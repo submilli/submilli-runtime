@@ -606,7 +606,7 @@ async fn sqlite_records_and_replays_through_the_endpoint() {
     // Completion is stored in the shared database.
     assert!(matches!(
         ledger.load(&session, "k1").await.unwrap().unwrap().state,
-        submilli_server::domain::idempotent_request::RequestState::Completed(_)
+        submilli_server::domain::idempotent_request::RunStatus::Completed
     ));
 
     let (_, second_body) = execute(&router, &session, &code, Some("k1")).await;
@@ -722,7 +722,7 @@ async fn an_expired_response_is_refused_without_running_and_different_code_still
     );
     assert_eq!(
         ledger.load(&session, "k1").await.unwrap().unwrap().state,
-        submilli_server::domain::idempotent_request::RequestState::Expired,
+        submilli_server::domain::idempotent_request::RunStatus::Expired,
         "the tombstone stays and nothing ran"
     );
 
@@ -765,7 +765,7 @@ async fn unkeyed_http_session_and_one_shot_runs_persist_without_recording() {
         .transaction(|connection| {
             Box::pin(async move {
                 Ok(sqlx::query_as(
-                    "SELECT run_id,state,request_key,response_body FROM runs ORDER BY run_id",
+                    "SELECT run_id,state,request_key,run_results.content FROM runs LEFT JOIN run_results USING(run_id) ORDER BY run_id",
                 )
                 .fetch_all(connection)
                 .await?)
@@ -777,6 +777,6 @@ async fn unkeyed_http_session_and_one_shot_runs_persist_without_recording() {
     assert_eq!(rows.iter().map(|r| r.0.clone()).collect::<Vec<_>>(), ids);
     assert!(
         rows.iter()
-            .all(|r| r.1 == "finished" && r.2.is_none() && r.3.is_none())
+            .all(|r| r.1 == "completed" && r.2.is_none() && r.3.is_none())
     );
 }

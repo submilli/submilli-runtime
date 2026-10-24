@@ -52,6 +52,7 @@ pub(crate) fn history(run: &Run, units: submilli_durable::UnitFactory) -> Arc<Hi
 #[allow(clippy::too_many_arguments)] // Same explicit runtime/import/mount inputs as the ordinary runner.
 pub(crate) async fn run(
     run: &Run,
+    program: &RunProgram,
     history: Arc<History>,
     units: submilli_durable::UnitFactory,
     runtime: RunnerRuntime<'_>,
@@ -60,7 +61,6 @@ pub(crate) async fn run(
     mut services: HostServices,
     imports: RunnerImports<'_>,
 ) -> Result<RunOutcome, String> {
-    let program = run.program().ok_or("run has no retained program")?;
     if program.compatibility != COMPATIBILITY || program.limits != limits(runtime.config, &services)
     {
         return Err("recorded runtime or limits do not match this execution environment".into());

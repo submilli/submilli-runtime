@@ -1,27 +1,11 @@
 //! A request identity prevents an uncertain execution from being repeated.
+pub use super::run_status::RunStatus;
 use std::time::{Duration, SystemTime};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordedOutcome {
     pub status: u16,
     pub body: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RequestState {
-    Reserved,
-    Running,
-    Blocked,
-    Cancelled,
-    Aborted,
-    /// An unkeyed execution completed; no HTTP replay body is retained.
-    Finished,
-    Completed(RecordedOutcome),
-    Indeterminate,
-    /// Completed, but its response is no longer kept: the request must not run
-    /// again, and there is nothing left to replay. Storage makes this transition
-    /// in bulk (`UnitOfWork::expire_responses`), without loading the bodies it drops.
-    Expired,
 }
 
 // Compatibility names for existing HTTP callers; the run is the only aggregate.
@@ -170,17 +154,18 @@ mod tests {
                 0,
                 0,
                 0,
+                false,
                 None,
             )
         };
-        assert!(restore(RequestState::Expired, Some(at(1))).is_ok());
-        assert!(restore(RequestState::Reserved, None).is_ok());
+        assert!(restore(RunStatus::Expired, Some(at(1))).is_ok());
+        assert!(restore(RunStatus::Queued, None).is_ok());
         assert!(matches!(
-            restore(RequestState::Expired, None),
+            restore(RunStatus::Expired, None),
             Err(RequestError::CompletionTimeMismatch)
         ));
         assert!(matches!(
-            restore(RequestState::Indeterminate, Some(at(1))),
+            restore(RunStatus::Indeterminate, Some(at(1))),
             Err(RequestError::CompletionTimeMismatch)
         ));
     }

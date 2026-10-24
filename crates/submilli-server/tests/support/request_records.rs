@@ -5,22 +5,20 @@ use sqlx::Row;
 use std::sync::Arc;
 use std::time::SystemTime;
 use submilli_server::database::{DatabaseError, ServerDatabase};
-use submilli_server::domain::idempotent_request::{RecordedOutcome, RequestState};
+use submilli_server::domain::idempotent_request::{RecordedOutcome, RunStatus};
 
 #[derive(Debug, PartialEq)]
 pub struct Record {
     pub session_id: String,
     pub key: String,
     pub fingerprint: String,
-    pub state: RequestState,
+    pub state: RunStatus,
+    pub result: Option<RecordedOutcome>,
 }
 impl Record {
     #[allow(dead_code)] // The last-run integration assertions inspect the stored response.
     pub fn outcome(&self) -> Option<&RecordedOutcome> {
-        match &self.state {
-            RequestState::Completed(outcome) => Some(outcome),
-            _ => None,
-        }
+        self.result.as_ref()
     }
 
     pub fn indeterminate(session: &str, key: &str, fingerprint: String) -> Self {
@@ -28,7 +26,8 @@ impl Record {
             session_id: session.into(),
             key: key.into(),
             fingerprint,
-            state: RequestState::Indeterminate,
+            state: RunStatus::Indeterminate,
+            result: None,
         }
     }
 
@@ -38,7 +37,8 @@ impl Record {
             session_id: session.into(),
             key: key.into(),
             fingerprint,
-            state: RequestState::Expired,
+            state: RunStatus::Expired,
+            result: None,
         }
     }
 }
@@ -65,8 +65,8 @@ impl RequestRecords {
     }
     pub async fn put(&self, record: Record) -> Result<(), DatabaseError> {
         let (state, completed, owner_generation) = match record.state {
-            RequestState::Indeterminate => ("indeterminate", false, "previous-server"),
-            RequestState::Expired => ("expired", true, "this-server"),
+            RunStatus::Indeterminate => ("indeterminate", false, "previous-server"),
+            RunStatus::Expired => ("expired", true, "this-server"),
             _ => panic!("fixture seeds abandoned or expired requests only"),
         };
         self.database.transaction(move |connection| Box::pin(async move {
@@ -87,7 +87,7 @@ impl RequestRecords {
             .transaction(move |connection| {
                 Box::pin(async move {
                     let Some(row) =
-                        sqlx::query("SELECT * FROM runs WHERE session_id=? AND request_key=?")
+                        sqlx::query("SELECT runs.*,run_results.status AS response_status,run_results.content AS response_body FROM runs LEFT JOIN run_results USING(run_id) WHERE session_id=? AND request_key=?")
                             .bind(&session)
                             .bind(&key)
                             .fetch_optional(connection)
@@ -96,18 +96,15 @@ impl RequestRecords {
                         return Ok(None);
                     };
                     let state = match row.try_get::<&str, _>("state")? {
-                        "completed" => RequestState::Completed(RecordedOutcome {
-                            status: row.try_get("response_status")?,
-                            body: String::from_utf8(row.try_get("response_body")?).unwrap(),
-                        }),
-                        "reserved" => RequestState::Reserved,
-                        "expired" => RequestState::Expired,
-                        "running" => RequestState::Running,
-                        "blocked" => RequestState::Blocked,
-                        "cancelled" => RequestState::Cancelled,
-                        "aborted" => RequestState::Aborted,
-                        "finished" => RequestState::Finished,
-                        "indeterminate" => RequestState::Indeterminate,
+                        "completed" => RunStatus::Completed,
+                        "reserved" => RunStatus::Queued,
+                        "expired" => RunStatus::Expired,
+                        "running" => RunStatus::Running,
+                        "blocked" => RunStatus::Stuck,
+                        "cancelled" => RunStatus::Cancelled,
+                        "aborted" => RunStatus::Aborted,
+                        "finished" => RunStatus::Completed,
+                        "indeterminate" => RunStatus::Indeterminate,
                         state => {
                             return Err(DatabaseError::Import(format!(
                                 "invalid run state: {state}"
@@ -118,6 +115,9 @@ impl RequestRecords {
                         session_id: session,
                         key,
                         fingerprint: row.try_get("fingerprint")?,
+                        result: row.try_get::<Option<u16>,_>("response_status")?.map(|status| RecordedOutcome {
+                            status, body: String::from_utf8(row.try_get("response_body").unwrap()).unwrap(),
+                        }),
                         state,
                     }))
                 })

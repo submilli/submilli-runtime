@@ -2,7 +2,7 @@ use super::tests::{fixture, proceed, read_request};
 use super::*;
 use crate::application::error::StoreError;
 use crate::application::unit_of_work::UnitOfWork;
-use crate::domain::idempotent_request::RequestState;
+use crate::domain::idempotent_request::RunStatus;
 use crate::domain::session::Session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -60,23 +60,10 @@ impl UnitOfWork for FaultUnit {
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError> {
         self.inner.remove_blueprint(name).await
     }
-    async fn run_summary_for_key(
-        &mut self,
-        session: &str,
-        key: &str,
-    ) -> Result<Option<crate::application::sessions::recovery::RunSummary>, StoreError> {
-        self.inner.run_summary_for_key(session, key).await
-    }
-    async fn run_summary(
-        &mut self,
-        id: &str,
-    ) -> Result<Option<crate::application::sessions::recovery::RunSummary>, StoreError> {
-        self.inner.run_summary(id).await
-    }
     async fn list_runs(
         &mut self,
         query: crate::application::sessions::recovery::RunQuery,
-    ) -> Result<Vec<crate::application::sessions::recovery::RunSummary>, StoreError> {
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
         self.inner.list_runs(query).await
     }
     async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError> {
@@ -84,12 +71,6 @@ impl UnitOfWork for FaultUnit {
     }
     async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError> {
         self.inner.has_run_predecessor(id).await
-    }
-    async fn save_run_lifecycle(
-        &mut self,
-        run: crate::domain::run_status::RunSummary,
-    ) -> Result<(), StoreError> {
-        self.inner.save_run_lifecycle(run).await
     }
     async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError> {
         self.inner.retire_run_resources(id).await
@@ -114,6 +95,26 @@ impl UnitOfWork for FaultUnit {
         self.inner.save_run(request).await
     }
 
+    async fn get_run_program(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::domain::run_program::RunProgram>, StoreError> {
+        self.inner.get_run_program(id).await
+    }
+    async fn save_run_program(
+        &mut self,
+        id: &str,
+        program: crate::domain::run_program::RunProgram,
+    ) -> Result<(), StoreError> {
+        self.inner.save_run_program(id, program).await
+    }
+    async fn save_run_result(
+        &mut self,
+        id: &str,
+        result: RecordedOutcome,
+    ) -> Result<(), StoreError> {
+        self.inner.save_run_result(id, result).await
+    }
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
         self.inner.unfinished_runs().await
     }
@@ -495,7 +496,7 @@ async fn failed_request_cleanup_rolls_back_expiry() {
         read_request(units.as_ref(), "session", "key")
             .await
             .unwrap()
-            .is_some_and(|run| run.state() == &RequestState::Cancelled)
+            .is_some_and(|run| run.status() == RunStatus::Cancelled)
     );
 }
 
@@ -594,7 +595,7 @@ async fn lost_unkeyed_preparation_and_claim_acknowledgements_keep_one_identity()
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(run.state(), &RequestState::Finished);
+    assert_eq!(run.status(), RunStatus::Completed);
     assert_eq!(run.identity().admission_order, 1);
     assert_eq!(run.attempt(), 1);
 }

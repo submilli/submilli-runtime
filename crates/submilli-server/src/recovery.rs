@@ -105,8 +105,8 @@ pub(crate) async fn admit(
     } else {
         None
     };
-    run.record_program(program).map_err(|e| e.to_string())?;
-    let id = recovery::admit(state.units().as_ref(), run)
+    run.enable_durability().map_err(|e| e.to_string())?;
+    let id = recovery::admit(state.units().as_ref(), run, program)
         .await
         .map_err(|e| e.to_string())?;
     audit.accepted();
@@ -189,39 +189,43 @@ async fn schedule(
 ) -> Result<Option<RunId>, crate::application::error::StoreError> {
     let page = candidates(state, after).await?;
     let next = if page.len() == 100 {
-        page.last().map(|run| run.id.clone())
+        page.last().map(|run| run.reservation_id().clone())
     } else {
         None
     };
-    for summary in page {
+    for candidate in page {
         if active.len() == capacity {
             return Ok(None);
         }
         if active
             .values()
-            .any(|running| running.run.session_id() == summary.session_id.as_str())
+            .any(|running| running.run.session_id() == candidate.session_id())
         {
             continue;
         }
         if matches!(
-            summary.status,
+            candidate.status(),
             RunStatus::Completed | RunStatus::Cancelled | RunStatus::Aborted | RunStatus::Expired
         ) {
-            if let Err(error) =
-                retire(state.session_manager(), state.units().as_ref(), &summary.id).await
+            if let Err(error) = retire(
+                state.session_manager(),
+                state.units().as_ref(),
+                candidate.reservation_id(),
+            )
+            .await
             {
-                tracing::warn!(run = %summary.id, %error, "run resources retained; cleanup unavailable");
+                tracing::warn!(run = %candidate.reservation_id(), %error, "run resources retained; cleanup unavailable");
             }
             continue;
         }
-        if !matches!(summary.status, RunStatus::Queued | RunStatus::Running) {
+        if !matches!(candidate.status(), RunStatus::Queued | RunStatus::Running) {
             continue;
         }
         if !state.durable_execution() {
             recovery::mark_stuck(
                 state.units().as_ref(),
-                &summary.id,
-                summary.revision,
+                candidate.reservation_id(),
+                candidate.revision(),
                 StuckReason::Disabled,
             )
             .await?;
@@ -229,18 +233,19 @@ async fn schedule(
         }
         // A committed claim whose acknowledgement/reconciliation both failed
         // has no live task. Never leave it running forever or launch it twice.
-        if summary.status == RunStatus::Running && summary.owner == state.idempotency().generation()
+        if candidate.status() == RunStatus::Running
+            && candidate.owner_generation() == state.idempotency().generation()
         {
             recovery::mark_stuck(
                 state.units().as_ref(),
-                &summary.id,
-                summary.revision,
+                candidate.reservation_id(),
+                candidate.revision(),
                 StuckReason::Interrupted,
             )
             .await?;
             continue;
         }
-        let Some(run) = claim_candidate(state, &summary).await? else {
+        let Some(run) = claim_candidate(state, &candidate).await? else {
             continue;
         };
         #[cfg(test)]
@@ -256,28 +261,28 @@ async fn schedule(
 
 async fn claim_candidate(
     state: &AppState,
-    candidate: &recovery::RunSummary,
+    candidate: &Run,
 ) -> Result<Option<Run>, crate::application::error::StoreError> {
     match recovery::claim(
         state.units().as_ref(),
-        &candidate.id,
+        candidate.reservation_id(),
         state.idempotency().generation(),
     )
     .await
     {
         Ok(run) => Ok(run),
         Err(error) => {
-            tracing::warn!(run = %candidate.id, %error, "cannot recover run");
+            tracing::warn!(run = %candidate.reservation_id(), %error, "cannot recover run");
             // No task was launched. Read again: the claim might have committed
             // even if both its acknowledgement and reconciliation read failed.
             let mut unit = state.units().begin().await?;
-            if let Some(mut current) = unit.run_summary(&candidate.id).await?
-                && matches!(current.status, RunStatus::Queued | RunStatus::Running)
+            if let Some(mut current) = unit.get_run(candidate.reservation_id()).await?
+                && matches!(current.status(), RunStatus::Queued | RunStatus::Running)
             {
                 current
                     .mark_stuck(StuckReason::History)
                     .map_err(|_| crate::application::error::StoreError::Conflict)?;
-                unit.save_run_lifecycle(current).await?;
+                unit.save_run(current).await?;
                 unit.commit().await?;
             }
             Ok(None)
@@ -288,7 +293,7 @@ async fn claim_candidate(
 async fn candidates(
     state: &AppState,
     after: Option<RunId>,
-) -> Result<Vec<recovery::RunSummary>, crate::application::error::StoreError> {
+) -> Result<Vec<Run>, crate::application::error::StoreError> {
     let mut unit = state.units().begin().await?;
     unit.list_runs(RunQuery {
         after,
@@ -304,7 +309,17 @@ async fn run_attempt(
     run: &Run,
     cancelled: oneshot::Receiver<()>,
 ) -> Result<(), StuckReason> {
-    let program = run.program().ok_or(StuckReason::History)?;
+    let program = {
+        let mut unit = state
+            .units()
+            .begin()
+            .await
+            .map_err(|_| StuckReason::History)?;
+        unit.get_run_program(run.reservation_id())
+            .await
+            .map_err(|_| StuckReason::History)?
+            .ok_or(StuckReason::History)?
+    };
     let saved = &program.limits;
     let current = state.runtime();
     if program.compatibility != runner::durable::COMPATIBILITY
@@ -376,6 +391,7 @@ async fn run_attempt(
     let history = runner::durable::history(run, units.clone());
     let outcome = runner::durable::run(
         run,
+        &program,
         history.clone(),
         units,
         runner::RunnerRuntime {
@@ -462,7 +478,13 @@ pub(crate) async fn retire(
             .map_err(|e| e.to_string())?
             .ok_or("run missing")?
     };
-    let program = run.program().ok_or("retained program missing")?;
+    let program = {
+        let mut unit = units.begin().await.map_err(|e| e.to_string())?;
+        unit.get_run_program(id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("retained program missing")?
+    };
     if let Some(expected) = program.filesystem_config_fingerprint {
         let (vfs, _) = manager
             .reopen_vfs(run.session_id(), &program.blueprint, &program.variables)

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::*;
-use crate::domain::idempotent_request::RequestState as EntryState;
+use crate::domain::idempotent_request::RunStatus as EntryState;
 use crate::request_records::RequestRecords;
 
 const CODE: &str = "function main(): number { console.log(\"executed\"); return 42; }";
@@ -169,7 +169,7 @@ async fn rest_setup_failure_is_undispatched_and_same_key_can_execute_after_recov
             .unwrap()
             .unwrap()
             .state,
-        EntryState::Completed(_)
+        EntryState::Completed
     ));
     let (_, _, replay) = harness.post(&path, json!({"code": CODE}), &headers).await;
     assert_eq!(replay, healthy);

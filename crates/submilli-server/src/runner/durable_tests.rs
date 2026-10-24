@@ -5,7 +5,7 @@ use crate::application::sessions::runs::{
     PrepareRun, RecoverRuns, RunDisposition, RunResolution, claim_run, reopen_run,
 };
 use crate::blueprint::{BlueprintStore, SqliteBlueprintStore, StoredBlueprint};
-use crate::domain::idempotent_request::{RecordedOutcome, RequestState};
+use crate::domain::idempotent_request::{RecordedOutcome, RunStatus};
 use crate::domain::run::{Run, RunIdentity};
 use crate::session_store::{DurableSessionStore, RootVfsType, SessionRecord, SqliteSessionStore};
 use std::time::{Duration, SystemTime};
@@ -53,6 +53,7 @@ fn services() -> HostServices {
 }
 async fn execute(
     run: &Run,
+    program: &crate::domain::run_program::RunProgram,
     history: Arc<History>,
     units: submilli_durable::UnitFactory,
     root: &std::path::Path,
@@ -68,6 +69,7 @@ async fn execute(
     let mcps = Arc::new(McpCatalog::empty());
     super::durable::run(
         run,
+        program,
         history,
         units,
         RunnerRuntime {
@@ -164,14 +166,14 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
         SystemTime::now(),
     )
     .unwrap();
-    prepared.record_program(program.clone()).unwrap();
-    assert!(matches!(
-        PrepareRun::new(units.as_ref())
-            .execute(prepared.clone())
-            .await
-            .unwrap(),
-        RunDisposition::Proceed
-    ));
+    prepared.enable_durability().unwrap();
+    crate::application::sessions::recovery::admit(
+        units.as_ref(),
+        prepared.clone(),
+        program.clone(),
+    )
+    .await
+    .unwrap();
     // The first process died after admission, before claiming or dispatching.
     let first = reopen_run(
         units.as_ref(),
@@ -190,9 +192,15 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
             .is_err()
     );
     let first_history = history(&first, fs_units.clone());
-    let original = execute(&first, first_history.clone(), fs_units.clone(), &files)
-        .await
-        .unwrap();
+    let original = execute(
+        &first,
+        &program,
+        first_history.clone(),
+        fs_units.clone(),
+        &files,
+    )
+    .await
+    .unwrap();
     assert!(original.error.is_none(), "{:?}", original.error);
     assert_eq!(
         original.console_raw,
@@ -229,12 +237,21 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
     )
     .await
     .unwrap();
-    assert_eq!(resumed.program(), Some(&program));
+    assert_eq!(
+        units
+            .begin()
+            .await
+            .unwrap()
+            .get_run_program(resumed.reservation_id())
+            .await
+            .unwrap(),
+        Some(program.clone())
+    );
     // UUID, write and read are recorded; console writes again without a history row.
     assert_eq!(resumed.history_position(), 3);
     assert_eq!(resumed.attempt(), first.attempt() + 1);
     let replay = history(&resumed, fs_units.clone());
-    let outcome = execute(&resumed, replay.clone(), fs_units, &files)
+    let outcome = execute(&resumed, &program, replay.clone(), fs_units, &files)
         .await
         .unwrap();
     assert!(outcome.error.is_none(), "{:?}", outcome.error);
@@ -277,10 +294,7 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
     .unwrap();
     let mut unit = units.begin().await.unwrap();
     let completed = unit.get_run(first.reservation_id()).await.unwrap().unwrap();
-    assert_eq!(
-        completed.state(),
-        &RequestState::Completed(response.clone())
-    );
+    assert_eq!(completed.status(), RunStatus::Completed);
     drop(unit);
     let last_id: String = database
         .transaction(|connection| {

@@ -203,7 +203,7 @@ async fn claim_is_one_launch_per_startup_and_corrupt_manifest_stays_observable()
     database
         .transaction(move |connection| {
             Box::pin(async move {
-                sqlx::query("UPDATE runs SET execution_manifest=x'00' WHERE run_id=?")
+                sqlx::query("UPDATE run_programs SET content=x'00' WHERE run_id=?")
                     .bind(corrupt_id)
                     .execute(connection)
                     .await?;
@@ -250,13 +250,14 @@ async fn recorded_runs_cannot_become_indeterminate() {
             id,
             run.owner_generation().into(),
             run.created_at(),
-            crate::domain::idempotent_request::RequestState::Indeterminate,
+            crate::domain::idempotent_request::RunStatus::Indeterminate,
             None,
             run.identity().clone(),
             run.revision(),
             run.attempt(),
             run.history_position(),
-            run.program().cloned().map(Arc::new),
+            run.is_durable(),
+            run.reason().map(str::to_owned),
         )
         .is_err()
     );
@@ -489,4 +490,139 @@ async fn retirement_does_not_recreate_a_deleted_working_directory() {
     until_retired(&state, &id).await;
     assert!(!root.path().join("sessions/s/work").exists());
     stop(&state).await;
+}
+
+#[tokio::test]
+async fn program_and_admission_commit_together() {
+    let root = tempfile::tempdir().unwrap();
+    let state = app(root.path(), 1_000_000).await;
+    let template = accept(&state, "s", CODE, None).await;
+    let program = state
+        .units()
+        .begin()
+        .await
+        .unwrap()
+        .get_run_program(&template)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut run = crate::domain::run::Run::prepare(
+        "s".into(),
+        Some("atomic".into()),
+        "fingerprint".into(),
+        "new-run".into(),
+        "owner".into(),
+        crate::domain::run::RunIdentity::default(),
+        SystemTime::now(),
+    )
+    .unwrap();
+    run.enable_durability().unwrap();
+    let database = state.database().unwrap();
+    database.transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER reject_program BEFORE INSERT ON run_programs BEGIN SELECT RAISE(FAIL,'injected'); END").execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    assert!(
+        recovery::admit(state.units().as_ref(), run.clone(), program.clone())
+            .await
+            .is_err()
+    );
+    let mut unit = state.units().begin().await.unwrap();
+    assert!(unit.get_run("new-run").await.unwrap().is_none());
+    assert!(unit.run_for_key("s", "atomic").await.unwrap().is_none());
+    drop(unit);
+    database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("DROP TRIGGER reject_program")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    recovery::admit(state.units().as_ref(), run, program.clone())
+        .await
+        .unwrap();
+    let mut unit = state.units().begin().await.unwrap();
+    assert!(unit.get_run("new-run").await.unwrap().unwrap().is_durable());
+    assert_eq!(
+        unit.get_run_program("new-run").await.unwrap(),
+        Some(program)
+    );
+}
+
+#[tokio::test]
+async fn completion_failure_rolls_back_result_and_expiry_keeps_run_identity() {
+    use crate::application::sessions::runs::ResolveRun;
+    use crate::domain::idempotent_request::RecordedOutcome;
+    let root = tempfile::tempdir().unwrap();
+    let state = app(root.path(), 1_000_000).await;
+    let id = accept(&state, "s", CODE, Some("atomic")).await;
+    let run = recovery::claim(state.units().as_ref(), &id, "owner")
+        .await
+        .unwrap()
+        .unwrap();
+    let database = state.database().unwrap();
+    database.transaction(|connection| Box::pin(async move {
+        sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON runs WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL,'injected'); END").execute(connection).await?;
+        Ok(())
+    })).await.unwrap();
+    let resolution = RunResolution::Completed(RecordedOutcome {
+        status: 200,
+        body: "exact result\n".into(),
+    });
+    let resolve = ResolveRun::new(state.units());
+    assert!(
+        resolve
+            .execute_recorded(&run, &resolution, None, 0)
+            .await
+            .is_err()
+    );
+    let mut unit = state.units().begin().await.unwrap();
+    assert_eq!(
+        unit.get_run(&id).await.unwrap().unwrap().status(),
+        RunStatus::Running
+    );
+    assert!(unit.run_result(&id).await.unwrap().is_none());
+    drop(unit);
+    database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("DROP TRIGGER reject_completion")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    resolve
+        .execute_recorded(&run, &resolution, None, 0)
+        .await
+        .unwrap();
+    let mut unit = state.units().begin().await.unwrap();
+    assert_eq!(
+        unit.run_result(&id).await.unwrap().unwrap().body,
+        "exact result\n"
+    );
+    assert_eq!(
+        unit.expire_responses("s", vec![id.to_string()])
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(unit.run_result(&id).await.unwrap().is_none());
+    let retained = unit.run_for_key("s", "atomic").await.unwrap().unwrap();
+    assert_eq!(retained.reservation_id(), &id);
+    assert_eq!(retained.status(), RunStatus::Expired);
+    assert!(unit.get_run_program(&id).await.unwrap().is_some());
+    unit.commit().await.unwrap();
+    assert!(
+        recovery::claim(state.units().as_ref(), &id, "another-owner")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

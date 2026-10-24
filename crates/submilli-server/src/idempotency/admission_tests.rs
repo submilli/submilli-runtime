@@ -1,6 +1,6 @@
 use super::tests::{fixture, proceed};
 use super::*;
-use crate::domain::idempotent_request::RequestState;
+use crate::domain::idempotent_request::RunStatus;
 
 #[tokio::test]
 async fn unkeyed_invocations_have_distinct_ordered_identity_and_no_response_body() {
@@ -24,8 +24,8 @@ async fn unkeyed_invocations_have_distinct_ordered_identity_and_no_response_body
     let mut unit = units.begin().await.unwrap();
     let a = unit.get_run("run-a").await.unwrap().unwrap();
     let b = unit.get_run("run-b").await.unwrap().unwrap();
-    assert_eq!(a.state(), &RequestState::Finished);
-    assert_eq!(b.state(), &RequestState::Finished);
+    assert_eq!(a.status(), RunStatus::Completed);
+    assert_eq!(b.status(), RunStatus::Completed);
     assert_ne!(a.identity().admission_order, b.identity().admission_order);
     assert_eq!(a.identity().principal.as_deref(), Some("alice"));
     assert_eq!(a.identity().execution_id.as_deref(), Some("run-a"));
@@ -51,7 +51,7 @@ async fn release_after_claim_keeps_the_key_and_cannot_authorize_a_retry() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(run.state(), &RequestState::Indeterminate);
+    assert_eq!(run.status(), RunStatus::Indeterminate);
     assert_eq!(run.optional_key(), Some("key"));
     assert!(matches!(
         coordinator.reserve("session", "key", "code").await,
@@ -79,24 +79,15 @@ async fn closure_fences_prepared_writes_and_retains_completed_identity() {
         .unwrap();
     unit.save_session(session).await.unwrap();
     unit.commit().await.unwrap();
-    stale
-        .complete(
-            "run",
-            RecordedOutcome {
-                status: 200,
-                body: "late".into(),
-            },
-            SystemTime::now(),
-        )
-        .unwrap();
+    stale.complete("run", SystemTime::now()).unwrap();
     let mut unit = units.begin().await.unwrap();
     assert!(unit.save_run(stale).await.is_err());
     drop(unit);
     guard.complete(200, "late".into()).await;
     let mut unit = units.begin().await.unwrap();
     assert_eq!(
-        unit.get_run("run").await.unwrap().unwrap().state(),
-        &RequestState::Cancelled
+        unit.get_run("run").await.unwrap().unwrap().status(),
+        RunStatus::Cancelled
     );
     drop(unit);
     assert!(matches!(
@@ -161,7 +152,7 @@ fn process_exit_preserves_unkeyed_run_without_inventing_replay() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(before.state(), &RequestState::Running);
+        assert_eq!(before.status(), RunStatus::Running);
         coordinator.recover().await.unwrap();
         let after = units
             .begin()
@@ -171,7 +162,7 @@ fn process_exit_preserves_unkeyed_run_without_inventing_replay() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(after.state(), &RequestState::Indeterminate);
+        assert_eq!(after.status(), RunStatus::Indeterminate);
         assert_eq!(before.identity(), after.identity());
         assert!(coordinator.claim(&"crashed".into()).await.is_err());
         database.close().await.unwrap();

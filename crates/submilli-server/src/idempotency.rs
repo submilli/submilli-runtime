@@ -481,7 +481,7 @@ mod tests {
     use crate::adapters::unit_of_work::SqliteUnitOfWorkFactory;
     use crate::application::sessions::close::CloseSession;
     use crate::database::ServerDatabase;
-    use crate::domain::idempotent_request::RequestState;
+    use crate::domain::idempotent_request::RunStatus;
     use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId, SessionLifetime};
 
     struct Audit;
@@ -568,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn responses_past_retention_become_tombstones_that_still_refuse_to_run() {
         use crate::application::sessions::runs::ExpireResponses;
-        use crate::domain::idempotent_request::{RequestState, ResponseRetention};
+        use crate::domain::idempotent_request::{ResponseRetention, RunStatus};
         let (_, units, coordinator) = fixture().await;
         drop(proceed(coordinator.reserve("session", "k0", "code").await));
         for key in ["k1", "k2", "k3", "k4", "k5"] {
@@ -605,8 +605,8 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap()
-                    .state(),
-                &RequestState::Expired
+                    .status(),
+                RunStatus::Expired
             );
         }
         assert!(matches!(
@@ -618,8 +618,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .state(),
-            &RequestState::Indeterminate,
+                .status(),
+            RunStatus::Indeterminate,
             "only completed responses expire"
         );
         let mut unit = units.begin().await.unwrap();
@@ -637,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn each_session_due_expires_in_its_own_unit_and_the_counts_add_up() {
         use crate::application::sessions::runs::ExpireResponses;
-        use crate::domain::idempotent_request::{RequestState, ResponseRetention};
+        use crate::domain::idempotent_request::{ResponseRetention, RunStatus};
         let (_, units, coordinator) = fixture().await;
         let mut unit = units.begin().await.unwrap();
         unit.save_session(
@@ -677,10 +677,9 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap()
-                    .state()
-                    .clone();
+                    .status();
                 assert_eq!(
-                    matches!(state, RequestState::Completed(_)),
+                    matches!(state, RunStatus::Completed),
                     kept,
                     "{session}/{key}: {state:?}"
                 );
@@ -743,8 +742,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .state(),
-            &RequestState::Reserved
+                .status(),
+            RunStatus::Queued
         );
         let next = Coordinator::new(units.clone(), "next-generation".into());
         next.recover().await.unwrap();
@@ -753,8 +752,8 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap()
-                .state(),
-            &RequestState::Indeterminate
+                .status(),
+            RunStatus::Indeterminate
         );
         guard.complete(200, "late".into()).await;
         assert!(matches!(
@@ -793,7 +792,7 @@ mod tests {
             read_request(units.as_ref(), "session", "key")
                 .await
                 .unwrap()
-                .is_some_and(|run| run.state() == &RequestState::Cancelled)
+                .is_some_and(|run| run.status() == RunStatus::Cancelled)
         );
         assert!(matches!(
             coordinator.reserve("session", "key", "code").await,

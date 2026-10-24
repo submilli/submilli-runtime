@@ -3394,7 +3394,7 @@ async fn unkeyed_mcp_programs_persist_distinct_run_identities() {
     assert_ne!(rows[0].0, rows[1].0);
     assert!(
         rows.iter()
-            .all(|r| r.1 == "finished" && r.2 == "mcp" && r.3.is_none())
+            .all(|r| r.1 == "completed" && r.2 == "mcp" && r.3.is_none())
     );
 }
 

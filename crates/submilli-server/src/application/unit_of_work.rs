@@ -27,26 +27,12 @@ pub(crate) trait UnitOfWork: Send {
     async fn save_session(&mut self, session: Session) -> Result<(), StoreError>;
     async fn blueprint_exists(&mut self, name: &str) -> Result<bool, StoreError>;
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError>;
-    async fn run_summary_for_key(
-        &mut self,
-        session: &str,
-        key: &str,
-    ) -> Result<Option<super::sessions::recovery::RunSummary>, StoreError>;
-    async fn run_summary(
-        &mut self,
-        id: &str,
-    ) -> Result<Option<super::sessions::recovery::RunSummary>, StoreError>;
     async fn list_runs(
         &mut self,
         query: super::sessions::recovery::RunQuery,
-    ) -> Result<Vec<super::sessions::recovery::RunSummary>, StoreError>;
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError>;
     async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError>;
     async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError>;
-    async fn save_run_lifecycle(
-        &mut self,
-        run: crate::domain::run_status::RunSummary,
-    ) -> Result<(), StoreError>;
-    /// Caller has drained all work. Refuse nonterminal runs.
     async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError>;
     async fn run_result(
         &mut self,
@@ -59,6 +45,21 @@ pub(crate) trait UnitOfWork: Send {
         key: &str,
     ) -> Result<Option<crate::domain::run::Run>, StoreError>;
     async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError>;
+
+    async fn get_run_program(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::domain::run_program::RunProgram>, StoreError>;
+    async fn save_run_program(
+        &mut self,
+        id: &str,
+        program: crate::domain::run_program::RunProgram,
+    ) -> Result<(), StoreError>;
+    async fn save_run_result(
+        &mut self,
+        id: &str,
+        result: crate::domain::idempotent_request::RecordedOutcome,
+    ) -> Result<(), StoreError>;
 
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError>;
     /// The sessions holding more than `kept` completed responses, at least one

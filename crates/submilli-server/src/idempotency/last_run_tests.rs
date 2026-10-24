@@ -5,7 +5,7 @@ use super::*;
 use crate::adapters::session::last_run::{INLINE_BYTES, LastRuns, StoredLastRun};
 use crate::application::sessions::close::CloseSession;
 use crate::database::ServerDatabase;
-use crate::domain::idempotent_request::RequestState;
+use crate::domain::idempotent_request::RunStatus;
 use crate::domain::session::ClosedReason;
 use crate::session::LastRun;
 use std::path::{Path, PathBuf};
@@ -90,9 +90,9 @@ impl Fixture {
             .map(|stored| stored.value()["result"].as_str().unwrap().to_owned())
     }
 
-    async fn state(&self, id: &str) -> RequestState {
+    async fn state(&self, id: &str) -> RunStatus {
         let mut unit = self.units.begin().await.unwrap();
-        unit.get_run(id).await.unwrap().unwrap().state().clone()
+        unit.get_run(id).await.unwrap().unwrap().status()
     }
 
     /// The session's last-run files, once every run's end has settled.
@@ -237,7 +237,7 @@ async fn a_last_run_that_cannot_be_written_leaves_the_run_unknown_and_no_file() 
         .await;
     fixture.finish("failed", Some(&large("failed"))).await;
     assert!(fixture.files().await.is_empty());
-    assert_eq!(fixture.state("failed").await, RequestState::Indeterminate);
+    assert_eq!(fixture.state("failed").await, RunStatus::Indeterminate);
     assert_eq!(fixture.last_result().await, None, "first is not the latest");
     fixture.sql("DROP TRIGGER fail_last_run").await;
     fixture.finish("recovered", Some(&run("recovered"))).await;
@@ -271,7 +271,7 @@ async fn a_run_cut_off_by_a_restart_leaves_no_last_run() {
         .execute("a later generation")
         .await
         .unwrap();
-    assert_eq!(fixture.state("cut-off").await, RequestState::Indeterminate);
+    assert_eq!(fixture.state("cut-off").await, RunStatus::Indeterminate);
     assert_eq!(fixture.last_result().await, None);
 }
 
@@ -288,7 +288,7 @@ async fn a_run_that_started_and_then_failed_to_settle_leaves_no_last_run() {
     fixture.coordinator.claim(&"started".into()).await.unwrap();
     guard.set_last_run(&run("started"));
     guard.release().await;
-    assert_eq!(fixture.state("started").await, RequestState::Indeterminate);
+    assert_eq!(fixture.state("started").await, RunStatus::Indeterminate);
     assert_eq!(fixture.last_result().await, None);
 }
 

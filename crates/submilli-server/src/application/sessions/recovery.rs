@@ -5,7 +5,7 @@ use crate::domain::run::Run;
 use interpreter::runtime::durable::RunId;
 use std::time::SystemTime;
 
-pub(crate) use crate::domain::run_status::{RunStatus, RunSummary, StuckReason};
+pub(crate) use crate::domain::run_status::{RunStatus, StuckReason};
 
 #[derive(Clone, Default)]
 pub(crate) struct RunQuery {
@@ -26,34 +26,33 @@ pub(crate) async fn claim(
     startup: &str,
 ) -> Result<Option<Run>, StoreError> {
     let mut unit = units.begin().await?;
-    let Some(summary) = unit.run_summary(id).await? else {
+    let Some(mut run) = unit.get_run(id).await? else {
         return Ok(None);
     };
-    if !summary.recorded
-        || !matches!(summary.status, RunStatus::Queued | RunStatus::Running)
-        || (summary.status == RunStatus::Running && summary.owner == startup)
+    if !run.is_durable()
+        || !matches!(run.status(), RunStatus::Queued | RunStatus::Running)
+        || (run.status() == RunStatus::Running && run.owner_generation() == startup)
         || unit.has_run_predecessor(id).await?
     {
         return Ok(None);
     }
-    let Some(session) = unit.get_session(summary.session_id.as_str()).await? else {
+    let Some(session) = unit.get_session(run.session_id()).await? else {
         return Err(StoreError::Io("run session is missing".into()));
     };
     session
         .require_active()
         .map_err(|error| StoreError::Io(error.to_string()))?;
-    let mut run = unit.get_run(id).await?.ok_or(StoreError::Conflict)?;
     run.reopen(startup)
         .map_err(|error| StoreError::Io(error.to_string()))?;
     unit.save_run(run.clone()).await?;
     if let Err(error) = unit.commit().await {
         let mut check = units.begin().await?;
-        let saved = check.run_summary(id).await?;
+        let saved = check.get_run(id).await?;
         if !saved.is_some_and(|saved| {
-            saved.status == RunStatus::Running
-                && saved.owner == startup
-                && saved.attempt == run.attempt()
-                && saved.revision == run.revision()
+            saved.status() == RunStatus::Running
+                && saved.owner_generation() == startup
+                && saved.attempt() == run.attempt()
+                && saved.revision() == run.revision()
         }) {
             return Err(error);
         }
@@ -68,24 +67,24 @@ pub(crate) async fn resume(
     revision: i64,
 ) -> Result<(), StoreError> {
     let mut unit = units.begin().await?;
-    let mut summary = unit.run_summary(id).await?.ok_or(StoreError::Conflict)?;
-    if !summary.recorded || summary.status != RunStatus::Stuck || summary.revision != revision {
+    let mut run = unit.get_run(id).await?.ok_or(StoreError::Conflict)?;
+    if !run.is_durable() || run.status() != RunStatus::Stuck || run.revision() != revision {
         return Err(StoreError::Conflict);
     }
     let session = unit
-        .get_session(summary.session_id.as_str())
+        .get_session(run.session_id())
         .await?
         .ok_or(StoreError::Conflict)?;
     session.require_active().map_err(|_| StoreError::Conflict)?;
-    summary.resume(revision).map_err(|_| StoreError::Conflict)?;
-    unit.save_run_lifecycle(summary.clone()).await?;
+    run.resume(revision).map_err(|_| StoreError::Conflict)?;
+    unit.save_run(run.clone()).await?;
     if let Err(error) = unit.commit().await {
         let mut check = units.begin().await?;
-        let saved = check.run_summary(id).await?;
+        let saved = check.get_run(id).await?;
         if !saved.is_some_and(|saved| {
-            saved.status == RunStatus::Queued
-                && Some(saved.revision) == revision.checked_add(1)
-                && saved.attempt == summary.attempt
+            saved.status() == RunStatus::Queued
+                && Some(saved.revision()) == revision.checked_add(1)
+                && saved.attempt() == run.attempt()
         }) {
             return Err(error);
         }
@@ -100,14 +99,12 @@ pub(crate) async fn mark_stuck(
     reason: StuckReason,
 ) -> Result<(), StoreError> {
     let mut unit = units.begin().await?;
-    let mut summary = unit.run_summary(id).await?.ok_or(StoreError::Conflict)?;
-    if summary.revision != revision {
+    let mut run = unit.get_run(id).await?.ok_or(StoreError::Conflict)?;
+    if run.revision() != revision {
         return Err(StoreError::Conflict);
     }
-    summary
-        .mark_stuck(reason)
-        .map_err(|_| StoreError::Conflict)?;
-    unit.save_run_lifecycle(summary).await?;
+    run.mark_stuck(reason).map_err(|_| StoreError::Conflict)?;
+    unit.save_run(run).await?;
     unit.commit().await
 }
 
@@ -120,20 +117,21 @@ pub(crate) async fn existing(
         return Ok(None);
     };
     let mut unit = units.begin().await?;
-    let Some(existing) = unit.run_summary_for_key(request.session_id(), key).await? else {
+    let Some(existing) = unit.run_for_key(request.session_id(), key).await? else {
         return Ok(None);
     };
-    if existing.fingerprint != request.fingerprint() {
+    if existing.fingerprint() != request.fingerprint() {
         return Err(super::runs::RunFailure::Rule(
             crate::domain::run::RequestError::Conflict,
         ));
     }
-    Ok(Some(existing.id.clone()))
+    Ok(Some(existing.reservation_id().clone()))
 }
 
 pub(crate) async fn admit(
     units: &dyn UnitOfWorkFactory,
     request: Run,
+    program: crate::domain::run_program::RunProgram,
 ) -> Result<RunId, super::runs::RunFailure> {
     let mut unit = units.begin().await?;
     let session = unit
@@ -144,22 +142,24 @@ pub(crate) async fn admit(
         .await
         .map_err(|_| super::runs::RunFailure::SessionUnavailable)?;
     if let Some(key) = request.optional_key()
-        && let Some(existing) = unit.run_summary_for_key(request.session_id(), key).await?
+        && let Some(existing) = unit.run_for_key(request.session_id(), key).await?
     {
-        if existing.fingerprint != request.fingerprint() {
+        if existing.fingerprint() != request.fingerprint() {
             return Err(super::runs::RunFailure::Rule(
                 crate::domain::run::RequestError::Conflict,
             ));
         }
-        return Ok(existing.id.clone());
+        return Ok(existing.reservation_id().clone());
     }
     unit.save_run(request.clone()).await?;
+    unit.save_run_program(request.reservation_id(), program)
+        .await?;
     if let Err(error) = unit.commit().await {
         let mut check = units.begin().await?;
-        let saved = check.run_summary(request.reservation_id()).await?;
-        if !saved.is_some_and(|saved| {
-            saved.recorded && saved.session_id.as_str() == request.session_id()
-        }) {
+        let saved = check.get_run(request.reservation_id()).await?;
+        if !saved
+            .is_some_and(|saved| saved.is_durable() && saved.session_id() == request.session_id())
+        {
             return Err(error.into());
         }
     }
@@ -174,16 +174,16 @@ pub(crate) async fn stop_attempt(
     reason: StuckReason,
 ) -> Result<(), StoreError> {
     let mut unit = units.begin().await?;
-    let Some(mut saved) = unit.run_summary(run.reservation_id()).await? else {
+    let Some(mut saved) = unit.get_run(run.reservation_id()).await? else {
         return Ok(());
     };
-    if saved.status != RunStatus::Running
-        || saved.attempt != run.attempt()
-        || saved.owner != run.owner_generation()
+    if saved.status() != RunStatus::Running
+        || saved.attempt() != run.attempt()
+        || saved.owner_generation() != run.owner_generation()
     {
         return Ok(());
     }
     saved.mark_stuck(reason).map_err(|_| StoreError::Conflict)?;
-    unit.save_run_lifecycle(saved).await?;
+    unit.save_run(saved).await?;
     unit.commit().await
 }

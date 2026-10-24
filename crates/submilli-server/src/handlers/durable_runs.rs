@@ -1,6 +1,7 @@
 //! Persistent run observation and explicit recovery, independent of tool answers.
 use crate::app::AppState;
-use crate::application::sessions::recovery::{self, RunQuery, RunStatus, RunSummary};
+use crate::application::sessions::recovery::{self, RunQuery, RunStatus};
+use crate::domain::run::Run;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -40,7 +41,7 @@ pub(crate) async fn list(
     match result {
         Ok(runs) => {
             let next = (runs.len() == limit)
-                .then(|| runs.last().map(|run| run.id.clone()))
+                .then(|| runs.last().map(|run| run.reservation_id().clone()))
                 .flatten();
             Json(json!({"runs": runs.iter().map(view).collect::<Vec<_>>(), "next": next}))
                 .into_response()
@@ -62,7 +63,7 @@ pub(crate) async fn observe(
     id: &str,
 ) -> Result<Option<Value>, crate::application::error::StoreError> {
     let mut unit = state.units().begin().await?;
-    let Some(run) = unit.run_summary(id).await? else {
+    let Some(run) = unit.get_run(id).await? else {
         return Ok(None);
     };
     let mut result = view(&run);
@@ -130,7 +131,7 @@ pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, S
         let run = {
             let mut unit = state.units().begin().await.map_err(|e| e.to_string())?;
             let run = unit
-                .run_summary(id)
+                .get_run(id)
                 .await
                 .map_err(|e| e.to_string())?
                 .ok_or("unknown run")?;
@@ -139,7 +140,7 @@ pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, S
             }
             run
         };
-        if !matches!(run.status, RunStatus::Queued | RunStatus::Running)
+        if !matches!(run.status(), RunStatus::Queued | RunStatus::Running)
             || tokio::time::Instant::now() >= deadline
         {
             return Ok(WaitResponse::Metadata(view(&run)));
@@ -148,19 +149,19 @@ pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, S
     }
 }
 
-fn view(run: &RunSummary) -> Value {
+fn view(run: &Run) -> Value {
     let millis = |time: std::time::SystemTime| {
         time.duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_millis())
     };
     json!({
-        "execution_id": run.id, "session_id": run.session_id.as_str(),
-        "status": run.status.as_str(), "reason": run.reason,
-        "durable": run.recorded, "revision": run.revision, "attempt": run.attempt,
-        "admission_order": run.admission_order,
-        "created_at_unix_ms": millis(run.created_at),
-        "completed_at_unix_ms": run.completed_at.and_then(millis),
+        "execution_id": run.reservation_id(), "session_id": run.session_id(),
+        "status": run.status().as_str(), "reason": run.reason(),
+        "durable": run.is_durable(), "revision": run.revision(), "attempt": run.attempt(),
+        "admission_order": run.identity().admission_order,
+        "created_at_unix_ms": millis(run.created_at()),
+        "completed_at_unix_ms": run.completed_at().and_then(millis),
     })
 }
 

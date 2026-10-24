@@ -417,23 +417,25 @@ async fn durable_retry(
             .begin()
             .await
             .map_err(|e| Refusal::Unavailable(e.to_string()))?;
-        unit.run_summary_for_key(session, key)
+        unit.run_for_key(session, key)
             .await
             .map_err(|e| Refusal::Unavailable(e.to_string()))?
     };
     let Some(run) = summary else {
         return Ok(None);
     };
-    if run.fingerprint != format!("{:x}", Sha256::digest(code.as_bytes())) {
+    if run.fingerprint() != format!("{:x}", Sha256::digest(code.as_bytes())) {
         return Err(Refusal::Conflict);
     }
-    match run.status {
+    match run.status() {
         RunStatus::Expired => return Err(Refusal::Expired),
         RunStatus::Indeterminate => return Err(Refusal::Indeterminate),
-        RunStatus::Queued | RunStatus::Running if !run.recorded => return Err(Refusal::InProgress),
+        RunStatus::Queued | RunStatus::Running if !run.is_durable() => {
+            return Err(Refusal::InProgress);
+        }
         _ => {}
     }
-    let response = super::durable_runs::wait(state, &run.id)
+    let response = super::durable_runs::wait(state, run.reservation_id())
         .await
         .map_err(Refusal::Unavailable)?;
     Ok(Some(durable_wait_response(session, response)))

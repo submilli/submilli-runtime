@@ -6,6 +6,37 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 const MAX_PROGRAM_BYTES: usize = 16 * 1024 * 1024;
 
+pub(crate) async fn get(
+    connection: &mut sqlx::SqliteConnection,
+    sealer: &Sealer,
+    id: &str,
+) -> Result<Option<RunProgram>, DatabaseError> {
+    let content: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT content FROM run_programs WHERE run_id=? AND length(content)<=16777344",
+    )
+    .bind(id)
+    .fetch_optional(connection)
+    .await?;
+    content
+        .map(|content| open(sealer, id, &content))
+        .transpose()
+}
+
+pub(crate) async fn save(
+    connection: &mut sqlx::SqliteConnection,
+    sealer: &Sealer,
+    id: &str,
+    program: &RunProgram,
+) -> Result<(), DatabaseError> {
+    let content = seal(sealer, id, program)?;
+    sqlx::query("INSERT INTO run_programs(run_id,content) VALUES (?,?)")
+        .bind(id)
+        .bind(content)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
 pub(super) fn seal(
     sealer: &Sealer,
     id: &str,

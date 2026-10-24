@@ -2,7 +2,7 @@
 use crate::application::error::StoreError;
 use crate::application::sessions::ports::StagedLastRun;
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
-use crate::domain::idempotent_request::{RecordedOutcome, RequestState, ResponseRetention};
+use crate::domain::idempotent_request::{RecordedOutcome, ResponseRetention, RunStatus};
 use crate::domain::run::Run;
 use interpreter::runtime::durable::RunId;
 use std::sync::Arc;
@@ -50,14 +50,17 @@ impl<'a> PrepareRun<'a> {
         };
         if let Some(existing) = existing {
             existing.verify_fingerprint(request.fingerprint())?;
-            return match existing.state() {
-                RequestState::Reserved | RequestState::Running => {
+            return match existing.status() {
+                RunStatus::Queued | RunStatus::Running => {
                     Ok(RunDisposition::Wait(existing.reservation_id().to_owned()))
                 }
-                RequestState::Completed(outcome) => Ok(RunDisposition::Completed(outcome.clone())),
-                RequestState::Indeterminate => Err(RunFailure::Indeterminate),
-                RequestState::Expired | RequestState::Finished => Err(RunFailure::Expired),
-                RequestState::Cancelled | RequestState::Blocked | RequestState::Aborted => {
+                RunStatus::Completed => match unit.run_result(existing.reservation_id()).await? {
+                    Some(outcome) => Ok(RunDisposition::Completed(outcome)),
+                    None => Err(RunFailure::Expired),
+                },
+                RunStatus::Indeterminate => Err(RunFailure::Indeterminate),
+                RunStatus::Expired => Err(RunFailure::Expired),
+                RunStatus::Cancelled | RunStatus::Stuck | RunStatus::Aborted => {
                     Err(RunFailure::Indeterminate)
                 }
             };
@@ -87,7 +90,7 @@ impl<'a> PrepareRun<'a> {
                 && existing.fingerprint() == request.fingerprint()
                 && existing.owner_generation() == request.owner_generation()
                 && existing.revision() == 0
-                && existing.state() == &RequestState::Reserved
+                && existing.status() == RunStatus::Queued
         }))
     }
 }
@@ -144,27 +147,26 @@ impl ResolveRun {
         };
         if request.reservation_id() != reservation.reservation_id()
             || request.owner_generation() != reservation.owner_generation()
-            || (request.program().is_some() && request.attempt() != reservation.attempt())
+            || (request.is_durable() && request.attempt() != reservation.attempt())
         {
             return Err(RunFailure::Store(StoreError::Conflict));
         }
-        if !matches!(
-            request.state(),
-            RequestState::Reserved | RequestState::Running
-        ) {
+        if !matches!(request.status(), RunStatus::Queued | RunStatus::Running) {
             return Ok(None);
         }
-        if request.program().is_some() && history_position != Some(request.history_position()) {
+        if request.is_durable() && history_position != Some(request.history_position()) {
             return Err(RunFailure::Store(StoreError::Conflict));
         }
         let session_id = reservation.session_id();
         let now = SystemTime::now();
         let effect = match resolution {
             RunResolution::Completed(outcome) => {
-                request.complete(reservation.reservation_id(), outcome.clone(), now)?;
+                request.complete(reservation.reservation_id(), now)?;
+                unit.save_run_result(reservation.reservation_id(), outcome.clone())
+                    .await?;
                 if let Some(mut session) = unit.get_session(session_id).await?
                     && (session.require_available(now).is_ok()
-                        || (request.program().is_some() && session.require_active().is_ok()))
+                        || (request.is_durable() && session.require_active().is_ok()))
                 {
                     session
                         .record_execution_completed(now)
@@ -173,14 +175,14 @@ impl ResolveRun {
                 }
                 LastRunEffect::Record
             }
-            RunResolution::Undispatched if request.state() == &RequestState::Reserved => {
+            RunResolution::Undispatched if request.status() == RunStatus::Queued => {
                 request.abort_preparation()?;
                 LastRunEffect::Keep
             }
             RunResolution::Undispatched | RunResolution::Indeterminate => {
                 // Claiming is the admission barrier: a run still reserved
                 // never started, whatever became of its caller.
-                let started = request.state() == &RequestState::Running;
+                let started = request.status() == RunStatus::Running;
                 request.mark_indeterminate(reservation.reservation_id())?;
                 if started {
                     LastRunEffect::Forget
@@ -215,14 +217,16 @@ impl ResolveRun {
             Err(error) => {
                 let mut check = self.units.begin().await?;
                 let saved = check.get_run(reservation.reservation_id()).await?;
+                let result = check.run_result(reservation.reservation_id()).await?;
                 let committed = saved.is_some_and(|run| {
                     run.owner_generation() == reservation.owner_generation()
-                        && (run.program().is_none() || run.attempt() == reservation.attempt())
+                        && (!run.is_durable() || run.attempt() == reservation.attempt())
                         && match resolution {
                             RunResolution::Completed(outcome) => {
-                                run.state() == &RequestState::Completed(outcome.clone())
+                                run.status() == RunStatus::Completed
+                                    && result.as_ref() == Some(outcome)
                             }
-                            RunResolution::Finished => run.state() == &RequestState::Finished,
+                            RunResolution::Finished => run.status() == RunStatus::Completed,
                             _ => false,
                         }
                 });
@@ -256,11 +260,11 @@ impl<'a> RecoverRuns<'a> {
     pub async fn execute(&self, generation: &str) -> Result<(), RunFailure> {
         let mut unit = self.units.begin().await?;
         for mut request in unit.unfinished_runs().await? {
-            if request.owner_generation() != generation && request.program().is_none() {
+            if request.owner_generation() != generation && !request.is_durable() {
                 let id = request.reservation_id().to_owned();
                 // A run cut off once started ended unknown, as while the
                 // server runs; startup's sweep deletes the spill file.
-                if request.state() == &RequestState::Running {
+                if request.status() == RunStatus::Running {
                     unit.remove_last_run(request.session_id()).await?;
                 }
                 request.mark_indeterminate(&id)?;
@@ -345,7 +349,7 @@ pub(crate) async fn claim_run(
     let mut unit = units.begin().await?;
     if let Some(run) = unit.get_run(id).await?
         && run.owner_generation() == startup
-        && run.state() == &RequestState::Running
+        && run.status() == RunStatus::Running
         && run.revision() == expected_revision
         && run.attempt() == expected_attempt
     {
@@ -371,15 +375,15 @@ pub(crate) async fn cancel_session_runs(
             })
             .await?;
         let more = page.len() == 100;
-        after = page.last().map(|run| run.id.clone());
+        after = page.last().map(|run| run.reservation_id().clone());
         for mut run in page {
             if matches!(
-                run.status,
+                run.status(),
                 RunStatus::Queued | RunStatus::Running | RunStatus::Stuck
             ) {
                 run.cancel()
                     .map_err(|error| StoreError::Io(error.to_string()))?;
-                unit.save_run_lifecycle(run).await?;
+                unit.save_run(run).await?;
             }
         }
         if !more {
@@ -406,7 +410,10 @@ pub(crate) async fn reopen_run(
     super::execution::require_available(unit.as_mut(), &session, SystemTime::now())
         .await
         .map_err(|_| RunFailure::SessionUnavailable)?;
-    let program = run.program().ok_or(RunFailure::Indeterminate)?;
+    let program = unit
+        .get_run_program(id)
+        .await?
+        .ok_or(RunFailure::Indeterminate)?;
     if program.compatibility != compatibility {
         return Err(RunFailure::Store(StoreError::Io(
             "runtime is incompatible with the recorded program".into(),
@@ -421,7 +428,7 @@ pub(crate) async fn reopen_run(
             saved.owner_generation() == startup
                 && saved.attempt() == run.attempt()
                 && saved.revision() == run.revision()
-                && saved.state() == &RequestState::Running
+                && saved.status() == RunStatus::Running
         }) {
             return Err(error.into());
         }

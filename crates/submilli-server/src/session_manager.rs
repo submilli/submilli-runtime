@@ -823,15 +823,16 @@ impl SessionManager {
                 .await?
             };
             let more = page.len() == 100;
-            after = page.last().map(|run| run.id.clone());
+            after = page.last().map(|run| run.reservation_id().clone());
             for run in page {
                 if let Err(error) =
-                    crate::recovery::retire(self, self.unit_of_work.as_ref(), &run.id).await
+                    crate::recovery::retire(self, self.unit_of_work.as_ref(), run.reservation_id())
+                        .await
                 {
                     // Keep every root until both disk retirement and its
                     // transaction finish; a transient failure must be retryable.
                     finished = false;
-                    tracing::warn!(run = %run.id, %error, "run cleanup remains pending");
+                    tracing::warn!(run = %run.reservation_id(), %error, "run cleanup remains pending");
                 }
             }
             if !more {
@@ -2015,7 +2016,7 @@ mod tests {
 
     #[tokio::test]
     async fn reaping_expires_responses_past_their_retention() {
-        use crate::domain::idempotent_request::{IdempotentRequest, RecordedOutcome, RequestState};
+        use crate::domain::idempotent_request::{IdempotentRequest, RecordedOutcome, RunStatus};
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         let mgr = SessionManager::new(
@@ -2050,24 +2051,24 @@ mod tests {
             .unwrap();
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         let mut request = unit.get_run("r").await.unwrap().unwrap();
-        request
-            .complete(
-                "r",
-                RecordedOutcome {
-                    status: 200,
-                    body: "bytes".into(),
-                },
-                completed_at,
-            )
-            .unwrap();
+        request.complete("r", completed_at).unwrap();
+        unit.save_run_result(
+            "r",
+            RecordedOutcome {
+                status: 200,
+                body: "bytes".into(),
+            },
+        )
+        .await
+        .unwrap();
         unit.save_run(request).await.unwrap();
         unit.commit().await.unwrap();
 
         assert_eq!(mgr.reap_now().await.unwrap(), 0, "the session stays");
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         assert_eq!(
-            unit.run_for_key("s1", "k").await.unwrap().unwrap().state(),
-            &RequestState::Expired
+            unit.run_for_key("s1", "k").await.unwrap().unwrap().status(),
+            RunStatus::Expired
         );
     }
 
