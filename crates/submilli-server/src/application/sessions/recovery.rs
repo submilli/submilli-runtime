@@ -42,11 +42,7 @@ pub(crate) async fn claim(
     let Some(mut run) = unit.get_run(id).await? else {
         return Ok(None);
     };
-    if !run.is_durable()
-        || !matches!(run.status(), RunStatus::Queued | RunStatus::Running)
-        || (run.status() == RunStatus::Running && run.owner_generation() == startup)
-        || unit.has_run_predecessor(id).await?
-    {
+    if !run.claimable_by(startup) || unit.has_run_predecessor(id).await? {
         return Ok(None);
     }
     let Some(session) = unit.get_session(run.session_id()).await? else {

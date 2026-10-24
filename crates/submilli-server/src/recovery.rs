@@ -245,7 +245,7 @@ async fn schedule(
             .await?;
             continue;
         }
-        let Some(run) = claim_candidate(state, &candidate).await? else {
+        let Some(run) = claim_candidate(state, &candidate).await else {
             continue;
         };
         #[cfg(test)]
@@ -259,35 +259,20 @@ async fn schedule(
     Ok(next)
 }
 
-async fn claim_candidate(
-    state: &AppState,
-    candidate: &Run,
-) -> Result<Option<Run>, crate::application::error::StoreError> {
-    match recovery::claim(
+async fn claim_candidate(state: &AppState, candidate: &Run) -> Option<Run> {
+    recovery::claim(
         state.units().as_ref(),
         candidate.reservation_id(),
         state.idempotency().generation(),
     )
     .await
-    {
-        Ok(run) => Ok(run),
-        Err(error) => {
-            tracing::warn!(run = %candidate.reservation_id(), %error, "cannot recover run");
-            // No task was launched. Read again: the claim might have committed
-            // even if both its acknowledgement and reconciliation read failed.
-            let mut unit = state.units().begin().await?;
-            if let Some(mut current) = unit.get_run(candidate.reservation_id()).await?
-                && matches!(current.status(), RunStatus::Queued | RunStatus::Running)
-            {
-                current
-                    .mark_stuck(StuckReason::History)
-                    .map_err(|_| crate::application::error::StoreError::Conflict)?;
-                unit.save_run(current).await?;
-                unit.commit().await?;
-            }
-            Ok(None)
-        }
-    }
+    .unwrap_or_else(|error| {
+        // No task was launched. A transient claim failure must not turn a
+        // queued run stuck: the next scan reclaims a still-queued run, and
+        // the rule above marks a committed but unacknowledged claim stuck.
+        tracing::warn!(run = %candidate.reservation_id(), %error, "claim not confirmed; retrying on the next scan");
+        None
+    })
 }
 
 async fn candidates(

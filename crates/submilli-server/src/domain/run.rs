@@ -232,15 +232,23 @@ impl Run {
         Ok(())
     }
 
+    /// Whether `startup` may open a new attempt: a queued recorded run, or one
+    /// left running by an earlier startup. A run already running under
+    /// `startup` is never another launch permit, and a stuck run leaves that
+    /// state only through `resume`. This is the recovery model's `Claim` guard.
+    pub fn claimable_by(&self, startup: &str) -> bool {
+        self.durable
+            && match self.state {
+                RunStatus::Queued => true,
+                RunStatus::Running => self.owner_generation != startup,
+                _ => false,
+            }
+    }
+
     /// Called only after the old attempt's native work has drained. SQLite's
     /// exclusive local-store owner establishes that across a process restart.
     pub fn reopen(&mut self, startup: &str) -> Result<(), RequestError> {
-        if !self.durable
-            || !matches!(
-                self.state,
-                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
-            )
-        {
+        if !self.claimable_by(startup) {
             return Err(RequestError::InvalidTransition);
         }
         let attempt = self
@@ -429,5 +437,65 @@ mod tests {
         run.cancel().unwrap();
         assert_eq!(run.status(), RunStatus::Cancelled);
         assert_eq!(run.status().reason(), Some("session_closed"));
+    }
+
+    #[test]
+    fn reopen_follows_the_recovery_models_claim_rule() {
+        let mut run = Run::prepare(
+            "session".into(),
+            None,
+            "fingerprint".into(),
+            "run".into(),
+            "first".into(),
+            RunIdentity::default(),
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        run.enable_durability().unwrap();
+        // Queued: any startup may claim.
+        run.reopen("first").unwrap();
+        assert_eq!(run.status(), RunStatus::Running);
+        assert_eq!(run.attempt(), 1);
+        // Running under this startup: never a second launch permit.
+        let running = run.clone();
+        assert!(matches!(
+            run.reopen("first"),
+            Err(RequestError::InvalidTransition)
+        ));
+        assert_eq!(run, running);
+        // Running under an earlier startup: interrupted by a crash, reclaimed.
+        run.reopen("second").unwrap();
+        assert_eq!(run.attempt(), 2);
+        assert_eq!(run.owner_generation(), "second");
+        // Stuck: only an explicit resume leads back to a claim, and then the
+        // startup that marked it stuck may claim it again.
+        run.mark_stuck(StuckReason::Fuel).unwrap();
+        let stuck = run.clone();
+        assert!(!run.claimable_by("second"));
+        assert!(matches!(
+            run.reopen("third"),
+            Err(RequestError::InvalidTransition)
+        ));
+        assert_eq!(run, stuck);
+        run.resume(run.revision()).unwrap();
+        run.reopen("second").unwrap();
+        assert_eq!(run.attempt(), 3);
+        assert_eq!(run.status(), RunStatus::Running);
+        // Terminal: never claimable again.
+        run.cancel().unwrap();
+        assert!(!run.claimable_by("fourth"));
+        assert!(run.reopen("fourth").is_err());
+        // Unrecorded runs never enter recovery.
+        let unrecorded = Run::prepare(
+            "session".into(),
+            None,
+            "fingerprint".into(),
+            "plain".into(),
+            "first".into(),
+            RunIdentity::default(),
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        assert!(!unrecorded.claimable_by("second"));
     }
 }

@@ -395,9 +395,9 @@ pub(crate) async fn cancel_session_runs(
     }
 }
 
-/// Internal resume; the caller has exclusively acquired the local store and
+/// Internal reclaim; the caller has exclusively acquired the local store and
 /// drained any earlier in-process attempt. Startup discovery is a separate use case.
-#[allow(dead_code)] // Internal resume is integrated with startup scheduling separately.
+#[allow(dead_code)] // Internal reclaim is integrated with startup scheduling separately.
 pub(crate) async fn reopen_run(
     units: &dyn UnitOfWorkFactory,
     id: &str,

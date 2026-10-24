@@ -1,10 +1,11 @@
 # Single-node durable execution protocol
 
 SUB-1797 introduced the bounded model; SUB-1837 aligns it with the native
-outcome history now implemented. Public enablement and startup scheduling remain
-SUB-1842. Each run retains its initial source, blueprint, variables and limits
-once. Recovery reruns that program from the beginning, using committed outcomes
-until it reaches new work.
+outcome history now implemented. SUB-1842 added public enablement and startup
+scheduling, modeled in [recovery/](recovery/README.md). Each run retains its
+initial source, blueprint, variables and limits once. Recovery reruns that
+program from the beginning, using committed outcomes until it reaches new
+work.
 
     reconstruct arguments -> dispatch -> native outcome -> commit -> guest conversion
                                                     replay ----^ (skip dispatch)
@@ -213,12 +214,12 @@ unit-of-work port.
 | Model action | Implementation boundary | Fault coverage / remaining work |
 | --- | --- | --- |
 | Admit, Duplicate | Existing `PrepareRun` stores the immutable initial program with the optional admission key. | Existing admission/tombstone tests and recorded-run integration. |
-| Claim, Launch, Restart | Internal `runner::durable` and `reopen_run` reconstruct the program under a new attempt. | Explicit reopen tested; autonomous scheduling and transport enablement remain SUB-1842. |
+| Claim, Launch, Restart | Internal `runner::durable` and `reopen_run` reconstruct the program under a new attempt. | Explicit reopen tested; the supervisor's scheduling is modeled in [recovery/](recovery/README.md). |
 | Prepare, Commit, ForgetWrite | `append_history` inserts the outcome and advances position, bytes and run revision in one transaction, fenced by owner/attempt/state. | SQL rollback/reopen, stale attempt and mismatch tests. Lost acknowledgement is model-checked; SQL acknowledgement loss is not fault-injected. |
 | Dispatch, RemoteComplete, Receive | `effects::execute` calls the backend only for missing history, passing the stable EffectId. | Missing outcomes retry regardless of adapter idempotency. No persistent intent. |
 | Consume | Operation, codec version and argument fingerprint must match; native outcomes are decoded before guest conversion. | Saved observation and filesystem-resource replay, malformed data and encoded-size bounds. |
 | PrepareTerminal, Commit, Ack | `publish` verifies all history was consumed and uses `ResolveRun` for atomic terminal response and last-result publication. | Restart before terminal publication and stale-attempt refusal. Public handlers remain unchanged. |
-| Cancel, Drain, Release, ExpireSession | Existing cancellation/drain rules remain; caller must drain an old attempt before reopening its mounts. | Full recovery/cleanup orchestration remains SUB-1842. |
+| Cancel, Drain, Release, ExpireSession | Existing cancellation/drain rules remain; caller must drain an old attempt before reopening its mounts. | Recovery and cleanup orchestration is modeled in [recovery/](recovery/README.md). |
 | ExpireResponse, legacy initialization | Existing response retention preserves keys. Legacy runs without a manifest remain indeterminate. | Migration and legacy admission tests; no invented histories. |
 
 `durable_outcomes` stores sealed, versioned inline native results, one row per

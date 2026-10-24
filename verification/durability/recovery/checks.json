@@ -2,29 +2,89 @@
   "module": "RunRecovery",
   "constants": {
     "Capacity": 2,
-    "Fault": "none"
+    "MaxBoot": 2,
+    "MaxAttempt": 3,
+    "Legacy": false,
+    "Fault": "none",
+    "Witness": "none"
   },
   "invariants": [
-    "SingleLaunch",
-    "ManualResumeOnly",
-    "SessionOrder",
+    "TypeOK",
+    "OneLiveAttemptPerRun",
+    "NoSupersededLiveAttempt",
+    "LiveAttemptsBelongToThisBoot",
+    "WithinCapacity",
+    "StuckIsInert",
+    "ResumeIsExplicit",
+    "OrderedExecution",
     "ResourcesProtected",
+    "HistoryFenced",
     "ProgressBounded",
-    "TerminalCommitted"
+    "TerminalCommitted",
+    "LegacyBlocked"
   ],
   "cases": [
     {
       "name": "safety",
       "kind": "safety",
-      "timeout_seconds": 300
+      "timeout_seconds": 900
     },
     {
-      "name": "negative-duplicate-launch",
+      "name": "safety-legacy-predecessor",
+      "kind": "safety",
+      "constants": {
+        "Legacy": true
+      }
+    },
+    {
+      "name": "safety-capacity-one",
+      "kind": "safety",
+      "constants": {
+        "Capacity": 1
+      },
+      "timeout_seconds": 900
+    },
+    {
+      "name": "safety-two-crashes",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxBoot": 3,
+        "MaxAttempt": 4
+      },
+      "timeout_seconds": 3600
+    },
+    {
+      "name": "negative-duplicate-claim",
       "kind": "negative",
       "constants": {
-        "Fault": "duplicate-launch"
+        "Fault": "duplicate-claim"
       },
-      "invariant": "SingleLaunch"
+      "invariant": "NoSupersededLiveAttempt"
+    },
+    {
+      "name": "negative-redispatch",
+      "kind": "negative",
+      "constants": {
+        "Fault": "redispatch"
+      },
+      "invariant": "OneLiveAttemptPerRun"
+    },
+    {
+      "name": "negative-stale-launch",
+      "kind": "negative",
+      "constants": {
+        "Fault": "stale-launch"
+      },
+      "invariant": "LiveAttemptsBelongToThisBoot"
+    },
+    {
+      "name": "negative-stuck-while-live",
+      "kind": "negative",
+      "constants": {
+        "Fault": "stuck-while-live"
+      },
+      "invariant": "StuckIsInert"
     },
     {
       "name": "negative-auto-resume",
@@ -32,7 +92,7 @@
       "constants": {
         "Fault": "auto-resume"
       },
-      "invariant": "ManualResumeOnly"
+      "invariant": "ResumeIsExplicit"
     },
     {
       "name": "negative-overtake",
@@ -40,7 +100,7 @@
       "constants": {
         "Fault": "overtake"
       },
-      "invariant": "SessionOrder"
+      "invariant": "OrderedExecution"
     },
     {
       "name": "negative-early-retire",
@@ -51,8 +111,52 @@
       "invariant": "ResourcesProtected"
     },
     {
-      "name": "unrelated-session-progress",
+      "name": "negative-stale-commit",
+      "kind": "negative",
+      "constants": {
+        "Fault": "stale-commit"
+      },
+      "invariant": "HistoryFenced"
+    },
+    {
+      "name": "witness-reclaim-after-crash",
       "kind": "witness",
+      "constants": {
+        "Witness": "reclaim-after-crash"
+      },
+      "invariant": "NoWitness"
+    },
+    {
+      "name": "witness-retry-commits-prior-progress",
+      "kind": "witness",
+      "constants": {
+        "Witness": "retry-commits-prior-progress"
+      },
+      "invariant": "NoWitness"
+    },
+    {
+      "name": "witness-fenced-task-drains",
+      "kind": "witness",
+      "constants": {
+        "Witness": "fenced-task-drains"
+      },
+      "invariant": "NoWitness"
+    },
+    {
+      "name": "witness-unrelated-session-progress",
+      "kind": "witness",
+      "constants": {
+        "Witness": "unrelated-session-progress"
+      },
+      "invariant": "NoWitness"
+    },
+    {
+      "name": "witness-legacy-successor-admitted",
+      "kind": "witness",
+      "constants": {
+        "Legacy": true,
+        "Witness": "legacy-successor-admitted"
+      },
       "invariant": "NoWitness"
     }
   ]
