@@ -86,8 +86,17 @@ are bounded checks of the scheduler and lifecycle composition, not a liveness
 proof: there is no fairness and no progress property, only the reachability
 witnesses above.
 
+Capacity assumes the two sessions have disjoint writable named volumes. The
+implementation also serializes durable writers sharing a named root or mount,
+reserving the whole volume until the task drains. Persisted running writers
+recover before conflicting queued work after a crash. Stuck runs release their
+volumes for other sessions; resuming one after intervening writes is outside
+the filesystem models' exclusive-access assumption until advisory locking is
+available. Rust scheduling and process-kill tests cover these volume rules;
+this model does not represent volume identities.
+
 Not modeled: the scheduler's page cursor and its reset on wakeup (SUB-2029),
-sessions that share a writable named volume (SUB-2030), the filesystem
+the shared-volume scheduling rule (SUB-2030), the filesystem
 fingerprint check at launch and retirement (SUB-2028), the `durability_disabled`
 transition from queued to stuck, lost commit acknowledgements inside one
 transaction (`DurableExecution` and the unit-of-work model cover those),

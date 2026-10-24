@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "6efcefbf9ad3edeed213024284f7a80aa12ae33fce1d620c23ff5a739223872a"
+  contentHash: "31b677c9c41806f059f294c9a2bccc3273b01dc94b1ff30a5e57c15c2db41b65"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -20,6 +20,17 @@ authorship:
 
 Database, key, and volume settings are listed in
 [server settings](/docs/reference/server-settings).
+
+Durable runs in different sessions can execute together when their writable
+named volumes do not overlap. A named root or mount reserves its whole volume,
+including other subdirectories, until the execution task has drained. Read-only
+references do not reserve the volume. The retained blueprint determines these
+references, even if the registered blueprint has changed.
+
+After a restart, a run still marked `running` recovers before queued writers to
+the same volume. A stuck run releases the volume for other sessions. Resuming it
+after another writer has changed the files can therefore overwrite newer data
+at a saved append offset; shared-volume advisory locking is not yet available.
 
 ## CLI commands
 
@@ -78,7 +89,7 @@ work. Session closure preserves its record in run history.
 | Disconnect | Accepted execution continues independently of its waiter |
 | Long-running request | May return run metadata after the bounded wait |
 | Storage ownership | One server process per SQLite database |
-| File writers | Exclusive access to backing files, including other sessions and external tools |
+| File writers | Durable writers to the same named volume are serialized while running. Ordinary executions, external tools, and different volume names pointing to the same files still require exclusive access |
 | Packages | Package contents must remain unchanged while runs are unfinished |
 | External effects, including HTTP | Assumed idempotent. Calls without a committed outcome may execute again |
 | General Git/code idempotency | Deferred |

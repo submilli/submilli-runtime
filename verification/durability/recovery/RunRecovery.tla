@@ -15,6 +15,11 @@ EXTENDS Naturals, FiniteSets
 
 CONSTANTS Capacity, MaxBoot, MaxAttempt, Legacy, Fault, Witness
 
+\* Capacity assumes sessions have disjoint writable named volumes. The Rust
+\* scheduler additionally excludes overlapping writers until their tasks drain
+\* and recovers persisted running writers before queued ones. Stuck runs release
+\* that exclusion; safe resume after intervening writes needs advisory locking.
+
 ASSUME /\ Capacity \in Nat \ {0} /\ MaxBoot \in Nat \ {0} /\ MaxAttempt \in Nat \ {0}
        /\ Legacy \in BOOLEAN
        /\ Fault \in {"none", "duplicate-claim", "redispatch", "stale-launch",
