@@ -230,6 +230,46 @@ async fn replaced_volume_allows_closed_session_cleanup() {
     stop(&state).await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn supervisor_respects_failed_retirement_backoff() {
+    let logs = retirement_log();
+    let root = tempfile::tempdir().unwrap();
+    let state = mounted_app(root.path(), true).await;
+    let id = accept_with_blueprint(&state, "s", CODE, None, mounted_blueprint()).await;
+    let private = root
+        .path()
+        .join("managed-local/data/.git-submilli-recovery");
+    let outside = root.path().join("outside");
+    std::fs::create_dir_all(outside.join(id.as_str())).unwrap();
+    std::os::unix::fs::symlink(&outside, &private).unwrap();
+    state.session_manager().wipe_now("s").await.unwrap();
+    state.boot().await.unwrap();
+    // Cover repeated discovery ticks and notifications through the real owner.
+    for _ in 0..6 {
+        state.wake_recovery();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+    stop(&state).await;
+    let output = logs.for_run(&id);
+    assert_eq!(
+        output.matches("run resources retained").count(),
+        1,
+        "{output}"
+    );
+    assert!(
+        !state
+            .units()
+            .begin()
+            .await
+            .unwrap()
+            .run_resources_retired(&id)
+            .await
+            .unwrap()
+    );
+    assert!(outside.join(id.as_str()).exists());
+}
+
 #[tokio::test]
 async fn close_retires_named_mount_artifacts_after_stuck_work_drains() {
     let root = tempfile::tempdir().unwrap();

@@ -1,6 +1,6 @@
 //! Bounded lifecycle queries; programs and results are loaded separately.
 use super::run::{SELECT, decode};
-use crate::application::sessions::recovery::{RunQuery, RunStatusFilter};
+use crate::application::sessions::recovery::{RecoveryFilter, RunQuery, RunStatusFilter};
 use crate::database::DatabaseError;
 use crate::domain::run::Run;
 use sqlx::SqliteConnection;
@@ -12,8 +12,17 @@ pub(crate) async fn list(
     let mut sql = sqlx::QueryBuilder::new(SELECT);
     sql.push(" WHERE run_id>")
         .push_bind(query.after.map(|id| id.to_string()).unwrap_or_default());
-    if query.recovery {
+    if let Some(recovery) = query.recovery {
         sql.push(" AND recovery_mode='recorded' AND resources_retired=0");
+        match recovery {
+            RecoveryFilter::Retained => {}
+            RecoveryFilter::Execution => {
+                sql.push(" AND state IN ('reserved','running')");
+            }
+            RecoveryFilter::Retirement => {
+                sql.push(" AND state IN ('completed','cancelled','aborted','expired')");
+            }
+        }
     }
     if let Some(session) = query.session {
         sql.push(" AND session_id=").push_bind(session);

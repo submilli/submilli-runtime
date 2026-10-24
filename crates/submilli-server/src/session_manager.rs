@@ -823,7 +823,9 @@ impl SessionManager {
                     session: Some(session.into()),
                     after,
                     limit: 100,
-                    recovery: true,
+                    recovery: Some(
+                        crate::application::sessions::recovery::RecoveryFilter::Retained,
+                    ),
                     ..Default::default()
                 })
                 .await?
