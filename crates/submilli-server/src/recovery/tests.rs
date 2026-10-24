@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::ServerConfig;
+use crate::domain::run_status::IndeterminateReason;
 use crate::handlers::durable_runs;
 use submilli_shared::secret_store::SecretCipher;
 
@@ -250,14 +251,15 @@ async fn recorded_runs_cannot_become_indeterminate() {
             id,
             run.owner_generation().into(),
             run.created_at(),
-            crate::domain::idempotent_request::RunStatus::Indeterminate,
+            crate::domain::idempotent_request::RunStatus::Indeterminate(
+                IndeterminateReason::Interrupted
+            ),
             None,
             run.identity().clone(),
             run.revision(),
             run.attempt(),
             run.history_position(),
             run.is_durable(),
-            run.reason().map(str::to_owned),
         )
         .is_err()
     );
@@ -625,4 +627,49 @@ async fn completion_failure_rolls_back_result_and_expiry_keeps_run_identity() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn stuck_filter_includes_every_reason_and_resume_clears_it() {
+    use crate::application::sessions::recovery::{RunQuery, RunStatusFilter};
+    let root = tempfile::tempdir().unwrap();
+    let state = app(root.path(), 1_000_000).await;
+    let fuel = accept(&state, "s", CODE, None).await;
+    let credentials = accept(&state, "s", CODE, None).await;
+    recovery::mark_stuck(state.units().as_ref(), &fuel, 0, StuckReason::Fuel)
+        .await
+        .unwrap();
+    recovery::mark_stuck(
+        state.units().as_ref(),
+        &credentials,
+        0,
+        StuckReason::Credentials,
+    )
+    .await
+    .unwrap();
+    let mut unit = state.units().begin().await.unwrap();
+    let runs = unit
+        .list_runs(RunQuery {
+            status: Some(RunStatusFilter::Stuck),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 2);
+    assert!(
+        runs.iter()
+            .any(|run| run.status() == RunStatus::Stuck(StuckReason::Fuel))
+    );
+    assert!(
+        runs.iter()
+            .any(|run| run.status() == RunStatus::Stuck(StuckReason::Credentials))
+    );
+    drop(unit);
+    recovery::resume(state.units().as_ref(), &fuel, 1)
+        .await
+        .unwrap();
+    let observed = durable_runs::observe(&state, &fuel).await.unwrap().unwrap();
+    assert_eq!(observed["status"], "queued");
+    assert!(observed["reason"].is_null());
 }

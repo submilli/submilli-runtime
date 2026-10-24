@@ -1,6 +1,7 @@
 use super::tests::{fixture, proceed};
 use super::*;
 use crate::domain::idempotent_request::RunStatus;
+use crate::domain::run_status::IndeterminateReason;
 
 #[tokio::test]
 async fn unkeyed_invocations_have_distinct_ordered_identity_and_no_response_body() {
@@ -51,7 +52,10 @@ async fn release_after_claim_keeps_the_key_and_cannot_authorize_a_retry() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(run.status(), RunStatus::Indeterminate);
+    assert_eq!(
+        run.status(),
+        RunStatus::Indeterminate(IndeterminateReason::Interrupted)
+    );
     assert_eq!(run.optional_key(), Some("key"));
     assert!(matches!(
         coordinator.reserve("session", "key", "code").await,
@@ -162,7 +166,10 @@ fn process_exit_preserves_unkeyed_run_without_inventing_replay() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(after.status(), RunStatus::Indeterminate);
+        assert_eq!(
+            after.status(),
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted)
+        );
         assert_eq!(before.identity(), after.identity());
         assert!(coordinator.claim(&"crashed".into()).await.is_err());
         database.close().await.unwrap();

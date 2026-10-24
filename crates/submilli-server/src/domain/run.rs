@@ -1,5 +1,5 @@
 //! Persistent program identity and guarded lifecycle transitions. No I/O.
-use super::run_status::{RunStatus, StuckReason};
+use super::run_status::{IndeterminateReason, RunStatus, StuckReason};
 use super::session::SessionId;
 use interpreter::runtime::durable::RunId;
 use std::time::SystemTime;
@@ -20,7 +20,6 @@ pub struct Run {
     attempt: i64,
     history_position: u64,
     durable: bool,
-    reason: Option<String>,
 }
 
 /// Immutable admission metadata. Imported requests may have no execution ID:
@@ -87,7 +86,6 @@ impl Run {
         attempt: i64,
         history_position: u64,
         durable: bool,
-        reason: Option<String>,
     ) -> Result<Self, RequestError> {
         if let Some(key) = &key {
             Self::validate_key(key)?;
@@ -95,7 +93,7 @@ impl Run {
         if identity.admission_order <= 0 || revision < 0 || attempt < 0 {
             return Err(RequestError::InvalidTransition);
         }
-        if durable && state == RunStatus::Indeterminate {
+        if durable && matches!(state, RunStatus::Indeterminate(_)) {
             return Err(RequestError::InvalidTransition);
         }
         let has_completed = matches!(state, RunStatus::Completed | RunStatus::Expired);
@@ -116,7 +114,6 @@ impl Run {
             attempt,
             history_position,
             durable,
-            reason,
         })
     }
 
@@ -142,7 +139,6 @@ impl Run {
         self.require_reservation(reservation_id)?;
         self.advance_revision()?;
         self.state = RunStatus::Completed;
-        self.reason = None;
         self.completed_at = Some(completed_at);
         Ok(())
     }
@@ -154,8 +150,7 @@ impl Run {
             return Err(RequestError::InvalidTransition);
         }
         self.advance_revision()?;
-        self.state = RunStatus::Indeterminate;
-        self.reason = Some("interrupted_without_history".into());
+        self.state = RunStatus::Indeterminate(IndeterminateReason::Interrupted);
         Ok(())
     }
 
@@ -196,7 +191,6 @@ impl Run {
             attempt: 0,
             history_position: 0,
             durable: false,
-            reason: None,
         })
     }
 
@@ -217,27 +211,22 @@ impl Run {
         self.durable
     }
 
-    pub fn reason(&self) -> Option<&str> {
-        self.reason.as_deref()
-    }
-
     pub fn mark_stuck(&mut self, reason: StuckReason) -> Result<(), RequestError> {
         if !self.durable || !matches!(self.state, RunStatus::Queued | RunStatus::Running) {
             return Err(RequestError::InvalidTransition);
         }
         self.advance_revision()?;
-        self.state = RunStatus::Stuck;
-        self.reason = Some(reason.as_str().into());
+        self.state = RunStatus::Stuck(reason);
         Ok(())
     }
 
     pub fn resume(&mut self, revision: i64) -> Result<(), RequestError> {
-        if !self.durable || self.state != RunStatus::Stuck || self.revision != revision {
+        if !self.durable || !matches!(self.state, RunStatus::Stuck(_)) || self.revision != revision
+        {
             return Err(RequestError::InvalidTransition);
         }
         self.advance_revision()?;
         self.state = RunStatus::Queued;
-        self.reason = None;
         Ok(())
     }
 
@@ -247,7 +236,7 @@ impl Run {
         if !self.durable
             || !matches!(
                 self.state,
-                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck
+                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
             )
         {
             return Err(RequestError::InvalidTransition);
@@ -260,7 +249,6 @@ impl Run {
         self.attempt = attempt;
         self.owner_generation = startup.to_owned();
         self.state = RunStatus::Running;
-        self.reason = None;
         Ok(())
     }
 
@@ -285,7 +273,6 @@ impl Run {
         self.advance_revision()?;
         self.attempt = attempt;
         self.state = RunStatus::Running;
-        self.reason = None;
         Ok(())
     }
 
@@ -296,14 +283,13 @@ impl Run {
         self.advance_revision()?;
         self.key = None;
         self.state = RunStatus::Aborted;
-        self.reason = Some("never_dispatched".into());
         Ok(())
     }
 
     pub fn cancel(&mut self) -> Result<(), RequestError> {
         if !matches!(
             self.state,
-            RunStatus::Queued | RunStatus::Running | RunStatus::Stuck
+            RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
         ) {
             return Err(RequestError::InvalidTransition);
         }
@@ -314,7 +300,6 @@ impl Run {
         self.advance_revision()?;
         self.attempt = attempt;
         self.state = RunStatus::Cancelled;
-        self.reason = Some("session_closed".into());
         Ok(())
     }
 
@@ -376,5 +361,37 @@ impl Run {
     }
     pub fn status(&self) -> RunStatus {
         self.state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resuming_and_cancelling_replace_the_entire_status() {
+        let mut run = Run::prepare(
+            "session".into(),
+            None,
+            "fingerprint".into(),
+            "run".into(),
+            "owner".into(),
+            RunIdentity::default(),
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        run.enable_durability().unwrap();
+        run.mark_stuck(StuckReason::Fuel).unwrap();
+        assert_eq!(run.status(), RunStatus::Stuck(StuckReason::Fuel));
+        assert_eq!(run.status().reason(), Some("fuel_exhausted"));
+        run.resume(run.revision()).unwrap();
+        assert_eq!(run.status(), RunStatus::Queued);
+        assert_eq!(run.status().reason(), None);
+        run.claim("owner").unwrap();
+        run.mark_stuck(StuckReason::Timeout).unwrap();
+        assert_eq!(run.status(), RunStatus::Stuck(StuckReason::Timeout));
+        run.cancel().unwrap();
+        assert_eq!(run.status(), RunStatus::Cancelled);
+        assert_eq!(run.status().reason(), Some("session_closed"));
     }
 }

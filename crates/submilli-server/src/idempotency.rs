@@ -482,6 +482,7 @@ mod tests {
     use crate::application::sessions::close::CloseSession;
     use crate::database::ServerDatabase;
     use crate::domain::idempotent_request::RunStatus;
+    use crate::domain::run_status::IndeterminateReason;
     use crate::domain::session::{RootVfs, Session, SessionBinding, SessionId, SessionLifetime};
 
     struct Audit;
@@ -619,7 +620,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status(),
-            RunStatus::Indeterminate,
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted),
             "only completed responses expire"
         );
         let mut unit = units.begin().await.unwrap();
@@ -753,7 +754,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status(),
-            RunStatus::Indeterminate
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted)
         );
         guard.complete(200, "late".into()).await;
         assert!(matches!(

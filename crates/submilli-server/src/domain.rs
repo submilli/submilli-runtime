@@ -10,4 +10,4 @@ pub mod finalization;
 
 pub mod run_program;
 
-pub(crate) mod run_status;
+pub mod run_status;

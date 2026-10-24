@@ -56,11 +56,11 @@ pub(crate) async fn save(
         .bind(request.fingerprint()).bind(&request.identity().principal).bind(&request.identity().entry)
         .bind(request.owner_generation()).bind(request.attempt())
         .bind(request.revision()).bind(request.identity().admission_order).bind(created).bind(state)
-        .bind(request.reason()).bind(completed).bind(recovery_mode).execute(connection).await?
+        .bind(request.status().reason()).bind(completed).bind(recovery_mode).execute(connection).await?
     } else {
         // Updating lifecycle never serializes or rewrites the retained initial inputs.
         sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running','blocked') AND ?='running' AND attempt=?-1))")
-            .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(request.reason())
+            .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(request.status().reason())
             .bind(request.attempt()).bind(request.revision()).bind(completed)
             .bind(request.reservation_id().as_str()).bind(request.revision()-1).bind(request.owner_generation()).bind(state).bind(request.attempt())
             .execute(connection).await?
@@ -134,17 +134,7 @@ pub(super) fn decode(row: SqliteRow) -> Result<Run, DatabaseError> {
         "unrecorded" => false,
         _ => return Err(invalid("invalid recovery mode")),
     };
-    let state = match row.try_get::<&str, _>("state")? {
-        "reserved" => RunStatus::Queued,
-        "running" => RunStatus::Running,
-        "blocked" => RunStatus::Stuck,
-        "cancelled" => RunStatus::Cancelled,
-        "aborted" => RunStatus::Aborted,
-        "completed" => RunStatus::Completed,
-        "indeterminate" => RunStatus::Indeterminate,
-        "expired" => RunStatus::Expired,
-        _ => return Err(invalid("invalid run state")),
-    };
+    let state = decode_status(row.try_get("state")?, row.try_get("reason")?)?;
     let completed_at = row
         .try_get::<Option<i64>, _>("completed_at_unix_ms")?
         .map(from_unix_ms)
@@ -171,7 +161,6 @@ pub(super) fn decode(row: SqliteRow) -> Result<Run, DatabaseError> {
         row.try_get("attempt")?,
         u64::try_from(row.try_get::<i64, _>("history_position")?).map_err(invalid)?,
         durable,
-        row.try_get("reason")?,
     )
     .map_err(invalid)
 }
@@ -196,7 +185,7 @@ fn invalid(error: impl std::fmt::Display) -> DatabaseError {
 pub(super) fn stored_state(state: RunStatus) -> &'static str {
     match state {
         RunStatus::Queued => "reserved",
-        RunStatus::Stuck => "blocked",
+        RunStatus::Stuck(_) => "blocked",
         other => other.as_str(),
     }
 }
@@ -211,4 +200,77 @@ pub(crate) async fn get_run(
         .await?
         .map(decode)
         .transpose()
+}
+
+fn decode_status(state: &str, reason: Option<&str>) -> Result<RunStatus, DatabaseError> {
+    use crate::domain::run_status::{IndeterminateReason, StuckReason};
+    Ok(match state {
+        "reserved" => RunStatus::Queued,
+        "running" => RunStatus::Running,
+        "blocked" => RunStatus::Stuck(match reason {
+            Some("credentials_unavailable") => StuckReason::Credentials,
+            Some("storage_unavailable") => StuckReason::Storage,
+            Some("incompatible_environment") => StuckReason::Compatibility,
+            Some("invalid_history") => StuckReason::History,
+            Some("fuel_exhausted") => StuckReason::Fuel,
+            Some("execution_timeout") => StuckReason::Timeout,
+            Some("execution_interrupted") => StuckReason::Interrupted,
+            Some("durability_disabled") => StuckReason::Disabled,
+            Some("replay_unavailable") => StuckReason::ReplayUnavailable,
+            _ => return Err(invalid("invalid stuck reason")),
+        }),
+        "cancelled" => RunStatus::Cancelled,
+        "aborted" => RunStatus::Aborted,
+        "completed" => RunStatus::Completed,
+        "indeterminate" => RunStatus::Indeterminate(match reason {
+            Some("legacy_without_history") => IndeterminateReason::Legacy,
+            // Older unrecorded rows may have no separately retained reason.
+            Some("interrupted_without_history") | None => IndeterminateReason::Interrupted,
+            _ => return Err(invalid("invalid indeterminate reason")),
+        }),
+        "expired" => RunStatus::Expired,
+        _ => return Err(invalid("invalid run state")),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::run_status::{IndeterminateReason, StuckReason};
+
+    #[test]
+    fn status_and_reason_roundtrip_together() {
+        let statuses = [
+            RunStatus::Queued,
+            RunStatus::Running,
+            RunStatus::Cancelled,
+            RunStatus::Aborted,
+            RunStatus::Completed,
+            RunStatus::Expired,
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted),
+            RunStatus::Indeterminate(IndeterminateReason::Legacy),
+            RunStatus::Stuck(StuckReason::Credentials),
+            RunStatus::Stuck(StuckReason::Storage),
+            RunStatus::Stuck(StuckReason::Compatibility),
+            RunStatus::Stuck(StuckReason::History),
+            RunStatus::Stuck(StuckReason::Fuel),
+            RunStatus::Stuck(StuckReason::Timeout),
+            RunStatus::Stuck(StuckReason::Interrupted),
+            RunStatus::Stuck(StuckReason::Disabled),
+            RunStatus::Stuck(StuckReason::ReplayUnavailable),
+        ];
+        for status in statuses {
+            assert_eq!(
+                decode_status(stored_state(status), status.reason()).unwrap(),
+                status
+            );
+        }
+        assert!(decode_status("blocked", None).is_err());
+        assert!(decode_status("blocked", Some("session_closed")).is_err());
+        assert!(decode_status("indeterminate", Some("fuel_exhausted")).is_err());
+        assert_eq!(
+            decode_status("indeterminate", None).unwrap(),
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted)
+        );
+    }
 }

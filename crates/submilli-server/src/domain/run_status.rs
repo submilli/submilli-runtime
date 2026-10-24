@@ -3,12 +3,12 @@
 pub enum RunStatus {
     Queued,
     Running,
-    Stuck,
+    Stuck(StuckReason),
     Cancelled,
     Aborted,
     Completed,
     /// An interrupted unrecorded run whose outcome cannot be recovered.
-    Indeterminate,
+    Indeterminate(IndeterminateReason),
     Expired,
 }
 
@@ -17,17 +17,27 @@ impl RunStatus {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
-            Self::Stuck => "stuck",
+            Self::Stuck(_) => "stuck",
             Self::Cancelled => "cancelled",
             Self::Aborted => "aborted",
             Self::Completed => "completed",
-            Self::Indeterminate => "indeterminate",
+            Self::Indeterminate(_) => "indeterminate",
             Self::Expired => "expired",
+        }
+    }
+
+    pub fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::Stuck(reason) => Some(reason.as_str()),
+            Self::Cancelled => Some("session_closed"),
+            Self::Aborted => Some("never_dispatched"),
+            Self::Indeterminate(reason) => Some(reason.as_str()),
+            Self::Queued | Self::Running | Self::Completed | Self::Expired => None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StuckReason {
     Credentials,
     Storage,
@@ -37,6 +47,7 @@ pub enum StuckReason {
     Timeout,
     Interrupted,
     Disabled,
+    ReplayUnavailable,
 }
 
 impl StuckReason {
@@ -50,6 +61,22 @@ impl StuckReason {
             Self::Timeout => "execution_timeout",
             Self::Interrupted => "execution_interrupted",
             Self::Disabled => "durability_disabled",
+            Self::ReplayUnavailable => "replay_unavailable",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndeterminateReason {
+    Interrupted,
+    Legacy,
+}
+
+impl IndeterminateReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Interrupted => "interrupted_without_history",
+            Self::Legacy => "legacy_without_history",
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Persistent run observation and explicit recovery, independent of tool answers.
 use crate::app::AppState;
-use crate::application::sessions::recovery::{self, RunQuery, RunStatus};
+use crate::application::sessions::recovery::{self, RunQuery, RunStatus, RunStatusFilter};
 use crate::domain::run::Run;
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -157,7 +157,7 @@ fn view(run: &Run) -> Value {
     };
     json!({
         "execution_id": run.reservation_id(), "session_id": run.session_id(),
-        "status": run.status().as_str(), "reason": run.reason(),
+        "status": run.status().as_str(), "reason": run.status().reason(),
         "durable": run.is_durable(), "revision": run.revision(), "attempt": run.attempt(),
         "admission_order": run.identity().admission_order,
         "created_at_unix_ms": millis(run.created_at()),
@@ -165,16 +165,16 @@ fn view(run: &Run) -> Value {
     })
 }
 
-fn parse_status(status: &str) -> Result<RunStatus, ()> {
+fn parse_status(status: &str) -> Result<RunStatusFilter, ()> {
     match status {
-        "queued" => Ok(RunStatus::Queued),
-        "running" => Ok(RunStatus::Running),
-        "stuck" => Ok(RunStatus::Stuck),
-        "completed" => Ok(RunStatus::Completed),
-        "cancelled" => Ok(RunStatus::Cancelled),
-        "aborted" => Ok(RunStatus::Aborted),
-        "indeterminate" => Ok(RunStatus::Indeterminate),
-        "expired" => Ok(RunStatus::Expired),
+        "queued" => Ok(RunStatusFilter::Queued),
+        "running" => Ok(RunStatusFilter::Running),
+        "stuck" => Ok(RunStatusFilter::Stuck),
+        "completed" => Ok(RunStatusFilter::Completed),
+        "cancelled" => Ok(RunStatusFilter::Cancelled),
+        "aborted" => Ok(RunStatusFilter::Aborted),
+        "indeterminate" => Ok(RunStatusFilter::Indeterminate),
+        "expired" => Ok(RunStatusFilter::Expired),
         _ => Err(()),
     }
 }

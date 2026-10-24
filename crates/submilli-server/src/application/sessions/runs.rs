@@ -58,9 +58,9 @@ impl<'a> PrepareRun<'a> {
                     Some(outcome) => Ok(RunDisposition::Completed(outcome)),
                     None => Err(RunFailure::Expired),
                 },
-                RunStatus::Indeterminate => Err(RunFailure::Indeterminate),
+                RunStatus::Indeterminate(_) => Err(RunFailure::Indeterminate),
                 RunStatus::Expired => Err(RunFailure::Expired),
-                RunStatus::Cancelled | RunStatus::Stuck | RunStatus::Aborted => {
+                RunStatus::Cancelled | RunStatus::Stuck(_) | RunStatus::Aborted => {
                     Err(RunFailure::Indeterminate)
                 }
             };
@@ -379,7 +379,7 @@ pub(crate) async fn cancel_session_runs(
         for mut run in page {
             if matches!(
                 run.status(),
-                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck
+                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
             ) {
                 run.cancel()
                     .map_err(|error| StoreError::Io(error.to_string()))?;

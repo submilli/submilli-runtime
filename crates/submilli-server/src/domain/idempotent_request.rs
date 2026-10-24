@@ -71,6 +71,7 @@ impl ResponseRetention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::run_status::IndeterminateReason;
     use std::time::UNIX_EPOCH;
 
     const HOUR: Duration = Duration::from_secs(60 * 60);
@@ -155,7 +156,6 @@ mod tests {
                 0,
                 0,
                 false,
-                None,
             )
         };
         assert!(restore(RunStatus::Expired, Some(at(1))).is_ok());
@@ -165,7 +165,10 @@ mod tests {
             Err(RequestError::CompletionTimeMismatch)
         ));
         assert!(matches!(
-            restore(RunStatus::Indeterminate, Some(at(1))),
+            restore(
+                RunStatus::Indeterminate(IndeterminateReason::Interrupted),
+                Some(at(1))
+            ),
             Err(RequestError::CompletionTimeMismatch)
         ));
     }

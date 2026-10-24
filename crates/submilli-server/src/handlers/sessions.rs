@@ -429,7 +429,7 @@ async fn durable_retry(
     }
     match run.status() {
         RunStatus::Expired => return Err(Refusal::Expired),
-        RunStatus::Indeterminate => return Err(Refusal::Indeterminate),
+        RunStatus::Indeterminate(_) => return Err(Refusal::Indeterminate),
         RunStatus::Queued | RunStatus::Running if !run.is_durable() => {
             return Err(Refusal::InProgress);
         }

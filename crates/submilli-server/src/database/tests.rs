@@ -704,7 +704,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
         database.close().await.unwrap();
     }
 }
@@ -1062,7 +1062,7 @@ async fn run_payload_migration_preserves_programs_history_and_responses() {
     .unwrap();
     let before = MIGRATOR
         .iter()
-        .filter(|migration| migration.version <= 13)
+        .filter(|migration| migration.version <= 12)
         .cloned()
         .collect();
     sqlx::migrate::Migrator::with_migrations(before)

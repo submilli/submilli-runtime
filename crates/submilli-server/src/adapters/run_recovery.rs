@@ -1,6 +1,6 @@
 //! Bounded lifecycle queries; programs and results are loaded separately.
-use super::run::{SELECT, decode, stored_state};
-use crate::application::sessions::recovery::RunQuery;
+use super::run::{SELECT, decode};
+use crate::application::sessions::recovery::{RunQuery, RunStatusFilter};
 use crate::database::DatabaseError;
 use crate::domain::run::Run;
 use sqlx::SqliteConnection;
@@ -19,7 +19,16 @@ pub(crate) async fn list(
         sql.push(" AND session_id=").push_bind(session);
     }
     if let Some(status) = query.status {
-        sql.push(" AND state=").push_bind(stored_state(status));
+        sql.push(" AND state=").push_bind(match status {
+            RunStatusFilter::Queued => "reserved",
+            RunStatusFilter::Running => "running",
+            RunStatusFilter::Stuck => "blocked",
+            RunStatusFilter::Cancelled => "cancelled",
+            RunStatusFilter::Aborted => "aborted",
+            RunStatusFilter::Completed => "completed",
+            RunStatusFilter::Indeterminate => "indeterminate",
+            RunStatusFilter::Expired => "expired",
+        });
     }
     sql.push(" ORDER BY run_id LIMIT ")
         .push_bind(query.limit.clamp(1, 100) as i64);

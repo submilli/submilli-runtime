@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use submilli_server::database::{DatabaseError, ServerDatabase};
 use submilli_server::domain::idempotent_request::{RecordedOutcome, RunStatus};
+use submilli_server::domain::run_status::{IndeterminateReason, StuckReason};
 
 #[derive(Debug, PartialEq)]
 pub struct Record {
@@ -26,7 +27,7 @@ impl Record {
             session_id: session.into(),
             key: key.into(),
             fingerprint,
-            state: RunStatus::Indeterminate,
+            state: RunStatus::Indeterminate(IndeterminateReason::Interrupted),
             result: None,
         }
     }
@@ -65,7 +66,7 @@ impl RequestRecords {
     }
     pub async fn put(&self, record: Record) -> Result<(), DatabaseError> {
         let (state, completed, owner_generation) = match record.state {
-            RunStatus::Indeterminate => ("indeterminate", false, "previous-server"),
+            RunStatus::Indeterminate(_) => ("indeterminate", false, "previous-server"),
             RunStatus::Expired => ("expired", true, "this-server"),
             _ => panic!("fixture seeds abandoned or expired requests only"),
         };
@@ -100,11 +101,22 @@ impl RequestRecords {
                         "reserved" => RunStatus::Queued,
                         "expired" => RunStatus::Expired,
                         "running" => RunStatus::Running,
-                        "blocked" => RunStatus::Stuck,
+                        "blocked" => RunStatus::Stuck(match row.try_get::<&str, _>("reason")? {
+                            "credentials_unavailable" => StuckReason::Credentials,
+                            "storage_unavailable" => StuckReason::Storage,
+                            "incompatible_environment" => StuckReason::Compatibility,
+                            "invalid_history" => StuckReason::History,
+                            "fuel_exhausted" => StuckReason::Fuel,
+                            "execution_timeout" => StuckReason::Timeout,
+                            "execution_interrupted" => StuckReason::Interrupted,
+                            "durability_disabled" => StuckReason::Disabled,
+                            "replay_unavailable" => StuckReason::ReplayUnavailable,
+                            _ => return Err(DatabaseError::Import("invalid stuck reason".into())),
+                        }),
                         "cancelled" => RunStatus::Cancelled,
                         "aborted" => RunStatus::Aborted,
                         "finished" => RunStatus::Completed,
-                        "indeterminate" => RunStatus::Indeterminate,
+                        "indeterminate" => RunStatus::Indeterminate(IndeterminateReason::Interrupted),
                         state => {
                             return Err(DatabaseError::Import(format!(
                                 "invalid run state: {state}"

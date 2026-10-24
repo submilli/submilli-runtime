@@ -10,12 +10,25 @@ pub(crate) use crate::domain::run_status::{RunStatus, StuckReason};
 #[derive(Clone, Default)]
 pub(crate) struct RunQuery {
     pub session: Option<String>,
-    pub status: Option<RunStatus>,
+    pub status: Option<RunStatusFilter>,
     /// Lexicographic run-ID cursor, independent of mutable lifecycle state.
     pub after: Option<RunId>,
     pub limit: usize,
     /// Only runs that still need execution or resource retirement.
     pub recovery: bool,
+}
+
+/// Selects a lifecycle status regardless of its reason.
+#[derive(Clone, Copy)]
+pub(crate) enum RunStatusFilter {
+    Queued,
+    Running,
+    Stuck,
+    Cancelled,
+    Aborted,
+    Completed,
+    Indeterminate,
+    Expired,
 }
 
 /// Claim one eligible run, checking its predecessor in the same transaction.
@@ -68,7 +81,10 @@ pub(crate) async fn resume(
 ) -> Result<(), StoreError> {
     let mut unit = units.begin().await?;
     let mut run = unit.get_run(id).await?.ok_or(StoreError::Conflict)?;
-    if !run.is_durable() || run.status() != RunStatus::Stuck || run.revision() != revision {
+    if !run.is_durable()
+        || !matches!(run.status(), RunStatus::Stuck(_))
+        || run.revision() != revision
+    {
         return Err(StoreError::Conflict);
     }
     let session = unit
