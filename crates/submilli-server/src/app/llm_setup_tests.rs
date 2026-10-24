@@ -48,7 +48,7 @@ impl Harness {
             }])
             .unwrap(),
         );
-        let ledger = Arc::new(RequestRecords::ephemeral());
+        let ledger = RequestRecords::ephemeral();
         let state = AppState::with_llm_dispatch_factory(
             ServerConfig {
                 blueprints: Some(blueprints),
@@ -61,6 +61,7 @@ impl Harness {
         )
         .await
         .unwrap();
+        let ledger = Arc::new(ledger.with_cipher(state.secret_cipher()));
         Self {
             state,
             fail,
@@ -161,16 +162,17 @@ async fn rest_setup_failure_is_undispatched_and_same_key_can_execute_after_recov
         .unwrap()
         .unwrap();
     assert_eq!(record.value()["console"].as_array().unwrap().len(), 1);
-    assert!(matches!(
-        harness
-            .ledger
-            .load(session, "setup-retry")
-            .await
-            .unwrap()
-            .unwrap()
-            .state,
-        EntryState::Completed
-    ));
+    let saved = harness
+        .ledger
+        .load(session, "setup-retry")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.state, EntryState::Completed);
+    assert_eq!(
+        serde_json::from_str::<Value>(&saved.outcome().unwrap().body).unwrap(),
+        healthy
+    );
     let (_, _, replay) = harness.post(&path, json!({"code": CODE}), &headers).await;
     assert_eq!(replay, healthy);
     assert_eq!(

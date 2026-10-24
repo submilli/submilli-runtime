@@ -4,16 +4,17 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::sync::Arc;
 use std::time::SystemTime;
+use submilli_durable::codec::Sealer;
 use submilli_server::database::{DatabaseError, ServerDatabase};
 use submilli_server::domain::idempotent_request::RunStatus;
+use submilli_server::domain::run_status::{IndeterminateReason, StuckReason};
+use submilli_shared::secret_store::SecretCipher;
 
 #[derive(Debug, PartialEq)]
 pub struct RecordedResponse {
     pub status: u16,
     pub body: String,
 }
-
-use submilli_server::domain::run_status::{IndeterminateReason, StuckReason};
 
 #[derive(Debug, PartialEq)]
 pub struct Record {
@@ -55,10 +56,18 @@ pub fn code_fingerprint(code: &str) -> String {
 }
 pub struct RequestRecords {
     pub database: Arc<ServerDatabase>,
+    sealer: Sealer,
 }
 impl RequestRecords {
     pub fn with_database(database: Arc<ServerDatabase>) -> Self {
-        Self { database }
+        Self {
+            database,
+            sealer: Sealer::default(),
+        }
+    }
+    pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
+        self.sealer = Sealer::new(cipher);
+        self
     }
     pub fn ephemeral() -> Self {
         Self::with_database(Arc::new(
@@ -91,11 +100,12 @@ impl RequestRecords {
     pub async fn load(&self, session: &str, key: &str) -> Result<Option<Record>, DatabaseError> {
         let session = session.to_owned();
         let key = key.to_owned();
+        let sealer = self.sealer.clone();
         self.database
             .transaction(move |connection| {
                 Box::pin(async move {
                     let Some(row) =
-                        sqlx::query("SELECT runs.*,run_results.status AS response_status,run_results.content AS response_body FROM runs LEFT JOIN run_results USING(run_id) WHERE session_id=? AND request_key=?")
+                        sqlx::query("SELECT runs.*,run_results.status AS response_status,run_results.content AS response_body,run_results.encrypted AS response_encrypted FROM runs LEFT JOIN run_results USING(run_id) WHERE session_id=? AND request_key=?")
                             .bind(&session)
                             .bind(&key)
                             .fetch_optional(connection)
@@ -130,13 +140,25 @@ impl RequestRecords {
                             )));
                         }
                     };
+                    let result = if let Some(status) = row.try_get::<Option<u16>, _>("response_status")? {
+                        let mut body: Vec<u8> = row.try_get("response_body")?;
+                        if row.try_get::<bool, _>("response_encrypted")? {
+                            let id: String = row.try_get("run_id")?;
+                            body = sealer.open(&format!("run-result:v1:{id}"), &body, "run result")
+                                .map_err(|error| DatabaseError::Import(error.to_string()))?;
+                        }
+                        Some(RecordedResponse {
+                            status,
+                            body: String::from_utf8(body).map_err(|error| DatabaseError::Import(error.to_string()))?,
+                        })
+                    } else {
+                        None
+                    };
                     Ok(Some(Record {
                         session_id: session,
                         key,
                         fingerprint: row.try_get("fingerprint")?,
-                        result: row.try_get::<Option<u16>,_>("response_status")?.map(|status| RecordedResponse {
-                            status, body: String::from_utf8(row.try_get("response_body").unwrap()).unwrap(),
-                        }),
+                        result,
                         state,
                     }))
                 })
