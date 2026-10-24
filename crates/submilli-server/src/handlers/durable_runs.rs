@@ -155,7 +155,7 @@ fn view(run: &RunSummary) -> Value {
             .map(|duration| duration.as_millis())
     };
     json!({
-        "execution_id": run.id, "session_id": run.session_id,
+        "execution_id": run.id, "session_id": run.session_id.as_str(),
         "status": run.status.as_str(), "reason": run.reason,
         "durable": run.recorded, "revision": run.revision, "attempt": run.attempt,
         "admission_order": run.admission_order,

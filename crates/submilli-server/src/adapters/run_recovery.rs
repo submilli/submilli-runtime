@@ -1,6 +1,7 @@
 //! Bounded lifecycle queries deliberately do not open program/history payloads.
 use crate::application::sessions::recovery::{RunQuery, RunStatus, RunSummary};
 use crate::database::DatabaseError;
+use crate::domain::session::SessionId;
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -121,7 +122,8 @@ fn decode(row: SqliteRow) -> Result<RunSummary, DatabaseError> {
     };
     Ok(RunSummary {
         id: row.try_get::<String, _>("run_id")?.into(),
-        session_id: row.try_get("session_id")?,
+        session_id: SessionId::parse(row.try_get("session_id")?)
+            .map_err(|error| DatabaseError::Import(error.to_string()))?,
         fingerprint: row.try_get("fingerprint")?,
         status,
         reason: row.try_get("reason")?,

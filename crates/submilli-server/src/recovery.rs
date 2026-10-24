@@ -199,7 +199,7 @@ async fn schedule(
         }
         if active
             .values()
-            .any(|running| running.run.session_id() == summary.session_id)
+            .any(|running| running.run.session_id() == summary.session_id.as_str())
         {
             continue;
         }

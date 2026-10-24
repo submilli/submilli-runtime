@@ -228,6 +228,41 @@ mod lifecycle;
 pub(super) mod process;
 
 #[tokio::test]
+async fn recorded_runs_cannot_become_indeterminate() {
+    let root = tempfile::tempdir().unwrap();
+    let state = app(root.path(), 1_000_000).await;
+    let id = accept(&state, "s", CODE, None).await;
+    let mut run = recovery::claim(state.units().as_ref(), &id, "first")
+        .await
+        .unwrap()
+        .unwrap();
+    let before = run.clone();
+    assert!(matches!(
+        run.mark_indeterminate(&id),
+        Err(crate::domain::run::RequestError::InvalidTransition)
+    ));
+    assert_eq!(run, before);
+    assert!(
+        crate::domain::run::Run::restore(
+            run.session_id().into(),
+            run.optional_key().map(str::to_owned),
+            run.fingerprint().into(),
+            id,
+            run.owner_generation().into(),
+            run.created_at(),
+            crate::domain::idempotent_request::RequestState::Indeterminate,
+            None,
+            run.identity().clone(),
+            run.revision(),
+            run.attempt(),
+            run.history_position(),
+            run.program().cloned().map(Arc::new),
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
 async fn retained_work_protects_expired_sessions_and_resume_survives_lost_ack() {
     use crate::idempotency::fault_tests::{CommitFault, FaultFactory};
     use std::sync::atomic::Ordering;

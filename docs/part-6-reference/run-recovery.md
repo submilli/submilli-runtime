@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "b2642fe16be1243f5dc9687940fdd5ef553652192e24a29fcba32ee6b135c46c"
+  contentHash: "9d891ed7fa2c0dbe711a8e1118e23d1aba5f51a07a4d30bdea349e92692a1560"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -42,7 +42,7 @@ The HTTP equivalents are [run endpoints](/docs/reference/http-api#get-v1runs).
 | `running` from an earlier process | Recover with a new attempt | Not accepted |
 | `stuck` | Retain without execution | Accepted with the observed revision |
 | `completed`, `cancelled`, `aborted`, `expired` | Retire drained resources | Not accepted |
-| `indeterminate` | No automatic execution | Not accepted |
+| `indeterminate` (non-durable runs only) | No automatic execution | Not accepted |
 
 Queued, running, and stuck recorded runs prevent idle session expiry. Explicit
 session closure cancels retained work and drains execution before cleanup.
@@ -76,7 +76,7 @@ remain eligible. Disabling durability leaves unfinished recorded runs stuck.
 | Storage ownership | One server process per SQLite database |
 | File writers | Exclusive access to backing files, including other sessions and external tools |
 | Packages | Package contents must remain unchanged while runs are unfinished |
-| External HTTP side effects | Caller supplies an idempotency key where the service supports one |
+| External effects, including HTTP | Assumed idempotent. Calls without a committed outcome may execute again |
 | General Git/code idempotency | Deferred |
 | Durable application-tool waits | Refused; deferred |
 | Multi-node recovery | Unsupported |

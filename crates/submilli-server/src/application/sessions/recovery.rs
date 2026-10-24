@@ -36,7 +36,7 @@ pub(crate) async fn claim(
     {
         return Ok(None);
     }
-    let Some(session) = unit.get_session(&summary.session_id).await? else {
+    let Some(session) = unit.get_session(summary.session_id.as_str()).await? else {
         return Err(StoreError::Io("run session is missing".into()));
     };
     session
@@ -73,7 +73,7 @@ pub(crate) async fn resume(
         return Err(StoreError::Conflict);
     }
     let session = unit
-        .get_session(&summary.session_id)
+        .get_session(summary.session_id.as_str())
         .await?
         .ok_or(StoreError::Conflict)?;
     session.require_active().map_err(|_| StoreError::Conflict)?;
@@ -157,7 +157,9 @@ pub(crate) async fn admit(
     if let Err(error) = unit.commit().await {
         let mut check = units.begin().await?;
         let saved = check.run_summary(request.reservation_id()).await?;
-        if !saved.is_some_and(|saved| saved.recorded && saved.session_id == request.session_id()) {
+        if !saved.is_some_and(|saved| {
+            saved.recorded && saved.session_id.as_str() == request.session_id()
+        }) {
             return Err(error.into());
         }
     }

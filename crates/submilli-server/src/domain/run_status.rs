@@ -1,6 +1,7 @@
 //! Run lifecycle independent of the retained program: a damaged manifest must
 //! not prevent observation, suspension, or cancellation.
 use super::run::RequestError;
+use super::session::SessionId;
 use interpreter::runtime::durable::RunId;
 use std::time::SystemTime;
 
@@ -8,7 +9,7 @@ use std::time::SystemTime;
 #[derive(Clone, Debug)]
 pub(crate) struct RunSummary {
     pub id: RunId,
-    pub session_id: String,
+    pub session_id: SessionId,
     pub fingerprint: String,
     pub status: RunStatus,
     pub reason: Option<String>,
@@ -29,6 +30,7 @@ pub(crate) enum RunStatus {
     Cancelled,
     Aborted,
     Completed,
+    /// An interrupted unrecorded run whose outcome cannot be recovered.
     Indeterminate,
     Expired,
 }

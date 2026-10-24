@@ -90,6 +90,9 @@ impl Run {
         if identity.admission_order <= 0 || revision < 0 || attempt < 0 {
             return Err(RequestError::InvalidTransition);
         }
+        if program.is_some() && state == RequestState::Indeterminate {
+            return Err(RequestError::InvalidTransition);
+        }
         let has_completed = matches!(
             state,
             RequestState::Completed(_) | RequestState::Expired | RequestState::Finished
@@ -143,6 +146,10 @@ impl Run {
 
     pub fn mark_indeterminate(&mut self, reservation_id: &str) -> Result<(), RequestError> {
         self.require_reservation(reservation_id)?;
+        // Recorded runs can retry missing outcomes through their effect history.
+        if self.program.is_some() {
+            return Err(RequestError::InvalidTransition);
+        }
         self.advance_revision()?;
         self.state = RequestState::Indeterminate;
         Ok(())
