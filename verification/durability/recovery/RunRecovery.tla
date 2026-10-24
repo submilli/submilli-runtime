@@ -22,7 +22,7 @@ ASSUME /\ Capacity \in Nat \ {0} /\ MaxBoot \in Nat \ {0} /\ MaxAttempt \in Nat 
                     "stale-commit"}
        /\ Witness \in {"none", "reclaim-after-crash", "retry-commits-prior-progress",
                       "fenced-task-drains", "unrelated-session-progress",
-                      "legacy-successor-admitted"}
+                      "legacy-successor-completed"}
 
 Runs == 1..3
 Sessions == 1..2
@@ -30,6 +30,7 @@ Session(r) == IF r <= 2 THEN 1 ELSE 2
 Steps == 2
 Terminal == {"completed", "cancelled"}
 Retained == {"queued", "running", "stuck"}
+OrderingFinished == Terminal \cup {"indeterminate"}
 Attempts == 1..(MaxAttempt + 1)
 
 VARIABLES
@@ -65,9 +66,9 @@ Init ==
 Live(r) == \E a \in Attempts : <<r, a>> \in live
 Earlier(r) == {q \in Runs : q < r /\ Session(q) = Session(r)}
 \* has_run_predecessor: an earlier run of the session that is queued, running,
-\* stuck or indeterminate blocks a claim. A terminal predecessor whose task has
-\* not drained blocks too, because the scheduler skips its session.
-EarlierDone(r) == \A q \in Earlier(r) : state[q] \in Terminal /\ ~Live(q)
+\* or stuck blocks a claim. Indeterminate runs have ended without a recoverable
+\* outcome. A predecessor whose task has not drained still blocks the session.
+EarlierDone(r) == \A q \in Earlier(r) : state[q] \in OrderingFinished /\ ~Live(q)
 ClosingCancels(s, r) == Session(r) = s /\ state[r] \in Retained
 AutoResumed(r) == Fault = "auto-resume" /\ state[r] = "stuck"
 Saw(name, condition) == witness \/ (Witness = name /\ condition)
@@ -78,9 +79,8 @@ Admit(r) ==
     /\ \A q \in Earlier(r) : state[q] # "absent"
     /\ state' = [state EXCEPT ![r] = "queued"]
     /\ pinned' = pinned \cup {r}
-    /\ witness' = Saw("legacy-successor-admitted", Legacy /\ r = 2)
     /\ UNCHANGED <<attempt, owner, history, progress, closed, boot, online, live,
-                   consumed, resumes, launched, unresumed, frozen, progressBy>>
+                   consumed, resumes, launched, unresumed, frozen, progressBy, witness>>
 
 \* recovery::claim: one transaction checks the predecessor and the session,
 \* then commits a new attempt owned by this startup. A run already running
@@ -166,7 +166,8 @@ Complete(r, a) ==
     /\ online /\ <<r, a>> \in live /\ a = attempt[r] /\ state[r] = "running"
     /\ consumed[r] = Steps /\ history[r] = Steps
     /\ state' = [state EXCEPT ![r] = "completed"]
-    /\ witness' = Saw("unrelated-session-progress", r = 3 /\ state[1] = "stuck")
+    /\ witness' = (Saw("unrelated-session-progress", r = 3 /\ state[1] = "stuck")
+                    \/ Saw("legacy-successor-completed", Legacy /\ r = 2))
     /\ UNCHANGED <<attempt, owner, history, progress, closed, pinned, boot, online,
                    live, consumed, resumes, launched, unresumed, frozen, progressBy>>
 
@@ -258,7 +259,7 @@ WithinCapacity == Cardinality(live) <= Capacity
 StuckIsInert == \A r \in Runs : state[r] = "stuck" => ~Live(r)
 \* A run that entered stuck stays stuck, or is cancelled, until an explicit resume.
 ResumeIsExplicit == \A r \in unresumed : state[r] \in {"stuck", "cancelled"}
-\* A running or live run has only terminal, drained predecessors in its session.
+\* A running or live run has only finished, drained predecessors in its session.
 OrderedExecution == \A r \in Runs : (state[r] = "running" \/ Live(r)) => EarlierDone(r)
 \* Private files and history stay while a run may still need them.
 ResourcesProtected == \A r \in Runs : (state[r] \in Retained \/ Live(r)) => r \in pinned
@@ -268,8 +269,8 @@ ProgressBounded == \A r \in Runs :
     /\ consumed[r] <= history[r] /\ history[r] <= progress[r]
     /\ progress[r] <= history[r] + 1 /\ progress[r] <= Steps
 TerminalCommitted == \A r \in Runs : state[r] = "completed" => history[r] = Steps
-\* Current behavior under review in SUB-2027: a legacy indeterminate run blocks
-\* every later run of its session until the session closes.
-LegacyBlocked == Legacy => state[2] \in {"absent", "queued", "cancelled"}
+\* Legacy outcomes remain unknown, without execution or durable resources.
+LegacyPreserved == Legacy => /\ state[1] = "indeterminate" /\ attempt[1] = 0
+                             /\ ~Live(1) /\ 1 \notin pinned
 NoWitness == ~witness
 =============================================================================

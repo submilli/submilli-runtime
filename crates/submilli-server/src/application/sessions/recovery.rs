@@ -11,6 +11,8 @@ pub(crate) use crate::domain::run_status::{RunStatus, StuckReason};
 pub(crate) struct RunQuery {
     pub session: Option<String>,
     pub status: Option<RunStatusFilter>,
+    /// Queued, running or stuck work that session closure must cancel.
+    pub unfinished_only: bool,
     /// Lexicographic run-ID cursor, independent of mutable lifecycle state.
     pub after: Option<RunId>,
     pub limit: usize,

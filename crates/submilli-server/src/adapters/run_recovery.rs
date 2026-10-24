@@ -27,6 +27,9 @@ pub(crate) async fn list(
     if let Some(session) = query.session {
         sql.push(" AND session_id=").push_bind(session);
     }
+    if query.unfinished_only {
+        sql.push(" AND state IN ('reserved','running','blocked')");
+    }
     if let Some(status) = query.status {
         sql.push(" AND state=").push_bind(match status {
             RunStatusFilter::Queued => "reserved",
@@ -61,7 +64,9 @@ pub(crate) async fn predecessor(
     connection: &mut SqliteConnection,
     id: &str,
 ) -> Result<bool, DatabaseError> {
-    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs previous JOIN runs current ON previous.session_id=current.session_id WHERE current.run_id=? AND previous.admission_order<current.admission_order AND previous.state IN ('reserved','running','blocked','indeterminate'))")
+    // Indeterminate work has ended without a recoverable outcome. Its evidence
+    // remains in the ledger, but only unfinished work delays a successor.
+    Ok(sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs previous JOIN runs current ON previous.session_id=current.session_id WHERE current.run_id=? AND previous.admission_order<current.admission_order AND previous.state IN ('reserved','running','blocked'))")
         .bind(id).fetch_one(connection).await?)
 }
 

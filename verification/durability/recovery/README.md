@@ -43,9 +43,9 @@ expressible.
 | `Retire` | `recovery::retire` for a terminal run with no live task: the scheduler skips a session with an active task, and session cleanup waits for the resource-scope write lock before retiring |
 | `Crash`, `Restart` | the process dies with its tasks; a new startup has a fresh generation and changes no run state |
 
-`EarlierDone` mirrors `has_run_predecessor`: queued, running, stuck and
-indeterminate predecessors block a claim, and so does a terminal predecessor
-whose task has not drained, because the scheduler skips its session.
+`EarlierDone` mirrors `has_run_predecessor`: queued, running and stuck
+predecessors block a claim. Indeterminate predecessors allow later work to
+proceed. Any predecessor whose task has not drained still blocks the session.
 
 ## Invariants
 
@@ -56,16 +56,11 @@ whose task has not drained, because the scheduler skips its session.
 | `LiveAttemptsBelongToThisBoot` | no task survives a restart, no task without a claim by this startup | `stale-launch`: launch a row claimed by an earlier startup |
 | `StuckIsInert` | stuck is recorded only after the task is gone | `stuck-while-live`: `stop_attempt` without waiting for the task |
 | `ResumeIsExplicit` | a run that entered stuck stays stuck or is cancelled until an explicit resume | `auto-resume`: a restart requeues stuck runs |
-| `OrderedExecution` | a running or live run has only terminal, drained predecessors in its session | `overtake`: claim without the predecessor check |
+| `OrderedExecution` | a running or live run has only finished, drained predecessors in its session | `overtake`: claim without the predecessor check |
 | `ResourcesProtected` | private files and history stay for retained or live runs | `early-retire`: retire while the task is live |
 | `HistoryFenced` | nothing commits to history after cancellation | `stale-commit`: `append_history` without the attempt and state fence |
 | `WithinCapacity`, `ProgressBounded`, `TerminalCommitted` | at most `Capacity` live tasks; adapter progress at most one effect ahead of history; completion needs the whole history | none; the `safety-capacity-one` case makes the capacity guard bind |
-| `LegacyBlocked` | with `Legacy`, run 1 starts indeterminate and run 2 never executes | none; the `legacy-successor-admitted` witness shows run 2 is admitted, so the invariant is not vacuous |
-
-`LegacyBlocked` records current behavior, not a goal: an indeterminate
-predecessor blocks its session until the session closes, silently. SUB-2027
-decides whether to keep that. If the decision changes `has_run_predecessor`,
-change `EarlierDone` and this invariant together.
+| `LegacyPreserved` | with `Legacy`, run 1 stays indeterminate with no attempts, live tasks or retained resources | none; the `legacy-successor-completed` witness shows run 2 can complete in the same session |
 
 ## Witnesses
 
@@ -77,7 +72,7 @@ Each witness case asserts `NoWitness` and must fail, proving the path exists:
 | `retry-commits-prior-progress` | adapter progress landed under one attempt and the outer outcome commits under a later one, the filesystem-receipt composition |
 | `fenced-task-drains` | a cancelled run's task is still live after `Close` and drains |
 | `unrelated-session-progress` | run 3 completes while run 1 is stuck |
-| `legacy-successor-admitted` | run 2 is admitted behind an indeterminate run 1 |
+| `legacy-successor-completed` | run 2 completes behind an indeterminate run 1 |
 
 ## Bounds and limits
 
