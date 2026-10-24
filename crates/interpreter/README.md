@@ -14,4 +14,8 @@ For the policy, `submilli-policy` (with its `engine` feature) provides the
 with filters on each capability's context. `submilli-build` builds packages and
 reads their artifacts back from a package store.
 
+When a session closes, `invoke_finalizer_async` runs the cleanup a package
+registered with `session.registerFinalizer`. `examples/finalizer.rs` shows the
+whole call.
+
 Licensed under Apache-2.0.

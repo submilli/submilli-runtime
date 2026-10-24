@@ -92,14 +92,14 @@ pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind
 pub use typechecker::{capability_binding_type, capture, check, desugar, infer, infer_package};
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,
-    FieldNarrowingTest, ForOfKind, GenericArgument, GlobalKind, InterfaceCarrier,
-    InterfaceNarrowingTest, InternalModuleExports, Intrinsic, PostfixTarget, TypedArrayElement,
-    TypedAst, TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor,
-    TypedClassDecl, TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction,
-    TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl,
-    TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField,
-    TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl,
-    TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl,
-    TypeofTagKind,
+    FieldNarrowingTest, FinalizerArgumentCheck, ForOfKind, GenericArgument, GlobalKind,
+    InterfaceCarrier, InterfaceNarrowingTest, InternalModuleExports, Intrinsic, PostfixTarget,
+    TypedArrayElement, TypedAst, TypedCatchClause, TypedChainPart, TypedClassAccessor,
+    TypedClassConstructor, TypedClassDecl, TypedClassField, TypedClassMethod, TypedExpr,
+    TypedExprKind, TypedFunction, TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember,
+    TypedNumberEnumDecl, TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource,
+    TypedObjectLiteralField, TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind,
+    TypedStringEnumDecl, TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue,
+    TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
 };
 pub use types::{IndexSignature, ObjectField, Package, TupleType, Type, TypePredicate};

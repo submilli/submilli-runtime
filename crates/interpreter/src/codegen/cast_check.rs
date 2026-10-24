@@ -107,7 +107,21 @@ pub fn emit_cast(
     emitter.end_single_evaluations(mark)?;
     let enclosing = map_cast_span(emitter, cast_span);
     cast::emit_box(emitter, ctx, &source_ty)?;
+    emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape, key)?;
+    restore_span(emitter, enclosing);
+    Ok(())
+}
 
+/// The runtime half of `value as target_ty` for the boxed value on the stack:
+/// test it against `check_shape` and narrow it, or throw the cast's
+/// `TypeError`. `session_key` names the `session.get` key in that error.
+pub(crate) fn emit_shape_cast_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    target_ty: &Type,
+    check_shape: &Type,
+    session_key: Option<u32>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let object_idx = ctx
         .symbols
         .intrinsic_type_indices()
@@ -120,7 +134,7 @@ pub fn emit_cast(
     let scratch = emitter.add_anonymous_local(scratch_ty)?;
     emitter.instruction(Instruction::LocalSet(scratch));
     let previous_diagnostic = diagnostic::begin(emitter, ctx);
-    diagnostic::session_key(emitter, key);
+    diagnostic::session_key(emitter, session_key);
 
     emit_structural_test(emitter, ctx, scratch, check_shape, target_ty)?;
 
@@ -133,7 +147,6 @@ pub fn emit_cast(
     emit_cast_throw(emitter, ctx, scratch, target_ty);
     emitter.emit_end();
     emitter.cast_diagnostic = previous_diagnostic;
-    restore_span(emitter, enclosing);
     Ok(())
 }
 

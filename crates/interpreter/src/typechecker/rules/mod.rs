@@ -13,7 +13,7 @@ mod doc_consistency;
 mod exported_docs;
 pub(crate) mod exported_signature_types;
 mod fallthrough;
-mod finalizers;
+pub(crate) mod finalizers;
 mod main_required;
 mod missing_return;
 mod return_outside_function;

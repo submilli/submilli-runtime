@@ -14,6 +14,7 @@ mod effects_memory;
 pub mod embedding;
 pub mod exec;
 pub mod filesystem;
+pub mod finalizers;
 pub mod fs;
 pub mod fuel;
 pub mod gc_singleton;
@@ -57,6 +58,7 @@ pub use embedding::{
     estimate_embedding_tokens,
 };
 pub use exec::{RunResult, dispatch_main_async, instantiate_program_async};
+pub use finalizers::{FinalizerCall, FinalizerError, invoke_finalizer_async};
 pub use host::{
     INTERNAL_MODULE_NAME, NUMBER_MODULE_NAME, host_package_declarations,
     install_async as install_runtime_async, install_async_for as install_runtime_async_for,

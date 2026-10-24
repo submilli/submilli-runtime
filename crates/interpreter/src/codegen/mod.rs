@@ -23,6 +23,7 @@ mod field_guards;
 mod field_lookup;
 pub mod field_name_strings;
 pub mod field_names;
+mod finalizer_argument;
 pub mod function_adapters;
 pub mod function_emitter;
 pub mod imported_classes;
@@ -1537,6 +1538,20 @@ fn codegen_inner(
         runtime_validator_sigs.push(sig_idx);
     }
 
+    let finalizer_argument = ta
+        .finalizer_argument
+        .as_ref()
+        .map(|check| {
+            finalizer_argument::allocate(
+                check,
+                &mut types,
+                &symbols,
+                &mut next_type_idx,
+                &mut next_func_idx,
+            )
+        })
+        .transpose()?;
+
     // `main`'s result is encoded to its output `$string` entirely in wasm by the
     // `__main_output` shim (`() -> (ref null $string)`): scalars render via `toString`
     // (a `string` passes through verbatim — no JSON quoting), and structured
@@ -1629,6 +1644,9 @@ fn codegen_inner(
     functions.function(field_lookup_signature);
     for &sig_idx in &runtime_validator_sigs {
         functions.function(sig_idx);
+    }
+    if let Some(argument) = &finalizer_argument {
+        functions.function(argument.type_idx);
     }
     if let Some((sig_idx, _)) = main_output_shim {
         functions.function(sig_idx);
@@ -1810,6 +1828,13 @@ fn codegen_inner(
     }
     if let Some((_, func_idx)) = main_output_shim {
         exports.export("__main_output", WasmExportKind::Func, func_idx);
+    }
+    if let Some(argument) = &finalizer_argument {
+        exports.export(
+            crate::mangle::finalizer_argument(&ta.package_name).as_str(),
+            WasmExportKind::Func,
+            argument.func_idx,
+        );
     }
     // A test build also exports what its non-entry modules export, each once.
     for entry in ta.exports.iter().chain(&ta.test_exports) {
@@ -2034,6 +2059,9 @@ fn codegen_inner(
             )
         })?;
         code.function(&validator);
+    }
+    if let Some(argument) = &finalizer_argument {
+        code.function(&finalizer_argument::body(&ctx, argument)?);
     }
 
     if let (Some(_), Some(main_func_idx), Some(main_return_ty)) =

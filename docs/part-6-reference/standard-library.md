@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4d8c1dea99798e42d2e1330b71392242167b531ae7bd1453a470a32468eca778"
+  contentHash: "791453e031d5797335eb0a5cfd0ab406bb785c6fe009ba7bef4b935779c84368"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -255,7 +255,9 @@ export function finalizer(key: string, value: ResourceHandle): void {
 
 The package root exports one fixed, nongeneric
 `finalizer(key: string, value: T): void`. Registration arguments must match
-`T` and satisfy the same serialization rules as session KV values.
+`T` and satisfy the same serialization rules as session KV values. Cleanup
+checks the stored value against `T` as `value as T` does, so `T` must be a type
+`as` accepts.
 
 | Function | Behavior |
 | --- | --- |

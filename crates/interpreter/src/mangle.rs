@@ -39,6 +39,12 @@ pub fn package_symbol(package: &str, symbol: &str) -> MangledName {
     MangledName(format!("{package}{SEP}{symbol}"))
 }
 
+/// The export that checks a stored finalizer argument against the package's
+/// `finalizer` parameter. The `:` keeps it out of reach of every import.
+pub fn finalizer_argument(package: &str) -> MangledName {
+    MangledName(format!("{package}{SEP}finalizer:argument"))
+}
+
 /// Internal module symbol for a declaration in a multi-file package. `module` is
 /// the canonicalized package-relative path (`util`, `internal/math`) — no
 /// leading `./`, no `.subm` suffix. Root-exported (public) symbols use

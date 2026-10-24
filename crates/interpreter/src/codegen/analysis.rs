@@ -171,6 +171,9 @@ impl CodegenAnalysis {
                 .mentioned_closure_sigs
                 .push(super::field_guards::signature());
         }
+        if let Some(argument) = &ta.finalizer_argument {
+            analysis.note_cast(&argument.target, Some(&argument.check))?;
+        }
         analysis.note_narrowing_checks(ta)?;
         analysis.note_inherited_conversions(ta, dependencies)?;
         for test in ta.runtime_type_tests.values() {
@@ -333,6 +336,26 @@ impl CodegenAnalysis {
             | crate::FieldNarrowingTest::Substituted
             | crate::FieldNarrowingTest::Representation => {}
         };
+        Ok(())
+    }
+
+    /// What `value as target_ty` needs: its error text and, for a checked
+    /// cast, the shape it tests.
+    fn note_cast(
+        &mut self,
+        target_ty: &Type,
+        check: Option<&Type>,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.string_pool
+            .intern_text(&cast_check::error_prefix(target_ty));
+        for tag in cast_check::TYPE_TAG_STRINGS {
+            self.string_pool.intern_text(tag);
+        }
+        self.visit_type(target_ty)?;
+        if let Some(check) = check {
+            self.visit_type(check)?;
+            self.note_shape_member_names(check);
+        }
         Ok(())
     }
 
@@ -1196,18 +1219,7 @@ impl CodegenAnalysis {
             }
             TypedExprKind::Cast {
                 target_ty, check, ..
-            } => {
-                self.string_pool
-                    .intern_text(&cast_check::error_prefix(target_ty));
-                for tag in cast_check::TYPE_TAG_STRINGS {
-                    self.string_pool.intern_text(tag);
-                }
-                self.visit_type(target_ty)?;
-                if let Some(check) = check {
-                    self.visit_type(check)?;
-                    self.note_shape_member_names(check);
-                }
-            }
+            } => self.note_cast(target_ty, check.as_deref())?,
             TypedExprKind::Regex { source, flags } => {
                 self.string_pool.intern_text(source);
                 self.string_pool.intern_text(flags);
