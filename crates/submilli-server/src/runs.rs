@@ -11,9 +11,11 @@
 //! listeners may read it, and a listener that goes away loses nothing, since
 //! the state stays readable until the next change.
 //!
-//! A suspended run is lost on restart: nothing here is durable.
+//! Durable runs rebuild this in-memory view from effect history after restart.
 
-use interpreter::runtime::durable::RunId;
+use interpreter::runtime::durable::{EffectId, RunId};
+
+pub(crate) mod durable;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -47,6 +49,8 @@ pub struct PendingCallView {
 pub enum RunState {
     /// Working, or about to.
     Running,
+    /// This attempt stopped; durable storage supplies its authoritative status.
+    Unavailable,
     /// Waiting on the harness for these calls.
     Suspended(Arc<[PendingCallView]>),
     /// Done. The body is the execute response, as the caller receives it.
@@ -126,6 +130,9 @@ struct RunInner {
     pending: Option<PendingCall>,
     /// Call ids the harness answered: answering one again is a no-op.
     answered: HashSet<String>,
+    /// Delivered answers are provisional until the ordinary effect commits.
+    delivered: Option<String>,
+    rejected: HashSet<String>,
     next_seq: u64,
     /// Taken when the run is cancelled or finishes: a run without it has stopped.
     cancel: Option<oneshot::Sender<()>>,
@@ -148,6 +155,7 @@ impl RunInner {
 pub struct RunEntry {
     pub id: RunId,
     pub session_id: String,
+    pub(crate) durable: bool,
     state: watch::Sender<RunView>,
     inner: Mutex<RunInner>,
     slots: Arc<Slots>,
@@ -159,12 +167,17 @@ impl RunEntry {
         self.state.borrow().state.clone()
     }
 
+    /// Capture before submitting so a transition during delivery cannot be missed.
+    pub(crate) fn generation(&self) -> u64 {
+        self.state.borrow().generation
+    }
+
     /// Wait until the run has finished.
     pub async fn finished(&self) {
         let _ = self
             .state
             .subscribe()
-            .wait_for(|view| matches!(view.state, RunState::Finished(_)))
+            .wait_for(|view| matches!(view.state, RunState::Finished(_) | RunState::Unavailable))
             .await;
     }
 
@@ -217,7 +230,11 @@ impl RunEntry {
             inner.pending = Some(pending);
             return Err(ResumeRefusal::UnknownCall(other.call_id));
         }
-        inner.answered.insert(pending.view.call_id);
+        if self.durable {
+            inner.delivered = Some(pending.view.call_id);
+        } else {
+            inner.answered.insert(pending.view.call_id);
+        }
         self.slots.give_back();
         let generation = self.publish(RunState::Running);
         // The run may have ended since; then nobody is waiting for the answer.
@@ -273,6 +290,7 @@ impl RunEntry {
 
     fn suspend(
         &self,
+        effect_id: EffectId,
         tool: &str,
         args: serde_json::Value,
         reply: oneshot::Sender<Result<McpResponse, ToolCallError>>,
@@ -295,7 +313,11 @@ impl RunEntry {
         }
         inner.next_seq += 1;
         let view = PendingCallView {
-            call_id: format!("{}:{}", self.id, inner.next_seq),
+            call_id: if self.durable {
+                self.call_id(&effect_id)
+            } else {
+                format!("{}:{}", self.id, inner.next_seq)
+            },
             tool: tool.to_owned(),
             args,
         };
@@ -353,7 +375,7 @@ impl RunEntry {
     async fn wait(&self, mut receiver: watch::Receiver<RunView>, floor: u64) -> RunState {
         let settled = receiver
             .wait_for(|view| {
-                matches!(view.state, RunState::Finished(_))
+                matches!(view.state, RunState::Finished(_) | RunState::Unavailable)
                     || (view.generation > floor && !matches!(view.state, RunState::Running))
             })
             .await;
@@ -412,6 +434,25 @@ impl RunRegistry {
         session_id: &str,
         cancel: oneshot::Sender<()>,
     ) -> Arc<RunEntry> {
+        self.insert_with_mode(id, session_id, cancel, false)
+    }
+
+    pub(crate) fn insert_durable(
+        &self,
+        id: &RunId,
+        session_id: &str,
+        cancel: oneshot::Sender<()>,
+    ) -> Arc<RunEntry> {
+        self.insert_with_mode(id, session_id, cancel, true)
+    }
+
+    fn insert_with_mode(
+        &self,
+        id: &RunId,
+        session_id: &str,
+        cancel: oneshot::Sender<()>,
+        durable: bool,
+    ) -> Arc<RunEntry> {
         let (state, _) = watch::channel(RunView {
             generation: 0,
             state: RunState::Running,
@@ -419,6 +460,7 @@ impl RunRegistry {
         let entry = Arc::new(RunEntry {
             id: id.to_owned(),
             session_id: session_id.to_owned(),
+            durable,
             state,
             inner: Mutex::new(RunInner {
                 cancel: Some(cancel),
@@ -453,7 +495,12 @@ impl RunRegistry {
     pub fn sessions_with_unfinished_runs(&self) -> HashSet<String> {
         self.lock()
             .values()
-            .filter(|entry| !matches!(entry.current(), RunState::Finished(_)))
+            .filter(|entry| {
+                !matches!(
+                    entry.current(),
+                    RunState::Finished(_) | RunState::Unavailable
+                )
+            })
             .map(|entry| entry.session_id.clone())
             .collect()
     }
@@ -488,7 +535,7 @@ impl RunRegistry {
         self.slots.taken.load(Ordering::Acquire)
     }
 
-    fn forget(&self, entry: &Arc<RunEntry>) {
+    pub(crate) fn forget(&self, entry: &Arc<RunEntry>) {
         let mut runs = self.lock();
         if runs
             .get(&entry.id)
@@ -519,14 +566,19 @@ pub struct SuspendingToolProvider {
 impl ToolProvider for SuspendingToolProvider {
     fn call<'a>(
         &'a self,
+        effect_id: EffectId,
         tool: &'a str,
         args_json: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<McpResponse, ToolCallError>> + Send + 'a>> {
         Box::pin(async move {
             let args = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
             let (reply, mut answer) = oneshot::channel();
-            let call_id = match self.entry.suspend(tool, args, reply) {
+            let call_id = match self.entry.suspend(effect_id, tool, args, reply) {
                 Ok(call_id) => call_id,
+                Err(SuspendRefusal::Full) if self.entry.durable => {
+                    tracing::warn!(run = %self.entry.id, "durable tool wait interrupted: suspended-run capacity reached");
+                    return Err(ToolCallError::Cancelled);
+                }
                 Err(SuspendRefusal::Full) => {
                     return Err(ToolCallError::QuotaExceeded {
                         message:
@@ -604,7 +656,11 @@ mod tests {
         let provider = provider(&registry, Duration::from_secs(60));
         let call = tokio::spawn({
             let provider = Arc::clone(&provider);
-            async move { provider.call("lookup", r#"{"id":1}"#).await }
+            async move {
+                provider
+                    .call("test-effect".into(), "lookup", r#"{"id":1}"#)
+                    .await
+            }
         });
         let pending = calls(provider.entry.settled().await);
         assert_eq!(pending[0].call_id, "run:1");
@@ -643,7 +699,7 @@ mod tests {
     async fn an_unanswered_call_times_out_and_a_late_answer_is_refused() {
         let registry = Arc::new(RunRegistry::default());
         let provider = provider(&registry, Duration::from_millis(20));
-        let answer = provider.call("slow", "{}").await;
+        let answer = provider.call("test-effect".into(), "slow", "{}").await;
         assert!(matches!(answer, Err(ToolCallError::TimedOut)));
         assert_eq!(registry.suspended(), 0);
         assert!(matches!(provider.entry.current(), RunState::Running));
@@ -660,7 +716,7 @@ mod tests {
     async fn the_suspended_run_cap_refuses_with_quota_exceeded() {
         let registry = Arc::new(RunRegistry::new(0));
         let provider = provider(&registry, Duration::from_secs(60));
-        let answer = provider.call("lookup", "{}").await;
+        let answer = provider.call("test-effect".into(), "lookup", "{}").await;
         assert!(matches!(answer, Err(ToolCallError::QuotaExceeded { .. })));
     }
 
@@ -670,7 +726,7 @@ mod tests {
         let provider = provider(&registry, Duration::from_secs(60));
         let call = tokio::spawn({
             let provider = Arc::clone(&provider);
-            async move { provider.call("lookup", "{}").await }
+            async move { provider.call("test-effect".into(), "lookup", "{}").await }
         });
         calls(provider.entry.settled().await);
         provider.entry.cancel();
@@ -684,7 +740,7 @@ mod tests {
         let provider = provider(&registry, Duration::from_secs(60));
         let call = tokio::spawn({
             let provider = Arc::clone(&provider);
-            async move { provider.call("lookup", "{}").await }
+            async move { provider.call("test-effect".into(), "lookup", "{}").await }
         });
         calls(provider.entry.settled().await);
         call.abort();
@@ -708,7 +764,7 @@ mod tests {
         let provider = provider(&registry, Duration::from_secs(60));
         let call = tokio::spawn({
             let provider = Arc::clone(&provider);
-            async move { provider.call("lookup", "{}").await }
+            async move { provider.call("test-effect".into(), "lookup", "{}").await }
         });
         calls(provider.entry.settled().await);
         provider.entry.stop_waiting();
@@ -726,7 +782,7 @@ mod tests {
             provider.entry.outcome_recordable(),
             "nothing was stopped yet"
         );
-        let answer = provider.call("lookup", "{}").await;
+        let answer = provider.call("test-effect".into(), "lookup", "{}").await;
         assert!(matches!(answer, Err(ToolCallError::Cancelled)));
         assert!(!provider.entry.outcome_recordable());
         assert_eq!(registry.suspended(), 0);
@@ -749,13 +805,13 @@ mod tests {
             }),
         };
         assert!(matches!(
-            provider.call("slow", "{}").await,
+            provider.call("test-effect".into(), "slow", "{}").await,
             Err(ToolCallError::TimedOut)
         ));
         assert_eq!(touches.load(Ordering::Relaxed), 1);
         // The harness is gone: the next call is refused at once, untouched.
         assert!(matches!(
-            provider.call("slow", "{}").await,
+            provider.call("test-effect".into(), "slow", "{}").await,
             Err(ToolCallError::TimedOut)
         ));
         assert_eq!(touches.load(Ordering::Relaxed), 1);

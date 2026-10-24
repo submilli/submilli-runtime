@@ -79,6 +79,7 @@ impl ToolCallError {
 pub trait ToolProvider: Send + Sync {
     fn call<'a>(
         &'a self,
+        effect_id: super::durable::EffectId,
         tool: &'a str,
         args_json: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<McpResponse, ToolCallError>> + Send + 'a>>;
@@ -130,7 +131,7 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
                     caller,
                     "tools.call",
                     request,
-                    move |caller, _, request| {
+                    move |caller, effect_id, request| {
                         Box::pin(async move {
                             fuel::charge(&mut *caller, fuel::IO, request.args_json.len() as u64)?;
                             let ToolRequest { tool, args_json } = request;
@@ -145,7 +146,7 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
                                 .map_err(|error| error.into_denial(TOOLS_CAPABILITY))?;
 
                             let waited = Instant::now();
-                            let outcome = provider.call(&tool, &args_json).await;
+                            let outcome = provider.call(effect_id, &tool, &args_json).await;
                             let data = caller.data_mut();
                             data.clock_paused = data.clock_paused.saturating_add(waited.elapsed());
 
@@ -302,6 +303,7 @@ mod tests {
     impl ToolProvider for Answer {
         fn call<'a>(
             &'a self,
+            _effect_id: crate::runtime::durable::EffectId,
             tool: &'a str,
             args_json: &'a str,
         ) -> std::pin::Pin<

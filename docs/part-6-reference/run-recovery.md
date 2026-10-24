@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "31b677c9c41806f059f294c9a2bccc3273b01dc94b1ff30a5e57c15c2db41b65"
+  contentHash: "7995c50bfa5a30d96df4e28e50e0ce7e411e4690000689b49853a1c7b6c0f4e1"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -16,7 +16,7 @@ authorship:
 | YAML key | Default | Constraint |
 | --- | --- | --- |
 | `durable_execution` | `false` | Requires persistent SQLite storage and an encryption key |
-| `max_durable_runs` | `4` | Positive maximum of concurrently executing sessions |
+| `max_durable_runs` | `4` | Positive limit for admitting execution work, excluding suspended tool runs |
 
 Database, key, and volume settings are listed in
 [server settings](/docs/reference/server-settings).
@@ -87,11 +87,13 @@ work. Session closure preserves its record in run history.
 | HTTP idempotency key | Retries observe the original run, including a stuck run |
 | MCP request identity | No automatic idempotency key; another call may create another run |
 | Disconnect | Accepted execution continues independently of its waiter |
-| Long-running request | May return run metadata after the bounded wait |
+| Long-running request | Queued runs and runs without a local attempt return metadata after the 25-second wait. A running tool-enabled program with a local attempt waits for its next suspension or terminal state |
 | Storage ownership | One server process per SQLite database |
-| File writers | Durable writers to the same named volume are serialized while running. Ordinary executions, external tools, and different volume names pointing to the same files still require exclusive access |
+| File writers | Durable writers to the same named volume are serialized while their attempts remain active, including while suspended at a tool. Ordinary executions, external tools, and different volume names pointing to the same files still require exclusive access |
 | Packages | Package contents must remain unchanged while runs are unfinished |
 | External effects, including HTTP | Assumed idempotent. Calls without a committed outcome may execute again |
 | General Git/code idempotency | Deferred |
-| Durable application-tool waits | Refused; deferred |
+| Durable application-tool waits | Supported inside the active attempt. The answer is accepted when its ordinary effect commits. Recovery replays to the same call and restarts `tool_call_timeout` for an unresolved wait |
+| Suspended run capacity | A suspended run stays in memory and counts toward `max_suspended_runs`, but not toward `max_durable_runs`. It retains its session order and writable named volumes until its attempt exits. Resumed attempts continue without acquiring a new execution slot |
+| Full suspended-run pool | Interrupts the durable attempt without recording a tool outcome. The run becomes `stuck` with `execution_interrupted` and can be explicitly recovered |
 | Multi-node recovery | Unsupported |

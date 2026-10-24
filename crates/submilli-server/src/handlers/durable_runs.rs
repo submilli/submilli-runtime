@@ -55,7 +55,17 @@ pub(crate) async fn list(
 
 pub(crate) async fn get(state: &AppState, id: &str) -> Response {
     match observe(state, id).await {
-        Ok(Some(value)) => Json(value).into_response(),
+        Ok(Some(value)) => {
+            // A committed cancellation or terminal result takes precedence over
+            // a pending call whose in-memory cleanup has not run yet.
+            if matches!(value["status"].as_str(), Some("queued" | "running"))
+                && let Some(entry) = state.session_manager().runs().get(id)
+                && let pending @ crate::runs::RunState::Suspended(_) = entry.current()
+            {
+                return super::runs::state_response(&entry, pending);
+            }
+            Json(value).into_response()
+        }
         Ok(None) => (StatusCode::NOT_FOUND, "unknown run").into_response(),
         Err(error) => unavailable(error),
     }
@@ -122,13 +132,19 @@ impl WaitResponse {
     }
 }
 
-/// A bounded observer: a slow run answers with its identity and current status.
+/// Running tool programs with a local attempt wait for suspension or completion.
+/// All other runs, including queued tool runs, use a bounded observer.
 /// Its supervisor keeps running when this future or its transport disappears.
 pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, String> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(25);
+    let mut tools = None;
+    let responses = responses(state).map_err(|e| e.to_string())?;
+    let draining = state.graceful_shutdown().draining();
     loop {
-        let observed = responses(state)
-            .map_err(|e| e.to_string())?
+        if draining.is_cancelled() {
+            return Err("server is shutting down".into());
+        }
+        let observed = responses
             .observe(id)
             .await
             .map_err(|e| e.to_string())?
@@ -137,9 +153,31 @@ pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, S
             return Ok(WaitResponse::Completed(response));
         }
         let run = observed.run;
-        if !matches!(run.status(), RunStatus::Queued | RunStatus::Running)
-            || tokio::time::Instant::now() >= deadline
+        if !matches!(run.status(), RunStatus::Queued | RunStatus::Running) {
+            return Ok(WaitResponse::Metadata(view(&run)));
+        }
+        let entry = state.session_manager().runs().get(id);
+        if let Some(entry) = &entry
+            && let crate::runs::RunState::Suspended(calls) = entry.current()
         {
+            return Ok(WaitResponse::Metadata(
+                json!({"status": "suspended", "execution_id": id, "session_id": entry.session_id, "calls": calls}),
+            ));
+        }
+        let has_tools = if let Some(tools) = tools {
+            tools
+        } else {
+            let mut unit = state.units().begin().await.map_err(|e| e.to_string())?;
+            let present = unit
+                .get_run_program(id)
+                .await
+                .map_err(|e| e.to_string())?
+                .is_some_and(|program| program.tools.is_some());
+            tools = Some(present);
+            present
+        };
+        let owned_tool_run = has_tools && run.status() == RunStatus::Running && entry.is_some();
+        if !owned_tool_run && tokio::time::Instant::now() >= deadline {
             return Ok(WaitResponse::Metadata(view(&run)));
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -153,7 +191,7 @@ pub(crate) fn responses(state: &AppState) -> Result<RunResponses, StoreError> {
     Ok(RunResponses::new(database.clone(), state.secret_cipher()))
 }
 
-fn view(run: &Run) -> Value {
+pub(crate) fn view(run: &Run) -> Value {
     let millis = |time: std::time::SystemTime| {
         time.duration_since(std::time::UNIX_EPOCH)
             .ok()

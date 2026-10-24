@@ -27,9 +27,6 @@ pub(crate) async fn admit(
     if !state.durable_execution() {
         return Err("durable execution is disabled".into());
     }
-    if inputs.tools.is_some() {
-        return Err("durable application-tool waits are not supported yet".into());
-    }
     let vfs = inputs
         .blueprint
         .vfs
@@ -101,6 +98,18 @@ pub(crate) async fn admit(
     let mut program =
         runner::durable::capture_program(source, blueprint, &prepared.services, state.runtime());
     program.mcp_catalog = prepared.mcp_catalog;
+    // The session catalog is immutable. Retain it with the accepted program,
+    // independently of later blueprint availability and session hydration.
+    program.tools =
+        if submilli_shared::docs_scope::tools_availability(&program.blueprint).is_available() {
+            state
+                .session_manager()
+                .tools(run.session_id())
+                .await
+                .map_err(|e| e.to_string())?
+        } else {
+            None
+        };
     program.filesystem_config_fingerprint = if prepared.vfs.dir().is_some() {
         Some(
             submilli_durable::filesystem_config_fingerprint(&prepared.vfs)
@@ -120,11 +129,12 @@ pub(crate) async fn admit(
 
 struct ActiveRun {
     run: Run,
-    cancel: oneshot::Sender<()>,
+    entry: Arc<crate::runs::RunEntry>,
     writable_volumes: HashSet<String>,
 }
 
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(1);
+pub(crate) const SCHEDULER_TICK: Duration = Duration::from_millis(250);
 
 pub(crate) async fn supervise(
     state: impl Fn() -> Option<AppState>,
@@ -146,7 +156,7 @@ pub(crate) async fn supervise(
             break;
         };
         let mut continue_scan = false;
-        if active.len() < capacity {
+        if live_work(&active) < capacity {
             match schedule(&app, &mut tasks, &mut active, after.clone(), capacity).await {
                 Ok(next) => {
                     after = next;
@@ -214,18 +224,27 @@ pub(crate) async fn supervise(
             () = wakeup.notified() => tokio::task::yield_now().await,
             // Keep the cursor on errors, but only successful pages continue
             // immediately. Failed discovery waits for the next poll or wakeup.
-            () = tokio::task::yield_now(), if continue_scan && active.len() < capacity => {}
+            () = tokio::task::yield_now(), if continue_scan && live_work(&active) < capacity => {}
             () = tokio::time::sleep_until(next_retirement), if retirements.is_empty() => {}
-            () = tokio::time::sleep(DISCOVERY_INTERVAL) => {}
+            () = tokio::time::sleep(SCHEDULER_TICK) => {}
         }
     }
     // Cancel the guest, then let the runner drain owned native work. Keep the
     // persisted attempt running so the next process can recover it.
     for (_, active_run) in active {
-        let _ = active_run.cancel.send(());
+        active_run.entry.cancel();
     }
     while tasks.join_next().await.is_some() {}
     while retirements.join_next().await.is_some() {}
+}
+
+/// Waiting tools retain their instances, session order and volume reservations,
+/// but do not prevent the scheduler from admitting unrelated execution work.
+fn live_work(active: &HashMap<Id, ActiveRun>) -> usize {
+    active
+        .values()
+        .filter(|run| !matches!(run.entry.current(), crate::runs::RunState::Suspended(_)))
+        .count()
 }
 
 async fn schedule(
@@ -238,7 +257,7 @@ async fn schedule(
     let page = candidates(state, after.clone()).await?;
     let next = next_page(&page);
     for candidate in page {
-        if active.len() == capacity {
+        if live_work(active) >= capacity {
             return Ok(after);
         }
         after = Some(candidate.reservation_id().clone());
@@ -301,14 +320,26 @@ async fn schedule(
         #[cfg(test)]
         tests::process::checkpoint("claimed");
         let (cancel, cancelled) = oneshot::channel();
+        let entry = state.session_manager().runs().insert_durable(
+            run.reservation_id(),
+            run.session_id(),
+            cancel,
+        );
         let executing = run.clone();
         let worker = state.clone();
-        let handle = tasks.spawn(async move { run_attempt(&worker, &executing, cancelled).await });
+        let running_entry = entry.clone();
+        let handle = tasks.spawn(async move {
+            let _attempt = ToolAttempt {
+                registry: worker.session_manager().runs().clone(),
+                entry: running_entry,
+            };
+            run_attempt(&worker, &executing, cancelled).await
+        });
         active.insert(
             handle.id(),
             ActiveRun {
                 run,
-                cancel,
+                entry,
                 writable_volumes,
             },
         );
@@ -436,6 +467,12 @@ async fn run_attempt(
         .reopen_vfs(run.session_id(), &program.blueprint, &program.variables)
         .await
         .map_err(|_| StuckReason::Storage)?;
+    let entry = state.session_manager().runs().get(run.reservation_id());
+    let tools = match (&program.tools, &entry) {
+        (Some(tools), Some(entry)) => Some(run_tools(state, run, &program, tools, entry)),
+        (Some(_), None) => return Err(StuckReason::Interrupted),
+        _ => None,
+    };
     let inputs = ExecuteInputs {
         session_id: run.session_id(),
         code: &program.source,
@@ -447,7 +484,7 @@ async fn run_attempt(
         vfs_source: execute::VfsSource::Opened { vfs, vfs_info },
         run_entry: "session",
         idempotency_key: run.optional_key(),
-        tools: None,
+        tools,
     };
     let mut prepared = execute::prepare_execution(state, inputs, Some(cancelled), Some(program.mcp_catalog.clone())).await.map_err(|outcome| {
         tracing::warn!(run = %run.reservation_id(), error = ?outcome.response.error, "recovery preparation failed");
@@ -465,6 +502,12 @@ async fn run_attempt(
         state.secret_cipher().ok_or(StuckReason::Credentials)?,
     );
     let history = runner::durable::history(run, units.clone());
+    if let Some(entry) = entry {
+        prepared.services.effects = Some(Arc::new(crate::runs::durable::ToolHistory::new(
+            history.clone(),
+            entry,
+        )));
+    }
     let outcome = runner::durable::run(
         run,
         &program,
@@ -484,7 +527,7 @@ async fn run_attempt(
         runner::RunnerImports {
             packages: &prepared.packages,
             mcps: &prepared.mcp_catalog,
-            tools: None,
+            tools: prepared.tools.as_ref().map(|tools| &tools.package),
         },
     )
     .await
@@ -600,4 +643,44 @@ pub(crate) async fn retire(
         tracing::warn!(run = %id, "filesystem roots or limits changed; retired private artifacts under current roots");
     }
     Ok(())
+}
+
+/// Dropping an attempt (including a failed task) wakes its observers and releases
+/// registry resources. The supervisor still owns durable status transitions.
+struct ToolAttempt {
+    registry: Arc<crate::runs::RunRegistry>,
+    entry: Arc<crate::runs::RunEntry>,
+}
+impl Drop for ToolAttempt {
+    fn drop(&mut self) {
+        self.entry.unavailable();
+        self.registry.forget(&self.entry);
+    }
+}
+
+fn run_tools(
+    state: &AppState,
+    run: &Run,
+    program: &crate::domain::run_program::RunProgram,
+    tools: &crate::domain::tools::SessionTools,
+    entry: &Arc<crate::runs::RunEntry>,
+) -> execute::RunTools {
+    let (declaration, warnings) = crate::app_tools::declaration(tools);
+    execute::RunTools {
+        package: Arc::new(runner::ToolsPackage {
+            declaration,
+            warnings,
+        }),
+        provider: Arc::new(crate::runs::SuspendingToolProvider {
+            entry: entry.clone(),
+            timeout: program.blueprint.tool_call_timeout,
+            touch: crate::handlers::sessions::session_touch(state, run.session_id()),
+        }),
+        cancel: None,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn tool_checkpoint(point: &str) {
+    tests::process::checkpoint(point);
 }

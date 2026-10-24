@@ -40,6 +40,7 @@ pub(crate) fn capture_program(
 ) -> RunProgram {
     RunProgram {
         source,
+        tools: None,
         blueprint,
         variables: (*services.variables).clone(),
         limits: limits(config, services),
@@ -99,7 +100,7 @@ pub(crate) async fn run(
                 .await?;
         services.filesystem = Some(Arc::new(filesystem));
     }
-    services.effects = Some(history.clone());
+    services.effects.get_or_insert_with(|| history.clone());
     services.variables = Arc::new(program.variables.clone());
     let parsed = super::parse(&program.source)?;
     let outcome = super::run(
