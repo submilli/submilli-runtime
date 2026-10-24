@@ -333,13 +333,6 @@ pub async fn execute(
         Some(Ok(key)) => Some(key),
     };
     if state.durable_execution() {
-        if tools.is_some() {
-            return (
-                StatusCode::BAD_REQUEST,
-                "durable application-tool waits are not supported yet",
-            )
-                .into_response();
-        }
         let BoundSession {
             blueprint_name,
             blueprint,
@@ -442,7 +435,7 @@ async fn durable_retry(
     Ok(Some(durable_wait_response(session, response)))
 }
 
-fn durable_wait_response(
+pub(crate) fn durable_wait_response(
     session: &str,
     response: super::durable_runs::WaitResponse,
 ) -> axum::response::Response {
@@ -721,7 +714,7 @@ fn run_tools(
 }
 
 /// Marks `session_id` active, for a run that suspends in it.
-fn session_touch(
+pub(crate) fn session_touch(
     state: &AppState,
     session_id: &str,
 ) -> Arc<dyn Fn() -> crate::runs::Touch + Send + Sync> {

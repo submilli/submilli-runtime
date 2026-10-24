@@ -5,6 +5,8 @@ use submilli_blueprint::{Blueprint, VarBindings};
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunProgram {
     pub source: String,
+    /// Application-tool declarations fixed at admission.
+    pub tools: Option<super::tools::SessionTools>,
     pub blueprint: Blueprint,
     pub variables: VarBindings,
     pub limits: RunLimits,

@@ -2059,7 +2059,7 @@ waiting costs no fuel. Backend work keeps its existing IO/SCAN/PARSE/SYSCALL cos
 | HTTP request verbs and download | Input costs before send; response IO/SCAN settles inside the boundary. Native response/metadata is committed before guest allocation. |
 | session get/has/set/remove/list and finalizer registration | Existing KV IO inside the boundary; parsing and guest values charge normally afterward. Guest serialization callbacks precede history allocation. |
 | LLM dispatch/models; embedding embed/models | Provider work and live reservations stay inside the boundary. LLM/embedding result types carry usage; their callers charge it after execute returns, before output conversion or error handling. Replay restores per-run spend without a second shared provider reservation. |
-| MCP, tools, agents, skills | Request IO and provider charges inside boundary; native outcome then guest conversion. |
+| MCP, tools, agents, skills | Request IO and provider charges inside boundary; native outcome then guest conversion. Tools pass the existing effect identity to the provider at no additional charge; waiting and server-side commit notification do not consume guest fuel. |
 | security.check | Gate cost inside boundary. |
 | code read/search/glob/tree/diffFiles/edit/insertAt/applyPatch | Existing native scan/parse/walk/write costs inside boundary; diffText stays pure. Mutation validates result size before publication. |
 | Git worker operations | Existing native WorkingBudget/Work settlement inside boundary, guest encoding afterward. Worker ownership/draining is unchanged. |

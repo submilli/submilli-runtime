@@ -5,7 +5,9 @@ outcome history now implemented. SUB-1842 added public enablement and startup
 scheduling, modeled in [recovery/](recovery/README.md). Each run retains its
 initial source, blueprint, variables and limits once. Recovery reruns that
 program from the beginning, using committed outcomes until it reaches new
-work.
+work. The [application-tool model](tools/README.md) verifies the proposed HTTP
+callback handoff: reconstructed waits, idempotent answer submission, timeout
+races, and terminal retries without retained tool history.
 
     reconstruct arguments -> dispatch -> native outcome -> commit -> guest conversion
                                                     replay ----^ (skip dispatch)

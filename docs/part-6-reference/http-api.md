@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7bebfd4426a01c0aa615c9b455a5ffc36a0a032a87837126d50adea044c3329e"
+  contentHash: "cd9fb41491015b82ff8e8694b250c14e5f8520211c222955ab91f981f1f3302c"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -333,22 +333,23 @@ function main(): string {
 
 ### Run states
 
-Every execute answers with the run's state, as do `resume` and
-`GET /v1/runs/{run_id}`. Only a run in a session with application tools can be
-anything but `finished`. A run's id is its `execution_id`.
+Execute, `resume`, and `GET /v1/runs/{run_id}` report the run's state.
+A run's id is its `execution_id`. Durable executions also use the lifecycle
+metadata described in [Run recovery](/docs/reference/run-recovery).
 
 | `status` | Body |
 | --- | --- |
 | `suspended` | `execution_id`, `session_id`, and `calls`: the calls waiting on the harness, each `call_id`, `tool`, and `args` |
 | `finished` | The [execute result](#the-execute-result) |
-| `running` | `execution_id` and `session_id`. Only `GET` answers it: between a resume and the next state, or after a call timed out or the run was cancelled, until it finishes |
+| `running` | The run is working or recovering. Durable runs include their lifecycle metadata. An ordinary tool run reports only `execution_id` and `session_id` through `GET` |
+| `queued`, `stuck`, `cancelled`, `expired` | Durable lifecycle metadata. A queued execute returns this view after the 25-second observation bound. A resume returns a stopped or expired run's view with HTTP `200` |
 
 ```json
-{"status":"suspended","execution_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11","session_id":"b6cc8dc3-631f-4bc2-8ac3-921053ad88c7","calls":[{"call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:1","tool":"query_orders","args":{"customer":"c_42"}}]}
+{"status":"suspended","execution_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11","session_id":"b6cc8dc3-631f-4bc2-8ac3-921053ad88c7","calls":[{"call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:49d962de-15ba-4fad-9cf7-71a27c1bf719","tool":"query_orders","args":{"customer":"c_42"}}]}
 ```
 
-A call id is the run id and the call's sequence number, so it is stable
-across retries. One suspension carries one call. A run does not depend on the
+A durable call id is `run_id:effect_id`, stable across replay and retries.
+Ordinary tool runs use `run_id:sequence`. Treat either form as an opaque id. One suspension carries one call. A run does not depend on the
 request that started it: it carries on when the client goes away. A harness
 that may lose a response sends an `Idempotency-Key`, and a retry with the same
 key answers with the run's current state.
@@ -356,17 +357,32 @@ key answers with the run's current state.
 | Limit | Value |
 | --- | --- |
 | Time | `max_execution_time` and fuel count the program's work only, not the time it waits on the harness |
-| One wait | The Blueprint's `tool_call_timeout`, 10 minutes by default. The pending call then throws `TimeoutError` in the program, and so does every later `@tools` call of that run, without waiting |
-| Waiting runs | At most `max_suspended_runs` server-wide, 256 by default. Past it, the call throws `QuotaExceededError` |
-| Shutdown | A server shutting down cancels its suspended runs. A run that is working carries on, but a later `@tools` call cancels it. Either way its key stays indeterminate |
-| Restart | A suspended run is lost on restart: `GET` answers `404` `unknown_run` |
-| Session end | Deleting the session ends its runs. A session with an unfinished run is not idle |
-| Finished runs | Readable with `GET` for 10 minutes, if they suspended. A run that never did is answered whole by its execute |
+| One wait | The Blueprint's `tool_call_timeout`, 10 minutes by default, per attempt. It restarts when recovery reconstructs an unresolved call. A committed timeout throws `TimeoutError`, as do later `@tools` calls of that run without waiting |
+| Waiting runs | At most `max_suspended_runs` server-wide, 256 by default. At capacity, a durable attempt is interrupted without recording a tool outcome and becomes `stuck`. An ordinary tool call throws `QuotaExceededError` |
+| Execution capacity | Suspended durable runs do not count toward `max_durable_runs`. They remain in memory and retain their session order and writable named volumes until the attempt exits |
+| Shutdown | Durable attempts stop for recovery. An open resume answers `503` `run_unavailable`. Ordinary suspended runs are cancelled and their keys stay indeterminate |
+| Restart | Durable runs replay to the same unanswered call without a connected client. Ordinary suspended runs are lost and `GET` answers `404` `unknown_run` |
+| Session end | Deleting the session cancels its durable runs. Resume returns the cancelled run view. A session with an unfinished run is not idle |
+| Finished runs | Durable results follow response-retention settings, then leave an expired tombstone. Ordinary runs that suspended remain readable with `GET` for 10 minutes |
 
 ### POST /v1/runs/{run_id}/resume
 
 Role: `user`. Answers the run's pending call, then waits for the run to
 suspend again or finish, and answers with that state.
+
+For a durable run, the request waits until replay resolves the submitted call
+and its answer commits to effect history, then waits for the next suspension or
+completion. Delivery to the in-memory tool future does not acknowledge the
+answer. After a disconnect, retry any unacknowledged answer with the same call
+id. An answer held only in memory can be lost if the server stops before the
+commit. A committed answer survives a lost HTTP response and a restart.
+
+Identical retries are idempotent. A differing retry for an already committed
+call is also acknowledged with the current run state, with the original
+committed value remaining authoritative. It cannot replace that value or answer
+a later call. A terminal retry uses the retained result or expired run view
+without requiring tool history. Stuck and cancelled runs return their lifecycle
+view with HTTP `200`, including when an answer committed before execution stopped.
 
 | Field | Type | Required | Value |
 | --- | --- | --- | --- |
@@ -378,7 +394,7 @@ suspend again or finish, and answers with that state.
 | `results[].error.message` | string | with `ok: false` | Shown to the program |
 
 ```json
-{"results":[{"call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:1","ok":true,"value":{"count":3}}]}
+{"results":[{"call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:49d962de-15ba-4fad-9cf7-71a27c1bf719","ok":true,"value":{"count":3}}]}
 ```
 
 | Answer | In the program |
@@ -397,7 +413,8 @@ request bodies.
 | `400` | `invalid_request`: no answer, a call answered twice, a malformed answer, or a value over the limits. Nothing is delivered |
 | `400` | `unknown_call`: the run waits on another call |
 | `404` | `unknown_run` |
-| `409` | `run_not_suspended`: the run waits on nothing, because it finished, its call timed out, or it was cancelled |
+| `409` | `run_not_suspended`: the call timed out, an interrupted attempt consumed this request's uncommitted answer, or an ordinary run no longer waits for a call |
+| `503` | `run_unavailable`: shutdown or unavailable run storage |
 
 Refusals answer `{error, execution_id, message}`.
 
@@ -405,7 +422,7 @@ Refusals answer `{error, execution_id, message}`.
 
 Role: `user`. Answers the run's state now, or `404` `unknown_run`.
 
-When no live application-tool entry remains, a persisted run returns
+When a durable run has no pending call to expose, `GET` returns
 `execution_id`, `session_id`, `status`, `reason`,
 `durable`, `revision`, `attempt`, `admission_order`, `created_at_unix_ms`, and
 `completed_at_unix_ms`. When retained, `response` contains the execution result.

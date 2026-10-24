@@ -6,6 +6,7 @@ use submilli_shared::secret_store::SecretCipher;
 
 mod indeterminate;
 mod scheduling;
+mod tool_callbacks;
 mod volumes;
 
 const CODE: &str =

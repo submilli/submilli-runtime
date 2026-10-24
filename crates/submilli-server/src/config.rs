@@ -18,7 +18,8 @@ use crate::blueprint::BlueprintStore;
 pub struct ServerConfig {
     /// Persist and recover session executions. Requires a database and retained key.
     pub durable_execution: bool,
-    /// Maximum simultaneous durable sessions. Defaults to four.
+    /// Limit for admitting live durable work, excluding suspended tool waits.
+    /// Defaults to four. Resuming an existing attempt does not acquire a new slot.
     pub max_durable_runs: Option<usize>,
     pub audit: crate::audit::AuditConfig,
     pub audit_log: Option<crate::audit::AuditLog>,

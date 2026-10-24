@@ -1,0 +1,307 @@
+{
+  "module": "ToolCallbacks",
+  "constants": {
+    "MaxCalls": 1,
+    "MaxCrashes": 1,
+    "AllowTimeouts": true,
+    "Fault": "none",
+    "Witness": "none"
+  },
+  "invariants": [
+    "TypeOK",
+    "OneRunPerKey",
+    "OneResultPerCall",
+    "TimeoutNotReplaced",
+    "StableCallIdentity",
+    "CorrectDelivery",
+    "ExecuteReturnsCurrentState",
+    "TerminalReturnsStoredResult",
+    "AcknowledgedCommitted",
+    "ReplayMatches",
+    "TerminalConsistent",
+    "SubmissionResolvedBeforeReply"
+  ],
+  "cases": [
+    {
+      "name": "safety",
+      "kind": "safety",
+      "timeout_seconds": 180
+    },
+    {
+      "name": "safety-several-tools",
+      "kind": "safety",
+      "constants": {
+        "MaxCalls": 2,
+        "AllowTimeouts": false
+      },
+      "timeout_seconds": 600
+    },
+    {
+      "name": "safety-timeout-next-tool",
+      "kind": "safety",
+      "constants": {
+        "MaxCalls": 2,
+        "MaxCrashes": 0
+      },
+      "timeout_seconds": 180
+    },
+    {
+      "name": "recovery-without-client",
+      "kind": "liveness",
+      "specification": "RecoverySpec",
+      "properties": [
+        "RecoveryProgress"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "name": "client-retry-progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "RecoveryProgress",
+        "RunProgress"
+      ],
+      "constants": {
+        "AllowTimeouts": false
+      },
+      "timeout_seconds": 180
+    },
+    {
+      "name": "negative-duplicate-result",
+      "kind": "negative",
+      "invariant": "OneResultPerCall",
+      "constants": {
+        "Fault": "duplicate-result"
+      }
+    },
+    {
+      "name": "negative-late-result",
+      "kind": "negative",
+      "invariant": "TimeoutNotReplaced",
+      "constants": {
+        "Fault": "late-result"
+      }
+    },
+    {
+      "name": "negative-duplicate-run",
+      "kind": "negative",
+      "invariant": "OneRunPerKey",
+      "constants": {
+        "Fault": "duplicate-run"
+      }
+    },
+    {
+      "name": "negative-retry-running",
+      "kind": "negative",
+      "invariant": "ExecuteReturnsCurrentState",
+      "constants": {
+        "Fault": "retry-running"
+      }
+    },
+    {
+      "name": "negative-provider-counter",
+      "kind": "negative",
+      "invariant": "StableCallIdentity",
+      "constants": {
+        "Fault": "provider-counter",
+        "MaxCalls": 2,
+        "AllowTimeouts": false
+      }
+    },
+    {
+      "name": "negative-wrong-call",
+      "kind": "negative",
+      "invariant": "CorrectDelivery",
+      "constants": {
+        "Fault": "wrong-call"
+      }
+    },
+    {
+      "name": "negative-early-ack",
+      "kind": "negative",
+      "invariant": "AcknowledgedCommitted",
+      "constants": {
+        "Fault": "early-ack"
+      }
+    },
+    {
+      "name": "negative-skip-replay",
+      "kind": "negative",
+      "invariant": "ReplayMatches",
+      "constants": {
+        "Fault": "skip-replay"
+      }
+    },
+    {
+      "name": "negative-terminal-needs-history",
+      "kind": "negative",
+      "invariant": "TerminalReturnsStoredResult",
+      "constants": {
+        "Fault": "terminal-needs-history"
+      }
+    },
+    {
+      "name": "witness-duplicate-before-commit",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "duplicate-before-commit"
+      }
+    },
+    {
+      "name": "witness-duplicate-after-commit",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "duplicate-after-commit"
+      }
+    },
+    {
+      "name": "witness-conflicting-duplicate",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "conflicting-duplicate"
+      }
+    },
+    {
+      "name": "witness-late-resume",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "late-resume"
+      }
+    },
+    {
+      "name": "witness-repeat-execute",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "repeat-execute"
+      }
+    },
+    {
+      "name": "witness-lost-execute-response",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "lost-execute-response"
+      }
+    },
+    {
+      "name": "witness-recover-wait",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "recover-wait"
+      }
+    },
+    {
+      "name": "witness-resume-during-recovery",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "resume-during-recovery"
+      }
+    },
+    {
+      "name": "witness-resume-after-recovery",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "resume-after-recovery"
+      }
+    },
+    {
+      "name": "witness-retry-uncommitted-answer",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "retry-uncommitted-answer"
+      }
+    },
+    {
+      "name": "witness-lost-resume-response",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "lost-resume-response"
+      }
+    },
+    {
+      "name": "witness-timeout-after-restart",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "timeout-after-restart"
+      }
+    },
+    {
+      "name": "witness-terminal-without-history",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "terminal-without-history"
+      }
+    },
+    {
+      "name": "witness-expired-result",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "Witness": "expired-result"
+      }
+    },
+    {
+      "name": "witness-old-answer-next-call",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "MaxCalls": 2,
+        "AllowTimeouts": false,
+        "Witness": "old-answer-next-call"
+      }
+    },
+    {
+      "name": "witness-recover-second-call",
+      "kind": "witness",
+      "invariant": "NeverWitness",
+      "constants": {
+        "MaxCalls": 2,
+        "AllowTimeouts": false,
+        "Witness": "recover-second-call"
+      }
+    },
+    {
+      "name": "safety-two-restarts",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxCalls": 1,
+        "MaxCrashes": 2,
+        "AllowTimeouts": false
+      },
+      "timeout_seconds": 600
+    },
+    {
+      "name": "negative-replay-ack",
+      "kind": "negative",
+      "invariant": "SubmissionResolvedBeforeReply",
+      "constants": {
+        "Fault": "replay-ack"
+      }
+    },
+    {
+      "name": "safety-timeout-restart-several-tools",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxCalls": 2,
+        "AllowTimeouts": true,
+        "MaxCrashes": 1
+      },
+      "timeout_seconds": 600
+    }
+  ]
+}

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1c140e46f9dd3bc5f4db5ceea441f30cc9736d08ff941136aebe4895c695fc2c"
+  contentHash: "185aab5a82e78427645f6f598a1f3803e485f70b135a5733192d13a94ed44fb9"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -217,7 +217,12 @@ error: case.yaml: blueprint parse error: idle_timeout: unknown duration unit 'd'
 How long a run waits for the harness to answer one call to an application
 tool, `@tools`, before the call throws `TimeoutError` in the program. Later
 calls of that run then throw `TimeoutError` without waiting. The time a run
-waits does not count against `max_execution_time`. See
+waits does not count against `max_execution_time`.
+
+For a durable run, this bound applies per attempt. Recovery after a server
+restart starts a fresh timeout when it reconstructs an unresolved call. A
+committed timeout replays as `TimeoutError` and later calls still fail without
+waiting. See
 [Application tools](/docs/reference/http-api#application-tools).
 
 ## vfs

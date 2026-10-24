@@ -78,6 +78,8 @@ pub(super) fn open(sealer: &Sealer, id: &str, sealed: &[u8]) -> Result<RunProgra
 #[serde(remote = "RunProgram")]
 struct ProgramRecord {
     source: String,
+    #[serde(default, with = "recorded_tools")]
+    tools: Option<crate::domain::tools::SessionTools>,
     #[serde(with = "recorded_blueprint")]
     blueprint: submilli_blueprint::Blueprint,
     variables: submilli_blueprint::VarBindings,
@@ -263,6 +265,7 @@ mod tests {
         let config = interpreter::runtime::RuntimeConfig::default();
         RunProgram {
             source: "function main(): void {}".into(),
+            tools: None,
             blueprint: submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap(),
             variables: Default::default(),
             compatibility: "test-v1".into(),
@@ -305,6 +308,36 @@ mod tests {
         assert!(open(&sealer, "one", &malformed).is_err());
     }
     #[test]
+    fn tool_catalog_is_pinned_and_programs_without_tools_remain_readable() {
+        let sealer = Sealer::new(Some(std::sync::Arc::new(
+            submilli_shared::secret_store::SecretCipher::from_key([17; 32]),
+        )));
+        let mut program = program();
+        program.tools =
+            crate::domain::tools::SessionTools::new(vec![crate::domain::tools::DeclaredTool {
+                name: "echo".into(),
+                description: None,
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: Some(serde_json::json!({"type": "number"})),
+            }])
+            .unwrap();
+        assert_eq!(
+            open(&sealer, "one", &seal(&sealer, "one", &program).unwrap()).unwrap(),
+            program
+        );
+        let mut legacy = serde_json::to_value(BorrowedEnvelope {
+            version: 1,
+            program: &program,
+        })
+        .unwrap();
+        legacy["program"].as_object_mut().unwrap().remove("tools");
+        let bytes = rmp_serde::to_vec_named(&legacy).unwrap();
+        let sealed = sealer.seal("run-program:v1:one", &bytes).unwrap();
+        program.tools = None;
+        assert_eq!(open(&sealer, "one", &sealed).unwrap(), program);
+    }
+
+    #[test]
     fn program_admission_bounds_encoding_and_policy_compilation_count() {
         let sealer = Sealer::new(Some(std::sync::Arc::new(
             submilli_shared::secret_store::SecretCipher::from_key([18; 32]),
@@ -328,5 +361,29 @@ mod tests {
             submilli_blueprint::FilterExpr::regex_count("path == \"matches\"").unwrap(),
             0
         );
+    }
+}
+
+mod recorded_tools {
+    use crate::domain::tools::{DeclaredTool, SessionTools};
+    use serde::{Deserialize, Serialize};
+
+    pub fn serialize<S: serde::Serializer>(
+        tools: &Option<SessionTools>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        tools
+            .as_ref()
+            .map(SessionTools::tools)
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        decoder: D,
+    ) -> Result<Option<SessionTools>, D::Error> {
+        match Option::<Vec<DeclaredTool>>::deserialize(decoder)? {
+            Some(tools) => SessionTools::new(tools).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
     }
 }

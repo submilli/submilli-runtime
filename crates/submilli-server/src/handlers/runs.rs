@@ -63,11 +63,8 @@ pub async fn get(
     Path(run_id): Path<String>,
 ) -> axum::response::Response {
     match state.session_manager().runs().get(&run_id) {
-        Some(entry) => {
-            let current = entry.current();
-            state_response(&entry, current)
-        }
-        None => super::durable_runs::get(&state, &run_id).await,
+        Some(entry) if !entry.durable => state_response(&entry, entry.current()),
+        _ => super::durable_runs::get(&state, &run_id).await,
     }
 }
 
@@ -96,6 +93,22 @@ pub async fn resume(
             return refusal(StatusCode::BAD_REQUEST, "invalid_request", &run_id, message);
         }
     };
+    if let Ok(responses) = super::durable_runs::responses(&state) {
+        match responses.observe(&run_id).await {
+            Ok(Some(observed)) if observed.run.is_durable() => {
+                return resume_durable(&state, &run_id, answers).await;
+            }
+            Err(error) => {
+                return refusal(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "run_unavailable",
+                    &run_id,
+                    error.to_string(),
+                );
+            }
+            _ => {}
+        }
+    }
     let Some(entry) = state.session_manager().runs().get(&run_id) else {
         return unknown_run(&run_id);
     };
@@ -166,6 +179,14 @@ pub(crate) fn state_response(entry: &RunEntry, state: RunState) -> axum::respons
             serde_json::to_string(&Unfinished::Suspended { ids, calls: &calls })
         }
         RunState::Running => serde_json::to_string(&Unfinished::Running { ids }),
+        RunState::Unavailable => {
+            return refusal(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "run_unavailable",
+                &entry.id,
+                "the execution attempt stopped; retry or inspect the durable run".into(),
+            );
+        }
     };
     let body = match body {
         Ok(body) => body,
@@ -282,4 +303,105 @@ fn answer(result: CallResult) -> Result<ToolAnswer, String> {
         call_id: result.call_id,
         answer,
     })
+}
+
+/// Durable submissions never use the bounded execute observer: replay and commit
+/// must resolve the submitted ID before any successful next-state response.
+async fn resume_durable(
+    state: &AppState,
+    id: &str,
+    answers: Vec<ToolAnswer>,
+) -> axum::response::Response {
+    use crate::application::sessions::recovery::RunStatus;
+    use crate::runs::durable::Submission;
+    let mut submission = match Submission::new(id, answers) {
+        Ok(submission) => submission,
+        Err(error) => return resume_refusal(id, error),
+    };
+    let responses = match super::durable_runs::responses(state) {
+        Ok(responses) => responses,
+        Err(error) => {
+            return refusal(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "run_unavailable",
+                id,
+                error.to_string(),
+            );
+        }
+    };
+    let draining = state.graceful_shutdown().draining();
+    loop {
+        if draining.is_cancelled() {
+            return refusal(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "run_unavailable",
+                id,
+                "server is shutting down".into(),
+            );
+        }
+        let observed = match responses.observe(id).await {
+            Ok(Some(observed)) => observed,
+            Ok(None) => return unknown_run(id),
+            Err(error) => {
+                return refusal(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "run_unavailable",
+                    id,
+                    error.to_string(),
+                );
+            }
+        };
+        if let Some(response) = observed.response {
+            return super::sessions::durable_wait_response(
+                observed.run.session_id(),
+                super::durable_runs::WaitResponse::Completed(response),
+            );
+        }
+        if !matches!(
+            observed.run.status(),
+            RunStatus::Queued | RunStatus::Running
+        ) {
+            return Json(super::durable_runs::view(&observed.run)).into_response();
+        }
+        let entry = state.session_manager().runs().get(id);
+        let generation = entry.as_ref().map(|entry| entry.generation());
+        if let Some(entry) = &entry {
+            match entry.resume_durable(&mut submission) {
+                Ok(true) => {
+                    if let settled @ RunState::Suspended(_) = entry.current() {
+                        return state_response(entry, settled);
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => return resume_refusal(id, error),
+            }
+        }
+        tokio::select! {
+            () = draining.cancelled() => {},
+            () = async {
+                if let (Some(entry), Some(generation)) = (entry, generation) {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), entry.settled_after(generation)).await;
+                } else {
+                    tokio::time::sleep(crate::recovery::SCHEDULER_TICK).await;
+                }
+            } => {},
+        }
+    }
+}
+
+fn resume_refusal(id: &str, error: ResumeRefusal) -> axum::response::Response {
+    match error {
+        ResumeRefusal::NotSuspended => refusal(
+            StatusCode::CONFLICT,
+            "run_not_suspended",
+            id,
+            "the call timed out or the execution attempt stopped".into(),
+        ),
+        ResumeRefusal::UnknownCall(call) => refusal(
+            StatusCode::BAD_REQUEST,
+            "unknown_call",
+            id,
+            format!("the run is not waiting on call `{call}`"),
+        ),
+    }
 }
