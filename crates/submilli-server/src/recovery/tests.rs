@@ -4,6 +4,8 @@ use crate::domain::run_status::IndeterminateReason;
 use crate::handlers::durable_runs;
 use submilli_shared::secret_store::SecretCipher;
 
+mod scheduling;
+
 const CODE: &str =
     r#"import { v4 } from "submilli:uuid"; function main(): string { return v4(); }"#;
 
@@ -264,7 +266,7 @@ async fn unconfirmed_claims_are_retried_or_marked_interrupted() {
     assert_eq!(stuck["reason"], "execution_interrupted");
     assert_eq!(stuck["attempt"], 1);
     // Two scan intervals pass without a claim.
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(DISCOVERY_INTERVAL * 2).await;
     assert_eq!(
         durable_runs::observe(&state, &retried)
             .await

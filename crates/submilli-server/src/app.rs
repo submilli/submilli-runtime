@@ -509,7 +509,7 @@ impl AppState {
                 ))
             })?;
             unit.list_runs(crate::application::sessions::recovery::RunQuery {
-                recovery: true,
+                recovery: Some(crate::application::sessions::recovery::RecoveryFilter::Retained),
                 limit: 1,
                 ..Default::default()
             })

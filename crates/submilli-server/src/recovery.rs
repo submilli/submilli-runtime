@@ -1,7 +1,9 @@
 //! The single-node execution owner. SQLite grants attempts; wakeups only reduce
 //! polling latency. Dropping a transport waiter never drops accepted work.
 use crate::app::AppState;
-use crate::application::sessions::recovery::{self, RunQuery, RunStatus, StuckReason};
+use crate::application::sessions::recovery::{
+    self, RecoveryFilter, RunQuery, RunStatus, StuckReason,
+};
 use crate::application::sessions::runs::RunResolution;
 use crate::domain::run::{Run, RunIdentity};
 use crate::handlers::execute::{self, ExecuteInputs, ExecuteResponse};
@@ -119,6 +121,8 @@ struct ActiveRun {
     cancel: oneshot::Sender<()>,
 }
 
+const DISCOVERY_INTERVAL: Duration = Duration::from_secs(1);
+
 pub(crate) async fn supervise(
     state: impl Fn() -> Option<AppState>,
     wakeup: Arc<Notify>,
@@ -128,6 +132,9 @@ pub(crate) async fn supervise(
     let mut tasks = JoinSet::new();
     let mut active: HashMap<Id, ActiveRun> = HashMap::new();
     let mut after = None;
+    let mut retirements = JoinSet::new();
+    let mut retirement_after = None;
+    let mut next_retirement = tokio::time::Instant::now();
     loop {
         if draining.is_cancelled() {
             break;
@@ -135,11 +142,38 @@ pub(crate) async fn supervise(
         let Some(app) = state() else {
             break;
         };
+        let mut continue_scan = false;
         if active.len() < capacity {
             match schedule(&app, &mut tasks, &mut active, after.clone(), capacity).await {
-                Ok(next) => after = next,
+                Ok(next) => {
+                    after = next;
+                    continue_scan = after.is_some();
+                }
                 Err(error) => tracing::warn!(%error, "run discovery unavailable"),
             }
+        }
+        if retirements.is_empty() && tokio::time::Instant::now() >= next_retirement {
+            match retirement_candidates(&app, retirement_after.clone()).await {
+                Ok(page) => {
+                    retirement_after = next_page(&page);
+                    // Publication may precede task completion. Select terminal
+                    // rows first, then exclude owners not yet joined. No new
+                    // attempt can start for these terminal runs.
+                    let ready: Vec<_> = page
+                        .into_iter()
+                        .filter(|candidate| {
+                            !active.values().any(|running| {
+                                running.run.reservation_id() == candidate.reservation_id()
+                            })
+                        })
+                        .collect();
+                    if !ready.is_empty() {
+                        retirements.spawn(retire_runs(app.clone(), ready, draining.clone()));
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "retirement discovery unavailable"),
+            }
+            next_retirement = tokio::time::Instant::now() + DISCOVERY_INTERVAL;
         }
         drop(app);
         tokio::select! {
@@ -166,10 +200,20 @@ pub(crate) async fn supervise(
                         }
                     }
                 }
-                after = None;
             }
-            () = wakeup.notified() => { after = None; }
-            () = tokio::time::sleep(Duration::from_millis(250)) => {}
+            finished = retirements.join_next(), if !retirements.is_empty() => {
+                if let Some(Err(error)) = finished {
+                    tracing::warn!(%error, "retirement worker failed");
+                }
+            }
+            // At full capacity a stream of ready notifications must still let
+            // workers run to completion and release their execution slots.
+            () = wakeup.notified() => tokio::task::yield_now().await,
+            // Keep the cursor on errors, but only successful pages continue
+            // immediately. Failed discovery waits for the next poll or wakeup.
+            () = tokio::task::yield_now(), if continue_scan && active.len() < capacity => {}
+            () = tokio::time::sleep_until(next_retirement), if retirements.is_empty() => {}
+            () = tokio::time::sleep(DISCOVERY_INTERVAL) => {}
         }
     }
     // Cancel the guest, then let the runner drain owned native work. Keep the
@@ -178,42 +222,27 @@ pub(crate) async fn supervise(
         let _ = active_run.cancel.send(());
     }
     while tasks.join_next().await.is_some() {}
+    while retirements.join_next().await.is_some() {}
 }
 
 async fn schedule(
     state: &AppState,
     tasks: &mut JoinSet<Result<(), StuckReason>>,
     active: &mut HashMap<Id, ActiveRun>,
-    after: Option<RunId>,
+    mut after: Option<RunId>,
     capacity: usize,
 ) -> Result<Option<RunId>, crate::application::error::StoreError> {
-    let page = candidates(state, after).await?;
-    let next = if page.len() == 100 {
-        page.last().map(|run| run.reservation_id().clone())
-    } else {
-        None
-    };
+    let page = candidates(state, after.clone()).await?;
+    let next = next_page(&page);
     for candidate in page {
         if active.len() == capacity {
-            return Ok(None);
+            return Ok(after);
         }
+        after = Some(candidate.reservation_id().clone());
         if active
             .values()
             .any(|running| running.run.session_id() == candidate.session_id())
         {
-            continue;
-        }
-        if matches!(
-            candidate.status(),
-            RunStatus::Completed | RunStatus::Cancelled | RunStatus::Aborted | RunStatus::Expired
-        ) {
-            state
-                .session_manager()
-                .retire_run(candidate.reservation_id())
-                .await;
-            continue;
-        }
-        if !matches!(candidate.status(), RunStatus::Queued | RunStatus::Running) {
             continue;
         }
         if !state.durable_execution() {
@@ -278,10 +307,44 @@ async fn candidates(
     unit.list_runs(RunQuery {
         after,
         limit: 100,
-        recovery: true,
+        recovery: Some(RecoveryFilter::Execution),
         ..Default::default()
     })
     .await
+}
+
+async fn retirement_candidates(
+    state: &AppState,
+    after: Option<RunId>,
+) -> Result<Vec<Run>, crate::application::error::StoreError> {
+    let mut unit = state.units().begin().await?;
+    unit.list_runs(RunQuery {
+        after,
+        limit: 100,
+        recovery: Some(RecoveryFilter::Retirement),
+        ..Default::default()
+    })
+    .await
+}
+
+async fn retire_runs(state: AppState, runs: Vec<Run>, draining: CancellationToken) {
+    for run in runs {
+        if draining.is_cancelled() {
+            break;
+        }
+        state
+            .session_manager()
+            .retire_run(run.reservation_id())
+            .await;
+    }
+}
+
+fn next_page(page: &[Run]) -> Option<RunId> {
+    if page.len() == 100 {
+        page.last().map(|run| run.reservation_id().clone())
+    } else {
+        None
+    }
 }
 
 async fn run_attempt(

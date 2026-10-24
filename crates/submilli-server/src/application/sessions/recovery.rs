@@ -14,8 +14,15 @@ pub(crate) struct RunQuery {
     /// Lexicographic run-ID cursor, independent of mutable lifecycle state.
     pub after: Option<RunId>,
     pub limit: usize,
-    /// Only runs that still need execution or resource retirement.
-    pub recovery: bool,
+    /// Recorded runs with retained resources, optionally restricted by work.
+    pub recovery: Option<RecoveryFilter>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RecoveryFilter {
+    Retained,
+    Execution,
+    Retirement,
 }
 
 /// Selects a lifecycle status regardless of its reason.

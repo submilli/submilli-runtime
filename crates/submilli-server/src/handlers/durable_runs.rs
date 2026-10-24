@@ -35,7 +35,7 @@ pub(crate) async fn list(
             status,
             after: query.after.map(Into::into),
             limit,
-            recovery: false,
+            recovery: None,
         })
         .await
     }
