@@ -59,7 +59,7 @@ pub(crate) async fn save(
         .bind(request.status().reason()).bind(completed).bind(recovery_mode).execute(connection).await?
     } else {
         // Updating lifecycle never serializes or rewrites the retained initial inputs.
-        sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running','blocked') AND ?='running' AND attempt=?-1))")
+        sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running') AND ?='running' AND attempt=?-1))")
             .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(request.status().reason())
             .bind(request.attempt()).bind(request.revision()).bind(completed)
             .bind(request.reservation_id().as_str()).bind(request.revision()-1).bind(request.owner_generation()).bind(state).bind(request.attempt())

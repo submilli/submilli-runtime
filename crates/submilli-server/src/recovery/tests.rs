@@ -228,6 +228,67 @@ async fn claim_is_one_launch_per_startup_and_corrupt_manifest_stays_observable()
 mod lifecycle;
 pub(super) mod process;
 
+/// A claim that fails before it commits.
+const REJECT_CLAIM: &str = "CREATE TRIGGER reject_claim BEFORE UPDATE ON runs WHEN NEW.state='running' AND OLD.state='reserved' BEGIN SELECT RAISE(FAIL,'injected'); END";
+
+#[tokio::test]
+async fn unconfirmed_claims_are_retried_or_marked_interrupted() {
+    let root = tempfile::tempdir().unwrap();
+    let state = app(root.path(), 1_000_000).await;
+    // A claim committed by this startup whose task never launched: the
+    // schedule-time rule marks it interrupted.
+    let orphan = accept(&state, "orphan", CODE, None).await;
+    recovery::claim(
+        state.units().as_ref(),
+        &orphan,
+        state.idempotency().generation(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    // A claim that fails before it commits: the run stays queued and is
+    // claimed on a later scan. A transient failure never marks it stuck.
+    let retried = accept(&state, "retried", CODE, None).await;
+    let database = state.database().unwrap();
+    database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query(REJECT_CLAIM).execute(connection).await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    state.boot().await.unwrap();
+    let stuck = until(&state, &orphan, "stuck").await;
+    assert_eq!(stuck["reason"], "execution_interrupted");
+    assert_eq!(stuck["attempt"], 1);
+    // Two scan intervals pass without a claim.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(
+        durable_runs::observe(&state, &retried)
+            .await
+            .unwrap()
+            .unwrap()["status"],
+        "queued"
+    );
+    database
+        .transaction(|connection| {
+            Box::pin(async move {
+                sqlx::query("DROP TRIGGER reject_claim")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    state.wake_recovery();
+    let completed = until(&state, &retried, "completed").await;
+    assert_eq!(completed["attempt"], 1);
+    stop(&state).await;
+}
+
 #[tokio::test]
 async fn recorded_runs_cannot_become_indeterminate() {
     let root = tempfile::tempdir().unwrap();
