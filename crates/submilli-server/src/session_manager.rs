@@ -2016,7 +2016,8 @@ mod tests {
 
     #[tokio::test]
     async fn reaping_expires_responses_past_their_retention() {
-        use crate::domain::idempotent_request::{IdempotentRequest, RecordedOutcome, RunStatus};
+        use crate::domain::idempotent_request::{IdempotentRequest, RunStatus};
+        use crate::domain::run_result::RunOutput;
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         let mgr = SessionManager::new(
@@ -2051,16 +2052,17 @@ mod tests {
             .unwrap();
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         let mut request = unit.get_run("r").await.unwrap().unwrap();
-        request.complete("r", completed_at).unwrap();
-        unit.save_run_result(
-            "r",
-            RecordedOutcome {
-                status: 200,
-                body: "bytes".into(),
-            },
-        )
-        .await
-        .unwrap();
+        let result = request
+            .complete(
+                "r",
+                RunOutput {
+                    result: Some("bytes".into()),
+                    ..Default::default()
+                },
+                completed_at,
+            )
+            .unwrap();
+        unit.save_run_result(result).await.unwrap();
         unit.save_run(request).await.unwrap();
         unit.commit().await.unwrap();
 

@@ -7,6 +7,7 @@
 //! * `POST   /v1/sessions/{id}/rebind` — replace encrypted harness secrets
 //! * `DELETE /v1/sessions/{id}`       — terminate, wiping the VFS immediately
 
+use interpreter::runtime::durable::RunId;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -22,10 +23,10 @@ use submilli_blueprint::{
     HarnessSecretBindings, required_harness_secrets, resolve_harness_secrets, resolve_variables,
 };
 
+use crate::adapters::run_result::RunResponse;
 use crate::adapters::session::finalizers::FinalizerDiagnostic;
 use crate::app::AppState;
 use crate::blueprint::StoreError;
-use crate::domain::idempotent_request::RecordedOutcome;
 use crate::domain::tools::{DeclaredTool, SessionTools};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation, ReservationGuard};
@@ -472,9 +473,7 @@ async fn settle(
         if let Some(last_run) = &outcome.last_run {
             guard.set_last_run(last_run);
         }
-        guard
-            .complete(StatusCode::OK.as_u16(), finished.body.clone())
-            .await;
+        guard.complete(outcome.response.output()).await;
     } else {
         drop(guard);
     }
@@ -516,8 +515,8 @@ async fn reserve(
             Reservation::Refused(refusal) => {
                 return Reserved::Answered(refusal_response(session_id, &refusal));
             }
-            Reservation::Replay(outcome) => {
-                return Reserved::Answered(replay_response(state, session_id, &outcome).await);
+            Reservation::Replay(run_id) => {
+                return Reserved::Answered(replay_response(state, session_id, &run_id).await);
             }
             Reservation::Attached(run_id) => {
                 let Some(entry) = state.session_manager().runs().get(&run_id) else {
@@ -537,12 +536,17 @@ async fn reserve(
 async fn replay_response(
     state: &AppState,
     session_id: &str,
-    outcome: &RecordedOutcome,
+    run_id: &RunId,
 ) -> axum::response::Response {
     if let Some(refused) = note_duplicate(state, session_id).await {
         return refused;
     }
-    recorded_response(session_id, outcome)
+    let response = async { super::durable_runs::responses(state)?.get(run_id).await }.await;
+    match response {
+        Ok(Some(response)) => recorded_response(session_id, &response),
+        Ok(None) => refusal_response(session_id, &Refusal::Expired),
+        Err(error) => refusal_response(session_id, &Refusal::Unavailable(error.to_string())),
+    }
 }
 
 /// Note a duplicate request answered without running: it is a replay in the
@@ -926,7 +930,7 @@ fn refusal_response(session_id: &str, refusal: &Refusal) -> axum::response::Resp
         .into_response()
 }
 
-fn recorded_response(session_id: &str, outcome: &RecordedOutcome) -> axum::response::Response {
+fn recorded_response(session_id: &str, outcome: &RunResponse) -> axum::response::Response {
     let status = StatusCode::from_u16(outcome.status).unwrap_or(StatusCode::OK);
     stored_body_response(session_id, status, outcome.body.clone())
 }

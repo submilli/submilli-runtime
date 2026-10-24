@@ -4,8 +4,8 @@ use crate::application::sessions::runs::{
     PrepareRun, RecoverRuns, ResolveRun, RunDisposition, RunFailure, RunResolution,
 };
 use crate::application::unit_of_work::UnitOfWorkFactory;
-pub use crate::domain::idempotent_request::RecordedOutcome;
 use crate::domain::idempotent_request::{IdempotentRequest, RequestError};
+use crate::domain::run_result::RunOutput;
 use axum::http::StatusCode;
 use interpreter::runtime::durable::RunId;
 use sha2::{Digest, Sha256};
@@ -20,8 +20,8 @@ const DEFAULT_WAITER_TIMEOUT: Duration = Duration::from_secs(300);
 pub enum Reservation {
     /// Run the program, then settle the guard with `complete` or `release`.
     Proceed(ReservationGuard),
-    /// Return this recorded status and body verbatim. Nothing runs.
-    Replay(RecordedOutcome),
+    /// Return this completed run's retained response. Nothing runs.
+    Replay(RunId),
     /// The earlier request's run is still going, and may be waiting on the harness:
     /// answer with that run's current state. Nothing new runs.
     Attached(RunId),
@@ -234,7 +234,7 @@ impl Coordinator {
                     }
                     waiting_for = Some(id);
                 }
-                Ok(RunDisposition::Completed(outcome)) => return Reservation::Replay(outcome),
+                Ok(RunDisposition::Completed(run_id)) => return Reservation::Replay(run_id),
                 Err(RunFailure::Rule(RequestError::Conflict)) => {
                     return Reservation::Refused(Refusal::Conflict);
                 }
@@ -442,9 +442,8 @@ impl ReservationGuard {
         }
     }
 
-    pub async fn complete(self, status: u16, body: String) {
-        self.resolve(RunResolution::Completed(RecordedOutcome { status, body }))
-            .await;
+    pub async fn complete(self, output: RunOutput) {
+        self.resolve(RunResolution::Completed(output)).await;
     }
     pub async fn finish_unkeyed(self) {
         self.resolve(RunResolution::Finished).await;
@@ -543,6 +542,29 @@ mod tests {
         (database, units, coordinator)
     }
 
+    pub(super) fn output(value: impl Into<String>) -> RunOutput {
+        RunOutput {
+            result: Some(value.into()),
+            ..Default::default()
+        }
+    }
+
+    pub(super) async fn saved_value(coordinator: &Coordinator, id: &RunId) -> String {
+        coordinator
+            .units
+            .begin()
+            .await
+            .unwrap()
+            .run_result(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .output()
+            .result
+            .clone()
+            .unwrap()
+    }
+
     pub(super) fn proceed(reservation: Reservation) -> ReservationGuard {
         match reservation {
             Reservation::Proceed(guard) => guard,
@@ -558,9 +580,11 @@ mod tests {
         let duplicate = tokio::spawn(async move { second.reserve("session", "key", "code").await });
         tokio::task::yield_now().await;
         assert!(!duplicate.is_finished());
-        guard.complete(200, "exact bytes\n".into()).await;
+        guard.complete(output("exact bytes\n")).await;
         match duplicate.await.unwrap() {
-            Reservation::Replay(outcome) => assert_eq!(outcome.body, "exact bytes\n"),
+            Reservation::Replay(outcome) => {
+                assert_eq!(saved_value(&first, &outcome).await, "exact bytes\n");
+            }
             _ => panic!("duplicate must replay"),
         }
         first.drain().await;
@@ -574,7 +598,7 @@ mod tests {
         drop(proceed(coordinator.reserve("session", "k0", "code").await));
         for key in ["k1", "k2", "k3", "k4", "k5"] {
             proceed(coordinator.reserve("session", key, "code").await)
-                .complete(201, format!("body of {key}"))
+                .complete(output(format!("body of {key}")))
                 .await;
         }
         let expire = ExpireResponses::new(units.as_ref(), ResponseRetention::default());
@@ -591,7 +615,10 @@ mod tests {
         for key in ["k3", "k4", "k5"] {
             match coordinator.reserve("session", key, "code").await {
                 Reservation::Replay(outcome) => {
-                    assert_eq!(outcome.body, format!("body of {key}"));
+                    assert_eq!(
+                        saved_value(&coordinator, &outcome).await,
+                        format!("body of {key}")
+                    );
                 }
                 _ => panic!("{key} is among the newest and still replays"),
             }
@@ -656,7 +683,7 @@ mod tests {
         for session in ["session", "other"] {
             for key in ["a", "b", "c"] {
                 proceed(coordinator.reserve(session, key, "code").await)
-                    .complete(200, "body".into())
+                    .complete(output("body"))
                     .await;
             }
         }
@@ -710,7 +737,7 @@ mod tests {
             .release()
             .await;
         proceed(coordinator.reserve("session", "key", "code").await)
-            .complete(200, "done".into())
+            .complete(output("done"))
             .await;
     }
 
@@ -726,9 +753,11 @@ mod tests {
         .await
         .expect("answered without waiting for the run");
         assert!(matches!(attached, Reservation::Attached(run) if run.as_str() == "run-1"));
-        guard.complete(200, "{}".into()).await;
+        guard.complete(output("{}")).await;
         match coordinator.reserve("session", "key", "code").await {
-            Reservation::Replay(outcome) => assert_eq!(outcome.body, "{}"),
+            Reservation::Replay(outcome) => {
+                assert_eq!(saved_value(&coordinator, &outcome).await, "{}");
+            }
             _ => panic!("a settled run replays its outcome"),
         }
     }
@@ -756,7 +785,7 @@ mod tests {
                 .status(),
             RunStatus::Indeterminate(IndeterminateReason::Interrupted)
         );
-        guard.complete(200, "late".into()).await;
+        guard.complete(output("late")).await;
         assert!(matches!(
             coordinator.reserve("session", "key", "code").await,
             Reservation::Refused(Refusal::Indeterminate)
@@ -788,7 +817,7 @@ mod tests {
             .execute("session", crate::domain::session::ClosedReason::Deleted)
             .await
             .unwrap();
-        guard.complete(200, "late".into()).await;
+        guard.complete(output("late")).await;
         assert!(
             read_request(units.as_ref(), "session", "key")
                 .await
@@ -809,9 +838,7 @@ mod tests {
             sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON runs WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?;
             Ok(())
         })).await.unwrap();
-        guard
-            .complete(200, "caller still receives this".into())
-            .await;
+        guard.complete(output("caller still receives this")).await;
         assert!(matches!(
             coordinator.reserve("session", "key", "code").await,
             Reservation::Refused(Refusal::Indeterminate)

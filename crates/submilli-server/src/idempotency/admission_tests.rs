@@ -1,3 +1,4 @@
+use super::tests::output;
 use super::tests::{fixture, proceed};
 use super::*;
 use crate::domain::idempotent_request::RunStatus;
@@ -83,11 +84,13 @@ async fn closure_fences_prepared_writes_and_retains_completed_identity() {
         .unwrap();
     unit.save_session(session).await.unwrap();
     unit.commit().await.unwrap();
-    stale.complete("run", SystemTime::now()).unwrap();
+    stale
+        .complete("run", output("late"), SystemTime::now())
+        .unwrap();
     let mut unit = units.begin().await.unwrap();
     assert!(unit.save_run(stale).await.is_err());
     drop(unit);
-    guard.complete(200, "late".into()).await;
+    guard.complete(output("late")).await;
     let mut unit = units.begin().await.unwrap();
     assert_eq!(
         unit.get_run("run").await.unwrap().unwrap().status(),

@@ -2,8 +2,9 @@
 use crate::application::error::StoreError;
 use crate::application::sessions::ports::StagedLastRun;
 use crate::application::unit_of_work::{UnitOfWork, UnitOfWorkFactory};
-use crate::domain::idempotent_request::{RecordedOutcome, ResponseRetention, RunStatus};
+use crate::domain::idempotent_request::{ResponseRetention, RunStatus};
 use crate::domain::run::Run;
+use crate::domain::run_result::RunOutput;
 use interpreter::runtime::durable::RunId;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -25,7 +26,7 @@ pub(crate) enum RunFailure {
 pub(crate) enum RunDisposition {
     Proceed,
     Wait(RunId),
-    Completed(RecordedOutcome),
+    Completed(RunId),
 }
 
 pub(crate) struct PrepareRun<'a> {
@@ -54,10 +55,9 @@ impl<'a> PrepareRun<'a> {
                 RunStatus::Queued | RunStatus::Running => {
                     Ok(RunDisposition::Wait(existing.reservation_id().to_owned()))
                 }
-                RunStatus::Completed => match unit.run_result(existing.reservation_id()).await? {
-                    Some(outcome) => Ok(RunDisposition::Completed(outcome)),
-                    None => Err(RunFailure::Expired),
-                },
+                RunStatus::Completed => {
+                    Ok(RunDisposition::Completed(existing.reservation_id().clone()))
+                }
                 RunStatus::Indeterminate(_) => Err(RunFailure::Indeterminate),
                 RunStatus::Expired => Err(RunFailure::Expired),
                 RunStatus::Cancelled | RunStatus::Stuck(_) | RunStatus::Aborted => {
@@ -96,7 +96,7 @@ impl<'a> PrepareRun<'a> {
 }
 
 pub(crate) enum RunResolution {
-    Completed(RecordedOutcome),
+    Completed(RunOutput),
     Finished,
     Undispatched,
     Indeterminate,
@@ -161,9 +161,9 @@ impl ResolveRun {
         let now = SystemTime::now();
         let effect = match resolution {
             RunResolution::Completed(outcome) => {
-                request.complete(reservation.reservation_id(), now)?;
-                unit.save_run_result(reservation.reservation_id(), outcome.clone())
-                    .await?;
+                let result =
+                    request.complete(reservation.reservation_id(), outcome.clone(), now)?;
+                unit.save_run_result(result).await?;
                 if let Some(mut session) = unit.get_session(session_id).await?
                     && (session.require_available(now).is_ok()
                         || (request.is_durable() && session.require_active().is_ok()))
@@ -224,7 +224,10 @@ impl ResolveRun {
                         && match resolution {
                             RunResolution::Completed(outcome) => {
                                 run.status() == RunStatus::Completed
-                                    && result.as_ref() == Some(outcome)
+                                    && result.as_ref().is_some_and(|result| {
+                                        result.run_id() == run.reservation_id()
+                                            && result.output() == outcome
+                                    })
                             }
                             RunResolution::Finished => run.status() == RunStatus::Completed,
                             _ => false,

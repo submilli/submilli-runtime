@@ -288,7 +288,7 @@ impl UnitOfWork for SqliteUnitOfWork {
     async fn run_result(
         &mut self,
         id: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::RecordedOutcome>, StoreError> {
+    ) -> Result<Option<crate::domain::run_result::RunResult>, StoreError> {
         let sealer = self.sealer.clone();
         let id = id.to_owned();
         self.query(move |connection| {
@@ -353,14 +353,12 @@ impl UnitOfWork for SqliteUnitOfWork {
     }
     async fn save_run_result(
         &mut self,
-        id: &str,
-        result: crate::domain::idempotent_request::RecordedOutcome,
+        result: crate::domain::run_result::RunResult,
     ) -> Result<(), StoreError> {
-        let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::run_result::save(connection, &sealer, &id, &result).await
+                crate::adapters::run_result::save(connection, &sealer, &result).await
             })
         })
         .await

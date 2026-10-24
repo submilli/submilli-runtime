@@ -434,10 +434,6 @@ async fn run_attempt(
         error: response.error.clone(),
     };
     let json = serde_json::to_vec(&last).map_err(|_| StuckReason::Storage)?;
-    let result = crate::handlers::runs::finished_body(&response);
-    if !result.recordable {
-        return Err(StuckReason::Storage);
-    }
     let mut files =
         crate::idempotency::LastRunFiles::before(state.last_runs().as_ref(), run.session_id())
             .await;
@@ -448,10 +444,7 @@ async fn run_attempt(
         state.units(),
         run,
         &history,
-        &RunResolution::Completed(crate::domain::idempotent_request::RecordedOutcome {
-            status: 200,
-            body: result.body,
-        }),
+        &RunResolution::Completed(response.output()),
         Some(&staged),
     )
     .await;

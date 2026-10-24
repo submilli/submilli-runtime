@@ -5,7 +5,14 @@ use sqlx::Row;
 use std::sync::Arc;
 use std::time::SystemTime;
 use submilli_server::database::{DatabaseError, ServerDatabase};
-use submilli_server::domain::idempotent_request::{RecordedOutcome, RunStatus};
+use submilli_server::domain::idempotent_request::RunStatus;
+
+#[derive(Debug, PartialEq)]
+pub struct RecordedResponse {
+    pub status: u16,
+    pub body: String,
+}
+
 use submilli_server::domain::run_status::{IndeterminateReason, StuckReason};
 
 #[derive(Debug, PartialEq)]
@@ -14,11 +21,11 @@ pub struct Record {
     pub key: String,
     pub fingerprint: String,
     pub state: RunStatus,
-    pub result: Option<RecordedOutcome>,
+    pub result: Option<RecordedResponse>,
 }
 impl Record {
     #[allow(dead_code)] // The last-run integration assertions inspect the stored response.
-    pub fn outcome(&self) -> Option<&RecordedOutcome> {
+    pub fn outcome(&self) -> Option<&RecordedResponse> {
         self.result.as_ref()
     }
 
@@ -127,7 +134,7 @@ impl RequestRecords {
                         session_id: session,
                         key,
                         fingerprint: row.try_get("fingerprint")?,
-                        result: row.try_get::<Option<u16>,_>("response_status")?.map(|status| RecordedOutcome {
+                        result: row.try_get::<Option<u16>,_>("response_status")?.map(|status| RecordedResponse {
                             status, body: String::from_utf8(row.try_get("response_body").unwrap()).unwrap(),
                         }),
                         state,

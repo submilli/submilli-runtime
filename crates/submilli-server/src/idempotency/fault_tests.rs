@@ -1,8 +1,10 @@
 use super::tests::{fixture, proceed, read_request};
+use super::tests::{output, saved_value};
 use super::*;
 use crate::application::error::StoreError;
 use crate::application::unit_of_work::UnitOfWork;
 use crate::domain::idempotent_request::RunStatus;
+use crate::domain::run_result::RunResult;
 use crate::domain::session::Session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -78,7 +80,7 @@ impl UnitOfWork for FaultUnit {
     async fn run_result(
         &mut self,
         id: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::RecordedOutcome>, StoreError> {
+    ) -> Result<Option<crate::domain::run_result::RunResult>, StoreError> {
         self.inner.run_result(id).await
     }
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
@@ -108,12 +110,8 @@ impl UnitOfWork for FaultUnit {
     ) -> Result<(), StoreError> {
         self.inner.save_run_program(id, program).await
     }
-    async fn save_run_result(
-        &mut self,
-        id: &str,
-        result: RecordedOutcome,
-    ) -> Result<(), StoreError> {
-        self.inner.save_run_result(id, result).await
+    async fn save_run_result(&mut self, result: RunResult) -> Result<(), StoreError> {
+        self.inner.save_run_result(result).await
     }
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
         self.inner.unfinished_runs().await
@@ -287,9 +285,11 @@ async fn lost_acknowledgements_never_repeat_execution_or_lose_completed_bytes() 
     fault.lose_ack.store(true, Ordering::SeqCst);
     let guard = proceed(coordinator.reserve("session", "key", "code").await);
     fault.lose_ack.store(true, Ordering::SeqCst);
-    guard.complete(200, "original bytes".into()).await;
+    guard.complete(output("original bytes")).await;
     match coordinator.reserve("session", "key", "code").await {
-        Reservation::Replay(outcome) => assert_eq!(outcome.body, "original bytes"),
+        Reservation::Replay(outcome) => {
+            assert_eq!(saved_value(&coordinator, &outcome).await, "original bytes");
+        }
         _ => panic!("committed outcome must replay"),
     }
     let guard = proceed(coordinator.reserve("session", "release", "code").await);
@@ -332,7 +332,7 @@ async fn cancelling_completion_waiter_does_not_cancel_owned_finalization() {
     let coordinator = Arc::new(Coordinator::new(units, database.generation().unwrap()));
     let guard = proceed(coordinator.reserve("session", "key", "code").await);
     fault.pause_after_commit.store(true, Ordering::SeqCst);
-    let task = tokio::spawn(guard.complete(200, "done".into()));
+    let task = tokio::spawn(guard.complete(output("done")));
     fault.committed.notified().await;
     task.abort();
     assert!(matches!(task.await, Err(error) if error.is_cancelled()));
@@ -358,7 +358,7 @@ async fn simultaneous_claims_dispatch_once_and_cancelled_waiters_do_not_release_
     let guard = proceed(winner);
     loser.abort();
     assert!(matches!(loser.await, Err(error) if error.is_cancelled()));
-    guard.complete(200, "once".into()).await;
+    guard.complete(output("once")).await;
     assert!(matches!(
         first.reserve("session", "key", "code").await,
         Reservation::Replay(_)
@@ -381,7 +381,7 @@ async fn waiter_deadline_does_not_authorize_another_execution() {
         second.reserve("session", "key", "code").await,
         Reservation::Refused(Refusal::InProgress)
     ));
-    guard.complete(200, "eventual result".into()).await;
+    guard.complete(output("eventual result")).await;
     assert!(matches!(
         second.reserve("session", "key", "code").await,
         Reservation::Replay(_)
@@ -428,7 +428,7 @@ async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_runs() {
     let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
     let (_, units, coordinator) = super::tests::fixture_with_database(database.clone()).await;
     proceed(coordinator.reserve("session", "done", "code").await)
-        .complete(201, "exact\nbytes".into())
+        .complete(output("exact\nbytes"))
         .await;
     let abandoned = IdempotentRequest::reserve(
         "session".into(),
@@ -449,8 +449,7 @@ async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_runs() {
     coordinator.recover().await.unwrap();
     match coordinator.reserve("session", "done", "code").await {
         Reservation::Replay(outcome) => {
-            assert_eq!(outcome.status, 201);
-            assert_eq!(outcome.body, "exact\nbytes");
+            assert_eq!(saved_value(&coordinator, &outcome).await, "exact\nbytes");
         }
         _ => panic!("stored bytes must survive reopen"),
     }
@@ -491,7 +490,7 @@ async fn failed_request_cleanup_rolls_back_expiry() {
         .await
         .unwrap();
     assert_eq!(expiry.execute(later, &Default::default()).await.unwrap(), 1);
-    guard.complete(200, "late".into()).await;
+    guard.complete(output("late")).await;
     assert!(
         read_request(units.as_ref(), "session", "key")
             .await
@@ -516,7 +515,7 @@ async fn failed_completion_activity_write_cannot_publish_a_partial_outcome() {
     database.transaction(|connection| Box::pin(async move {
         sqlx::query("CREATE TRIGGER reject_activity BEFORE UPDATE ON sessions BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?; Ok(())
     })).await.unwrap();
-    guard.complete(200, "original result".into()).await;
+    guard.complete(output("original result")).await;
     assert!(matches!(
         coordinator.reserve("session", "key", "code").await,
         Reservation::Refused(Refusal::Indeterminate)
@@ -557,7 +556,7 @@ async fn database_contention_cannot_exceed_reservation_deadline() {
         Reservation::Refused(Refusal::Unavailable(_))
     ));
     drop(held);
-    guard.complete(200, "done".into()).await;
+    guard.complete(output("done")).await;
     second.drain().await;
 }
 

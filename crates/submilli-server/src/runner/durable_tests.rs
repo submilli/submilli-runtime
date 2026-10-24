@@ -5,8 +5,9 @@ use crate::application::sessions::runs::{
     PrepareRun, RecoverRuns, RunDisposition, RunResolution, claim_run, reopen_run,
 };
 use crate::blueprint::{BlueprintStore, SqliteBlueprintStore, StoredBlueprint};
-use crate::domain::idempotent_request::{RecordedOutcome, RunStatus};
+use crate::domain::idempotent_request::RunStatus;
 use crate::domain::run::{Run, RunIdentity};
+use crate::domain::run_result::RunOutput;
 use crate::session_store::{DurableSessionStore, RootVfsType, SessionRecord, SqliteSessionStore};
 use std::time::{Duration, SystemTime};
 use submilli_durable::history::History;
@@ -261,9 +262,9 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
         std::fs::read_to_string(files.join("result")).unwrap(),
         "later filesystem contents"
     );
-    let response = RecordedOutcome {
-        status: 200,
-        body: outcome.value.unwrap(),
+    let response = RunOutput {
+        result: outcome.value,
+        ..Default::default()
     };
     let last = StagedLastRun {
         encoded_bytes: 2,
@@ -311,7 +312,7 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
     assert_eq!(last_id, first.reservation_id().as_str());
 
     assert!(
-        matches!(PrepareRun::new(units.as_ref()).execute(prepared).await.unwrap(), RunDisposition::Completed(saved) if saved == response)
+        matches!(PrepareRun::new(units.as_ref()).execute(prepared).await.unwrap(), RunDisposition::Completed(saved) if saved == *first.reservation_id())
     );
     assert!(
         reopen_run(

@@ -1,5 +1,6 @@
 //! A session's last run is written with its run's end, in the same unit.
 use super::fault_tests::{CommitFault, FaultFactory};
+use super::tests::output;
 use super::tests::{fixture_with_database, proceed};
 use super::*;
 use crate::adapters::session::last_run::{INLINE_BYTES, LastRuns, StoredLastRun};
@@ -145,7 +146,7 @@ async fn a_run_that_ends_records_the_session_last_run() {
     );
     let mut guard = proceed(fixture.coordinator.reserve("session", "key", "code").await);
     guard.set_last_run(&run("keyed"));
-    guard.complete(200, "body".into()).await;
+    guard.complete(output("body")).await;
     assert_eq!(fixture.last_result().await.as_deref(), Some("keyed"));
 }
 

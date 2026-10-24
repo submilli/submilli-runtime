@@ -558,7 +558,7 @@ async fn program_and_admission_commit_together() {
 #[tokio::test]
 async fn completion_failure_rolls_back_result_and_expiry_keeps_run_identity() {
     use crate::application::sessions::runs::ResolveRun;
-    use crate::domain::idempotent_request::RecordedOutcome;
+    use crate::domain::run_result::RunOutput;
     let root = tempfile::tempdir().unwrap();
     let state = app(root.path(), 1_000_000).await;
     let id = accept(&state, "s", CODE, Some("atomic")).await;
@@ -571,9 +571,9 @@ async fn completion_failure_rolls_back_result_and_expiry_keeps_run_identity() {
         sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON runs WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL,'injected'); END").execute(connection).await?;
         Ok(())
     })).await.unwrap();
-    let resolution = RunResolution::Completed(RecordedOutcome {
-        status: 200,
-        body: "exact result\n".into(),
+    let resolution = RunResolution::Completed(RunOutput {
+        result: Some("exact result\n".into()),
+        ..Default::default()
     });
     let resolve = ResolveRun::new(state.units());
     assert!(
@@ -606,8 +606,14 @@ async fn completion_failure_rolls_back_result_and_expiry_keeps_run_identity() {
         .unwrap();
     let mut unit = state.units().begin().await.unwrap();
     assert_eq!(
-        unit.run_result(&id).await.unwrap().unwrap().body,
-        "exact result\n"
+        unit.run_result(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .output()
+            .result
+            .as_deref(),
+        Some("exact result\n")
     );
     assert_eq!(
         unit.expire_responses("s", vec![id.to_string()])

@@ -1,5 +1,7 @@
 //! Persistent run observation and explicit recovery, independent of tool answers.
+use crate::adapters::run_result::{RunResponse, RunResponses};
 use crate::app::AppState;
+use crate::application::error::StoreError;
 use crate::application::sessions::recovery::{self, RunQuery, RunStatus, RunStatusFilter};
 use crate::domain::run::Run;
 use axum::Json;
@@ -58,18 +60,14 @@ pub(crate) async fn get(state: &AppState, id: &str) -> Response {
     }
 }
 
-pub(crate) async fn observe(
-    state: &AppState,
-    id: &str,
-) -> Result<Option<Value>, crate::application::error::StoreError> {
-    let mut unit = state.units().begin().await?;
-    let Some(run) = unit.get_run(id).await? else {
+pub(crate) async fn observe(state: &AppState, id: &str) -> Result<Option<Value>, StoreError> {
+    let Some(observed) = responses(state)?.observe(id).await? else {
         return Ok(None);
     };
-    let mut result = view(&run);
-    if let Some(outcome) = unit.run_result(id).await? {
-        result["response"] = serde_json::from_str(&outcome.body)
-            .map_err(|e| crate::application::error::StoreError::Io(e.to_string()))?;
+    let mut result = view(&observed.run);
+    if let Some(outcome) = observed.response {
+        result["response"] =
+            serde_json::from_str(&outcome.body).map_err(|e| StoreError::Io(e.to_string()))?;
     }
     Ok(Some(result))
 }
@@ -99,7 +97,7 @@ pub(crate) async fn recover(
             state.wake_recovery();
             get(&state, &id).await
         }
-        Err(crate::application::error::StoreError::Conflict) => (
+        Err(StoreError::Conflict) => (
             StatusCode::CONFLICT,
             "run changed or is not stuck; inspect it again",
         )
@@ -110,7 +108,7 @@ pub(crate) async fn recover(
 
 /// Terminal HTTP responses retain their original serialization and status.
 pub(crate) enum WaitResponse {
-    Completed(crate::domain::idempotent_request::RecordedOutcome),
+    Completed(RunResponse),
     Metadata(Value),
 }
 
@@ -128,18 +126,16 @@ impl WaitResponse {
 pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, String> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(25);
     loop {
-        let run = {
-            let mut unit = state.units().begin().await.map_err(|e| e.to_string())?;
-            let run = unit
-                .get_run(id)
-                .await
-                .map_err(|e| e.to_string())?
-                .ok_or("unknown run")?;
-            if let Some(outcome) = unit.run_result(id).await.map_err(|e| e.to_string())? {
-                return Ok(WaitResponse::Completed(outcome));
-            }
-            run
-        };
+        let observed = responses(state)
+            .map_err(|e| e.to_string())?
+            .observe(id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("unknown run")?;
+        if let Some(response) = observed.response {
+            return Ok(WaitResponse::Completed(response));
+        }
+        let run = observed.run;
         if !matches!(run.status(), RunStatus::Queued | RunStatus::Running)
             || tokio::time::Instant::now() >= deadline
         {
@@ -147,6 +143,13 @@ pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, S
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+pub(crate) fn responses(state: &AppState) -> Result<RunResponses, StoreError> {
+    let database = state
+        .database()
+        .ok_or_else(|| StoreError::Io("run storage unavailable".into()))?;
+    Ok(RunResponses::new(database.clone(), state.secret_cipher()))
 }
 
 fn view(run: &Run) -> Value {
@@ -179,7 +182,7 @@ fn parse_status(status: &str) -> Result<RunStatusFilter, ()> {
     }
 }
 
-fn unavailable(error: crate::application::error::StoreError) -> Response {
+fn unavailable(error: StoreError) -> Response {
     tracing::warn!(%error, "run observation unavailable");
     (StatusCode::SERVICE_UNAVAILABLE, "run storage unavailable").into_response()
 }

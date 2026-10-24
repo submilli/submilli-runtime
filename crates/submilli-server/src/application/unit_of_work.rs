@@ -37,7 +37,7 @@ pub(crate) trait UnitOfWork: Send {
     async fn run_result(
         &mut self,
         id: &str,
-    ) -> Result<Option<crate::domain::idempotent_request::RecordedOutcome>, StoreError>;
+    ) -> Result<Option<crate::domain::run_result::RunResult>, StoreError>;
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError>;
     async fn run_for_key(
         &mut self,
@@ -57,8 +57,7 @@ pub(crate) trait UnitOfWork: Send {
     ) -> Result<(), StoreError>;
     async fn save_run_result(
         &mut self,
-        id: &str,
-        result: crate::domain::idempotent_request::RecordedOutcome,
+        result: crate::domain::run_result::RunResult,
     ) -> Result<(), StoreError>;
 
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError>;

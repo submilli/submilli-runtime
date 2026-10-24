@@ -2,12 +2,6 @@
 pub use super::run_status::RunStatus;
 use std::time::{Duration, SystemTime};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedOutcome {
-    pub status: u16,
-    pub body: String,
-}
-
 // Compatibility names for existing HTTP callers; the run is the only aggregate.
 pub use super::run::{RequestError, Run as IdempotentRequest};
 

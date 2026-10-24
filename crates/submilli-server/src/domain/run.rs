@@ -1,4 +1,5 @@
 //! Persistent program identity and guarded lifecycle transitions. No I/O.
+use super::run_result::{RunOutput, RunResult};
 use super::run_status::{IndeterminateReason, RunStatus, StuckReason};
 use super::session::SessionId;
 use interpreter::runtime::durable::RunId;
@@ -134,13 +135,14 @@ impl Run {
     pub fn complete(
         &mut self,
         reservation_id: &str,
+        output: RunOutput,
         completed_at: SystemTime,
-    ) -> Result<(), RequestError> {
+    ) -> Result<RunResult, RequestError> {
         self.require_reservation(reservation_id)?;
         self.advance_revision()?;
         self.state = RunStatus::Completed;
         self.completed_at = Some(completed_at);
-        Ok(())
+        Ok(RunResult::new(self.reservation_id.clone(), output))
     }
 
     pub fn mark_indeterminate(&mut self, reservation_id: &str) -> Result<(), RequestError> {
@@ -367,6 +369,40 @@ impl Run {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_produces_a_result_only_for_the_runs_current_reservation() {
+        let now = SystemTime::UNIX_EPOCH;
+        let mut run = Run::reserve(
+            "session".into(),
+            "key".into(),
+            "fingerprint".into(),
+            "run".into(),
+            "owner".into(),
+            now,
+        )
+        .unwrap();
+        run.claim("owner").unwrap();
+        let output = RunOutput {
+            result: Some("value".into()),
+            console: vec!["before completion".into()],
+            ..Default::default()
+        };
+        let before = run.clone();
+        assert!(run.complete("another-run", output.clone(), now).is_err());
+        assert_eq!(run, before);
+
+        let result = run.complete("run", output.clone(), now).unwrap();
+        assert_eq!(result.run_id(), run.reservation_id());
+        assert_eq!(result.output(), &output);
+        assert_eq!(run.status(), RunStatus::Completed);
+        assert_eq!(run.completed_at(), Some(now));
+        assert_eq!(run.revision(), before.revision() + 1);
+
+        let completed = run.clone();
+        assert!(run.complete("run", output, now).is_err());
+        assert_eq!(run, completed);
+    }
 
     #[test]
     fn resuming_and_cancelling_replace_the_entire_status() {

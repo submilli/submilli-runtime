@@ -54,6 +54,17 @@ pub struct ExecuteResponse {
     pub discovery_warnings: Vec<String>,
 }
 
+impl ExecuteResponse {
+    pub(crate) fn output(&self) -> crate::domain::run_result::RunOutput {
+        crate::domain::run_result::RunOutput {
+            result: self.result.clone(),
+            console: self.console.clone(),
+            error: self.error.clone(),
+            discovery_warnings: self.discovery_warnings.clone(),
+        }
+    }
+}
+
 /// What to tell a caller whose blueprint name resolved to nothing.
 ///
 /// A name can be registered but unrunnable: a stored blueprint whose form this
