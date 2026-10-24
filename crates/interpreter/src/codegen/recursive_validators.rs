@@ -343,6 +343,9 @@ impl<'a> Discovery<'a> {
                 self.walk(shape)?;
             }
         }
+        if let Some(argument) = &ta.finalizer_argument {
+            self.walk(&argument.check)?;
+        }
         Ok(())
     }
 

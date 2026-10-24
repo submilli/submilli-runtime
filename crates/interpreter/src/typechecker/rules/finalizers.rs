@@ -7,20 +7,16 @@ use crate::{
     Diagnostic, PackageDeclaration, Severity, Span, Type, TypedAst, TypedExprKind, ValueKind,
 };
 
-pub(super) fn run(
-    typed_ast: &TypedAst,
-    declaration: &PackageDeclaration,
-    resolver: TypeResolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), CompilerFailure> {
-    let finalizer = declaration.values.get("finalizer");
-    let value_type = match finalizer.map(|symbol| &symbol.kind) {
-        Some(ValueKind::Function {
+/// The type of the value a valid `finalizer(key: string, value: T): void`
+/// receives, or `None` when the signature is not one.
+pub(crate) fn value_type(kind: &ValueKind) -> Option<&Type> {
+    match kind {
+        ValueKind::Function {
             generics,
             params,
             ret,
             ..
-        }) if generics.is_empty()
+        } if generics.is_empty()
             && params.len() == 2
             && params[0].ty == Type::String
             && params
@@ -30,22 +26,32 @@ pub(super) fn run(
         {
             Some(&params[1].ty)
         }
-        Some(_) => {
-            if let Some(symbol) = finalizer {
-                error(
-                    diagnostics,
-                    symbol.declaration_span,
-                    "invalid package finalizer signature".into(),
-                    vec![
-                        "export function finalizer(key: string, value: YourSerializableType): void"
-                            .into(),
-                    ],
-                );
-            }
-            None
+        _ => None,
+    }
+}
+
+pub(super) fn run(
+    typed_ast: &TypedAst,
+    declaration: &PackageDeclaration,
+    resolver: TypeResolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), CompilerFailure> {
+    let finalizer = declaration.values.get("finalizer");
+    let value_type = finalizer.and_then(|symbol| {
+        let ty = value_type(&symbol.kind);
+        if ty.is_none() {
+            error(
+                diagnostics,
+                symbol.declaration_span,
+                "invalid package finalizer signature".into(),
+                vec![
+                    "export function finalizer(key: string, value: YourSerializableType): void"
+                        .into(),
+                ],
+            );
         }
-        None => None,
-    };
+        ty
+    });
     let register = crate::mangle::package_symbol("submilli:session", "registerFinalizer");
     let mut references = RegistrationReferences {
         register: &register,

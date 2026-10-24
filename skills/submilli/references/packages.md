@@ -553,6 +553,8 @@ register its cleanup internally before returning the handle. Use
 package namespacing: supply only the local resource key. Two packages can use
 the same key without conflict; the finalizer receives the original local key.
 A duplicate live key in the same package/session is rejected.
+Cleanup checks the stored value against `T` as `value as T` does, so `T` must be
+a type `as` accepts.
 
 ```typescript
 import * as session from "submilli:session";

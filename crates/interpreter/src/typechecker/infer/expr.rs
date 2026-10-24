@@ -4196,6 +4196,45 @@ impl Inferer<'_> {
         )))
     }
 
+    /// Records how the argument of `declaration`'s valid `finalizer` is
+    /// checked at runtime: as `value as T` checks it. A `T` the runtime cannot
+    /// check is an error at the finalizer.
+    pub(super) fn record_finalizer_argument(
+        &mut self,
+        declaration: &crate::PackageDeclaration,
+    ) -> Result<(), CompilerFailure> {
+        let Some(symbol) = declaration.values.get("finalizer") else {
+            return Ok(());
+        };
+        let Some(ty) = crate::typechecker::rules::finalizers::value_type(&symbol.kind) else {
+            return Ok(());
+        };
+        let check = self.reduce_enums_to_members(&self.reduce_cast_target(ty));
+        if let Some(reason) =
+            unsupported_cast_target_reason(&check, self.resolver(), &mut Vec::new())
+        {
+            self.error_with_help(
+                symbol.declaration_span,
+                format!("finalizer value type `{ty}` cannot be verified at runtime: {reason}"),
+                cast_gate_help(
+                    reason,
+                    "cleanup checks the stored value against this type as `value as T` \
+                     checks it, so `T` must be a type `as` accepts"
+                        .into(),
+                ),
+            );
+            return Ok(());
+        }
+        // Every expression records a runtime test for its type when it is
+        // pushed; this argument has no expression, so record it here.
+        self.record_runtime_type_test(ty)?;
+        self.typed_ast.finalizer_argument = Some(crate::FinalizerArgumentCheck {
+            target: ty.clone(),
+            check,
+        });
+        Ok(())
+    }
+
     /// dispatch a `<ns>.<member>(args)` call where `<ns>` is
     /// a namespace-imported package. Lifts the member's
     /// package-export mangled name into a static call (or `VirtualCall` for

@@ -685,6 +685,14 @@ pub fn infer_package_checked<'a>(
             package_declaration.values = module_symbols.exported_value_map();
             package_declaration.types = module_symbols.exported_type_map();
             root_public_exports = exports.clone();
+            tc.record_finalizer_argument(&package_declaration)
+                .map_err(|fatal| {
+                    CompileError {
+                        diagnostics: tc.diagnostics.clone(),
+                        fatal: Some(fatal),
+                    }
+                    .with_prior_diagnostics(&diagnostics)
+                })?;
         } else {
             tc.typed_ast
                 .internal_modules

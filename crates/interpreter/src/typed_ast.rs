@@ -993,6 +993,10 @@ pub struct TypedAst {
     /// globals and class statics of its non-entry modules, under their
     /// module-qualified mangled names. Empty outside a test build.
     pub test_exports: Vec<ExportEntry>,
+    /// The check codegen emits for the argument of the package's valid
+    /// `finalizer`, in the hidden export embedders call to restore it; `None`
+    /// without one.
+    pub finalizer_argument: Option<FinalizerArgumentCheck>,
     /// Concrete runtime validators resolved while inference still has access to
     /// interface declarations and generic substitutions. Codegen consults this
     /// for narrowed reads instead of re-deriving type structure.
@@ -1002,6 +1006,14 @@ pub struct TypedAst {
     pub runtime_class_parameters: std::collections::BTreeMap<MangledName, Vec<String>>,
     pub runtime_class_contexts: std::collections::BTreeMap<Type, Vec<InstanceTypeContext>>,
     pub runtime_field_guards: std::collections::BTreeMap<Type, Vec<InstantiatedFieldGuard>>,
+}
+
+/// A finalizer's value type and the shape its argument is checked against,
+/// as a `Cast` carries them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FinalizerArgumentCheck {
+    pub target: Type,
+    pub check: Type,
 }
 
 #[derive(Clone, Debug)]

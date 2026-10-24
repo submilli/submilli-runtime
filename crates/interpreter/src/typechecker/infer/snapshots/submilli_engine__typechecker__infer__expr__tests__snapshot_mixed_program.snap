@@ -1,6 +1,5 @@
 ---
 source: crates/interpreter/src/typechecker/infer/expr.rs
-assertion_line: 11231
 expression: ta
 ---
 TypedAst {
@@ -490,6 +489,7 @@ TypedAst {
     imported_packages: {},
     internal_modules: {},
     test_exports: [],
+    finalizer_argument: None,
     runtime_type_tests: {
         Number: Shape(
             Number,

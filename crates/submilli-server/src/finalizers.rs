@@ -4,10 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use interpreter::runtime::{
-    LinkedPackageModule, StoreData, dispatch_main_async, install_package_modules_async,
-    install_runtime_async, install_tenant_limits,
+    FinalizerCall, FinalizerError, LinkedPackageModule, StoreData, install_tenant_limits,
+    invoke_finalizer_async,
 };
-use interpreter::{FileId, PackageDeclaration, TypeKind, TypeSymbol, ValueKind};
 use submilli_shared::{BlueprintAuthProxy, BlueprintSecretProvider, PolicyCheck};
 
 use crate::app::AppState;
@@ -19,8 +18,7 @@ pub(crate) async fn execute(
 ) -> Result<(), FinalizerFailure> {
     let authority = resolve_authority(state, invocation).await?;
     let artifacts = load_artifacts(state, invocation, &authority).await?;
-    let compiled = compile_invocation(invocation, &artifacts)?;
-    run_finalizer(state, invocation, &authority, &artifacts, &compiled).await
+    run_finalizer(state, invocation, &authority, &artifacts).await
 }
 
 struct CleanupAuthority {
@@ -101,77 +99,13 @@ async fn load_artifacts(
     Ok(artifacts)
 }
 
-fn compile_invocation(
-    invocation: &FinalizerInvocation,
-    artifacts: &[submilli_build::Artifact],
-) -> Result<interpreter::compile::CompiledScript, FinalizerFailure> {
-    let mut declarations: Vec<PackageDeclaration> = artifacts
-        .iter()
-        .map(|artifact| artifact.package_declaration.clone())
-        .collect();
-    let declaration = declarations
-        .iter_mut()
-        .find(|decl| decl.package_name == invocation.package)
-        .ok_or(FinalizerFailure::ArtifactUnavailable)?;
-    let Some(ValueKind::Function { params, .. }) = declaration
-        .values
-        .get("finalizer")
-        .map(|symbol| &symbol.kind)
-    else {
-        return Err(FinalizerFailure::ArtifactUnavailable);
-    };
-    let value_type = params
-        .get(1)
-        .ok_or(FinalizerFailure::ArtifactUnavailable)?
-        .ty
-        .clone();
-    let mut alias = "__SubmilliFinalizerValue".to_owned();
-    while declaration.types.contains_key(&alias) || declaration.values.contains_key(&alias) {
-        alias.push('_');
-    }
-    declaration.types.insert(
-        alias.clone(),
-        TypeSymbol {
-            name: alias.clone(),
-            mangled_name: interpreter::mangle::package_symbol(&invocation.package, &alias),
-            declaration_span: interpreter::Span::at(FileId(0)),
-            kind: TypeKind::Alias {
-                generics: Vec::new(),
-                ty: value_type,
-                doc: None,
-            },
-        },
-    );
-    let package = serde_json::to_string(&invocation.package)
-        .map_err(|_| FinalizerFailure::ArtifactUnavailable)?;
-    let code = format!(
-        "import {{ finalizer, type {alias} }} from {package};\nfunction main(): void {{ finalizer({}, JSON.parse({}) as {alias}); }}",
-        literal(&invocation.key),
-        literal(invocation.value.as_ref().map_err(|failure| *failure)?)
-    );
-    let refs: Vec<_> = declarations.iter().collect();
-    let compiled = crate::compiler_thread::run(|| {
-        interpreter::compile_script_owned_by(
-            &invocation.package,
-            &code,
-            "<session-finalizer>",
-            FileId(0),
-            &refs,
-            &[],
-        )
-    })
-    .map_err(|_| FinalizerFailure::ArtifactUnavailable)?
-    .map_err(|_| FinalizerFailure::ArtifactUnavailable)?;
-    Ok(compiled)
-}
-
 async fn run_finalizer(
     state: &AppState,
     invocation: &FinalizerInvocation,
     authority: &CleanupAuthority,
     artifacts: &[submilli_build::Artifact],
-    compiled: &interpreter::compile::CompiledScript,
 ) -> Result<(), FinalizerFailure> {
+    let value = invocation.value.as_ref().map_err(|failure| *failure)?;
     let mut config = state.runtime().clone();
     // Finalizers always have a finite deadline, even if normal runs do not.
     let timeout = config
@@ -182,8 +116,7 @@ async fn run_finalizer(
     let engine = config
         .engine_async()
         .map_err(|_| FinalizerFailure::Execution)?;
-    let mut data = host_services(state, invocation, authority).await?;
-    data.install_type_info(compiled.type_info.clone());
+    let data = host_services(state, invocation, authority).await?;
     let mut store = config
         .store_async(&engine, data)
         .map_err(|_| FinalizerFailure::Execution)?;
@@ -191,31 +124,29 @@ async fn run_finalizer(
     let _watchdog = config
         .arm_timeout(&engine)
         .map_err(|_| FinalizerFailure::Execution)?;
-    let execution = async {
-        let mut linker = wasmtime::Linker::new(&engine);
-        install_runtime_async(&mut linker, &mut store).await?;
-        let modules = artifacts
-            .iter()
-            .map(|artifact| wasmtime::Module::new(&engine, &artifact.wasm))
-            .collect::<wasmtime::Result<Vec<_>>>()?;
-        let linked: Vec<_> = modules
-            .iter()
-            .zip(artifacts)
-            .map(|(module, artifact)| LinkedPackageModule {
-                module,
-                declaration: &artifact.package_declaration,
-                type_info: &artifact.type_info,
-            })
-            .collect();
-        install_package_modules_async(&mut linker, &mut store, &linked).await?;
-        let module = wasmtime::Module::new(&engine, &compiled.wasm)?;
-        let instance = interpreter::instantiate_program_async(&linker, &mut store, &module).await?;
-        dispatch_main_async(&mut store, &instance).await?;
-        Ok::<(), wasmtime::Error>(())
+    let modules = artifacts
+        .iter()
+        .map(|artifact| wasmtime::Module::new(&engine, &artifact.wasm))
+        .collect::<wasmtime::Result<Vec<_>>>()
+        .map_err(|_| FinalizerFailure::Execution)?;
+    let linked: Vec<_> = modules
+        .iter()
+        .zip(artifacts)
+        .map(|(module, artifact)| LinkedPackageModule {
+            module,
+            declaration: &artifact.package_declaration,
+            type_info: &artifact.type_info,
+        })
+        .collect();
+    let call = FinalizerCall {
+        package: &invocation.package,
+        key: &invocation.key,
+        value,
     };
+    let execution = invoke_finalizer_async(&mut store, &linked, call);
     let outcome = match tokio::time::timeout(timeout, execution).await {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(execution_failure(&error)),
+        Ok(Err(error)) => Err(failure(&error)),
         Err(_) => Err(FinalizerFailure::BudgetExhausted),
     };
     store
@@ -246,7 +177,6 @@ async fn host_services(
         state.runtime().max_store_bytes,
     );
     data.vfs_info = vfs_info;
-    data.finalizing = true;
     data.git = submilli_shared::resolve_git(blueprint, &variables)
         .map_err(|_| FinalizerFailure::AuthorityUnavailable)?;
     data.llm_provider = state
@@ -287,33 +217,15 @@ async fn host_services(
     Ok(data)
 }
 
-fn execution_failure(error: &wasmtime::Error) -> FinalizerFailure {
-    if matches!(
-        error.downcast_ref::<wasmtime::Trap>(),
-        Some(wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt)
-    ) || interpreter::runtime::is_memory_exhausted(error)
-    {
-        return FinalizerFailure::BudgetExhausted;
+fn failure(error: &FinalizerError) -> FinalizerFailure {
+    match error {
+        FinalizerError::Unavailable(_) => FinalizerFailure::ArtifactUnavailable,
+        FinalizerError::Denied(_) => FinalizerFailure::AuthorityUnavailable,
+        FinalizerError::BudgetExhausted(_) => FinalizerFailure::BudgetExhausted,
+        FinalizerError::MalformedArgument(_)
+        | FinalizerError::IncompatibleArgument(_)
+        | FinalizerError::Failed(_) => FinalizerFailure::Execution,
     }
-    if error
-        .downcast_ref::<interpreter::backtrace::ThrownError>()
-        .is_some_and(|thrown| thrown.denial.is_some())
-    {
-        return FinalizerFailure::AuthorityUnavailable;
-    }
-    FinalizerFailure::Execution
-}
-
-/// Source literals preserve every UTF-16 unit, including lone surrogates, and
-/// prevent persisted data from becoming executable source.
-fn literal(units: &[u16]) -> String {
-    use std::fmt::Write;
-    let mut text = String::from("\"");
-    for unit in units {
-        let _ = write!(text, "\\u{unit:04x}");
-    }
-    text.push('"');
-    text
 }
 
 #[cfg(test)]

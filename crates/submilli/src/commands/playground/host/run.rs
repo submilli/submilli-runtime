@@ -1191,8 +1191,8 @@ impl RunHost {
     }
 
     /// What a closing session's finalizer runs against: the session's files and
-    /// connectors under `blueprint`, with its console discarded, no session
-    /// values, and no further finalizer registrations. Mirrors
+    /// connectors under `blueprint`, with its console discarded and no session
+    /// values. The engine refuses further finalizer registrations. Mirrors
     /// `submilli-server`'s `finalizers.rs` (`host_services`).
     pub(crate) async fn finalizer_store_data(
         &self,
@@ -1208,7 +1208,6 @@ impl RunHost {
             self.runtime.max_store_bytes,
         );
         data.vfs_info = vfs_info;
-        data.finalizing = true;
         data.git = submilli_shared::resolve_git(blueprint, variables)
             .map_err(|error| error.to_string())?;
         data.llm_provider = self.llm_provider_for(blueprint, secrets)?;
