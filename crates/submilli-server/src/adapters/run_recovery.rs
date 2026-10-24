@@ -56,6 +56,18 @@ pub(crate) async fn predecessor(
         .bind(id).fetch_one(connection).await?)
 }
 
+pub(crate) async fn resources_retired(
+    connection: &mut SqliteConnection,
+    id: &str,
+) -> Result<bool, DatabaseError> {
+    Ok(
+        sqlx::query_scalar("SELECT resources_retired FROM runs WHERE run_id=?")
+            .bind(id)
+            .fetch_one(connection)
+            .await?,
+    )
+}
+
 pub(crate) async fn retire(
     connection: &mut SqliteConnection,
     id: &str,

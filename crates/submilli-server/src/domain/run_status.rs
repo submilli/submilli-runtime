@@ -41,6 +41,7 @@ impl RunStatus {
 pub enum StuckReason {
     Credentials,
     Storage,
+    FilesystemChanged,
     Compatibility,
     History,
     Fuel,
@@ -55,6 +56,7 @@ impl StuckReason {
         match self {
             Self::Credentials => "credentials_unavailable",
             Self::Storage => "storage_unavailable",
+            Self::FilesystemChanged => "filesystem_changed",
             Self::Compatibility => "incompatible_environment",
             Self::History => "invalid_history",
             Self::Fuel => "fuel_exhausted",

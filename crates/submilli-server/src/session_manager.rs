@@ -102,6 +102,10 @@ pub struct SessionManager {
     finalizer_executor:
         std::sync::OnceLock<Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>>,
     finalization_lock: tokio::sync::Mutex<()>,
+    /// Coordinate supervisor/reaper retirement and bound retries after failures.
+    retirement_retries: tokio::sync::Mutex<
+        std::collections::HashMap<interpreter::runtime::durable::RunId, tokio::time::Instant>,
+    >,
     /// Poisoning can leave execution scopes partly installed; never recover that map.
     resource_scopes:
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<ResourceScope>>>,
@@ -138,6 +142,7 @@ pub struct SessionManager {
 /// How long ending a session waits for its cancelled runs to stop before it
 /// removes their files anyway.
 const RUN_DRAIN: Duration = Duration::from_secs(10);
+const RETIREMENT_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// How a session's `submilli:session` store is bounded. The state itself is in
 /// the database, so every limit is per session. Kept a struct beside
@@ -286,6 +291,7 @@ impl SessionManager {
             },
             finalizer_executor: std::sync::OnceLock::new(),
             finalization_lock: tokio::sync::Mutex::new(()),
+            retirement_retries: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             resource_scopes: std::sync::Mutex::new(std::collections::HashMap::new()),
             audit: None,
             credentials: CredentialCodec::new(database.ephemeral_cipher()),
@@ -825,18 +831,42 @@ impl SessionManager {
             let more = page.len() == 100;
             after = page.last().map(|run| run.reservation_id().clone());
             for run in page {
-                if let Err(error) =
-                    crate::recovery::retire(self, self.unit_of_work.as_ref(), run.reservation_id())
-                        .await
-                {
+                if !self.retire_run(run.reservation_id()).await {
                     // Keep every root until both disk retirement and its
                     // transaction finish; a transient failure must be retryable.
                     finished = false;
-                    tracing::warn!(run = %run.reservation_id(), %error, "run cleanup remains pending");
                 }
             }
             if !more {
                 return Ok(finished);
+            }
+        }
+    }
+
+    /// Both cleanup owners share the delay, including failures that need an
+    /// operator repair. Keep retrying slowly so a repair needs no database edits.
+    pub(crate) async fn retire_run(&self, id: &interpreter::runtime::durable::RunId) -> bool {
+        // Hold through retirement so the supervisor and reaper cannot remove
+        // the same private tree concurrently.
+        let mut retries = self.retirement_retries.lock().await;
+        if retries
+            .get(id)
+            .is_some_and(|retry| *retry > tokio::time::Instant::now())
+        {
+            return false;
+        }
+        match crate::recovery::retire(self, self.unit_of_work.as_ref(), id).await {
+            Ok(()) => {
+                retries.remove(id);
+                true
+            }
+            Err(error) => {
+                retries.insert(
+                    id.clone(),
+                    tokio::time::Instant::now() + RETIREMENT_RETRY_DELAY,
+                );
+                tracing::warn!(run = %id, %error, "run resources retained; cleanup will retry in 30 seconds");
+                false
             }
         }
     }

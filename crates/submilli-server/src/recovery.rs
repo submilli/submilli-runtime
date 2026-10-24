@@ -207,15 +207,10 @@ async fn schedule(
             candidate.status(),
             RunStatus::Completed | RunStatus::Cancelled | RunStatus::Aborted | RunStatus::Expired
         ) {
-            if let Err(error) = retire(
-                state.session_manager(),
-                state.units().as_ref(),
-                candidate.reservation_id(),
-            )
-            .await
-            {
-                tracing::warn!(run = %candidate.reservation_id(), %error, "run resources retained; cleanup unavailable");
-            }
+            state
+                .session_manager()
+                .retire_run(candidate.reservation_id())
+                .await;
             continue;
         }
         if !matches!(candidate.status(), RunStatus::Queued | RunStatus::Running) {
@@ -399,7 +394,10 @@ async fn run_attempt(
     .await
     .map_err(|error| {
         tracing::warn!(run = %run.reservation_id(), %error, "replay failed");
-        StuckReason::History
+        match error {
+            runner::durable::ReplayError::FilesystemChanged => StuckReason::FilesystemChanged,
+            _ => StuckReason::History,
+        }
     })?;
     if !outcome.durable_completion {
         return Err(match outcome.error.as_ref().map(|e| e.kind) {
@@ -451,6 +449,15 @@ pub(crate) async fn retire(
 ) -> Result<(), String> {
     let run = {
         let mut unit = units.begin().await.map_err(|e| e.to_string())?;
+        // Another cleanup owner may have completed a previously listed run and
+        // removed its session root. Do not reopen storage for a stale candidate.
+        if unit
+            .run_resources_retired(id)
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(());
+        }
         unit.get_run(id)
             .await
             .map_err(|e| e.to_string())?
@@ -463,26 +470,38 @@ pub(crate) async fn retire(
             .map_err(|e| e.to_string())?
             .ok_or("retained program missing")?
     };
-    if let Some(expected) = program.filesystem_config_fingerprint {
+    if !matches!(
+        run.status(),
+        RunStatus::Completed | RunStatus::Cancelled | RunStatus::Aborted | RunStatus::Expired
+    ) {
+        return Err("run is not terminal".into());
+    }
+    let filesystem_changed = if let Some(expected) = program.filesystem_config_fingerprint {
         let (vfs, _) = manager
             .reopen_vfs(run.session_id(), &program.blueprint, &program.variables)
             .await
             .map_err(|e| e.to_string())?;
         let id = id.clone();
         tokio::task::spawn_blocking(move || {
-            if submilli_durable::filesystem_config_fingerprint(&vfs).map_err(|e| e.to_string())?
-                != expected
-            {
-                return Err("filesystem roots changed".to_owned());
-            }
-            submilli_durable::retire_filesystem(&vfs, &id).map_err(|e| e.to_string())
+            // Only private artifacts under current writable roots are removed.
+            // A replay-compatibility check must not prevent terminal cleanup.
+            let changed = submilli_durable::filesystem_config_fingerprint(&vfs)
+                .is_ok_and(|actual| actual != expected);
+            submilli_durable::retire_filesystem(&vfs, &id).map_err(|e| e.to_string())?;
+            Ok::<_, String>(changed)
         })
         .await
-        .map_err(|e| e.to_string())??;
-    }
+        .map_err(|e| e.to_string())??
+    } else {
+        false
+    };
     let mut unit = units.begin().await.map_err(|e| e.to_string())?;
     unit.retire_run_resources(id)
         .await
         .map_err(|e| e.to_string())?;
-    unit.commit().await.map_err(|e| e.to_string())
+    unit.commit().await.map_err(|e| e.to_string())?;
+    if filesystem_changed {
+        tracing::warn!(run = %id, "filesystem roots or limits changed; retired private artifacts under current roots");
+    }
+    Ok(())
 }

@@ -58,7 +58,7 @@ async fn execute(
     history: Arc<History>,
     units: submilli_durable::UnitFactory,
     root: &std::path::Path,
-) -> Result<RunOutcome, String> {
+) -> Result<RunOutcome, super::durable::ReplayError> {
     let config = RuntimeConfig::default();
     let engine = config.engine().unwrap();
     let mut linker = Linker::new(&engine);

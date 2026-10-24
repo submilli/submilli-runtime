@@ -278,6 +278,15 @@ impl UnitOfWork for SqliteUnitOfWork {
         })
         .await
     }
+    async fn run_resources_retired(&mut self, id: &str) -> Result<bool, StoreError> {
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::run_recovery::resources_retired(connection, &id).await
+            })
+        })
+        .await
+    }
     async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError> {
         let id = id.to_owned();
         self.query(move |connection| {
