@@ -1,0 +1,59 @@
+{
+  "module": "RunRecovery",
+  "constants": {
+    "Capacity": 2,
+    "Fault": "none"
+  },
+  "invariants": [
+    "SingleLaunch",
+    "ManualResumeOnly",
+    "SessionOrder",
+    "ResourcesProtected",
+    "ProgressBounded",
+    "TerminalCommitted"
+  ],
+  "cases": [
+    {
+      "name": "safety",
+      "kind": "safety",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "negative-duplicate-launch",
+      "kind": "negative",
+      "constants": {
+        "Fault": "duplicate-launch"
+      },
+      "invariant": "SingleLaunch"
+    },
+    {
+      "name": "negative-auto-resume",
+      "kind": "negative",
+      "constants": {
+        "Fault": "auto-resume"
+      },
+      "invariant": "ManualResumeOnly"
+    },
+    {
+      "name": "negative-overtake",
+      "kind": "negative",
+      "constants": {
+        "Fault": "overtake"
+      },
+      "invariant": "SessionOrder"
+    },
+    {
+      "name": "negative-early-retire",
+      "kind": "negative",
+      "constants": {
+        "Fault": "early-retire"
+      },
+      "invariant": "ResourcesProtected"
+    },
+    {
+      "name": "unrelated-session-progress",
+      "kind": "witness",
+      "invariant": "NoWitness"
+    }
+  ]
+}

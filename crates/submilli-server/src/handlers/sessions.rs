@@ -7,6 +7,7 @@
 //! * `POST   /v1/sessions/{id}/rebind` — replace encrypted harness secrets
 //! * `DELETE /v1/sessions/{id}`       — terminate, wiping the VFS immediately
 
+use interpreter::runtime::durable::RunId;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -22,10 +23,10 @@ use submilli_blueprint::{
     HarnessSecretBindings, required_harness_secrets, resolve_harness_secrets, resolve_variables,
 };
 
+use crate::adapters::run_result::RunResponse;
 use crate::adapters::session::finalizers::FinalizerDiagnostic;
 use crate::app::AppState;
 use crate::blueprint::StoreError;
-use crate::domain::idempotent_request::RecordedOutcome;
 use crate::domain::tools::{DeclaredTool, SessionTools};
 use crate::handlers::execute::{self, ExecuteInputs, SESSION_HEADER, blueprint_miss_message};
 use crate::idempotency::{Refusal, Reservation, ReservationGuard};
@@ -283,6 +284,28 @@ pub async fn execute(
             Some(&session_id),
         )
     });
+    if state.durable_execution() {
+        // Observation needs an active session, but not today's credentials,
+        // blueprint, or external discovery. Its original manifest is retained.
+        if let Err(error) = state.session_manager().get(&session_id).await {
+            return session_state_response(error);
+        }
+        if let Some(key) = idempotency_key(&headers) {
+            let key = match key {
+                Ok(key) => key,
+                Err(refusal) => return refusal_response(&session_id, &refusal),
+            };
+            match durable_retry(&state, &session_id, &key, &req.code).await {
+                Ok(Some(response)) => {
+                    audit.replay();
+                    audit.finish(true);
+                    return response;
+                }
+                Ok(None) => {}
+                Err(refusal) => return refusal_response(&session_id, &refusal),
+            }
+        }
+    }
     let bound = match bound_for_run(
         &state,
         &session_id,
@@ -309,6 +332,41 @@ pub async fn execute(
         Some(Err(refusal)) => return refusal_response(&session_id, &refusal),
         Some(Ok(key)) => Some(key),
     };
+    if state.durable_execution() {
+        if tools.is_some() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "durable application-tool waits are not supported yet",
+            )
+                .into_response();
+        }
+        let BoundSession {
+            blueprint_name,
+            blueprint,
+            variables,
+            harness_secrets,
+        } = bound;
+        let inputs = ExecuteInputs {
+            session_id: &session_id,
+            code: &req.code,
+            blueprint_name: &blueprint_name,
+            blueprint: Arc::new(blueprint),
+            variables,
+            harness_secrets,
+            audit: Some(audit),
+            vfs_source: execute::VfsSource::Rest,
+            run_entry: "session",
+            idempotency_key: key.as_deref(),
+            tools: None,
+        };
+        return match crate::recovery::admit(&state, inputs).await {
+            Ok(id) => match super::durable_runs::wait(&state, &id).await {
+                Ok(response) => durable_wait_response(&session_id, response),
+                Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
+            },
+            Err(message) => (StatusCode::CONFLICT, message).into_response(),
+        };
+    }
     let guard = match &key {
         None => None,
         Some(key) => match reserve(&state, &session_id, key, &req.code, &audit).await {
@@ -343,6 +401,61 @@ pub async fn execute(
     stored_body_response(&session_id, StatusCode::OK, finished.body)
 }
 
+/// Observe the original reservation without reopening its execution environment.
+async fn durable_retry(
+    state: &AppState,
+    session: &str,
+    key: &str,
+    code: &str,
+) -> Result<Option<axum::response::Response>, Refusal> {
+    use crate::application::sessions::recovery::RunStatus;
+    use sha2::{Digest, Sha256};
+    crate::domain::run::Run::validate_key(key)
+        .map_err(|_| Refusal::InvalidKey("invalid idempotency key"))?;
+    let summary = {
+        let mut unit = state
+            .units()
+            .begin()
+            .await
+            .map_err(|e| Refusal::Unavailable(e.to_string()))?;
+        unit.run_for_key(session, key)
+            .await
+            .map_err(|e| Refusal::Unavailable(e.to_string()))?
+    };
+    let Some(run) = summary else {
+        return Ok(None);
+    };
+    if run.fingerprint() != format!("{:x}", Sha256::digest(code.as_bytes())) {
+        return Err(Refusal::Conflict);
+    }
+    match run.status() {
+        RunStatus::Expired => return Err(Refusal::Expired),
+        RunStatus::Indeterminate(_) => return Err(Refusal::Indeterminate),
+        RunStatus::Queued | RunStatus::Running if !run.is_durable() => {
+            return Err(Refusal::InProgress);
+        }
+        _ => {}
+    }
+    let response = super::durable_runs::wait(state, run.reservation_id())
+        .await
+        .map_err(Refusal::Unavailable)?;
+    Ok(Some(durable_wait_response(session, response)))
+}
+
+fn durable_wait_response(
+    session: &str,
+    response: super::durable_runs::WaitResponse,
+) -> axum::response::Response {
+    match response {
+        super::durable_runs::WaitResponse::Completed(outcome) => {
+            recorded_response(session, &outcome)
+        }
+        super::durable_runs::WaitResponse::Metadata(value) => {
+            stored_body_response(session, StatusCode::OK, value.to_string())
+        }
+    }
+}
+
 /// Settle the key a run held: record `finished` when the program ran and its
 /// outcome may be recorded, release the key when nothing reached the runner
 /// (caching a transient failure would pin it to the key forever), and
@@ -360,9 +473,7 @@ async fn settle(
         if let Some(last_run) = &outcome.last_run {
             guard.set_last_run(last_run);
         }
-        guard
-            .complete(StatusCode::OK.as_u16(), finished.body.clone())
-            .await;
+        guard.complete(outcome.response.output()).await;
     } else {
         drop(guard);
     }
@@ -404,8 +515,8 @@ async fn reserve(
             Reservation::Refused(refusal) => {
                 return Reserved::Answered(refusal_response(session_id, &refusal));
             }
-            Reservation::Replay(outcome) => {
-                return Reserved::Answered(replay_response(state, session_id, &outcome).await);
+            Reservation::Replay(run_id) => {
+                return Reserved::Answered(replay_response(state, session_id, &run_id).await);
             }
             Reservation::Attached(run_id) => {
                 let Some(entry) = state.session_manager().runs().get(&run_id) else {
@@ -425,12 +536,17 @@ async fn reserve(
 async fn replay_response(
     state: &AppState,
     session_id: &str,
-    outcome: &RecordedOutcome,
+    run_id: &RunId,
 ) -> axum::response::Response {
     if let Some(refused) = note_duplicate(state, session_id).await {
         return refused;
     }
-    recorded_response(session_id, outcome)
+    let response = async { super::durable_runs::responses(state)?.get(run_id).await }.await;
+    match response {
+        Ok(Some(response)) => recorded_response(session_id, &response),
+        Ok(None) => refusal_response(session_id, &Refusal::Expired),
+        Err(error) => refusal_response(session_id, &Refusal::Unavailable(error.to_string())),
+    }
 }
 
 /// Note a duplicate request answered without running: it is a replay in the
@@ -814,7 +930,7 @@ fn refusal_response(session_id: &str, refusal: &Refusal) -> axum::response::Resp
         .into_response()
 }
 
-fn recorded_response(session_id: &str, outcome: &RecordedOutcome) -> axum::response::Response {
+fn recorded_response(session_id: &str, outcome: &RunResponse) -> axum::response::Response {
     let status = StatusCode::from_u16(outcome.status).unwrap_or(StatusCode::OK);
     stored_body_response(session_id, status, outcome.body.clone())
 }

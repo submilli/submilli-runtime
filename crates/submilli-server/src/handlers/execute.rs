@@ -54,6 +54,17 @@ pub struct ExecuteResponse {
     pub discovery_warnings: Vec<String>,
 }
 
+impl ExecuteResponse {
+    pub(crate) fn output(&self) -> crate::domain::run_result::RunOutput {
+        crate::domain::run_result::RunOutput {
+            result: self.result.clone(),
+            console: self.console.clone(),
+            error: self.error.clone(),
+            discovery_warnings: self.discovery_warnings.clone(),
+        }
+    }
+}
+
 /// What to tell a caller whose blueprint name resolved to nothing.
 ///
 /// A name can be registered but unrunnable: a stored blueprint whose form this
@@ -282,10 +293,9 @@ pub(crate) struct RunTools {
 pub(crate) enum VfsSource {
     /// REST: the core registers the session and opens its VFS.
     Rest,
-    /// MCP: the tool opened the VFS under its own file-area rules, ahead of the
-    /// core. A program that fails to parse is audited as a compile error, as the
-    /// MCP tool always has.
-    Mcp { vfs: Vfs, vfs_info: VfsInfo },
+    /// The caller already opened its filesystem (MCP or recovery). Parse errors
+    /// are compilation failures, without another round of storage preparation.
+    Opened { vfs: Vfs, vfs_info: VfsInfo },
 }
 
 /// What one execution produced, plus whether the program actually reached the
@@ -393,171 +403,29 @@ async fn prepare_and_run(
     inputs: ExecuteInputs<'_>,
     cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> ExecuteOutcome {
-    let ExecuteInputs {
-        session_id,
-        code,
-        blueprint_name,
-        blueprint,
-        variables,
-        harness_secrets,
-        audit: execution_audit,
-        vfs_source,
-        run_entry: _,
-        idempotency_key,
-        tools,
-    } = inputs;
-    if let Some(audit) = &execution_audit {
+    let code = inputs.code;
+    let session_id = inputs.session_id;
+    let blueprint_name = inputs.blueprint_name;
+    let execution_audit = inputs.audit.clone();
+    let audit = execution_audit.as_deref();
+    if let Some(audit) = audit {
         audit.begin();
     }
-    let audit = execution_audit.as_deref();
-    let fail = |kind: ErrorKind, message: String| {
-        ExecuteOutcome::undispatched(failure_response(audit, session_id, kind, message))
+    let prepared = match prepare_execution(state, inputs, cancel_requested, None).await {
+        Ok(prepared) => prepared,
+        Err(outcome) => return *outcome,
     };
-    let parse_audit_kind = match vfs_source {
-        VfsSource::Rest => ErrorKind::RuntimeError,
-        VfsSource::Mcp { .. } => ErrorKind::CompileError,
-    };
-    let fail_to_parse = |message: String| {
-        if let Some(audit) = audit {
-            audit.error(parse_audit_kind);
-        }
-        ExecuteOutcome::undispatched(response_for_error(
-            audit,
-            session_id,
-            ErrorKind::RuntimeError,
-            message,
-        ))
-    };
-
-    let parsed = match runner::parse(code) {
-        Ok(parsed) => parsed,
-        Err(error) => return fail_to_parse(error.to_string()),
-    };
-    let script_imports = match parsed.imports() {
-        Ok(imports) => imports,
-        Err(message) => return fail_to_parse(message),
-    };
-    let network_policy = execution_audit.as_ref().map_or_else(
-        || state.network_policy().clone(),
-        |audit| audit.network_policy(state.network_policy()),
-    );
-    let llm_provider = match state.llm_provider_for(&blueprint, &harness_secrets, &network_policy) {
-        Ok(provider) => provider,
-        Err(error) => {
-            tracing::error!(error = ?error, "LLM dispatch initialization failed");
-            return fail(ErrorKind::RuntimeError, error.to_string());
-        }
-    };
-
-    let embedding_provider =
-        match state.embedding_provider_for(&blueprint, &harness_secrets, &network_policy) {
-            Ok(provider) => provider,
-            Err(error) => {
-                tracing::error!(error = ?error, "embedding dispatch initialization failed");
-                return fail(ErrorKind::RuntimeError, error.to_string());
-            }
-        };
-
-    if matches!(&vfs_source, VfsSource::Rest)
-        && let Err(message) = open_session(state, session_id, &blueprint).await
-    {
-        return fail(ErrorKind::RuntimeError, message);
-    }
-    let resource_use = match state
-        .session_manager()
-        .admit_resource_work(session_id)
-        .await
-    {
-        Ok(scope) => scope,
-        Err(error) => return fail(ErrorKind::RuntimeError, error.to_string()),
-    };
-    let context = WorldContext {
-        state,
-        session_id,
-        blueprint_name,
-        blueprint: &blueprint,
-        variables: &variables,
-        harness_secrets: &harness_secrets,
-        network_policy: &network_policy,
-        llm_provider,
-        embedding_provider,
-        cancel_requested,
-    };
-    let RunWorld {
-        mcp_catalog,
+    let PreparedExecution {
+        parsed,
         vfs,
         vfs_info,
-        session_kv,
-        http_client,
-        mcp_transport,
-        llm_provider,
-        llm_budget,
-        embedding_provider,
-        embedding_budget,
-        cancel_requested,
-    } = match live_world(context, vfs_source, &script_imports.mcp_servers).await {
-        Ok(world) => world,
-        Err(message) => return fail(ErrorKind::RuntimeError, message),
-    };
-    // The session's tools reach a program that imports them, and only then: one
-    // that does not keeps the cached compile inputs it always had.
-    let run_tools = tools.filter(|_| script_imports.tools);
-    let manager = state.session_manager();
-    let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
-        PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
-    );
-    let security_check = execution_audit.as_ref().map_or_else(
-        || policy.clone(),
-        |execution| {
-            Arc::new(crate::audit::AuditedPolicy {
-                policy: policy.clone(),
-                execution: execution.clone(),
-            }) as Arc<dyn interpreter::runtime::SecurityCheck>
-        },
-    );
-    let packages =
-        match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
-            Ok(packages) => packages,
-            Err(err) => return fail(ErrorKind::PackageResolution, err.to_string()),
-        };
-    let services = runner::HostServices {
-        effects: None,
-        filesystem: None,
-        // Keyed completion updates activity with its recorded outcome in one transaction.
-        session_manager: idempotency_key.is_none().then(|| manager.clone()),
-        audit: execution_audit.clone(),
-        git: submilli_shared::resolve_git(&blueprint, &variables)
-            .map_err(|error| error.to_string()),
-        auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
-            Arc::clone(&blueprint),
-            state.secret_store().cloned(),
-            Arc::clone(&harness_secrets),
-        )),
-        secret_provider: Arc::new(
-            BlueprintSecretProvider::with_harness(
-                Arc::clone(&blueprint),
-                state.secret_store().cloned(),
-                Arc::clone(&harness_secrets),
-            )
-            .with_cipher(state.secret_cipher()),
-        ),
-        variables: Arc::clone(&variables),
-        security_check,
-        http_client,
-        mcp_transport,
-        tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
-        session_kv,
-        session_finalizers: match manager.finalizer_provider(session_id, &packages) {
-            Ok(provider) => Some(provider),
-            Err(message) => return fail(ErrorKind::RuntimeError, message),
-        },
-        resource_use: Some(resource_use),
-        cursor_keys: manager.cursor_keys(),
-        llm_provider,
-        llm_budget: Some(llm_budget),
-        embedding_provider,
-        embedding_budget: Some(embedding_budget),
-        cancel_requested,
+        services,
+        packages,
+        mcp_catalog,
+        tools: run_tools,
+    } = prepared;
+    let fail = |kind, message| {
+        ExecuteOutcome::undispatched(failure_response(audit, session_id, kind, message))
     };
     // This commit is the admission barrier. A failure before it permits only a
     // proven preparation release; after it, a lost run remains indeterminate.
@@ -602,6 +470,205 @@ async fn prepare_and_run(
     }
 }
 
+pub(crate) async fn prepare_execution(
+    state: &AppState,
+    inputs: ExecuteInputs<'_>,
+    cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
+    retained_catalog: Option<Arc<submilli_shared::mcp::McpCatalog>>,
+) -> Result<PreparedExecution, Box<ExecuteOutcome>> {
+    let ExecuteInputs {
+        session_id,
+        code,
+        blueprint_name,
+        blueprint,
+        variables,
+        harness_secrets,
+        audit: execution_audit,
+        vfs_source,
+        run_entry: _,
+        idempotency_key,
+        tools,
+    } = inputs;
+    let audit = execution_audit.as_deref();
+    let fail = |kind: ErrorKind, message: String| {
+        Box::new(ExecuteOutcome::undispatched(failure_response(
+            audit, session_id, kind, message,
+        )))
+    };
+    let parse_audit_kind = match vfs_source {
+        VfsSource::Rest => ErrorKind::RuntimeError,
+        VfsSource::Opened { .. } => ErrorKind::CompileError,
+    };
+    let fail_to_parse = |message: String| {
+        if let Some(audit) = audit {
+            audit.error(parse_audit_kind);
+        }
+        Box::new(ExecuteOutcome::undispatched(response_for_error(
+            audit,
+            session_id,
+            ErrorKind::RuntimeError,
+            message,
+        )))
+    };
+
+    let parsed = match runner::parse(code) {
+        Ok(parsed) => parsed,
+        Err(error) => return Err(fail_to_parse(error.to_string())),
+    };
+    let script_imports = match parsed.imports() {
+        Ok(imports) => imports,
+        Err(message) => return Err(fail_to_parse(message)),
+    };
+    let network_policy = execution_audit.as_ref().map_or_else(
+        || state.network_policy().clone(),
+        |audit| audit.network_policy(state.network_policy()),
+    );
+    let llm_provider = match state.llm_provider_for(&blueprint, &harness_secrets, &network_policy) {
+        Ok(provider) => provider,
+        Err(error) => {
+            tracing::error!(error = ?error, "LLM dispatch initialization failed");
+            return Err(fail(ErrorKind::RuntimeError, error.to_string()));
+        }
+    };
+
+    let embedding_provider =
+        match state.embedding_provider_for(&blueprint, &harness_secrets, &network_policy) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(error = ?error, "embedding dispatch initialization failed");
+                return Err(fail(ErrorKind::RuntimeError, error.to_string()));
+            }
+        };
+
+    if matches!(&vfs_source, VfsSource::Rest)
+        && let Err(message) = open_session(state, session_id, &blueprint).await
+    {
+        return Err(fail(ErrorKind::RuntimeError, message));
+    }
+    let resource_use = match state
+        .session_manager()
+        .admit_resource_work(session_id)
+        .await
+    {
+        Ok(scope) => scope,
+        Err(error) => return Err(fail(ErrorKind::RuntimeError, error.to_string())),
+    };
+    let context = WorldContext {
+        state,
+        session_id,
+        blueprint_name,
+        blueprint: &blueprint,
+        variables: &variables,
+        harness_secrets: &harness_secrets,
+        network_policy: &network_policy,
+        llm_provider,
+        embedding_provider,
+        cancel_requested,
+    };
+    let world = live_world(
+        context,
+        vfs_source,
+        &script_imports.mcp_servers,
+        retained_catalog,
+    )
+    .await;
+    let RunWorld {
+        mcp_catalog,
+        vfs,
+        vfs_info,
+        session_kv,
+        http_client,
+        mcp_transport,
+        llm_provider,
+        llm_budget,
+        embedding_provider,
+        embedding_budget,
+        cancel_requested,
+    } = match world {
+        Ok(world) => world,
+        Err(message) => return Err(fail(ErrorKind::RuntimeError, message)),
+    };
+    // The session's tools reach a program that imports them, and only then: one
+    // that does not keeps the cached compile inputs it always had.
+    let run_tools = tools.filter(|_| script_imports.tools);
+    let manager = state.session_manager();
+    let policy: Arc<dyn interpreter::runtime::SecurityCheck> = Arc::new(
+        PolicyCheck::with_variables(Arc::clone(&blueprint), Arc::clone(&variables)),
+    );
+    let security_check = execution_audit.as_ref().map_or_else(
+        || policy.clone(),
+        |execution| {
+            Arc::new(crate::audit::AuditedPolicy {
+                policy: policy.clone(),
+                execution: execution.clone(),
+            }) as Arc<dyn interpreter::runtime::SecurityCheck>
+        },
+    );
+    let packages =
+        match state.prepared_packages_for_imports(blueprint_name, &blueprint, &script_imports) {
+            Ok(packages) => packages,
+            Err(err) => return Err(fail(ErrorKind::PackageResolution, err.to_string())),
+        };
+    let services = runner::HostServices {
+        effects: None,
+        filesystem: None,
+        // Keyed completion updates activity with its recorded outcome in one transaction.
+        session_manager: idempotency_key.is_none().then(|| manager.clone()),
+        audit: execution_audit.clone(),
+        git: submilli_shared::resolve_git(&blueprint, &variables)
+            .map_err(|error| error.to_string()),
+        auth_proxy: Arc::new(BlueprintAuthProxy::with_harness(
+            Arc::clone(&blueprint),
+            state.secret_store().cloned(),
+            Arc::clone(&harness_secrets),
+        )),
+        secret_provider: Arc::new(
+            BlueprintSecretProvider::with_harness(
+                Arc::clone(&blueprint),
+                state.secret_store().cloned(),
+                Arc::clone(&harness_secrets),
+            )
+            .with_cipher(state.secret_cipher()),
+        ),
+        variables: Arc::clone(&variables),
+        security_check,
+        http_client,
+        mcp_transport,
+        tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
+        session_kv,
+        session_finalizers: match manager.finalizer_provider(session_id, &packages) {
+            Ok(provider) => Some(provider),
+            Err(message) => return Err(fail(ErrorKind::RuntimeError, message)),
+        },
+        resource_use: Some(resource_use),
+        cursor_keys: manager.cursor_keys(),
+        llm_provider,
+        llm_budget: Some(llm_budget),
+        embedding_provider,
+        embedding_budget: Some(embedding_budget),
+        cancel_requested,
+    };
+    Ok(PreparedExecution {
+        parsed,
+        vfs,
+        vfs_info,
+        services,
+        packages,
+        mcp_catalog,
+        tools: run_tools,
+    })
+}
+
+pub(crate) struct PreparedExecution {
+    pub parsed: runner::ParsedExecute,
+    pub vfs: Vfs,
+    pub vfs_info: VfsInfo,
+    pub services: runner::HostServices,
+    pub packages: Arc<crate::app::PreparedBlueprintPackages>,
+    pub mcp_catalog: Arc<submilli_shared::mcp::McpCatalog>,
+    pub tools: Option<RunTools>,
+}
+
 /// What a run's world is built from: the run's own inputs, and the cancel signal its
 /// caller registered.
 pub(crate) struct WorldContext<'a> {
@@ -639,24 +706,28 @@ async fn live_world(
     context: WorldContext<'_>,
     vfs_source: VfsSource,
     mcp_servers: &BTreeSet<String>,
+    retained_catalog: Option<Arc<submilli_shared::mcp::McpCatalog>>,
 ) -> Result<RunWorld, String> {
-    let mcp_catalog = context
-        .state
-        .mcp_catalog_for_imports(
-            context.blueprint_name,
-            context.blueprint,
-            mcp_servers,
-            context.harness_secrets,
-            context.network_policy,
-        )
-        .await
-        .map_err(|error| {
-            tracing::error!(error = ?error, "MCP discovery initialization failed");
-            error.to_string()
-        })?;
+    let mcp_catalog = match retained_catalog {
+        Some(catalog) => catalog,
+        None => context
+            .state
+            .mcp_catalog_for_imports(
+                context.blueprint_name,
+                context.blueprint,
+                mcp_servers,
+                context.harness_secrets,
+                context.network_policy,
+            )
+            .await
+            .map_err(|error| {
+                tracing::error!(error = ?error, "MCP discovery initialization failed");
+                error.to_string()
+            })?,
+    };
     let manager = context.state.session_manager();
     let (vfs, vfs_info) = match vfs_source {
-        VfsSource::Mcp { vfs, vfs_info } => (vfs, vfs_info),
+        VfsSource::Opened { vfs, vfs_info } => (vfs, vfs_info),
         VfsSource::Rest => manager
             .vfs_for_execute_with_variables(
                 context.session_id,
@@ -774,7 +845,7 @@ fn error_response(session_id: &str, kind: ErrorKind, message: String) -> Execute
 }
 
 /// A failed response, with the failure recorded on the execution's audit.
-fn failure_response(
+pub(crate) fn failure_response(
     audit: Option<&crate::audit::ExecutionAudit>,
     session_id: &str,
     kind: ErrorKind,
@@ -833,7 +904,7 @@ fn execution_id_of(audit: Option<&crate::audit::ExecutionAudit>) -> RunId {
     audit.map_or_else(crate::audit::execution_id, |audit| audit.id.clone())
 }
 
-fn into_response(
+pub(crate) fn into_response(
     audit: Option<&crate::audit::ExecutionAudit>,
     session_id: &str,
     outcome: &RunOutcome,
@@ -866,7 +937,7 @@ fn outcome_to_parts(
     (outcome.value.clone(), Vec::new(), None)
 }
 
-fn split_console(raw: &str) -> Vec<String> {
+pub(crate) fn split_console(raw: &str) -> Vec<String> {
     if raw.is_empty() {
         return Vec::new();
     }

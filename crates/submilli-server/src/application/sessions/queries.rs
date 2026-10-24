@@ -1,23 +1,23 @@
 use super::error::SessionError;
-use super::ports::SessionRepository;
+use crate::application::unit_of_work::UnitOfWorkFactory;
 use crate::domain::session::Session;
 use std::time::SystemTime;
 
 pub(crate) struct GetSession<'a> {
-    repository: &'a dyn SessionRepository,
+    units: &'a dyn UnitOfWorkFactory,
 }
 impl<'a> GetSession<'a> {
-    pub fn new(repository: &'a dyn SessionRepository) -> Self {
-        Self { repository }
+    pub fn new(units: &'a dyn UnitOfWorkFactory) -> Self {
+        Self { units }
     }
 
     pub async fn execute(&self, id: &str) -> Result<Session, SessionError> {
-        let session = self
-            .repository
-            .get(id)
+        let mut unit = self.units.begin().await?;
+        let session = unit
+            .get_session(id)
             .await?
             .ok_or(SessionError::UnknownSession)?;
-        session.require_available(SystemTime::now())?;
+        super::execution::require_available(unit.as_mut(), &session, SystemTime::now()).await?;
         Ok(session)
     }
 }

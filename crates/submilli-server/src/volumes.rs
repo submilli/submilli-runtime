@@ -136,6 +136,30 @@ impl VolumeRegistry {
         volume: &str,
         requested: Option<Access>,
     ) -> Result<ResolvedVolume, SessionError> {
+        let resolved = self.resolve_existing(volume, requested)?;
+        if self
+            .spec(volume)
+            .is_some_and(|spec| spec.kind == VolumeKind::ManagedLocal)
+        {
+            create_owned_dir(&resolved.host).map_err(|err| {
+                tracing::error!(
+                    volume,
+                    path = %resolved.host.display(),
+                    %err,
+                    "preparing the managed volume failed"
+                );
+                SessionError::VolumeUnavailable(volume.to_string())
+            })?;
+        }
+        Ok(resolved)
+    }
+
+    /// Resolve configuration without recreating a lost managed volume.
+    pub(crate) fn resolve_existing(
+        &self,
+        volume: &str,
+        requested: Option<Access>,
+    ) -> Result<ResolvedVolume, SessionError> {
         let Some(spec) = self.spec(volume) else {
             tracing::warn!(
                 volume,
@@ -155,17 +179,6 @@ impl VolumeRegistry {
             None => spec.access,
         };
         let host = self.host_of(volume, &spec.kind)?;
-        if spec.kind == VolumeKind::ManagedLocal {
-            create_owned_dir(&host).map_err(|err| {
-                tracing::error!(
-                    volume,
-                    path = %host.display(),
-                    %err,
-                    "preparing the managed volume failed"
-                );
-                SessionError::VolumeUnavailable(volume.to_string())
-            })?;
-        }
         Ok(ResolvedVolume { host, access })
     }
 

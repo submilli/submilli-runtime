@@ -67,7 +67,7 @@ pub async fn get(
             let current = entry.current();
             state_response(&entry, current)
         }
-        None => unknown_run(&run_id),
+        None => super::durable_runs::get(&state, &run_id).await,
     }
 }
 

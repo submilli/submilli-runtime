@@ -324,9 +324,8 @@ impl Session {
         binding: SessionBinding,
         root: RootVfs,
         credentials: std::sync::Arc<submilli_blueprint::HarnessSecretBindings>,
-        now: SystemTime,
     ) -> Result<(), SessionRuleError> {
-        self.require_available(now)?;
+        self.require_active()?;
         self.verify_binding(&binding)?;
         self.resolve_root(root)?;
         self.replace_credentials(credentials)

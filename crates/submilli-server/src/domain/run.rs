@@ -1,11 +1,13 @@
 //! Persistent program identity and guarded lifecycle transitions. No I/O.
-use super::idempotent_request::{RecordedOutcome, RequestState};
+use super::run_result::{RunOutput, RunResult};
+use super::run_status::{IndeterminateReason, RunStatus, StuckReason};
+use super::session::SessionId;
 use interpreter::runtime::durable::RunId;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
-    session_id: String,
+    session_id: SessionId,
     key: Option<String>,
     fingerprint: String,
     reservation_id: RunId,
@@ -13,12 +15,12 @@ pub struct Run {
     created_at: SystemTime,
     /// Set exactly when the request is completed or expired.
     completed_at: Option<SystemTime>,
-    state: RequestState,
+    state: RunStatus,
     identity: RunIdentity,
     revision: i64,
     attempt: i64,
     history_position: u64,
-    program: Option<std::sync::Arc<super::run_program::RunProgram>>,
+    durable: bool,
 }
 
 /// Immutable admission metadata. Imported requests may have no execution ID:
@@ -41,6 +43,8 @@ pub enum RequestError {
     ReservationMismatch,
     #[error("the completion time does not match the request's state")]
     CompletionTimeMismatch,
+    #[error(transparent)]
+    Session(#[from] super::session::SessionRuleError),
     #[error("run counter exhausted")]
     CounterExhausted,
     #[error("run is not in the required lifecycle state")]
@@ -76,13 +80,13 @@ impl Run {
         reservation_id: RunId,
         owner_generation: String,
         created_at: SystemTime,
-        state: RequestState,
+        state: RunStatus,
         completed_at: Option<SystemTime>,
         identity: RunIdentity,
         revision: i64,
         attempt: i64,
         history_position: u64,
-        program: Option<std::sync::Arc<super::run_program::RunProgram>>,
+        durable: bool,
     ) -> Result<Self, RequestError> {
         if let Some(key) = &key {
             Self::validate_key(key)?;
@@ -90,15 +94,15 @@ impl Run {
         if identity.admission_order <= 0 || revision < 0 || attempt < 0 {
             return Err(RequestError::InvalidTransition);
         }
-        let has_completed = matches!(
-            state,
-            RequestState::Completed(_) | RequestState::Expired | RequestState::Finished
-        );
+        if durable && matches!(state, RunStatus::Indeterminate(_)) {
+            return Err(RequestError::InvalidTransition);
+        }
+        let has_completed = matches!(state, RunStatus::Completed | RunStatus::Expired);
         if has_completed != completed_at.is_some() {
             return Err(RequestError::CompletionTimeMismatch);
         }
         Ok(Self {
-            session_id,
+            session_id: SessionId::parse(session_id)?,
             key,
             fingerprint,
             reservation_id,
@@ -110,7 +114,7 @@ impl Run {
             revision,
             attempt,
             history_position,
-            program,
+            durable,
         })
     }
 
@@ -131,26 +135,30 @@ impl Run {
     pub fn complete(
         &mut self,
         reservation_id: &str,
-        outcome: RecordedOutcome,
+        output: RunOutput,
         completed_at: SystemTime,
-    ) -> Result<(), RequestError> {
+    ) -> Result<RunResult, RequestError> {
         self.require_reservation(reservation_id)?;
         self.advance_revision()?;
-        self.state = RequestState::Completed(outcome);
+        self.state = RunStatus::Completed;
         self.completed_at = Some(completed_at);
-        Ok(())
+        Ok(RunResult::new(self.reservation_id.clone(), output))
     }
 
     pub fn mark_indeterminate(&mut self, reservation_id: &str) -> Result<(), RequestError> {
         self.require_reservation(reservation_id)?;
+        // Recorded runs can retry missing outcomes through their effect history.
+        if self.durable {
+            return Err(RequestError::InvalidTransition);
+        }
         self.advance_revision()?;
-        self.state = RequestState::Indeterminate;
+        self.state = RunStatus::Indeterminate(IndeterminateReason::Interrupted);
         Ok(())
     }
 
     pub fn require_reservation(&self, reservation_id: &str) -> Result<(), RequestError> {
         if self.reservation_id.as_str() != reservation_id
-            || !matches!(self.state, RequestState::Reserved | RequestState::Running)
+            || !matches!(self.state, RunStatus::Queued | RunStatus::Running)
         {
             return Err(RequestError::ReservationMismatch);
         }
@@ -172,49 +180,65 @@ impl Run {
             Self::validate_key(key)?;
         }
         Ok(Self {
-            session_id,
+            session_id: SessionId::parse(session_id)?,
             key,
             fingerprint,
             reservation_id: run_id,
             owner_generation: startup,
             created_at,
             completed_at: None,
-            state: RequestState::Reserved,
+            state: RunStatus::Queued,
             identity,
             revision: 0,
             attempt: 0,
             history_position: 0,
-            program: None,
+            durable: false,
         })
     }
 
-    /// Retain initial inputs before admission. Individual effects store outcomes only.
-    pub fn record_program(
-        &mut self,
-        program: super::run_program::RunProgram,
-    ) -> Result<(), RequestError> {
-        if self.state != RequestState::Reserved
+    /// Admission commits the retained program together with this transition.
+    pub fn enable_durability(&mut self) -> Result<(), RequestError> {
+        if self.state != RunStatus::Queued
             || self.revision != 0
             || self.attempt != 0
-            || self.program.is_some()
+            || self.durable
         {
             return Err(RequestError::InvalidTransition);
         }
-        self.program = Some(std::sync::Arc::new(program));
+        self.durable = true;
         Ok(())
     }
 
-    pub fn program(&self) -> Option<&super::run_program::RunProgram> {
-        self.program.as_deref()
+    pub fn is_durable(&self) -> bool {
+        self.durable
+    }
+
+    pub fn mark_stuck(&mut self, reason: StuckReason) -> Result<(), RequestError> {
+        if !self.durable || !matches!(self.state, RunStatus::Queued | RunStatus::Running) {
+            return Err(RequestError::InvalidTransition);
+        }
+        self.advance_revision()?;
+        self.state = RunStatus::Stuck(reason);
+        Ok(())
+    }
+
+    pub fn resume(&mut self, revision: i64) -> Result<(), RequestError> {
+        if !self.durable || !matches!(self.state, RunStatus::Stuck(_)) || self.revision != revision
+        {
+            return Err(RequestError::InvalidTransition);
+        }
+        self.advance_revision()?;
+        self.state = RunStatus::Queued;
+        Ok(())
     }
 
     /// Called only after the old attempt's native work has drained. SQLite's
     /// exclusive local-store owner establishes that across a process restart.
     pub fn reopen(&mut self, startup: &str) -> Result<(), RequestError> {
-        if self.program.is_none()
+        if !self.durable
             || !matches!(
                 self.state,
-                RequestState::Reserved | RequestState::Running | RequestState::Blocked
+                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
             )
         {
             return Err(RequestError::InvalidTransition);
@@ -226,7 +250,7 @@ impl Run {
         self.advance_revision()?;
         self.attempt = attempt;
         self.owner_generation = startup.to_owned();
-        self.state = RequestState::Running;
+        self.state = RunStatus::Running;
         Ok(())
     }
 
@@ -241,7 +265,7 @@ impl Run {
     /// Compatibility execution is claimed only by the startup that prepared it.
     /// Restart replay is deliberately unavailable until manifest/history exist.
     pub fn claim(&mut self, startup: &str) -> Result<(), RequestError> {
-        if self.state != RequestState::Reserved || self.owner_generation != startup {
+        if self.state != RunStatus::Queued || self.owner_generation != startup {
             return Err(RequestError::InvalidTransition);
         }
         let attempt = self
@@ -250,24 +274,24 @@ impl Run {
             .ok_or(RequestError::CounterExhausted)?;
         self.advance_revision()?;
         self.attempt = attempt;
-        self.state = RequestState::Running;
+        self.state = RunStatus::Running;
         Ok(())
     }
 
     pub fn abort_preparation(&mut self) -> Result<(), RequestError> {
-        if self.state != RequestState::Reserved {
+        if self.state != RunStatus::Queued {
             return Err(RequestError::InvalidTransition);
         }
         self.advance_revision()?;
         self.key = None;
-        self.state = RequestState::Aborted;
+        self.state = RunStatus::Aborted;
         Ok(())
     }
 
     pub fn cancel(&mut self) -> Result<(), RequestError> {
         if !matches!(
             self.state,
-            RequestState::Reserved | RequestState::Running | RequestState::Blocked
+            RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
         ) {
             return Err(RequestError::InvalidTransition);
         }
@@ -277,25 +301,16 @@ impl Run {
             .ok_or(RequestError::CounterExhausted)?;
         self.advance_revision()?;
         self.attempt = attempt;
-        self.state = RequestState::Cancelled;
-        Ok(())
-    }
-
-    pub fn block(&mut self) -> Result<(), RequestError> {
-        if self.state != RequestState::Running {
-            return Err(RequestError::InvalidTransition);
-        }
-        self.advance_revision()?;
-        self.state = RequestState::Blocked;
+        self.state = RunStatus::Cancelled;
         Ok(())
     }
 
     pub fn finish_unkeyed(&mut self, at: SystemTime) -> Result<(), RequestError> {
-        if self.key.is_some() || self.state != RequestState::Running {
+        if self.key.is_some() || self.state != RunStatus::Running {
             return Err(RequestError::InvalidTransition);
         }
         self.advance_revision()?;
-        self.state = RequestState::Finished;
+        self.state = RunStatus::Completed;
         self.completed_at = Some(at);
         Ok(())
     }
@@ -325,7 +340,7 @@ impl Run {
     }
 
     pub fn session_id(&self) -> &str {
-        &self.session_id
+        self.session_id.as_str()
     }
     pub fn key(&self) -> &str {
         self.key.as_deref().unwrap_or("")
@@ -346,7 +361,73 @@ impl Run {
     pub fn completed_at(&self) -> Option<SystemTime> {
         self.completed_at
     }
-    pub fn state(&self) -> &RequestState {
-        &self.state
+    pub fn status(&self) -> RunStatus {
+        self.state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_produces_a_result_only_for_the_runs_current_reservation() {
+        let now = SystemTime::UNIX_EPOCH;
+        let mut run = Run::reserve(
+            "session".into(),
+            "key".into(),
+            "fingerprint".into(),
+            "run".into(),
+            "owner".into(),
+            now,
+        )
+        .unwrap();
+        run.claim("owner").unwrap();
+        let output = RunOutput {
+            result: Some("value".into()),
+            console: vec!["before completion".into()],
+            ..Default::default()
+        };
+        let before = run.clone();
+        assert!(run.complete("another-run", output.clone(), now).is_err());
+        assert_eq!(run, before);
+
+        let result = run.complete("run", output.clone(), now).unwrap();
+        assert_eq!(result.run_id(), run.reservation_id());
+        assert_eq!(result.output(), &output);
+        assert_eq!(run.status(), RunStatus::Completed);
+        assert_eq!(run.completed_at(), Some(now));
+        assert_eq!(run.revision(), before.revision() + 1);
+
+        let completed = run.clone();
+        assert!(run.complete("run", output, now).is_err());
+        assert_eq!(run, completed);
+    }
+
+    #[test]
+    fn resuming_and_cancelling_replace_the_entire_status() {
+        let mut run = Run::prepare(
+            "session".into(),
+            None,
+            "fingerprint".into(),
+            "run".into(),
+            "owner".into(),
+            RunIdentity::default(),
+            SystemTime::UNIX_EPOCH,
+        )
+        .unwrap();
+        run.enable_durability().unwrap();
+        run.mark_stuck(StuckReason::Fuel).unwrap();
+        assert_eq!(run.status(), RunStatus::Stuck(StuckReason::Fuel));
+        assert_eq!(run.status().reason(), Some("fuel_exhausted"));
+        run.resume(run.revision()).unwrap();
+        assert_eq!(run.status(), RunStatus::Queued);
+        assert_eq!(run.status().reason(), None);
+        run.claim("owner").unwrap();
+        run.mark_stuck(StuckReason::Timeout).unwrap();
+        assert_eq!(run.status(), RunStatus::Stuck(StuckReason::Timeout));
+        run.cancel().unwrap();
+        assert_eq!(run.status(), RunStatus::Cancelled);
+        assert_eq!(run.status().reason(), Some("session_closed"));
     }
 }

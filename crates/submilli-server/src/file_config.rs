@@ -65,6 +65,9 @@ const MCP_LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileConfig {
+    #[serde(default)]
+    pub durable_execution: bool,
+    pub max_durable_runs: Option<usize>,
     pub bind: Option<IpAddr>,
     pub port: Option<u16>,
     #[serde(default)]
@@ -1070,6 +1073,8 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         .collect();
 
     let config = ServerConfig {
+        durable_execution: file.durable_execution,
+        max_durable_runs: file.max_durable_runs,
         audit: file.logging.audit,
         runtime,
         tls,

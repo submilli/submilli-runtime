@@ -609,8 +609,8 @@ fn diagnostic_payloads(
         result.try_reserve(1).map_err(|_| RenderError::Allocation)?;
         result.push(DiagnosticPayload {
             severity: match diagnostic.severity {
-                Severity::Error => "error",
-                Severity::Warning => "warning",
+                Severity::Error => "error".into(),
+                Severity::Warning => "warning".into(),
             },
             line,
             column,
@@ -667,7 +667,7 @@ fn classify_runtime_error(err: &wasmtime::Error, sources: &Sources, file: FileId
         denial: denial.map(|denial| DenialDetails {
             caller: denial.caller.clone(),
             capability: denial.capability.clone(),
-            source: denial.source.as_str(),
+            source: denial.source.as_str().into(),
         }),
     }
 }

@@ -14,7 +14,7 @@ use submilli_durable::history::{ExecutionAttempt, History};
 /// Bump this contract when compiler, host ABI, codecs or deterministic semantics
 /// change incompatibly. Package content retention is a separate prerequisite for
 /// replay across package changes; this version assumes unchanged package contents.
-pub(crate) const COMPATIBILITY: &str = concat!("durable-v7/wasmgc/", env!("CARGO_PKG_VERSION"));
+pub(crate) const COMPATIBILITY: &str = concat!("durable-v8/wasmgc/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) fn capture_program(
     source: String,
@@ -28,6 +28,8 @@ pub(crate) fn capture_program(
         variables: (*services.variables).clone(),
         limits: limits(config, services),
         compatibility: COMPATIBILITY.into(),
+        mcp_catalog: std::sync::Arc::new(submilli_shared::mcp::McpCatalog::empty()),
+        filesystem_config_fingerprint: None,
     }
 }
 
@@ -50,6 +52,7 @@ pub(crate) fn history(run: &Run, units: submilli_durable::UnitFactory) -> Arc<Hi
 #[allow(clippy::too_many_arguments)] // Same explicit runtime/import/mount inputs as the ordinary runner.
 pub(crate) async fn run(
     run: &Run,
+    program: &RunProgram,
     history: Arc<History>,
     units: submilli_durable::UnitFactory,
     runtime: RunnerRuntime<'_>,
@@ -58,7 +61,6 @@ pub(crate) async fn run(
     mut services: HostServices,
     imports: RunnerImports<'_>,
 ) -> Result<RunOutcome, String> {
-    let program = run.program().ok_or("run has no retained program")?;
     if program.compatibility != COMPATIBILITY || program.limits != limits(runtime.config, &services)
     {
         return Err("recorded runtime or limits do not match this execution environment".into());
@@ -69,12 +71,21 @@ pub(crate) async fn run(
     {
         return Err("recorded execution identity does not match the requested environment".into());
     }
-    let filesystem =
-        submilli_durable::DurableFilesystem::open(vfs.clone(), run.reservation_id(), units)
-            .await
+    if let Some(expected) = program.filesystem_config_fingerprint {
+        let actual = submilli_durable::filesystem_config_fingerprint(&vfs)
             .map_err(|error| error.to_string())?;
+        if actual != expected {
+            return Err("recorded filesystem roots changed".into());
+        }
+    }
+    if vfs.dir().is_some() {
+        let filesystem =
+            submilli_durable::DurableFilesystem::open(vfs.clone(), run.reservation_id(), units)
+                .await
+                .map_err(|error| error.to_string())?;
+        services.filesystem = Some(Arc::new(filesystem));
+    }
     services.effects = Some(history.clone());
-    services.filesystem = Some(Arc::new(filesystem));
     services.variables = Arc::new(program.variables.clone());
     let parsed = super::parse(&program.source).map_err(|error| error.to_string())?;
     let outcome = super::run(
@@ -89,13 +100,12 @@ pub(crate) async fn run(
     .await;
     // A fatal interruption may leave a missing outcome. It must remain resumable,
     // not be turned into a definitive completion by a transport error formatter.
-    if !outcome.durable_completion {
-        return Err("recorded execution was interrupted; retain its history and resources".into());
+    if outcome.durable_completion {
+        history
+            .ensure_history_consumed()
+            .await
+            .map_err(|error| error.to_string())?;
     }
-    history
-        .ensure_history_consumed()
-        .await
-        .map_err(|error| error.to_string())?;
     Ok(outcome)
 }
 
@@ -147,4 +157,47 @@ fn limits(config: &RuntimeConfig, services: &HostServices) -> RunLimits {
             }
         }),
     }
+}
+
+/// Use the accepted limits for every attempt, even after operator defaults change.
+pub(crate) fn restore_limits(
+    current: &RuntimeConfig,
+    saved: &RunLimits,
+    sessions: &crate::session_manager::SessionManager,
+    services: &mut HostServices,
+) -> RuntimeConfig {
+    let mut config = current.clone();
+    config.fuel = saved.fuel;
+    config.max_wasm_stack = saved.max_wasm_stack;
+    config.memory_reservation = saved.memory_reservation;
+    config.memory_guard_size = saved.memory_guard_size;
+    config.memory_reservation_for_growth = saved.memory_reservation_for_growth;
+    config.max_store_bytes = saved.max_store_bytes;
+    config.timeout = saved.timeout;
+    config.async_yield_fuel = saved.async_yield_fuel;
+    services.llm_budget = saved.llm.as_ref().map(|saved| {
+        Arc::new(interpreter::runtime::ExecutionTokenBudget::new(
+            interpreter::runtime::LlmLimits {
+                per_execution_tokens: saved.per_execution_tokens,
+                max_held_tokens: saved.max_held_tokens,
+                max_prompt_count: saved.max_prompt_count,
+                max_prompt_bytes: saved.max_prompt_bytes,
+                default_output_cap: saved.default_output_cap,
+            },
+            sessions.llm_budget().clone(),
+        ))
+    });
+    services.embedding_budget = saved.embedding.as_ref().map(|saved| {
+        Arc::new(interpreter::runtime::EmbeddingTokenBudget::new(
+            interpreter::runtime::EmbeddingLimits {
+                per_execution_tokens: saved.per_execution_tokens,
+                max_held_tokens: saved.max_held_tokens,
+                max_requests: saved.max_requests,
+                max_texts_per_call: saved.max_texts_per_call,
+                max_bytes_per_call: saved.max_bytes_per_call,
+            },
+            sessions.embedding_budget().clone(),
+        ))
+    });
+    config
 }

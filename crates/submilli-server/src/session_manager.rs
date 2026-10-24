@@ -439,7 +439,7 @@ impl SessionManager {
     }
 
     pub async fn get(&self, id: &str) -> Result<Session, SessionError> {
-        crate::application::sessions::queries::GetSession::new(&self.repository)
+        crate::application::sessions::queries::GetSession::new(self.unit_of_work.as_ref())
             .execute(id)
             .await
     }
@@ -460,9 +460,14 @@ impl SessionManager {
             .find(id)
             .await?
             .ok_or(SessionError::UnknownSession)?;
-        loaded
-            .session()
-            .require_available(self.store.now().await?)?;
+        let now = self.store.now().await?;
+        let mut unit = self.unit_of_work.begin().await?;
+        let session = unit
+            .get_session(id)
+            .await?
+            .ok_or(SessionError::UnknownSession)?;
+        crate::application::sessions::execution::require_available(unit.as_mut(), &session, now)
+            .await?;
         Ok(loaded)
     }
 
@@ -674,6 +679,34 @@ impl SessionManager {
         Ok((attach_limits(vfs, blueprint, &self.volumes).await?, info))
     }
 
+    /// Reconstruct accepted storage without provisioning directories. This is
+    /// also valid for a closed session while its owner is draining cleanup.
+    pub(crate) async fn reopen_vfs(
+        &self,
+        session_id: &str,
+        blueprint: &Blueprint,
+        variables: &VarBindings,
+    ) -> Result<(Vfs, VfsInfo), SessionError> {
+        let session = {
+            let mut unit = self.unit_of_work.begin().await?;
+            unit.get_session(session_id)
+                .await?
+                .ok_or(SessionError::UnknownSession)?
+        };
+        let vfs = open_vfs(
+            blueprint,
+            variables,
+            session.root().owned_path(),
+            &self.ephemeral_root,
+            &self.volumes,
+            WorkspaceOpen::Existing,
+        )?;
+        Ok((
+            attach_limits(vfs, blueprint, &self.volumes).await?,
+            vfs_info(blueprint),
+        ))
+    }
+
     pub async fn touch(&self, id: &str) -> Result<bool, SessionError> {
         crate::application::sessions::execution::CompleteExecution::new(self.unit_of_work.as_ref())
             .execute(id)
@@ -723,6 +756,11 @@ impl SessionManager {
                 "finalization completion could not be recorded; recovery is required".into(),
             ));
         }
+        if !self.retire_session_runs(id).await? {
+            // The session is closed and fenced, but its roots are still needed
+            // to retry retirement. Leave cleanup_pending set for the reaper.
+            return Ok(());
+        }
         self.resources.evict(id);
         self.last_runs.remove_session_files(id).await;
         let Some(task) = self.store.cleanup_task(id).await? else {
@@ -764,6 +802,43 @@ impl SessionManager {
             .map_err(|error| SessionError::Io(error.to_string()))?;
         self.store.complete_cleanup(id).await?;
         Ok(())
+    }
+
+    /// Called only after the session's execution and finalizers have drained,
+    /// before deleting its owned root (which may also contain mount points).
+    async fn retire_session_runs(&self, session: &str) -> Result<bool, SessionError> {
+        use crate::application::sessions::recovery::RunQuery;
+        let mut after = None;
+        let mut finished = true;
+        loop {
+            let page = {
+                let mut unit = self.unit_of_work.begin().await?;
+                unit.list_runs(RunQuery {
+                    session: Some(session.into()),
+                    after,
+                    limit: 100,
+                    recovery: true,
+                    ..Default::default()
+                })
+                .await?
+            };
+            let more = page.len() == 100;
+            after = page.last().map(|run| run.reservation_id().clone());
+            for run in page {
+                if let Err(error) =
+                    crate::recovery::retire(self, self.unit_of_work.as_ref(), run.reservation_id())
+                        .await
+                {
+                    // Keep every root until both disk retirement and its
+                    // transaction finish; a transient failure must be retryable.
+                    finished = false;
+                    tracing::warn!(run = %run.reservation_id(), %error, "run cleanup remains pending");
+                }
+            }
+            if !more {
+                return Ok(finished);
+            }
+        }
     }
 
     /// Expire idle sessions and clean up after them, and expire the keyed-execute
@@ -1016,6 +1091,30 @@ pub(crate) fn build_vfs(
     ephemeral_root: &EphemeralRoot,
     volumes: &VolumeRegistry,
 ) -> Result<Vfs, SessionError> {
+    open_vfs(
+        blueprint,
+        variables,
+        session_root,
+        ephemeral_root,
+        volumes,
+        WorkspaceOpen::Prepare,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum WorkspaceOpen {
+    Prepare,
+    Existing,
+}
+
+fn open_vfs(
+    blueprint: &Blueprint,
+    variables: &VarBindings,
+    session_root: Option<&Path>,
+    ephemeral_root: &EphemeralRoot,
+    volumes: &VolumeRegistry,
+    mode: WorkspaceOpen,
+) -> Result<Vfs, SessionError> {
     // `Vfs` formats the host root into its error, and these roots are the server's own
     // storage layout. Redact for the same reason a volume's target is redacted: the
     // client chose the mode, not the directory, so the directory is not theirs to learn.
@@ -1045,7 +1144,7 @@ pub(crate) fn build_vfs(
             access,
             sub_path,
             ..
-        } => mount_root(volume, *access, sub_path.as_deref(), volumes)?,
+        } => mount_root(volume, *access, sub_path.as_deref(), volumes, mode)?,
     };
     let vfs = config
         .mounts()
@@ -1058,9 +1157,14 @@ pub(crate) fn build_vfs(
                 mount.access,
                 mount.sub_path.as_deref(),
                 volumes,
+                mode,
             )
         })?;
-    vfs.with_cwd(config.cwd()).map_err(|error| {
+    let vfs = match mode {
+        WorkspaceOpen::Prepare => vfs.with_cwd(config.cwd()),
+        WorkspaceOpen::Existing => vfs.with_cwd_path(config.cwd()),
+    };
+    vfs.map_err(|error| {
         tracing::error!(%error, "preparing working directory failed");
         SessionError::InvalidVfs(format!(
             "cwd {} must name an existing directory or a directory in writable storage",
@@ -1126,8 +1230,12 @@ fn mount_root(
     access: Option<submilli_blueprint::Access>,
     sub_path: Option<&str>,
     volumes: &VolumeRegistry,
+    mode: WorkspaceOpen,
 ) -> Result<Vfs, SessionError> {
-    let resolved = volumes.resolve(volume, access)?;
+    let resolved = match mode {
+        WorkspaceOpen::Prepare => volumes.resolve(volume, access)?,
+        WorkspaceOpen::Existing => volumes.resolve_existing(volume, access)?,
+    };
     let vfs = Vfs::external_with_mode(resolved.host.clone(), RtVfsMode::Named).map_err(|err| {
         tracing::error!(
             volume,
@@ -1137,18 +1245,21 @@ fn mount_root(
         );
         SessionError::VolumeUnavailable(volume.to_string())
     })?;
-    vfs.with_access(runtime_access(resolved.access))
-        .with_volume_name(volume)
-        .with_subpath(sub_path)
-        .map_err(|error| {
-            tracing::error!(volume, %error, "opening volume subPath failed");
-            SessionError::MountFailed {
-                volume: volume.into(),
-                reason:
-                    "subPath must name a directory; missing directories require read_write access"
-                        .into(),
-            }
-        })
+    let vfs = vfs
+        .with_access(runtime_access(resolved.access))
+        .with_volume_name(volume);
+    let vfs = match mode {
+        WorkspaceOpen::Prepare => vfs.with_subpath(sub_path),
+        WorkspaceOpen::Existing => vfs.reopen_subpath(sub_path),
+    };
+    vfs.map_err(|error| {
+        tracing::error!(volume, %error, "opening volume subPath failed");
+        SessionError::MountFailed {
+            volume: volume.into(),
+            reason: "subPath must name a directory; missing directories require read_write access"
+                .into(),
+        }
+    })
 }
 
 /// Graft a named volume at `path` below the root.
@@ -1159,21 +1270,26 @@ fn graft(
     access: Option<submilli_blueprint::Access>,
     sub_path: Option<&str>,
     volumes: &VolumeRegistry,
+    mode: WorkspaceOpen,
 ) -> Result<Vfs, SessionError> {
-    let resolved = volumes.resolve(volume, access)?;
+    let resolved = match mode {
+        WorkspaceOpen::Prepare => volumes.resolve(volume, access)?,
+        WorkspaceOpen::Existing => volumes.resolve_existing(volume, access)?,
+    };
     let host = resolved.host.clone();
-    vfs.with_mount_subpath(
-        MountSpec {
-            guest_path: path.to_string(),
-            host: resolved.host,
-            volume: volume.to_string(),
-            access: runtime_access(resolved.access),
-            // Attached by `attach_limits`, and only for a run that may write.
-            quota: None,
-        },
-        sub_path,
-    )
-    .map_err(|err| match err {
+    let spec = MountSpec {
+        guest_path: path.to_string(),
+        host: resolved.host,
+        volume: volume.to_string(),
+        access: runtime_access(resolved.access),
+        // Attached by `attach_limits`, and only for a run that may write.
+        quota: None,
+    };
+    let vfs = match mode {
+        WorkspaceOpen::Prepare => vfs.with_mount_subpath(spec, sub_path),
+        WorkspaceOpen::Existing => vfs.reopen_mount_subpath(spec, sub_path),
+    };
+    vfs.map_err(|err| match err {
         MountError::Io(err) => {
             tracing::error!(
                 volume,
@@ -1900,7 +2016,8 @@ mod tests {
 
     #[tokio::test]
     async fn reaping_expires_responses_past_their_retention() {
-        use crate::domain::idempotent_request::{IdempotentRequest, RecordedOutcome, RequestState};
+        use crate::domain::idempotent_request::{IdempotentRequest, RunStatus};
+        use crate::domain::run_result::RunOutput;
         let store_dir = tempfile::tempdir().expect("store dir");
         let root = tempfile::tempdir().expect("session root");
         let mgr = SessionManager::new(
@@ -1935,24 +2052,25 @@ mod tests {
             .unwrap();
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         let mut request = unit.get_run("r").await.unwrap().unwrap();
-        request
+        let result = request
             .complete(
                 "r",
-                RecordedOutcome {
-                    status: 200,
-                    body: "bytes".into(),
+                RunOutput {
+                    result: Some("bytes".into()),
+                    ..Default::default()
                 },
                 completed_at,
             )
             .unwrap();
+        unit.save_run_result(result).await.unwrap();
         unit.save_run(request).await.unwrap();
         unit.commit().await.unwrap();
 
         assert_eq!(mgr.reap_now().await.unwrap(), 0, "the session stays");
         let mut unit = mgr.unit_of_work.begin().await.unwrap();
         assert_eq!(
-            unit.run_for_key("s1", "k").await.unwrap().unwrap().state(),
-            &RequestState::Expired
+            unit.run_for_key("s1", "k").await.unwrap().unwrap().status(),
+            RunStatus::Expired
         );
     }
 

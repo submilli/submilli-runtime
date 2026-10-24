@@ -106,7 +106,7 @@ const MAX_DISCOVERY_CATALOG_BYTES: usize = MCP_MAX_RESPONSE_BYTES;
 
 /// One reachable server's virtual package. Unavailable servers (unauthenticated or
 /// unreachable) are omitted from the catalog entirely — see [`discover_all`].
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpPackage {
     pub server: String,
     pub defs: PackageDeclaration,
@@ -150,7 +150,7 @@ fn plural(n: usize) -> &'static str {
 /// The `@mcp/*` packages for one blueprint, discovered once and cached. It serializes
 /// whole, so a recorded run can keep the catalog it compiled against and a replay can
 /// compile against it without contacting the servers.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct McpCatalog {
     packages: Vec<McpPackage>,
     /// Server-level warnings for servers omitted from the catalog (unauthenticated

@@ -9,3 +9,5 @@ pub mod runs;
 pub mod secret;
 pub mod sessions;
 pub mod volumes;
+
+pub(crate) mod durable_runs;

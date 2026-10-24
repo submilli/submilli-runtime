@@ -14,7 +14,7 @@ async fn fixture(
 ) {
     let database = Arc::new(ServerDatabase::open(path).await.unwrap());
     database.transaction(|connection| Box::pin(async move {
-        sqlx::query("INSERT OR IGNORE INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,attempt,admission_order,created_at_unix_ms,state,recovery_mode,execution_manifest) VALUES('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','session','original','owner',1,1,0,'running','recorded',X'01')")
+        sqlx::query("INSERT OR IGNORE INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,attempt,admission_order,created_at_unix_ms,state,recovery_mode) VALUES('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000001','session','original','owner',1,1,0,'running','recorded')")
             .execute(connection).await?;
         Ok(())
     })).await.unwrap();

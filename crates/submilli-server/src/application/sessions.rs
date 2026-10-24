@@ -12,3 +12,5 @@ pub(crate) mod replace_credentials;
 pub(crate) mod runs;
 
 pub(crate) mod finalization;
+
+pub(crate) mod recovery;

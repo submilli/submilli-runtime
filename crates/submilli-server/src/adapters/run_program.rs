@@ -6,6 +6,37 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 const MAX_PROGRAM_BYTES: usize = 16 * 1024 * 1024;
 
+pub(crate) async fn get(
+    connection: &mut sqlx::SqliteConnection,
+    sealer: &Sealer,
+    id: &str,
+) -> Result<Option<RunProgram>, DatabaseError> {
+    let content: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT content FROM run_programs WHERE run_id=? AND length(content)<=16777344",
+    )
+    .bind(id)
+    .fetch_optional(connection)
+    .await?;
+    content
+        .map(|content| open(sealer, id, &content))
+        .transpose()
+}
+
+pub(crate) async fn save(
+    connection: &mut sqlx::SqliteConnection,
+    sealer: &Sealer,
+    id: &str,
+    program: &RunProgram,
+) -> Result<(), DatabaseError> {
+    let content = seal(sealer, id, program)?;
+    sqlx::query("INSERT INTO run_programs(run_id,content) VALUES (?,?)")
+        .bind(id)
+        .bind(content)
+        .execute(connection)
+        .await?;
+    Ok(())
+}
+
 pub(super) fn seal(
     sealer: &Sealer,
     id: &str,
@@ -53,6 +84,8 @@ struct ProgramRecord {
     #[serde(with = "LimitsRecord")]
     limits: RunLimits,
     compatibility: String,
+    mcp_catalog: std::sync::Arc<submilli_shared::mcp::McpCatalog>,
+    filesystem_config_fingerprint: Option<[u8; 32]>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "RunLimits")]
@@ -233,6 +266,8 @@ mod tests {
             blueprint: submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap(),
             variables: Default::default(),
             compatibility: "test-v1".into(),
+            mcp_catalog: std::sync::Arc::new(submilli_shared::mcp::McpCatalog::empty()),
+            filesystem_config_fingerprint: None,
             limits: RunLimits {
                 fuel: config.fuel,
                 max_wasm_stack: config.max_wasm_stack,

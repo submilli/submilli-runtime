@@ -1,22 +1,24 @@
 use super::tests::{fixture, proceed, read_request};
+use super::tests::{output, saved_value};
 use super::*;
 use crate::application::error::StoreError;
 use crate::application::unit_of_work::UnitOfWork;
-use crate::domain::idempotent_request::RequestState;
+use crate::domain::idempotent_request::RunStatus;
+use crate::domain::run_result::RunResult;
 use crate::domain::session::Session;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Default)]
-pub(super) struct CommitFault {
-    pub(super) lose_ack: AtomicBool,
+pub(crate) struct CommitFault {
+    pub(crate) lose_ack: AtomicBool,
     fail_begin: AtomicBool,
     pause_after_commit: AtomicBool,
     committed: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
-pub(super) struct FaultFactory {
-    pub(super) inner: Arc<dyn UnitOfWorkFactory>,
-    pub(super) fault: Arc<CommitFault>,
+pub(crate) struct FaultFactory {
+    pub(crate) inner: Arc<dyn UnitOfWorkFactory>,
+    pub(crate) fault: Arc<CommitFault>,
 }
 struct FaultUnit {
     inner: Box<dyn UnitOfWork>,
@@ -60,6 +62,27 @@ impl UnitOfWork for FaultUnit {
     async fn remove_blueprint(&mut self, name: &str) -> Result<bool, StoreError> {
         self.inner.remove_blueprint(name).await
     }
+    async fn list_runs(
+        &mut self,
+        query: crate::application::sessions::recovery::RunQuery,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.inner.list_runs(query).await
+    }
+    async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError> {
+        self.inner.has_retained_run(session).await
+    }
+    async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError> {
+        self.inner.has_run_predecessor(id).await
+    }
+    async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError> {
+        self.inner.retire_run_resources(id).await
+    }
+    async fn run_result(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::domain::run_result::RunResult>, StoreError> {
+        self.inner.run_result(id).await
+    }
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
         self.inner.get_run(id).await
     }
@@ -73,11 +96,22 @@ impl UnitOfWork for FaultUnit {
     async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
         self.inner.save_run(request).await
     }
-    async fn active_session_runs(
+
+    async fn get_run_program(
         &mut self,
-        session_id: &str,
-    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
-        self.inner.active_session_runs(session_id).await
+        id: &str,
+    ) -> Result<Option<crate::domain::run_program::RunProgram>, StoreError> {
+        self.inner.get_run_program(id).await
+    }
+    async fn save_run_program(
+        &mut self,
+        id: &str,
+        program: crate::domain::run_program::RunProgram,
+    ) -> Result<(), StoreError> {
+        self.inner.save_run_program(id, program).await
+    }
+    async fn save_run_result(&mut self, result: RunResult) -> Result<(), StoreError> {
+        self.inner.save_run_result(result).await
     }
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
         self.inner.unfinished_runs().await
@@ -100,9 +134,9 @@ impl UnitOfWork for FaultUnit {
     async fn expire_responses(
         &mut self,
         session_id: &str,
-        keys: Vec<String>,
+        run_ids: Vec<String>,
     ) -> Result<u64, StoreError> {
-        self.inner.expire_responses(session_id, keys).await
+        self.inner.expire_responses(session_id, run_ids).await
     }
     async fn get_secret(
         &mut self,
@@ -251,9 +285,11 @@ async fn lost_acknowledgements_never_repeat_execution_or_lose_completed_bytes() 
     fault.lose_ack.store(true, Ordering::SeqCst);
     let guard = proceed(coordinator.reserve("session", "key", "code").await);
     fault.lose_ack.store(true, Ordering::SeqCst);
-    guard.complete(200, "original bytes".into()).await;
+    guard.complete(output("original bytes")).await;
     match coordinator.reserve("session", "key", "code").await {
-        Reservation::Replay(outcome) => assert_eq!(outcome.body, "original bytes"),
+        Reservation::Replay(outcome) => {
+            assert_eq!(saved_value(&coordinator, &outcome).await, "original bytes");
+        }
         _ => panic!("committed outcome must replay"),
     }
     let guard = proceed(coordinator.reserve("session", "release", "code").await);
@@ -296,7 +332,7 @@ async fn cancelling_completion_waiter_does_not_cancel_owned_finalization() {
     let coordinator = Arc::new(Coordinator::new(units, database.generation().unwrap()));
     let guard = proceed(coordinator.reserve("session", "key", "code").await);
     fault.pause_after_commit.store(true, Ordering::SeqCst);
-    let task = tokio::spawn(guard.complete(200, "done".into()));
+    let task = tokio::spawn(guard.complete(output("done")));
     fault.committed.notified().await;
     task.abort();
     assert!(matches!(task.await, Err(error) if error.is_cancelled()));
@@ -322,7 +358,7 @@ async fn simultaneous_claims_dispatch_once_and_cancelled_waiters_do_not_release_
     let guard = proceed(winner);
     loser.abort();
     assert!(matches!(loser.await, Err(error) if error.is_cancelled()));
-    guard.complete(200, "once".into()).await;
+    guard.complete(output("once")).await;
     assert!(matches!(
         first.reserve("session", "key", "code").await,
         Reservation::Replay(_)
@@ -345,7 +381,7 @@ async fn waiter_deadline_does_not_authorize_another_execution() {
         second.reserve("session", "key", "code").await,
         Reservation::Refused(Refusal::InProgress)
     ));
-    guard.complete(200, "eventual result".into()).await;
+    guard.complete(output("eventual result")).await;
     assert!(matches!(
         second.reserve("session", "key", "code").await,
         Reservation::Replay(_)
@@ -392,7 +428,7 @@ async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_runs() {
     let database = Arc::new(crate::database::ServerDatabase::open(&path).await.unwrap());
     let (_, units, coordinator) = super::tests::fixture_with_database(database.clone()).await;
     proceed(coordinator.reserve("session", "done", "code").await)
-        .complete(201, "exact\nbytes".into())
+        .complete(output("exact\nbytes"))
         .await;
     let abandoned = IdempotentRequest::reserve(
         "session".into(),
@@ -413,8 +449,7 @@ async fn disk_reopen_preserves_completed_bytes_and_recovers_unfinished_runs() {
     coordinator.recover().await.unwrap();
     match coordinator.reserve("session", "done", "code").await {
         Reservation::Replay(outcome) => {
-            assert_eq!(outcome.status, 201);
-            assert_eq!(outcome.body, "exact\nbytes");
+            assert_eq!(saved_value(&coordinator, &outcome).await, "exact\nbytes");
         }
         _ => panic!("stored bytes must survive reopen"),
     }
@@ -455,12 +490,12 @@ async fn failed_request_cleanup_rolls_back_expiry() {
         .await
         .unwrap();
     assert_eq!(expiry.execute(later, &Default::default()).await.unwrap(), 1);
-    guard.complete(200, "late".into()).await;
+    guard.complete(output("late")).await;
     assert!(
         read_request(units.as_ref(), "session", "key")
             .await
             .unwrap()
-            .is_some_and(|run| run.state() == &RequestState::Cancelled)
+            .is_some_and(|run| run.status() == RunStatus::Cancelled)
     );
 }
 
@@ -480,7 +515,7 @@ async fn failed_completion_activity_write_cannot_publish_a_partial_outcome() {
     database.transaction(|connection| Box::pin(async move {
         sqlx::query("CREATE TRIGGER reject_activity BEFORE UPDATE ON sessions BEGIN SELECT RAISE(FAIL, 'injected'); END").execute(connection).await?; Ok(())
     })).await.unwrap();
-    guard.complete(200, "original result".into()).await;
+    guard.complete(output("original result")).await;
     assert!(matches!(
         coordinator.reserve("session", "key", "code").await,
         Reservation::Refused(Refusal::Indeterminate)
@@ -521,7 +556,7 @@ async fn database_contention_cannot_exceed_reservation_deadline() {
         Reservation::Refused(Refusal::Unavailable(_))
     ));
     drop(held);
-    guard.complete(200, "done".into()).await;
+    guard.complete(output("done")).await;
     second.drain().await;
 }
 
@@ -559,7 +594,7 @@ async fn lost_unkeyed_preparation_and_claim_acknowledgements_keep_one_identity()
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(run.state(), &RequestState::Finished);
+    assert_eq!(run.status(), RunStatus::Completed);
     assert_eq!(run.identity().admission_order, 1);
     assert_eq!(run.attempt(), 1);
 }

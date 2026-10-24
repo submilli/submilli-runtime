@@ -29,7 +29,7 @@ mod readers;
 pub mod unit_of_work;
 mod writers;
 pub use filesystem::{DurableFilesystem, FilesystemError};
-pub use io::RecoveryError;
+pub use io::{RecoveryError, filesystem_config_fingerprint, retire_filesystem};
 pub use readers::{DirectoryEntry, ReaderPosition};
 pub use unit_of_work::{UnitFactory, UnitOfWork};
 #[cfg(feature = "test-support")]

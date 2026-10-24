@@ -1,28 +1,6 @@
 //! A request identity prevents an uncertain execution from being repeated.
+pub use super::run_status::RunStatus;
 use std::time::{Duration, SystemTime};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedOutcome {
-    pub status: u16,
-    pub body: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RequestState {
-    Reserved,
-    Running,
-    Blocked,
-    Cancelled,
-    Aborted,
-    /// An unkeyed execution completed; no HTTP replay body is retained.
-    Finished,
-    Completed(RecordedOutcome),
-    Indeterminate,
-    /// Completed, but its response is no longer kept: the request must not run
-    /// again, and there is nothing left to replay. Storage makes this transition
-    /// in bulk (`UnitOfWork::expire_responses`), without loading the bodies it drops.
-    Expired,
-}
 
 // Compatibility names for existing HTTP callers; the run is the only aggregate.
 pub use super::run::{RequestError, Run as IdempotentRequest};
@@ -30,7 +8,7 @@ pub use super::run::{RequestError, Run as IdempotentRequest};
 /// A completed response, without its body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompletedResponse {
-    pub key: String,
+    pub run_id: String,
     pub completed_at: SystemTime,
 }
 
@@ -60,13 +38,13 @@ impl ResponseRetention {
         newest_first.sort_by(|a, b| {
             b.completed_at
                 .cmp(&a.completed_at)
-                .then_with(|| b.key.cmp(&a.key))
+                .then_with(|| b.run_id.cmp(&a.run_id))
         });
         newest_first
             .into_iter()
             .skip(self.keep_last)
             .filter(|response| self.outlived(response.completed_at, now))
-            .map(|response| response.key.as_str())
+            .map(|response| response.run_id.as_str())
             .collect()
     }
 
@@ -87,6 +65,7 @@ impl ResponseRetention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::run_status::IndeterminateReason;
     use std::time::UNIX_EPOCH;
 
     const HOUR: Duration = Duration::from_secs(60 * 60);
@@ -97,7 +76,7 @@ mod tests {
 
     fn response(key: &str, hours: u64) -> CompletedResponse {
         CompletedResponse {
-            key: key.into(),
+            run_id: key.into(),
             completed_at: at(hours),
         }
     }
@@ -170,17 +149,20 @@ mod tests {
                 0,
                 0,
                 0,
-                None,
+                false,
             )
         };
-        assert!(restore(RequestState::Expired, Some(at(1))).is_ok());
-        assert!(restore(RequestState::Reserved, None).is_ok());
+        assert!(restore(RunStatus::Expired, Some(at(1))).is_ok());
+        assert!(restore(RunStatus::Queued, None).is_ok());
         assert!(matches!(
-            restore(RequestState::Expired, None),
+            restore(RunStatus::Expired, None),
             Err(RequestError::CompletionTimeMismatch)
         ));
         assert!(matches!(
-            restore(RequestState::Indeterminate, Some(at(1))),
+            restore(
+                RunStatus::Indeterminate(IndeterminateReason::Interrupted),
+                Some(at(1))
+            ),
             Err(RequestError::CompletionTimeMismatch)
         ));
     }

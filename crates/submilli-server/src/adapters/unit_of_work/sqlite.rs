@@ -251,11 +251,57 @@ impl UnitOfWork for SqliteUnitOfWork {
         .await
     }
 
+    async fn list_runs(
+        &mut self,
+        query: crate::application::sessions::recovery::RunQuery,
+    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
+        self.query(move |connection| {
+            Box::pin(crate::adapters::run_recovery::list(connection, query))
+        })
+        .await
+    }
+    async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError> {
+        let session = session.to_owned();
+        self.query(move |connection| {
+            Box::pin(
+                async move { crate::adapters::run_recovery::retained(connection, &session).await },
+            )
+        })
+        .await
+    }
+    async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError> {
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(
+                async move { crate::adapters::run_recovery::predecessor(connection, &id).await },
+            )
+        })
+        .await
+    }
+    async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError> {
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(async move { crate::adapters::run_recovery::retire(connection, &id).await })
+        })
+        .await
+    }
+    async fn run_result(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::domain::run_result::RunResult>, StoreError> {
+        let sealer = self.sealer.clone();
+        let id = id.to_owned();
+        self.query(move |connection| {
+            Box::pin(
+                async move { crate::adapters::run_result::get(connection, &sealer, &id).await },
+            )
+        })
+        .await
+    }
     async fn get_run(&mut self, id: &str) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let id = id.to_owned();
-        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move { crate::adapters::run::get_run(connection, &sealer, &id).await })
+            Box::pin(async move { crate::adapters::run::get_run(connection, &id).await })
         })
         .await
     }
@@ -266,39 +312,61 @@ impl UnitOfWork for SqliteUnitOfWork {
     ) -> Result<Option<crate::domain::run::Run>, StoreError> {
         let session_id = session_id.to_owned();
         let key = key.to_owned();
-        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move {
-                crate::adapters::run::get(connection, &sealer, &session_id, &key).await
-            })
+            Box::pin(async move { crate::adapters::run::get(connection, &session_id, &key).await })
         })
         .await
     }
     async fn save_run(&mut self, request: crate::domain::run::Run) -> Result<(), StoreError> {
-        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move { crate::adapters::run::save(connection, &sealer, request).await })
+            Box::pin(async move { crate::adapters::run::save(connection, request).await })
         })
         .await
     }
-    async fn active_session_runs(
+
+    async fn get_run_program(
         &mut self,
-        session_id: &str,
-    ) -> Result<Vec<crate::domain::run::Run>, StoreError> {
-        let id = session_id.to_owned();
+        id: &str,
+    ) -> Result<Option<crate::domain::run_program::RunProgram>, StoreError> {
+        let id = id.to_owned();
+        let sealer = self.sealer.clone();
+        self.query(move |connection| {
+            Box::pin(
+                async move { crate::adapters::run_program::get(connection, &sealer, &id).await },
+            )
+        })
+        .await
+    }
+    async fn save_run_program(
+        &mut self,
+        id: &str,
+        program: crate::domain::run_program::RunProgram,
+    ) -> Result<(), StoreError> {
+        let id = id.to_owned();
         let sealer = self.sealer.clone();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::run::active_for_session(connection, &sealer, &id).await
+                crate::adapters::run_program::save(connection, &sealer, &id, &program).await
+            })
+        })
+        .await
+    }
+    async fn save_run_result(
+        &mut self,
+        result: crate::domain::run_result::RunResult,
+    ) -> Result<(), StoreError> {
+        let sealer = self.sealer.clone();
+        self.query(move |connection| {
+            Box::pin(async move {
+                crate::adapters::run_result::save(connection, &sealer, &result).await
             })
         })
         .await
     }
 
     async fn unfinished_runs(&mut self) -> Result<Vec<crate::domain::run::Run>, StoreError> {
-        let sealer = self.sealer.clone();
         self.query(move |connection| {
-            Box::pin(async move { crate::adapters::run::unfinished(connection, &sealer).await })
+            Box::pin(async move { crate::adapters::run::unfinished(connection).await })
         })
         .await
     }
@@ -329,12 +397,12 @@ impl UnitOfWork for SqliteUnitOfWork {
     async fn expire_responses(
         &mut self,
         session_id: &str,
-        keys: Vec<String>,
+        run_ids: Vec<String>,
     ) -> Result<u64, StoreError> {
         let session_id = session_id.to_owned();
         self.query(move |connection| {
             Box::pin(async move {
-                crate::adapters::run::expire_responses(connection, &session_id, &keys).await
+                crate::adapters::run::expire_responses(connection, &session_id, &run_ids).await
             })
         })
         .await

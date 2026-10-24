@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7e5f2f4dc79e748616c045c49f390d15ac57f39df5b351b1bd7e40a3aac4eff8"
+  contentHash: "d7e147c98fbfa8ca472af884d225b485d33b0fc24b8f94c464d82145e4417fe0"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -61,6 +61,8 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
+| `durable_execution` | — | — | boolean | `false` | Retain and recover persistent session executions. Requires persistent SQLite and an encryption key. See [run recovery](/docs/reference/run-recovery). |
+| `max_durable_runs` | — | — | runs | `4` | Maximum simultaneous durable session runs. Must be positive. |
 | `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting on the harness at an [application tool](/docs/reference/http-api#application-tools) call at once, across the server. Each holds its program in memory. `0` turns application tool calls off. |
 | `max_last_run_size` | `--max-last-run-size` | `SUBMILLI_MAX_LAST_RUN_SIZE` | megabytes | `64` | The largest [last run](/docs/reference/http-api#get-v1sessionssession_idlast-run) a session keeps, as JSON. A larger one keeps only its size, and its last-run answers `413`. |
 | `idempotency_retention` | `--idempotency-retention` | `SUBMILLI_IDEMPOTENCY_RETENTION` | seconds | `86400` | How long a keyed execute's response is kept for replay after it completes. `0` keeps only the newest `idempotency_keep_last`. See [Idempotency](/docs/reference/http-api#idempotency). |

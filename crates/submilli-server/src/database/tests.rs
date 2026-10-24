@@ -678,6 +678,8 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "finalizer_context",
                 "last_runs",
                 "mcp_grants",
+                "run_programs",
+                "run_results",
                 "runs",
                 "secrets",
                 "session_cleanup",
@@ -702,7 +704,7 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
             })
             .await
             .unwrap();
-        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!(versions, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
         database.close().await.unwrap();
     }
 }
@@ -824,7 +826,7 @@ async fn expiry_migration_keeps_every_request_and_dates_completed_ones_by_creati
     let rows: Vec<RequestRow> = database
         .read(|connection| {
             Box::pin(async move {
-                Ok(sqlx::query_as("SELECT request_key,state,response_status,response_body,completed_at_unix_ms FROM runs ORDER BY created_at_unix_ms")
+                Ok(sqlx::query_as("SELECT request_key,state,run_results.status,run_results.content,completed_at_unix_ms FROM runs LEFT JOIN run_results USING(run_id) ORDER BY created_at_unix_ms")
                     .fetch_all(connection)
                     .await?)
             })
@@ -854,14 +856,17 @@ async fn expiry_migration_keeps_every_request_and_dates_completed_ones_by_creati
     let refused = database
         .transaction(|connection| {
             Box::pin(async move {
-                sqlx::query("UPDATE runs SET state='expired' WHERE request_key='completed'")
+                sqlx::query("UPDATE runs SET state='expired',completed_at_unix_ms=NULL WHERE request_key='completed'")
                     .execute(connection)
                     .await?;
                 Ok(())
             })
         })
         .await;
-    assert!(refused.is_err(), "an expired row may not keep its body");
+    assert!(
+        refused.is_err(),
+        "an expired run must retain its completion time"
+    );
     database.close().await.unwrap();
 }
 
@@ -966,7 +971,7 @@ async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_r
         database
             .read(|connection| {
                 Box::pin(async move {
-                    let rows = sqlx::query("SELECT * FROM runs ORDER BY admission_order")
+                    let rows = sqlx::query("SELECT runs.*,run_results.status AS response_status,run_results.content AS response_body FROM runs LEFT JOIN run_results USING(run_id) ORDER BY admission_order")
                         .fetch_all(&mut *connection)
                         .await?;
                     assert_eq!(rows.len(), 6);
@@ -1041,4 +1046,86 @@ async fn run_migration_preserves_v6_tombstones_identity_and_exact_bytes_across_r
             .unwrap();
         database.close().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn run_payload_migration_preserves_programs_history_and_responses() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("db");
+    let mut connection = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .foreign_keys(true),
+    )
+    .await
+    .unwrap();
+    let before = MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= 12)
+        .cloned()
+        .collect();
+    sqlx::migrate::Migrator::with_migrations(before)
+        .run_direct(None, &mut connection, false)
+        .await
+        .unwrap();
+    sqlx::raw_sql("INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state,recovery_mode,execution_manifest,history_position,history_bytes) VALUES ('active','active','s','fp','old',1,0,'running','recorded',X'010203',1,2);
+        INSERT INTO durable_outcomes VALUES('active',0,X'0405');
+        INSERT INTO runs(run_id,reservation_id,session_id,request_key,fingerprint,owner_generation,admission_order,created_at_unix_ms,state,response_status,response_body,completed_at_unix_ms) VALUES('done','done','s','key','fp','old',2,0,'completed',201,X'62797465730A',1);
+        INSERT INTO runs(run_id,reservation_id,session_id,fingerprint,owner_generation,admission_order,created_at_unix_ms,state,completed_at_unix_ms) VALUES('unkeyed','unkeyed','s','fp','old',3,0,'finished',1);").execute(&mut connection).await.unwrap();
+    MIGRATOR
+        .run_direct(None, &mut connection, false)
+        .await
+        .unwrap();
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('runs')")
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
+    assert!(!columns.iter().any(|name| matches!(
+        name.as_str(),
+        "execution_manifest" | "response_body" | "response_status"
+    )));
+    let program: Vec<u8> =
+        sqlx::query_scalar("SELECT content FROM run_programs WHERE run_id='active'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    assert_eq!(program, [1, 2, 3]);
+    let outcome: Vec<u8> = sqlx::query_scalar(
+        "SELECT content FROM durable_outcomes WHERE run_id='active' AND sequence=0",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .unwrap();
+    assert_eq!(outcome, [4, 5]);
+    let response: (i64, Vec<u8>, bool) =
+        sqlx::query_as("SELECT status,content,encrypted FROM run_results WHERE run_id='done'")
+            .fetch_one(&mut connection)
+            .await
+            .unwrap();
+    assert_eq!(response, (201, b"bytes\n".to_vec(), false));
+    let state: String = sqlx::query_scalar("SELECT state FROM runs WHERE run_id='unkeyed'")
+        .fetch_one(&mut connection)
+        .await
+        .unwrap();
+    assert_eq!(state, "completed");
+    assert!(
+        sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&mut connection)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        sqlx::query("INSERT INTO run_programs VALUES('missing',X'01')")
+            .execute(&mut connection)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("DELETE FROM runs WHERE run_id='active'")
+            .execute(&mut connection)
+            .await
+            .is_err()
+    );
 }

@@ -27,6 +27,8 @@ jobs:
         run: python3 -m unittest discover -s verification/tests -p 'test_*.py'
       - name: Check safety, progress, negative variants and reachable crash paths
         run: python3 verification/check.py --output "$RUNNER_TEMP/durability-model"
+      - name: Check restart recovery and explicit resume
+        run: python3 verification/check.py --model durability/recovery --output "$RUNNER_TEMP/recovery-model"
       - name: Check run preparation and admission
         run: python3 verification/check.py --model admission --output "$RUNNER_TEMP/admission-model"
       - name: Check filesystem operation journal
@@ -58,6 +60,7 @@ jobs:
           name: durability-model
           path: |
             ${{ runner.temp }}/durability-model
+            ${{ runner.temp }}/recovery-model
             ${{ runner.temp }}/admission-model
             ${{ runner.temp }}/effects-model
             ${{ runner.temp }}/unit-of-work-model

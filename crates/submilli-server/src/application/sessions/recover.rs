@@ -49,7 +49,12 @@ impl<'a> RecoverSessions<'a> {
                     },
                 ));
             }
-            if session.recover(now) {
+            if !unit
+                .has_retained_run(&id)
+                .await
+                .map_err(BootError::Sessions)?
+                && session.recover(now)
+            {
                 events.push((id.clone(), SessionEvent::Expired));
                 crate::application::sessions::runs::cancel_session_runs(
                     unit.as_mut(),

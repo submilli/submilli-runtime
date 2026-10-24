@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "227c6434d0d358a692bcf614ebdc2dd253aeadfd1176c5f8593ac090e022b799"
+  contentHash: "7bebfd4426a01c0aa615c9b455a5ffc36a0a032a87837126d50adea044c3329e"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -76,6 +76,8 @@ its own. A program that fails is not an HTTP error. `POST /v1/execute` and
 | `GET` | [`/v1/sessions/{session_id}/last-run`](#get-v1sessionssession_idlast-run) |
 | `DELETE` | [`/v1/sessions/{session_id}`](#delete-v1sessionssession_id) |
 | `POST` | [`/v1/runs/{run_id}/resume`](#post-v1runsrun_idresume) |
+| `GET` | [`/v1/runs`](#get-v1runs) |
+| `POST` | [`/v1/runs/{run_id}/recover`](#post-v1runsrun_idrecover) |
 | `GET` | [`/v1/runs/{run_id}`](#get-v1runsrun_id) |
 | `GET` | [`/v1/sessions/{session_id}/packages/search`](#get-v1sessionssession_idpackagessearch) |
 | `GET` | [`/v1/sessions/{session_id}/packages/docs`](#get-v1sessionssession_idpackagesdocs) |
@@ -402,6 +404,42 @@ Refusals answer `{error, execution_id, message}`.
 ### GET /v1/runs/{run_id}
 
 Role: `user`. Answers the run's state now, or `404` `unknown_run`.
+
+When no live application-tool entry remains, a persisted run returns
+`execution_id`, `session_id`, `status`, `reason`,
+`durable`, `revision`, `attempt`, `admission_order`, `created_at_unix_ms`, and
+`completed_at_unix_ms`. When retained, `response` contains the execution result.
+Metadata remains observable when the retained program cannot be opened.
+Non-durable runs have `durable: false`. Their stored metadata does not retain
+a waiting tool call or allow it to resume.
+
+### GET /v1/runs
+
+Role: `user`. Lists persisted runs as `{runs, next}`. Optional query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `session` | Filter by session ID |
+| `status` | `queued`, `running`, `stuck`, `completed`, `cancelled`, `aborted`, `indeterminate`, or `expired` |
+| `after` | The previous page's `next` cursor |
+| `limit` | Page size, clamped to 1–100; default 100 |
+
+`next` is null when no further page is indicated. Listing includes metadata,
+without loading result bodies or the retained program. Unknown status: `400`.
+Storage unavailable: `503`.
+
+### POST /v1/runs/{run_id}/recover
+
+Role: `user`. Explicitly queues a stuck durable run for another attempt. Requires
+`durable_execution: true`. The body is `{"revision": N}`, using the revision
+returned by `GET /v1/runs/{run_id}`. Returns the current run metadata. A changed
+revision, a closed session, or a run that is not stuck returns `409`. Storage
+unavailable returns `503`.
+
+The original program, run ID, limits, and history are retained. This endpoint
+is distinct from `/resume`, which delivers application-tool answers. See
+[run recovery](/docs/reference/run-recovery) for setup and limitations.
+
 
 ## Blueprint discovery
 

@@ -38,7 +38,7 @@ impl SessionWorkspaces for LocalSessionWorkspaces<'_> {
                 sub_path,
                 ..
             } => {
-                let resolved = self.volumes.resolve(&volume, access)?;
+                let resolved = self.volumes.resolve_existing(&volume, access)?;
                 let path = match sub_path {
                     Some(path) => resolved.host.join(path),
                     None => resolved.host,

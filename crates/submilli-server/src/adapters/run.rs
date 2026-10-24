@@ -1,41 +1,39 @@
 //! Relational mapping for program runs. Transactions belong to the caller.
-use crate::adapters::sealing::Sealer;
 use crate::database::DatabaseError;
-use crate::domain::idempotent_request::{CompletedResponse, RecordedOutcome, RequestState};
+use crate::domain::idempotent_request::{CompletedResponse, RunStatus};
 use crate::domain::run::Run;
 use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub(super) const SELECT: &str = "SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,completed_at_unix_ms FROM runs";
+
 pub(crate) async fn get(
     connection: &mut SqliteConnection,
-    sealer: &Sealer,
     session: &str,
     key: &str,
 ) -> Result<Option<Run>, DatabaseError> {
-    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE session_id=? AND request_key=?")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,completed_at_unix_ms FROM runs WHERE session_id=? AND request_key=?")
         .bind(session)
         .bind(key)
         .fetch_optional(connection)
         .await?
-        .map(|row| decode(row, sealer))
+        .map(decode)
         .transpose()
 }
 
 pub(crate) async fn unfinished(
     connection: &mut SqliteConnection,
-    sealer: &Sealer,
 ) -> Result<Vec<Run>, DatabaseError> {
-    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE state IN ('reserved','running')")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,completed_at_unix_ms FROM runs WHERE recovery_mode='unrecorded' AND state IN ('reserved','running')")
         .fetch_all(connection)
         .await?
         .into_iter()
-        .map(|row| decode(row, sealer))
+        .map(decode)
         .collect()
 }
 
 pub(crate) async fn save(
     connection: &mut SqliteConnection,
-    sealer: &Sealer,
     mut request: Run,
 ) -> Result<(), DatabaseError> {
     if request.identity().admission_order == 0 {
@@ -45,43 +43,25 @@ pub(crate) async fn save(
     }
     let created = to_unix_ms(request.created_at())?;
     let completed = request.completed_at().map(to_unix_ms).transpose()?;
-    let (state, status, body) = match request.state() {
-        RequestState::Reserved => ("reserved", None, None),
-        RequestState::Running => ("running", None, None),
-        RequestState::Blocked => ("blocked", None, None),
-        RequestState::Cancelled => ("cancelled", None, None),
-        RequestState::Aborted => ("aborted", None, None),
-        RequestState::Finished => ("finished", None, None),
-        RequestState::Indeterminate => ("indeterminate", None, None),
-        RequestState::Completed(outcome) => (
-            "completed",
-            Some(outcome.status),
-            Some(outcome.body.as_bytes()),
-        ),
-        RequestState::Expired => ("expired", None, None),
-    };
+    let state = stored_state(request.status());
     let result = if request.revision() == 0 {
-        let manifest = request
-            .program()
-            .map(|program| super::run_program::seal(sealer, request.reservation_id(), program))
-            .transpose()?;
-        let recovery_mode = if manifest.is_some() {
+        let recovery_mode = if request.is_durable() {
             "recorded"
         } else {
             "unrecorded"
         };
-        sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,recovery_mode,execution_manifest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" )
+        sqlx::query("INSERT INTO runs(run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,created_at_unix_ms,state,reason,completed_at_unix_ms,recovery_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)" )
         .bind(request.reservation_id().as_str()).bind(request.reservation_id().as_str())
         .bind(request.identity().execution_id.as_deref()).bind(request.session_id()).bind(request.optional_key())
         .bind(request.fingerprint()).bind(&request.identity().principal).bind(&request.identity().entry)
         .bind(request.owner_generation()).bind(request.attempt())
         .bind(request.revision()).bind(request.identity().admission_order).bind(created).bind(state)
-        .bind(reason(request.state())).bind(status).bind(body).bind(completed).bind(recovery_mode).bind(manifest).execute(connection).await?
+        .bind(request.status().reason()).bind(completed).bind(recovery_mode).execute(connection).await?
     } else {
         // Updating lifecycle never serializes or rewrites the retained initial inputs.
-        sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,response_status=?,response_body=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running','blocked') AND ?='running' AND attempt=?-1))")
-            .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(reason(request.state()))
-            .bind(request.attempt()).bind(request.revision()).bind(status).bind(body).bind(completed)
+        sqlx::query("UPDATE runs SET owner_generation=?,request_key=?,state=?,reason=?,attempt=?,revision=?,completed_at_unix_ms=? WHERE run_id=? AND revision=? AND (owner_generation=? OR (recovery_mode='recorded' AND state IN ('reserved','running','blocked') AND ?='running' AND attempt=?-1))")
+            .bind(request.owner_generation()).bind(request.optional_key()).bind(state).bind(request.status().reason())
+            .bind(request.attempt()).bind(request.revision()).bind(completed)
             .bind(request.reservation_id().as_str()).bind(request.revision()-1).bind(request.owner_generation()).bind(state).bind(request.attempt())
             .execute(connection).await?
     };
@@ -100,7 +80,7 @@ pub(crate) async fn sessions_with_responses_to_expire(
     kept: usize,
 ) -> Result<Vec<String>, DatabaseError> {
     let kept = i64::try_from(kept).unwrap_or(i64::MAX);
-    Ok(sqlx::query_scalar("SELECT session_id FROM runs WHERE state='completed' GROUP BY session_id HAVING COUNT(*)>? AND MIN(completed_at_unix_ms)<=? ORDER BY session_id")
+    Ok(sqlx::query_scalar("SELECT session_id FROM runs WHERE state='completed' AND EXISTS(SELECT 1 FROM run_results WHERE run_results.run_id=runs.run_id) GROUP BY session_id HAVING COUNT(*)>? AND MIN(completed_at_unix_ms)<=? ORDER BY session_id")
         .bind(kept)
         .bind(to_unix_ms(cutoff)?)
         .fetch_all(connection)
@@ -112,68 +92,49 @@ pub(crate) async fn completed_responses(
     connection: &mut SqliteConnection,
     session: &str,
 ) -> Result<Vec<CompletedResponse>, DatabaseError> {
-    sqlx::query("SELECT request_key,completed_at_unix_ms FROM runs WHERE session_id=? AND state='completed'")
-        .bind(session)
-        .fetch_all(connection)
-        .await?
-        .into_iter()
-        .map(|row| {
-            Ok(CompletedResponse {
-                key: row.try_get("request_key")?,
-                completed_at: from_unix_ms(row.try_get("completed_at_unix_ms")?)?,
-            })
+    sqlx::query(
+        "SELECT run_id,completed_at_unix_ms FROM runs WHERE session_id=? AND state='completed' AND EXISTS(SELECT 1 FROM run_results WHERE run_results.run_id=runs.run_id)",
+    )
+    .bind(session)
+    .fetch_all(connection)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(CompletedResponse {
+            run_id: row.try_get("run_id")?,
+            completed_at: from_unix_ms(row.try_get("completed_at_unix_ms")?)?,
         })
-        .collect()
+    })
+    .collect()
 }
 
-/// Drop the bodies of `keys`, keeping each as an expired tombstone. A request
+/// Drop the bodies of `run_ids`, keeping each as an expired tombstone. A request
 /// that is no longer completed is left as it is.
 pub(crate) async fn expire_responses(
     connection: &mut SqliteConnection,
     session: &str,
-    keys: &[String],
+    run_ids: &[String],
 ) -> Result<u64, DatabaseError> {
     let mut expired = 0;
-    for key in keys {
-        expired += sqlx::query("UPDATE runs SET state='expired',revision=revision+1,response_status=NULL,response_body=NULL WHERE session_id=? AND request_key=? AND state='completed'")
+    for run_id in run_ids {
+        expired += sqlx::query("UPDATE runs SET state='expired',revision=revision+1 WHERE session_id=? AND run_id=? AND state='completed'")
             .bind(session)
-            .bind(key)
+            .bind(run_id)
             .execute(&mut *connection)
             .await?
             .rows_affected();
+        sqlx::query("DELETE FROM run_results WHERE run_id=? AND EXISTS(SELECT 1 FROM runs WHERE run_id=? AND session_id=? AND state='expired')").bind(run_id).bind(run_id).bind(session).execute(&mut *connection).await?;
     }
     Ok(expired)
 }
 
-fn decode(row: SqliteRow, sealer: &Sealer) -> Result<Run, DatabaseError> {
-    let id: String = row.try_get("run_id")?;
-    let program = match row.try_get::<&str, _>("recovery_mode")? {
-        "unrecorded" => None,
-        "recorded" => Some(std::sync::Arc::new(super::run_program::open(
-            sealer,
-            &id,
-            row.try_get::<&[u8], _>("execution_manifest")?,
-        )?)),
+pub(super) fn decode(row: SqliteRow) -> Result<Run, DatabaseError> {
+    let durable = match row.try_get::<&str, _>("recovery_mode")? {
+        "recorded" => true,
+        "unrecorded" => false,
         _ => return Err(invalid("invalid recovery mode")),
     };
-    let state = match row.try_get::<&str, _>("state")? {
-        "reserved" => RequestState::Reserved,
-        "running" => RequestState::Running,
-        "blocked" => RequestState::Blocked,
-        "cancelled" => RequestState::Cancelled,
-        "aborted" => RequestState::Aborted,
-        "finished" => RequestState::Finished,
-        "indeterminate" => RequestState::Indeterminate,
-        "completed" => {
-            let body: Vec<u8> = row.try_get("response_body")?;
-            RequestState::Completed(RecordedOutcome {
-                status: row.try_get("response_status")?,
-                body: String::from_utf8(body).map_err(invalid)?,
-            })
-        }
-        "expired" => RequestState::Expired,
-        _ => return Err(invalid("invalid request state")),
-    };
+    let state = decode_status(row.try_get("state")?, row.try_get("reason")?)?;
     let completed_at = row
         .try_get::<Option<i64>, _>("completed_at_unix_ms")?
         .map(from_unix_ms)
@@ -199,7 +160,7 @@ fn decode(row: SqliteRow, sealer: &Sealer) -> Result<Run, DatabaseError> {
         row.try_get("revision")?,
         row.try_get("attempt")?,
         u64::try_from(row.try_get::<i64, _>("history_position")?).map_err(invalid)?,
-        program,
+        durable,
     )
     .map_err(invalid)
 }
@@ -221,41 +182,95 @@ fn invalid(error: impl std::fmt::Display) -> DatabaseError {
     DatabaseError::Import(format!("invalid run: {error}"))
 }
 
-fn reason(state: &RequestState) -> Option<&'static str> {
+pub(super) fn stored_state(state: RunStatus) -> &'static str {
     match state {
-        RequestState::Indeterminate => Some("interrupted_without_history"),
-        RequestState::Blocked => Some("replay_unavailable"),
-        RequestState::Cancelled => Some("session_closed"),
-        RequestState::Aborted => Some("never_dispatched"),
-        _ => None,
+        RunStatus::Queued => "reserved",
+        RunStatus::Stuck(_) => "blocked",
+        other => other.as_str(),
     }
 }
 
 pub(crate) async fn get_run(
     connection: &mut SqliteConnection,
-    sealer: &Sealer,
     id: &str,
 ) -> Result<Option<Run>, DatabaseError> {
-    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE run_id=?")
+    sqlx::query("SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,completed_at_unix_ms FROM runs WHERE run_id=?")
         .bind(id)
         .fetch_optional(connection)
         .await?
-        .map(|row| decode(row, sealer))
+        .map(decode)
         .transpose()
 }
 
-pub(crate) async fn active_for_session(
-    connection: &mut SqliteConnection,
-    sealer: &Sealer,
-    session: &str,
-) -> Result<Vec<Run>, DatabaseError> {
-    sqlx::query(
-        "SELECT run_id,reservation_id,execution_id,session_id,request_key,fingerprint,principal,entry_point,owner_generation,attempt,revision,admission_order,history_position,recovery_mode,created_at_unix_ms,state,reason,response_status,response_body,completed_at_unix_ms,CASE WHEN length(execution_manifest)<=16777344 THEN execution_manifest ELSE NULL END AS execution_manifest FROM runs WHERE session_id=? AND state IN ('reserved','running','blocked')",
-    )
-    .bind(session)
-    .fetch_all(connection)
-    .await?
-    .into_iter()
-    .map(|row| decode(row, sealer))
-    .collect()
+fn decode_status(state: &str, reason: Option<&str>) -> Result<RunStatus, DatabaseError> {
+    use crate::domain::run_status::{IndeterminateReason, StuckReason};
+    Ok(match state {
+        "reserved" => RunStatus::Queued,
+        "running" => RunStatus::Running,
+        "blocked" => RunStatus::Stuck(match reason {
+            Some("credentials_unavailable") => StuckReason::Credentials,
+            Some("storage_unavailable") => StuckReason::Storage,
+            Some("incompatible_environment") => StuckReason::Compatibility,
+            Some("invalid_history") => StuckReason::History,
+            Some("fuel_exhausted") => StuckReason::Fuel,
+            Some("execution_timeout") => StuckReason::Timeout,
+            Some("execution_interrupted") => StuckReason::Interrupted,
+            Some("durability_disabled") => StuckReason::Disabled,
+            Some("replay_unavailable") => StuckReason::ReplayUnavailable,
+            _ => return Err(invalid("invalid stuck reason")),
+        }),
+        "cancelled" => RunStatus::Cancelled,
+        "aborted" => RunStatus::Aborted,
+        "completed" => RunStatus::Completed,
+        "indeterminate" => RunStatus::Indeterminate(match reason {
+            Some("legacy_without_history") => IndeterminateReason::Legacy,
+            // Older unrecorded rows may have no separately retained reason.
+            Some("interrupted_without_history") | None => IndeterminateReason::Interrupted,
+            _ => return Err(invalid("invalid indeterminate reason")),
+        }),
+        "expired" => RunStatus::Expired,
+        _ => return Err(invalid("invalid run state")),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::run_status::{IndeterminateReason, StuckReason};
+
+    #[test]
+    fn status_and_reason_roundtrip_together() {
+        let statuses = [
+            RunStatus::Queued,
+            RunStatus::Running,
+            RunStatus::Cancelled,
+            RunStatus::Aborted,
+            RunStatus::Completed,
+            RunStatus::Expired,
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted),
+            RunStatus::Indeterminate(IndeterminateReason::Legacy),
+            RunStatus::Stuck(StuckReason::Credentials),
+            RunStatus::Stuck(StuckReason::Storage),
+            RunStatus::Stuck(StuckReason::Compatibility),
+            RunStatus::Stuck(StuckReason::History),
+            RunStatus::Stuck(StuckReason::Fuel),
+            RunStatus::Stuck(StuckReason::Timeout),
+            RunStatus::Stuck(StuckReason::Interrupted),
+            RunStatus::Stuck(StuckReason::Disabled),
+            RunStatus::Stuck(StuckReason::ReplayUnavailable),
+        ];
+        for status in statuses {
+            assert_eq!(
+                decode_status(stored_state(status), status.reason()).unwrap(),
+                status
+            );
+        }
+        assert!(decode_status("blocked", None).is_err());
+        assert!(decode_status("blocked", Some("session_closed")).is_err());
+        assert!(decode_status("indeterminate", Some("fuel_exhausted")).is_err());
+        assert_eq!(
+            decode_status("indeterminate", None).unwrap(),
+            RunStatus::Indeterminate(IndeterminateReason::Interrupted)
+        );
+    }
 }

@@ -4,23 +4,30 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::sync::Arc;
 use std::time::SystemTime;
+use submilli_durable::codec::Sealer;
 use submilli_server::database::{DatabaseError, ServerDatabase};
-use submilli_server::domain::idempotent_request::{RecordedOutcome, RequestState};
+use submilli_server::domain::idempotent_request::RunStatus;
+use submilli_server::domain::run_status::{IndeterminateReason, StuckReason};
+use submilli_shared::secret_store::SecretCipher;
+
+#[derive(Debug, PartialEq)]
+pub struct RecordedResponse {
+    pub status: u16,
+    pub body: String,
+}
 
 #[derive(Debug, PartialEq)]
 pub struct Record {
     pub session_id: String,
     pub key: String,
     pub fingerprint: String,
-    pub state: RequestState,
+    pub state: RunStatus,
+    pub result: Option<RecordedResponse>,
 }
 impl Record {
     #[allow(dead_code)] // The last-run integration assertions inspect the stored response.
-    pub fn outcome(&self) -> Option<&RecordedOutcome> {
-        match &self.state {
-            RequestState::Completed(outcome) => Some(outcome),
-            _ => None,
-        }
+    pub fn outcome(&self) -> Option<&RecordedResponse> {
+        self.result.as_ref()
     }
 
     pub fn indeterminate(session: &str, key: &str, fingerprint: String) -> Self {
@@ -28,7 +35,8 @@ impl Record {
             session_id: session.into(),
             key: key.into(),
             fingerprint,
-            state: RequestState::Indeterminate,
+            state: RunStatus::Indeterminate(IndeterminateReason::Interrupted),
+            result: None,
         }
     }
 
@@ -38,7 +46,8 @@ impl Record {
             session_id: session.into(),
             key: key.into(),
             fingerprint,
-            state: RequestState::Expired,
+            state: RunStatus::Expired,
+            result: None,
         }
     }
 }
@@ -47,10 +56,18 @@ pub fn code_fingerprint(code: &str) -> String {
 }
 pub struct RequestRecords {
     pub database: Arc<ServerDatabase>,
+    sealer: Sealer,
 }
 impl RequestRecords {
     pub fn with_database(database: Arc<ServerDatabase>) -> Self {
-        Self { database }
+        Self {
+            database,
+            sealer: Sealer::default(),
+        }
+    }
+    pub fn with_cipher(mut self, cipher: Option<Arc<SecretCipher>>) -> Self {
+        self.sealer = Sealer::new(cipher);
+        self
     }
     pub fn ephemeral() -> Self {
         Self::with_database(Arc::new(
@@ -65,8 +82,8 @@ impl RequestRecords {
     }
     pub async fn put(&self, record: Record) -> Result<(), DatabaseError> {
         let (state, completed, owner_generation) = match record.state {
-            RequestState::Indeterminate => ("indeterminate", false, "previous-server"),
-            RequestState::Expired => ("expired", true, "this-server"),
+            RunStatus::Indeterminate(_) => ("indeterminate", false, "previous-server"),
+            RunStatus::Expired => ("expired", true, "this-server"),
             _ => panic!("fixture seeds abandoned or expired requests only"),
         };
         self.database.transaction(move |connection| Box::pin(async move {
@@ -83,11 +100,12 @@ impl RequestRecords {
     pub async fn load(&self, session: &str, key: &str) -> Result<Option<Record>, DatabaseError> {
         let session = session.to_owned();
         let key = key.to_owned();
+        let sealer = self.sealer.clone();
         self.database
             .transaction(move |connection| {
                 Box::pin(async move {
                     let Some(row) =
-                        sqlx::query("SELECT * FROM runs WHERE session_id=? AND request_key=?")
+                        sqlx::query("SELECT runs.*,run_results.status AS response_status,run_results.content AS response_body,run_results.encrypted AS response_encrypted FROM runs LEFT JOIN run_results USING(run_id) WHERE session_id=? AND request_key=?")
                             .bind(&session)
                             .bind(&key)
                             .fetch_optional(connection)
@@ -96,28 +114,51 @@ impl RequestRecords {
                         return Ok(None);
                     };
                     let state = match row.try_get::<&str, _>("state")? {
-                        "completed" => RequestState::Completed(RecordedOutcome {
-                            status: row.try_get("response_status")?,
-                            body: String::from_utf8(row.try_get("response_body")?).unwrap(),
+                        "completed" => RunStatus::Completed,
+                        "reserved" => RunStatus::Queued,
+                        "expired" => RunStatus::Expired,
+                        "running" => RunStatus::Running,
+                        "blocked" => RunStatus::Stuck(match row.try_get::<&str, _>("reason")? {
+                            "credentials_unavailable" => StuckReason::Credentials,
+                            "storage_unavailable" => StuckReason::Storage,
+                            "incompatible_environment" => StuckReason::Compatibility,
+                            "invalid_history" => StuckReason::History,
+                            "fuel_exhausted" => StuckReason::Fuel,
+                            "execution_timeout" => StuckReason::Timeout,
+                            "execution_interrupted" => StuckReason::Interrupted,
+                            "durability_disabled" => StuckReason::Disabled,
+                            "replay_unavailable" => StuckReason::ReplayUnavailable,
+                            _ => return Err(DatabaseError::Import("invalid stuck reason".into())),
                         }),
-                        "reserved" => RequestState::Reserved,
-                        "expired" => RequestState::Expired,
-                        "running" => RequestState::Running,
-                        "blocked" => RequestState::Blocked,
-                        "cancelled" => RequestState::Cancelled,
-                        "aborted" => RequestState::Aborted,
-                        "finished" => RequestState::Finished,
-                        "indeterminate" => RequestState::Indeterminate,
+                        "cancelled" => RunStatus::Cancelled,
+                        "aborted" => RunStatus::Aborted,
+                        "finished" => RunStatus::Completed,
+                        "indeterminate" => RunStatus::Indeterminate(IndeterminateReason::Interrupted),
                         state => {
                             return Err(DatabaseError::Import(format!(
                                 "invalid run state: {state}"
                             )));
                         }
                     };
+                    let result = if let Some(status) = row.try_get::<Option<u16>, _>("response_status")? {
+                        let mut body: Vec<u8> = row.try_get("response_body")?;
+                        if row.try_get::<bool, _>("response_encrypted")? {
+                            let id: String = row.try_get("run_id")?;
+                            body = sealer.open(&format!("run-result:v1:{id}"), &body, "run result")
+                                .map_err(|error| DatabaseError::Import(error.to_string()))?;
+                        }
+                        Some(RecordedResponse {
+                            status,
+                            body: String::from_utf8(body).map_err(|error| DatabaseError::Import(error.to_string()))?,
+                        })
+                    } else {
+                        None
+                    };
                     Ok(Some(Record {
                         session_id: session,
                         key,
                         fingerprint: row.try_get("fingerprint")?,
+                        result,
                         state,
                     }))
                 })
