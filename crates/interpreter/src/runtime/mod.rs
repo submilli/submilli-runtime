@@ -26,6 +26,7 @@ pub mod limits;
 pub mod llm;
 pub mod mcp;
 pub mod metrics;
+pub mod model_calls;
 pub mod number;
 pub mod prelude;
 pub mod secrets;
@@ -82,6 +83,7 @@ pub use mcp::{
     mcp_call_package_declaration,
 };
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
+pub use model_calls::{AttributedUsage, ModelCallUsage};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{EncryptedSecret, NoopSecretProvider, SecretKeyId, SecretProvider};
@@ -188,6 +190,9 @@ pub struct StoreData {
     /// This execution's embedding budget (tokens and outbound requests). `None`
     /// in the pure-interpreter path; dropping it returns unspent reservation.
     pub embedding_budget: Option<Arc<EmbeddingTokenBudget>>,
+    /// Live `submilli:llm` and `submilli:embedding` dispatches in this attempt.
+    /// The embedder reads [`Self::model_calls`] after guest code finishes.
+    model_calls: Vec<ModelCallUsage>,
     /// Session-scoped key-value storage, present only when the embedder wires a
     /// provider. Left `None` the store stays absent rather than silently
     /// becoming per-execution scratch state that no later `execute` can read —
@@ -333,6 +338,7 @@ impl StoreData {
             llm_budget: None,
             embedding_provider: None,
             embedding_budget: None,
+            model_calls: Vec::new(),
             session_kv: None,
             session_finalizers: None,
             finalizing: false,
@@ -371,6 +377,23 @@ impl StoreData {
 
     pub fn install_type_info(&mut self, table: TypeInfoTable) {
         self.type_info.insert(table.package_name.clone(), table);
+    }
+
+    /// Live model dispatches in this attempt, in call order.
+    ///
+    /// Empty when none ran. A guest trap does not clear it: a call that already
+    /// returned was billed. Read this after `dispatch_main_async`, before
+    /// dropping the store. [`ModelCallUsage::summed_by_model`] folds it per model.
+    pub fn model_calls(&self) -> &[ModelCallUsage] {
+        &self.model_calls
+    }
+
+    /// Append one live dispatch. Only the provider action may call this.
+    ///
+    /// Replay restores the recorded outcome without running that action.
+    /// Recording after `effects::execute` returns would bill the call again.
+    pub(crate) fn note_model_call(&mut self, call: ModelCallUsage) {
+        self.model_calls.push(call);
     }
 
     pub fn with_tempdir() -> std::io::Result<Self> {

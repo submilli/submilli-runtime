@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
+use crate::runtime::ModelCallUsage;
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
@@ -378,7 +379,13 @@ async fn call_provider(
                     .with_owned_body(serde_json::to_vec(&texts).unwrap_or_default())
                     .with_size(received as u64)
             });
-            record_usage(&*caller, ticket, reported_usage(&outcomes));
+            let usage = reported_usage(&outcomes);
+            record_usage(&*caller, ticket, usage);
+            // The provider action is the live dispatch. Replay returns the
+            // recorded outcome without entering here.
+            caller
+                .data_mut()
+                .note_model_call(ModelCallUsage::llm(model, usage));
             fuel::settle(&mut *caller, fuel::IO, received as u64)?;
             Ok(LlmResponse {
                 outcomes,
@@ -911,9 +918,13 @@ fn build_array(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use super::{filters_candidate, sanitize_description};
+    use crate::runtime::durable::EffectId;
+    use crate::runtime::effects::{EffectCall, EffectHistory, HistoryError, RecordedOutcome};
     use crate::runtime::llm::{
         ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel,
         LlmOutcome, LlmProvider, SharedTokenBudget,
@@ -1072,6 +1083,12 @@ mod tests {
         provider: Option<Arc<dyn LlmProvider>>,
         budget: Option<Arc<ExecutionTokenBudget>>,
         policy: Option<Arc<dyn SecurityCheck>>,
+        effects: Option<Arc<dyn crate::runtime::effects::EffectHistory>>,
+    }
+
+    struct Observed {
+        result: wasmtime::Result<String>,
+        model_calls: Vec<crate::runtime::ModelCallUsage>,
     }
 
     impl Harness {
@@ -1080,11 +1097,17 @@ mod tests {
                 provider: None,
                 budget: None,
                 policy: None,
+                effects: None,
             }
         }
 
         fn provider(mut self, provider: Arc<dyn LlmProvider>) -> Self {
             self.provider = Some(provider);
+            self
+        }
+
+        fn effects(mut self, effects: Arc<dyn crate::runtime::effects::EffectHistory>) -> Self {
+            self.effects = Some(effects);
             self
         }
 
@@ -1103,6 +1126,11 @@ mod tests {
 
         /// Run `source` and hand back what `main` returned.
         async fn run(self, source: &str) -> wasmtime::Result<String> {
+            self.observe(source).await.result
+        }
+
+        /// Run `source` and keep the model calls, including when `main` traps.
+        async fn observe(self, source: &str) -> Observed {
             let compiled = crate::compile_script(source, "test.ts", crate::FileId(0), &[], &[])
                 .expect("compile clean");
             let cfg = RuntimeConfig::default();
@@ -1111,6 +1139,7 @@ mod tests {
             data.install_type_info(compiled.type_info.clone());
             data.llm_provider = self.provider;
             data.llm_budget = self.budget;
+            data.effects = self.effects;
             if let Some(policy) = self.policy {
                 data.security_check = policy;
             }
@@ -1124,9 +1153,14 @@ mod tests {
                 .instantiate_async(&mut store, &module)
                 .await
                 .expect("instantiate");
-            dispatch_main_async(&mut store, &inst)
+            let result = dispatch_main_async(&mut store, &inst)
                 .await
-                .map(Option::unwrap_or_default)
+                .map(Option::unwrap_or_default);
+            let model_calls = store.data().model_calls().to_vec();
+            Observed {
+                result,
+                model_calls,
+            }
         }
     }
 
@@ -2039,5 +2073,354 @@ mod tests {
             recorder.dispatches()[0].schema.is_some(),
             "a typed batch must send a schema",
         );
+    }
+
+    /// A `batch` of three prompts is one dispatch. The embedder sees their usage
+    /// summed, and a second model stays a second record.
+    #[tokio::test]
+    async fn batch_usage_is_summed_per_model_for_the_embedder() {
+        let provider = QueuedProvider::new(vec![
+            vec![
+                LlmOutcome::success("a").with_usage(Some(1), Some(2)),
+                LlmOutcome::success("b").with_usage(Some(3), Some(4)),
+                LlmOutcome::success("c").with_usage(Some(5), Some(6)),
+            ],
+            vec![LlmOutcome::success("x").with_usage(Some(7), Some(8))],
+        ]);
+        let observed = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .observe(
+                r#"import llm from "submilli:llm";
+                   function main(): void {
+                     llm.batch("haiku", ["a", "b", "c"]);
+                     llm.batch("sonnet", ["x"]);
+                   }"#,
+            )
+            .await;
+        observed.result.expect("program completes");
+        let calls = observed.model_calls;
+        assert_eq!(calls.len(), 2, "one record per host call");
+        assert_eq!(
+            crate::runtime::ModelCallUsage::summed_by_model(&calls),
+            vec![
+                llm_call("haiku", Some(9), Some(12)),
+                llm_call("sonnet", Some(7), Some(8)),
+            ]
+        );
+    }
+
+    /// One omitted count makes that field absent for the whole batch. The other
+    /// field still sums. A partial sum would bill an unknown half as zero.
+    #[tokio::test]
+    async fn an_omitted_batch_count_stays_absent() {
+        let provider = QueuedProvider::new(vec![vec![
+            LlmOutcome::success("a").with_usage(Some(1), Some(2)),
+            LlmOutcome::success("b").with_usage(None, Some(4)),
+            LlmOutcome::success("c").with_usage(Some(5), Some(6)),
+        ]]);
+        let observed = Harness::new()
+            .provider(provider)
+            .observe(
+                r#"import llm from "submilli:llm";
+                   function main(): void {
+                     llm.batch("haiku", ["a", "b", "c"]);
+                   }"#,
+            )
+            .await;
+        observed.result.expect("program completes");
+        assert_eq!(
+            observed.model_calls,
+            vec![llm_call("haiku", None, Some(12))]
+        );
+    }
+
+    /// The call returned, and was billed, before the program trapped.
+    #[tokio::test]
+    async fn a_trap_after_a_billed_call_keeps_the_record() {
+        let provider = QueuedProvider::new(vec![vec![
+            LlmOutcome::success("hi").with_usage(Some(3), Some(4)),
+        ]]);
+        let observed = Harness::new()
+            .provider(provider)
+            .observe(
+                r#"import llm from "submilli:llm";
+                   function main(): void {
+                     llm.call("haiku", "hi");
+                     throw new Error("after");
+                   }"#,
+            )
+            .await;
+        assert!(observed.result.is_err(), "the program traps");
+        assert_eq!(
+            observed.model_calls,
+            vec![llm_call("haiku", Some(3), Some(4))]
+        );
+    }
+
+    /// Two calls stay two records. The per-model fold adds known counts and
+    /// keeps a missing one missing.
+    #[tokio::test]
+    async fn two_calls_to_one_model_sum_without_turning_unknown_into_zero() {
+        let provider = QueuedProvider::new(vec![
+            vec![LlmOutcome::success("one").with_usage(Some(10), Some(1))],
+            vec![LlmOutcome::success("two").with_usage(None, Some(2))],
+        ]);
+        let observed = Harness::new()
+            .provider(provider)
+            .observe(
+                r#"import llm from "submilli:llm";
+                   function main(): void {
+                     llm.call("haiku", "one");
+                     llm.call("haiku", "two");
+                   }"#,
+            )
+            .await;
+        observed.result.expect("program completes");
+        assert_eq!(observed.model_calls.len(), 2);
+        assert_eq!(
+            crate::runtime::ModelCallUsage::summed_by_model(&observed.model_calls),
+            vec![llm_call("haiku", None, Some(3))]
+        );
+    }
+
+    /// A provider error means the dispatch never ran. Nothing was billed.
+    #[tokio::test]
+    async fn a_dispatch_that_never_ran_records_nothing() {
+        let observed = Harness::new()
+            .provider(Arc::new(RefusingProvider))
+            .observe(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     try {
+                       llm.call("haiku", "hi");
+                       return "ran";
+                     } catch (e: Error) {
+                       return "caught";
+                     }
+                   }"#,
+            )
+            .await;
+        assert_eq!(
+            observed.result.expect("the guest catches the error"),
+            "caught"
+        );
+        assert!(observed.model_calls.is_empty());
+    }
+
+    /// Replay restores the outcome without calling the provider. The new store
+    /// must not grow a second bill for the same call.
+    #[tokio::test]
+    async fn a_replayed_batch_is_not_recorded_again() {
+        let provider = QueuedProvider::new(vec![vec![
+            LlmOutcome::success("a").with_usage(Some(1), Some(2)),
+            LlmOutcome::success("b").with_usage(Some(3), Some(4)),
+            LlmOutcome::success("c").with_usage(Some(5), Some(6)),
+        ]]);
+        let history = Arc::new(MemoryHistory::new());
+        let source = r#"import llm from "submilli:llm";
+            function main(): string {
+              return String(llm.batch("haiku", ["a", "b", "c"]).length);
+            }"#;
+        let first = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(Arc::clone(&history) as Arc<dyn EffectHistory>)
+            .observe(source)
+            .await;
+        assert_eq!(first.result.expect("live run"), "3");
+        assert_eq!(
+            first.model_calls,
+            vec![llm_call("haiku", Some(9), Some(12))]
+        );
+        history.replay();
+        let second = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(history)
+            .observe(source)
+            .await;
+        assert_eq!(second.result.expect("replayed run"), "3");
+        assert!(
+            second.model_calls.is_empty(),
+            "replay must not bill the call again: {:?}",
+            second.model_calls
+        );
+        assert_eq!(provider.invoked(), 1, "replay must not call the provider");
+    }
+
+    fn llm_call(
+        model: &str,
+        input: Option<u64>,
+        output: Option<u64>,
+    ) -> crate::runtime::ModelCallUsage {
+        crate::runtime::ModelCallUsage::llm(
+            model,
+            crate::runtime::ModelUsage {
+                input_tokens: input,
+                output_tokens: output,
+            },
+        )
+    }
+
+    /// One scripted outcome list per host call, in call order.
+    struct QueuedProvider {
+        calls: Mutex<VecDeque<Vec<LlmOutcome>>>,
+        invoked: AtomicUsize,
+    }
+
+    impl QueuedProvider {
+        fn new(calls: Vec<Vec<LlmOutcome>>) -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(calls.into()),
+                invoked: AtomicUsize::new(0),
+            })
+        }
+
+        fn invoked(&self) -> usize {
+            self.invoked.load(Ordering::Relaxed)
+        }
+    }
+
+    impl LlmProvider for QueuedProvider {
+        fn call<'a>(
+            &'a self,
+            model: &'a str,
+            prompts: &'a [String],
+            _schema_json: Option<&'a str>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a,
+            >,
+        > {
+            self.invoked.fetch_add(1, Ordering::Relaxed);
+            let scripted = self.calls.lock().expect("scripted calls").pop_front();
+            let model = model.to_string();
+            Box::pin(async move {
+                let Some(scripted) = scripted else {
+                    return Err(LlmCallError::NotConfigured { model });
+                };
+                Ok(prompts
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        scripted
+                            .get(index)
+                            .cloned()
+                            .unwrap_or_else(|| LlmOutcome::success(format!("answer {index}")))
+                    })
+                    .collect())
+            })
+        }
+
+        fn models<'a>(
+            &'a self,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    struct RefusingProvider;
+
+    impl LlmProvider for RefusingProvider {
+        fn call<'a>(
+            &'a self,
+            model: &'a str,
+            _prompts: &'a [String],
+            _schema_json: Option<&'a str>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a,
+            >,
+        > {
+            let model = model.to_string();
+            Box::pin(async move { Err(LlmCallError::NotConfigured { model }) })
+        }
+
+        fn models<'a>(
+            &'a self,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<LlmModel>, LlmCallError>> + Send + 'a>,
+        > {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    struct MemoryHistory {
+        state: Mutex<ReplayState>,
+    }
+
+    struct ReplayState {
+        outcomes: Vec<RecordedOutcome>,
+        cursor: usize,
+        replay: bool,
+    }
+
+    impl MemoryHistory {
+        fn new() -> Self {
+            Self {
+                state: Mutex::new(ReplayState {
+                    outcomes: Vec::new(),
+                    cursor: 0,
+                    replay: false,
+                }),
+            }
+        }
+
+        fn replay(&self) {
+            let mut state = self.state.lock().expect("history");
+            state.replay = true;
+            state.cursor = 0;
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EffectHistory for MemoryHistory {
+        async fn begin(
+            &self,
+            _operation: &str,
+            _fingerprint: [u8; 32],
+        ) -> Result<EffectCall, HistoryError> {
+            let mut state = self.state.lock().expect("history");
+            let id = EffectId::stub().map_err(|error| HistoryError(error.to_string()))?;
+            if state.replay {
+                let recorded = state
+                    .outcomes
+                    .get(state.cursor)
+                    .cloned()
+                    .ok_or_else(|| HistoryError("replay past recorded effects".into()))?;
+                let sequence = state.cursor as u64;
+                state.cursor += 1;
+                return Ok(EffectCall {
+                    id,
+                    sequence,
+                    recorded: Some(recorded),
+                });
+            }
+            Ok(EffectCall {
+                id,
+                sequence: state.outcomes.len() as u64,
+                recorded: None,
+            })
+        }
+
+        async fn complete(
+            &self,
+            call: &EffectCall,
+            outcome: RecordedOutcome,
+        ) -> Result<(), HistoryError> {
+            let mut state = self.state.lock().expect("history");
+            if state.replay {
+                return Ok(());
+            }
+            if call.sequence as usize != state.outcomes.len() {
+                return Err(HistoryError("effect completed out of order".into()));
+            }
+            state.outcomes.push(outcome);
+            Ok(())
+        }
+
+        async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
+            Ok(())
+        }
     }
 }
