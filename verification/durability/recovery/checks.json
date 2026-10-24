@@ -21,7 +21,7 @@
     "HistoryFenced",
     "ProgressBounded",
     "TerminalCommitted",
-    "LegacyBlocked"
+    "LegacyPreserved"
   ],
   "cases": [
     {
@@ -151,11 +151,11 @@
       "invariant": "NoWitness"
     },
     {
-      "name": "witness-legacy-successor-admitted",
+      "name": "witness-legacy-successor-completed",
       "kind": "witness",
       "constants": {
         "Legacy": true,
-        "Witness": "legacy-successor-admitted"
+        "Witness": "legacy-successor-completed"
       },
       "invariant": "NoWitness"
     }

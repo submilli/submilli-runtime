@@ -366,12 +366,13 @@ pub(crate) async fn cancel_session_runs(
     unit: &mut dyn UnitOfWork,
     session_id: &str,
 ) -> Result<(), StoreError> {
-    use super::recovery::{RunQuery, RunStatus};
+    use super::recovery::RunQuery;
     let mut after = None;
     loop {
         let page = unit
             .list_runs(RunQuery {
                 session: Some(session_id.into()),
+                unfinished_only: true,
                 after,
                 limit: 100,
                 ..Default::default()
@@ -380,14 +381,9 @@ pub(crate) async fn cancel_session_runs(
         let more = page.len() == 100;
         after = page.last().map(|run| run.reservation_id().clone());
         for mut run in page {
-            if matches!(
-                run.status(),
-                RunStatus::Queued | RunStatus::Running | RunStatus::Stuck(_)
-            ) {
-                run.cancel()
-                    .map_err(|error| StoreError::Io(error.to_string()))?;
-                unit.save_run(run).await?;
-            }
+            run.cancel()
+                .map_err(|error| StoreError::Io(error.to_string()))?;
+            unit.save_run(run).await?;
         }
         if !more {
             return Ok(());

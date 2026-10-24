@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "9d891ed7fa2c0dbe711a8e1118e23d1aba5f51a07a4d30bdea349e92692a1560"
+  contentHash: "6efcefbf9ad3edeed213024284f7a80aa12ae33fce1d620c23ff5a739223872a"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -48,6 +48,10 @@ Queued, running, and stuck recorded runs prevent idle session expiry. Explicit
 session closure cancels retained work and drains execution before cleanup.
 A stuck run prevents later runs in its session from executing; other sessions
 remain eligible. Disabling durability leaves unfinished recorded runs stuck.
+
+An indeterminate non-durable run keeps its unknown outcome and idempotency
+identity. It does not block later runs or appear in durable recovery and cleanup
+work. Session closure preserves its record in run history.
 
 ## Retained execution data
 

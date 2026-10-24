@@ -36,6 +36,7 @@ pub(crate) async fn list(
             after: query.after.map(Into::into),
             limit,
             recovery: None,
+            unfinished_only: false,
         })
         .await
     }
