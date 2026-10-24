@@ -16,6 +16,22 @@ use submilli_durable::history::{ExecutionAttempt, History};
 /// replay across package changes; this version assumes unchanged package contents.
 pub(crate) const COMPATIBILITY: &str = concat!("durable-v8/wasmgc/", env!("CARGO_PKG_VERSION"));
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReplayError {
+    #[error("recorded runtime or limits do not match this execution environment")]
+    Environment,
+    #[error("recorded execution identity does not match the requested environment")]
+    Identity,
+    #[error("recorded filesystem roots or limits changed")]
+    FilesystemChanged,
+    #[error(transparent)]
+    Filesystem(#[from] submilli_durable::FilesystemError),
+    #[error(transparent)]
+    Source(#[from] interpreter::source::SourceError),
+    #[error(transparent)]
+    History(#[from] interpreter::runtime::effects::HistoryError),
+}
+
 pub(crate) fn capture_program(
     source: String,
     blueprint: submilli_blueprint::Blueprint,
@@ -60,34 +76,32 @@ pub(crate) async fn run(
     vfs_info: VfsInfo,
     mut services: HostServices,
     imports: RunnerImports<'_>,
-) -> Result<RunOutcome, String> {
+) -> Result<RunOutcome, ReplayError> {
     if program.compatibility != COMPATIBILITY || program.limits != limits(runtime.config, &services)
     {
-        return Err("recorded runtime or limits do not match this execution environment".into());
+        return Err(ReplayError::Environment);
     }
     if runtime.run_id != run.reservation_id()
         || runtime.session != run.session_id()
         || runtime.blueprint != program.blueprint.name
     {
-        return Err("recorded execution identity does not match the requested environment".into());
+        return Err(ReplayError::Identity);
     }
     if let Some(expected) = program.filesystem_config_fingerprint {
-        let actual = submilli_durable::filesystem_config_fingerprint(&vfs)
-            .map_err(|error| error.to_string())?;
+        let actual = submilli_durable::filesystem_config_fingerprint(&vfs)?;
         if actual != expected {
-            return Err("recorded filesystem roots changed".into());
+            return Err(ReplayError::FilesystemChanged);
         }
     }
     if vfs.dir().is_some() {
         let filesystem =
             submilli_durable::DurableFilesystem::open(vfs.clone(), run.reservation_id(), units)
-                .await
-                .map_err(|error| error.to_string())?;
+                .await?;
         services.filesystem = Some(Arc::new(filesystem));
     }
     services.effects = Some(history.clone());
     services.variables = Arc::new(program.variables.clone());
-    let parsed = super::parse(&program.source).map_err(|error| error.to_string())?;
+    let parsed = super::parse(&program.source)?;
     let outcome = super::run(
         &program.source,
         parsed,
@@ -101,10 +115,7 @@ pub(crate) async fn run(
     // A fatal interruption may leave a missing outcome. It must remain resumable,
     // not be turned into a definitive completion by a transport error formatter.
     if outcome.durable_completion {
-        history
-            .ensure_history_consumed()
-            .await
-            .map_err(|error| error.to_string())?;
+        history.ensure_history_consumed().await?;
     }
     Ok(outcome)
 }

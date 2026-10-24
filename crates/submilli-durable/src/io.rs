@@ -599,6 +599,9 @@ pub(crate) struct Entry {
 
 // A retry must resolve the same guest paths against the same configured roots.
 // Keep only a fingerprint in each record, not a second persisted mount catalog.
+// Quotas remain part of replay compatibility: a changed limit can change whether
+// an unrecorded write succeeds. Keep the encoding stable for retained journals;
+// retirement does not replay operations and must not require this fingerprint.
 pub fn filesystem_config_fingerprint(vfs: &Vfs) -> Result<[u8; 32], FilesystemError> {
     let root = vfs
         .dir()

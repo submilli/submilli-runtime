@@ -33,6 +33,7 @@ pub(crate) trait UnitOfWork: Send {
     ) -> Result<Vec<crate::domain::run::Run>, StoreError>;
     async fn has_retained_run(&mut self, session: &str) -> Result<bool, StoreError>;
     async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError>;
+    async fn run_resources_retired(&mut self, id: &str) -> Result<bool, StoreError>;
     async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError>;
     async fn run_result(
         &mut self,
