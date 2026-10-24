@@ -210,6 +210,7 @@ fn decode_status(state: &str, reason: Option<&str>) -> Result<RunStatus, Databas
         "blocked" => RunStatus::Stuck(match reason {
             Some("credentials_unavailable") => StuckReason::Credentials,
             Some("storage_unavailable") => StuckReason::Storage,
+            Some("filesystem_changed") => StuckReason::FilesystemChanged,
             Some("incompatible_environment") => StuckReason::Compatibility,
             Some("invalid_history") => StuckReason::History,
             Some("fuel_exhausted") => StuckReason::Fuel,
@@ -251,6 +252,7 @@ mod tests {
             RunStatus::Indeterminate(IndeterminateReason::Legacy),
             RunStatus::Stuck(StuckReason::Credentials),
             RunStatus::Stuck(StuckReason::Storage),
+            RunStatus::Stuck(StuckReason::FilesystemChanged),
             RunStatus::Stuck(StuckReason::Compatibility),
             RunStatus::Stuck(StuckReason::History),
             RunStatus::Stuck(StuckReason::Fuel),

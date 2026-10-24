@@ -74,6 +74,9 @@ impl UnitOfWork for FaultUnit {
     async fn has_run_predecessor(&mut self, id: &str) -> Result<bool, StoreError> {
         self.inner.has_run_predecessor(id).await
     }
+    async fn run_resources_retired(&mut self, id: &str) -> Result<bool, StoreError> {
+        self.inner.run_resources_retired(id).await
+    }
     async fn retire_run_resources(&mut self, id: &str) -> Result<(), StoreError> {
         self.inner.retire_run_resources(id).await
     }
