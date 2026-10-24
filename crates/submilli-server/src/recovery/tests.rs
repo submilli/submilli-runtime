@@ -6,6 +6,7 @@ use submilli_shared::secret_store::SecretCipher;
 
 mod indeterminate;
 mod scheduling;
+mod volumes;
 
 const CODE: &str =
     r#"import { v4 } from "submilli:uuid"; function main(): string { return v4(); }"#;

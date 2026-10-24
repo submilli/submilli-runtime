@@ -10,12 +10,14 @@ use crate::handlers::execute::{self, ExecuteInputs, ExecuteResponse};
 use crate::runner;
 use interpreter::runtime::durable::RunId;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Notify, oneshot};
 use tokio::task::{Id, JoinSet};
 use tokio_util::sync::CancellationToken;
+
+mod volumes;
 
 /// Prepare the complete replay environment before atomically accepting the run.
 pub(crate) async fn admit(
@@ -119,6 +121,7 @@ pub(crate) async fn admit(
 struct ActiveRun {
     run: Run,
     cancel: oneshot::Sender<()>,
+    writable_volumes: HashSet<String>,
 }
 
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(1);
@@ -269,6 +272,29 @@ async fn schedule(
             .await?;
             continue;
         }
+        let writable_volumes = match volumes::writable_volumes(state, candidate.reservation_id())
+            .await
+        {
+            Ok(volumes) => volumes,
+            Err(error) => {
+                tracing::warn!(run = %candidate.reservation_id(), %error, "run volume configuration unavailable");
+                recovery::mark_stuck(
+                    state.units().as_ref(),
+                    candidate.reservation_id(),
+                    candidate.revision(),
+                    StuckReason::History,
+                )
+                .await?;
+                continue;
+            }
+        };
+        if active
+            .values()
+            .any(|running| !running.writable_volumes.is_disjoint(&writable_volumes))
+            || volumes::has_prior_recovering_writer(state, &candidate, &writable_volumes).await?
+        {
+            continue;
+        }
         let Some(run) = claim_candidate(state, &candidate).await else {
             continue;
         };
@@ -278,7 +304,14 @@ async fn schedule(
         let executing = run.clone();
         let worker = state.clone();
         let handle = tasks.spawn(async move { run_attempt(&worker, &executing, cancelled).await });
-        active.insert(handle.id(), ActiveRun { run, cancel });
+        active.insert(
+            handle.id(),
+            ActiveRun {
+                run,
+                cancel,
+                writable_volumes,
+            },
+        );
     }
     Ok(next)
 }
