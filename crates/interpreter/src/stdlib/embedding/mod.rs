@@ -35,6 +35,7 @@ use std::sync::Arc;
 
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
+use crate::runtime::ModelCallUsage;
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
@@ -361,11 +362,17 @@ async fn call_provider(
         settlements: settlements.to_vec(),
     };
     let result = match dispatched {
-        Ok(batch) if batch.count() != texts.len() => Err(throw(EmbeddingError::Malformed {
-            alias: model.to_string(),
-            reason: EmbeddingMalformedReason::CountMismatch,
-            settlements: Vec::new(),
-        })),
+        // The provider returned a batch, so the dispatch ran. A short or long
+        // row count is a guest error, not an absent call: the budget still
+        // settles the batch's tokens.
+        Ok(batch) if batch.count() != texts.len() => {
+            note_embedding_usage(caller, ticket, model, batch.input_tokens());
+            Err(throw(EmbeddingError::Malformed {
+                alias: model.to_string(),
+                reason: EmbeddingMalformedReason::CountMismatch,
+                settlements: Vec::new(),
+            }))
+        }
         Ok(batch) => {
             let received = (batch.values().len() as u64).saturating_mul(4);
             record_payload(&*caller, ticket, Side::Response, || {
@@ -378,14 +385,7 @@ async fn call_provider(
                 }))
                 .with_size(received)
             });
-            record_usage(
-                &*caller,
-                ticket,
-                ModelUsage {
-                    input_tokens: batch.input_tokens(),
-                    output_tokens: None,
-                },
-            );
+            note_embedding_usage(caller, ticket, model, batch.input_tokens());
             fuel::settle(&mut *caller, fuel::IO, received)?;
             Ok(batch)
         }
@@ -396,14 +396,7 @@ async fn call_provider(
                 .iter()
                 .fold(0u64, |sum, part| sum.saturating_add(part.reported));
             if reported > 0 {
-                record_usage(
-                    &*caller,
-                    ticket,
-                    ModelUsage {
-                        input_tokens: Some(reported),
-                        output_tokens: None,
-                    },
-                );
+                note_embedding_usage(caller, ticket, model, Some(reported));
             }
             Err(quota_throw(caller, ticket, model, error))
         }
@@ -419,6 +412,29 @@ async fn call_provider(
         requests,
         settlement: Some(settlement),
     })
+}
+
+/// Record the usage the call log keeps, and the same counts for the embedder.
+///
+/// Only `call_provider` may call this. Replay restores the recorded outcome
+/// without entering that action.
+fn note_embedding_usage(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    ticket: Option<CallTicket>,
+    model: &str,
+    input_tokens: Option<u64>,
+) {
+    record_usage(
+        &*caller,
+        ticket,
+        ModelUsage {
+            input_tokens,
+            output_tokens: None,
+        },
+    );
+    caller
+        .data_mut()
+        .note_model_call(ModelCallUsage::embedding(model, input_tokens));
 }
 
 /// The capability check, run before any bytes leave the process. The context is
@@ -851,6 +867,10 @@ mod tests {
         TransportFailure,
         /// Sends, then reports an internal bookkeeping failure.
         Internal,
+        /// Sent, then failed, having reported this many tokens.
+        FailedAfter(u64),
+        /// Returns one row for however many texts were sent, with 50 input tokens.
+        CountMismatch,
     }
 
     /// Counts `embed` calls and answers deterministically. The `embed` count is
@@ -860,6 +880,9 @@ mod tests {
         max_input_bytes: u64,
         outcome: Outcome,
         embed_calls: AtomicUsize,
+        /// Provider-reported input tokens on a successful batch. `None` leaves
+        /// the batch's count unreported, which is the older mock's behavior.
+        input_tokens: Option<u64>,
     }
 
     impl MockProvider {
@@ -869,6 +892,17 @@ mod tests {
                 max_input_bytes,
                 outcome,
                 embed_calls: AtomicUsize::new(0),
+                input_tokens: None,
+            })
+        }
+
+        fn reporting(tokens: u64) -> Arc<Self> {
+            Arc::new(Self {
+                dimensions: 2,
+                max_input_bytes: 1_000,
+                outcome: Outcome::Reported,
+                embed_calls: AtomicUsize::new(0),
+                input_tokens: Some(tokens),
             })
         }
 
@@ -910,14 +944,45 @@ mod tests {
                         }],
                     });
                 }
+                if matches!(self.outcome, Outcome::CountMismatch) {
+                    let values = vec![0.5f32; self.dimensions];
+                    return EmbeddingBatch::new(values, 1, self.dimensions, "emb1:mock", alias)
+                        .map(|batch| {
+                            batch.with_input_tokens(Some(50)).with_settlements(vec![
+                                SubBatchSettlement {
+                                    estimate,
+                                    reported: 50,
+                                    indeterminate: 0,
+                                },
+                            ])
+                        })
+                        .map_err(|_| EmbeddingError::Malformed {
+                            alias: alias.to_string(),
+                            reason: crate::runtime::EmbeddingMalformedReason::CountMismatch,
+                            settlements: Vec::new(),
+                        });
+                }
+                if let Outcome::FailedAfter(reported) = self.outcome {
+                    return Err(EmbeddingError::Provider {
+                        alias: alias.to_string(),
+                        reason: EmbeddingFailureReason::Transport,
+                        settlements: vec![SubBatchSettlement {
+                            estimate,
+                            reported,
+                            indeterminate: estimate.saturating_sub(reported),
+                        }],
+                    });
+                }
                 let values = vec![0.5f32; texts.len() * self.dimensions];
                 EmbeddingBatch::new(values, texts.len(), self.dimensions, "emb1:mock", alias)
                     .map(|batch| {
-                        batch.with_settlements(vec![SubBatchSettlement {
-                            estimate,
-                            reported: estimate,
-                            indeterminate: 0,
-                        }])
+                        batch
+                            .with_input_tokens(self.input_tokens)
+                            .with_settlements(vec![SubBatchSettlement {
+                                estimate,
+                                reported: self.input_tokens.unwrap_or(estimate),
+                                indeterminate: 0,
+                            }])
                     })
                     .map_err(|_| EmbeddingError::Malformed {
                         alias: alias.to_string(),
@@ -967,6 +1032,7 @@ mod tests {
         host_attached_bytes: u64,
         /// GC heap growth the limiter has observed for the whole run.
         observed_bytes: u64,
+        model_calls: Vec<crate::runtime::ModelCallUsage>,
     }
 
     async fn run(
@@ -1002,10 +1068,12 @@ mod tests {
             .map(Option::unwrap_or_default);
         let host_attached_bytes = store.data().tenant_limits.host_attached_bytes();
         let observed_bytes = store.data().tenant_limits.observed_bytes();
+        let model_calls = store.data().model_calls().to_vec();
         Run {
             result,
             host_attached_bytes,
             observed_bytes,
+            model_calls,
         }
     }
 
@@ -1503,5 +1571,76 @@ mod tests {
         run.result.expect("program completes");
         assert_eq!(provider.calls(), 0);
         assert_eq!(budget.used(), 0);
+    }
+
+    /// A successful embed records the alias the program passed and the tokens
+    /// the provider reported. That record is not an llm call of the same name.
+    #[tokio::test]
+    async fn an_embed_records_input_tokens_for_the_alias() {
+        let provider = MockProvider::reporting(42);
+        let run = run(
+            r#"import embedding from "submilli:embedding";
+               function main(): void {
+                 embedding.embed("mock", ["a", "b"], "document");
+               }"#,
+            Some(provider),
+            None,
+            None,
+        )
+        .await;
+        run.result.expect("program completes");
+        let calls = run.model_calls;
+        assert_eq!(
+            calls,
+            vec![crate::runtime::ModelCallUsage::embedding("mock", Some(42))]
+        );
+        assert_eq!(
+            crate::runtime::ModelCallUsage::summed_by_model(&calls),
+            vec![crate::runtime::ModelCallUsage::embedding("mock", Some(42))]
+        );
+    }
+
+    /// A failed embed that already reported tokens still records them. The call
+    /// log does, and the embedder's bill must not disagree.
+    #[tokio::test]
+    async fn a_failed_embed_that_reported_tokens_keeps_them() {
+        let provider = MockProvider::new(2, 1_000, Outcome::FailedAfter(4));
+        let run = run(
+            r#"import embedding from "submilli:embedding";
+               function main(): void {
+                 embedding.embed("mock", ["a"], "document");
+               }"#,
+            Some(provider),
+            None,
+            None,
+        )
+        .await;
+        assert!(run.result.is_err(), "the failed embed reaches the guest");
+        assert_eq!(
+            run.model_calls,
+            vec![crate::runtime::ModelCallUsage::embedding("mock", Some(4))]
+        );
+    }
+
+    /// A provider `Ok` whose row count does not match still ran. The guest sees
+    /// an error; the embedder still sees the tokens the batch reported.
+    #[tokio::test]
+    async fn a_count_mismatch_still_records_reported_tokens() {
+        let provider = MockProvider::new(2, 1_000, Outcome::CountMismatch);
+        let run = run(
+            r#"import embedding from "submilli:embedding";
+               function main(): void {
+                 embedding.embed("mock", ["a", "b"], "document");
+               }"#,
+            Some(provider),
+            None,
+            None,
+        )
+        .await;
+        assert!(run.result.is_err(), "a short batch is a guest error");
+        assert_eq!(
+            run.model_calls,
+            vec![crate::runtime::ModelCallUsage::embedding("mock", Some(50))]
+        );
     }
 }
