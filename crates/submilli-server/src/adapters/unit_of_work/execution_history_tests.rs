@@ -806,8 +806,10 @@ async fn execution_history_replays_each_code_filesystem_operation() {
             return JSON.stringify({ window, matches, files, listing, comparison, edited, inserted, patched, pure }) ?? "";
         }
     "#;
-    let history = Arc::new(History::new(attempt, units.clone()));
-    let original = run_script(source, history.clone(), &root).await;
+    let history = Arc::new(History::new(attempt.clone(), units.clone()));
+    let original = run_filesystem_script(source, history.clone(), &root, units.clone(), &attempt)
+        .await
+        .unwrap();
     // The eight filesystem calls are recorded; pure diffText creates no effect.
     assert_eq!(history.position().await, 8);
     for (name, content) in [
@@ -825,11 +827,19 @@ async fn execution_history_replays_each_code_filesystem_operation() {
     drop(database);
 
     let (_database, units, attempt) = fixture(&path).await;
-    let history = Arc::new(History::new(attempt, units));
-    let replay = run_script(source, history.clone(), &root).await;
+    let history = Arc::new(History::new(attempt.clone(), units.clone()));
+    let replay = run_filesystem_script(source, history.clone(), &root, units, &attempt)
+        .await
+        .unwrap();
     assert_eq!(original, replay);
     assert_eq!(history.position().await, 8);
-    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read_dir(&root)
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().file_name() != ".git-submilli-recovery")
+            .count(),
+        1
+    );
     assert_eq!(
         std::fs::read_to_string(root.join("sentinel")).unwrap(),
         "untouched"
@@ -918,11 +928,21 @@ async fn execution_history_replays_native_http_errors_session_values_and_code_mu
             return response.body + "|" + failure;
         }
     "#;
+    let filesystem = Arc::new(
+        submilli_durable::DurableFilesystem::open(
+            interpreter::runtime::Vfs::external(root.clone()).unwrap(),
+            &attempt.run_id,
+            units.clone(),
+        )
+        .await
+        .unwrap(),
+    );
     let original = run_script_with(
         source,
         Arc::new(History::new(attempt.clone(), units.clone())),
         &root,
         |data| {
+            data.filesystem = filesystem.clone();
             data.http_client = http.clone();
             data.session_kv = Some(Arc::new(interpreter::runtime::InMemorySessionKv::default()));
         },
@@ -935,6 +955,7 @@ async fn execution_history_replays_native_http_errors_session_values_and_code_mu
         Arc::new(History::new(attempt, units)),
         &root,
         |data| {
+            data.filesystem = filesystem.clone();
             data.http_client = http.clone();
             data.session_kv = Some(Arc::new(interpreter::runtime::InMemorySessionKv::default()));
         },
@@ -1421,4 +1442,95 @@ async fn execution_history_error_conversion_can_stop_for_fuel_without_losing_the
         2,
         "one direct call and one recorded call; neither replay dispatches"
     );
+}
+
+#[tokio::test]
+async fn code_updates_resume_after_receipt_before_history_without_recomputing() {
+    for (operation, expected) in [
+        ("edit('/file', 'original', 'changed')", "changed\n"),
+        ("insertAt('/file', 1, 'head\\n')", "head\noriginal\n"),
+        (
+            "applyPatch('/file', '--- a\\n+++ b\\n@@ -1,1 +1,1 @@\\n-original\\n+changed\\n')",
+            "changed\n",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file"), "original\n").unwrap();
+        let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+        let source = format!(
+            r#"
+            import {{ edit, insertAt, applyPatch }} from "submilli:code";
+            function main(): string {{
+                const result = {operation};
+                assert(result.success && result.changed);
+                assert(result.diff.includes("original"));
+                return JSON.stringify(result) ?? "";
+            }}
+        "#
+        );
+        let interrupted = Arc::new(InterruptHistory {
+            history: History::new(attempt.clone(), units.clone()),
+            before_commit: 0,
+        });
+        let error = run_filesystem_script(&source, interrupted, &root, units.clone(), &attempt)
+            .await
+            .unwrap_err();
+        assert!(
+            error.is::<interpreter::runtime::host::FatalHostError>(),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("file")).unwrap(),
+            expected
+        );
+        let replay = Arc::new(History::new(attempt.clone(), units.clone()));
+        let output = run_filesystem_script(&source, replay, &root, units.clone(), &attempt)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("file")).unwrap(),
+            expected
+        );
+        std::fs::remove_file(root.join("file")).unwrap();
+        let replay = Arc::new(History::new(attempt.clone(), units.clone()));
+        assert_eq!(
+            run_filesystem_script(&source, replay, &root, units, &attempt)
+                .await
+                .unwrap()
+                .unwrap(),
+            output
+        );
+        assert!(!root.join("file").exists());
+    }
+}
+
+#[tokio::test]
+async fn recorded_code_updates_require_a_persistent_filesystem() {
+    for expression in [
+        "edit('/file','original','after')",
+        "insertAt('/file',1,'head\\n')",
+        "applyPatch('/file','')",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("files");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file"), "original\n").unwrap();
+        let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+        let history = Arc::new(History::new(attempt, units));
+        let source = format!(
+            "import {{ edit, insertAt, applyPatch }} from 'submilli:code'; function main(): void {{ {expression}; }}"
+        );
+        let error = try_run_script_with(&source, history, &root, |_| {})
+            .await
+            .unwrap_err();
+        assert!(error.is::<interpreter::runtime::host::FatalHostError>());
+        assert!(format!("{error:#}").contains("require a persistent filesystem"));
+        assert_eq!(
+            std::fs::read_to_string(root.join("file")).unwrap(),
+            "original\n"
+        );
+    }
 }

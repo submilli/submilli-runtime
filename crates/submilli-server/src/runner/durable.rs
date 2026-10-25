@@ -14,7 +14,7 @@ use submilli_durable::history::{ExecutionAttempt, History};
 /// Bump this contract when compiler, host ABI, codecs or deterministic semantics
 /// change incompatibly. Package content retention is a separate prerequisite for
 /// replay across package changes; this version assumes unchanged package contents.
-pub(crate) const COMPATIBILITY: &str = concat!("durable-v8/wasmgc/", env!("CARGO_PKG_VERSION"));
+pub(crate) const COMPATIBILITY: &str = concat!("durable-v9/wasmgc/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ReplayError {

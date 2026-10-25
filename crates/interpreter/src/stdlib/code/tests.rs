@@ -960,3 +960,83 @@ async fn rejected_mutation_result_does_not_publish_the_edit() {
         "a\n"
     );
 }
+
+#[tokio::test]
+async fn code_uses_the_installed_filesystem_for_every_observation_and_update() {
+    let decoy = crate::runtime::Vfs::tempdir().unwrap();
+    let actual = crate::runtime::Vfs::tempdir().unwrap();
+    std::fs::write(actual.root().join("a"), "before\n").unwrap();
+    std::fs::write(actual.root().join("b"), "other\n").unwrap();
+    std::fs::write(actual.root().join(".ignore"), "hidden\n").unwrap();
+    std::fs::write(actual.root().join("hidden"), "before\n").unwrap();
+    let mut data = crate::runtime::StoreData::with_vfs("port-test".into(), decoy);
+    data.filesystem = std::sync::Arc::new(
+        crate::runtime::default_filesystem::DefaultFilesystem::new(actual, "port-test".into()),
+    );
+    run(r#"
+        import { read, search, tree, glob, diffFiles, edit, insertAt, applyPatch } from "submilli:code";
+        function main(): void {
+            assert(read("a").lines[0].text === "before");
+            assert(search("before").matches.length === 1);
+            assert(tree("/").entries.length === 2);
+            assert(glob("*").entries.length === 2);
+            assert(diffFiles("a", "b").includes("before"));
+            assert(edit("a", "before", "after").changed);
+            assert(insertAt("a", 1, "head\n").changed);
+            assert(applyPatch("b", "--- a\n+++ b\n@@ -1,1 +1,1 @@\n-other\n+new\n").changed);
+            assert(read("a").lines[0].text === "head");
+            assert(read("b").lines[0].text === "new");
+        }
+    "#, data).await.unwrap();
+}
+
+#[test]
+fn regular_read_keeps_its_allocation_inside_the_admitted_bound() {
+    let vfs = crate::runtime::Vfs::tempdir().unwrap();
+    std::fs::write(vfs.root().join("file"), vec![b'x'; 10_000]).unwrap();
+    let limits = crate::runtime::limits::TenantLimits::new(10_001);
+    let read =
+        crate::runtime::default_filesystem::read_regular(&vfs, None, "/file", 10_000, &limits)
+            .unwrap();
+    assert_eq!(read.bytes.len(), 10_000);
+    assert!(read.bytes.capacity() as u64 <= limits.host_attached_bytes());
+    drop(read);
+    assert_eq!(limits.host_attached_bytes(), 0);
+    let limits = crate::runtime::limits::TenantLimits::new(10_000);
+    assert!(
+        crate::runtime::default_filesystem::read_regular(&vfs, None, "/file", 10_000, &limits)
+            .is_err()
+    );
+    assert_eq!(limits.host_attached_bytes(), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn protected_edit_targets_are_catchable_before_publication() {
+    for hard_link in [false, true] {
+        let vfs = crate::runtime::Vfs::tempdir().unwrap();
+        std::fs::create_dir(vfs.root().join(".git")).unwrap();
+        let target = vfs.root().join(".git/config");
+        std::fs::write(&target, "original\n").unwrap();
+        if hard_link {
+            std::fs::hard_link(&target, vfs.root().join("alias")).unwrap();
+        } else {
+            std::os::unix::fs::symlink(".git/config", vfs.root().join("alias")).unwrap();
+        }
+        run(
+            r#"import { edit } from 'submilli:code'; function main(): void {
+            let denied = false;
+            try { edit('/alias', 'original', 'changed'); } catch { denied = true; }
+            assert(denied);
+        }"#,
+            crate::runtime::StoreData::with_vfs("test".into(), vfs.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "original\n");
+        assert_eq!(
+            std::fs::read_to_string(vfs.root().join("alias")).unwrap(),
+            "original\n"
+        );
+    }
+}

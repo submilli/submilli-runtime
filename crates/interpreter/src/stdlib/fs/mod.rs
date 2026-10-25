@@ -997,7 +997,7 @@ fn i32_flag(val: &Val, ctx: &str) -> wasmtime::Result<bool> {
     }
 }
 
-fn backend_error(op: &str, path: &str, error: PortError) -> wasmtime::Error {
+pub(crate) fn backend_error(op: &str, path: &str, error: PortError) -> wasmtime::Error {
     match error {
         PortError::Execution(error) => error,
         PortError::Exhausted(_) => wasmtime::Trap::OutOfFuel.into(),

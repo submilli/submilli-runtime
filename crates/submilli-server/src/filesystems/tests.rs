@@ -7,6 +7,7 @@ use submilli_shared::secret_store::SecretCipher;
 mod boundaries;
 pub(crate) mod process;
 mod resources;
+mod updates;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -530,7 +531,7 @@ async fn interpreter_uses_durable_backend_and_replay_does_not_repeat_append() {
 }
 
 #[tokio::test]
-async fn code_tools_remain_native_with_a_durable_filesystem_backend() {
+async fn code_tools_use_durable_updates_and_transient_observations() {
     let fixture = Fixture::new().await;
     std::fs::write(fixture.filesystem.vfs().root().join("note.ts"), b"before\n").unwrap();
     let source = r#"import { edit, read, glob } from "submilli:code";
@@ -545,7 +546,7 @@ async fn code_tools_remain_native_with_a_durable_filesystem_backend() {
         b"after\n"
     );
     let mut unit = fixture.units()().await.unwrap();
-    assert_eq!(unit.journal_entry_count(&fixture.run).await.unwrap(), 0);
+    assert_eq!(unit.journal_entry_count(&fixture.run).await.unwrap(), 1);
 }
 
 #[tokio::test]

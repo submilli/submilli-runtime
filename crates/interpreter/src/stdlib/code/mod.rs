@@ -7,17 +7,16 @@ mod patch;
 #[cfg(test)]
 mod tests;
 mod text;
+mod update;
 mod walk;
 
 use crate::runtime::StoreData;
+use crate::runtime::filesystem::PreparedFileUpdate;
 use crate::runtime::fuel;
-use crate::stdlib::shared::{
-    atomic_write, check_security, check_security_call, contain_trap, require_writable,
-    resolve_content_or_trap,
-};
+use crate::stdlib::shared::{check_security, check_security_call, require_writable};
 use budget::{Budget, OutputBudget};
 use serde_json::{Value, json};
-use std::io::Read;
+
 use wasmtime::{Caller, Result, bail};
 
 pub const MODULE_NAME: &str = "submilli:code";
@@ -25,14 +24,14 @@ pub use declaration::package_declaration;
 pub use install::install;
 use walk::{glob, search, tree};
 
-fn read(
+async fn read(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
     start: usize,
     limit: usize,
 ) -> Result<Value> {
-    let source = read_file(caller, budget, path, "read")?;
+    let source = read_file(caller, budget, path, "read").await?;
     budget.charge(
         caller,
         source
@@ -56,7 +55,7 @@ fn read(
     )
 }
 
-fn edit(
+async fn edit(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
@@ -64,36 +63,36 @@ fn edit(
     new: &str,
     replace_all: bool,
     near_line: usize,
-) -> Result<Value> {
-    let original = read_file(caller, budget, path, "edit")?;
+) -> Result<PreparedFileUpdate> {
+    let original = read_file(caller, budget, path, "edit").await?;
     budget.charge(caller, original.len().saturating_mul(64))?;
     fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
     let change = prepare_edit(caller, budget, &original, old, new, replace_all, near_line)?;
-    write_change(caller, budget, path, "edit", &original, change)
+    prepare_change(caller, budget, path, "edit", &original, change)
 }
 
-fn insert_at(
+async fn insert_at(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
     line: usize,
     text: &str,
-) -> Result<Value> {
-    let original = read_file(caller, budget, path, "insertAt")?;
+) -> Result<PreparedFileUpdate> {
+    let original = read_file(caller, budget, path, "insertAt").await?;
     budget.charge(caller, original.len().saturating_mul(64))?;
     fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
     let change = text::insert(&original, line, text)?;
-    write_change(caller, budget, path, "insertAt", &original, change)
+    prepare_change(caller, budget, path, "insertAt", &original, change)
 }
 
-fn diff_files(
+async fn diff_files(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     first: &str,
     second: &str,
 ) -> Result<Vec<u16>> {
-    let first = read_file(caller, budget, first, "diffFiles")?;
-    let second = read_file(caller, budget, second, "diffFiles")?;
+    let first = read_file(caller, budget, first, "diffFiles").await?;
+    let second = read_file(caller, budget, second, "diffFiles").await?;
     budget.charge(caller, (first.len() + second.len()).saturating_mul(2))?;
     diff_text(
         caller,
@@ -103,13 +102,13 @@ fn diff_files(
     )
 }
 
-fn apply_patch(
+async fn apply_patch(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
     patch: &str,
-) -> Result<Value> {
-    let original = read_file(caller, budget, path, "applyPatch")?;
+) -> Result<PreparedFileUpdate> {
+    let original = read_file(caller, budget, path, "applyPatch").await?;
     budget.charge(caller, original.len().saturating_mul(64))?;
     fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
     budget.charge(caller, patch.len().saturating_mul(32))?;
@@ -120,17 +119,17 @@ fn apply_patch(
     )?;
     fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
     let change = patch::apply(&original, patch)?;
-    write_change(caller, budget, path, "applyPatch", &original, change)
+    prepare_change(caller, budget, path, "applyPatch", &original, change)
 }
 
-fn write_change(
+fn prepare_change(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
-    op: &str,
+    _op: &str,
     original: &str,
     change: text::Edit,
-) -> Result<Value> {
+) -> Result<PreparedFileUpdate> {
     budget.check_size(change.text.len())?;
     let success = change.diagnostics.is_empty();
     let changed = success && change.text != original;
@@ -152,25 +151,19 @@ fn write_change(
     // Build the native result before commit; history captures it before guest conversion.
     let result =
         json!({"success":success,"changed":changed,"diff":patch,"diagnostics":change.diagnostics});
-    budget.check_size(serde_json::to_string(&result)?.len())?;
+    let output = update::encode(caller, budget, &result)?;
     if changed {
-        let resolved = resolve_content_or_trap(caller.data(), path, op)?;
-        require_writable(&*caller, ticket, resolved.placement(), "fs.write", path)?;
-        let permissions = resolved
-            .metadata()
-            .map_err(|e| contain_trap(op, path, &e))?
-            .permissions();
-        let quota = resolved.placement().quota().cloned();
-        atomic_write(
-            &resolved,
-            change.text.as_bytes(),
-            Some(permissions),
-            path,
-            op,
-            quota,
-        )?;
+        let placement = caller
+            .data()
+            .filesystem
+            .placement(path)
+            .map_err(|e| backend_error(_op, path, e))?;
+        require_writable(&*caller, ticket, &placement, "fs.write", path)?;
     }
-    Ok(result)
+    Ok(PreparedFileUpdate {
+        contents: changed.then_some(change.text.into_bytes()),
+        output,
+    })
 }
 fn prepare_edit(
     caller: &mut Caller<'_, StoreData>,
@@ -235,15 +228,15 @@ fn gate_call(
 ) -> Result<Option<crate::runtime::CallTicket>> {
     check_security_call(caller, capability, json!({"path":path,"recursive":true}))
 }
-fn read_file(
+async fn read_file(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
     op: &str,
 ) -> Result<String> {
-    read_contents(caller, budget, path, op, false)
+    read_contents(caller, budget, path, op, false).await
 }
-fn read_contents(
+async fn read_contents(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
@@ -251,21 +244,21 @@ fn read_contents(
     skip_binary: bool,
 ) -> Result<String> {
     let ticket = gate_call(caller, "fs.read", path)?;
-    let resolved = resolve_content_or_trap(caller.data(), path, op)?;
-    let (file, metadata) = resolved
-        .open_regular()
-        .map_err(|e| contain_trap(op, path, &e))?;
-    let len = usize::try_from(metadata.len())?;
-    budget.check_size(len)?;
-    budget.charge(caller, len.saturating_mul(8).saturating_add(1024))?;
-    fuel::charge(&mut *caller, fuel::IO, len as u64)?;
-    fuel::charge(&mut *caller, fuel::SCAN, len as u64)?;
-    let mut bytes = Vec::with_capacity(len);
-    file.take((len as u64).saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > len {
-        bail!("code.{op}: file grew during read; retry");
-    }
+    let filesystem = caller.data().filesystem.clone();
+    let work = begin_work(caller)?;
+    let result = filesystem
+        .read_regular(
+            Some(work.clone()),
+            path,
+            budget.max_bytes as u64,
+            &caller.data().tenant_limits,
+        )
+        .await;
+    work.settle(&mut *caller)?;
+    let contents = result.map_err(|e| backend_error(op, path, e))?;
+    let bytes = contents.bytes;
+    budget.charge(caller, bytes.len().saturating_mul(8).saturating_add(1024))?;
+    fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
     crate::runtime::call_log::record_payload(
         &*caller,
         ticket,
@@ -293,4 +286,27 @@ fn diff_text(
     let result = text::diff_charged(a, b, |steps| fuel::charge(&mut *caller, fuel::PARSE, steps))?;
     budget.check_size(result.len().saturating_mul(2))?;
     Ok(result)
+}
+
+fn backend_error(
+    op: &str,
+    path: &str,
+    error: crate::runtime::filesystem::FilesystemError,
+) -> wasmtime::Error {
+    crate::stdlib::fs::backend_error(&format!("code.{op}"), path, error)
+}
+fn begin_work(caller: &mut Caller<'_, StoreData>) -> Result<std::sync::Arc<fuel::WorkBudget>> {
+    Ok(std::sync::Arc::new(fuel::WorkBudget::new(
+        fuel::remaining_fuel(caller)?,
+    )))
+}
+async fn metadata(
+    caller: &mut Caller<'_, StoreData>,
+    path: &str,
+) -> std::result::Result<cap_std::fs::Metadata, crate::runtime::filesystem::FilesystemError> {
+    caller
+        .data()
+        .filesystem
+        .metadata(&"code-observation".into(), None, path, false)
+        .await
 }

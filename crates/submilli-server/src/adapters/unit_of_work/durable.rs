@@ -84,6 +84,71 @@ impl UnitOfWork for SqliteDurableUnitOfWork {
             .map_err(durable_error)
     }
 
+    async fn update_output_bytes(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<u64>, DurableStoreError> {
+        let run = run.clone();
+        let id = id.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(async move {
+                    super::durable_state::update_output_bytes(connection, &run, &id).await
+                })
+            })
+            .await
+            .map_err(durable_error)
+    }
+    async fn total_update_output_bytes(&mut self, run: &RunId) -> Result<u64, DurableStoreError> {
+        let run = run.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(async move {
+                    super::durable_state::total_update_output_bytes(connection, &run).await
+                })
+            })
+            .await
+            .map_err(durable_error)
+    }
+    async fn get_update_output(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<Vec<u8>>, DurableStoreError> {
+        let run = run.clone();
+        let id = id.clone();
+        let sealer = self.sealer.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(async move {
+                    super::durable_state::get_update_output(connection, &sealer, &run, &id).await
+                })
+            })
+            .await
+            .map_err(durable_error)
+    }
+    async fn save_update_output(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+        output: Arc<Vec<u8>>,
+    ) -> Result<(), DurableStoreError> {
+        let run = run.clone();
+        let id = id.clone();
+        let sealer = self.sealer.clone();
+        self.transaction
+            .query_recoverable(move |connection| {
+                Box::pin(async move {
+                    super::durable_state::save_update_output(
+                        connection, &sealer, &run, &id, &output,
+                    )
+                    .await
+                })
+            })
+            .await
+            .map_err(durable_error)
+    }
     async fn get_reader(
         &mut self,
         run_id: &RunId,

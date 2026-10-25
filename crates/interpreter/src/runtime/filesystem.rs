@@ -63,6 +63,18 @@ pub enum FilesystemError {
     Backend(Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl FilesystemError {
+    /// A mutation may already have happened. Preserve terminating limit/trap
+    /// errors, but never let an ordinary refusal become a catchable completion.
+    pub fn after_effect(self) -> Self {
+        match self {
+            Self::Execution(error) if super::host::ends_the_run(&error) => Self::Execution(error),
+            Self::Exhausted(_) | Self::Backend(_) => self,
+            other => Self::Backend(Box::new(other)),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MountInfo {
     pub path: String,
@@ -78,6 +90,48 @@ pub struct FilesystemInfo {
     pub volume: Option<String>,
     pub maximum_bytes: Option<u64>,
     pub mounts: Vec<MountInfo>,
+}
+
+/// Bounded native data stays charged until its consumer finishes with it.
+pub struct FileContents {
+    pub bytes: Vec<u8>,
+    pub _memory: super::limits::HostBytes,
+}
+
+pub struct DirectoryNames {
+    pub names: Vec<String>,
+    pub _memory: super::limits::HostBytes,
+}
+
+/// A native transformation has finished, but nothing has been published yet.
+/// The filesystem does not interpret the caller's encoded result.
+pub struct PreparedFileUpdate {
+    /// None records an unchanged/rejected native result without publishing a file.
+    pub contents: Option<Vec<u8>>,
+    pub output: FileUpdateOutput,
+}
+
+pub struct FileUpdateOutput {
+    pub bytes: Vec<u8>,
+    pub memory: super::limits::HostBytes,
+}
+
+/// The native caller supplies text processing and authority, never guest code.
+/// Work budgets are created between caller phases, so preparation and publication
+/// cannot each spend the same remaining fuel. Every native phase settles once.
+#[async_trait::async_trait]
+pub trait FileUpdate: Send {
+    /// Read and transform once, including fresh-call capability/size checks.
+    /// No public mutation is allowed here; the filesystem owns publication.
+    async fn prepare(&mut self) -> Result<PreparedFileUpdate, FilesystemError>;
+    /// Recheck caller authority against the saved native result without rereading
+    /// or transforming the public file. Used only for a captured update.
+    fn authorize(&mut self, output: &[u8], bytes: u64) -> Result<(), FilesystemError>;
+    fn work(&mut self) -> Result<Arc<WorkBudget>, FilesystemError>;
+    fn settle(&mut self, work: &WorkBudget) -> Result<(), FilesystemError>;
+    /// Admit independently owned buffers. Workers retain the returned guard
+    /// until they finish, including when their awaiting caller is cancelled.
+    fn reserve(&mut self, bytes: u64) -> Result<super::limits::HostBytes, FilesystemError>;
 }
 impl FilesystemInfo {
     pub fn from_vfs(vfs: &Vfs) -> Self {
@@ -239,6 +293,10 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
 }
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
+    /// update_file retains prepared bytes/results and completed receipts across retries.
+    fn supports_update_replay(&self) -> bool {
+        false
+    }
     /// Whether resources can be used after decoding without their local handles.
     fn supports_resource_replay(&self) -> bool {
         false
@@ -251,6 +309,32 @@ pub trait Filesystem: Send + Sync {
         0
     }
     fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
+    /// Whole regular-file observation, with nonblocking special-file refusal.
+    async fn read_regular(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_bytes: u64,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<FileContents, FilesystemError>;
+    /// Names only: the caller checks each child's authority before its metadata.
+    /// This transient observation is not a guest-visible persistent iterator.
+    async fn directory_names(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_entries: usize,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<DirectoryNames, FilesystemError>;
+    /// Retry a single prepared replacement under the same identity and request.
+    /// Completed calls return their output without invoking preparation again.
+    async fn update_file(
+        &self,
+        effect_id: &EffectId,
+        path: &str,
+        request: [u8; 32],
+        update: &mut dyn FileUpdate,
+    ) -> Result<FileUpdateOutput, FilesystemError>;
     async fn metadata(
         &self,
         effect_id: &EffectId,

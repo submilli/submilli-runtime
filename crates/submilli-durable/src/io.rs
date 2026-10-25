@@ -39,6 +39,8 @@ pub enum RecoveryError {
     InvalidRecord,
     #[error("durable filesystem size limit exceeded")]
     Quota,
+    #[error(transparent)]
+    QuotaRefused(interpreter::runtime::QuotaExceeded),
     #[error("filesystem recovery traversal limit exceeded")]
     Limit,
 }
@@ -476,17 +478,36 @@ impl Volume {
     /// Admission uses only public bytes. The caller holds exclusive mutation
     /// ownership, so temporary files need neither reservations nor a rescan.
     pub(crate) fn check_growth(&self, growth: u64) -> Result<(), RecoveryError> {
+        self.check_growth_before_mutation(growth)
+            .map_err(|_| RecoveryError::Quota)
+    }
+
+    pub(crate) fn check_growth_before_mutation(&self, growth: u64) -> Result<(), RecoveryError> {
         let Some(quota) = &self.quota else {
             return Ok(());
         };
-        if growth != 0
-            && (quota.is_unmeasured()
-                || quota
-                    .used()
-                    .checked_add(growth)
-                    .is_none_or(|used| used > quota.limit()))
+        if growth == 0 {
+            return Ok(());
+        }
+        if quota.is_unmeasured() {
+            return Err(RecoveryError::QuotaRefused(
+                interpreter::runtime::QuotaExceeded::Unmeasured {
+                    limit: quota.limit(),
+                },
+            ));
+        }
+        if quota
+            .used()
+            .checked_add(growth)
+            .is_none_or(|used| used > quota.limit())
         {
-            return Err(RecoveryError::Quota);
+            return Err(RecoveryError::QuotaRefused(
+                interpreter::runtime::QuotaExceeded::Over {
+                    limit: quota.limit(),
+                    used: quota.used(),
+                    requested: growth,
+                },
+            ));
         }
         Ok(())
     }

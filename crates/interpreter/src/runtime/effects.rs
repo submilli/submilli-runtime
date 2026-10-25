@@ -138,7 +138,7 @@ pub(crate) mod binary {
     }
 }
 
-fn fingerprint<A: Serialize>(
+pub(crate) fn fingerprint<A: Serialize>(
     caller: &mut Caller<'_, StoreData>,
     arguments: &A,
 ) -> wasmtime::Result<[u8; 32]> {

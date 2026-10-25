@@ -43,6 +43,13 @@ async fn crash_child() {
     let filesystem = open(vfs, &RUN.into(), database, cipher).await.unwrap();
     if let Some(operation) = kind.strip_prefix("quota-") {
         retry_quota_operation(&filesystem, operation).await;
+    } else if kind == "update" {
+        let path = filesystem.vfs().root().join("file");
+        std::fs::write(&path, b"original\n").unwrap();
+        let mut update = super::updates::Insert::new(path);
+        Filesystem::update_file(&filesystem, &EFFECT.into(), "/file", [1; 32], &mut update)
+            .await
+            .unwrap();
     } else if kind == "reader" {
         std::fs::write(filesystem.vfs().root().join("file"), b"abcdef").unwrap();
         let mut reader = filesystem
@@ -653,5 +660,55 @@ async fn byte_write_restarts_from_scratch_without_a_filesystem_receipt() {
                 "{point}"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn file_update_process_restart_uses_the_captured_result() {
+    for point in [
+        "update-candidate-sync",
+        "update-candidate-durable",
+        "update-captured",
+        "update-published",
+        "update-public-durable",
+        "update-receipt",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("workspace")).unwrap();
+        let child_root = root.path().to_owned();
+        tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, "update"))
+            .await
+            .unwrap();
+        let (database, cipher) = open_database(root.path()).await;
+        let filesystem = open(
+            Vfs::external(root.path().join("workspace")).unwrap(),
+            &RUN.into(),
+            database,
+            cipher,
+        )
+        .await
+        .unwrap();
+        let path = filesystem.vfs().root().join("file");
+        let mut update = super::updates::Insert::new(path.clone());
+        update.forbid_prepare =
+            !matches!(point, "update-candidate-sync" | "update-candidate-durable");
+        let output =
+            Filesystem::update_file(&filesystem, &EFFECT.into(), "/file", [1; 32], &mut update)
+                .await
+                .unwrap();
+        assert_eq!(output.bytes, b"original\n", "{point}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"inserted\noriginal\n",
+            "{point}"
+        );
+        std::fs::write(&path, b"later").unwrap();
+        update.forbid_prepare = true;
+        let replay =
+            Filesystem::update_file(&filesystem, &EFFECT.into(), "/file", [1; 32], &mut update)
+                .await
+                .unwrap();
+        assert_eq!(replay.bytes, output.bytes);
+        assert_eq!(std::fs::read(&path).unwrap(), b"later");
     }
 }

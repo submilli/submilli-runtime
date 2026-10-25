@@ -5,8 +5,10 @@ use super::filesystem::{
     FilesystemError, FilesystemInfo, MutationBudget, OpenWrite, ReadItem, ReadOutput, ReadPosition,
     ReaderHandle, ReaderOptions, TempFile, WriterHandle, bounded_read,
 };
+use super::filesystem::{DirectoryNames, FileContents, FileUpdate, FileUpdateOutput};
 use super::fs::{self, ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES};
 use super::fuel::WorkBudget;
+use super::limits::{HostBytes, TenantLimits};
 use super::vfs::Placement;
 use super::{DiskQuota, Holder, QuotaCharge, QuotaExceeded, Vfs};
 use crate::stdlib::shared::{contain_trap, quota_refusal, write_target_trap};
@@ -39,6 +41,41 @@ impl Filesystem for DefaultFilesystem {
         Ok(fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?
             .placement()
             .clone())
+    }
+    async fn read_regular(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_bytes: u64,
+        limits: &TenantLimits,
+    ) -> Result<FileContents, FilesystemError> {
+        read_regular(&self.vfs, work.as_deref(), path, maximum_bytes, limits)
+    }
+    async fn directory_names(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_entries: usize,
+        limits: &TenantLimits,
+    ) -> Result<DirectoryNames, FilesystemError> {
+        directory_names(&self.vfs, work.as_deref(), path, maximum_entries, limits)
+    }
+    async fn update_file(
+        &self,
+        _effect_id: &EffectId,
+        path: &str,
+        _request: [u8; 32],
+        update: &mut dyn FileUpdate,
+    ) -> Result<FileUpdateOutput, FilesystemError> {
+        let prepared = update.prepare().await?;
+        let Some(bytes) = prepared.contents else {
+            return Ok(prepared.output);
+        };
+        let work = update.work()?;
+        let result = replace_existing(&self.vfs, path, &bytes, &work);
+        update.settle(&work)?;
+        result?;
+        Ok(prepared.output)
     }
     async fn metadata(
         &self,
@@ -345,6 +382,150 @@ impl Filesystem for DefaultFilesystem {
             local: Some(WriterHandle::new(file.into_std(), temp, path, quota)),
         })
     }
+}
+
+/// Shared bounded observations for native filesystem implementations. They do
+/// not record history: the enclosing host observation commits before exposure.
+pub fn read_regular(
+    vfs: &Vfs,
+    work: Option<&WorkBudget>,
+    path: &str,
+    maximum_bytes: u64,
+    limits: &TenantLimits,
+) -> Result<FileContents, FilesystemError> {
+    let resolved = fs::resolve_content(vfs, vfs.cwd(), path)?;
+    let (file, metadata) = resolved.open_regular()?;
+    let length = metadata.len();
+    if length > maximum_bytes {
+        return Err(FilesystemError::Rejected(
+            "code: result or input exceeds maxReadSize; use a smaller file or query".into(),
+        ));
+    }
+    let bound = length
+        .checked_add(1)
+        .ok_or(FilesystemError::Unsupported("file is too large"))?;
+    let memory = HostBytes::new(limits, bound).map_err(|e| FilesystemError::Execution(e.into()))?;
+    if let Some(work) = work {
+        work.charge(super::fuel::IO, bound)?;
+    }
+    let capacity =
+        usize::try_from(bound).map_err(|_| FilesystemError::Unsupported("file is too large"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+    // read_to_end may reserve speculative capacity at EOF. A fixed slice keeps
+    // the admitted allocation exact, including the single growth-detection byte.
+    bytes.resize(capacity, 0);
+    let mut file = file;
+    let mut filled = 0;
+    while filled < capacity {
+        let count = file.read(&mut bytes[filled..])?;
+        if count == 0 {
+            break;
+        }
+        filled += count;
+    }
+    bytes.truncate(filled);
+    if bytes.len() as u64 > length {
+        return Err(FilesystemError::Rejected(
+            "file grew during read; retry".into(),
+        ));
+    }
+    Ok(FileContents {
+        bytes,
+        _memory: memory,
+    })
+}
+
+pub fn directory_names(
+    vfs: &Vfs,
+    work: Option<&WorkBudget>,
+    path: &str,
+    maximum_entries: usize,
+    limits: &TenantLimits,
+) -> Result<DirectoryNames, FilesystemError> {
+    let resolved = fs::resolve_content(vfs, vfs.cwd(), path)?;
+    let mut memory = HostBytes::new(limits, 0).map_err(|e| FilesystemError::Execution(e.into()))?;
+    let mut names = Vec::new();
+    for entry in resolved.entries()? {
+        let entry = entry?;
+        if names.len() == maximum_entries {
+            return Err(FilesystemError::Rejected(
+                "traversal exceeds 20000 entries; choose a smaller root".into(),
+            ));
+        }
+        if let Some(work) = work {
+            work.charge(super::fuel::SYSCALL, 1)?;
+        }
+        let raw = entry.file_name();
+        let name = raw
+            .to_str()
+            .ok_or_else(|| FilesystemError::Rejected(format!("non-UTF-8 filename in {path}")))?;
+        memory
+            .grow(limits, name.len() as u64)
+            .map_err(|e| FilesystemError::Execution(e.into()))?;
+        if names.len() == names.capacity() {
+            let capacity = names
+                .capacity()
+                .saturating_mul(2)
+                .max(16)
+                .min(maximum_entries);
+            memory
+                .grow(
+                    limits,
+                    ((capacity - names.capacity()) * std::mem::size_of::<String>()) as u64,
+                )
+                .map_err(|e| FilesystemError::Execution(e.into()))?;
+            names
+                .try_reserve_exact(capacity - names.len())
+                .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+        }
+        names.push(name.to_owned());
+    }
+    Ok(DirectoryNames {
+        names,
+        _memory: memory,
+    })
+}
+
+fn replace_existing(
+    vfs: &Vfs,
+    path: &str,
+    bytes: &[u8],
+    work: &WorkBudget,
+) -> Result<(), FilesystemError> {
+    let destination = fs::resolve_content(vfs, vfs.cwd(), path)?;
+    destination.check_rename_end()?;
+    let (_, metadata) = destination.open_regular()?;
+    let mut quota = QuotaCharge::new(
+        destination.placement().quota().cloned(),
+        destination.regular_file(),
+    );
+    quota.reserve(bytes.len() as u64)?;
+    work.charge(super::fuel::IO, bytes.len() as u64)?;
+    work.charge(super::fuel::SYSCALL, 8)?;
+    let temporary = destination.temp_sibling();
+    temporary.check_rename_end()?;
+    let mut file = temporary.create_new()?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.set_permissions(metadata.permissions())?;
+        file.sync_all()?;
+        work.before_effect();
+        temporary
+            .rename_to(&destination)
+            .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+        quota.commit();
+        destination
+            .sync_parent()
+            .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = temporary.remove_file();
+    }
+    result
 }
 
 /// Read one logical item, anchoring every attempt at the supplied position.
