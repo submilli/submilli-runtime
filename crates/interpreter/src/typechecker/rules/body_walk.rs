@@ -121,7 +121,7 @@ impl<V: Visitor> Walk<'_, V> {
                 update,
                 body,
             } => {
-                if let Some(i) = init {
+                for i in init {
                     self.stmt(*i)?;
                 }
                 if let Some(c) = condition {

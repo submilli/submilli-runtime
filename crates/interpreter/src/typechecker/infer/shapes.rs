@@ -195,7 +195,7 @@ pub(super) fn collect_from_stmt(
             update,
             body,
         } => {
-            if let Some(i) = init {
+            for i in init {
                 collect_from_stmt(ast, *i, c)?;
             }
             if let Some(cond) = condition {

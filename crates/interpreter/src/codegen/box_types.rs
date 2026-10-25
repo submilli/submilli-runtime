@@ -138,7 +138,7 @@ impl Collector<'_> {
                 update,
                 body,
             } => {
-                if let Some(i) = init {
+                for i in init {
                     self.walk_stmt(*i)?;
                 }
                 if let Some(c) = condition {

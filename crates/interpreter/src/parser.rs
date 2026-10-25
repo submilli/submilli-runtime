@@ -76,6 +76,7 @@ pub fn parse_checked(
         recursion_limit_span: None,
         resume_at_next_member: false,
         last_as_type_end: None,
+        trailing_declarators: Vec::new(),
         eof,
         fatal: None,
     };
@@ -166,6 +167,8 @@ pub(crate) struct Parser<'a> {
     /// may end at a line break, since the type stops at one (see
     /// [`Parser::at_statement_end`]).
     last_as_type_end: Option<u32>,
+    /// See [`Parser::take_trailing_declarators`].
+    trailing_declarators: Vec<StmtId>,
     eof: Token,
     fatal: Option<CompilerFailure>,
 }
@@ -204,6 +207,8 @@ impl<'a> Parser<'a> {
             let pos_before = self.pos;
             if let Some(id) = self.parse_statement() {
                 self.ast.top_level.push(id);
+                let trailing = self.take_trailing_declarators();
+                self.ast.top_level.extend(trailing);
             } else {
                 if self.fatal.is_some() {
                     break;
@@ -229,6 +234,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Option<StmtId> {
+        self.trailing_declarators.clear();
         self.with_recursion_limit(Self::parse_statement_inner)
     }
 
@@ -341,10 +347,56 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// Parses `let`/`const` with one or more comma-separated declarators. Each
+    /// declarator becomes its own statement, in source order; the first is
+    /// returned and the rest wait in `trailing_declarators` for the caller to
+    /// place after it.
     fn parse_let_or_const(&mut self, is_const: bool) -> Option<StmtId> {
-        let doc = self.take_leading_doc();
+        let mut doc = self.take_leading_doc();
         let kw = self.advance();
 
+        let mut declarators = Vec::new();
+        let mut start = kw.span.start;
+        loop {
+            let kind = self.parse_declarator(is_const, doc.take())?;
+            if !matches!(self.peek().kind, TokenKind::Comma) {
+                if !self.at_statement_end() {
+                    self.error_at_peek("expected `;` after declaration");
+                    return None;
+                }
+                let end = self.finish_statement();
+                declarators.push(self.push_declarator(kind, start, end)?);
+                break;
+            }
+            let end = self.prev_token_end();
+            declarators.push(self.push_declarator(kind, start, end)?);
+            self.advance();
+            start = self.peek().span.start;
+        }
+
+        let first = declarators.remove(0);
+        self.trailing_declarators = declarators;
+        Some(first)
+    }
+
+    fn push_declarator(&mut self, kind: StmtKind, start: u32, end: u32) -> Option<StmtId> {
+        let span = self.span(start, end);
+        parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
+    }
+
+    /// The declarators after the first of the declaration `parse_statement` just
+    /// returned. Every caller of `parse_statement` takes them, so none can
+    /// attach to a later statement.
+    fn take_trailing_declarators(&mut self) -> Vec<StmtId> {
+        std::mem::take(&mut self.trailing_declarators)
+    }
+
+    /// One declarator: a name or pattern, an optional annotation, and its initializer.
+    fn parse_declarator(
+        &mut self,
+        is_const: bool,
+        doc: Option<crate::DocComment>,
+    ) -> Option<StmtKind> {
         let binding = match self.peek().kind {
             TokenKind::LeftBrace | TokenKind::LeftBracket => Some(self.parse_binding()?),
             _ => None,
@@ -367,8 +419,7 @@ impl<'a> Parser<'a> {
 
         let implicit = !is_const
             && ty.is_some()
-            && !matches!(self.peek().kind, TokenKind::Equals)
-            && matches!(self.peek().kind, TokenKind::Semicolon);
+            && matches!(self.peek().kind, TokenKind::Semicolon | TokenKind::Comma);
         let value = if let (true, Some(name)) = (implicit, &name) {
             // `let x: T;` starts as `undefined`; the typechecker requires `T` to allow it.
             let value = parse_arena_result(
@@ -407,30 +458,7 @@ impl<'a> Parser<'a> {
             self.parse_expression()?
         };
 
-        if !self.at_statement_end() {
-            if matches!(self.peek().kind, TokenKind::Comma) {
-                let keyword = if is_const { "const" } else { "let" };
-                let first = name.as_ref().map_or("a", |name| name.name.as_str());
-                let next = self.peek_at(1);
-                let second = if matches!(next.kind, TokenKind::Identifier) {
-                    &self.source[next.span.start as usize..next.span.end as usize]
-                } else {
-                    "b"
-                };
-                let help = format!(
-                    "declare one variable per statement: `{keyword} {first} = …; {keyword} {second} = …;`; \
-                     in a `for (…)` header, declare `{second}` before the loop"
-                );
-                self.error_at_peek_with_help("one declaration declares one variable", vec![help]);
-            } else {
-                self.error_at_peek("expected `;` after declaration");
-            }
-            return None;
-        }
-        let end = self.finish_statement();
-
-        let span = self.span(kw.span.start, end);
-        let kind = match (binding, name) {
+        Some(match (binding, name) {
             (Some(binding), _) => {
                 if is_const {
                     StmtKind::ConstPattern {
@@ -466,8 +494,7 @@ impl<'a> Parser<'a> {
                 }
             }
             (None, None) => return self.invariant_failure("either binding or name must be Some"),
-        };
-        parse_arena_result(self.ast.try_push_stmt(Stmt { kind, span }), &mut self.fatal)
+        })
     }
 
     // One level only; nested patterns are rejected.
@@ -1731,10 +1758,12 @@ impl<'a> Parser<'a> {
             if nested {
                 return None;
             }
-            self.ast.exported_decls.push(ExportedDecl {
-                stmt: id,
-                export_span,
-            });
+            // The caller places the trailing declarators; each is exported too.
+            for stmt in std::iter::once(id).chain(self.trailing_declarators.clone()) {
+                self.ast
+                    .exported_decls
+                    .push(ExportedDecl { stmt, export_span });
+            }
             return Some(id);
         }
 
@@ -2431,6 +2460,7 @@ impl<'a> Parser<'a> {
             let pos_before = self.pos;
             if let Some(id) = self.parse_statement() {
                 stmts.push(id);
+                stmts.extend(self.take_trailing_declarators());
             } else {
                 self.recover();
                 if self.pos == pos_before && !self.is_at_eof() {
@@ -2500,10 +2530,15 @@ impl<'a> Parser<'a> {
         let stmt = self.parse_statement();
         self.block_depth -= 1;
         let stmt = stmt?;
-        let span = parse_arena_result(self.ast.try_stmt(stmt), &mut self.fatal)?.span;
+        let mut stmts = vec![stmt];
+        stmts.extend(self.take_trailing_declarators());
+        let first = parse_arena_result(self.ast.try_stmt(stmt), &mut self.fatal)?.span;
+        let last_id = stmts.last().copied().unwrap_or(stmt);
+        let last = parse_arena_result(self.ast.try_stmt(last_id), &mut self.fatal)?.span;
+        let span = self.span(first.start, last.end);
         parse_arena_result(
             self.ast.try_push_stmt(Stmt {
-                kind: StmtKind::Block(vec![stmt]),
+                kind: StmtKind::Block(stmts),
                 span,
             }),
             &mut self.fatal,
@@ -2690,25 +2725,28 @@ impl<'a> Parser<'a> {
     fn parse_c_for_tail(&mut self, kw: Token) -> Option<StmtId> {
         let init = if matches!(self.peek().kind, TokenKind::Semicolon) {
             self.advance();
-            None
+            Vec::new()
         } else {
-            let init_id = match self.peek().kind {
+            self.trailing_declarators.clear();
+            let first = match self.peek().kind {
                 TokenKind::Let => self.parse_let_or_const(false)?,
                 TokenKind::Const => self.parse_let_or_const(true)?,
                 _ => self.parse_expression_statement()?,
             };
-            Some(init_id)
+            let mut init = vec![first];
+            init.extend(self.take_trailing_declarators());
+            init
         };
-        let for_stmt = self.finish_c_for(kw, init);
-        if for_stmt.is_none()
-            && let Some(init) = init
-        {
-            self.discard_detached_pattern(init);
+        let for_stmt = self.finish_c_for(kw, init.clone());
+        if for_stmt.is_none() {
+            for declarator in init {
+                self.discard_detached_pattern(declarator);
+            }
         }
         for_stmt
     }
 
-    fn finish_c_for(&mut self, kw: Token, init: Option<StmtId>) -> Option<StmtId> {
+    fn finish_c_for(&mut self, kw: Token, init: Vec<StmtId>) -> Option<StmtId> {
         let condition = if matches!(self.peek().kind, TokenKind::Semicolon) {
             None
         } else {
@@ -2763,7 +2801,32 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `i++, j--` in a `for` update runs each expression in turn, so it becomes a
+    /// block of their statements; it declares nothing, so the block scopes nothing.
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {
+        let first = self.parse_for_update_expr()?;
+        if !matches!(self.peek().kind, TokenKind::Comma) {
+            return Some(first);
+        }
+        let mut stmts = vec![first];
+        while matches!(self.peek().kind, TokenKind::Comma) {
+            self.advance();
+            stmts.push(self.parse_for_update_expr()?);
+        }
+        let start = parse_arena_result(self.ast.try_stmt(first), &mut self.fatal)?
+            .span
+            .start;
+        let span = self.span(start, self.prev_token_end());
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(stmts),
+                span,
+            }),
+            &mut self.fatal,
+        )
+    }
+
+    fn parse_for_update_expr(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let span = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.span;
         let kind = self.statement_kind_for(expr_id)?;
@@ -3031,10 +3094,12 @@ impl<'a> Parser<'a> {
             }
             let pos_before = self.pos;
             if let Some(id) = self.parse_statement() {
-                end_offset = parse_arena_result(self.ast.try_stmt(id), &mut self.fatal)?
+                stmts.push(id);
+                stmts.extend(self.take_trailing_declarators());
+                let last = stmts.last().copied().unwrap_or(id);
+                end_offset = parse_arena_result(self.ast.try_stmt(last), &mut self.fatal)?
                     .span
                     .end;
-                stmts.push(id);
             } else {
                 self.recover();
                 if self.pos == pos_before && !self.is_at_eof() {
@@ -7098,6 +7163,7 @@ mod tests {
             recursion_limit_span: None,
             resume_at_next_member: false,
             last_as_type_end: None,
+            trailing_declarators: Vec::new(),
             eof: Token::new(
                 TokenKind::Eof,
                 crate::Span::new(F, source.len() as u32, source.len() as u32).unwrap(),
@@ -9508,24 +9574,99 @@ mod tests {
     }
 
     #[test]
-    fn multiple_declarators_name_the_split() {
-        let (_ast, diags) = parse_str("let a = 0, b = 0;");
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(diags[0].message, "one declaration declares one variable");
-        assert_eq!(
-            diags[0].help,
-            [
-                "declare one variable per statement: `let a = …; let b = …;`; in a `for (…)` header, declare `b` before the loop"
-            ]
-        );
-        let (_ast, diags) = parse_str("for (let i = 0, j = 10; i < j; i++) {}");
-        assert_eq!(
-            diags[0].message, "one declaration declares one variable",
-            "{diags:?}"
-        );
+    fn multiple_declarators_become_one_statement_each() {
+        let (ast, diags) = parse_str("let a = 0, b: string = \"s\", [c] = [1];");
+        assert!(diags.is_empty(), "{diags:?}");
+        let kinds: Vec<&crate::StmtKind> = ast
+            .top_level
+            .iter()
+            .map(|id| &ast.try_stmt(*id).unwrap().kind)
+            .collect();
         assert!(
-            diags[0].help[0].ends_with("declare `j` before the loop"),
+            matches!(
+                kinds.as_slice(),
+                [
+                    crate::StmtKind::Let { name: a, ty: None, .. },
+                    crate::StmtKind::Let { name: b, ty: Some(_), .. },
+                    crate::StmtKind::LetPattern { .. },
+                ] if a.name == "a" && b.name == "b"
+            ),
+            "{kinds:?}"
+        );
+    }
+
+    #[test]
+    fn declarators_keep_their_own_spans() {
+        let source = "const a = 1, b = 2;";
+        let (ast, diags) = parse_str(source);
+        assert!(diags.is_empty(), "{diags:?}");
+        let spans: Vec<&str> = ast
+            .top_level
+            .iter()
+            .map(|id| {
+                let span = ast.try_stmt(*id).unwrap().span;
+                &source[span.start as usize..span.end as usize]
+            })
+            .collect();
+        assert_eq!(spans, ["const a = 1", "b = 2;"]);
+    }
+
+    #[test]
+    fn a_declarator_missing_its_initializer_is_reported_at_it() {
+        let (_ast, diags) = parse_str("const a = 1, b;");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "`const` declaration requires an initializer"
+        );
+        assert_eq!(diags[0].span.start, 14, "{diags:?}");
+        let (_ast, diags) = parse_str("let a = 1, ;");
+        assert_eq!(
+            diags[0].message, "expected identifier after `let`/`const`",
             "{diags:?}"
+        );
+    }
+
+    #[test]
+    fn a_typed_declarator_without_a_value_may_precede_another() {
+        let (ast, diags) = parse_str("let a: number | undefined, b = 1;");
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(ast.top_level.len(), 2);
+    }
+
+    #[test]
+    fn declarators_stay_in_their_block() {
+        let (ast, diags) = parse_str("function f(): void { let a = 1, b = 2; }\nlet c = 3;");
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(
+            ast.top_level.len(),
+            2,
+            "the block's declarators don't leak out"
+        );
+    }
+
+    #[test]
+    fn every_exported_declarator_is_exported() {
+        let (ast, diags) = parse_str("export const a = 1, b = 2;");
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(ast.top_level.len(), 2);
+        let exported: Vec<crate::StmtId> =
+            ast.exported_decls.iter().map(|decl| decl.stmt).collect();
+        assert_eq!(exported, ast.top_level);
+    }
+
+    #[test]
+    fn a_for_head_holds_every_declarator() {
+        let (ast, diags) = parse_str("for (let i = 0, j = 10; i < j; i++, j--) {}");
+        assert!(diags.is_empty(), "{diags:?}");
+        let crate::StmtKind::For { init, update, .. } = &single_stmt(&ast).kind else {
+            panic!("expected For");
+        };
+        assert_eq!(init.len(), 2);
+        let update = ast.try_stmt(update.unwrap()).unwrap();
+        assert!(
+            matches!(&update.kind, crate::StmtKind::Block(stmts) if stmts.len() == 2),
+            "{update:?}"
         );
     }
 
@@ -10160,15 +10301,15 @@ mod tests {
             condition,
             update,
             body,
-        } = stmt.kind
+        } = &stmt.kind
         else {
             panic!("expected For");
         };
-        assert!(init.is_some(), "init missing");
+        assert!(!init.is_empty(), "init missing");
         assert!(condition.is_some(), "condition missing");
         assert!(update.is_some(), "update missing");
         assert!(matches!(
-            ast.try_stmt(body).unwrap().kind,
+            ast.try_stmt(*body).unwrap().kind,
             crate::StmtKind::Block(_)
         ));
     }
@@ -10183,11 +10324,11 @@ mod tests {
             condition,
             update,
             ..
-        } = stmt.kind
+        } = &stmt.kind
         else {
             panic!("expected For");
         };
-        assert!(init.is_none() && condition.is_none() && update.is_none());
+        assert!(init.is_empty() && condition.is_none() && update.is_none());
     }
 
     #[test]

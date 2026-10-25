@@ -112,7 +112,10 @@ impl Inferer<'_> {
             } => self.without_argument_memo(|this| {
                 this.check_for_pattern_init_captures(stmt_id, span);
                 this.scopes.push();
-                let typed_init = init.map(|id| this.infer_stmt(id)).transpose()?.flatten();
+                let mut typed_init = Vec::with_capacity(init.len());
+                for id in init {
+                    typed_init.extend(this.infer_stmt(id)?);
+                }
                 // Init-scope bindings persist across iterations, so the body's
                 // scope floor, taken in `infer_condition_first_loop`, sits
                 // above them.

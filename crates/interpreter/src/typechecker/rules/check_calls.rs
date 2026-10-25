@@ -87,7 +87,7 @@ impl Collector<'_> {
                 update,
                 body,
             } => {
-                if let Some(init) = init {
+                for init in init {
                     self.stmt(*init)?;
                 }
                 if let Some(condition) = condition {

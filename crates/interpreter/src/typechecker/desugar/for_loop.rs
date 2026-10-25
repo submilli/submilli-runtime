@@ -44,7 +44,7 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
         return Ok(());
     };
 
-    for statement in init.into_iter().chain(update).chain(std::iter::once(body)) {
+    for &statement in init.iter().chain(&update).chain(std::iter::once(&body)) {
         ctx.ta
             .try_stmt(statement)
             .map_err(crate::typechecker::arena_failure)?;
@@ -59,8 +59,8 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
     // per-iteration environment first and *then* runs the update in it, so the
     // update mutates the new binding rather than the one the last pass's closures
     // captured. With neither to do, the plain `while` shape suffices.
-    let rebox = per_iteration_rebox(ctx, init, span)?;
-    let (pre_while, while_stmt) = if update.is_some() || rebox.is_some() {
+    let rebox = per_iteration_rebox(ctx, &init, span)?;
+    let (pre_while, while_stmt) = if update.is_some() || !rebox.is_empty() {
         let (flag, let_flag) = ctx.first_pass_flag("for_first", span)?;
         let head: Vec<StmtId> = rebox.into_iter().chain(update).collect();
         let step = ctx.skip_on_first_pass(&flag, head, span)?;
@@ -87,7 +87,7 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
         (None, w)
     };
 
-    let mut outer_stmts = Vec::with_capacity(3);
+    let mut outer_stmts = Vec::with_capacity(init.len() + 2);
     outer_stmts.extend(init);
     outer_stmts.extend(pre_while);
     outer_stmts.push(while_stmt);
@@ -98,22 +98,22 @@ fn lower(ctx: &mut DesugarCtx, id: StmtId) -> Result<(), crate::compiler_error::
     Ok(())
 }
 
-/// A `ReboxLocal` for the head's `let`, when it is boxed — i.e. captured, the only
-/// case where sharing one cell across iterations is observable. A `const` head
-/// needs none: it can't be reassigned, so every copy would hold the same value,
-/// and a captured `const` is copied into the closure env rather than boxed.
+/// A `ReboxLocal` for each of the head's `let`s that is boxed — i.e. captured, the
+/// only case where sharing one cell across iterations is observable. A `const`
+/// head needs none: it can't be reassigned, so every copy would hold the same
+/// value, and a captured `const` is copied into the closure env rather than boxed.
 fn per_iteration_rebox(
     ctx: &mut DesugarCtx,
-    init: Option<StmtId>,
+    init: &[StmtId],
     span: Span,
-) -> Result<Option<StmtId>, crate::compiler_error::CompilerFailure> {
-    let Some((ident, ty)) = init.map(|id| boxed_let(ctx, id)).transpose()?.flatten() else {
-        return Ok(None);
-    };
-    Ok(Some(ctx.push_stmt(
-        TypedStmtKind::ReboxLocal { ident, ty },
-        span,
-    )?))
+) -> Result<Vec<StmtId>, crate::compiler_error::CompilerFailure> {
+    let mut reboxes = Vec::new();
+    for &id in init {
+        if let Some((ident, ty)) = boxed_let(ctx, id)? {
+            reboxes.push(ctx.push_stmt(TypedStmtKind::ReboxLocal { ident, ty }, span)?);
+        }
+    }
+    Ok(reboxes)
 }
 
 fn boxed_let(

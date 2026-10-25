@@ -670,7 +670,7 @@ impl SyntaxChildren {
                 update,
                 body,
             } => {
-                self.nodes.extend(init.map(Node::Stmt));
+                self.nodes.extend(init.iter().copied().map(Node::Stmt));
                 self.nodes.extend(condition.map(Node::Expr));
                 self.nodes.extend(update.map(Node::Stmt));
                 self.stmt(*body);
@@ -1124,7 +1124,7 @@ impl TypedChildren {
                 update,
                 body,
             } => {
-                self.nodes.extend(init.map(Node::Stmt));
+                self.nodes.extend(init.iter().copied().map(Node::Stmt));
                 self.nodes.extend(condition.map(Node::Expr));
                 self.nodes.extend(update.map(Node::Stmt));
                 self.stmt(*body);
