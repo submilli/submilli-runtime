@@ -164,6 +164,13 @@ impl ToolHistory {
 
 #[async_trait::async_trait]
 impl EffectHistory for ToolHistory {
+    fn take_storage_fuel(&self) -> u64 {
+        self.history.take_storage_fuel()
+    }
+    async fn drain(&self) -> Result<(), HistoryError> {
+        self.history.drain().await
+    }
+
     async fn begin(
         &self,
         operation: &str,
@@ -193,12 +200,12 @@ impl EffectHistory for ToolHistory {
             .as_ref()
             == Some(&call.id);
         let decision = ToolResolution::from(&outcome);
-        #[cfg(test)]
+        #[cfg(all(test, not(windows)))]
         if is_tool {
             crate::recovery::tool_checkpoint("tool-answer");
         }
         self.history.complete(call, outcome).await?;
-        #[cfg(test)]
+        #[cfg(all(test, not(windows)))]
         if is_tool {
             crate::recovery::tool_checkpoint("tool-committed");
         }

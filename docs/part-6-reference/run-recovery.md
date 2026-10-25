@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "7995c50bfa5a30d96df4e28e50e0ce7e411e4690000689b49853a1c7b6c0f4e1"
+  contentHash: "e71cc722e482e2c2f28a48ad0592754cc92a2a62a8c5c22799853364832ad66c"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -16,6 +16,7 @@ authorship:
 | YAML key | Default | Constraint |
 | --- | --- | --- |
 | `durable_execution` | `false` | Requires persistent SQLite storage and an encryption key |
+| `durable_objects.inline_threshold` | `64KiB` | Bytes or size string, from `0` through 64 MiB + 64 KiB. Entries larger than this threshold use private object files |
 | `max_durable_runs` | `4` | Positive limit for admitting execution work, excluding suspended tool runs |
 
 Database, key, and volume settings are listed in
@@ -78,6 +79,28 @@ work. Session closure preserves its record in run history.
 | Result | Retained for keyed and unkeyed runs under response-retention settings |
 | Expired result | Tombstone retained; no re-execution |
 
+## Effect-history storage
+
+| Property | Contract |
+| --- | --- |
+| Directory | `<volume_dir>/durable-objects/`, private to the server and unavailable through guest filesystems or named volumes |
+| Placement | Serialized history entries at or below `inline_threshold` stay in SQLite. Larger entries use encrypted object files with an encrypted SQLite reference. The size includes outcome metadata before encryption |
+| Threshold changes | Apply to new entries. Existing inline entries and object references remain readable |
+| Encryption | Uses the retained secret-store encryption key, including the existing key identifier and authenticated run/sequence binding |
+| Limits | Existing 64 MiB payload limit, 64 KiB entry-metadata allowance, and 1 GiB per-run history limit still apply. Object bytes count toward the run limit. There is no separate object-store capacity limit or guest filesystem quota charge |
+| Publication | The file and its directory are synced before the reference and run progress commit together |
+| Read failure | A missing, corrupt, truncated, or undecryptable object stops recovery. It does not repeat the recorded operation |
+| Retention | Objects remain while the run can recover, including while stuck or waiting for a tool. Terminal run retirement removes history references and schedules object deletion. Deletion failures retry |
+| Ownership | One database-owning server on local or block storage. Database and directory identities must match. EFS and multi-node sharing are unsupported |
+| Backup and restore | Stop the server and preserve SQLite, the complete volume root, and the encryption key together. Restoring only SQLite or replacing the object directory can make retained runs unrecoverable |
+| Disabling durable execution | An existing object store still requires its directory and key for retention and cleanup |
+| HTTP downloads | Use their existing filesystem and effect behavior. They do not use a separate object API |
+
+```yaml title="server.yaml (fragment)"
+durable_objects:
+  inline_threshold: 64KiB
+```
+
 ## Supported scope
 
 | Area | Contract |
@@ -88,6 +111,7 @@ work. Session closure preserves its record in run history.
 | MCP request identity | No automatic idempotency key; another call may create another run |
 | Disconnect | Accepted execution continues independently of its waiter |
 | Long-running request | Queued runs and runs without a local attempt return metadata after the 25-second wait. A running tool-enabled program with a local attempt waits for its next suspension or terminal state |
+| Object-storage platforms | Unix systems with file and directory synchronization. Native Windows durable execution is unsupported. Ordinary execution remains available |
 | Storage ownership | One server process per SQLite database |
 | File writers | Durable writers to the same named volume are serialized while their attempts remain active, including while suspended at a tool. Ordinary executions, external tools, and different volume names pointing to the same files still require exclusive access |
 | Packages | Package contents must remain unchanged while runs are unfinished |

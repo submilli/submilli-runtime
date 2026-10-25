@@ -1,4 +1,4 @@
-use super::durable::{COMPATIBILITY, capture_program, history, publish};
+use super::durable::{COMPATIBILITY, capture_program, publish};
 use super::*;
 use crate::application::sessions::ports::{LastRunStorage, StagedLastRun};
 use crate::application::sessions::runs::{
@@ -12,6 +12,17 @@ use crate::session_store::{DurableSessionStore, RootVfsType, SessionRecord, Sqli
 use std::time::{Duration, SystemTime};
 use submilli_durable::history::History;
 use submilli_shared::secret_store::SecretCipher;
+
+fn history(run: &Run, units: submilli_durable::UnitFactory) -> Arc<History> {
+    Arc::new(History::new(
+        submilli_durable::history::ExecutionAttempt {
+            run_id: run.reservation_id().clone(),
+            owner_generation: run.owner_generation().into(),
+            attempt: run.attempt(),
+        },
+        units,
+    ))
+}
 
 struct UnusedMcp;
 impl interpreter::runtime::McpTransport for UnusedMcp {
@@ -95,6 +106,16 @@ async fn execute(
 
 #[tokio::test]
 async fn recorded_run_reopens_original_program_and_publishes_terminal_response() {
+    recorded_run_reopens(None).await;
+}
+
+#[cfg(not(windows))]
+#[tokio::test]
+async fn object_history_replays_through_the_runner_without_repeating_native_effects() {
+    recorded_run_reopens(Some(0)).await;
+}
+
+async fn recorded_run_reopens(threshold: Option<usize>) {
     let root = tempfile::tempdir().unwrap();
     let session_root = root.path().join("sessions");
     let files = session_root.join("session");
@@ -192,7 +213,26 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
             .await
             .is_err()
     );
-    let first_history = history(&first, fs_units.clone());
+    let object_directory = root.path().join("objects");
+    std::fs::create_dir(&object_directory).unwrap();
+    let objects = if let Some(inline_threshold) = threshold {
+        Some(
+            crate::adapters::history::HistoryObjects::open(
+                database.clone(),
+                object_directory.clone(),
+                cipher.clone(),
+                crate::config::DurableObjectConfig { inline_threshold },
+            )
+            .await
+            .unwrap(),
+        )
+    } else {
+        None
+    };
+    let first_history = match &objects {
+        Some(objects) => super::durable::history(&first, objects.history()),
+        None => history(&first, fs_units.clone()),
+    };
     let original = execute(
         &first,
         &program,
@@ -209,6 +249,7 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
     );
     // Lose the process after all native outcomes, but before terminal publication.
     drop(first_history);
+    drop(objects);
     drop(fs_units);
     drop(units);
     database.close().await.unwrap();
@@ -225,7 +266,7 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
         session_root,
         Some(cipher.clone()),
     );
-    let fs_units = crate::adapters::unit_of_work::durable::units(database.clone(), cipher);
+    let fs_units = crate::adapters::unit_of_work::durable::units(database.clone(), cipher.clone());
     RecoverRuns::new(units.as_ref())
         .execute("second")
         .await
@@ -251,7 +292,24 @@ async fn recorded_run_reopens_original_program_and_publishes_terminal_response()
     // UUID, write and read are recorded; console writes again without a history row.
     assert_eq!(resumed.history_position(), 3);
     assert_eq!(resumed.attempt(), first.attempt() + 1);
-    let replay = history(&resumed, fs_units.clone());
+    let objects = if let Some(inline_threshold) = threshold {
+        Some(
+            crate::adapters::history::HistoryObjects::open(
+                database.clone(),
+                object_directory,
+                cipher,
+                crate::config::DurableObjectConfig { inline_threshold },
+            )
+            .await
+            .unwrap(),
+        )
+    } else {
+        None
+    };
+    let replay = match &objects {
+        Some(objects) => super::durable::history(&resumed, objects.history()),
+        None => history(&resumed, fs_units.clone()),
+    };
     let outcome = execute(&resumed, &program, replay.clone(), fs_units, &files)
         .await
         .unwrap();

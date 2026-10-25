@@ -52,14 +52,17 @@ pub(crate) fn capture_program(
 
 /// Return a fresh replay cursor for this claimed attempt. An old attempt cannot
 /// append or publish after `reopen_run` increments the persistent attempt number.
-pub(crate) fn history(run: &Run, units: submilli_durable::UnitFactory) -> Arc<History> {
-    Arc::new(History::new(
+pub(crate) fn history(
+    run: &Run,
+    store: Arc<dyn submilli_durable::history::HistoryStore>,
+) -> Arc<History> {
+    Arc::new(History::with_store(
         ExecutionAttempt {
             run_id: run.reservation_id().clone(),
             owner_generation: run.owner_generation().into(),
             attempt: run.attempt(),
         },
-        units,
+        store,
     ))
 }
 

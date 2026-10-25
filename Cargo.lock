@@ -5563,6 +5563,8 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "cap-fs-ext",
+ "cap-std",
  "clap",
  "futures",
  "getrandom 0.2.17",

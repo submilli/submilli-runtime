@@ -15,3 +15,5 @@ mod run_program;
 pub(crate) mod run_result;
 
 pub(crate) mod run_recovery;
+
+pub(crate) mod history;

@@ -180,9 +180,7 @@ pub(crate) async fn supervise(
                             })
                         })
                         .collect();
-                    if !ready.is_empty() {
-                        retirements.spawn(retire_runs(app.clone(), ready, draining.clone()));
-                    }
+                    retirements.spawn(retire_runs(app.clone(), ready, draining.clone()));
                 }
                 Err(error) => tracing::warn!(%error, "retirement discovery unavailable"),
             }
@@ -401,6 +399,11 @@ async fn retire_runs(state: AppState, runs: Vec<Run>, draining: CancellationToke
             .retire_run(run.reservation_id())
             .await;
     }
+    if let Some(objects) = state.history_objects()
+        && let Err(error) = objects.collect().await
+    {
+        tracing::warn!(%error, "history object collection will retry");
+    }
 }
 
 fn next_page(page: &[Run]) -> Option<RunId> {
@@ -501,7 +504,13 @@ async fn run_attempt(
         state.database().ok_or(StuckReason::Storage)?,
         state.secret_cipher().ok_or(StuckReason::Credentials)?,
     );
-    let history = runner::durable::history(run, units.clone());
+    let history = runner::durable::history(
+        run,
+        state
+            .history_objects()
+            .ok_or(StuckReason::Storage)?
+            .history(),
+    );
     if let Some(entry) = entry {
         prepared.services.effects = Some(Arc::new(crate::runs::durable::ToolHistory::new(
             history.clone(),
@@ -577,7 +586,7 @@ async fn run_attempt(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests;
 
 /// Also called on startup for a crash between terminal commit and retirement.
@@ -680,7 +689,7 @@ fn run_tools(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 pub(crate) fn tool_checkpoint(point: &str) {
     tests::process::checkpoint(point);
 }

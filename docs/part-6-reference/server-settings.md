@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d7e147c98fbfa8ca472af884d225b485d33b0fc24b8f94c464d82145e4417fe0"
+  contentHash: "0382e32d89f3f8d9c4de6fc5520eb550b2bd538e1f8f041108173576f47c902f"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -45,7 +45,7 @@ flat names listed. A dash means the form doesn't exist.
 | `blueprint_dir` | `--blueprint-dir` | `SUBMILLI_BLUEPRINT_DIR` | path | `$SUBMILLI_HOME/server/blueprints` | Obsolete. |
 | `session_store_dir` | `--session-store-dir` | `SUBMILLI_SESSION_STORE_DIR` | path | `$SUBMILLI_HOME/server/sessions` | Session lifecycle records. |
 | `package_store_dir` | `--package-store-dir` | `SUBMILLI_PACKAGE_STORE_DIR` | path | `$SUBMILLI_HOME/server/packages` | Installed Packages. |
-| `volume_dir` | `--volume-dir` | `SUBMILLI_VOLUME_DIR` | path | `$SUBMILLI_HOME/server/volumes` | `managed-local` volumes, `per_session` files and `ephemeral` scratch. See [Directories](#directories). |
+| `volume_dir` | `--volume-dir` | `SUBMILLI_VOLUME_DIR` | path | `$SUBMILLI_HOME/server/volumes` | `managed-local` volumes, `per_session` files, `ephemeral` scratch, and private durable objects. See [Directories](#directories). |
 | — | `--create-volume-dir` | — | boolean | `false` | Create a missing `volume_dir` at startup. See [Directories](#directories). |
 | `secret_store.dir` | `--secret-store-dir` | `SUBMILLI_SECRET_STORE_DIR` | path | `$SUBMILLI_HOME/server/secrets` | The encrypted secret store. See [`secret_store`](#secret_store). |
 | `secret_store.key_file` | `--secret-store-key-file` | `SUBMILLI_SECRET_STORE_KEY_FILE` | path | none | File holding the store's key. |
@@ -61,6 +61,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_llm_tokens` | `--max-llm-tokens` | `SUBMILLI_MAX_LLM_TOKENS` | count, at least 1 | `20M` | Model tokens across all runs. |
 | `max_execution_llm_tokens` | `--max-execution-llm-tokens` | `SUBMILLI_MAX_EXECUTION_LLM_TOKENS` | count, at least 1 | `1M` | Model tokens one run may spend. |
 | `max_llm_concurrency` | `--max-llm-concurrency` | `SUBMILLI_MAX_LLM_CONCURRENCY` | prompts, at least 1 | `4` | Prompts of one `llm.batch` in flight at once. |
+| `durable_objects.inline_threshold` | — | — | bytes or size string | `64KiB` | Maximum serialized effect-history entry size kept inline. Equality stays inline. Accepts `0` through 64 MiB + 64 KiB. No separate directory or capacity setting. See [effect-history storage](/docs/reference/run-recovery#effect-history-storage). |
 | `durable_execution` | — | — | boolean | `false` | Retain and recover persistent session executions. Requires persistent SQLite and an encryption key. See [run recovery](/docs/reference/run-recovery). |
 | `max_durable_runs` | — | — | runs | `4` | Maximum simultaneous durable session runs. Must be positive. |
 | `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting on the harness at an [application tool](/docs/reference/http-api#application-tools) call at once, across the server. Each holds its program in memory. `0` turns application tool calls off. |
@@ -197,7 +198,7 @@ mcp_allowed_hosts:
 | `blueprint_dir` | Obsolete. | `$SUBMILLI_HOME/server/blueprints` |
 | `session_store_dir` | Open sessions' lifecycle records, so sessions and idle timeouts survive a restart. | `$SUBMILLI_HOME/server/sessions` |
 | `package_store_dir` | Packages installed with `submilli server packages install`. | `$SUBMILLI_HOME/server/packages` |
-| `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. | `$SUBMILLI_HOME/server/volumes` |
+| `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. `durable-objects/` holds private encrypted effect-history entries. | `$SUBMILLI_HOME/server/volumes` |
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
 | `database_path` + `-last-runs` | Last runs over 64 KiB, one directory per session, deleted when the session ends. | `$SUBMILLI_HOME/server/db/submilli.db-last-runs` |
 
@@ -205,7 +206,7 @@ The server creates each directory it needs, except a `volume_dir` you set,
 which must exist when the server starts. On a host where nothing can create it
 first, `--create-volume-dir` lets the server create it. Use it only for a
 directory on a disk that is always mounted by then. The volume root's
-`managed-local/`, `sessions/` and `ephemeral/` directories are created at
+`managed-local/`, `sessions/`, `ephemeral/`, and `durable-objects/` directories are created at
 startup and never while the server runs. Without the flag, a disk that isn't
 mounted stops the server, or the work that needs it, instead of filling an
 empty directory in its place. The server also reads the CLI's Package store, `$SUBMILLI_HOME/packages`,

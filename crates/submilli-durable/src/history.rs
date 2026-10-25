@@ -43,7 +43,7 @@ pub struct HistoryEntry {
 
 pub struct History {
     attempt: ExecutionAttempt,
-    units: UnitFactory,
+    store: Arc<dyn HistoryStore>,
     cursor: Mutex<Cursor>,
 }
 #[derive(Default)]
@@ -57,12 +57,22 @@ struct PendingCall {
 }
 impl History {
     /// A fresh interpreter always starts at the first call, even with saved history.
+    /// Compatibility constructor for embedders retaining inline history in a unit of work.
     pub fn new(attempt: ExecutionAttempt, units: UnitFactory) -> Self {
+        Self::with_store(attempt, Arc::new(UnitHistoryStore(units)))
+    }
+
+    pub fn with_store(attempt: ExecutionAttempt, store: Arc<dyn HistoryStore>) -> Self {
         Self {
             attempt,
-            units,
+            store,
             cursor: Mutex::new(Cursor::default()),
         }
+    }
+
+    /// Drain persistence workers even when an execution future was cancelled.
+    pub async fn drain(&self) -> Result<(), HistoryError> {
+        self.store.drain().await.map_err(history_error)
     }
 
     pub async fn position(&self) -> u64 {
@@ -74,18 +84,15 @@ impl History {
     }
 
     async fn save_outcome(&self, entry: Arc<HistoryEntry>) -> Result<(), StoreError> {
-        let mut unit = (self.units)().await?;
-        unit.append_history(&self.attempt, Arc::clone(&entry))
-            .await?;
-        match unit.commit().await {
+        match self.store.append(&self.attempt, Arc::clone(&entry)).await {
             Ok(()) => Ok(()),
             Err(commit_error) => {
                 // A lost acknowledgement is resolved by identity and exact contents,
                 // never by running the native action a second time here.
-                let mut check = (self.units)().await?;
-                check.history_progress(&self.attempt).await?;
-                if check
-                    .get_history_entry(&self.attempt.run_id, entry.sequence)
+                self.store.progress(&self.attempt).await?;
+                if self
+                    .store
+                    .get(&self.attempt.run_id, entry.sequence)
                     .await?
                     .as_ref()
                     == Some(entry.as_ref())
@@ -101,6 +108,13 @@ impl History {
 
 #[async_trait::async_trait]
 impl EffectHistory for History {
+    fn take_storage_fuel(&self) -> u64 {
+        self.store.take_storage_fuel()
+    }
+    async fn drain(&self) -> Result<(), HistoryError> {
+        History::drain(self).await
+    }
+
     async fn begin(
         &self,
         operation: &str,
@@ -112,9 +126,9 @@ impl EffectHistory for History {
                 "the previous native call has no committed outcome".into(),
             ));
         }
-        let mut unit = (self.units)().await.map_err(history_error)?;
-        let progress = unit
-            .history_progress(&self.attempt)
+        let progress = self
+            .store
+            .progress(&self.attempt)
             .await
             .map_err(history_error)?;
         if cursor.sequence > progress.position {
@@ -124,8 +138,9 @@ impl EffectHistory for History {
         }
         let id = self.effect_id(cursor.sequence);
         if cursor.sequence < progress.position {
-            let entry = unit
-                .get_history_entry(&self.attempt.run_id, cursor.sequence)
+            let entry = self
+                .store
+                .get(&self.attempt.run_id, cursor.sequence)
                 .await
                 .map_err(history_error)?
                 .ok_or_else(|| {
@@ -209,9 +224,9 @@ impl EffectHistory for History {
 
     async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
         let cursor = self.cursor.lock().await;
-        let mut unit = (self.units)().await.map_err(history_error)?;
-        let progress = unit
-            .history_progress(&self.attempt)
+        let progress = self
+            .store
+            .progress(&self.attempt)
             .await
             .map_err(history_error)?;
         if cursor.pending.is_some() || cursor.sequence != progress.position {
@@ -239,4 +254,44 @@ fn effect_id(run_id: &RunId, sequence: u64) -> EffectId {
 }
 fn history_error(error: StoreError) -> HistoryError {
     HistoryError(error.to_string())
+}
+
+/// Persistence of complete outcomes. Append fences the execution attempt and commits
+/// the entry, its ownership, position and accounting atomically before returning.
+/// Physical payload placement is private to the implementation.
+#[async_trait::async_trait]
+pub trait HistoryStore: Send + Sync {
+    fn take_storage_fuel(&self) -> u64 {
+        0
+    }
+    async fn progress(&self, attempt: &ExecutionAttempt) -> Result<HistoryProgress, StoreError>;
+    async fn get(&self, run: &RunId, sequence: u64) -> Result<Option<HistoryEntry>, StoreError>;
+    async fn append(
+        &self,
+        attempt: &ExecutionAttempt,
+        entry: Arc<HistoryEntry>,
+    ) -> Result<(), StoreError>;
+    async fn drain(&self) -> Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+struct UnitHistoryStore(UnitFactory);
+#[async_trait::async_trait]
+impl HistoryStore for UnitHistoryStore {
+    async fn progress(&self, attempt: &ExecutionAttempt) -> Result<HistoryProgress, StoreError> {
+        (self.0)().await?.history_progress(attempt).await
+    }
+    async fn get(&self, run: &RunId, sequence: u64) -> Result<Option<HistoryEntry>, StoreError> {
+        (self.0)().await?.get_history_entry(run, sequence).await
+    }
+    async fn append(
+        &self,
+        attempt: &ExecutionAttempt,
+        entry: Arc<HistoryEntry>,
+    ) -> Result<(), StoreError> {
+        let mut unit = (self.0)().await?;
+        unit.append_history(attempt, entry).await?;
+        unit.commit().await
+    }
 }
