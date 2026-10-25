@@ -358,10 +358,14 @@ impl<'a> Parser<'a> {
         let mut declarators = Vec::new();
         let mut start = kw.span.start;
         loop {
-            let kind = self.parse_declarator(is_const, doc.take())?;
+            let Some(kind) = self.parse_declarator(is_const, doc.take()) else {
+                self.discard_detached_patterns(&declarators);
+                return None;
+            };
             if !matches!(self.peek().kind, TokenKind::Comma) {
                 if !self.at_statement_end() {
                     self.error_at_peek("expected `;` after declaration");
+                    self.discard_detached_patterns(&declarators);
                     return None;
                 }
                 let end = self.finish_statement();
@@ -1756,6 +1760,10 @@ impl<'a> Parser<'a> {
             }
             let id = self.parse_statement()?;
             if nested {
+                let detached: Vec<StmtId> = std::iter::once(id)
+                    .chain(self.take_trailing_declarators())
+                    .collect();
+                self.discard_detached_patterns(&detached);
                 return None;
             }
             // The caller places the trailing declarators; each is exported too.
@@ -2739,9 +2747,7 @@ impl<'a> Parser<'a> {
         };
         let for_stmt = self.finish_c_for(kw, init.clone());
         if for_stmt.is_none() {
-            for declarator in init {
-                self.discard_detached_pattern(declarator);
-            }
+            self.discard_detached_patterns(&init);
         }
         for_stmt
     }
@@ -2787,17 +2793,21 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// A destructuring `for` initializer is lowered with its loop, so one whose
-    /// loop failed to parse would otherwise reach inference unlowered.
-    fn discard_detached_pattern(&mut self, init: StmtId) {
-        let Some(stmt) = parse_arena_result(self.ast.try_stmt_mut(init), &mut self.fatal) else {
-            return;
-        };
-        if matches!(
-            stmt.kind,
-            StmtKind::LetPattern { .. } | StmtKind::ConstPattern { .. }
-        ) {
-            stmt.kind = StmtKind::Block(Vec::new());
+    /// Pattern lowering expands a destructuring declaration only where a block, the
+    /// program or a `for` head holds it, so one parsed into the arena whose
+    /// statement then failed (a `for` loop, a later declarator, a nested `export`)
+    /// would otherwise reach inference unlowered.
+    fn discard_detached_patterns(&mut self, stmts: &[StmtId]) {
+        for &id in stmts {
+            let Some(stmt) = parse_arena_result(self.ast.try_stmt_mut(id), &mut self.fatal) else {
+                return;
+            };
+            if matches!(
+                stmt.kind,
+                StmtKind::LetPattern { .. } | StmtKind::ConstPattern { .. }
+            ) {
+                stmt.kind = StmtKind::Block(Vec::new());
+            }
         }
     }
 
