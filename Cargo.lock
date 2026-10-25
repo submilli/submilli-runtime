@@ -5458,6 +5458,7 @@ dependencies = [
 name = "submilli-build"
 version = "0.4.3"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "serde_yml",

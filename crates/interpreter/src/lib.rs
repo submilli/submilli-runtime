@@ -43,6 +43,16 @@ pub mod typechecker;
 pub mod typed_ast;
 pub mod types;
 
+/// Identity of this compiler build: workspace version plus a hash of the
+/// compiler sources. Installed package artifacts record it. A missing or
+/// different stamp means `pkg.wasm` was produced by another compiler and must
+/// be rebuilt from the sources retained beside it, not executed.
+pub const COMPILER_ID: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    "+",
+    env!("SUBMILLI_COMPILER_FINGERPRINT")
+);
+
 pub use asi::Asi;
 pub use ast::{
     AccessorKind, ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, BindingKind, CatchClause,

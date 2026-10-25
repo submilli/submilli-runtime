@@ -267,6 +267,11 @@ fn compile_repo(
             Ok(artifact) => artifact.metadata.config.overrides,
             Err(PackageStoreError::MissingPackage { .. }) => std::collections::BTreeMap::new(),
             Err(error) if error.is_incomplete_artifact() => std::collections::BTreeMap::new(),
+            // A compiler mismatch with no sources must not run the old wasm, but
+            // the saved overrides are still the inputs this install should keep.
+            Err(PackageStoreError::Unavailable { .. }) => {
+                crate::package_store::saved_overrides(store, package.name.as_str())
+            }
             Err(error) => return Err(InstallError::Store(error)),
         };
         if only == Some(&package.name) {
@@ -322,8 +327,13 @@ fn select_install(
         };
         match existing {
             Err(PackageStoreError::MissingPackage { .. }) => to_install.push(package.name.clone()),
-            Err(err) if err.is_incomplete_artifact() => to_install.push(package.name.clone()),
+            Err(err) if err.is_incomplete_artifact() || err.is_unsupported_schema() => {
+                to_install.push(package.name.clone());
+            }
             Err(err) => return Err(InstallError::Store(err)),
+            Ok(artifact) if crate::rebuild::needs_rebuild(&artifact.metadata) => {
+                to_install.push(package.name.clone());
+            }
             Ok(artifact) => match artifact.metadata.source {
                 Some(PackageSource::Github(existing))
                     if existing.sha == github.sha && artifact.metadata.config == package.config =>

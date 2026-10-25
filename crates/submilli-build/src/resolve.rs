@@ -464,6 +464,9 @@ fn lock_satisfies(
         // The lock is satisfied only by the owned root; a fallback copy would
         // leave this store depending on a directory it does not manage.
         let artifact = store.load_owned(&entry.name).ok()?;
+        if crate::rebuild::needs_rebuild(&artifact.metadata) {
+            return None;
+        }
         match artifact.metadata.source {
             Some(PackageSource::Github(gh))
                 if gh.sha == entry.sha

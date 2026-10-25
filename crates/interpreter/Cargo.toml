@@ -71,6 +71,9 @@ libc = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 cap-primitives = { workspace = true }
 
+[build-dependencies]
+sha2 = "0.10"
+
 [dev-dependencies]
 tokio-rustls = "0.26"
 insta = { workspace = true }

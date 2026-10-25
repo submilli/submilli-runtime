@@ -17,7 +17,7 @@ use crate::{
     ArtifactDependency, ArtifactError, ArtifactMetadata, ArtifactSource,
     CANONICAL_SOURCE_EXTENSION, CapabilitySchema, DependencyKind, LEGACY_SOURCE_EXTENSION,
     PackageManifest, PackageName, PackageSource, PackageStore, PackageStoreError, PackageVersion,
-    ProjectManifest, derive_capability_schema, write_package_artifact_with_docs_and_sources,
+    ProjectManifest, derive_capability_schema,
 };
 
 #[derive(Clone, Debug)]
@@ -124,6 +124,9 @@ fn build_with_inputs(
             match externals.load(package.name.as_str()) {
                 Ok(artifact) => artifact.metadata.config.overrides,
                 Err(PackageStoreError::MissingPackage { .. }) => BTreeMap::new(),
+                Err(PackageStoreError::Unavailable { .. }) => {
+                    crate::package_store::saved_overrides(externals, package.name.as_str())
+                }
                 Err(error) => {
                     return Err(DriverError::MissingExternal {
                         package: package.name.clone(),
@@ -410,20 +413,23 @@ pub fn install_packages(
         );
         metadata.source = package.source.clone();
         metadata.config = package.config.clone();
-        write_package_artifact_with_docs_and_sources(
-            &dir,
-            &package.wasm,
-            &package.type_info,
-            &package.capabilities,
-            &package.declaration,
-            &metadata,
-            &package.documentation,
-            &package.sources,
-        )
-        .map_err(|source| DriverError::Install {
-            package: package.name.clone(),
-            source: Box::new(source),
-        })?;
+        let compiled = crate::rebuild::Recompiled {
+            wasm: package.wasm.clone(),
+            type_info: package.type_info.clone(),
+            capabilities: package.capabilities.clone(),
+            declaration: package.declaration.clone(),
+            metadata,
+            documentation: package.documentation.clone(),
+            sources: package.sources.clone(),
+        };
+        if let Err(source) =
+            crate::rebuild::replace_installed(store.root(), package.name.as_str(), &dir, &compiled)
+        {
+            return Err(DriverError::Store {
+                package: package.name.clone(),
+                source: Box::new(source),
+            });
+        }
         dirs.push(dir);
     }
     Ok(dirs)
