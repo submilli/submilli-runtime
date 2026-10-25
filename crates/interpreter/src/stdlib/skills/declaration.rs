@@ -96,13 +96,7 @@ fn skill_properties(loaded: bool) -> BTreeMap<String, PropertySig> {
             &mut properties,
             "files",
             Type::Array(Box::new(Type::String)),
-            "/** Up to 256 bundled file names relative to this skill, without reading their contents. Pass each to `skills.readFile(name, path)`. These are not filesystem paths and cannot be read through `submilli:fs`. Invalid paths are omitted. */",
-        );
-        insert_property(
-            &mut properties,
-            "filesTruncated",
-            Type::Boolean,
-            "/** True when the provider omitted files or the engine capped or filtered the listing. */",
+            "/** Bundled file names relative to this skill, without reading their contents. Pass each to `skills.readFile(name, path)`. These are not filesystem paths and cannot be read through `submilli:fs`. Invalid paths are omitted. */",
         );
         insert_property(
             &mut properties,

@@ -33,12 +33,9 @@ pub struct Skill {
     pub content: String,
     /// Bundled file names relative to this skill, accepted by `read_file`.
     /// These are not filesystem paths; programs use `skills.readFile(name, path)`.
-    /// The engine exposes at most 256 entries and omits invalid paths.
+    /// The engine omits invalid paths without limiting the number of files.
     #[serde(default)]
     pub files: Vec<String>,
-    /// The provider omitted files, or the engine capped or filtered the listing.
-    #[serde(default)]
-    pub files_truncated: bool,
 }
 
 /// Why a skill or one of its files could not be read. Every message is safe to
@@ -125,9 +122,8 @@ pub trait SkillProvider: Send + Sync {
     /// not empty, `.` or `..` and has no `/`, `\` or NUL; it may contain `:`, so
     /// never use it as a path.
     /// Return bundled file names in `files` without reading their contents. Each
-    /// must be accepted by `read_file(name, path)`; set `files_truncated` when
-    /// the provider omits entries. The engine considers the first 256 entries,
-    /// removes invalid paths, and reports any omission in `files_truncated`.
+    /// must be accepted by `read_file(name, path)`. Return the complete listing;
+    /// the engine removes invalid paths but does not cap the number of files.
     fn load<'a>(
         &'a self,
         name: &'a str,

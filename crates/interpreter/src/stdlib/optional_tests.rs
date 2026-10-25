@@ -101,7 +101,6 @@ struct FakeSkills {
     loads: Mutex<Vec<String>>,
     reads: Mutex<Vec<(String, String)>>,
     files: Vec<String>,
-    files_truncated: bool,
 }
 
 impl FakeSkills {
@@ -110,7 +109,6 @@ impl FakeSkills {
             loads: Mutex::new(Vec::new()),
             reads: Mutex::new(Vec::new()),
             files: vec!["templates/report.md".to_string()],
-            files_truncated: false,
         })
     }
 }
@@ -145,7 +143,6 @@ impl SkillProvider for FakeSkills {
                     description: Some("Review a diff".to_string()),
                     content: "Read the diff twice.".to_string(),
                     files: self.files.clone(),
-                    files_truncated: self.files_truncated,
                 }),
                 _ => Err(SkillError::NotFound {
                     name: name.to_string(),
@@ -538,12 +535,12 @@ async fn skills_list_load_and_read_files() {
                  const names = skills.list().map((s) => s.name).join(",");
                  const review = skills.load("review");
                  const report = skills.readFile(review.name, review.files[0]);
-                 return names + "|" + review.content + "|" + report + "|" + (review.filesTruncated ? "true" : "false");
+                 return names + "|" + review.content + "|" + report;
                }"#,
         )
         .await
         .expect("program completes");
-    assert_eq!(out, "review|Read the diff twice.|# Report|false");
+    assert_eq!(out, "review|Read the diff twice.|# Report");
     assert_eq!(
         *skills.reads.lock().expect("reads"),
         [("review".to_string(), "templates/report.md".to_string())]
@@ -551,27 +548,11 @@ async fn skills_list_load_and_read_files() {
 }
 
 #[tokio::test]
-async fn skill_files_are_bounded_and_report_omissions() {
+async fn skill_files_are_not_capped_and_invalid_paths_are_omitted() {
+    let many_files: Vec<String> = (0..1024).map(|i| format!("references/{i}.md")).collect();
     let cases = [
-        (Vec::new(), false, Vec::new(), false),
-        (
-            vec!["a".to_string(); 256],
-            false,
-            vec!["a".to_string(); 256],
-            false,
-        ),
-        (
-            vec!["a".to_string(); 257],
-            false,
-            vec!["a".to_string(); 256],
-            true,
-        ),
-        (
-            vec!["references/✓.md".to_string()],
-            true,
-            vec!["references/✓.md".to_string()],
-            true,
-        ),
+        (Vec::new(), Vec::new()),
+        (many_files.clone(), many_files),
         (
             vec![
                 "../secret".to_string(),
@@ -584,16 +565,12 @@ async fn skill_files_are_bounded_and_report_omissions() {
                 "references/✓.md".to_string(),
                 "a".repeat(4096),
             ],
-            false,
             vec!["references/✓.md".to_string(), "a".repeat(4096)],
-            true,
         ),
     ];
-    for (files, provider_truncated, expected, truncated) in cases {
+    for (files, expected) in cases {
         let mut skills = FakeSkills::new();
-        let provider = Arc::get_mut(&mut skills).expect("sole owner");
-        provider.files = files;
-        provider.files_truncated = provider_truncated;
+        Arc::get_mut(&mut skills).expect("sole owner").files = files;
         let out = Harness::default()
             .skills(skills.clone())
             .run(
@@ -604,7 +581,7 @@ async fn skill_files_are_bounded_and_report_omissions() {
             .expect("program completes");
         let loaded: serde_json::Value = serde_json::from_str(&out).expect("JSON");
         assert_eq!(loaded["files"], serde_json::json!(expected));
-        assert_eq!(loaded["filesTruncated"], truncated);
+        assert!(loaded.get("filesTruncated").is_none());
         assert!(
             skills.reads.lock().expect("reads").is_empty(),
             "load must not read bundled contents"
@@ -639,7 +616,6 @@ fn older_skill_payloads_have_an_empty_file_listing() {
         serde_json::from_str(r#"{"name":"review","description":null,"content":"Review"}"#)
             .expect("old provider or journal payload");
     assert!(skill.files.is_empty());
-    assert!(!skill.files_truncated);
 }
 
 #[tokio::test]
@@ -865,7 +841,6 @@ impl SkillProvider for CaseFoldingSkills {
                 description: None,
                 content: "Read the diff twice.".to_string(),
                 files: Vec::new(),
-                files_truncated: false,
             })
         })
     }
