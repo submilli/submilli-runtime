@@ -987,7 +987,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:session" => {
             "Session-scoped key-value state and durable package-owned resource cleanup."
         }
-        "submilli:skills" => "Harness skills: list(), load(name) and readFile(name, path).",
+        "submilli:skills" => "Harness skills: list(), load(name), and skill.readFile(path).",
         "submilli:url" => "URL parse/build and query-string handling. Pure compute.",
         "submilli:variables" => "Immutable Blueprint/session configuration for packages.",
         "submilli:uuid" => "UUID v4/v7 generation and validation.",

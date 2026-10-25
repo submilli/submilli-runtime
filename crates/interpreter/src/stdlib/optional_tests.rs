@@ -100,6 +100,7 @@ fn two_agents() -> Vec<AgentInfo> {
 struct FakeSkills {
     loads: Mutex<Vec<String>>,
     reads: Mutex<Vec<(String, String)>>,
+    files: Vec<String>,
 }
 
 impl FakeSkills {
@@ -107,6 +108,7 @@ impl FakeSkills {
         Arc::new(Self {
             loads: Mutex::new(Vec::new()),
             reads: Mutex::new(Vec::new()),
+            files: vec!["templates/report.md".to_string()],
         })
     }
 }
@@ -140,6 +142,13 @@ impl SkillProvider for FakeSkills {
                     name: "review".to_string(),
                     description: Some("Review a diff".to_string()),
                     content: "Read the diff twice.".to_string(),
+                    files: self.files.clone(),
+                }),
+                "internal" => Ok(Skill {
+                    name: "internal".to_string(),
+                    description: None,
+                    content: "Internal instructions.".to_string(),
+                    files: vec!["templates/report.md".to_string()],
                 }),
                 _ => Err(SkillError::NotFound {
                     name: name.to_string(),
@@ -160,6 +169,7 @@ impl SkillProvider for FakeSkills {
         Box::pin(async move {
             match (name, path) {
                 ("review", "templates/report.md") => Ok("# Report".to_string()),
+                ("internal", "templates/report.md") => Ok("# Internal".to_string()),
                 _ => Err(SkillError::FileNotFound {
                     name: name.to_string(),
                     path: path.to_string(),
@@ -531,28 +541,169 @@ async fn skills_list_load_and_read_files() {
                function main(): string {
                  const names = skills.list().map((s) => s.name).join(",");
                  const review = skills.load("review");
-                 const report = skills.readFile("review", "templates/report.md");
+                 const report = review.readFile(review.files[0]);
                  return names + "|" + review.content + "|" + report;
                }"#,
         )
         .await
         .expect("program completes");
     assert_eq!(out, "review|Read the diff twice.|# Report");
+    assert_eq!(
+        *skills.reads.lock().expect("reads"),
+        [("review".to_string(), "templates/report.md".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn skill_read_file_uses_its_receiver_and_reports_missing_files() {
+    let skills = FakeSkills::new();
+    let out = Harness::default()
+        .skills(skills.clone())
+        .run(
+            r#"import skills from "submilli:skills";
+               import { Skill } from "submilli:skills";
+               function report(skill: Skill): string { return skill.readFile("templates/report.md"); }
+               function main(): string {
+                 const review = skills.load("review");
+                 const internal = skills.load("internal");
+                 const reports = report(review) + "|" + report(internal);
+                 try { review.readFile("missing.md"); return "unexpected"; }
+                 catch (e) { if (e instanceof Error) return reports + "|" + e.message; throw e; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(
+        out,
+        "# Report|# Internal|skills.readFile: skill `review` has no file `missing.md`"
+    );
+    assert_eq!(
+        *skills.reads.lock().expect("reads"),
+        [
+            ("review".to_string(), "templates/report.md".to_string()),
+            ("internal".to_string(), "templates/report.md".to_string()),
+            ("review".to_string(), "missing.md".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn read_file_is_available_only_on_a_loaded_skill() {
+    let errors = compile_errors(
+        r#"import skills from "submilli:skills";
+           function main(): string { return skills.readFile("review", "templates/report.md"); }"#,
+        harness_stdlib(),
+    );
+    assert!(!errors.is_empty());
+    assert!(errors.iter().any(|error| error.contains("readFile")));
+}
+
+#[tokio::test]
+async fn skill_files_are_not_capped_and_invalid_paths_are_omitted() {
+    let many_files: Vec<String> = (0..1024).map(|i| format!("references/{i}.md")).collect();
+    let cases = [
+        (Vec::new(), Vec::new()),
+        (many_files.clone(), many_files),
+        (
+            vec![
+                "../secret".to_string(),
+                "/absolute".to_string(),
+                "a\\b".to_string(),
+                "a:b".to_string(),
+                "a//b".to_string(),
+                "a\0b".to_string(),
+                "a".repeat(4097),
+                "references/✓.md".to_string(),
+                "a".repeat(4096),
+            ],
+            vec!["references/✓.md".to_string(), "a".repeat(4096)],
+        ),
+    ];
+    for (files, expected) in cases {
+        let mut skills = FakeSkills::new();
+        Arc::get_mut(&mut skills).expect("sole owner").files = files;
+        let out = Harness::default()
+            .skills(skills.clone())
+            .run(
+                r#"import skills from "submilli:skills";
+               function main(): string { return JSON.stringify(skills.load("review"))!; }"#,
+            )
+            .await
+            .expect("program completes");
+        let loaded: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+        assert_eq!(loaded["files"], serde_json::json!(expected));
+        assert!(loaded.get("filesTruncated").is_none());
+        assert!(
+            skills.reads.lock().expect("reads").is_empty(),
+            "load must not read bundled contents"
+        );
+    }
+}
+
+#[tokio::test]
+async fn loading_a_skill_does_not_expose_its_files_on_the_filesystem() {
+    let out = Harness::default()
+        .skills(FakeSkills::new())
+        .run(
+            r#"import skills from "submilli:skills";
+           import fs from "submilli:fs";
+           function main(): string {
+             const skill = skills.load("review");
+             const path = skill.files[0];
+             if (fs.exists(path) || fs.exists("/review/" + path) || fs.info().mounts.length !== 0) {
+               return "exposed";
+             }
+             return skill.readFile(path);
+           }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(out, "# Report");
+}
+
+#[test]
+fn older_skill_payloads_have_an_empty_file_listing() {
+    let skill: Skill =
+        serde_json::from_str(r#"{"name":"review","description":null,"content":"Review"}"#)
+            .expect("old provider or journal payload");
+    assert!(skill.files.is_empty());
 }
 
 #[tokio::test]
 async fn read_file_is_gated_by_the_skill_and_refuses_paths_outside_it() {
+    struct DenySecondCall(std::sync::atomic::AtomicUsize);
+    impl SecurityCheck for DenySecondCall {
+        fn check(
+            &self,
+            _caller: &str,
+            capability: &str,
+            context: &serde_json::Value,
+        ) -> CheckOutcome {
+            assert_eq!(capability, "skill.load");
+            assert_eq!(context["name"], "review");
+            if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                CheckOutcome::Deny {
+                    rule: None,
+                    reason: "read denied".to_string(),
+                }
+            } else {
+                CheckOutcome::Allow { rule: None }
+            }
+        }
+    }
+    let policy = Arc::new(DenySecondCall(std::sync::atomic::AtomicUsize::new(0)));
     let skills = FakeSkills::new();
     let out = Harness::default()
         .skills(skills.clone())
-        .policy(DenyOne::new("name", "internal"))
+        .policy(policy.clone())
         .run(
             r#"import skills from "submilli:skills";
                function main(): string {
                  let out = "";
-                 try { skills.readFile("internal", "SKILL.md"); out += "read "; }
+                 const review = skills.load("review");
+                 try { review.readFile("templates/report.md"); out += "read "; }
                  catch (e: PermissionDeniedError) { out += "denied "; }
-                 try { skills.readFile("review", "../secrets"); out += "escaped"; }
+                 try { review.readFile("../secrets"); out += "escaped"; }
                  catch (e: RangeError) { out += "range"; }
                  return out;
                }"#,
@@ -560,6 +711,7 @@ async fn read_file_is_gated_by_the_skill_and_refuses_paths_outside_it() {
         .await
         .expect("program completes");
     assert_eq!(out, "denied range");
+    assert_eq!(policy.0.load(std::sync::atomic::Ordering::SeqCst), 3);
     assert!(
         skills.reads.lock().expect("reads").is_empty(),
         "neither call may reach the harness"
@@ -693,14 +845,12 @@ async fn a_skill_name_that_is_not_one_segment_never_reaches_the_harness() {
                    try { skills.load(name); out += "loaded "; }
                    catch (e: RangeError) { out += "range "; }
                  }
-                 try { skills.readFile("../../etc", "passwd"); out += "read"; }
-                 catch (e: RangeError) { out += "range"; }
                  return out;
                }"#,
         )
         .await
         .expect("program completes");
-    assert_eq!(out, "range range range range range");
+    assert_eq!(out, "range range range range ");
     assert!(skills.loads.lock().expect("loads").is_empty());
     assert!(skills.reads.lock().expect("reads").is_empty());
 }
@@ -762,6 +912,7 @@ impl SkillProvider for CaseFoldingSkills {
                 name: "review".to_string(),
                 description: None,
                 content: "Read the diff twice.".to_string(),
+                files: Vec::new(),
             })
         })
     }

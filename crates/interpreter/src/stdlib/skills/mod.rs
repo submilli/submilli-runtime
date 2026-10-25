@@ -44,6 +44,7 @@ pub const CAPABILITY: &str = "skill.load";
 const S_NAME: usize = 1;
 const S_DESCRIPTION: usize = 2;
 const S_CONTENT: usize = 3;
+const S_FILES: usize = 4;
 
 const SKILL_INFO_VIEW: HostView = HostView {
     module: MODULE_NAME,
@@ -60,6 +61,7 @@ const SKILL_VIEW: HostView = HostView {
         ("name", S_NAME),
         ("description", S_DESCRIPTION),
         ("content", S_CONTENT),
+        ("files", S_FILES),
     ],
 };
 
@@ -118,14 +120,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_value_async(
         linker,
         MODULE_NAME,
-        crate::mangle::package_symbol(MODULE_NAME, "readFile"),
-        FuncType::new(&engine, [string.clone(), string.clone()], [string.clone()]),
+        crate::mangle::extend(
+            &crate::mangle::package_symbol(MODULE_NAME, "Skill"),
+            "readFile",
+        ),
+        FuncType::new(&engine, [object.clone(), string.clone()], [string.clone()]),
         |caller, params| {
             Box::pin(async move {
-                let name =
-                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "skills.readFile (name)")?;
+                let receiver = abi::backing_receiver(caller, abi_arg(params, 0)?)?;
+                let name = receiver
+                    .field(&mut *caller, S_NAME)
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+                let name = read_string_arg(&mut *caller, &name, "Skill.readFile (name)")?;
                 let path =
-                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "skills.readFile (path)")?;
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "Skill.readFile (path)")?;
                 read_file(caller, name, path).await
             })
         },
@@ -196,11 +204,13 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
         Box::pin(async move {
             let provider =
                 provider(caller).map_err(|error| fail(caller, ticket, "load", &error))?;
-            let skill = provider
+            let mut skill = provider
                 .load(&name)
                 .await
                 .map_err(|error| fail(caller, ticket, "load", &error))?;
             fuel::settle(&mut *caller, fuel::IO, skill.content.len() as u64)?;
+            // Every entry is visited or dropped, even if the skill is refused.
+            fuel::settle(&mut *caller, fuel::ELEM, skill.files.len() as u64)?;
             if skill.name != name {
                 return Err(fail(
                     caller,
@@ -209,6 +219,7 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
                     &SkillError::WrongSkill { name },
                 ));
             }
+            filter_skill_files(caller, &mut skill)?;
             record_text(caller, ticket, &skill.content);
             Ok(skill)
         })
@@ -217,7 +228,27 @@ async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> was
     build_skill(caller, skill)
 }
 
-/// `readFile(name, path)`: in the order `load` follows, with the path checked
+/// Filter metadata before it is journaled or converted to guest values. Never
+/// shorten a path: it must retain exactly the name `readFile` will receive.
+fn filter_skill_files(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    skill: &mut Skill,
+) -> wasmtime::Result<()> {
+    let scanned_bytes = skill
+        .files
+        .iter()
+        .filter(|path| path.len() <= MAX_SKILL_ARG_BYTES)
+        .fold(0_u64, |bytes, path| bytes.saturating_add(path.len() as u64));
+    fuel::settle(&mut *caller, fuel::SCAN, scanned_bytes)?;
+    skill.files.retain(|path| is_skill_path(path));
+    let path_bytes = skill
+        .files
+        .iter()
+        .fold(0_u64, |bytes, path| bytes.saturating_add(path.len() as u64));
+    fuel::settle(caller, fuel::IO, path_bytes)
+}
+
+/// `skill.readFile(path)`: in the order `load` follows, with the path checked
 /// beside the name.
 async fn read_file(
     caller: &mut wasmtime::Caller<'_, StoreData>,
@@ -381,6 +412,7 @@ fn skill_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
             string_field(&intr),
             nullable_object_field(&intr),
             string_field(&intr),
+            abi::array_field(&intr),
         ],
     )
 }
@@ -406,6 +438,16 @@ fn build_skill(
     let name = write_submilli_string_struct(caller, &skill.name)?;
     let description = optional_text(caller, skill.description.as_deref())?;
     let content = write_submilli_string_struct(caller, &skill.content)?;
+    crate::runtime::array_storage::checked_length(skill.files.len())?;
+    let mut files = Vec::new();
+    files
+        .try_reserve_exact(skill.files.len())
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    for path in &skill.files {
+        let path = write_submilli_string_struct(caller, path)?;
+        files.push(Val::AnyRef(Some(path.to_anyref())));
+    }
+    let files = abi::new_array(caller, &files)?;
     let ty = skill_backing_struct(caller.engine())?;
     abi::new_backing(
         caller,
@@ -414,6 +456,7 @@ fn build_skill(
             Val::AnyRef(Some(name.to_anyref())),
             description,
             Val::AnyRef(Some(content.to_anyref())),
+            files,
         ],
     )
 }
