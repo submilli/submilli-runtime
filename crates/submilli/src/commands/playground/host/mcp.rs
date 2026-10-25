@@ -145,7 +145,11 @@ async fn handle(
     };
     req.extensions_mut().insert(Caller(token.name().to_owned()));
     let Some(endpoint) = host.endpoints.get(&blueprint) else {
-        return StatusCode::NOT_FOUND.into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown blueprint: {blueprint}"),
+        )
+            .into_response();
     };
     let Some(applied) = host.shared.blueprint(&blueprint).await else {
         return (
