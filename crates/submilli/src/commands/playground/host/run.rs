@@ -765,6 +765,28 @@ impl RunHost {
         self.packages.clear();
     }
 
+    /// Refresh only the registry packages visible to this discovery request.
+    pub(crate) async fn refresh_package_discovery(
+        self: &Arc<Self>,
+        blueprint: &Blueprint,
+        name: Option<&str>,
+    ) -> Result<(), String> {
+        let wanted = blueprint
+            .packages
+            .iter()
+            .filter(|package| name.is_none_or(|name| package.as_str() == name))
+            .cloned()
+            .collect();
+        if let Some(freshness) = &self.freshness {
+            let host = Arc::clone(self);
+            freshness
+                .before_discovery(wanted, move || host.clear_prepared_packages())
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Drop every discovered `@mcp/<server>` catalog, so the next run discovers
     /// against the blueprint in force.
     pub(crate) fn clear_mcp_catalogs(&self) {

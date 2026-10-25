@@ -169,6 +169,25 @@ const changeText = (c: ValueChange) => c.name + " " + c.was + " → " + c.now;
 export function Values({ v }: { v: ValuesNote }) {
   const [open, setOpen] = useState(false);
   const [first, ...rest] = v.changes;
+  if (v.summary) {
+    return (
+      <div className="pg-note">
+        <p>
+          {v.summary}{" "}
+          <button className="pg-link pg-inline" aria-expanded={open} onClick={() => setOpen(!open)}>
+            {open ? "hide details" : "Show details"}
+          </button>
+        </p>
+        {open && (
+          <ul className="pg-values">
+            {[first, ...rest].map((c) => (
+              <li key={c.name}>{changeText(c)}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="pg-note">
       <p>

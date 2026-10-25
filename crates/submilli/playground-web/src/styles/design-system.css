@@ -4,6 +4,8 @@
 
 /* Colors */
 :root {
+  color-scheme: dark;
+
   /* Base neutrals */
   --black: #000000;
   --ink-900: #090a0a;
@@ -15,7 +17,9 @@
   --slate-700: #31415c;
   --slate-600: #4d6183;
 
+  --grey-550: #6f6f6f;
   --grey-500: #737373;
+  --grey-450: #8a8a8a;
   --grey-400: #929292;
   --grey-300: #b6b6b6;
 
@@ -30,6 +34,7 @@
   --cyan-300: #88e5ff;
   --blue-600: #6badda;
   --blue-700: #61a4d0;
+  --blue-800: #3075a2;
 
   /* Semantic */
   --danger: #ff8181;
@@ -46,7 +51,8 @@
 
   --text-primary: var(--white);
   --text-secondary: rgba(255, 255, 255, 0.64);
-  --text-muted: var(--grey-500);
+  --text-muted: var(--grey-450);
+  --text-form-help: var(--text-secondary);
   --text-on-light: var(--grey-900);
   --text-accent: var(--blue-300);
 
@@ -68,6 +74,8 @@
 }
 
 .theme-light {
+  color-scheme: light;
+
   --surface-canvas: var(--blue-100);
   --surface-raised: var(--white);
   --surface-card: rgba(255, 255, 255, 0.6);
@@ -76,9 +84,10 @@
 
   --text-primary: var(--grey-900);
   --text-secondary: rgba(32, 32, 32, 0.66);
-  --text-muted: var(--grey-400);
+  --text-muted: var(--grey-550);
+  --text-form-help: var(--text-secondary);
   --text-on-light: var(--grey-900);
-  --text-accent: var(--blue-700);
+  --text-accent: var(--blue-800);
 
   --border-subtle: rgba(32, 32, 32, 0.1);
   --border-strong: rgba(32, 32, 32, 0.2);
@@ -90,7 +99,7 @@
 
 /* Typography */
 :root {
-  --font-rounded: "SF Pro Rounded", "Nunito", -apple-system, BlinkMacSystemFont,
+  --font-rounded: "SF Pro Rounded", "Nunito Variable", "Nunito", -apple-system, BlinkMacSystemFont,
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
@@ -98,6 +107,14 @@
   --font-title: var(--font-rounded);
   --font-body: var(--font-rounded);
   --font-label: var(--font-mono);
+
+  /* Application forms: a clear title, rounded section/body copy, mono labels.
+     Keep helper text readable; hierarchy comes from scale, weight and spacing. */
+  --fs-form-title: var(--fs-title);
+  --fs-form-section: var(--fs-base);
+  --fs-form-body: var(--fs-sm);
+  --fs-form-label: var(--fs-caption);
+  --fs-form-help: var(--fs-caption);
 
   --fw-regular: 400;
   --fw-medium: 500;
@@ -152,6 +169,21 @@
   --pad-card: var(--space-6);
 
   --measure-prose: 46ch;
+  /* Shared form controls: fixed rhythm, with room reserved for select affordances. */
+  --control-height: 36px;
+  --control-padding-block: var(--space-2);
+  --control-padding-inline: var(--space-3);
+  --control-border-width: 1px;
+  --control-line-height: 18px;
+  --control-select-padding-end: calc(var(--control-padding-inline) + var(--control-arrow-inset) + var(--control-arrow-size));
+  --control-radius: var(--radius-sm);
+  --control-font-size: 12px;
+  --control-arrow-size: var(--space-2);
+  --control-arrow-inset: var(--space-3);
+  --measure-form-copy: 58ch;
+  --measure-form-help: 64ch;
+  --gap-form-section: var(--space-8);
+  --gap-form-field: var(--space-2);
 }
 
 /* Radius */

@@ -24,8 +24,8 @@ use serde_json::json;
 use super::chat::ChatPost;
 use super::control_auth::Caller;
 use super::controls::act::{
-    ActError, Actions, Answer, BindRequest, ChatRequest, DraftRequest, ExecRequest, RunRequest,
-    SessionEndRequest, SessionStartRequest, TestRequest,
+    ActError, Actions, Answer, BindRequest, ChatRequest, DraftRequest, ExecRequest, RerunRequest,
+    RunRequest, SessionEndRequest, SessionStartRequest, TestRequest,
 };
 use super::controls::read::{self, AuditQuery, RunsQuery, Since};
 use super::controls::render::{self, EXIT_FAILURE};
@@ -250,6 +250,13 @@ pub(crate) const ROUTES: &[Route] = &[
     },
     Route {
         method: "GET",
+        path: "/api/packages/docs",
+        group: Group::Viewer,
+        command: None,
+        handler: || get(package_docs),
+    },
+    Route {
+        method: "GET",
         path: "/api/packages/source",
         group: Group::Viewer,
         command: None,
@@ -395,7 +402,7 @@ async fn test(
 
 async fn rerun(
     State(state): State<ControlState>,
-    request: Result<Json<RunRequest>, JsonRejection>,
+    request: Result<Json<RerunRequest>, JsonRejection>,
 ) -> Response {
     act_with(&state, request, |actions, request| async move {
         actions.rerun(request).await
@@ -715,6 +722,112 @@ struct PackageSourceParams {
     package: String,
     /// As a package line names it: the path under `src/`, without the extension.
     module: String,
+}
+
+#[derive(Deserialize)]
+struct PackageDocsParams {
+    /// In the query rather than the path, since a scoped name holds a `/`.
+    package: String,
+    /// An existing registered project blueprint; omitted means the launch default.
+    blueprint: Option<String>,
+}
+
+/// `GET /api/packages/docs`: the package author's documentation as installed now.
+/// Only the packages the selected registered blueprint reaches (the launch default
+/// when omitted): the store is shared by every
+/// project, and the others are not this playground's.
+async fn package_docs(
+    State(state): State<ControlState>,
+    params: Result<Query<PackageDocsParams>, QueryRejection>,
+) -> Response {
+    let Query(PackageDocsParams { package, blueprint }) = match extracted(params) {
+        Ok(params) => params,
+        Err(refused) => return *refused,
+    };
+    let shown = render::clean(&package);
+    let closure = if let Some(name) = blueprint {
+        let blueprint = match state.actions().blueprint(&name).await {
+            Ok(blueprint) => blueprint,
+            Err(refused) => {
+                return host::error(StatusCode::BAD_REQUEST, refused.kind, &refused.message);
+            }
+        };
+        host::closure_of(&state, blueprint).await
+    } else {
+        host::current_closure(&state)
+            .await
+            .map(Option::unwrap_or_default)
+    };
+    let closure = match closure {
+        Ok(closure) => closure,
+        Err(message) => {
+            return host::error(StatusCode::INTERNAL_SERVER_ERROR, "read_failed", &message);
+        }
+    };
+    if !closure.iter().any(|entry| entry.name == package) {
+        return host::error(
+            StatusCode::NOT_FOUND,
+            "unknown_package",
+            &format!(
+                "package `{shown}` is not in the package closure of the blueprint in force; \
+                 `submilli playground status` lists it"
+            ),
+        );
+    }
+    let packages = Arc::clone(state.packages());
+    let name = package.clone();
+    let documentation =
+        match tokio::task::spawn_blocking(move || packages.installed_documentation(&name)).await {
+            Ok(Ok(Some(documentation))) => documentation,
+            Ok(Ok(None)) => {
+                return host::error(
+                    StatusCode::NOT_FOUND,
+                    "unknown_package",
+                    &format!(
+                        "package `{shown}` is not installed; install it with `submilli build \
+                     publish-local`"
+                    ),
+                );
+            }
+            Ok(Err(_message)) => {
+                return host::error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "read_failed",
+                    &format!("package `{shown}` documentation could not be read"),
+                );
+            }
+            Err(_error) => {
+                return host::error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "read_failed",
+                    &format!("package `{shown}` documentation could not be read"),
+                );
+            }
+        };
+    if documentation.trim().is_empty() {
+        return host::error(
+            StatusCode::NOT_FOUND,
+            "no_documentation",
+            &format!("package `{shown}` was installed without documentation"),
+        );
+    }
+    let bytes = documentation.len();
+    let (markdown, truncated) = super::within_bytes(&documentation, MAX_SOURCE_BYTES);
+    let note = truncated.then(|| {
+        format!(
+            "the documentation is {} kB; only the first {} kB are shown",
+            bytes.div_ceil(1000),
+            MAX_SOURCE_BYTES / 1000
+        )
+    });
+    Json(json!({
+        "package": package,
+        "bytes": bytes,
+        "truncated": truncated,
+        "note": note,
+        "untrusted": { "markdown": markdown },
+    }))
+    .into_response()
 }
 
 /// `GET /api/packages/source`: one module of a package as installed now, for the page's
@@ -1167,10 +1280,13 @@ mod tests {
             .collect()
     }
 
-    /// Routes only the page calls, with no CLI subcommand. A package's source serves the
-    /// page's step into a package's line; on the command line `show` and `explain` name
-    /// that line, and the file is the developer's to open.
-    const PAGE_ONLY: &[&str] = &["/api/packages/source", "/api/model-key"];
+    /// Routes only the page calls, with no CLI subcommand. Package docs and source are
+    /// already available to agents through the runtime and to developers in their files.
+    const PAGE_ONLY: &[&str] = &[
+        "/api/packages/docs",
+        "/api/packages/source",
+        "/api/model-key",
+    ];
 
     #[test]
     fn every_action_and_read_route_has_a_cli_subcommand() {
@@ -1245,6 +1361,7 @@ mod tests {
             ("GET", "/api/audit", Viewer),
             ("GET", "/api/changes", Viewer),
             ("POST", "/api/model-key", Viewer),
+            ("GET", "/api/packages/docs", Viewer),
             ("GET", "/api/packages/source", Viewer),
             ("GET", "/api/sessions", Viewer),
             ("GET", "/api/sessions/{session}/events", Viewer),

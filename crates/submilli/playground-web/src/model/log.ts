@@ -1,10 +1,10 @@
 // The log pane: a row per run, its permission checks, and the tests and reruns of it.
 import type { Explain, RuleRef, Show, ShowDecision } from "../api/types";
 import { bpRuleLine } from "./blueprint";
-import { askedFor, boundVars, capitalize, ctx, differing, duration, end, ordinal, plainBy, plural, size, tone, when, type Tone, type ValuesNote } from "./format";
+import { askedFor, boundVars, capitalize, ctx, differing, duration, end, ordinal, outcomeLabel, plainBy, plural, size, tone, when, type Tone, type ValuesNote } from "./format";
 import { decisionRef, forAsst, runRef } from "./refs";
 import { countWords, followUps } from "./summary";
-import { byAgent, callTarget, endedRuns, fileTool, followUpName, programNumber, type Frame } from "./steps";
+import { byAgent, callTarget, endedRuns, fileTool, followUpName, runIdentity, programNumber, type Frame } from "./steps";
 import type { UiState } from "./ui";
 
 /** What a button runs: the page acts on it, and `commandOf` gives the same from the CLI. */
@@ -43,6 +43,7 @@ export interface RuleSpot {
 export interface DecisionRow {
   id: string;
   ref: string;
+  denied: boolean;
   selected: boolean;
   open: boolean;
   title: string;
@@ -81,6 +82,7 @@ export interface FollowRow {
   further: string;
   showFurther: boolean;
   what: string;
+  localState: string;
   changes: { tone: "ok" | "bad" | ""; text: string }[];
   isStop: boolean;
   stopLead: string;
@@ -199,7 +201,7 @@ export function nearOf(ex: Explain | undefined): NearMiss[] {
     const where = "rule " + m.rule.position + " of " + m.rule.caller + ", line " + m.rule.line;
     const name = m.rule.name ? m.rule.name + " (" + where + ")" : where;
     return {
-      text: "Nearest rule: " + name + ". Failed: " + failed + ".",
+      text: "Related rule that did not match: " + name + ". Failed: " + failed + ".",
       values: "actual" in vals ? [{ name: "this call", value: JSON.stringify(vals.actual) }, { name: "the rule wanted", value: JSON.stringify(vals.expected) }] : null,
     };
   });
@@ -261,7 +263,7 @@ function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
       action: { kind: "recheck", run: n },
       goal: "Changed the blueprint?",
       what: "See whether this call gets through now.",
-      label: f.inForce !== null ? "Check against blueprint v" + f.inForce : "Check against the blueprint in force",
+      label: f.inForce !== null ? "Recheck policy · v" + f.inForce : "Recheck policy",
       caution: false,
       copy: cliCopy("submilli playground recheck " + n),
       note: "Nothing runs. To make the call again, ask the agent.",
@@ -273,19 +275,19 @@ function againOptions(f: Frame, r: Show, word: string): AgainOption[] {
       action: { kind: "test", run: n },
       goal: "Changed the blueprint?",
       what: "See whether this " + what + " gets through now.",
-      label: f.inForce !== null ? "Test against blueprint v" + f.inForce : "Test against the blueprint in force",
+      label: f.inForce !== null ? "Test with recorded results · v" + f.inForce : "Test with recorded results",
       caution: false,
       copy: cliCopy("submilli playground test " + n),
-      note: "Nothing real happens: replies come from run " + n + "’s recording, and it keeps run " + n + "’s values.",
+      note: "Uses Run " + n + "’s original program and variables with the current blueprint. External connector replies come from the recording; local files and session data use current state. No live external connector calls.",
     },
     {
       action: { kind: "rerun", run: n },
       goal: "Changed the package, or want other variables?",
       what: "Run it for real.",
-      label: "Rerun for real…",
+      label: "Rerun live…",
       caution: true,
       copy: cliCopy("submilli playground rerun " + n),
-      note: "Asks first. Uses the variables you’ve set now." + (firstDenied ? " A package change can’t lift a refusal; only the blueprint can." : ""),
+      note: "Review and edit this rerun’s variables before it starts." + (firstDenied ? " A package change can’t lift a refusal; only the blueprint can." : ""),
     },
   );
   return options;
@@ -311,12 +313,13 @@ function decisionRow(f: Frame, r: Show, d: ShowDecision): DecisionRow {
   return {
     id,
     ref,
+    denied: d.outcome === "deny",
     selected: f.ui.sel === id,
-    open: !!f.ui.open[id],
+    open: f.ui.open[id] ?? d.outcome === "deny",
     title: " · " + d.caller + " → " + d.capability + (d.refs.length > 1 ? " ×" + d.refs.length : "") + (asked ? " " + asked : ""),
     hint: ctx(r.untrusted.contexts?.[ref]),
-    status: d.outcome === "deny" ? "Denied" : "Allowed",
-    tone: d.outcome === "deny" ? "bad" : "ok",
+    status: d.outcome === "deny" ? "Blocked by blueprint" : "Allowed",
+    tone: d.outcome === "deny" ? "warn" : "ok",
     meta: "blueprint v" + r.blueprint_version + (lines.length ? " · " + programLines(lines) + " · " + (bytes ? size(bytes) + " fetched" : "nothing fetched") : ""),
     decidedBy: decidedBy(d, ex),
     near: nearOf(ex),
@@ -393,7 +396,7 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
     open: !!f.ui.open[id],
     title: " · " + followKind(fu),
     meta: "blueprint v" + fu.blueprint_version + " · " + when(fu.started_at),
-    status: w === "stopped" ? (fixed ? "Got past the refusal · stopped at a new call" : "Stopped · nothing sent") : capitalize(w),
+    status: w === "stopped" ? (fixed ? "Got past the refusal · stopped at a new call" : "Stopped · nothing sent") : outcomeLabel(w),
     tone: tone(w),
     verdict,
     values,
@@ -403,10 +406,13 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
       ? "Run " + r.run + "’s program, run for real with the variables set at the time: " + boundVars(fu.variables) + "."
       : "Run " + r.run + "’s program, tested against blueprint v" + fu.blueprint_version + " with run " + r.run + "’s variables. " +
         (test?.mode === "reads-live"
-          ? "Reads with no recorded reply went to the real service."
+          ? liveTestDescription("reads-live", ut)
           : test?.mode === "live"
-            ? "Calls with no recorded reply went to the real service."
-            : "Replies came from run " + r.run + "’s recording, so nothing real happened."),
+            ? liveTestDescription("live", ut)
+            : test?.mode === "recorded"
+              ? "Recorded mode replays external connector replies from Run " + r.run + "; local files and session data use state at test time. No live external connector calls."
+              : "The test mode was not recorded."),
+    localState: test?.local_state ?? "",
     changes,
     isStop: w === "stopped",
     stopLead: fixed ? further : "Stopped before this call: " + stopDetail + ", so there was no recorded reply to use. Nothing was sent.",
@@ -430,6 +436,18 @@ function followRow(f: Frame, r: Show, fu: Show, again: AgainOption[], all: numbe
     againHead: "Try run " + r.run + "’s " + (fileTool(f, r.run) ? "call" : "program") + " again",
     again,
   };
+}
+
+function liveTestDescription(mode: "reads-live" | "live", test: NonNullable<Show["untrusted"]["test"]>): string {
+  const subject = mode === "reads-live" ? "read" : "call";
+  const capability = mode === "reads-live" ? "Real-read mode" : "Live mode";
+  const description = capability + ": a " + subject + " without a recorded reply can use the real service.";
+  if (!Object.prototype.hasOwnProperty.call(test, "went_live_keys")) {
+    return description + " This record does not say whether a " + subject + " went live.";
+  }
+  return test.went_live_keys?.length
+    ? description
+    : description + " No external " + subject + " is recorded as live for this run.";
 }
 
 function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
@@ -463,8 +481,8 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
     selected: f.ui.sel === id,
     open,
     thing: fileTool(f, n) ? "call" : "program",
-    title: "Run " + n + " · " + (!byAgent(f, n) ? followUpName(f, n) ?? "run by your assistant" : fileTool(f, n) ? "the agent’s " + fileTool(f, n) + " call" + (target.text ? " " + target.text : "") : "the agent’s " + ordinal(programNumber(f, n)) + " program"),
-    status: capitalize(word),
+    title: byAgent(f, n) ? runIdentity(f, n) : "Run " + n + " · " + (followUpName(f, n) ?? "run by your assistant"),
+    status: outcomeLabel(word),
     tone: tone(word),
     meta:
       when(r.started_at) + " · " + duration(r.wall_ms) + " · blueprint v" + r.blueprint_version +
@@ -495,7 +513,7 @@ export function logPane(f: Frame): LogPane {
   const runs = endedRuns(f);
   const all = runs.map((r, i) => runRow(f, r, i, runs));
   const filter = f.ui.filter;
-  const rows = all.filter((x) => filter === "all" || (filter === "problems" ? x.word !== "completed" || x.decisions.some((d) => d.status === "Denied") : x.follow.length > 0));
+  const rows = all.filter((x) => filter === "all" || (filter === "problems" ? x.word !== "completed" || x.decisions.some((d) => d.denied) : x.follow.length > 0));
   const ids: string[] = [];
   for (const x of rows) {
     ids.push(x.id);

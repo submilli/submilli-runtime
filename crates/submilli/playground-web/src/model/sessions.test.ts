@@ -130,7 +130,7 @@ describe("a session started for the coding assistant", () => {
     data.events = [];
     const f = frame(data, INITIAL_UI);
     expect(sessionBar(f)).toMatchObject({ state: "Open", live: true });
-    expect(askBox(f)).toMatchObject({ disabled: true, none: { text: "No agent chats in this session.", offer: true } });
+    expect(askBox(f)).toMatchObject({ disabled: true, none: { text: "No agent chats in this session." } });
     expect(chatEmptyText(f)).toBe("No chat in this session: its runs came from your coding assistant or the CLI.");
   });
 });
@@ -144,17 +144,19 @@ describe("an open session whose values differ from the ones bound now", () => {
 
   it("says it keeps its own: the first that differs, then the rest to open", () => {
     expect(keptValues(frame(bound({ customerId: "cus_globex", region: "us" }), INITIAL_UI))).toEqual({
-      lead: "This session keeps the values it started with; the ones bound now differ: ",
+      lead: "",
       changes: [
         { name: "customerId", was: "pied_piper", now: "cus_globex" },
         { name: "region", was: "not set", now: "us" },
       ],
-      tail: ". Its messages still use its own.",
+      tail: "",
+      summary: "New sessions will use different settings.",
     });
   });
 
-  it("says nothing when they match, or for a session that takes no more messages", () => {
+  it("says nothing when they match, the binding is empty, or for a session that takes no more messages", () => {
     expect(keptValues(frame(bound({ customerId: "pied_piper" }), INITIAL_UI))).toBeNull();
+    expect(keptValues(frame(bound({}), INITIAL_UI))).toBeNull();
     const ended = bound({ customerId: "cus_globex" });
     ended.sessions = ended.sessions.map((s) => (s.session === ended.sessionId ? { ...s, open: false } : s));
     expect(keptValues(frame(ended, INITIAL_UI))).toBeNull();

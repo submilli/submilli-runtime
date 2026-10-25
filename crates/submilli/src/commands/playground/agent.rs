@@ -43,13 +43,36 @@ const MAX_RESULT_BYTES: usize = 64 * 1024;
 
 // A refusal holds under the blueprint that made it, which the developer may change
 // between messages, so a refused call is made again when asked rather than recalled.
-const SYSTEM: &str = "You are the production agent for this application, running in a \
-    local playground. Do the task with the tools you are given: write TypeScript-subset \
-    programs and run them. When the playground refuses something, report the refusal; do \
-    not look for another way to get it. A refusal stands only under the blueprint that \
-    made it, and the developer may change the blueprint between messages, so when asked \
-    to try again, call the tool again rather than repeating an earlier answer. Finish with \
-    a short answer.";
+const SYSTEM: &str = "You are helping a developer try out Submilli in its local playground, \
+    using the tools of the application they loaded. Submilli runs agent programs under \
+    the application's blueprint permissions. Help the developer do useful tasks with \
+    those tools and understand the results. When asked what to ask or try, offer two or \
+    three concrete, short prompts relevant to this application, with minimal setup. Ground \
+    suggestions in the current tool descriptions, available package documentation, and \
+    bound session variables. Use those variables where appropriate. Session variables \
+    bind the scope of access; they do not authenticate the human or prove account \
+    ownership. When ownership is unclear, attribute results to the selected resource \
+    (including its ID when useful), rather than calling it the user's own account. \
+    Describe data as demo or synthetic only when the application documentation or tool \
+    results establish that. Distinguish an empty lookup from proof of a real account \
+    balance: report that no matching records were returned for the selected resource. \
+    If you need package \
+    documentation to make a concrete suggestion, read it with an available tool. Do not \
+    invent operations, packages, resource IDs, data, permissions, or results; if context \
+    is missing, say what you need. Prefer a small read-only task where supported. Do not \
+    execute a suggested task until asked, and do not assume a local playground's tools \
+    have no real effects. Only suggest deliberately denied calls when the developer \
+    explicitly wants to test a permission boundary. For that experiment, use documented \
+    operations, explain possible effects if allowed, and report the actual tool result \
+    or refusal the developer can inspect in the session log. Do not promise a denial \
+    without evidence or claim that your own refusal proves runtime enforcement. \
+    For normal tasks, answer directly without turning every answer into a tutorial. \
+    Follow the tool instructions: write TypeScript-subset programs and run them when \
+    needed for the requested task. When the playground refuses something, report the \
+    refusal; do not look for another way to get it. A refusal stands only under the \
+    blueprint that made it, and the developer may change the blueprint between messages, \
+    so when asked to try again, call the tool again rather than repeating an earlier \
+    answer. Finish with a short answer.";
 
 /// [`SYSTEM`], and what the session's variables are.
 fn system_prompt(variables: &BTreeMap<String, String>) -> String {
@@ -1125,6 +1148,52 @@ mod tests {
         assert!(system.starts_with(SYSTEM), "{system}");
         assert!(system.contains(r#"customerId = "pied_piper""#), "{system}");
         assert_eq!(system_prompt(&BTreeMap::new()), SYSTEM);
+    }
+
+    #[test]
+    fn playground_context_and_application_tools_reach_every_provider() {
+        let variables = BTreeMap::from([("workspaceId".to_owned(), "demo-workspace".to_owned())]);
+        let system = system_prompt(&variables);
+        let tools = [ToolSpec {
+            name: "execute".to_owned(),
+            description:
+                "Loaded application: inspect demo workspace records with @example/records."
+                    .to_owned(),
+            input_schema: json!({ "type": "object", "properties": {} }),
+        }];
+        let turns = [Turn::User("What should I ask you?".to_owned())];
+        let keys = env(&[
+            ("ANTHROPIC_API_KEY", "mock"),
+            ("OPENAI_API_KEY", "mock"),
+            ("GEMINI_API_KEY", "mock"),
+        ]);
+        for (model, system_path, description_path) in [
+            ("anthropic:mock", "/system", "/tools/0/description"),
+            ("openai:mock", "/instructions", "/tools/0/description"),
+            (
+                "google:mock",
+                "/systemInstruction/parts/0/text",
+                "/tools/0/functionDeclarations/0/description",
+            ),
+        ] {
+            let choice = choose_named(&keys, model, "--model").unwrap();
+            let body = request(
+                &choice,
+                "mock",
+                &turns,
+                &tools,
+                &Settings::default(),
+                &system,
+            )
+            .unwrap()
+            .body;
+            assert_eq!(body.pointer(system_path), Some(&json!(system)), "{model}");
+            assert_eq!(
+                body.pointer(description_path),
+                Some(&json!(tools[0].description)),
+                "{model}"
+            );
+        }
     }
 
     #[test]

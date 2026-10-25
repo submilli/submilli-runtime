@@ -1,4 +1,4 @@
-//! `submilli playground init`: a `submilli/` folder with a starter billing package,
+//! `submilli playground init-demo`: a `submilli/` folder with a starter billing package,
 //! a deny-by-default blueprint that pins charges to the signed-in customer, and an
 //! example program. Nothing is left outside `submilli/`: the files are written into
 //! a hidden staging folder beside it and renamed into place, so a failed `init`
@@ -99,7 +99,7 @@ fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
         })
         .and_then(|()| {
             if folder.exists() {
-                bail!("another init created it");
+                bail!("another init-demo created it");
             }
             std::fs::rename(staging.path(), &folder)
                 .with_context(|| format!("moving the starter into {}", folder.display()))
@@ -126,7 +126,7 @@ fn init_with(root: &Path, starter: &[(&str, &str)]) -> Result<Scaffolded> {
 
 fn already_exists(folder: &Path) -> anyhow::Error {
     anyhow::anyhow!(
-        "{} already exists; `playground init` only creates a new `submilli/` folder",
+        "{} already exists; `playground init-demo` only creates a new `submilli/` folder",
         folder.display()
     )
 }
@@ -176,7 +176,7 @@ fn remove_leftover_staging(root: &Path) {
             )
         {
             warn(&format!(
-                "removing {}, left by an interrupted init: {error}",
+                "removing {}, left by an interrupted init-demo: {error}",
                 path.display()
             ));
         }
@@ -250,6 +250,14 @@ The playground's starter package. `listCharges(customerId)` returns the charges 
 customer's account, read from `charges.json` on the project's `billing` volume
 (`submilli/volumes/billing/`). There is no network call and no configuration.
 
+The starter data has two charges for `pied_piper` and one for `hooli`.
+
+```ts
+import { listCharges } from "@pied-piper/billing";
+
+const charges = listCharges("pied_piper");
+```
+
 The operation declares the capability `pied-piper.example/charges.list` with a `customerId` field, so a
 blueprint can grant it under a filter that pins the customer to a value the calling application
 binds per request.
@@ -294,6 +302,12 @@ name: billing
 variables:
   customerId:
     required: true
+    description: >-
+      Use the demo customer below, or find another customerId in
+      submilli/volumes/billing/charges.json. In your application, this value comes
+      from the signed-in customer's account record. This blueprint fixes the
+      customer for the session and denies charge lookups for other customers.
+    example: pied_piper
 
 packages:
 - '@pied-piper/billing'
@@ -475,6 +489,28 @@ mod tests {
         );
         assert!(BLUEPRINT.contains("default: deny"));
         assert!(BLUEPRINT.contains("filter: customerId == ${vars.customerId}"));
+        let help = blueprint.variables["customerId"]
+            .description
+            .as_deref()
+            .unwrap();
+        assert!(help.contains("submilli/volumes/billing/charges.json"));
+        assert!(help.contains("signed-in customer's account record"));
+        assert!(help.contains("denies charge lookups for other customers"));
+        assert_eq!(
+            blueprint.variables["customerId"].example.as_deref(),
+            Some("pied_piper")
+        );
+        let fixture: Vec<serde_json::Value> = serde_json::from_str(FIXTURE).unwrap();
+        let demo_customer = blueprint.variables["customerId"]
+            .example
+            .as_deref()
+            .unwrap();
+        assert!(
+            fixture
+                .iter()
+                .any(|charge| charge["customerId"] == demo_customer),
+            "the suggested customer must exist in the scaffold's fixture"
+        );
     }
 
     #[test]

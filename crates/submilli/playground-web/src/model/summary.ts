@@ -65,24 +65,30 @@ export function summary(f: Frame): Summary {
   const denied = checks.filter((d) => d.outcome === "deny").length;
   const follows = f.stepping ? [] : runs.flatMap((r) => followUps(f, r.run));
 
-  let dataNote = "Nothing fetched or returned yet.";
+  let dataNote = "";
   if (denied && !fetched) dataNote = "The call was denied before any data was fetched; the agent got the denial.";
   else if (fetched) dataNote = "Fetched data stayed in code; the agent got only each finished run’s result.";
   const notCounted = [refused ? plural(refused, "refused run", "refused runs") : "", failed ? plural(failed, "failed run", "failed runs") : ""]
     .filter(Boolean)
     .join(" and ");
-  if (notCounted) dataNote += " Returned to agent leaves out " + notCounted + ": the agent got the error message instead.";
+  if (notCounted) {
+    const omitted = "Returned to agent leaves out " + notCounted + ": the agent got the error message instead.";
+    dataNote = dataNote ? dataNote + " " + omitted : omitted;
+  }
+
+  const allowed = checks.length - denied;
+  const noChecks = checks.length === 0;
 
   return {
     fetched: size(fetched),
     returned: size(returned),
-    dataNote: f.ui.mode === "fresh" ? "No runs yet in this session." : dataNote,
+    dataNote: f.ui.mode === "fresh" ? "" : dataNote,
     execHead: plural(runs.length, "run", "runs"),
-    execSub: countWords(words) || "No runs yet",
-    checksHead: checks.length - denied + " allowed",
-    checksSub: denied + " denied",
+    execSub: countWords(words),
+    checksHead: noChecks ? "0 checks" : allowed + " allowed",
+    checksSub: noChecks ? "" : denied + " denied",
     checksBad: denied > 0,
     followHead: follows.length ? plural(follows.length, "run", "runs") : "None",
-    followSub: follows.length ? "tests and live reruns" : "None yet",
+    followSub: follows.length ? "tests and live reruns" : "",
   };
 }

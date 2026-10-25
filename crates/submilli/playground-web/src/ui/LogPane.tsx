@@ -51,6 +51,20 @@ function keepUnits(text: string): string {
   return text.replace(/(\d) (k?B)\b/g, "$1\u00a0$2");
 }
 
+/** Metadata stays grouped at its existing separators when a narrow log pane wraps it. */
+function Meta({ text }: { text: string }) {
+  return (
+    <span className="pg-event-meta">
+      {text.split(" · ").map((part, i) => (
+        <span className="pg-event-meta-item" key={i}>
+          {i > 0 && <span className="pg-event-meta-sep" aria-hidden="true">·</span>}
+          {part}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 // One button that changes its words, so focus stays on it between Show all and Show less.
 function Cut(props: { cut: string; less: boolean; run: number; a: LogActions }) {
   if (!props.cut && !props.less) return null;
@@ -100,13 +114,13 @@ function Head(props: { open: boolean; onToggle: () => void; children: ReactNode;
 function Check({ d, run, a }: { d: DecisionRow; run: number; a: LogActions }) {
   return (
     <div className={cls("pg-event nested", d.selected && "selected")} id={"pgrow-" + d.id}>
-      <Head open={d.open} onToggle={() => a.toggle(d.id)} status={d.status} tone={d.tone}>
+      <Head open={d.open} onToggle={() => a.toggle(d.id)} status={d.status} tone={d.tone} label={"Check " + d.ref + d.title + ": " + d.status}>
         <span className="pg-event-title" title={d.hint ? "Asked for " + d.hint : undefined}>
           <Arrow />
           Check <span className="pg-refnum">{d.ref}</span>
           {d.title}
         </span>
-        {d.open && <span className="pg-event-meta">{keepUnits(d.meta)}</span>}
+        {d.open && <Meta text={keepUnits(d.meta)} />}
       </Head>
       {d.open && (
         <div className="pg-event-detail">
@@ -151,14 +165,14 @@ function Check({ d, run, a }: { d: DecisionRow; run: number; a: LogActions }) {
             )}
           </div>
           {d.next.length > 0 && (
-            <div className="pg-next">
-              <span>Next, from the CLI</span>
+            <details className="pg-next">
+              <summary>Equivalent CLI commands</summary>
               {d.next.map((c) => (
                 <button className="pg-cmd" title="Copy this command" key={c} onClick={() => a.copy(c, "command")}>
                   {c}
                 </button>
               ))}
-            </div>
+            </details>
           )}
         </div>
       )}
@@ -168,14 +182,14 @@ function Check({ d, run, a }: { d: DecisionRow; run: number; a: LogActions }) {
 
 function FollowUp({ f, a }: { f: FollowRow; a: LogActions }) {
   return (
-    <div className={cls("pg-event nested", f.selected && "selected")} id={"pgrow-" + f.id}>
+    <div className={cls("pg-event nested", f.selected && "selected", f.tone === "warn" && "blocked")} id={"pgrow-" + f.id}>
       <Head open={f.open} onToggle={() => a.toggle(f.id)} status={f.status} tone={f.tone} label={"Run " + f.num + f.title + ": " + f.status}>
         <span className="pg-event-title">
           <Arrow />
-          <span className="pg-refnum">{f.num}</span>
+          <span className="pg-refnum">Run {f.num}</span>
           {f.title}
         </span>
-        <span className="pg-event-meta">{keepUnits(f.meta)}</span>
+        <Meta text={keepUnits(f.meta)} />
       </Head>
       {f.open && (
         <div className="pg-event-detail">
@@ -183,6 +197,7 @@ function FollowUp({ f, a }: { f: FollowRow; a: LogActions }) {
           {f.values && <Values v={f.values} />}
           {f.showFurther && <p className="pg-note">{f.further}</p>}
           <p className="pg-note pg-muted">{f.what}</p>
+          {f.localState && <p className="pg-note"><strong>Local state:</strong> {f.localState}</p>}
           {f.changes.map((c, i) => (
             <p className={cls("pg-change-line", c.tone)} key={i}>
               {c.text}
@@ -260,16 +275,33 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
   const checks = press(() => a.toggleChecks(r.n, !r.checksOpen));
   const follow = press(() => a.toggleFollow(r.n, !r.followOpen));
   return (
-    <article className={cls("pg-event", r.selected && "selected")} id={"pgrow-" + r.id}>
-      <Head open={r.open} onToggle={() => a.toggle(r.id)} status={r.status} tone={r.tone}>
+    <article className={cls("pg-event", r.selected && "selected", r.word === "denied" && "blocked")} id={"pgrow-" + r.id}>
+      <Head open={r.open} onToggle={() => a.toggle(r.id)} status={r.status} tone={r.tone} label={r.title + ": " + r.status}>
         <span className="pg-event-title" title={r.hint ? "Asked for " + r.hint : undefined}>
           <Arrow />
           {r.title}
         </span>
-        {r.open && <span className="pg-event-meta">{keepUnits(r.meta)}</span>}
-        {!r.open && r.closedSum && <span className="pg-event-meta">{r.closedSum}</span>}
+        {r.open && <Meta text={keepUnits(r.meta)} />}
+        {!r.open && r.closedSum && <Meta text={r.closedSum} />}
       </Head>
       {r.preview && <div className="pg-error-preview">{r.preview}</div>}
+      {showChecks && (
+        <div className="pg-follow pg-checks">
+          <div className="pg-follow-head" role="button" tabIndex={0} aria-expanded={r.checksOpen} onClick={checks} onKeyDown={checks}>
+            <Arrow />
+            {r.checksLabel}
+            <span className="pg-follow-sum">{r.checksSum}</span>
+          </div>
+          {r.checksOpen && (
+            <>
+              <p className="pg-group-note">What the blueprint decided each time this {r.thing} asked to do something.</p>
+              {r.decisions.map((d) => (
+                <Check d={d} run={r.n} a={a} key={d.id} />
+              ))}
+            </>
+          )}
+        </div>
+      )}
       {r.open && (
         <div className="pg-event-detail">
           {r.error && <ErrorText text={r.error} />}
@@ -288,23 +320,6 @@ function Run({ r, a }: { r: RunRow; a: LogActions }) {
             </div>
           )}
           {r.againNote && <p className="pg-group-note pg-again-note">{r.againNote}</p>}
-        </div>
-      )}
-      {showChecks && (
-        <div className="pg-follow pg-checks">
-          <div className="pg-follow-head" role="button" tabIndex={0} aria-expanded={r.checksOpen} onClick={checks} onKeyDown={checks}>
-            <Arrow />
-            {r.checksLabel}
-            <span className="pg-follow-sum">{r.checksSum}</span>
-          </div>
-          {r.checksOpen && (
-            <>
-              <p className="pg-group-note">What the blueprint decided each time this {r.thing} asked to do something.</p>
-              {r.decisions.map((d) => (
-                <Check d={d} run={r.n} a={a} key={d.id} />
-              ))}
-            </>
-          )}
         </div>
       )}
       {showFollow && (
@@ -346,10 +361,10 @@ export function LogPane(props: {
 }) {
   const { log, a } = props;
   return (
-    <section className="pg-pane log" aria-label="Log">
+    <section id="pg-panel-log" className="pg-pane log" aria-label="Execution">
       <div className="pg-pane-head">
-        <h2>
-          Log<span className="sub">{log.count}</span>
+        <h2 tabIndex={-1}>
+          Execution<span className="sub">{log.count}</span>
         </h2>
         <div className="pg-pane-tools">
           <button className="pg-link" onClick={props.onToggleAll}>

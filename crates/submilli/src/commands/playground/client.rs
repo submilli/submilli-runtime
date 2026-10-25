@@ -244,8 +244,13 @@ impl Running {
         Ok(minted.code)
     }
 
-    pub(crate) fn stop(&self) -> Result<()> {
-        self.call::<Value>("POST", "/api/stop").map(|_| ())
+    pub(crate) fn stop(&self, restart: bool) -> Result<()> {
+        let path = if restart {
+            "/api/stop?restart=true"
+        } else {
+            "/api/stop"
+        };
+        self.call::<Value>("POST", path).map(|_| ())
     }
 
     /// Whether the server listener answers its health probe, which needs no token.

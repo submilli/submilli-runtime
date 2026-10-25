@@ -426,6 +426,8 @@ Neither can change the bindings.
 
 | Field | Type | Default | Constraints |
 | --- | --- | --- | --- |
+| `description` | string | none | Human-facing explanation an application may show when asking for the value |
+| `example` | string | none | Illustrative value an application may show; it is not bound automatically |
 | `required` | boolean | `false` | `true` refuses a session that doesn't supply a non-empty value |
 | `default` | string | none | The value bound when the session supplies none. Can't be combined with `required: true` or `alias` |
 | `alias` | string | none | Another declared variable name. Resolves from its target; direct bindings for this name are refused. May be combined with `required: true` |

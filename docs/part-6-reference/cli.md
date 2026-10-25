@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "31ddc238a2e1ce0646b7073f052b7c927e3aef680b9340ec00b8fdda58a4683a"
+  contentHash: "1d6fcfd3993978c83d0b10084defe2e1a53ae0979736e43d77335978efd5df40"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -405,30 +405,45 @@ Options:
           Wall-clock deadline in milliseconds. Omit for no deadline
 
       --vfs <VFS>
-          Directory to expose as the script's VFS root. The future `submilli:fs.*` host functions will resolve paths against it. Omit to allocate a fresh tempdir under the OS temp root for the duration of the run
+          Directory to expose as the script's VFS root. The future `submilli:fs.*` host functions
+          will resolve paths against it. Omit to allocate a fresh tempdir under the OS temp root for
+          the duration of the run
 
       --blueprint <BLUEPRINT>
-          Apply a blueprint's policy (capability gating, deny-by-default) and `auth_proxy:` secret injection to this local run. Without it, the run is unrestricted (allow-all). `store:` secrets resolve from the local secret store, and authenticated `@mcp/<server>` servers are called in-process — no running server needed
+          Apply a blueprint's policy (capability gating, deny-by-default) and `auth_proxy:` secret
+          injection to this local run. Without it, the run is unrestricted (allow-all). `store:`
+          secrets resolve from the local secret store, and authenticated `@mcp/<server>` servers are
+          called in-process — no running server needed
 
       --var <NAME=VALUE>
-          Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the way an application binds it when it opens a session. Requires `--blueprint`; the blueprint must declare the variable, and its `required` variables must all be bound
+          Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the way an application
+          binds it when it opens a session. Requires `--blueprint`; the blueprint must declare the
+          variable, and its `required` variables must all be bound
 
       --max-llm-tokens <TOKENS>
-          Tokens this run's `submilli:llm` calls may spend in total. A run that asks for more raises a catchable `QuotaExceededError` rather than being billed.
-          
-          Finite by default, deliberately: a blueprint-configured provider spends real money against the operator's credential, and a CLI run has no server-wide ceiling behind it. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
+          Tokens this run's `submilli:llm` calls may spend in total. A run that asks for more raises
+          a catchable `QuotaExceededError` rather than being billed.
+
+          Finite by default, deliberately: a blueprint-configured provider spends real money against
+          the operator's credential, and a CLI run has no server-wide ceiling behind it. [default:
+          1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
 
       --max-llm-concurrency <PROMPTS>
-          Prompts one `llm.batch` dispatches at once. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`
+          Prompts one `llm.batch` dispatches at once. [default: 4] Env:
+          `$SUBMILLI_MAX_LLM_CONCURRENCY`
 
       --max-execution-embedding-tokens <TOKENS>
-          Tokens this run's `submilli:embedding` calls may spend in total. A call that asks for more raises a catchable `QuotaExceededError`. [default: 2000000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file
+          Tokens this run's `submilli:embedding` calls may spend in total. A call that asks for more
+          raises a catchable `QuotaExceededError`. [default: 2000000] Env:
+          `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file
 
       --max-execution-embedding-requests <REQUESTS>
-          Outbound provider requests this run's `submilli:embedding` calls may send. [default: 1000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file
+          Outbound provider requests this run's `submilli:embedding` calls may send. [default: 1000]
+          Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file
 
       --max-embedding-concurrency <REQUESTS>
-          Provider requests one embedding call sends at once. [default: 4] Env: `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file
+          Provider requests one embedding call sends at once. [default: 4] Env:
+          `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file
 
   -h, --help
           Print help (see a summary with '-h')
@@ -539,12 +554,16 @@ Options:
   -p, --package <PACKAGE>    Compile only this package and its sibling dependencies
       --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
       --all-env              Supply all Unicode process environment variables as test credentials
-      --env-var <NAME>       Supply a process variable (repeatable or comma-separated); fail if unset or non-Unicode
-      --env-file <PATH>      Read credentials from a file; relative paths use the current directory. Fail if unreadable
-      --skip-network         Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under tests/
+      --env-var <NAME>       Supply a process variable (repeatable or comma-separated); fail if
+                             unset or non-Unicode
+      --env-file <PATH>      Read credentials from a file; relative paths use the current directory.
+                             Fail if unreadable
+      --skip-network         Skip network.test.{ts,subm} and network_*.test.{ts,subm} anywhere under
+                             tests/
   -h, --help                 Print help
 
-Tests receive no credentials by default. Credential precedence (highest first): --env-var > --env-file > --all-env, regardless of argument order.
+Tests receive no credentials by default. Credential precedence (highest first): --env-var >
+--env-file > --all-env, regardless of argument order.
 ```
 
 ### `submilli build authority-map`
@@ -570,12 +589,17 @@ Usage: submilli build security-review [OPTIONS] --agent <AGENT> --model <MODEL>
 
 Options:
       --config <NAME=VALUE>  Set a src/config.ts parameter of the explicitly selected package
-  -a, --agent <AGENT>        Installed coding agent to invoke; uses its existing authentication [possible values: codex, claude, copilot]
+  -a, --agent <AGENT>        Installed coding agent to invoke; uses its existing authentication
+                             [possible values: codex, claude, copilot]
   -m, --model <MODEL>        Provider model ID; "astra" resolves to gpt-6-astra for Codex/Copilot
-  -e, --effort <EFFORT>      Reasoning effort; the selected CLI/model must support it [possible values: low, medium, high]
-  -p, --package <PACKAGE>    Review this package and its local dependency closure; default: all packages
-      --fail-on <FAIL_ON>    Fail on findings at this severity or higher. Incomplete reviews always fail [default: high] [possible values: low, medium, high, critical]
-      --output <FILE>        Write a JSON report, including failures. Refuses to replace an existing file
+  -e, --effort <EFFORT>      Reasoning effort; the selected CLI/model must support it [possible
+                             values: low, medium, high]
+  -p, --package <PACKAGE>    Review this package and its local dependency closure; default: all
+                             packages
+      --fail-on <FAIL_ON>    Fail on findings at this severity or higher. Incomplete reviews always
+                             fail [default: high] [possible values: low, medium, high, critical]
+      --output <FILE>        Write a JSON report, including failures. Refuses to replace an existing
+                             file
       --timeout <TIMEOUT>    Maximum time for the agent, in seconds (1–3600) [default: 600]
   -h, --help                 Print help
 ```
@@ -588,8 +612,11 @@ Install a package from GitHub into the local store, pinned to a commit
 Usage: submilli install [OPTIONS] <URL> [PACKAGE]
 
 Arguments:
-  <URL>      GitHub repo to install from: `org/repo`, `github.com/org/repo`, or a full URL — optionally pinned with `@<ref>` (branch, tag, or commit SHA). A private repository needs a GitHub token: see `submilli github authenticate`
-  [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
+  <URL>      GitHub repo to install from: `org/repo`, `github.com/org/repo`, or a full URL —
+             optionally pinned with `@<ref>` (branch, tag, or commit SHA). A private repository
+             needs a GitHub token: see `submilli github authenticate`
+  [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo
+             declares
 
 Options:
       --config <NAME=VALUE>  Set a src/config.ts parameter of the selected package
@@ -607,10 +634,13 @@ Print a stdlib package's declarations and description
 Usage: submilli docs [OPTIONS] <NAME>
 
 Arguments:
-  <NAME>  Package name, e.g. `submilli:http` or an installed `@org/name`. A language built-in (`Temporal`, `Temporal.Instant`) resolves here too
+  <NAME>  Package name, e.g. `submilli:http` or an installed `@org/name`. A language built-in
+          (`Temporal`, `Temporal.Instant`) resolves here too
 
 Options:
-      --blueprint <BLUEPRINT>  Show only what programs under this blueprint could import. Without it, the whole library is shown. An `@mcp/<server>` package is always read from a blueprint, by default blueprint.yaml
+      --blueprint <BLUEPRINT>  Show only what programs under this blueprint could import. Without
+                               it, the whole library is shown. An `@mcp/<server>` package is always
+                               read from a blueprint, by default blueprint.yaml
   -h, --help                   Print help
 ```
 
@@ -622,10 +652,14 @@ Search available stdlib packages by name, description, or symbol
 Usage: submilli search [OPTIONS] [QUERY]
 
 Arguments:
-  [QUERY]  Substring to match against module names, descriptions, and exported symbols. Omit to list every package
+  [QUERY]  Substring to match against module names, descriptions, and exported symbols. Omit to list
+           every package
 
 Options:
-      --blueprint <BLUEPRINT>  List only what programs under this blueprint could import. Its `@mcp/<server>` packages are not listed: read one with `submilli docs @mcp/<server> --blueprint <path>`. Without it, the whole library is listed
+      --blueprint <BLUEPRINT>  List only what programs under this blueprint could import. Its
+                               `@mcp/<server>` packages are not listed: read one with `submilli docs
+                               @mcp/<server> --blueprint <path>`. Without it, the whole library is
+                               listed
   -h, --help                   Print help
 ```
 
@@ -637,7 +671,8 @@ Print declarations for language built-ins, or list the catalog
 Usage: submilli builtins [NAMES]...
 
 Arguments:
-  [NAMES]...  Built-in names to describe, e.g. `Array Map Temporal`. A dotted member path (`Temporal.Instant`) prints just that member. Omit to list the full catalog
+  [NAMES]...  Built-in names to describe, e.g. `Array Map Temporal`. A dotted member path
+              (`Temporal.Instant`) prints just that member. Omit to list the full catalog
 
 Options:
   -h, --help  Print help
@@ -654,7 +689,8 @@ Commands:
   install  Install the skill bundled with this CLI (no network required)
   update   Refresh an installed, unmodified skill from this CLI's bundle
   status   Check installation integrity and freshness; exit 1 if missing or different
-  sync     Bring every unmodified installation for this user and project up to the newest released skill. Falls back to this CLI's bundle when offline
+  sync     Bring every unmodified installation for this user and project up to the newest released
+           skill. Falls back to this CLI's bundle when offline
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -669,7 +705,8 @@ Install the skill bundled with this CLI (no network required)
 Usage: submilli skill install [OPTIONS] --agent <AGENT>
 
 Options:
-      --agent <AGENT>        Assistant whose discovery directory to use [possible values: claude, codex, cursor]
+      --agent <AGENT>        Assistant whose discovery directory to use [possible values: claude,
+                             codex, cursor]
       --project <DIRECTORY>  Install in this project instead of the user home directory
   -h, --help                 Print help
 ```
@@ -682,7 +719,8 @@ Refresh an installed, unmodified skill from this CLI's bundle
 Usage: submilli skill update [OPTIONS] --agent <AGENT>
 
 Options:
-      --agent <AGENT>        Assistant whose discovery directory to use [possible values: claude, codex, cursor]
+      --agent <AGENT>        Assistant whose discovery directory to use [possible values: claude,
+                             codex, cursor]
       --project <DIRECTORY>  Install in this project instead of the user home directory
   -h, --help                 Print help
 ```
@@ -695,7 +733,8 @@ Check installation integrity and freshness; exit 1 if missing or different
 Usage: submilli skill status [OPTIONS] --agent <AGENT>
 
 Options:
-      --agent <AGENT>        Assistant whose discovery directory to use [possible values: claude, codex, cursor]
+      --agent <AGENT>        Assistant whose discovery directory to use [possible values: claude,
+                             codex, cursor]
       --project <DIRECTORY>  Install in this project instead of the user home directory
   -h, --help                 Print help
 ```
@@ -703,7 +742,8 @@ Options:
 ### `submilli skill sync`
 
 ```text
-Bring every unmodified installation for this user and project up to the newest released skill. Falls back to this CLI's bundle when offline
+Bring every unmodified installation for this user and project up to the newest released skill. Falls
+back to this CLI's bundle when offline
 
 Usage: submilli skill sync
 
@@ -732,16 +772,21 @@ Author a blueprint file locally (scaffold, edit)
 Usage: submilli blueprint <COMMAND>
 
 Commands:
-  init         Scaffold a minimal deny-by-default `blueprint.yaml` in the current directory (`--full` lists every stdlib capability). Offline — no server needed
+  init         Scaffold a minimal deny-by-default `blueprint.yaml` in the current directory
+               (`--full` lists every stdlib capability). Offline — no server needed
   git          Configure Git identity and HTTPS username in a local blueprint
   lint         Validate a blueprint file's syntax and references. Offline
   add-mcp      Add an outbound MCP server to a local `blueprint.yaml`
   add-package  Add an already-installed package to a local `blueprint.yaml`
-  variable     Manage the session variables declared in a local `blueprint.yaml`'s `variables:` block
+  variable     Manage the session variables declared in a local `blueprint.yaml`'s `variables:`
+               block
   secret       Manage the secrets declared in a local `blueprint.yaml`'s `secrets:` block
   auth-proxy   Manage host-keyed outbound-auth rules in a local `blueprint.yaml`
-  capability   Browse gateable capabilities and edit `permissions:` rules in a local `blueprint.yaml`
-  prompt       Print the LLM-facing `execute` tool description (the MCP "system prompt") for a blueprint, with placeholders resolved as the server resolves them. Offline — no server needed
+  capability   Browse gateable capabilities and edit `permissions:` rules in a local
+               `blueprint.yaml`
+  prompt       Print the LLM-facing `execute` tool description (the MCP "system prompt") for a
+               blueprint, with placeholders resolved as the server resolves them. Offline — no
+               server needed
   help         Print this message or the help of the given subcommand(s)
 
 Options:
@@ -751,7 +796,8 @@ Options:
 ### `submilli blueprint init`
 
 ```text
-Scaffold a minimal deny-by-default `blueprint.yaml` in the current directory (`--full` lists every stdlib capability). Offline — no server needed
+Scaffold a minimal deny-by-default `blueprint.yaml` in the current directory (`--full` lists every
+stdlib capability). Offline — no server needed
 
 Usage: submilli blueprint init [OPTIONS] [NAME]
 
@@ -760,7 +806,8 @@ Arguments:
 
 Options:
       --blueprint <BLUEPRINT>  Path to write (default: ./blueprint.yaml)
-      --full                   Scaffold every stdlib capability as a deny rule with a commented filter example, instead of the minimal empty policy
+      --full                   Scaffold every stdlib capability as a deny rule with a commented
+                               filter example, instead of the minimal empty policy
   -h, --help                   Print help
 ```
 
@@ -789,11 +836,11 @@ Enable or update Git. Values may contain declared ${vars.NAME} references
 Usage: submilli blueprint git set [OPTIONS] --name <NAME> --email <EMAIL>
 
 Options:
-      --name <NAME>            
-      --email <EMAIL>          
-      --username <USERNAME>    
-      --clear-username         
-      --blueprint <BLUEPRINT>  
+      --name <NAME>
+      --email <EMAIL>
+      --username <USERNAME>
+      --clear-username
+      --blueprint <BLUEPRINT>
   -h, --help                   Print help
 ```
 
@@ -805,7 +852,7 @@ Show Git templates and token declaration, never secret values
 Usage: submilli blueprint git show [OPTIONS]
 
 Options:
-      --blueprint <BLUEPRINT>  
+      --blueprint <BLUEPRINT>
   -h, --help                   Print help
 ```
 
@@ -817,7 +864,7 @@ Disable Git without removing secrets, variables, or permissions
 Usage: submilli blueprint git remove [OPTIONS]
 
 Options:
-      --blueprint <BLUEPRINT>  
+      --blueprint <BLUEPRINT>
   -h, --help                   Print help
 ```
 
@@ -832,7 +879,8 @@ Arguments:
   <FILE>  Path to the blueprint YAML file to lint
 
 Options:
-      --fix            Add the rules declared packages and their dependencies require for their own calls
+      --fix            Add the rules declared packages and their dependencies require for their own
+                       calls
       --deny-warnings  Fail on blueprint warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
   -h, --help           Print help
 ```
@@ -845,22 +893,28 @@ Add an outbound MCP server to a local `blueprint.yaml`
 Usage: submilli blueprint add-mcp [OPTIONS] <NAME> <URL>
 
 Arguments:
-  <NAME>  Local identifier for the server: its key in the `mcp:` block and the import name `@mcp/<name>`
+  <NAME>  Local identifier for the server: its key in the `mcp:` block and the import name
+          `@mcp/<name>`
   <URL>   The MCP endpoint URL
 
 Options:
       --blueprint <BLUEPRINT>
           Blueprint file to edit (default: ./blueprint.yaml)
       --oauth
-          Make this an OAuth server (`auth: type: oauth2`). A client id isn't required — the CLI does Dynamic Client Registration at authenticate time
+          Make this an OAuth server (`auth: type: oauth2`). A client id isn't required — the CLI
+          does Dynamic Client Registration at authenticate time
       --client-id <CLIENT_ID>
-          OAuth client id, for servers that need a pre-registered client. Implies `--oauth`. A literal or a `${secrets.X}` reference
+          OAuth client id, for servers that need a pre-registered client. Implies `--oauth`. A
+          literal or a `${secrets.X}` reference
       --scope <SCOPES>
           OAuth scope to request (repeatable). Implies `--oauth`
       --header <HEADERS>
-          Static request header, `"Name: value"` (repeatable). Use `${secrets.X}` for credentials. Conflicts with the OAuth flags
+          Static request header, `"Name: value"` (repeatable). Use `${secrets.X}` for credentials.
+          Conflicts with the OAuth flags
       --authorization-bearer <SECRET_NAME>
-          Shorthand for static API-key auth: sets the header `Authorization: Bearer ${secrets.<NAME>}`. The secret must already be declared (`submilli blueprint secret add`). Implies static auth, so the OAuth probe is skipped. Conflicts with the OAuth flags
+          Shorthand for static API-key auth: sets the header `Authorization: Bearer
+          ${secrets.<NAME>}`. The secret must already be declared (`submilli blueprint secret add`).
+          Implies static auth, so the OAuth probe is skipped. Conflicts with the OAuth flags
       --no-probe
           Skip the network probe that auto-detects whether the server needs OAuth
   -h, --help
@@ -875,12 +929,15 @@ Add an already-installed package to a local `blueprint.yaml`
 Usage: submilli blueprint add-package [OPTIONS] <PACKAGE>
 
 Arguments:
-  <PACKAGE>  Package name to add, e.g. `@stripe/sdk`. The packages it depends on get caller rules too
+  <PACKAGE>  Package name to add, e.g. `@stripe/sdk`. The packages it depends on get caller rules
+             too
 
 Options:
       --capabilities <NAME,...>  Provided capabilities to allow for `main`, comma-separated
       --all-capabilities         Allow every capability the package provides
-      --no-capabilities          Allow none of the provided capabilities (the blueprint's `default:` decides them; under `default: allow` they get explicit `deny` rules)
+      --no-capabilities          Allow none of the provided capabilities (the blueprint's `default:`
+                                 decides them; under `default: allow` they get explicit `deny`
+                                 rules)
       --blueprint <BLUEPRINT>    Blueprint file to edit (default: ./blueprint.yaml)
   -h, --help                     Print help
 ```
@@ -913,8 +970,10 @@ Arguments:
   <NAME>  Variable name — what `${vars.<NAME>}` references in a filter
 
 Options:
-      --required               Reject a session that omits the variable or binds it to an empty string
-      --default <VALUE>        Value bound when the caller supplies none. A variable is always a string
+      --required               Reject a session that omits the variable or binds it to an empty
+                               string
+      --default <VALUE>        Value bound when the caller supplies none. A variable is always a
+                               string
       --alias <NAME>           Resolve from another declared variable instead of accepting a binding
       --blueprint <BLUEPRINT>  Blueprint file to edit (default: ./blueprint.yaml)
   -h, --help                   Print help
@@ -957,7 +1016,8 @@ Usage: submilli blueprint secret <COMMAND>
 Commands:
   add     Declare a secret in the blueprint's `secrets:` block
   list    List the blueprint's declared secrets and their sources (never values)
-  remove  Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:` still references it
+  remove  Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:`
+          still references it
   help    Print this message or the help of the given subcommand(s)
 
 Options:
@@ -997,7 +1057,8 @@ Options:
 #### `submilli blueprint secret remove`
 
 ```text
-Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:` still references it
+Remove a declared secret. Refused while `auth_proxy:`, `mcp:`, `llm:`, or `embedding:` still
+references it
 
 Usage: submilli blueprint secret remove [OPTIONS] <NAME>
 
@@ -1035,12 +1096,18 @@ Usage: submilli blueprint auth-proxy add [OPTIONS] --host <HOST> <--bearer <SECR
 
 Options:
       --host <HOST>                   Destination host to match exactly (e.g. `api.github.com`)
-      --allow-insecure-http           Permit HTTP for this rule; the blueprint must separately allow_insecure_http
-      --bearer <SECRET_NAME>          Bearer-token auth: names a declared secret. Sets `Authorization: Bearer <secret>`
-      --basic-username <USERNAME>     Basic-auth username (a literal, not a secret). Requires `--basic-password`
-      --basic-password <SECRET_NAME>  Basic-auth password: names a declared secret. Requires `--basic-username`
-      --header <NAME=VALUE>           Raw header injection, `Name=value` (repeatable). Value may use `${secrets.X}`
-      --query <KEY=VALUE>             Raw query-param injection, `key=value` (repeatable). Value may use `${secrets.X}`
+      --allow-insecure-http           Permit HTTP for this rule; the blueprint must separately
+                                      allow_insecure_http
+      --bearer <SECRET_NAME>          Bearer-token auth: names a declared secret. Sets
+                                      `Authorization: Bearer <secret>`
+      --basic-username <USERNAME>     Basic-auth username (a literal, not a secret). Requires
+                                      `--basic-password`
+      --basic-password <SECRET_NAME>  Basic-auth password: names a declared secret. Requires
+                                      `--basic-username`
+      --header <NAME=VALUE>           Raw header injection, `Name=value` (repeatable). Value may use
+                                      `${secrets.X}`
+      --query <KEY=VALUE>             Raw query-param injection, `key=value` (repeatable). Value may
+                                      use `${secrets.X}`
       --blueprint <BLUEPRINT>         Blueprint file to edit (default: ./blueprint.yaml)
   -h, --help                          Print help
 ```
@@ -1078,8 +1145,10 @@ Browse gateable capabilities and edit `permissions:` rules in a local `blueprint
 Usage: submilli blueprint capability <COMMAND>
 
 Commands:
-  list    List the capabilities available to the blueprint, annotated with the permission rules already present. Offline — no server needed
-  add     Append a permission rule to the `permissions:` block. Rewrites the file; YAML comments are not preserved
+  list    List the capabilities available to the blueprint, annotated with the permission rules
+          already present. Offline — no server needed
+  add     Append a permission rule to the `permissions:` block. Rewrites the file; YAML comments are
+          not preserved
   remove  Remove every rule for a capability. Rewrites the file; YAML comments are not preserved
   help    Print this message or the help of the given subcommand(s)
 
@@ -1090,23 +1159,29 @@ Options:
 #### `submilli blueprint capability list`
 
 ```text
-List the capabilities available to the blueprint, annotated with the permission rules already present. Offline — no server needed
+List the capabilities available to the blueprint, annotated with the permission rules already
+present. Offline — no server needed
 
 Usage: submilli blueprint capability list [OPTIONS] [LIBRARY]
 
 Arguments:
-  [LIBRARY]  Show one library only: a stdlib module (`submilli:fs`), a declared package or a package one depends on, or a declared MCP server name
+  [LIBRARY]  Show one library only: a stdlib module (`submilli:fs`), a declared package or a package
+             one depends on, or a declared MCP server name
 
 Options:
-      --blueprint <BLUEPRINT>  Blueprint file to read (default: ./blueprint.yaml). Without a readable blueprint the stdlib catalog is still listed
-      --unconfigured           Show only the capabilities declared packages provide that have no rule under `main` (a filtered rule or a `deny` counts as a rule), and the default they fall through to. Requires a readable blueprint
+      --blueprint <BLUEPRINT>  Blueprint file to read (default: ./blueprint.yaml). Without a
+                               readable blueprint the stdlib catalog is still listed
+      --unconfigured           Show only the capabilities declared packages provide that have no
+                               rule under `main` (a filtered rule or a `deny` counts as a rule), and
+                               the default they fall through to. Requires a readable blueprint
   -h, --help                   Print help
 ```
 
 #### `submilli blueprint capability add`
 
 ```text
-Append a permission rule to the `permissions:` block. Rewrites the file; YAML comments are not preserved
+Append a permission rule to the `permissions:` block. Rewrites the file; YAML comments are not
+preserved
 
 Usage: submilli blueprint capability add [OPTIONS] <CAPABILITY>
 
@@ -1114,10 +1189,14 @@ Arguments:
   <CAPABILITY>  Capability name, e.g. `fs.read` or `mcp.linear`
 
 Options:
-      --action <ACTION>        The rule's action. Adding a capability under `default: deny` grants it, so the default is `allow` [default: allow] [possible values: allow, deny, ask-human]
+      --action <ACTION>        The rule's action. Adding a capability under `default: deny` grants
+                               it, so the default is `allow` [default: allow] [possible values:
+                               allow, deny, ask-human]
       --filter <FILTER>        Filter expression constraining the rule, e.g. 'path glob "*.csv"'
-      --caller <CALLER>        Caller id the rule applies to (`main` is the user script; a package name gates that package's own calls) [default: main]
-      --force                  Add the rule even if the capability name isn't known to the stdlib catalog, a declared package, or a declared MCP server
+      --caller <CALLER>        Caller id the rule applies to (`main` is the user script; a package
+                               name gates that package's own calls) [default: main]
+      --force                  Add the rule even if the capability name isn't known to the stdlib
+                               catalog, a declared package, or a declared MCP server
       --blueprint <BLUEPRINT>  Blueprint file to edit (default: ./blueprint.yaml)
   -h, --help                   Print help
 ```
@@ -1141,12 +1220,15 @@ Options:
 ### `submilli blueprint prompt`
 
 ```text
-Print the LLM-facing `execute` tool description (the MCP "system prompt") for a blueprint, with placeholders resolved as the server resolves them. Offline — no server needed
+Print the LLM-facing `execute` tool description (the MCP "system prompt") for a blueprint, with
+placeholders resolved as the server resolves them. Offline — no server needed
 
 Usage: submilli blueprint prompt [OPTIONS]
 
 Options:
-      --blueprint <BLUEPRINT>  Blueprint whose policy resolves `{vfs_mode}` / `{http_access}`. Defaults to `./blueprint.yaml` if present, otherwise an empty (deny-all) policy
+      --blueprint <BLUEPRINT>  Blueprint whose policy resolves `{vfs_mode}` / `{http_access}`.
+                               Defaults to `./blueprint.yaml` if present, otherwise an empty
+                               (deny-all) policy
   -h, --help                   Print help
 ```
 
@@ -1175,7 +1257,7 @@ Store a secret; prompts for the value, or reads it from piped stdin
 Usage: submilli secret put <KEY>
 
 Arguments:
-  <KEY>  
+  <KEY>
 
 Options:
   -h, --help  Print help
@@ -1189,7 +1271,7 @@ Delete a secret by key
 Usage: submilli secret delete <KEY>
 
 Arguments:
-  <KEY>  
+  <KEY>
 
 Options:
   -h, --help  Print help
@@ -1215,11 +1297,14 @@ Authenticate outbound OAuth MCP servers locally (no running server)
 Usage: submilli mcp <COMMAND>
 
 Commands:
-  authenticate    Run the OAuth flow for a blueprint's MCP server and store its credential locally. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
+  authenticate    Run the OAuth flow for a blueprint's MCP server and store its credential locally.
+                  Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the
+                  existing credential
   deauthenticate  Remove an MCP server's stored credential (blueprint returns to PENDING)
   auth-status     Show each declared MCP server's authentication state
   grants          List the MCP OAuth grants stored locally, one per blueprint and server
-  provider        Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the client id / secret used to authenticate confidential OAuth servers
+  provider        Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the client id /
+                  secret used to authenticate confidential OAuth servers
   help            Print this message or the help of the given subcommand(s)
 
 Options:
@@ -1229,7 +1314,8 @@ Options:
 ### `submilli mcp authenticate`
 
 ```text
-Run the OAuth flow for a blueprint's MCP server and store its credential locally. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
+Run the OAuth flow for a blueprint's MCP server and store its credential locally. Re-run to
+re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
 
 Usage: submilli mcp authenticate --blueprint <BLUEPRINT> <SERVER>
 
@@ -1283,7 +1369,8 @@ Options:
 ### `submilli mcp provider`
 
 ```text
-Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the client id / secret used to authenticate confidential OAuth servers
+Manage local OAuth provider apps (`~/.submilli/mcp_oauth.yaml`) — the client id / secret used to
+authenticate confidential OAuth servers
 
 Usage: submilli mcp provider <COMMAND>
 
@@ -1305,9 +1392,13 @@ Add or replace the provider matching a host
 Usage: submilli mcp provider add [OPTIONS] --match <MATCH_HOST> --client-id <CLIENT_ID>
 
 Options:
-      --match <MATCH_HOST>             OAuth host to match (e.g. `github.com`), compared against the token endpoint's host — not the MCP URL
-      --client-id <CLIENT_ID>          OAuth client id. A literal, or a `${secrets.X}` / `${env.X}` reference
-      --client-secret <CLIENT_SECRET>  OAuth client secret, as a reference: `${secrets.NAME}` (from the local store) or `${env.VAR}`. Omit for a public (PKCE-only) client
+      --match <MATCH_HOST>             OAuth host to match (e.g. `github.com`), compared against the
+                                       token endpoint's host — not the MCP URL
+      --client-id <CLIENT_ID>          OAuth client id. A literal, or a `${secrets.X}` / `${env.X}`
+                                       reference
+      --client-secret <CLIENT_SECRET>  OAuth client secret, as a reference: `${secrets.NAME}` (from
+                                       the local store) or `${env.VAR}`. Omit for a public
+                                       (PKCE-only) client
       --scope <SCOPES>                 OAuth scope to request (repeatable)
   -h, --help                           Print help
 ```
@@ -1343,7 +1434,10 @@ Manage the GitHub token used to install packages from private repositories
 Usage: submilli github <COMMAND>
 
 Commands:
-  authenticate    Store a GitHub token for installing packages from private repositories. Prompts for it, or reads it from piped stdin. It needs Repository permissions → Contents: Read-only on the package repositories (a fine-grained token), or the `repo` scope (a classic token)
+  authenticate    Store a GitHub token for installing packages from private repositories. Prompts
+                  for it, or reads it from piped stdin. It needs Repository permissions → Contents:
+                  Read-only on the package repositories (a fine-grained token), or the `repo` scope
+                  (a classic token)
   deauthenticate  Remove the stored GitHub token
   auth-status     Show which GitHub token package fetches use, and whose it is
   help            Print this message or the help of the given subcommand(s)
@@ -1355,12 +1449,15 @@ Options:
 ### `submilli github authenticate`
 
 ```text
-Store a GitHub token for installing packages from private repositories. Prompts for it, or reads it from piped stdin. It needs Repository permissions → Contents: Read-only on the package repositories (a fine-grained token), or the `repo` scope (a classic token)
+Store a GitHub token for installing packages from private repositories. Prompts for it, or reads it
+from piped stdin. It needs Repository permissions → Contents: Read-only on the package repositories
+(a fine-grained token), or the `repo` scope (a classic token)
 
 Usage: submilli github authenticate [OPTIONS]
 
 Options:
-      --owner <OWNER>  The user or organization whose repositories the token is for; fills it in on the token-creation link
+      --owner <OWNER>  The user or organization whose repositories the token is for; fills it in on
+                       the token-creation link
   -h, --help           Print help
 ```
 
@@ -1394,6 +1491,7 @@ Interact with a running submilli-server
 Usage: submilli server <COMMAND>
 
 Commands:
+  runs       Inspect executions and resume stuck runs
   apply      Apply blueprint YAML documents to a running submilli-server
   trust      Manage approved HTTPS server public keys
   docs       Read package declarations, including a blueprint's MCP tools
@@ -1411,6 +1509,89 @@ Options:
   -h, --help  Print help
 ```
 
+### `submilli server runs`
+
+```text
+Inspect executions and resume stuck runs
+
+Usage: submilli server runs <COMMAND>
+
+Commands:
+  list    List runs, including stuck runs and their reasons
+  show    Inspect a run and its retained result
+  resume  Resume a stuck run with its original code, identity, and limits
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server runs list`
+
+```text
+List runs, including stuck runs and their reasons
+
+Usage: submilli server runs list [OPTIONS]
+
+Options:
+      --session <SESSION>
+      --status <STATUS>    [possible values: queued, running, stuck, completed, cancelled, aborted,
+                           indeterminate, expired]
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server runs show`
+
+```text
+Inspect a run and its retained result
+
+Usage: submilli server runs show [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>
+
+Options:
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server runs resume`
+
+```text
+Resume a stuck run with its original code, identity, and limits
+
+Usage: submilli server runs resume [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>
+
+Options:
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
 ### `submilli server apply`
 
 ```text
@@ -1420,8 +1601,13 @@ Usage: submilli server apply [OPTIONS] --file <FILE>
 
 Options:
   -f, --file <FILE>        YAML file (multi-document ok) or directory of .yaml files to apply
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1450,8 +1636,10 @@ Inspect and approve a server public key. No token is sent
 Usage: submilli server trust add [OPTIONS] --server <URL>
 
 Options:
-      --server <URL>          HTTPS server URL whose public key should be approved [env: SUBMILLI_SERVER_URL=]
-      --fingerprint <SHA256>  Independently obtained SHA-256 SPKI fingerprint (sha256:<64 hex digits>). Matching it approves trust without an interactive prompt
+      --server <URL>          HTTPS server URL whose public key should be approved [env:
+                              SUBMILLI_SERVER_URL=]
+      --fingerprint <SHA256>  Independently obtained SHA-256 SPKI fingerprint (sha256:<64 hex
+                              digits>). Matching it approves trust without an interactive prompt
   -h, --help                  Print help
 ```
 
@@ -1490,8 +1678,13 @@ Arguments:
 
 Options:
       --blueprint <BLUEPRINT>  Registered blueprint whose package catalog to query
-      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>      File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                               [default: http://127.0.0.1:8128]
+      --token-file <PATH>      File holding the API token to send. Without it the token is read from
+                               `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only
+                               a server started with `--allow-unauthenticated` accepts. There is no
+                               flag taking the token itself, so it never lands in the process list.
+                               Env: `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help                   Print help
 ```
 
@@ -1503,15 +1696,23 @@ Execute a Submilli script on a running submilli-server
 Usage: submilli server run-code [OPTIONS] <SCRIPT>
 
 Arguments:
-  <SCRIPT>  
+  <SCRIPT>
 
 Options:
       --blueprint <BLUEPRINT>  Run in a fresh session bound to this registered blueprint
-      --session <SESSION>      Run inside a session opened by `submilli server session open`, which keeps its blueprint, variables, files, and session state between runs
-      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>      File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
-      --var <NAME=VALUE>       Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the way an application binds it when it opens a session
-      --timeout <TIMEOUT>      Omit for no client-side timeout; the server still enforces its own fuel/epoch limits
+      --session <SESSION>      Run inside a session opened by `submilli server session open`, which
+                               keeps its blueprint, variables, files, and session state between runs
+      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                               [default: http://127.0.0.1:8128]
+      --token-file <PATH>      File holding the API token to send. Without it the token is read from
+                               `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only
+                               a server started with `--allow-unauthenticated` accepts. There is no
+                               flag taking the token itself, so it never lands in the process list.
+                               Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --var <NAME=VALUE>       Bind a blueprint variable for this run, `NAME=VALUE` (repeatable),
+                               the way an application binds it when it opens a session
+      --timeout <TIMEOUT>      Omit for no client-side timeout; the server still enforces its own
+                               fuel/epoch limits
   -h, --help                   Print help
 ```
 
@@ -1540,17 +1741,26 @@ Install a GitHub package into the server's store
 Usage: submilli server packages install [OPTIONS] <URL> [PACKAGE]
 
 Arguments:
-  <URL>      GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL. A private repository needs the server's own GitHub token (`github_token_file` in its config file); this command never sends yours
-  [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo declares
+  <URL>      GitHub repo: `org/repo`, `github.com/org/repo`, or a full URL. A private repository
+             needs the server's own GitHub token (`github_token_file` in its config file); this
+             command never sends yours
+  [PACKAGE]  Install only this package (`@org/name`). Omit to install every package the repo
+             declares
 
 Options:
       --config <NAME=VALUE>  Set a src/config.ts parameter of the selected package
       --reset-config <NAME>  Remove a saved override and use the source default
-      --sha <SHA>            Pin to this commit SHA (or ref). Resolved from the default branch when omitted
+      --sha <SHA>            Pin to this commit SHA (or ref). Resolved from the default branch when
+                             omitted
       --upgrade              Replace an installed package when its source or configuration changes
       --deny-warnings        Fail on code warnings; also enabled by SUBMILLI_DENY_WARNINGS=1
-      --server <URL>         Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>    File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>         Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                             [default: http://127.0.0.1:8128]
+      --token-file <PATH>    File holding the API token to send. Without it the token is read from
+                             `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                             server started with `--allow-unauthenticated` accepts. There is no flag
+                             taking the token itself, so it never lands in the process list. Env:
+                             `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help                 Print help
 ```
 
@@ -1562,8 +1772,13 @@ List the packages the server can resolve, marking any read from a fallback store
 Usage: submilli server packages list [OPTIONS]
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1578,8 +1793,13 @@ Arguments:
   <NAME>  Package to remove, e.g. `@submilli/jina`
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1591,8 +1811,13 @@ Report a running server's status (pid, bind, sessions, blueprints)
 Usage: submilli server status [OPTIONS]
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1604,8 +1829,13 @@ Ask a running server to drain and stop
 Usage: submilli server stop [OPTIONS]
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1636,11 +1866,16 @@ Register a new blueprint file with the server; fails if the name is taken
 Usage: submilli server blueprint add [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  
+  <FILE>
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1652,11 +1887,16 @@ Register a blueprint file, replacing any existing one with the same name
 Usage: submilli server blueprint apply [OPTIONS] <FILE>
 
 Arguments:
-  <FILE>  
+  <FILE>
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1668,8 +1908,13 @@ List blueprints registered on the server
 Usage: submilli server blueprint list [OPTIONS]
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1681,11 +1926,16 @@ Print a registered blueprint's YAML
 Usage: submilli server blueprint show [OPTIONS] <NAME>
 
 Arguments:
-  <NAME>  
+  <NAME>
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1697,11 +1947,16 @@ Unregister a blueprint by name
 Usage: submilli server blueprint remove [OPTIONS] <NAME>
 
 Arguments:
-  <NAME>  
+  <NAME>
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1730,11 +1985,16 @@ Store a secret; prompts for the value, or reads it from piped stdin
 Usage: submilli server secret put [OPTIONS] <KEY>
 
 Arguments:
-  <KEY>  
+  <KEY>
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1746,11 +2006,16 @@ Delete a secret by key
 Usage: submilli server secret delete [OPTIONS] <KEY>
 
 Arguments:
-  <KEY>  
+  <KEY>
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1763,8 +2028,13 @@ Usage: submilli server secret list [OPTIONS]
 
 Options:
       --prefix <PREFIX>    Only list keys starting with this prefix
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1793,9 +2063,15 @@ Usage: submilli server session open [OPTIONS] --blueprint <BLUEPRINT>
 
 Options:
       --blueprint <BLUEPRINT>  Name of a blueprint registered on the server
-      --var <NAME=VALUE>       Bind a blueprint variable for the whole session, `NAME=VALUE` (repeatable)
-      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>      File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --var <NAME=VALUE>       Bind a blueprint variable for the whole session, `NAME=VALUE`
+                               (repeatable)
+      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                               [default: http://127.0.0.1:8128]
+      --token-file <PATH>      File holding the API token to send. Without it the token is read from
+                               `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only
+                               a server started with `--allow-unauthenticated` accepts. There is no
+                               flag taking the token itself, so it never lands in the process list.
+                               Env: `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help                   Print help
 ```
 
@@ -1810,8 +2086,13 @@ Arguments:
   <SESSION>  Id printed by `submilli server session open`
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1823,7 +2104,9 @@ Authenticate outbound OAuth MCP servers declared in a blueprint
 Usage: submilli server mcp <COMMAND>
 
 Commands:
-  authenticate    Run the OAuth flow for a blueprint's MCP server and store its refresh token. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
+  authenticate    Run the OAuth flow for a blueprint's MCP server and store its refresh token.
+                  Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the
+                  existing credential
   deauthenticate  Remove an MCP server's stored refresh token (blueprint returns to PENDING)
   auth-status     Show each declared MCP server's authentication state
   grants          List the MCP OAuth grants the server holds, or delete one
@@ -1836,7 +2119,8 @@ Options:
 #### `submilli server mcp authenticate`
 
 ```text
-Run the OAuth flow for a blueprint's MCP server and store its refresh token. Re-run to re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
+Run the OAuth flow for a blueprint's MCP server and store its refresh token. Re-run to
+re-authenticate (e.g. after changing scopes) — it overwrites the existing credential
 
 Usage: submilli server mcp authenticate [OPTIONS] <BLUEPRINT> <SERVER>
 
@@ -1845,8 +2129,13 @@ Arguments:
   <SERVER>     The MCP server's local name (its key in the `mcp:` block)
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1862,8 +2151,13 @@ Arguments:
   <SERVER>     The MCP server's local name (its key in the `mcp:` block)
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1878,8 +2172,13 @@ Arguments:
   <BLUEPRINT>  Blueprint to report on
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1908,8 +2207,13 @@ Usage: submilli server mcp grants list [OPTIONS]
 
 Options:
       --blueprint <BLUEPRINT>  Only list this blueprint's grants
-      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>      File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>           Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                               [default: http://127.0.0.1:8128]
+      --token-file <PATH>      File holding the API token to send. Without it the token is read from
+                               `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only
+                               a server started with `--allow-unauthenticated` accepts. There is no
+                               flag taking the token itself, so it never lands in the process list.
+                               Env: `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help                   Print help
 ```
 
@@ -1925,8 +2229,13 @@ Arguments:
   <SERVER>     The MCP server's local name (its key in the `mcp:` block)
 
 Options:
-      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
-      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
   -h, --help               Print help
 ```
 
@@ -1938,279 +2247,332 @@ Run a local playground that serves this project's blueprint and shows every run 
 Usage: submilli playground [OPTIONS]
        submilli playground <COMMAND>
 
-Commands:
-  start        Start the playground in the background, or attach to the running one, print its ready record with a fresh login link, and open the link in your browser (the default)
-  status       Report whether the playground is running, where, and with what
-  open         Print a fresh single-use login link for the running playground, and open it in your browser
-  stop         Stop the running playground: drain its runs and end browser sessions
-  restart      Stop the running playground and start it again, with its blueprint and egress grants unless given here, and open a fresh login link. Browser sessions end, and bound secrets have to be bound again
-  init         Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the signed-in customer, and an example program. Writes nothing outside `submilli/`
-  runs         List stored runs, newest first. Works with the playground stopped
-  show         Show one run: its decisions, calls, and outcome
-  explain      Explain one decision: the rule that decided it (or the default) and every rule that nearly matched
-  compare      Compare two runs: only the decisions that changed
-  audit        Audit the runs since the last blueprint edit
-  changes      List the blueprint versions and what each changed
-  sessions     List sessions, newest first
-  exec         Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled `example`), under the binding or in a started session
-  bind         Set the variables and harness-secret development values new runs use, or print them. Variables are kept for the next start; secret values only in the running playground's memory
-  session      Start a session with its variables fixed, or end one
-  recheck      After a blueprint edit, see which of a run's decisions would change: re-resolves them under the blueprint in force. Runs nothing and records nothing
-  test         After a blueprint edit, see whether a recorded program gets through now: runs it again under the blueprint in force, with its calls answered from the recording. It stops at a call with nothing recorded
-  rerun        After a package edit, or to try other variables, run a recorded program again for real under the current binding, as a new run linked to its source
-  draft-rule   Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works with the playground stopped
-  clear        Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
-  cancel       Cancel a run in flight
-  watch        Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
-  claude-code  Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own `.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use those tools without asking, so your blueprint decides its calls. Run it again to check; it changes only what's missing
-  mcp          Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
-  chat         Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
-  chat-hook    Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
-  help         Print this message or the help of the given subcommand(s)
+Run `submilli playground` to start and open the browser.
+Use the browser to chat and review runs, decision explanations, and comparisons.
 
-Options:
+Commands:
+  Start and open the browser:
+    start                    Start the playground and open the browser
+                             (default)
+    open                     Open the playground in your browser
+    init-demo                Create a demo project with example billing
+                             operations
+    status                   Show whether the playground is running
+    restart                  Restart the playground and open the browser
+    stop                     Stop the playground and finish active runs
+
+  Run from the terminal:
+    chat <MESSAGE>           Give an agent a task using your model key
+    exec <FILE|--example>    Run a program or the demo example
+    bind                     Set variables and development secrets for new
+                             runs
+    session <COMMAND>        Start or end a session
+    sessions                 List sessions, newest first
+    cancel <RUN>             Cancel an active run
+    watch                    Follow session events as JSON lines
+
+  Connect a coding assistant:
+    claude-code              Connect Claude Code to this playground
+    mcp                      Serve playground tools to a coding assistant
+
+  Advanced inspection and testing:
+    runs                     List recorded runs, newest first
+    show <RUN>               Show a run, its calls, and its outcome
+    explain <RUN.N>          Explain why a decision was allowed or refused
+    compare <RUN-A> <RUN-B>  Show which decisions differ between two runs
+    audit                    Audit runs since the last Blueprint edit
+    changes                  List Blueprint versions and their changes
+    recheck <RUN>            Check recorded decisions against the current
+                             Blueprint
+    test <RUN>               Run again using recorded call responses
+    rerun <RUN>              Run again for real, using current variables
+    draft-rule <RUN.N>       Draft a permission rule for one refused call
+    clear                    Delete recorded runs and session events
+
+Run `submilli playground <COMMAND> --help` for arguments and options.
+
+Start options (also available on `start`):
       --json                Print the ready record as JSON
-      --no-open             Don't open the login link in your browser. A start in a terminal opens it; one with `--json`, or whose output isn't a terminal, never does
-      --foreground          Serve in this terminal until `submilli playground stop` or a signal, instead of in the background
-      --blueprint <PATH>    The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the project's root `blueprint.yaml`
-      --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
-      --allow-private       Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env: `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
-      --allow-ip <IP|CIDR>  Let programs reach this address or CIDR range (repeatable). Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive
+      --no-open             Don't open the login link in your browser. A start in a terminal opens
+                            it; one with `--json`, or whose output isn't a terminal, never does
+      --foreground          Serve in this terminal until `submilli playground stop` or a signal,
+                            instead of in the background
+      --blueprint <PATH>    The blueprint to serve. Default: the single file under
+                            `submilli/blueprints/`, or the project's root `blueprint.yaml`
+      --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services.
+                            Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
+      --allow-private       Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env:
+                            `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
+      --allow-ip <IP|CIDR>  Let programs reach this address or CIDR range (repeatable). Env:
+                            `$SUBMILLI_ALLOW_IP` (comma-separated), additive
   -h, --help                Print help
 ```
 
 ### `submilli playground start`
 
 ```text
-Start the playground in the background, or attach to the running one, print its ready record with a fresh login link, and open the link in your browser (the default)
+Start the playground in the background, or attach to the running one, print its ready record with a
+fresh login link, and open the link in your browser (the default).
 
 Usage: submilli playground start [OPTIONS]
 
 Options:
-      --json                Print the ready record as JSON
-      --no-open             Don't open the login link in your browser. A start in a terminal opens it; one with `--json`, or whose output isn't a terminal, never does
-      --foreground          Serve in this terminal until `submilli playground stop` or a signal, instead of in the background
-      --blueprint <PATH>    The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the project's root `blueprint.yaml`
-      --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
-      --allow-private       Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env: `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
-      --allow-ip <IP|CIDR>  Let programs reach this address or CIDR range (repeatable). Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive
-  -h, --help                Print help
-```
+      --json
+          Print the ready record as JSON
 
-### `submilli playground status`
+      --no-open
+          Don't open the login link in your browser. A start in a terminal opens it; one with
+          `--json`, or whose output isn't a terminal, never does
 
-```text
-Report whether the playground is running, where, and with what
+      --foreground
+          Serve in this terminal until `submilli playground stop` or a signal, instead of in the
+          background
 
-Usage: submilli playground status [OPTIONS]
+      --blueprint <PATH>
+          The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the
+          project's root `blueprint.yaml`
 
-Options:
-      --json  Print JSON
-  -h, --help  Print help
+      --allow-localhost
+          Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env:
+          `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
+
+      --allow-private
+          Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env:
+          `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
+
+      --allow-ip <IP|CIDR>
+          Let programs reach this address or CIDR range (repeatable). Env: `$SUBMILLI_ALLOW_IP`
+          (comma-separated), additive
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground open`
 
 ```text
-Print a fresh single-use login link for the running playground, and open it in your browser
+Print a fresh single-use login link for the running playground, and open it in your browser.
 
 Usage: submilli playground open [OPTIONS] [RUN]
 
 Arguments:
-  [RUN]  A run to open the page at, or a decision as `<run>.<n>` (for example `12` or `12.3`)
+  [RUN]
+          A run to open the page at, or a decision as `<run>.<n>` (for example `12` or `12.3`)
 
 Options:
-      --json     Print JSON
-      --no-open  Only print the link. In a terminal it is opened too; with `--json`, or when the output isn't a terminal, it never is
-  -h, --help     Print help
+      --json
+          Print JSON
+
+      --no-open
+          Only print the link. In a terminal it is opened too; with `--json`, or when the output
+          isn't a terminal, it never is
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
-### `submilli playground stop`
+### `submilli playground init-demo`
 
 ```text
-Stop the running playground: drain its runs and end browser sessions
+Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the
+signed-in customer, and an example program. Writes nothing outside `submilli/`.
 
-Usage: submilli playground stop [OPTIONS]
+Usage: submilli playground init-demo [OPTIONS]
 
 Options:
-      --json  Print JSON
-  -h, --help  Print help
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground status`
+
+```text
+Report whether the playground is running, where, and with what.
+
+Usage: submilli playground status [OPTIONS]
+
+Options:
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground restart`
 
 ```text
-Stop the running playground and start it again, with its blueprint and egress grants unless given here, and open a fresh login link. Browser sessions end, and bound secrets have to be bound again
+Stop the running playground and start it again, with its blueprint and egress grants unless given
+here, and open a fresh login link. Browser sessions keep their original 12-hour expiry; bound
+secrets have to be bound again.
 
 Usage: submilli playground restart [OPTIONS]
 
 Options:
-      --json                Print the ready record as JSON
-      --no-open             Don't open the login link in your browser. A start in a terminal opens it; one with `--json`, or whose output isn't a terminal, never does
-      --foreground          Serve in this terminal until `submilli playground stop` or a signal, instead of in the background
-      --blueprint <PATH>    The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the project's root `blueprint.yaml`
-      --allow-localhost     Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
-      --allow-private       Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env: `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
-      --allow-ip <IP|CIDR>  Let programs reach this address or CIDR range (repeatable). Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive
-  -h, --help                Print help
+      --json
+          Print the ready record as JSON
+
+      --no-open
+          Don't open the login link in your browser. A start in a terminal opens it; one with
+          `--json`, or whose output isn't a terminal, never does
+
+      --foreground
+          Serve in this terminal until `submilli playground stop` or a signal, instead of in the
+          background
+
+      --blueprint <PATH>
+          The blueprint to serve. Default: the single file under `submilli/blueprints/`, or the
+          project's root `blueprint.yaml`
+
+      --allow-localhost
+          Let programs reach IPv4 and IPv6 loopback, for an app's local services. Env:
+          `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), additive
+
+      --allow-private
+          Let programs reach RFC1918, CGNAT, and IPv6 ULA private ranges. Env:
+          `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), additive
+
+      --allow-ip <IP|CIDR>
+          Let programs reach this address or CIDR range (repeatable). Env: `$SUBMILLI_ALLOW_IP`
+          (comma-separated), additive
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
-### `submilli playground init`
+### `submilli playground stop`
 
 ```text
-Create a `submilli/` folder with a starter billing package, a blueprint that pins charges to the signed-in customer, and an example program. Writes nothing outside `submilli/`
+Stop the running playground: drain its runs and end browser sessions.
 
-Usage: submilli playground init [OPTIONS]
+Usage: submilli playground stop [OPTIONS]
 
 Options:
-      --json  Print JSON
-  -h, --help  Print help
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
-### `submilli playground runs`
+### `submilli playground chat`
 
 ```text
-List stored runs, newest first. Works with the playground stopped
+Chat with an agent using your own model key, the way a production agent runs: it uses the
+playground's tools and prints its answer. Each chat starts a session; send the next message in it
+with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or
+`session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the
+playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model
+from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
 
-Usage: submilli playground runs [OPTIONS]
-
-Options:
-      --source <LABEL>        Only runs with this source label (`stand-in`, `app`, `assistant`, ...)
-      --since <DURATION|RUN>  Only runs that started within this long (`30s`, `10m`, `2h`, `1d`), or after this run id
-      --session <ID>          Only runs in this session
-      --limit <LIMIT>         How many runs to list [default: 20]
-      --json                  Print JSON
-  -h, --help                  Print help
-```
-
-### `submilli playground show`
-
-```text
-Show one run: its decisions, calls, and outcome
-
-Usage: submilli playground show [OPTIONS] <RUN>
+Usage: submilli playground chat [OPTIONS] <MESSAGE>
 
 Arguments:
-  <RUN>  The run id
+  <MESSAGE>
+          What the agent should do, or, with `--session`, the next message to it
 
 Options:
-      --include-payloads  Include call request and response bodies, and results and console output in full
-      --program           Include the program the run ran, as the agent wrote it
-      --json              Print JSON
-  -h, --help              Print help
-```
+      --session <ID>
+          Carry on this chat session: the agent sees the conversation so far, under the session's
+          fixed variables, and answers with the session's own model
 
-### `submilli playground explain`
+      --model <PROVIDER:MODEL>
+          The model for a new session, as `<provider>:<model>`, from a provider whose key the
+          playground started with. Default: the playground's configured model. A session carried on
+          keeps its own
 
-```text
-Explain one decision: the rule that decided it (or the default) and every rule that nearly matched
+      --effort <LEVEL>
+          How hard a new session's model reasons. OpenAI models only, for now
 
-Usage: submilli playground explain [OPTIONS] <RUN.N>
+          [possible values: low, medium, high]
 
-Arguments:
-  <RUN.N>  The decision, as `<run>.<n>` (for example `12.3`)
+      --max-output <TOKENS>
+          The most tokens one answer of a new session's model may take. Default: 4096
 
-Options:
-      --json  Print JSON
-  -h, --help  Print help
-```
+      --provider-settings <JSON>
+          Fields a new session adds to every request to its provider, as a JSON object in the
+          provider's own API terms, such as `{"temperature": 0.2}`. Fields the playground sets
+          itself (the model, messages, tools, instructions) are refused
 
-### `submilli playground compare`
+      --max-calls-per-answer <N>
+          The most tool calls run for one answer of the model; the rest are refused to it
 
-```text
-Compare two runs: only the decisions that changed
+          [default: 16]
 
-Usage: submilli playground compare [OPTIONS] <RUN-A> <RUN-B>
+      --json
+          Print JSON
 
-Arguments:
-  <RUN-A>  
-  <RUN-B>  
-
-Options:
-      --json  Print JSON
-  -h, --help  Print help
-```
-
-### `submilli playground audit`
-
-```text
-Audit the runs since the last blueprint edit
-
-Usage: submilli playground audit [OPTIONS]
-
-Options:
-      --default-only   Only calls allowed by the default, which no rule matched
-      --packages-only  Only calls made by packages
-      --json           Print JSON
-  -h, --help           Print help
-```
-
-### `submilli playground changes`
-
-```text
-List the blueprint versions and what each changed
-
-Usage: submilli playground changes [OPTIONS]
-
-Options:
-      --version <N>  Only this version, with its file text
-      --json         Print JSON
-  -h, --help         Print help
-```
-
-### `submilli playground sessions`
-
-```text
-List sessions, newest first
-
-Usage: submilli playground sessions [OPTIONS]
-
-Options:
-      --limit <LIMIT>  How many sessions to list; tests' and reruns' own sessions come on top, up to as many [default: 20]
-      --json           Print JSON
-  -h, --help           Print help
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground exec`
 
 ```text
-Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled `example`), under the binding or in a started session
+Run a program in the running playground, labeled `assistant` (or the scaffolded example, labeled
+`example`), under the binding or in a started session.
 
 Usage: submilli playground exec [OPTIONS] <FILE|--example>
 
 Arguments:
-  [FILE]  The program to run
+  [FILE]
+          The program to run
 
 Options:
-      --example           Run the scaffolded example program instead
-      --session <ID>      Run in this started session, under its fixed variables
-      --var <NAME=VALUE>  A variable for this run over the binding (repeatable). In a started session it must match the session's value
-      --json              Print JSON
-  -h, --help              Print help
+      --example
+          Run the scaffolded example program instead
+
+      --session <ID>
+          Run in this started session, under its fixed variables
+
+      --var <NAME=VALUE>
+          A variable for this run over the binding (repeatable). In a started session it must match
+          the session's value
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground bind`
 
 ```text
-Set the variables and harness-secret development values new runs use, or print them. Variables are kept for the next start; secret values only in the running playground's memory
+Set the variables and harness-secret development values new runs use, or print them. Variables are
+kept for the next start; secret values only in the running playground's memory.
 
 Usage: submilli playground bind [OPTIONS] [NAME=VALUE]...
 
 Arguments:
-  [NAME=VALUE]...  Variables to bind
+  [NAME=VALUE]...
+          Variables to bind
 
 Options:
-      --secret <NAME>  A harness secret to bind, its value read from the environment variable of the same name or the local secret store; never from the command line (repeatable)
-      --unset <NAME>   Remove a variable or secret from the binding (repeatable)
-      --clear          Remove everything from the binding first
-      --json           Print JSON
-  -h, --help           Print help
+      --secret <NAME>
+          A harness secret to bind, its value read from the environment variable of the same name or
+          the local secret store; never from the command line (repeatable)
+
+      --unset <NAME>
+          Remove a variable or secret from the binding (repeatable)
+
+      --clear
+          Remove everything from the binding first
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground session`
 
 ```text
-Start a session with its variables fixed, or end one
+Start a session with its variables fixed, or end one.
 
 Usage: submilli playground session <COMMAND>
 
@@ -2220,7 +2582,8 @@ Commands:
   help   Print this message or the help of the given subcommand(s)
 
 Options:
-  -h, --help  Print help
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 #### `submilli playground session start`
@@ -2244,174 +2607,354 @@ End a session
 Usage: submilli playground session end [OPTIONS] <ID>
 
 Arguments:
-  <ID>  
+  <ID>
 
 Options:
       --json  Print JSON
   -h, --help  Print help
 ```
 
-### `submilli playground recheck`
+### `submilli playground sessions`
 
 ```text
-After a blueprint edit, see which of a run's decisions would change: re-resolves them under the blueprint in force. Runs nothing and records nothing
+List sessions, newest first.
 
-Usage: submilli playground recheck [OPTIONS] <RUN>
-
-Arguments:
-  <RUN>  The run id
+Usage: submilli playground sessions [OPTIONS]
 
 Options:
-      --json  Print JSON
-  -h, --help  Print help
-```
+      --limit <LIMIT>
+          How many sessions to list; tests' and reruns' own sessions come on top, up to as many
 
-### `submilli playground test`
+          [default: 20]
 
-```text
-After a blueprint edit, see whether a recorded program gets through now: runs it again under the blueprint in force, with its calls answered from the recording. It stops at a call with nothing recorded
+      --json
+          Print JSON
 
-Usage: submilli playground test [OPTIONS] <RUN>
-
-Arguments:
-  <RUN>  The run to test
-
-Options:
-      --reads-live  Let unrecorded reads (`GET`, `HEAD`) go live; anything else still stops the run
-      --live        Let every unrecorded call go live
-      --json        Print JSON
-  -h, --help        Print help
-```
-
-### `submilli playground rerun`
-
-```text
-After a package edit, or to try other variables, run a recorded program again for real under the current binding, as a new run linked to its source
-
-Usage: submilli playground rerun [OPTIONS] <RUN>
-
-Arguments:
-  <RUN>  The run id
-
-Options:
-      --json  Print JSON
-  -h, --help  Print help
-```
-
-### `submilli playground draft-rule`
-
-```text
-Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works with the playground stopped
-
-Usage: submilli playground draft-rule [OPTIONS] <RUN.N>
-
-Arguments:
-  <RUN.N>  The refused decision, as `<run>.<n>`
-
-Options:
-      --write        Write the rule into the blueprint file
-      --name <NAME>  Name the rule, so decisions cite it by name; written as its first key. It must be new to its caller's block
-      --json         Print JSON
-  -h, --help         Print help
-```
-
-### `submilli playground clear`
-
-```text
-Remove every stored run and its sessions' events, and start a new audit window. Run ids keep counting, and started sessions stay listed
-
-Usage: submilli playground clear [OPTIONS]
-
-Options:
-      --json  Print JSON
-  -h, --help  Print help
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground cancel`
 
 ```text
-Cancel a run in flight
+Cancel a run in flight.
 
 Usage: submilli playground cancel [OPTIONS] <RUN>
 
 Arguments:
-  <RUN>  The run id
+  <RUN>
+          The run id
 
 Options:
-      --json  Print JSON
-  -h, --help  Print help
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground watch`
 
 ```text
-Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session ends). Without a session, follows the most recent one. On a session already idle it prints the events so far and exits at once, so start it after the run it is to follow has started, or pass `--follow`
+Follow a session's events as JSON lines until its last run finishes (`--follow`: until the session
+ends). Without a session, follows the most recent one. On a session already idle it prints the
+events so far and exits at once, so start it after the run it is to follow has started, or pass
+`--follow`.
 
 Usage: submilli playground watch [OPTIONS] [SESSION]
 
 Arguments:
-  [SESSION]  The session to follow
+  [SESSION]
+          The session to follow
 
 Options:
-      --follow  Keep following after the session goes idle, until it ends or the playground stops
-      --json    Accepted for symmetry; `watch` always prints JSON lines
-  -h, --help    Print help
+      --follow
+          Keep following after the session goes idle, until it ends or the playground stops
+
+      --json
+          Accepted for symmetry; `watch` always prints JSON lines
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground claude-code`
 
 ```text
-Set Claude Code up in this project to try tasks through the playground on your Claude subscription: writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own `.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use those tools without asking, so your blueprint decides its calls. Run it again to check; it changes only what's missing
+Set Claude Code up in this project to try tasks through the playground on your Claude subscription:
+writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own
+`.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use
+those tools without asking, so your blueprint decides its calls. Run it again to check; it changes
+only what's missing.
 
 Usage: submilli playground claude-code [OPTIONS]
 
 Options:
-      --force  Replace a `submilli-standin` subagent file that differs from the playground's
-      --json   Print JSON
-  -h, --help   Print help
+      --force
+          Replace a `submilli-standin` subagent file that differs from the playground's
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ### `submilli playground mcp`
 
 ```text
-Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to launch. Uses the binding and the development secrets; its runs are labeled `stand-in`
+Serve the running playground's tools over stdio, for a coding assistant's stand-in subagent to
+launch. Uses the binding and the development secrets; its runs are labeled `stand-in`.
 
 Usage: submilli playground mcp
 
 Options:
-  -h, --help  Print help
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
-### `submilli playground chat`
+### `submilli playground runs`
 
 ```text
-Chat with an agent using your own model key, the way a production agent runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the next message in it with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`
+List stored runs, newest first. Works with the playground stopped.
 
-Usage: submilli playground chat [OPTIONS] <MESSAGE>
+Usage: submilli playground runs [OPTIONS]
+
+Options:
+      --source <LABEL>
+          Only runs with this source label (`stand-in`, `app`, `assistant`, ...)
+
+      --since <DURATION|RUN>
+          Only runs that started within this long (`30s`, `10m`, `2h`, `1d`), or after this run id
+
+      --session <ID>
+          Only runs in this session
+
+      --limit <LIMIT>
+          How many runs to list
+
+          [default: 20]
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground show`
+
+```text
+Show one run: its decisions, calls, and outcome.
+
+Usage: submilli playground show [OPTIONS] <RUN>
 
 Arguments:
-  <MESSAGE>  What the agent should do, or, with `--session`, the next message to it
+  <RUN>
+          The run id
 
 Options:
-      --session <ID>              Carry on this chat session: the agent sees the conversation so far, under the session's fixed variables, and answers with the session's own model
-      --model <PROVIDER:MODEL>    The model for a new session, as `<provider>:<model>`, from a provider whose key the playground started with. Default: the playground's configured model. A session carried on keeps its own
-      --effort <LEVEL>            How hard a new session's model reasons. OpenAI models only, for now [possible values: low, medium, high]
-      --max-output <TOKENS>       The most tokens one answer of a new session's model may take. Default: 4096
-      --provider-settings <JSON>  Fields a new session adds to every request to its provider, as a JSON object in the provider's own API terms, such as `{"temperature": 0.2}`. Fields the playground sets itself (the model, messages, tools, instructions) are refused
-      --max-calls-per-answer <N>  The most tool calls run for one answer of the model; the rest are refused to it [default: 16]
-      --json                      Print JSON
-  -h, --help                      Print help
+      --include-payloads
+          Include call request and response bodies, and results and console output in full
+
+      --program
+          Include the program the run ran, as the agent wrote it
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
-### `submilli playground chat-hook`
+### `submilli playground explain`
 
 ```text
-Copy a coding assistant's stand-in conversation to the running playground: a Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks post anything. Always exits 0 and prints nothing
+Explain one decision: the rule that decided it (or the default) and every rule that nearly matched.
 
-Usage: submilli playground chat-hook
+Usage: submilli playground explain [OPTIONS] <RUN.N>
+
+Arguments:
+  <RUN.N>
+          The decision, as `<run>.<n>` (for example `12.3`)
 
 Options:
-  -h, --help  Print help
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground compare`
+
+```text
+Compare two runs: only the decisions that changed.
+
+Usage: submilli playground compare [OPTIONS] <RUN-A> <RUN-B>
+
+Arguments:
+  <RUN-A>
+
+
+  <RUN-B>
+
+
+Options:
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground audit`
+
+```text
+Audit the runs since the last blueprint edit.
+
+Usage: submilli playground audit [OPTIONS]
+
+Options:
+      --default-only
+          Only calls allowed by the default, which no rule matched
+
+      --packages-only
+          Only calls made by packages
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground changes`
+
+```text
+List the blueprint versions and what each changed.
+
+Usage: submilli playground changes [OPTIONS]
+
+Options:
+      --version <N>
+          Only this version, with its file text
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground recheck`
+
+```text
+After a blueprint edit, see which of a run's decisions would change: re-resolves them under the
+blueprint in force. Runs nothing and records nothing.
+
+Usage: submilli playground recheck [OPTIONS] <RUN>
+
+Arguments:
+  <RUN>
+          The run id
+
+Options:
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground test`
+
+```text
+After a blueprint edit, see whether a recorded program gets through now: runs it again under the
+blueprint in force, with its calls answered from the recording. It stops at a call with nothing
+recorded.
+
+Usage: submilli playground test [OPTIONS] <RUN>
+
+Arguments:
+  <RUN>
+          The run to test
+
+Options:
+      --reads-live
+          Let unrecorded reads (`GET`, `HEAD`) go live; anything else still stops the run
+
+      --live
+          Let every unrecorded call go live
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground rerun`
+
+```text
+After a package edit, or to try other variables, run a recorded program again for real under the
+current binding, as a new run linked to its source.
+
+Usage: submilli playground rerun [OPTIONS] <RUN>
+
+Arguments:
+  <RUN>
+          The run id
+
+Options:
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground draft-rule`
+
+```text
+Draft a rule that allows exactly one refused call; `--write` puts it in the blueprint file. Works
+with the playground stopped.
+
+Usage: submilli playground draft-rule [OPTIONS] <RUN.N>
+
+Arguments:
+  <RUN.N>
+          The refused decision, as `<run>.<n>`
+
+Options:
+      --write
+          Write the rule into the blueprint file
+
+      --name <NAME>
+          Name the rule, so decisions cite it by name; written as its first key. It must be new to
+          its caller's block
+
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+### `submilli playground clear`
+
+```text
+Remove every stored run and its sessions' events, and start a new audit window. Run ids keep
+counting, and started sessions stay listed.
+
+Usage: submilli playground clear [OPTIONS]
+
+Options:
+      --json
+          Print JSON
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 <!-- /generated:cli -->

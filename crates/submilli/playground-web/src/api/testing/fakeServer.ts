@@ -107,6 +107,16 @@ export class FakeServer {
       if ((m = path.match(/^\/api\/decisions\/([\d.]+)$/))) return recorded(`explain-${m[1]}.json`);
       if ((m = path.match(/^\/api\/compare\/(\d+)\/(\d+)$/))) return recorded(`compare-${m[1]}-${m[2]}.json`);
       if (path === "/api/changes") return recorded(query.has("version") ? `changes-v${query.get("version")}.json` : "changes.json");
+      if (path === "/api/packages/docs") {
+        if (query.get("package") === "@pied-piper/billing") {
+          const markdown =
+            "# @pied-piper/billing\n\n`listCharges(customerId)` returns the charges on one customer's account.\n\n" +
+            "The starter data has two charges for `pied_piper` and one for `hooli`.\n\n" +
+            '```ts\nimport { listCharges } from "@pied-piper/billing";\n\nconst charges = listCharges("pied_piper");\n```\n';
+          return Response.json({ package: "@pied-piper/billing", bytes: markdown.length, truncated: false, note: null, untrusted: { markdown } });
+        }
+        return Response.json({ error: "unknown_package", message: "package is not in the blueprint" }, { status: 404 });
+      }
       if (path === "/api/packages/source") {
         if (query.get("package") === "@pied-piper/billing" && query.get("module") === "lib") {
           return Response.json({

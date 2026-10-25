@@ -1,5 +1,4 @@
-// The top line: the project, the blueprint in force, its packages, and the page's menus.
-import type { RefObject } from "react";
+// The top line: the project, the blueprint in force, its packages, and session actions.
 
 import type { Status } from "../api/types";
 import type { Names } from "../model/refs";
@@ -8,18 +7,14 @@ export function Header(props: {
   names: Names;
   status: Status;
   inForce: number | null;
-  focus: boolean;
   setup: boolean;
-  moreOpen: boolean;
-  moreRef: RefObject<HTMLButtonElement>;
+  noSessions: boolean;
   onBlueprint: () => void;
   onPackages: () => void;
-  onFocus: () => void;
   onSessions: () => void;
   /** Leaves New session for the session shown before it, when there was one. */
   onBack: (() => void) | null;
   onNewSession: () => void;
-  onMore: () => void;
 }) {
   const { names, status } = props;
   const packages = status.packages;
@@ -29,28 +24,24 @@ export function Header(props: {
         <div className="pg-brand">
           Submilli <span>Playground</span>
         </div>
-        <span className="pg-muted pg-small">
-          project <span className="pg-project">{names.project}</span>
-        </span>
-        <button className="pg-bplink" onClick={props.onBlueprint}>
-          Blueprint {names.blueprint} · {props.inForce !== null ? "v" + props.inForce : "no version in force"}{" "}
+        <details className="ds-help">
+          <summary aria-label={"About project " + names.project}>Project <span className="pg-project">{names.project}</span></summary>
+          <p>A project is the local Submilli folder and configuration opened when you launch the playground. It is not a cloud workspace created for a session.</p>
+        </details>
+        {!props.setup && <button className="pg-bplink" onClick={props.onBlueprint}>
+          Current blueprint {names.blueprint} · {props.inForce !== null ? "v" + props.inForce : "no version in force"}{" "}
           <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
             <path d="M3 2l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.5"></path>
           </svg>
-        </button>
+        </button>}
         {/* One package by name; the rest are counted and listed in the dialog. */}
-        <button className="pg-tag pg-pkgs" onClick={props.onPackages}>
+        {!props.setup && <button className="pg-tag pg-pkgs" onClick={props.onPackages}>
           <span className="n">Packages</span>
           <span className="p">{packages.length ? packages[0].name : "none"}</span>
           {packages.length > 1 && <span className="c">+{packages.length - 1} more</span>}
-        </button>
+        </button>}
       </div>
       <div className="pg-header-actions">
-        {props.focus && (
-          <button className="pg-btn pg-exit-focus" onClick={props.onFocus}>
-            Exit focus view
-          </button>
-        )}
         {props.onBack && (
           <button className="pg-btn" onClick={props.onBack}>
             ← Back to the session you were viewing
@@ -60,13 +51,10 @@ export function Header(props: {
           Sessions
         </button>
         {!props.setup && (
-          <button className="pg-btn" onClick={props.onNewSession}>
+          <button className={props.noSessions ? "pg-btn pg-primary" : "pg-btn"} onClick={props.onNewSession}>
             New session
           </button>
         )}
-        <button className="pg-btn" ref={props.moreRef} aria-expanded={props.moreOpen} onClick={props.onMore}>
-          More
-        </button>
       </div>
     </header>
   );

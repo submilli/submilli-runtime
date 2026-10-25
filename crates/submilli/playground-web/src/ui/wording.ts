@@ -38,9 +38,14 @@ export function blueprintRefused(blueprint: string, refused: BlueprintRefusal, i
 }
 
 /** A message the agent couldn't answer, where it was sent. */
-export function chatFailed(message: string, started: boolean): { text: string; note: string } {
+export function chatFailed(message: string, started: boolean, kind?: string): { text: string; note: string } {
   // A provider that refused the request (a 4xx) refuses it again: only other settings help.
   // A rate limit (429) or a timeout (408) passes, so sending again can work.
+  const text = "The agent couldn’t answer: " + message.replace(/\.$/, "") + ".";
+  if (kind === "unreachable") return { text, note: "The response was lost; execution may have started. Reconnect and inspect this session’s recorded runs before sending again. Your draft is kept." };
+  if (/HTTP (401|403)/.test(message)) return { text, note: "Check the provider key and its access. Your message is kept. This session keeps its model settings; use New session if those need to change." };
+  if (/quota|insufficient.quota|billing|credit balance/i.test(message)) return { text, note: "The provider reports a quota or credit problem. Check the provider account before sending again. Your message is kept." };
+  if (/HTTP 429/.test(message)) return { text, note: "The provider is rate limiting requests. Wait, then Send again when ready. Your message and session settings are kept." };
   const again = !/\(HTTP 4(?!08|29)\d\d\)/.test(message);
   return {
     text: "The agent couldn’t answer: " + message.replace(/\.$/, "") + ".",
@@ -94,7 +99,7 @@ export function confirmOf(action: Action, bound: Record<string, string> = {}): {
   if (action.kind === "rerun") {
     return {
       title: "Rerun run " + action.run + " for real?",
-      body: "Every call goes out to the real services, including ones that change data. It uses the variables bound now: " + boundVars(bound) + ".",
+      body: "Every call goes out to the real services, including ones that change data. This rerun will use: " + boundVars(bound) + ".",
       go: "Rerun for real",
     };
   }

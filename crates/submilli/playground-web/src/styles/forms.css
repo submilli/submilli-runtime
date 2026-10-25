@@ -1,0 +1,13 @@
+/* Progressive forms. Load after tokens.css; state and validation belong to the app. */
+.ds-step { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); }
+.ds-step-heading { margin: 0; }
+.ds-step-trigger { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); width: 100%; padding: var(--space-4); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; font: var(--fw-bold) var(--fs-form-section)/var(--lh-title) var(--font-title); }
+.ds-step-trigger:focus-visible, .ds-help > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds-step-trigger:disabled { cursor: default; color: var(--text-secondary); }
+.ds-step-state { margin-left: auto; color: var(--text-accent); font: var(--fs-form-help)/var(--lh-body) var(--font-body); }
+.ds-step-summary { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; color: var(--text-secondary); font: var(--fw-regular) var(--fs-form-help)/var(--lh-body) var(--font-body); }
+.ds-step-panel { padding: 0 var(--space-4) var(--space-4); }
+.ds-step-panel[hidden] { display: none; }
+.ds-help { max-width: var(--measure-form-help); color: var(--text-form-help); font: var(--fs-form-help)/var(--lh-relaxed) var(--font-body); }
+.ds-help > summary { width: fit-content; color: var(--text-accent); cursor: pointer; }
+.ds-help p { margin: var(--space-2) 0; }

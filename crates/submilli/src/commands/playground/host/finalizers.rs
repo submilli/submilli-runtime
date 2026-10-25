@@ -605,12 +605,12 @@ impl SessionFinalizers for ReplayFinalizers {
 
 /// The blueprint in force, which a finalizer runs under.
 pub(crate) trait CurrentBlueprint: Send + Sync {
-    fn current(&self) -> BoxFuture<'_, Option<Arc<Blueprint>>>;
+    fn current<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<Arc<Blueprint>>>;
 }
 
 impl CurrentBlueprint for Blueprints {
-    fn current(&self) -> BoxFuture<'_, Option<Arc<Blueprint>>> {
-        Box::pin(async move { self.for_run().await.map(|applied| applied.blueprint) })
+    fn current<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Option<Arc<Blueprint>>> {
+        Box::pin(async move { self.named(name).await.map(|applied| applied.blueprint) })
     }
 }
 
@@ -640,7 +640,7 @@ impl FinalizerExecutor for HostFinalizers {
         let host = self.host.upgrade().ok_or(FinalizerFailure::Execution)?;
         let blueprint = self
             .blueprints
-            .current()
+            .current(&session.blueprint_name)
             .await
             .filter(|blueprint| blueprint.name == session.blueprint_name)
             .ok_or(FinalizerFailure::AuthorityUnavailable)?;

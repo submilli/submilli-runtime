@@ -1,7 +1,7 @@
 // The chat pane: the conversation up to the cursor, with a line for each run.
-import { askedFor, ctx, end, size, sourceRunOf } from "./format";
+import { askedFor, ctx, end, outcomeLabel, size, sourceRunOf } from "./format";
 import { actionBlock } from "./sessions";
-import { byAgent, callTarget, fileTool, programNumber, type Frame } from "./steps";
+import { byAgent, callTarget, runIdentity, programNumber, type Frame } from "./steps";
 
 export type ChatItem =
   | { kind: "message"; who: "You" | "Agent"; role: "user" | "agent"; text: string }
@@ -55,6 +55,7 @@ export function chatItems(f: Frame): ChatItem[] {
   const items: ChatItem[] = [];
   const running = new Set<number>();
   const picked = selectedRun(f.ui.sel);
+  const source = picked !== null && f.data.runs[picked] ? sourceRunOf(f.data.runs[picked]) : null;
   for (const s of f.vis) {
     if (s.kind === "chat") {
       const user = s.role === "user";
@@ -72,10 +73,12 @@ export function chatItems(f: Frame): ChatItem[] {
       // Your coding assistant's runs show in the log; the agent never saw them.
       continue;
     } else if (s.kind === "run") {
-      const tool = fileTool(f, s.run);
       const target = callTarget(f, s.run);
-      const what = tool ? "Called " + tool + (target.text ? " " + target.text : "") : "Ran program " + programNumber(f, s.run);
-      const chip: ChatItem = { kind: "run", text: what + " · " + runWord(f, s.run) + " →", run: s.run, selected: picked === s.run };
+      const word = runWord(f, s.run);
+      const action = word === "completed" ? "View result" : "View details";
+      const what = runIdentity(f, s.run);
+      const provenance = source === s.run ? " · Source for Run " + picked : "";
+      const chip: ChatItem = { kind: "run", text: action + " · " + what + " · " + outcomeLabel(word) + provenance, run: s.run, selected: picked === s.run };
       if (target.all) chip.hint = target.all;
       items.push(chip);
     } else if (!f.ended.includes(s.run) && !running.has(s.run)) {
@@ -126,28 +129,28 @@ export interface AskBox {
   stop?: boolean;
   /** It can't send yet, but the next message can be written in it meanwhile. */
   typeAhead?: boolean;
-  /** When there's no chat to send into: why, shown in the box's place, and whether New session is offered there. */
-  none?: { text: string; offer: boolean; /** Back to the session the reader came from, by its short id. */ back?: string };
+  /** When there's no chat to send into: why, shown in the box's place. */
+  none?: { text: string; /** Back to the session the reader came from, by its short id. */ back?: string };
 }
 
 /** Whether a message can be sent: a new session takes its first; an open chat session takes more. */
-/** No box to type in: a line saying why, and New session where it's the way on. */
-export function noChat(text: string, offer: boolean): AskBox {
-  return { placeholder: "", disabled: true, primary: false, none: { text, offer } };
+/** No box to type in: a line saying why. New session remains in the header. */
+export function noChat(text: string): AskBox {
+  return { placeholder: "", disabled: true, primary: false, none: { text } };
 }
 
 export function askBox(f: Frame): AskBox {
   if (f.ui.mode === "fresh") return { placeholder: "Ask the agent to do a task…", disabled: false, primary: true };
   // The form is open above, so its Start session is the way on.
-  if (f.ui.mode === "setup") return noChat("Start the session above to chat.", false);
+  if (f.ui.mode === "setup") return noChat("Start the session above to chat.");
   const fu = followUpSession(f);
-  if (fu) return noChat("A " + fu.kind + " takes no messages.", false);
+  if (fu) return noChat("A " + fu.kind + " takes no messages.");
   // Its conversation is in Claude Code, not here.
-  if (f.info?.sources.includes("stand-in") && !f.info.model) return noChat("You chat with this session’s stand-in in Claude Code.", true);
+  if (f.info?.sources.includes("stand-in") && !f.info.model) return noChat("You chat with this session’s stand-in in Claude Code.");
   const open = !!(f.info && f.info.model && f.info.open);
   const blocked = actionBlock(f);
   if (open && blocked) return { placeholder: "Reply in this session…", disabled: true, primary: false, reason: blocked };
   if (open) return { placeholder: "Reply in this session…", disabled: false, primary: true };
-  if (f.info?.open) return noChat("No agent chats in this session.", true);
-  return noChat(f.info ? "This session has ended." : "No session yet.", true);
+  if (f.info?.open) return noChat("No agent chats in this session.");
+  return noChat(f.info ? "This session has ended." : "No session yet.");
 }

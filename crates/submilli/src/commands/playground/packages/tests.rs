@@ -76,6 +76,21 @@ fn a_project_package_is_installed_once_and_reinstalled_only_after_an_edit() {
 }
 
 #[test]
+fn installed_documentation_is_the_package_authors_content() {
+    let fixture = Fixture::starter();
+    let packages = fixture.packages();
+    packages.sync(&billing()).unwrap();
+
+    let documentation = packages
+        .installed_documentation("@pied-piper/billing")
+        .unwrap()
+        .expect("installed package documentation");
+    assert!(documentation.contains("listCharges(customerId)"));
+    assert!(documentation.contains("pied_piper"));
+    assert!(documentation.contains("hooli"));
+}
+
+#[test]
 fn a_run_that_reaches_no_project_package_checks_nothing() {
     let fixture = Fixture::starter();
     let packages = fixture.packages();
@@ -510,4 +525,30 @@ fn automatic_rebuild_ignores_unrelated_broken_artifacts() {
     .unwrap();
     let result = fixture.packages().sync(&billing()).unwrap();
     assert_eq!(result.reinstalled, ["@pied-piper/billing"]);
+}
+
+#[tokio::test]
+async fn discovery_refreshes_edited_docs_without_executing_a_program_and_refuses_broken_source() {
+    let fixture = Fixture::starter();
+    let packages = Arc::new(fixture.packages());
+    packages.sync(&billing()).unwrap();
+    let freshness = Freshness::new(Arc::clone(&packages));
+    edit(
+        &fixture.package_dir.join("packages/billing/docs/readme.md"),
+        "The playground's starter package.",
+        "The edited starter documentation.",
+    );
+    freshness.before_discovery(billing(), || {}).await.unwrap();
+    let docs = packages
+        .installed_documentation("@pied-piper/billing")
+        .unwrap()
+        .unwrap();
+    assert!(docs.contains("The edited starter documentation."));
+    assert!(!docs.contains("The playground's starter package."));
+    std::fs::write(fixture.lib(), "export function broken(").unwrap();
+    let error = freshness
+        .before_discovery(billing(), || {})
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("@pied-piper/billing"), "{error}");
 }

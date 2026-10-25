@@ -44,7 +44,7 @@ mod unix {
             let root = dir.path().join("project");
             std::fs::create_dir_all(&root).unwrap();
             let project = Self { dir, root };
-            let init = project.run(&["init", "--json"]);
+            let init = project.run(&["init-demo", "--json"]);
             assert!(init.status.success(), "{}", stderr(&init));
             let core = project.root.join("submilli/packages/core");
             std::fs::create_dir_all(core.join("src")).unwrap();
@@ -695,7 +695,7 @@ permissions:
             /// The scaffolded starter project.
             fn starter() -> Self {
                 let playground = Self::empty();
-                let init = playground.run(&["init", "--json"]);
+                let init = playground.run(&["init-demo", "--json"]);
                 assert!(init.status.success(), "{}", stderr(&init));
                 playground
             }
@@ -2783,7 +2783,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         #[test]
         fn a_first_run_is_told_the_exact_commands_and_status_shows_the_binding() {
             let playground = Playground::empty();
-            let init = playground.run(&["init"]);
+            let init = playground.run(&["init-demo"]);
             assert!(init.status.success(), "{}", stderr(&init));
             let said = stderr(&init);
             assert!(
@@ -3506,6 +3506,412 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             (status, body)
         }
 
+        #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+        #[test]
+        fn a_selected_blueprint_chat_continues_under_its_original_blueprint() {
+            let (port, bodies) = model_api(|n| match n {
+                0 | 2 => call_execute(n),
+                _ => json!({"content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"}),
+            });
+            let playground = Playground::with_blueprint(
+                "name: demo\nvariables:\n  customerId:\n    required: true\npermissions: {}\n",
+            );
+            std::fs::write(
+                playground.root.join("submilli/blueprints/reports.yaml"),
+                "name: reports\nvariables:\n  region:\n    required: true\npermissions: {}\n",
+            )
+            .unwrap();
+            let output = playground
+                .command(&[
+                    "start",
+                    "--json",
+                    "--blueprint",
+                    "submilli/blueprints/demo.yaml",
+                ])
+                .env("ANTHROPIC_API_KEY", MODEL_KEY)
+                .env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", stderr(&output));
+            let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let page = ready["url"].as_str().unwrap().trim_end_matches('/');
+            let browser = browser_session(&playground, page);
+            let (_, first) = call(
+                page,
+                "POST",
+                "/api/agent",
+                Some(&browser),
+                Some(
+                    json!({"task":"Compute six times seven.","blueprint":"reports","variables":{"region":"eu"}}),
+                ),
+            );
+            assert_eq!(first["exit"], 0, "{first}");
+            let session = first["result"]["session"].as_str().unwrap();
+            let (_, next) = call(
+                page,
+                "POST",
+                "/api/agent",
+                Some(&browser),
+                Some(json!({"task":"Compute it again.","session":session})),
+            );
+            assert_eq!(next["exit"], 0, "{next}");
+            assert_eq!(next["result"]["session"], session);
+            assert_eq!(next["result"]["continued"], true);
+            let runs = playground.expect(0, &["runs", "--session", session]);
+            assert_eq!(runs["runs"].as_array().unwrap().len(), 2, "{runs}");
+            for run in runs["runs"].as_array().unwrap() {
+                let shown = playground.expect(0, &["show", &run["run"].to_string()]);
+                assert_eq!(shown["blueprint"], "reports", "{shown}");
+                assert_eq!(shown["variables"], json!({"region":"eu"}), "{shown}");
+            }
+            let requests = bodies.lock().unwrap();
+            assert_eq!(requests.len(), 4);
+            for request in requests.iter() {
+                let system = request["system"].to_string();
+                assert!(
+                    system.contains("region") && system.contains("eu"),
+                    "{request}"
+                );
+                assert!(!system.contains("customerId"), "{request}");
+            }
+            drop(requests);
+            // A caller cannot move an existing session to another blueprint.
+            let (_, refused) = call(
+                page,
+                "POST",
+                "/api/agent",
+                Some(&browser),
+                Some(json!({"task":"Again","session":session,"blueprint":"demo"})),
+            );
+            assert_eq!(
+                refused["result"]["error"]["kind"],
+                "session-blueprint-fixed"
+            );
+            playground.stop();
+        }
+
+        #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+        #[test]
+        fn selected_project_blueprints_keep_sessions_packages_and_versions_distinct() {
+            // Native MCP replaces the old server-backed /v1 package-discovery routes.
+            // Keep a real transport session per Blueprint, with the same bound values.
+            fn mcp_post(
+                url: &str,
+                token: &str,
+                session: Option<&str>,
+                body: Value,
+            ) -> (u16, Option<String>, Value) {
+                let agent: ureq::Agent = ureq::Agent::config_builder()
+                    .http_status_as_error(false)
+                    .timeout_global(Some(Duration::from_secs(60)))
+                    .build()
+                    .into();
+                let mut request = agent
+                    .post(url)
+                    .header("authorization", &format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .header("accept", "application/json, text/event-stream");
+                if let Some(session) = session {
+                    request = request.header("mcp-session-id", session);
+                }
+                let mut response = request.send(body.to_string()).unwrap();
+                let status = response.status().as_u16();
+                let session = response
+                    .headers()
+                    .get("mcp-session-id")
+                    .map(|value| value.to_str().unwrap().to_owned());
+                let text = response.body_mut().read_to_string().unwrap();
+                let data = text
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data:"))
+                    .next_back()
+                    .map_or(text.as_str(), str::trim);
+                let message = serde_json::from_str(data).unwrap_or(Value::String(text.clone()));
+                (status, session, message)
+            }
+            fn initialize(url: &str, token: &str, variables: Value) -> String {
+                let (status, session, message) = mcp_post(
+                    url,
+                    token,
+                    None,
+                    json!({
+                        "jsonrpc":"2.0", "id":1, "method":"initialize",
+                        "params": {"protocolVersion":"2025-06-18", "capabilities":{},
+                            "clientInfo":{"name":"selected-blueprint-test","version":"0"},
+                            "_meta":{"variables":variables}}
+                    }),
+                );
+                assert_eq!(status, 200, "initialize: {message}");
+                let session = session.expect("native MCP session id");
+                let (status, _, message) = mcp_post(
+                    url,
+                    token,
+                    Some(&session),
+                    json!({
+                        "jsonrpc":"2.0", "method":"notifications/initialized"
+                    }),
+                );
+                assert!(status == 200 || status == 202, "initialized: {message}");
+                session
+            }
+            let playground = Playground::starter();
+            let package = playground.root.join("submilli/packages/reports");
+            std::fs::create_dir_all(package.join("src")).unwrap();
+            std::fs::create_dir_all(package.join("docs")).unwrap();
+            std::fs::write(package.join("src/lib.ts"), "/** Report label. */\nexport function reportLabel(): string { return \"regional-report\"; }\n").unwrap();
+            std::fs::write(
+                package.join("docs/readme.md"),
+                "# Regional reports\nUse reportLabel to label a regional report.\n",
+            )
+            .unwrap();
+            let manifest = playground.root.join("submilli/submilli.toml");
+            let mut text = std::fs::read_to_string(&manifest).unwrap();
+            text.push_str("\n[[package]]\nname = \"@acme/reports\"\nversion = \"0.1.0\"\ndescription = \"Regional reports.\"\npath = \"packages/reports\"\n");
+            std::fs::write(&manifest, text).unwrap();
+            let other = playground.root.join("submilli/blueprints/reports.yaml");
+            std::fs::write(
+                &other,
+                "name: reports\npackages: [\"@acme/reports\"]\nvariables:\n  region:\n    required: true\npermissions: {}\n",
+            )
+            .unwrap();
+            // Unrelated malformed source cannot prevent a working default from starting.
+            std::fs::write(
+                playground.root.join("submilli/blueprints/broken.yaml"),
+                "name: [",
+            )
+            .unwrap();
+            let output = playground.run(&[
+                "start",
+                "--json",
+                "--blueprint",
+                "submilli/blueprints/billing.yaml",
+            ]);
+            assert!(output.status.success(), "{}", stderr(&output));
+            let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let page = ready["url"].as_str().unwrap().trim_end_matches('/');
+            let admin = playground.token("admin");
+            let (_, status) = call(page, "GET", "/api/status", Some(&admin), None);
+            let catalog = status["blueprints"].as_array().unwrap();
+            assert_eq!(catalog.len(), 2, "{status}");
+            let a = catalog.iter().find(|b| b["name"] == "billing").unwrap();
+            let b = catalog.iter().find(|b| b["name"] == "reports").unwrap();
+            assert_eq!(a["declared_variables"][0]["name"], "customerId");
+            assert_eq!(b["declared_variables"][0]["name"], "region");
+            assert!(
+                a["packages"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|p| p["name"] == "@pied-piper/billing" && p["importable"] == true)
+            );
+            assert_eq!(b["packages"][0]["name"], "@acme/reports");
+            assert_eq!(b["packages"][0]["importable"], true);
+            let av = a["blueprint_status"]["version"].as_u64().unwrap();
+            let bv = b["blueprint_status"]["version"].as_u64().unwrap();
+            assert_ne!(av, bv);
+            let start = |body: Value| {
+                call(
+                    page,
+                    "POST",
+                    "/api/sessions/start",
+                    Some(&admin),
+                    Some(body),
+                )
+                .1
+            };
+            let missing =
+                start(json!({"blueprint":"reports", "variables":{"customerId":"pied_piper"}}));
+            assert_ne!(missing["exit"], 0, "{missing}");
+            for unknown in ["missing", "../other/blueprint.yaml"] {
+                let refused = start(json!({"blueprint":unknown}));
+                assert_eq!(
+                    refused["result"]["error"]["kind"], "unknown-blueprint",
+                    "{refused}"
+                );
+            }
+            let first = start(json!({"variables":{"customerId":"pied_piper"}}));
+            let second = start(json!({"blueprint":"reports", "variables":{"region":"eu"}}));
+            let third =
+                start(json!({"blueprint":"billing", "variables":{"customerId":"pied_piper"}}));
+            for answer in [&first, &second, &third] {
+                assert_eq!(answer["exit"], 0, "{answer}");
+            }
+            let aid = first["result"]["session"].as_str().unwrap();
+            let bid = second["result"]["session"].as_str().unwrap();
+            let cid = third["result"]["session"].as_str().unwrap();
+            let exec = |session: &str, code: &str| {
+                call(
+                    page,
+                    "POST",
+                    "/api/exec",
+                    Some(&admin),
+                    Some(json!({"session":session,"code":code})),
+                )
+                .1
+            };
+            let code = "function main(): string { return \"ok\"; }";
+            for (id, version) in [(aid, av), (bid, bv), (cid, av)] {
+                let answer = exec(id, code);
+                assert_eq!(answer["exit"], 0, "{answer}");
+                assert_eq!(
+                    answer["result"]["blueprint_version"],
+                    version.to_string(),
+                    "{answer}"
+                );
+            }
+            let own_package = exec(
+                bid,
+                "import { reportLabel } from \"@acme/reports\"; function main(): string { return reportLabel(); }",
+            );
+            assert_eq!(own_package["exit"], 0, "{own_package}");
+            assert_eq!(
+                own_package["result"]["untrusted"]["result"],
+                "regional-report"
+            );
+            let cross_package = exec(
+                aid,
+                "import { reportLabel } from \"@acme/reports\"; function main(): string { return reportLabel(); }",
+            );
+            assert_ne!(cross_package["exit"], 0, "{cross_package}");
+            // The browser guide follows only the explicitly selected registered closure.
+            let browser = browser_session(&playground, page);
+            for query in [
+                "/api/packages/docs?package=%40acme%2Freports",
+                "/api/packages/docs?package=%40acme%2Freports&blueprint=billing",
+                "/api/packages/docs?package=%40pied-piper%2Fbilling&blueprint=reports",
+            ] {
+                let (status, docs) = call(page, "GET", query, Some(&browser), None);
+                assert_eq!(status, 404, "{docs}");
+                assert_eq!(docs["error"], "unknown_package", "{docs}");
+            }
+            for query in [
+                "/api/packages/docs?package=%40acme%2Freports&blueprint=missing",
+                "/api/packages/docs?package=%40acme%2Freports&blueprint=..%2Freports.yaml",
+            ] {
+                let (status, docs) = call(page, "GET", query, Some(&browser), None);
+                assert_eq!(status, 400, "{docs}");
+                assert_eq!(docs["error"], "unknown-blueprint", "{docs}");
+            }
+            for (query, expected) in [
+                (
+                    "/api/packages/docs?package=%40pied-piper%2Fbilling",
+                    "listCharges",
+                ),
+                (
+                    "/api/packages/docs?package=%40acme%2Freports&blueprint=reports",
+                    "reportLabel",
+                ),
+                (
+                    "/api/packages/docs?package=%40pied-piper%2Fbilling&blueprint=billing",
+                    "listCharges",
+                ),
+            ] {
+                let (status, docs) = call(page, "GET", query, Some(&browser), None);
+                assert_eq!(status, 200, "{docs}");
+                assert!(docs.to_string().contains(expected), "{docs}");
+            }
+            let server = ready["server_url"].as_str().unwrap().trim_end_matches('/');
+            let app = playground.token("app");
+            let a_url = format!("{server}/mcp/billing");
+            let b_url = format!("{server}/mcp/reports");
+            let a_mcp = initialize(&a_url, &app, json!({"customerId":"pied_piper"}));
+            let b_mcp = initialize(&b_url, &app, json!({"region":"eu"}));
+            let tool = |url: &str, session: &str, name: &str, arguments: Value| {
+                mcp_post(
+                    url,
+                    &app,
+                    Some(session),
+                    json!({
+                        "jsonrpc":"2.0", "id":2, "method":"tools/call",
+                        "params":{"name":name,"arguments":arguments}
+                    }),
+                )
+            };
+            let docs_tool = "submilli__typescript__packages__docs";
+            let search_tool = "submilli__typescript__packages__search";
+            let (http_status, _, docs) =
+                tool(&b_url, &b_mcp, docs_tool, json!({"name":"@acme/reports"}));
+            assert_eq!(http_status, 200, "{docs}");
+            assert!(docs.to_string().contains("reportLabel"), "{docs}");
+            let (http_status, _, docs) =
+                tool(&a_url, &a_mcp, docs_tool, json!({"name":"@acme/reports"}));
+            assert_eq!(http_status, 200, "{docs}");
+            assert_eq!(
+                docs["result"]["structuredContent"]["error"], "unknown_package",
+                "{docs}"
+            );
+            assert!(!docs.to_string().contains("reportLabel"), "{docs}");
+            let (http_status, _, discovery) =
+                tool(&b_url, &b_mcp, search_tool, json!({"query":"reportLabel"}));
+            assert_eq!(http_status, 200, "{discovery}");
+            assert!(
+                discovery.to_string().contains("@acme/reports"),
+                "{discovery}"
+            );
+            assert!(
+                !discovery.to_string().contains("@pied-piper/billing"),
+                "{discovery}"
+            );
+            // An existing reports transport session cannot be used on billing's endpoint.
+            let (http_status, _, refused) =
+                tool(&a_url, &b_mcp, docs_tool, json!({"name":"@acme/reports"}));
+            assert_ne!(http_status, 200, "{refused}");
+            // A valid B update gets its own new tag; an existing A session stays A.
+            let mut yaml = std::fs::read_to_string(&other).unwrap();
+            yaml.push_str("default: deny\n");
+            std::fs::write(&other, yaml).unwrap();
+            let (_, updated) = call(page, "GET", "/api/status", Some(&admin), None);
+            let new_b = updated["blueprints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["name"] == "reports")
+                .unwrap();
+            assert!(
+                new_b["blueprint_status"]["version"].as_u64().unwrap() > bv,
+                "{updated}"
+            );
+            let old_a = exec(aid, code);
+            assert_eq!(
+                old_a["result"]["blueprint_version"],
+                av.to_string(),
+                "{old_a}"
+            );
+            let not_allowed = exec(
+                bid,
+                "import { listCharges } from \"@pied-piper/billing\"; function main(): number { return listCharges(\"pied_piper\").length; }",
+            );
+            assert_ne!(not_allowed["exit"], 0, "{not_allowed}");
+            // A refused B save is scoped to B; A remains the default and keeps its tag.
+            std::fs::write(&other, "name: [").unwrap();
+            let (_, status) = call(page, "GET", "/api/status", Some(&admin), None);
+            assert!(status["blueprint_status"]["refused"].is_null(), "{status}");
+            let b = status["blueprints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["name"] == "reports")
+                .unwrap();
+            assert!(b["blueprint_status"]["refused"].is_object(), "{status}");
+            let old_a = exec(aid, code);
+            assert_eq!(
+                old_a["result"]["blueprint_version"],
+                av.to_string(),
+                "{old_a}"
+            );
+            let sessions = playground.expect(0, &["sessions"]);
+            for (id, name) in [(aid, "billing"), (bid, "reports"), (cid, "billing")] {
+                let row = sessions["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["session"] == id)
+                    .unwrap();
+                assert_eq!(row["blueprint"], name, "{row}");
+            }
+            playground.stop();
+        }
+
         /// A browser session, signed in as the page is: a login code the admin token
         /// mints, traded at `/api/login`.
         fn browser_session(playground: &Playground, page: &str) -> String {
@@ -3522,6 +3928,59 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             );
             assert_eq!(status, 200, "{session}");
             session["session_token"].as_str().unwrap().to_owned()
+        }
+
+        #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+        #[test]
+        fn the_page_reruns_with_reviewed_variables_without_changing_the_binding() {
+            let playground = Playground::with_blueprint(
+                "name: demo\nvariables:\n  customerId:\n    required: true\n  customerAlias:\n    alias: customerId\npermissions: {}\n",
+            );
+            let page = playground.start();
+            let program = playground.write("ok.ts", "function main(): string { return \"ok\"; }\n");
+            let ran = playground.expect(0, &["exec", &program, "--var", "customerId=original"]);
+            let browser = browser_session(&playground, &page);
+            let (status, description) = call(&page, "GET", "/api/status", Some(&browser), None);
+            assert_eq!(status, 200, "{description}");
+            assert_eq!(
+                description["declared_variables"],
+                json!([{"name": "customerId", "required": true}])
+            );
+            let runs_before = playground.runs();
+
+            for variables in [
+                json!({}),
+                json!({"customerId": ""}),
+                json!({"unknown": "value"}),
+            ] {
+                let (status, answer) = call(
+                    &page,
+                    "POST",
+                    "/api/rerun",
+                    Some(&browser),
+                    Some(json!({"run": ran["run"], "variables": variables})),
+                );
+                assert_eq!(status, 200, "{answer}");
+                assert!(answer["result"]["error"].is_object(), "{answer}");
+                assert_eq!(playground.runs(), runs_before);
+            }
+
+            let (status, answer) = call(
+                &page,
+                "POST",
+                "/api/rerun",
+                Some(&browser),
+                Some(json!({"run": ran["run"], "variables": {"customerId": "reviewed"}})),
+            );
+            assert_eq!(status, 200, "{answer}");
+            assert_eq!(answer["exit"], 0, "{answer}");
+            assert_eq!(answer["result"]["variables"]["customerId"], "reviewed");
+            assert_eq!(answer["result"]["rerun_of"], ran["run"]);
+            assert_eq!(playground.expect(0, &["bind"])["variables"], json!({}));
+
+            playground.expect(0, &["bind", "customerId=current"]);
+            let rerun = playground.expect(0, &["rerun", &ran["run"].to_string()]);
+            assert_eq!(rerun["variables"]["customerId"], "current");
         }
 
         #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
@@ -3725,7 +4184,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         #[test]
         fn status_lists_the_declared_variables_and_the_version_in_force() {
             let playground = Playground::with_blueprint(
-                "name: demo\nvariables:\n  customerId:\n    required: true\n  region:\n    default: eu\npermissions:\n  main:\n  - capability: http.get\n    action: allow\n",
+                "name: demo\nvariables:\n  customerId:\n    required: true\n    description: The customer this session may access.\n    example: cus_demo\n  region:\n    default: eu\npermissions:\n  main:\n  - capability: http.get\n    action: allow\n",
             );
             let page = playground.start();
             let browser = browser_session(&playground, &page);
@@ -3734,7 +4193,12 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             assert_eq!(
                 body["declared_variables"],
                 json!([
-                    { "name": "customerId", "required": true },
+                    {
+                        "name": "customerId",
+                        "required": true,
+                        "description": "The customer this session may access.",
+                        "example": "cus_demo",
+                    },
                     { "name": "region", "required": false },
                 ]),
                 "{body}"
@@ -3743,7 +4207,7 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
         }
 
         #[test]
-        fn the_page_reads_a_module_of_a_package_in_the_closure_and_nothing_else() {
+        fn the_page_reads_docs_and_source_of_a_package_in_the_closure_and_nothing_else() {
             let playground = Playground::starter();
             let submilli = playground.root.join("submilli");
             // A module over the cap, and a package installed in the same store that the
@@ -3788,6 +4252,29 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     None,
                 )
             };
+            let docs = |package: &str| {
+                call(
+                    &page,
+                    "GET",
+                    &format!("/api/packages/docs?package={package}"),
+                    Some(&browser),
+                    None,
+                )
+            };
+
+            let (status, body) = docs("%40acme%2Fbilling");
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["package"], "@acme/billing", "{body}");
+            assert_eq!(body["truncated"], false, "{body}");
+            let guide = body["untrusted"]["markdown"].as_str().unwrap();
+            assert!(guide.contains("listCharges(customerId)"), "{guide}");
+            assert!(guide.contains("cus_northwind"), "{guide}");
+            assert!(guide.contains("cus_initech"), "{guide}");
+
+            let (status, body) = docs("%40acme%2Fextra");
+            assert_eq!(status, 404, "{body}");
+            assert_eq!(body["error"], "unknown_package", "{body}");
+            assert!(body.get("untrusted").is_none(), "{body}");
 
             let (status, body) = source("%40pied-piper%2Fbilling", "lib");
             assert_eq!(status, 200, "{body}");

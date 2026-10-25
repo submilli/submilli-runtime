@@ -29,10 +29,10 @@ describe("the log's run rows", () => {
 
   it("titles each run as the agent's nth program, with what to try again", () => {
     expect(rows.map((r) => [r.title, r.status, r.tone])).toEqual([
-      ["Run 1 · the agent’s 1st program", "Completed", "ok"],
-      ["Run 2 · the agent’s 2nd program", "Denied", "bad"],
-      ["Run 3 · the agent’s 3rd program", "Rejected", "bad"],
-      ["Run 4 · the agent’s 4th program", "Completed", "ok"],
+      ["Program 1 · Run 1", "Completed", "ok"],
+      ["Program 2 · Run 2", "Blocked by blueprint", "warn"],
+      ["Program 3 · Run 3", "Rejected", "bad"],
+      ["Program 4 · Run 4", "Completed", "ok"],
     ]);
     expect(rows.map((r) => r.again.map((a) => a.copy.text))).toEqual([
       ["submilli playground test 1", "submilli playground rerun 1"],
@@ -62,22 +62,22 @@ describe("the log's run rows", () => {
         action: { kind: "test", run: 2 },
         goal: "Changed the blueprint?",
         what: "See whether this program gets through now.",
-        label: "Test against blueprint v2",
+        label: "Test with recorded results · v2",
         caution: false,
         copy: { label: "Copy CLI command", text: "submilli playground test 2", title: "Copy the CLI command: submilli playground test 2", what: "command" },
-        note: "Nothing real happens: replies come from run 2’s recording, and it keeps run 2’s values.",
+        note: "Uses Run 2’s original program and variables with the current blueprint. External connector replies come from the recording; local files and session data use current state. No live external connector calls.",
       },
       {
         action: { kind: "rerun", run: 2 },
         goal: "Changed the package, or want other variables?",
         what: "Run it for real.",
-        label: "Rerun for real…",
+        label: "Rerun live…",
         caution: true,
         copy: { label: "Copy CLI command", text: "submilli playground rerun 2", title: "Copy the CLI command: submilli playground rerun 2", what: "command" },
-        note: "Asks first. Uses the variables you’ve set now. A package change can’t lift a refusal; only the blueprint can.",
+        note: "Review and edit this rerun’s variables before it starts. A package change can’t lift a refusal; only the blueprint can.",
       },
     ]);
-    expect(row(rows, 1).again[1].note).toBe("Asks first. Uses the variables you’ve set now.");
+    expect(row(rows, 1).again[1].note).toBe("Review and edit this rerun’s variables before it starts.");
   });
 
   it("says nothing went back to the agent for a run that was cancelled", () => {
@@ -153,20 +153,20 @@ describe("the log's decision rows", () => {
       ref: "2.1",
       title: " · main → pied-piper.example/charges.list customerId = cus_globex",
       hint: 'customerId = "cus_globex"',
-      status: "Denied",
-      tone: "bad",
+      status: "Blocked by blueprint",
+      tone: "warn",
       meta: "blueprint v1 · program line 4 · nothing fetched",
       decidedBy: "Decided by the default: deny. No rule in main’s block matched.",
       near: [
         {
-          text: "Nearest rule: charges-for-signed-in-customer (rule 1 of main, line 27). Failed: customerId == ${vars.customerId} (the values differ).",
+          text: "Related rule that did not match: charges-for-signed-in-customer (rule 1 of main, line 27). Failed: customerId == ${vars.customerId} (the values differ).",
           values: [
             { name: "this call", value: '"cus_globex"' },
             { name: "the rule wanted", value: '"pied_piper"' },
           ],
         },
         {
-          text: "Nearest rule: pied-piper-support (rule 3 of main, line 35). Failed: customerId == \"cus_pied-piper\" (the values differ).",
+          text: "Related rule that did not match: pied-piper-support (rule 3 of main, line 35). Failed: customerId == \"cus_pied-piper\" (the values differ).",
           values: [
             { name: "this call", value: '"cus_globex"' },
             { name: "the rule wanted", value: '"cus_pied-piper"' },
@@ -231,7 +231,7 @@ describe("the log's follow-up rows", () => {
     const f5 = row(rows, 2).follow[1];
     expect(f5).toMatchObject({
       meta: "blueprint v2 · Oct 13, 13:26 UTC",
-      what: "Run 2’s program, tested against blueprint v2 with run 2’s variables. Replies came from run 2’s recording, so nothing real happened.",
+      what: "Run 2’s program, tested against blueprint v2 with run 2’s variables. Recorded mode replays external connector replies from Run 2; local files and session data use state at test time. No live external connector calls.",
       changes: [],
       againHead: "Try run 2’s program again",
       compareCmd: "submilli playground compare 2 5",
@@ -240,7 +240,7 @@ describe("the log's follow-up rows", () => {
       triedLabel: "6, test of blueprint v2, real reads, completed",
     });
     expect(row(rows, 2).follow[0].what).toBe(
-      "Run 2’s program, tested against blueprint v2 with run 2’s variables. Reads with no recorded reply went to the real service.",
+      "Run 2’s program, tested against blueprint v2 with run 2’s variables. Real-read mode: a read without a recorded reply can use the real service. No external read is recorded as live for this run.",
     );
   });
 
@@ -372,13 +372,13 @@ describe("runs as they happen", () => {
     data.runs[3] = { ...data.runs[3], source: "assistant" };
     const rows = logPane(frame(data, INITIAL_UI)).rows;
     expect(row(rows, 3).title).toBe("Run 3 · run by your assistant");
-    expect(row(rows, 4).title).toBe("Run 4 · the agent’s 3rd program");
+    expect(row(rows, 4).title).toBe("Program 3 · Run 4");
   });
 });
 
 describe("how a run's end and length are shown", () => {
   it("gives a run you cancelled its own quiet colour, apart from failures", () => {
-    expect([tone("completed"), tone("stopped"), tone("cancelled"), tone("failed"), tone("denied")]).toEqual(["ok", "warn", "quiet", "bad", "bad"]);
+    expect([tone("completed"), tone("stopped"), tone("cancelled"), tone("failed"), tone("denied")]).toEqual(["ok", "warn", "quiet", "bad", "warn"]);
   });
 
   it("gives milliseconds under a second, then seconds", () => {
@@ -391,8 +391,8 @@ describe("a run that was one of the agent's file tools", () => {
     const data = chatSession();
     data.runs[1] = { ...data.runs[1], entry: "mcp:list_files" };
     const rows = logPane(frame(data, INITIAL_UI)).rows;
-    expect(row(rows, 1).title).toBe("Run 1 · the agent’s list_files call customerId = pied_piper");
-    expect(row(rows, 2).title).toBe("Run 2 · the agent’s 1st program");
+    expect(row(rows, 1).title).toBe("Call · list_files · Run 1 · customerId = pied_piper");
+    expect(row(rows, 2).title).toBe("Program 1 · Run 2");
   });
 
   it("offers a rule and a recheck for a call the blueprint refused: it has no program to test or rerun", () => {
@@ -401,7 +401,7 @@ describe("a run that was one of the agent's file tools", () => {
     const denied = row(logPane(frame(data, INITIAL_UI)).rows, 2);
     expect(denied.thing).toBe("call");
     expect(denied.again.map((a) => a.copy.text)).toEqual([DENIED_CHECK_REF, "submilli playground recheck 2"]);
-    expect(denied.again[1]).toMatchObject({ action: { kind: "recheck", run: 2 }, label: "Check against blueprint v2", note: "Nothing runs. To make the call again, ask the agent." });
+    expect(denied.again[1]).toMatchObject({ action: { kind: "recheck", run: 2 }, label: "Recheck policy · v2", note: "Nothing runs. To make the call again, ask the agent." });
   });
 
   it("names the path each call asked for, so two calls to one tool tell apart, and offers nothing for one that went through", () => {
@@ -409,8 +409,8 @@ describe("a run that was one of the agent's file tools", () => {
     data.runs[1] = { ...data.runs[1], entry: "mcp:submilli__files__list", untrusted: { contexts: { "1.1": { path: "/", recursive: false } } } };
     data.runs[2] = { ...data.runs[2], entry: "mcp:submilli__files__list", untrusted: { contexts: { "2.1": { path: "/billing", recursive: true } } } };
     const rows = logPane(frame(data, INITIAL_UI)).rows;
-    expect(row(rows, 1).title).toBe("Run 1 · the agent’s files.list call /");
-    expect(row(rows, 2).title).toBe("Run 2 · the agent’s files.list call /billing");
+    expect(row(rows, 1).title).toBe("Call · files.list · Run 1 · /");
+    expect(row(rows, 2).title).toBe("Call · files.list · Run 2 · /billing");
     expect(row(rows, 2).hint).toBe('path = "/billing", recursive = true');
     expect(row(rows, 1).again).toEqual([]);
     expect(row(rows, 2).again.map((a) => a.action.kind)).toEqual(["draft", "recheck"]);
@@ -433,4 +433,79 @@ describe("your coding assistant's runs among the agent's", () => {
     const note = row(logPane(frame(data, INITIAL_UI)).rows, 3).againNote;
     expect(note).toBe("This program didn’t compile, so running it again gives the same error.");
   });
+});
+
+
+it("filters denied checks by recorded outcome even when their display label changes", () => {
+  const data = chatSession();
+  data.runs[2].outcome = { kind: "completed" };
+  const log = logPane(frame(data, { ...INITIAL_UI, filter: "problems" }));
+  expect(log.rows.map((run) => run.n)).toContain(2);
+  expect(row(log.rows, 2).decisions[0]).toMatchObject({ denied: true, status: "Blocked by blueprint", tone: "warn" });
+});
+
+it("keeps recorded connector replay distinct from local state", () => {
+  const data = chatSession();
+  data.runs[5].test!.local_state = "Exact diagnostic: local volume uses current state <not HTML>";
+  let follow = row(allOpen(data), 2).follow.find((run) => run.n === 5)!;
+  expect(follow.localState).toBe(data.runs[5].test!.local_state);
+  expect(follow.what).toContain("local files and session data use state at test time");
+  expect(follow.what).toContain("No live external connector calls");
+  delete data.runs[5].test!.local_state;
+  follow = row(allOpen(data), 2).follow.find((run) => run.n === 5)!;
+  expect(follow.localState).toBe("");
+});
+
+it.each([
+  {
+    mode: "reads-live" as const,
+    occurrence: "nonempty",
+    keys: ["acme.com/charges.list:customer=cus_northwind"],
+    what: "Real-read mode: a read without a recorded reply can use the real service.",
+    wentLive: "acme.com/charges.list:customer=cus_northwind",
+  },
+  {
+    mode: "reads-live" as const,
+    occurrence: "present empty",
+    keys: [],
+    what: "Real-read mode: a read without a recorded reply can use the real service. No external read is recorded as live for this run.",
+    wentLive: "",
+  },
+  {
+    mode: "reads-live" as const,
+    occurrence: "absent",
+    keys: undefined,
+    what: "Real-read mode: a read without a recorded reply can use the real service. This record does not say whether a read went live.",
+    wentLive: "",
+  },
+  {
+    mode: "live" as const,
+    occurrence: "nonempty",
+    keys: ["acme.com/charges.update:customer=cus_northwind"],
+    what: "Live mode: a call without a recorded reply can use the real service.",
+    wentLive: "acme.com/charges.update:customer=cus_northwind",
+  },
+  {
+    mode: "live" as const,
+    occurrence: "present empty",
+    keys: [],
+    what: "Live mode: a call without a recorded reply can use the real service. No external call is recorded as live for this run.",
+    wentLive: "",
+  },
+  {
+    mode: "live" as const,
+    occurrence: "absent",
+    keys: undefined,
+    what: "Live mode: a call without a recorded reply can use the real service. This record does not say whether a call went live.",
+    wentLive: "",
+  },
+])("describes $mode capability and $occurrence occurrence metadata separately", ({ mode, keys, what, wentLive }) => {
+  const data = chatSession();
+  data.runs[5].test!.mode = mode;
+  if (keys === undefined) delete data.runs[5].untrusted.test!.went_live_keys;
+  else data.runs[5].untrusted.test!.went_live_keys = keys;
+
+  const follow = row(allOpen(data), 2).follow.find((run) => run.n === 5)!;
+  expect(follow.what).toBe("Run 2’s program, tested against blueprint v2 with run 2’s variables. " + what);
+  expect(follow.wentLive).toBe(wentLive);
 });

@@ -16,7 +16,6 @@ const pane = (text: string, role: "agent" | "user") =>
       onText={() => {}}
       onSend={() => {}}
       onStop={() => {}}
-      onNew={() => {}}
       onPick={() => {}}
     />,
   );

@@ -207,6 +207,22 @@ impl ProjectPackages {
         &self,
         name: &str,
     ) -> Result<Option<Vec<ArtifactSource>>, String> {
+        self.installed_content(name)
+            .map(|installed| installed.map(|installed| installed.sources))
+    }
+
+    /// The authored documentation of the installed copy of package `name`, as the
+    /// store holds it now; `None` when the store does not hold it. Reads the filesystem,
+    /// so an async caller runs it on a blocking thread.
+    pub(crate) fn installed_documentation(&self, name: &str) -> Result<Option<String>, String> {
+        self.installed_content(name)
+            .map(|installed| installed.map(|installed| installed.documentation))
+    }
+
+    fn installed_content(
+        &self,
+        name: &str,
+    ) -> Result<Option<submilli_build::InstalledSources>, String> {
         let Some(located) = self
             .store()
             .locate(name)
@@ -215,7 +231,7 @@ impl ProjectPackages {
             return Ok(None);
         };
         read_installed_sources(&located.dir)
-            .map(|installed| Some(installed.sources))
+            .map(Some)
             .map_err(|error| error.to_string())
     }
 
@@ -742,6 +758,17 @@ impl Freshness {
         self.check_evicting(evict, move |packages| packages.sync(&wanted))
             .await
             .map_err(|failure| failure.for_run())
+    }
+
+    /// Refresh package documentation/discovery without starting a program. A broken
+    /// edited package is refused instead of serving its stale installed documentation.
+    pub(crate) async fn before_discovery(
+        &self,
+        wanted: BTreeSet<String>,
+        evict: impl FnOnce() + Send + 'static,
+    ) -> Result<(), ResolutionFailure> {
+        self.check_evicting(evict, move |packages| packages.sync(&wanted))
+            .await
     }
 
     /// Run one check on a blocking thread, one at a time, and call `evict` when it

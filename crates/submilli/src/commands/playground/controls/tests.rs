@@ -678,6 +678,7 @@ fn sessions_list_newest_first_with_variables_run_counts_and_the_denial() {
     fixture
         .store
         .append_session(SessionEntry::Started {
+            blueprint: None,
             session_id: "s-c".into(),
             variables: vars("cus_pied-piper"),
             label: "assistant".into(),
@@ -1512,6 +1513,7 @@ fn a_started_session_idle_past_its_own_timeout_lists_as_expired() {
         fixture
             .store
             .append_session(SessionEntry::Started {
+                blueprint: None,
                 session_id: session.into(),
                 variables: BTreeMap::new(),
                 label: "assistant".into(),
@@ -1568,6 +1570,7 @@ fn sessions_list_with_a_change_log_that_cannot_be_read() {
     fixture
         .store
         .append_session(SessionEntry::Started {
+            blueprint: None,
             session_id: "s-1".into(),
             variables: BTreeMap::new(),
             label: "assistant".into(),

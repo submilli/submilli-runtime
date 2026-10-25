@@ -7,7 +7,7 @@ const status = chatSession().status as Status;
 const withDecls: Status = {
   ...status,
   declared_variables: [
-    { name: "customerId", required: true },
+    { name: "customerId", required: true, description: "The customer this session may access.", example: "cus_northwind" },
     { name: "region", required: true },
     { name: "plan", required: true },
     { name: "note", required: false },
@@ -47,7 +47,7 @@ describe("the variables a new session asks for", () => {
 describe("the agent and its settings", () => {
   const ok = { customerId: "pied_piper" };
 
-  it("start when everything checks out, with the CLI command that does the same", () => {
+  it("start when the variables, model, and provider settings check out", () => {
     const check = checkSetup(status, form({ fields: ok, max: "2000", providerJson: '{"temperature": 0.2}' }));
     expect(check).toMatchObject({
       cantStart: false,
@@ -57,9 +57,6 @@ describe("the agent and its settings", () => {
       model: "anthropic:claude-sonnet-5-5",
       settings: { max_output: 2000, provider: { temperature: 0.2 } },
     });
-    expect(check.cli).toBe(
-      "submilli playground chat --model anthropic:claude-sonnet-5-5 --max-output 2000 --provider-settings '{\"temperature\":0.2}' \"<message>\"",
-    );
   });
 
   it("refuse a bad model name", () => {
@@ -70,16 +67,14 @@ describe("the agent and its settings", () => {
 
   it("say what's wrong with each field that stops the start", () => {
     const check = checkSetup(withDecls, form({ fields: { customerId: "cus_a" }, model: "claude sonnet", max: "lots" }));
-    expect(check.invalid).toEqual({
-      region: "Required.",
-      plan: "Required.",
+    expect(check.variableInvalid).toEqual({ region: "Required.", plan: "Required." });
+    expect(check.modelInvalid).toEqual({
       model: "A model name is letters, digits, “.”, “_”, and “-”.",
       max: "Max output is a whole number of tokens.",
     });
-    // A form that can't start gives no command.
-    expect(check.cli).toBe("");
-    expect(checkSetup(status, form({ fields: ok })).invalid).toEqual({});
-    expect(checkSetup(status, form({ fields: ok, model: "gpt 6 luna", provider: "openai" })).cli).toBe("");
+    const ready = checkSetup(status, form({ fields: ok }));
+    expect(ready.variableInvalid).toEqual({});
+    expect(ready.modelInvalid).toEqual({});
   });
 
   it("refuse a max output that isn't a whole number", () => {
@@ -111,7 +106,7 @@ describe("the agent and its settings", () => {
   it("let a provider without a key be picked, but not start until it has one", () => {
     const f = checkSetup(status, form({ fields: ok, provider: "google", model: "gemini-flash-latest" }));
     expect(f.cantStart).toBe(true);
-    expect(f.hint).toBe("Gemini needs a key first: use Add a key under Agent.");
+    expect(f.hint).toBe("Gemini needs a key first: use Add key under Provider.");
   });
 
   it("offer effort only where the provider takes it", () => {
@@ -159,10 +154,21 @@ describe("fixes found trying the form", () => {
     expect(checkSetup(status, form({ fields: { customerId: "pied_piper" }, max: "99999999999999999999" })).hint).toBe("Max output is at most 1,000,000 tokens.");
   });
 
-  it("binds variables that differ from the binding before the CLI's chat, which uses the binding", () => {
-    const same = checkSetup(status, form({ fields: { customerId: status.binding.variables.customerId } }));
-    expect(same.cliBind).toBe("");
-    const other = checkSetup(status, form({ fields: { customerId: "cus globex" } }));
-    expect(other.cliBind).toBe("submilli playground bind customerId='cus globex'");
-  });
+});
+
+it("selects existing blueprint declarations without changing shared status or accepting unknown names", () => {
+  const reports: Status = {
+    ...status,
+    blueprints: [
+      { name: status.blueprint.name, path: status.blueprint.path, packages: status.packages, declared_variables: status.declared_variables, blueprint_status: status.blueprint_status },
+      { name: "reports", path: "submilli/blueprints/reports.yaml", packages: [], declared_variables: [{ name: "region", required: true }], blueprint_status: { version: 3, refused: null } },
+    ],
+  };
+  const missing = checkSetup(reports, form({ blueprint: "reports", fields: { customerId: "cus_northwind" } }));
+  expect(missing.missingVariables).toEqual(["region"]);
+  const ready = checkSetup(reports, form({ blueprint: "reports", fields: { region: "eu" } }));
+  expect(ready.cantStart).toBe(false);
+  expect(ready.variables).toEqual({ region: "eu" });
+  expect(reports.blueprint.name).toBe(status.blueprint.name);
+  expect(checkSetup(reports, form({ blueprint: "../other.yaml", fields: { customerId: "cus_northwind" } })).cantStart).toBe(true);
 });

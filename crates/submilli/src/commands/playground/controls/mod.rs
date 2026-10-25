@@ -63,9 +63,9 @@ impl From<StoreError> for ReadError {
 impl std::fmt::Display for ReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoProject => {
-                f.write_str("no Submilli project here; create one with `submilli playground init`")
-            }
+            Self::NoProject => f.write_str(
+                "no Submilli project here; create one with `submilli playground init-demo`",
+            ),
             Self::UnknownRun(run) => write!(
                 f,
                 "no run {run} is stored; list the runs with `submilli playground runs`"

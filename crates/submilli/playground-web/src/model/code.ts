@@ -4,7 +4,7 @@ import { sourceKey, type Show } from "../api/types";
 import { capitalize, size, sourceRunOf } from "./format";
 import { programRef } from "./refs";
 import { selectedRun } from "./chat";
-import { byAgent, endedRuns, fileTool, followUpName, programNumber, type Call, type Frame } from "./steps";
+import { byAgent, endedRuns, fileTool, followUpName, programIdentity, programNumber, type Call, type Frame } from "./steps";
 
 /** "program 2", or the run your coding assistant made. */
 function programName(f: Frame, run: number): string {
@@ -101,7 +101,7 @@ export function codePane(f: Frame): CodePane {
   programs.sort((a, b) => a - b);
   const picked = selectedRun(ui.sel);
   let shown: number | null = ui.program ?? picked ?? (atCall ? atCall.run : null);
-  if (shown !== null && !programs.includes(sourceOf(f, shown))) shown = null;
+  if (shown !== null && !programs.includes(sourceOf(f, shown)) && picked === null && ui.program === null) shown = null;
   if (shown === null && programs.length) shown = programs[programs.length - 1];
   const codeRun: Show | undefined = shown !== null ? data.runs[sourceOf(f, shown)] : undefined;
 
@@ -115,7 +115,7 @@ export function codePane(f: Frame): CodePane {
   if (ui.sel && ui.sel.startsWith("f") && picked !== null) active = data.runs[picked]?.test?.stopped?.line ?? null;
 
   // The step at the cursor, when the program it's in is the one shown.
-  if (atCall && shown === atCall.run) {
+  if (atCall && shown === atCall.run && !ui.sel) {
     const c = (f.session.calls[atCall.run] || []).find((x) => x.index === atCall.index);
     if (c && atCall.kind === "package" && c.pkg) {
       const pkg = c.pkg;
@@ -142,7 +142,7 @@ export function codePane(f: Frame): CodePane {
   if (shown !== null && inFlight !== undefined) {
     return {
       ...blank,
-      sub: programName(f, shown) + " · run " + shown + " · running",
+      sub: programIdentity(f, shown) + " · Running",
       lines: linesOf(inFlight, active),
       codeNote: "Still running: its result shows in the log when it ends.",
       empty: null,
@@ -150,6 +150,7 @@ export function codePane(f: Frame): CodePane {
     };
   }
   if (!codeRun) {
+    if (picked !== null && !data.running[picked]) return { ...blank, sub: "run " + picked, lines: [], empty: "Source was not recorded for this run." };
     // A run whose start hasn't been read yet: its program shows once it is.
     const running = atCall ? atCall.run : f.running.length ? f.running[f.running.length - 1] : null;
     if (running !== null) return { ...blank, sub: "run " + running, lines: [], empty: "Run " + running + " is running; its program shows here as soon as it’s read, or when it ends." };
@@ -160,9 +161,9 @@ export function codePane(f: Frame): CodePane {
   const text = codeRun.untrusted.program;
   return {
     ...blank,
-    sub: programName(f, codeRun.run) + " · run " + codeRun.run,
+    sub: (shown !== null && shown !== codeRun.run ? "Source: " : "") + programIdentity(f, codeRun.run),
     lines: text ? linesOf(text, active) : [],
-    codeNote: shown !== null && shown !== codeRun.run ? "Run " + shown + " ran this same program, from run " + codeRun.run + "." : "",
+    codeNote: shown !== null && shown !== codeRun.run ? "Used by Run " + shown + ". This is the original program from Run " + codeRun.run + "." : "",
     empty: text ? null : fileTool(f, codeRun.run) ? "Run " + codeRun.run + " was the agent’s " + fileTool(f, codeRun.run) + " call, not a program." : "Run " + codeRun.run + "’s program wasn’t recorded.",
     programRef: programRef(f.names, codeRun.run),
   };

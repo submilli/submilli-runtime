@@ -31,3 +31,10 @@ describe("the page's own lines", () => {
     expect(recheckSaid({ ...result, in_force: null, changes: [], cant_tell: ["23.1"] }).head).toBe("Check 23.1’s recording is too cut to decide again.");
   });
 });
+
+
+it("keeps uncertain execution distinct from provider rejection", () => {
+  expect(chatFailed("The playground did not answer", false, "unreachable").note).toContain("execution may have started");
+  expect(chatFailed("Denied (HTTP 401)", true).note).toContain("provider key");
+  expect(chatFailed("insufficient_quota", true).note).toContain("quota or credit");
+});

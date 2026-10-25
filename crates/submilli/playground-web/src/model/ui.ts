@@ -9,7 +9,7 @@ export type Filter = "all" | "problems" | "follow";
 
 export const FILTERS: { filter: Filter; name: string }[] = [
   { filter: "all", name: "All" },
-  { filter: "problems", name: "Errors and denials" },
+  { filter: "problems", name: "Failures and blocked calls" },
   { filter: "follow", name: "With reruns" },
 ];
 
@@ -18,6 +18,7 @@ export type Dialog = null | "sessions" | "bp" | "pkgs" | "allvars" | "confirm" |
 
 /** A new session as the page holds it until the first message is sent with it. */
 export interface Fresh {
+  blueprint?: string;
   variables: Record<string, string>;
   /** `<provider>:<model>`. */
   agent: string;
@@ -49,8 +50,8 @@ export interface UiState {
   /** A run whose program the reader picked to show. */
   program: number | null;
   dlg: Dialog;
-  more: boolean;
-  focus: boolean;
+  /** Whether the session summary's metrics are visible. */
+  summaryOpen: boolean;
   /** The blueprint version the dialog shows; `null` for the one in force. */
   bpV: number | null;
   /** The line the blueprint dialog highlights, and what it is. */
@@ -71,8 +72,7 @@ export const INITIAL_UI: UiState = {
   whole: {},
   program: null,
   dlg: null,
-  more: false,
-  focus: false,
+  summaryOpen: false,
   bpV: null,
   bpFocus: null,
   fresh: null,

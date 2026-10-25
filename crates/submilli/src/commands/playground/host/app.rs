@@ -153,10 +153,12 @@ impl App {
 
     /// The blueprint in force, when it is the one named `name`.
     pub(crate) async fn applied(&self, name: &str) -> Option<AppliedBlueprint> {
-        self.blueprints
-            .for_run()
-            .await
-            .filter(|applied| applied.blueprint.name == name)
+        self.blueprints.named(name).await
+    }
+
+    /// Admit a name from a trusted discovered project file before applying it.
+    pub(crate) async fn register_blueprint(&self, name: &str) {
+        self.blueprints.register(name).await;
     }
 
     /// [`Self::applied`], the blueprint alone.
@@ -327,6 +329,15 @@ impl App {
             .map(|session| session.variables))
     }
 
+    /// The blueprint fixed when an open session was started, including recovered sessions.
+    pub(crate) async fn session_blueprint_name(&self, session_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .sessions
+            .get(session_id)
+            .await?
+            .map(|session| session.blueprint_name))
+    }
+
     /// Runs `test`'s recorded program again under the blueprint in force.
     pub(crate) async fn test_program(&self, test: TestRun) -> Result<TestOutcome, TestError> {
         test_run::test_program(
@@ -334,7 +345,7 @@ impl App {
                 runs: &self.run,
                 sessions: &self.sessions,
                 volumes: &self.volumes,
-                blueprint: self.blueprints.for_run().await,
+                blueprint: self.applied(&test.recorded.blueprint_name).await,
             },
             test,
         )

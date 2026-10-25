@@ -1,0 +1,48 @@
+@import "./forms.css";
+/* Setup and dialog polish lives here so the workbench stylesheet stays owned by the
+ * layout integrator. These rules only change presentation and responsive spacing. */
+.pg-setup {
+  width: min(960px, 100%);
+  align-self: center;
+  max-height: calc(100vh - 116px);
+  overflow: auto;
+  padding: var(--space-6);
+  gap: var(--gap-form-section);
+}
+
+.pg-blueprint-choice { display: grid; gap: var(--gap-form-field); min-width: 0; }
+.pg-blueprint-choice > small { overflow-wrap: anywhere; }
+.pg-step-heading { color: var(--text-primary); font: var(--fw-bold) var(--fs-form-section)/var(--lh-title) var(--font-title); }
+.pg-step-done { margin-top: var(--space-4); }
+.pg-model-primary { grid-template-columns: minmax(250px, 0.8fr) minmax(300px, 1fr); }
+.pg-vargrid { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+.pg-variable-section .pg-vargrid-single { grid-template-columns: minmax(0, 1fr); }
+.pg-variable-section .pg-vargrid-single > .pg-vfield { width: 100%; }
+.pg-variable-section .pg-vargrid-single > .pg-vfield input { max-width: 32rem; }
+.pg-vfield input, .pg-vfield textarea { min-height: 36px; }
+.pg-variable-help { max-width: var(--measure-form-help); }
+.pg-variable-section .pg-vargrid-single .pg-variable-help { width: min(var(--measure-form-help), 100%); }
+.pg-start-row { margin: 0; }
+
+.pg-dialog-body { display: grid; gap: 12px; }
+.pg-dialog-body > p { margin: 0; }
+.pg-package-picker { margin: 0; }
+/* Keep long code inside its scrollable block instead of widening the guide cards. */
+.pg-package { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.pg-package-head { padding-bottom: 4px; border-bottom: 1px solid var(--border-subtle); }
+.pg-package-head p { margin-bottom: 0; }
+.pg-package-section {
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--surface-card);
+}
+.pg-package-section h4 { margin: 0 0 5px; color: var(--text-primary); font-size: 13px; }
+.pg-package-section p { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
+.pg-package-section .pg-btn { margin-top: 9px; }
+.pg-package-docs { max-height: min(46vh, 400px); }
+
+@media (max-width: 700px) {
+  .pg-setup { max-height: none; padding: var(--space-4); }
+  .pg-vargrid, .pg-model-primary { grid-template-columns: 1fr; }
+}

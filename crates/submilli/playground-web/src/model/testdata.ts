@@ -57,6 +57,7 @@ export function chatSession(): PageData {
     compares,
     versions: { 1: v1, 2: v2 },
     sources: { [sourceKey(pkg.package, pkg.module)]: pkg },
+    packageDocs: {},
   };
 }
 

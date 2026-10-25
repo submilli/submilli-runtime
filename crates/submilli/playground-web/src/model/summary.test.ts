@@ -30,10 +30,13 @@ describe("the session summary", () => {
     // Not returned until the run completes.
     expect(at(5).returned).toBe("0 B");
     expect(at(6).returned).toBe("64 B");
-    expect(at(2).dataNote).toBe("Nothing fetched or returned yet.");
+    expect(at(2).dataNote).toBe("");
+    expect(at(2).execSub).toBe("");
+    expect(at(2).checksHead).toBe("0 checks");
+    expect(at(2).checksSub).toBe("");
     // Stepped back: follow-ups aren't counted.
     expect(at(10).followHead).toBe("None");
-    expect(at(10).followSub).toBe("None yet");
+    expect(at(10).followSub).toBe("");
   });
 
   it("says a refusal came before any data", () => {

@@ -510,7 +510,10 @@ async fn a_close_that_fails_fails_the_delete_with_its_error() {
     h.sessions.close_database().await.unwrap();
     let id = SessionId::from(session.as_str());
     let closed = EXPLICIT_DELETE
-        .scope(true, h.host.sessions.close_session(&id))
+        .scope(
+            true,
+            h.host.endpoints["fixture"].sessions.close_session(&id),
+        )
         .await;
     let error = closed.expect_err("the close fails").to_string();
     assert!(
@@ -609,4 +612,60 @@ fn the_variables_header_parses_key_value_pairs() {
     assert_eq!(vars["token"], "a=b");
     assert!(session::parse_variable_header("user_id").is_err());
     assert!(session::parse_variable_header("=value").is_err());
+}
+
+#[tokio::test]
+async fn registered_mcp_endpoints_keep_session_authority_separate() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = harness_in(dir.path(), PER_SESSION).await;
+    h.blueprints.register("reports").await;
+    h.blueprints
+        .apply(&PER_SESSION.replace("name: fixture", "name: reports"), "v2")
+        .await
+        .unwrap();
+    h.host = Arc::new(McpHost::new_many(
+        h.host.shared.as_ref().clone(),
+        Arc::clone(&h.host.tokens),
+        &["fixture".to_owned(), "reports".to_owned()],
+    ));
+    h.router = super::super::serve::router_with_mcp(Arc::clone(&h.host));
+    let first = h.handshake().await;
+    let mut req = request("POST")
+        .body(Body::from(initialize(json!({})).to_string()))
+        .unwrap();
+    *req.uri_mut() = "/mcp/reports".parse().unwrap();
+    let reply = h.send(req).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let second = reply.headers["mcp-session-id"].to_str().unwrap().to_owned();
+    assert_eq!(
+        h.sessions
+            .get(&first)
+            .await
+            .unwrap()
+            .unwrap()
+            .blueprint_name,
+        "fixture"
+    );
+    assert_eq!(
+        h.sessions
+            .get(&second)
+            .await
+            .unwrap()
+            .unwrap()
+            .blueprint_name,
+        "reports"
+    );
+    for (path, id) in [("/mcp/reports", &first), ("/mcp/fixture", &second)] {
+        let mut req = request("POST")
+            .header("mcp-session-id", id.as_str())
+            .body(Body::from(
+                json!({ "jsonrpc":"2.0", "id":2, "method":"tools/list" }).to_string(),
+            ))
+            .unwrap();
+        *req.uri_mut() = path.parse().unwrap();
+        let reply = h.send(req).await;
+        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.text);
+    }
+    assert!(h.sessions.get(&first).await.unwrap().is_some());
+    assert!(h.sessions.get(&second).await.unwrap().is_some());
 }

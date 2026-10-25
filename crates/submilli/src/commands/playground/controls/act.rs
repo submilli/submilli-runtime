@@ -96,6 +96,8 @@ pub(crate) struct BindRequest {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionStartRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) blueprint: Option<String>,
     #[serde(default)]
     pub(crate) variables: BTreeMap<String, String>,
 }
@@ -107,11 +109,20 @@ pub(crate) struct SessionEndRequest {
     pub(crate) session: String,
 }
 
-/// `POST /api/recheck`, `/api/rerun`, `/api/cancel`: one run.
+/// `POST /api/recheck`, `/api/cancel`: one run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunRequest {
     pub(crate) run: u64,
+}
+
+/// `POST /api/rerun`: optional values apply only to this new run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RerunRequest {
+    pub(crate) run: u64,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) variables: BTreeMap<String, String>,
 }
 
 /// `POST /api/test`.
@@ -407,11 +418,8 @@ pub(crate) struct Actions {
     pub(crate) binding: Mutex<Binding>,
     /// Where `bind` saves the binding's variables for the next start.
     pub(crate) binding_file: PathBuf,
-    /// Applies the blueprint file; a run first catches up on a save the watcher has
-    /// not applied yet.
-    pub(crate) applier: Arc<super::super::watch::Applier>,
     pub(crate) blueprint_name: String,
-    pub(crate) blueprint_path: PathBuf,
+    pub(crate) session_blueprints: BTreeMap<String, (PathBuf, Arc<super::super::watch::Applier>)>,
     pub(crate) project_root: PathBuf,
     pub(crate) page: Page,
     /// Runs a cancel was sent for, while they drain.
@@ -442,8 +450,14 @@ impl Actions {
 
     /// The blueprint in force, as the server runs it, once the file's latest save is
     /// applied.
-    async fn blueprint(&self, name: &str) -> Result<Blueprint, ActError> {
-        self.applier.catch_up().await;
+    pub(crate) async fn blueprint(&self, name: &str) -> Result<Blueprint, ActError> {
+        let Some((_, applier)) = self.session_blueprints.get(name) else {
+            return Err(ActError::usage(
+                "unknown-blueprint",
+                format!("blueprint `{name}` is not an existing blueprint in this project"),
+            ));
+        };
+        applier.catch_up().await;
         match self.app.blueprint(name).await {
             Some(blueprint) => Ok(blueprint),
             None => Err(ActError::usage(
@@ -832,6 +846,35 @@ impl Actions {
                 "say what the agent should do",
             ));
         }
+        if request.session.is_some() && request.blueprint.is_some() {
+            return Err(ActError::usage(
+                "session-blueprint-fixed",
+                "an existing session keeps its blueprint; choose a blueprint for a new session",
+            ));
+        }
+        let selected_name = match &request.session {
+            Some(session) => self
+                .app
+                .session_blueprint_name(session)
+                .await
+                .map_err(|error| {
+                    ActError::failure(format!("reading the session blueprint failed: {error}"))
+                })?
+                .ok_or_else(|| {
+                    ActError::usage("session-ended", "the session has ended; start a new chat")
+                })?,
+            None => request
+                .blueprint
+                .as_deref()
+                .unwrap_or(&self.blueprint_name)
+                .to_owned(),
+        };
+        if !self.session_blueprints.contains_key(&selected_name) {
+            return Err(ActError::usage(
+                "unknown-blueprint",
+                format!("blueprint `{selected_name}` is not an existing blueprint in this project"),
+            ));
+        }
         let max_calls_per_answer = agent::max_calls_per_answer(request.max_calls_per_answer)
             .map_err(|message| ActError::usage("invalid-max-calls", message))?;
         let asked = agent::Settings {
@@ -885,7 +928,7 @@ impl Actions {
         let (blueprint, variables, secrets) = if continued {
             (None, BTreeMap::new(), BTreeMap::new())
         } else {
-            let blueprint = self.blueprint(&self.blueprint_name).await?;
+            let blueprint = self.blueprint(&selected_name).await?;
             let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
             (Some(blueprint), variables, secrets)
         };
@@ -917,7 +960,7 @@ impl Actions {
             let setup = agent::Setup {
                 choice,
                 server_port: actions.server_port,
-                blueprint: &actions.blueprint_name,
+                blueprint: &selected_name,
                 label,
                 token: &token,
                 variables: &variables,
@@ -1107,6 +1150,7 @@ impl Actions {
             _ => variables,
         };
         let logged = self.store.append_session(SessionEntry::Started {
+            blueprint: Some(blueprint.name.clone()),
             session_id: session.to_owned(),
             variables,
             label: label.to_owned(),
@@ -1163,12 +1207,13 @@ impl Actions {
     }
 
     async fn try_session_start(&self, request: SessionStartRequest) -> Result<Answer, ActError> {
-        let blueprint = self.blueprint(&self.blueprint_name).await?;
+        let name = request.blueprint.as_deref().unwrap_or(&self.blueprint_name);
+        let blueprint = self.blueprint(name).await?;
         let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
         let session = self
             .app
             .start_session(SessionStart {
-                blueprint: self.blueprint_name.clone(),
+                blueprint: name.to_owned(),
                 variables: variables.clone(),
                 secrets,
             })
@@ -1183,6 +1228,7 @@ impl Actions {
         let logged = self.fixed_variables(&session).await.and_then(|variables| {
             self.store
                 .append_session(SessionEntry::Started {
+                    blueprint: Some(blueprint.name.clone()),
                     session_id: session.clone(),
                     variables: variables.clone(),
                     label: labels::ASSISTANT.to_owned(),
@@ -1293,13 +1339,23 @@ impl Actions {
         // The version number only labels the blueprint the recheck ran against, which
         // the server already holds; a change log that cannot be read leaves it unlabelled
         // rather than failing a recheck that did not need it.
-        let in_force = self
-            .store
-            .changes()
-            .ok()
-            .and_then(|changes| changes.current().map(|version| version.version.to_string()));
-        // The file as it is now, to cite the rules that decide now by their lines.
-        let current_text = std::fs::read_to_string(&self.blueprint_path).ok();
+        let (path, applier) = self
+            .session_blueprints
+            .get(&stored.recording.blueprint_name)
+            .ok_or_else(|| {
+                ActError::usage(
+                    "unknown-blueprint",
+                    "the run's blueprint is no longer selectable",
+                )
+            })?;
+        let in_force = applier
+            .status()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .version
+            .map(|version| version.to_string());
+        // The selected blueprint's file, to cite its current rules by their lines.
+        let current_text = std::fs::read_to_string(path).ok();
         let mut changes = Vec::new();
         let mut contexts = BTreeMap::new();
         let mut cant_tell = Vec::new();
@@ -1439,17 +1495,18 @@ impl Actions {
 
     // ---- rerun ----
 
-    pub(crate) async fn rerun(&self, request: RunRequest) -> Answer {
-        answer(self.try_rerun(request.run).await)
+    pub(crate) async fn rerun(&self, request: RerunRequest) -> Answer {
+        answer(self.try_rerun(request).await)
     }
 
-    async fn try_rerun(&self, source: u64) -> Result<Answer, ActError> {
+    async fn try_rerun(&self, request: RerunRequest) -> Result<Answer, ActError> {
+        let source = request.run;
         let stored = self.load(source)?;
         let Some(code) = stored.recording.code.clone() else {
             return Err(no_program(&stored, "rerun"));
         };
         let blueprint = self.blueprint(&stored.recording.blueprint_name).await?;
-        let (variables, secrets) = self.for_new_run(&blueprint, &BTreeMap::new())?;
+        let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
         let response = self
             .app
             .run_program(ProgramRun {
@@ -1470,10 +1527,21 @@ impl Actions {
             Ok(decision) => decision,
             Err(message) => return ActError::usage("invalid-decision", message).into(),
         };
+        let run = match self.load(decision.run) {
+            Ok(run) => run,
+            Err(error) => return error.into(),
+        };
+        let Some((path, _)) = self.session_blueprints.get(&run.recording.blueprint_name) else {
+            return ActError::usage(
+                "unknown-blueprint",
+                "the run's blueprint is no longer selectable",
+            )
+            .into();
+        };
         answer(
             draft_rule(
                 &self.store,
-                &self.blueprint_path,
+                path,
                 &self.project_root,
                 decision,
                 request.write,
@@ -2380,6 +2448,8 @@ fn write_blueprint(path: &Path, drafted_from: &[u8], new: &[u8]) -> Result<(), A
 /// A task for `chat`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ChatRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) blueprint: Option<String>,
     pub(crate) task: String,
     /// The chat session this message carries on; without one, a new session starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]

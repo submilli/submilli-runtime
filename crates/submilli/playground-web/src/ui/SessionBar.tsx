@@ -4,7 +4,6 @@ import type { Status } from "../api/types";
 import type { SessionBar as Bar } from "../model/sessions";
 import { forAsst } from "../model/refs";
 import type { SetupForm } from "../model/setup";
-import { NO_SESSIONS } from "./wording";
 import { Setup, type KeyActions } from "./Setup";
 import { CancelButton } from "./controls";
 
@@ -19,17 +18,18 @@ function LockIcon() {
 
 export function SessionBar(props: {
   bar: Bar | null;
+  task?: string;
   setup: boolean;
-  noSessions: boolean;
   status: Status;
   form: SetupForm;
-  canGoBack: boolean;
   /** The run in flight Cancel would stop, or `null`. */
   cancelRun: number | null;
   /** Cancel was pressed for this run and the server hasn't confirmed yet. */
   cancelling: boolean;
   onForm: (form: SetupForm) => void;
   onStart: () => void;
+  onBlueprint: () => void;
+  onPackages: () => void;
   /** Saves a model key typed in the form's key dialog, and says what it did. */
   keys: KeyActions;
   onCopy: () => void;
@@ -40,21 +40,9 @@ export function SessionBar(props: {
   const { bar } = props;
   return (
     <section className="pg-context" aria-label="Session">
-      <span className="pg-context-label">Session</span>
-      {!props.setup && !bar && props.noSessions && <span>{NO_SESSIONS}</span>}
+      <span className="pg-context-label" title={props.task}>{props.setup ? "New session" : props.task || "Session"}</span>
       {!props.setup && bar && (
         <>
-          {bar.copyText ? (
-            <button className="pg-tag pg-ref" title={forAsst(bar.copyText)} onClick={props.onCopy}>
-              {bar.short} <span className="pg-copyicon" aria-hidden="true">⧉</span>
-              <span className="sr-only">Copy a line for your assistant</span>
-            </button>
-          ) : (
-            // Not started on the playground yet, so there is nothing to copy.
-            <span className="pg-tag pg-ref" title="This session starts on the playground when you send its first message.">
-              {bar.short}
-            </span>
-          )}
           {bar.vars.map((v) => (
             <span className="pg-fixed" title={v.full} key={v.name}>
               <LockIcon />
@@ -67,18 +55,34 @@ export function SessionBar(props: {
               {bar.moreVars}
             </button>
           )}
-          <span className="pg-tag">{bar.source}</span>
-          {bar.agent && (
-            <span className="pg-tag" title="The model answering in this session">
-              Agent {bar.agent}
-            </span>
-          )}
-          {bar.moreSettings && (
-            <button className="pg-link" onClick={props.onAllVars}>
-              {bar.moreSettings}
-            </button>
-          )}
-          <span className="pg-tag">{bar.started}</span>
+          <details className="pg-session-details">
+            <summary>Session details</summary>
+            <div className="pg-session-detail-items">
+              {bar.copyText ? (
+                <button className="pg-tag pg-ref" title={forAsst(bar.copyText)} onClick={props.onCopy}>
+                  {bar.short} <span className="pg-copyicon" aria-hidden="true">⧉</span>
+                  <span className="sr-only">Copy a line for your assistant</span>
+                </button>
+              ) : (
+                // Not started on the playground yet, so there is nothing to copy.
+                <span className="pg-tag pg-ref" title="This session starts on the playground when you send its first message.">
+                  {bar.short}
+                </span>
+              )}
+              <span className="pg-tag">{bar.source}</span>
+              {bar.agent && (
+                <span className="pg-tag" title="The model answering in this session">
+                  Agent {bar.agent}
+                </span>
+              )}
+              {bar.moreSettings && (
+                <button className="pg-link" onClick={props.onAllVars}>
+                  {bar.moreSettings}
+                </button>
+              )}
+              <span className="pg-tag">{bar.started}</span>
+            </div>
+          </details>
           <span className={"pg-state" + (bar.live ? " live" : "")}>{bar.state}</span>
           {/* Cancel acts on the live run, even while the reader is stepped back. */}
           {props.cancelRun !== null && (
@@ -88,8 +92,7 @@ export function SessionBar(props: {
       )}
       {props.setup && (
         <>
-          {props.canGoBack && <span className="pg-muted pg-small">Nothing is started until you press Start session.</span>}
-          <Setup status={props.status} form={props.form} onForm={props.onForm} onStart={props.onStart} copy={props.copy} keys={props.keys} />
+          <Setup status={props.status} form={props.form} onForm={props.onForm} onStart={props.onStart} onBlueprint={props.onBlueprint} onPackages={props.onPackages} keys={props.keys} />
         </>
       )}
     </section>

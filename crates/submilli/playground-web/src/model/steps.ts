@@ -347,6 +347,19 @@ export function programNumber(f: Frame, run: number): number {
   return f.allRuns.filter((n) => byAgent(f, n) && !fileTool(f, n)).indexOf(run) + 1;
 }
 
+/** The program ordinal and execution ID name different things; never infer one from the other. */
+export function programIdentity(f: Frame, run: number): string {
+  const tool = fileTool(f, run);
+  const number = programNumber(f, run);
+  return (tool ? "Call · " + tool : "Program" + (number ? " " + number : "")) + " · Run " + run;
+}
+
+/** The complete identity shown by Conversation and Execution, including a file call's target. */
+export function runIdentity(f: Frame, run: number): string {
+  const target = callTarget(f, run);
+  return programIdentity(f, run) + (target.text ? " · " + target.text : "");
+}
+
 /** The runs that have ended by the cursor whose answers are loaded. */
 export function endedRuns(f: Frame) {
   return f.ended.flatMap((n) => (f.data.runs[n] ? [f.data.runs[n]] : []));

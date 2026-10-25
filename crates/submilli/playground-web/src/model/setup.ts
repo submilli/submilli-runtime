@@ -5,6 +5,7 @@ import { namesOf } from "./refs";
 import { providerName } from "./format";
 
 export interface SetupForm {
+  blueprint?: string;
   provider: string;
   model: string;
   /** "" for the provider's default. */
@@ -18,13 +19,20 @@ export interface SetupForm {
   fields: Record<string, string>;
 }
 
-export const INITIAL_SETUP: SetupForm = { provider: "", model: "", effort: "", max: "", providerJson: "", varJson: false, varJsonText: "", fields: {} };
+export const INITIAL_SETUP: SetupForm = { blueprint: "", provider: "", model: "", effort: "", max: "", providerJson: "", varJson: false, varJsonText: "", fields: {} };
 
 /** What the playground sets itself in each provider's request, so provider settings can't. */
 export const OWN_FIELDS: Record<string, string[]> = {
   anthropic: ["model", "messages", "system", "tools", "max_tokens", "stream", "thinking"],
   openai: ["model", "input", "instructions", "tools", "max_output_tokens", "stream"],
 };
+
+/** A form's selected blueprint, leaving the shared server status unchanged. */
+export function selectedSetupStatus(status: Status, name?: string): Status {
+  const selected = status.blueprints?.find((blueprint) => blueprint.name === name);
+  if (!selected) return status;
+  return { ...status, blueprint: { name: selected.name, path: selected.path }, packages: selected.packages, packages_error: selected.packages_error ?? undefined, declared_variables: selected.declared_variables, blueprint_status: selected.blueprint_status };
+}
 
 /** The variables the blueprint in force declares, the required ones first. */
 export function declaredVariables(status: Status): DeclaredVariable[] {
@@ -56,6 +64,7 @@ export function initialSetup(status: Status, sessions: SessionSummary[] = []): S
     const s = last.settings ?? {};
     return {
       ...INITIAL_SETUP,
+      blueprint: status.blueprint.name,
       provider,
       model,
       effort: provider === "openai" ? s.effort ?? "" : "",
@@ -67,7 +76,7 @@ export function initialSetup(status: Status, sessions: SessionSummary[] = []): S
   // Else the playground's default, else the first provider, whose key the form helps add.
   const first = providerOptions(status, "")[0];
   const [provider, model] = status.chat_models[0] ? split(status.chat_models[0]) : [first?.provider || "", first?.model || ""];
-  return { ...INITIAL_SETUP, provider, model, fields };
+  return { ...INITIAL_SETUP, blueprint: status.blueprint.name, provider, model, fields };
 }
 
 /** The most recently started session an agent chatted in. */
@@ -110,18 +119,15 @@ export interface SetupCheck {
   /** The line under Start session. */
   hint: string;
   cantStart: boolean;
-  /** The same session from the CLI. */
-  cli: string;
-  /**
-   * The CLI's chat takes the bound variables, so the variables that differ from them are
-   * bound first; "" when they all match.
-   */
-  cliBind: string;
-  /** What's wrong with each field that stops the start, by a variable's name, "model", "max", "provider" or "json". */
-  invalid: Record<string, string>;
+  /** Kept separate so application variables may share model field names. */
+  modelInvalid: Record<string, string>;
+  variableInvalid: Record<string, string>;
+  missingVariables: string[];
 }
 
 export function checkSetup(status: Status, form: SetupForm): SetupCheck {
+  const unavailable = !!form.blueprint && (status.blueprints ? !status.blueprints.some((b) => b.name === form.blueprint) : form.blueprint !== status.blueprint.name);
+  status = selectedSetupStatus(status, form.blueprint);
   const decls = declaredVariables(status);
   const parsed = form.varJson ? parseVars(form.varJsonText, decls, blueprintLabel(status)) : { vals: trimmed(form.fields) };
   const variables = parsed.vals || {};
@@ -132,14 +138,15 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
   const json = form.providerJson.trim();
   const set: ChatSettings = {};
   let problem = "";
-  const invalid: Record<string, string> = Object.fromEntries(missing.map((name) => [name, "Required."]));
-  if (parsed.err) invalid.json = parsed.err;
+  const variableInvalid: Record<string, string> = Object.fromEntries(missing.map((name) => [name, "Required."]));
+  if (parsed.err) variableInvalid.json = parsed.err;
+  const modelInvalid: Record<string, string> = {};
   const fail = (field: string, text: string) => {
-    invalid[field] = text;
+    modelInvalid[field] = text;
     problem = problem || text;
   };
   // Without a model key there's no agent to set up; the Agent field says how to add one.
-  if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add a key under Agent.";
+  if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add key under Provider.";
   else if (!model) fail("model", "Give the model’s name.");
   else if (!/^(models\/)?[A-Za-z0-9._-]+$/.test(model)) fail("model", "A model name is letters, digits, “.”, “_”, and “-”.");
   if (form.effort) set.effort = form.effort;
@@ -170,6 +177,8 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
       }
     }
   }
+  if (unavailable) fail("blueprint", "Choose an available blueprint from this project.");
+  if (status.packages_error) fail("blueprint", status.packages_error);
   const settings = Object.keys(set).length ? set : null;
   const more = missing.length > 1 ? " (+" + (missing.length - 1) + " more)" : "";
   const hint = parsed.err
@@ -177,36 +186,19 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
     : missing.length
       ? "Still needed: " + missing[0] + more + "."
       : problem || "The variables, the agent, and its settings are fixed once the session starts.";
-  const cli =
-    "submilli playground chat --model " + shellWord(form.provider + ":" + model) + (form.effort ? " --effort " + form.effort : "") +
-    (max ? " --max-output " + shellWord(max) : "") + (settings && settings.provider ? " --provider-settings " + shellWord(JSON.stringify(settings.provider)) : "") + ' "<message>"';
-  const bound = status.binding.variables;
-  const differ = Object.keys(variables).filter((k) => variables[k] !== bound[k]);
-  // An optional variable left empty is unset; a required one left empty can't start anyway.
-  const dropped = Object.keys(bound).filter((k) => !(k in variables) && decls.some((d) => d.name === k && !d.required));
-  const cliBind =
-    differ.length || dropped.length
-      ? "submilli playground bind " + [...differ.map((k) => k + "=" + shellWord(variables[k])), ...dropped.map((k) => "--unset " + k)].join(" ")
-      : "";
-  // A form that can't start gives no command, which couldn't run either.
   const cantStart = missing.length > 0 || !!parsed.err || !!problem;
   return {
     variables,
-    cliBind: cantStart ? "" : cliBind,
-    invalid,
+    modelInvalid,
+    variableInvalid,
+    missingVariables: missing,
     model: form.provider + ":" + model,
     settings,
     problem,
     varError: parsed.err || "",
     hint,
     cantStart,
-    cli: cantStart ? "" : cli,
   };
-}
-
-/** A value as a shell takes it: quoted when it holds anything but plain characters. */
-function shellWord(value: string): string {
-  return /^[A-Za-z0-9._@:/-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'";
 }
 
 function trimmed(fields: Record<string, string>): Record<string, string> {
@@ -237,7 +229,7 @@ export function varsHelp(check: SetupCheck): { text: string; error: boolean } {
 
 /** The note under the variables' fields. */
 export function fieldNote(status: Status): string {
-  return "Declared in blueprint " + blueprintLabel(status) + ". Fixed once the session starts.";
+  return "Declared in blueprint " + blueprintLabel(status) + ".";
 }
 
 /** The providers chat works with, in the order the page offers them, and the key each needs. */
