@@ -94,3 +94,5 @@ requires:
   filter: host == "slack.com"
 - capability: secrets.get
   filter: name == "SLACK_BOT_TOKEN"
+- capability: variables.get
+  filter: name == "SLACK_BOT_MESSAGE_METADATA"

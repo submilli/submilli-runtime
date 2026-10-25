@@ -2,23 +2,14 @@ import { get, post, Response } from "submilli:http";
 import { encodeQuery } from "submilli:url";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
+import { SlackError } from "./error";
+import { attachMessageMetadata, configuredMessageMetadata, MessageMetadata } from "./metadata";
+
+export { SlackError } from "./error";
 
 const API = "https://slack.com/api/";
 // One Slack user ID: a `U` or `W` followed by capital letters and digits.
 const USER_ID = /^[UW][A-Z0-9]+$/;
-
-/** A Slack transport or application error with a stable Slack error code. */
-export class SlackError extends Error {
-    code: string;
-    status: number;
-
-    constructor(code: string, message: string, status: number) {
-        super(message);
-        this.name = "SlackError";
-        this.code = code;
-        this.status = status;
-    }
-}
 
 /** Identity represented by `SLACK_BOT_TOKEN`. */
 export interface SlackIdentity {
@@ -252,13 +243,12 @@ export function getIdentity(): SlackIdentity {
 export function sendMessage(input: SendMessageInput): SlackMessage {
     const { channelId, text, threadTs, unfurlLinks, unfurlMedia } = input;
     check("slack.com/bot/sendMessage", { channelId: channelId });
+    const metadata = configuredMessageMetadata();
     const body: MessageWriteRequest = { channel: channelId, text: text };
     if (threadTs !== undefined) body.thread_ts = threadTs;
     if (unfurlLinks !== undefined) body.unfurl_links = unfurlLinks;
     if (unfurlMedia !== undefined) body.unfurl_media = unfurlMedia;
-    const data = slackPost("chat.postMessage", body).json() as MessageResponse;
-    requireOk(data, 200);
-    return messageFrom(data.message);
+    return postMessage(body, metadata);
 }
 
 /**
@@ -273,11 +263,10 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
 export function sendDirectMessage(userId: string, text: string): SlackMessage {
     const recipientId = singleUserId(userId);
     check("slack.com/bot/sendDirectMessage", { userId: recipientId });
+    const metadata = configuredMessageMetadata();
     const opened = slackPost("conversations.open", { users: recipientId }).json() as ConversationResponse;
     requireOk(opened, 200);
-    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
-    requireOk(data, 200);
-    return messageFrom(data.message);
+    return postMessage({ channel: opened.channel.id, text: text }, metadata);
 }
 
 /**
@@ -294,11 +283,10 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
     const participantIds: string[] = [];
     for (const userId of userIds) participantIds.push(singleUserId(userId));
     check("slack.com/bot/sendGroupDirectMessage", { userIds: participantIds });
+    const metadata = configuredMessageMetadata();
     const opened = slackPost("conversations.open", { users: participantIds.join(",") }).json() as ConversationResponse;
     requireOk(opened, 200);
-    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
-    requireOk(data, 200);
-    return messageFrom(data.message);
+    return postMessage({ channel: opened.channel.id, text: text }, metadata);
 }
 
 /**
@@ -339,6 +327,14 @@ interface MessageWriteRequest {
     thread_ts?: string;
     unfurl_links?: boolean;
     unfurl_media?: boolean;
+    metadata?: MessageMetadata;
+}
+
+function postMessage(body: MessageWriteRequest, metadata: MessageMetadata | undefined): SlackMessage {
+    attachMessageMetadata(body, metadata);
+    const data = slackPost("chat.postMessage", body).json() as MessageResponse;
+    requireOk(data, 200);
+    return messageFrom(data.message);
 }
 
 /**
