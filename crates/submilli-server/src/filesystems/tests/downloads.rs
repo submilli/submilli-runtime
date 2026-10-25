@@ -382,7 +382,10 @@ async fn download_charges_retained_alias_validation_and_settles_publication() {
     );
 }
 
-struct PausedPublication(std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>);
+struct PausedPublication {
+    release: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    streamed: Arc<tokio::sync::Notify>,
+}
 #[async_trait::async_trait]
 impl HttpClient for PausedPublication {
     async fn send(&self, _: &HttpRequest) -> Result<HttpResponse, HttpError> {
@@ -394,13 +397,14 @@ impl HttpClient for PausedPublication {
         writer: &mut (dyn Write + Send),
     ) -> Result<DownloadMeta, HttpError> {
         writer.write_all(b"complete").unwrap();
-        let wait = self.0.lock().unwrap().take().unwrap();
+        let wait = self.release.lock().unwrap().take().unwrap();
         let (ready, started) = tokio::sync::oneshot::channel();
         tokio::task::spawn_blocking(move || {
             ready.send(()).unwrap();
-            wait.blocking_recv().unwrap();
+            let _ = wait.blocking_recv();
         });
         started.await.unwrap();
+        self.streamed.notify_one();
         Ok(DownloadMeta {
             status: 200,
             status_text: "OK".into(),
@@ -413,6 +417,27 @@ impl HttpClient for PausedPublication {
 
 #[test]
 fn download_cancellation_drains_publication_before_releasing_workspace() {
+    // Isolate the execution's global blocking-worker slots from other tests.
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "filesystems::tests::downloads::download_cancellation_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[ignore = "helper process for the download cancellation test"]
+fn download_cancellation_child() {
     use interpreter::runtime::{
         RuntimeConfig, StoreData, dispatch_main_async, install_runtime_async,
         instantiate_program_async,
@@ -429,13 +454,31 @@ fn download_cancellation_drains_publication_before_releasing_workspace() {
             let mut data = StoreData::with_vfs(fixture.run.clone(), fixture.filesystem.vfs().clone());
             if durable { data.filesystem = Arc::new(fixture.filesystem.clone()); }
             let (release, wait) = tokio::sync::oneshot::channel();
-            data.http_client = Arc::new(PausedPublication(std::sync::Mutex::new(Some(wait))));
+            let streamed = Arc::new(tokio::sync::Notify::new());
+            data.http_client = Arc::new(PausedPublication {
+                release: std::sync::Mutex::new(Some(wait)),
+                streamed: streamed.clone(),
+            });
             let mut store = config.store(&engine, data).unwrap();
             let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
             let mut linker = wasmtime::Linker::new(&engine);
             install_runtime_async(&mut linker, &mut store).await.unwrap();
             let instance = instantiate_program_async(&linker, &mut store, &module).await.unwrap();
-            assert!(tokio::time::timeout(Duration::from_millis(200), dispatch_main_async(&mut store, &instance)).await.is_err());
+            // Poll execution first: after the client signals, this same poll advances
+            // through streaming into publication before we cancel the pending call.
+            // The child owns all worker slots; unconstrained prevents a cooperative
+            // yield while acquiring one from becoming an earlier cancellation point.
+            // The timeout only bounds a broken test; it never triggers cancellation
+            // during admission on a busy runner.
+            tokio::time::timeout(Duration::from_secs(30), async {
+                tokio::select! {
+                    biased;
+                    result = tokio::task::unconstrained(dispatch_main_async(&mut store, &instance)) => {
+                        panic!("download finished while publication was blocked: {result:?}");
+                    }
+                    () = streamed.notified() => {}
+                }
+            }).await.expect("download did not finish streaming");
             assert!(tokio::time::timeout(Duration::from_millis(50), store.data_mut().blocking_work.finish()).await.is_err(), "publication escaped the execution's drain list");
             release.send(()).unwrap();
             store.data_mut().blocking_work.finish().await.unwrap();
