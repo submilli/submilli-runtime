@@ -23,13 +23,22 @@ pub struct SkillInfo {
     pub description: Option<String>,
 }
 
-/// A loaded skill.
+/// A loaded skill. Read its bundled files through `submilli:skills.readFile`,
+/// never through `submilli:fs`: skills are not mounted on the virtual filesystem.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skill {
     pub name: String,
     pub description: Option<String>,
     /// The skill's instructions.
     pub content: String,
+    /// Bundled file names relative to this skill, accepted by `read_file`.
+    /// These are not filesystem paths; programs use `skills.readFile(name, path)`.
+    /// The engine exposes at most 256 entries and omits invalid paths.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// The provider omitted files, or the engine capped or filtered the listing.
+    #[serde(default)]
+    pub files_truncated: bool,
 }
 
 /// Why a skill or one of its files could not be read. Every message is safe to
@@ -115,6 +124,10 @@ pub trait SkillProvider: Send + Sync {
     /// through. The engine passes only one segment of at most 4096 bytes that is
     /// not empty, `.` or `..` and has no `/`, `\` or NUL; it may contain `:`, so
     /// never use it as a path.
+    /// Return bundled file names in `files` without reading their contents. Each
+    /// must be accepted by `read_file(name, path)`; set `files_truncated` when
+    /// the provider omits entries. The engine considers the first 256 entries,
+    /// removes invalid paths, and reports any omission in `files_truncated`.
     fn load<'a>(
         &'a self,
         name: &'a str,

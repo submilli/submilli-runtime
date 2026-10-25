@@ -100,6 +100,8 @@ fn two_agents() -> Vec<AgentInfo> {
 struct FakeSkills {
     loads: Mutex<Vec<String>>,
     reads: Mutex<Vec<(String, String)>>,
+    files: Vec<String>,
+    files_truncated: bool,
 }
 
 impl FakeSkills {
@@ -107,6 +109,8 @@ impl FakeSkills {
         Arc::new(Self {
             loads: Mutex::new(Vec::new()),
             reads: Mutex::new(Vec::new()),
+            files: vec!["templates/report.md".to_string()],
+            files_truncated: false,
         })
     }
 }
@@ -140,6 +144,8 @@ impl SkillProvider for FakeSkills {
                     name: "review".to_string(),
                     description: Some("Review a diff".to_string()),
                     content: "Read the diff twice.".to_string(),
+                    files: self.files.clone(),
+                    files_truncated: self.files_truncated,
                 }),
                 _ => Err(SkillError::NotFound {
                     name: name.to_string(),
@@ -531,13 +537,109 @@ async fn skills_list_load_and_read_files() {
                function main(): string {
                  const names = skills.list().map((s) => s.name).join(",");
                  const review = skills.load("review");
-                 const report = skills.readFile("review", "templates/report.md");
-                 return names + "|" + review.content + "|" + report;
+                 const report = skills.readFile(review.name, review.files[0]);
+                 return names + "|" + review.content + "|" + report + "|" + (review.filesTruncated ? "true" : "false");
                }"#,
         )
         .await
         .expect("program completes");
-    assert_eq!(out, "review|Read the diff twice.|# Report");
+    assert_eq!(out, "review|Read the diff twice.|# Report|false");
+    assert_eq!(
+        *skills.reads.lock().expect("reads"),
+        [("review".to_string(), "templates/report.md".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn skill_files_are_bounded_and_report_omissions() {
+    let cases = [
+        (Vec::new(), false, Vec::new(), false),
+        (
+            vec!["a".to_string(); 256],
+            false,
+            vec!["a".to_string(); 256],
+            false,
+        ),
+        (
+            vec!["a".to_string(); 257],
+            false,
+            vec!["a".to_string(); 256],
+            true,
+        ),
+        (
+            vec!["references/✓.md".to_string()],
+            true,
+            vec!["references/✓.md".to_string()],
+            true,
+        ),
+        (
+            vec![
+                "../secret".to_string(),
+                "/absolute".to_string(),
+                "a\\b".to_string(),
+                "a:b".to_string(),
+                "a//b".to_string(),
+                "a\0b".to_string(),
+                "a".repeat(4097),
+                "references/✓.md".to_string(),
+                "a".repeat(4096),
+            ],
+            false,
+            vec!["references/✓.md".to_string(), "a".repeat(4096)],
+            true,
+        ),
+    ];
+    for (files, provider_truncated, expected, truncated) in cases {
+        let mut skills = FakeSkills::new();
+        let provider = Arc::get_mut(&mut skills).expect("sole owner");
+        provider.files = files;
+        provider.files_truncated = provider_truncated;
+        let out = Harness::default()
+            .skills(skills.clone())
+            .run(
+                r#"import skills from "submilli:skills";
+               function main(): string { return JSON.stringify(skills.load("review"))!; }"#,
+            )
+            .await
+            .expect("program completes");
+        let loaded: serde_json::Value = serde_json::from_str(&out).expect("JSON");
+        assert_eq!(loaded["files"], serde_json::json!(expected));
+        assert_eq!(loaded["filesTruncated"], truncated);
+        assert!(
+            skills.reads.lock().expect("reads").is_empty(),
+            "load must not read bundled contents"
+        );
+    }
+}
+
+#[tokio::test]
+async fn loading_a_skill_does_not_expose_its_files_on_the_filesystem() {
+    let out = Harness::default()
+        .skills(FakeSkills::new())
+        .run(
+            r#"import skills from "submilli:skills";
+           import fs from "submilli:fs";
+           function main(): string {
+             const skill = skills.load("review");
+             const path = skill.files[0];
+             if (fs.exists(path) || fs.exists("/review/" + path) || fs.info().mounts.length !== 0) {
+               return "exposed";
+             }
+             return skills.readFile(skill.name, path);
+           }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(out, "# Report");
+}
+
+#[test]
+fn older_skill_payloads_have_an_empty_file_listing() {
+    let skill: Skill =
+        serde_json::from_str(r#"{"name":"review","description":null,"content":"Review"}"#)
+            .expect("old provider or journal payload");
+    assert!(skill.files.is_empty());
+    assert!(!skill.files_truncated);
 }
 
 #[tokio::test]
@@ -762,6 +864,8 @@ impl SkillProvider for CaseFoldingSkills {
                 name: "review".to_string(),
                 description: None,
                 content: "Read the diff twice.".to_string(),
+                files: Vec::new(),
+                files_truncated: false,
             })
         })
     }

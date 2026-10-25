@@ -1928,15 +1928,17 @@ Optional: installed only for an embedder that enables it. Variables: `I` = input
 
 ### submilli:skills
 
-Optional: installed only for an embedder that enables it. Variables: `T` = bytes of the skill's content or the file read; `m` = skills offered.
+Optional: installed only for an embedder that enables it. Variables: `T` = bytes of the skill's content or the file read; `m` = skills offered; `f` = all file names returned by the provider (including discarded entries); `S` = bytes scanned in the first at most 256 paths of at most 4096 bytes; `P` = bytes in retained file names.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:skills#list` | Gate, list the skills, run the policy check once per skill, sanitize each description, build `SkillInfo` structs and an array (`stdlib/skills/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.list().await`. |
-| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | Native `IO(T)` settles; the guest result is built with normal fuel checks. A name that is not one skill name is refused before the provider is asked. |
+| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T + P) + ELEM(f) + SCAN(S)` plus the strings and file array through shared writers | metadata validation and IO settle after the provider read; output through shared writers | First 256 names only; invalid paths are omitted and `filesTruncated` records omissions. Native IO and validation settle; the guest result is built with normal fuel checks. A name that is not one skill name is refused before the provider is asked. |
 | `submilli:skills#readFile` | Gate, check the name and the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the string through `write_submilli_string_struct` | `IO(T)` and the result after the read | A name or path outside the skills is refused before the provider is asked. |
 | `submilli:skills#Skill#content` | Field read | `CALL` | before | |
 | `submilli:skills#Skill#description` | Field read | `CALL` | before | |
+| `submilli:skills#Skill#files` | Field read | `CALL` | before | Reads the array in place. |
+| `submilli:skills#Skill#filesTruncated` | Field read | `CALL` | before | |
 | `submilli:skills#Skill#name` | Field read | `CALL` | before | |
 | `submilli:skills#SkillInfo#description` | Field read | `CALL` | before | |
 | `submilli:skills#SkillInfo#name` | Field read | `CALL` | before | |

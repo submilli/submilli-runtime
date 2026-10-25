@@ -21,7 +21,7 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut defs,
         "Skill",
         skill_properties(true),
-        "/** A loaded skill: its instructions, and the name to read its files under. Constructed only by `load()`. */",
+        "/** A loaded skill. Read bundled files with `skills.readFile(name, path)`. Skills are never mounted or accessible through `submilli:fs`. Constructed only by `load()`. */",
     );
     insert_fn(
         &mut defs,
@@ -38,7 +38,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "load",
         vec![Param::new("name", Type::String)],
         interface_type("Skill"),
-        "/**\n * Load the skill `name`: its description and its instructions.\n *\n * \
+        "/**\n * Load the skill `name`: its description, instructions and bundled file names.\n *\n * \
          A name that is not one skill name — empty, `.` or `..`, containing `/`, \
          `\\` or NUL, or over 4096 bytes — throws a `RangeError` without asking the \
          harness. Throws a catchable error when the harness has no skill of that name, \
@@ -76,7 +76,7 @@ fn interface_type(name: &str) -> Type {
     }
 }
 
-/// `name` and `description`, plus `content` for a loaded skill.
+/// `name` and `description`, plus instructions and file names for a loaded skill.
 fn skill_properties(loaded: bool) -> BTreeMap<String, PropertySig> {
     let mut properties = BTreeMap::new();
     insert_property(
@@ -92,6 +92,18 @@ fn skill_properties(loaded: bool) -> BTreeMap<String, PropertySig> {
         "/** What the skill is for, or `undefined` when the harness gives none. */",
     );
     if loaded {
+        insert_property(
+            &mut properties,
+            "files",
+            Type::Array(Box::new(Type::String)),
+            "/** Up to 256 bundled file names relative to this skill, without reading their contents. Pass each to `skills.readFile(name, path)`. These are not filesystem paths and cannot be read through `submilli:fs`. Invalid paths are omitted. */",
+        );
+        insert_property(
+            &mut properties,
+            "filesTruncated",
+            Type::Boolean,
+            "/** True when the provider omitted files or the engine capped or filtered the listing. */",
+        );
         insert_property(
             &mut properties,
             "content",
