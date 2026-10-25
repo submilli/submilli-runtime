@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "68976d046ca12a3d0d3233e6cb7e38e86119fd1c1b5290e9b33bd464d9066f2f"
+  contentHash: "9d70341b8824425e669f662ddb8a83074955a66031a924b6a6fe4d1f1b9ba39e"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -54,7 +54,7 @@ submilli --version
 ```
 
 ```text
-submilli 0.4.3
+submilli 0.5.0
 ```
 
 ```
@@ -111,7 +111,7 @@ Pass a release tag to choose the binary version. Keep the tag with the
 deployment record, and use the same option when upgrading a pinned deployment:
 
 ```sh
-curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.4.3
+curl -fsSL https://submilli.ai/install.sh | sh -s -- --version v0.5.0
 ```
 
 For native Windows, save and run the installer with its `-Version` parameter:
@@ -119,7 +119,7 @@ For native Windows, save and run the installer with its `-Version` parameter:
 ```powershell
 $installer = Join-Path $env:TEMP ('submilli-install-' + [guid]::NewGuid() + '.ps1')
 Invoke-WebRequest -UseBasicParsing https://submilli.ai/install.ps1 -OutFile $installer
-& $installer -Version v0.4.3
+& $installer -Version v0.5.0
 Remove-Item $installer
 ```
 
