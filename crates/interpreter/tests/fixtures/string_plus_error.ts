@@ -9,6 +9,9 @@ class Custom extends Error {
     return "custom!";
   }
 }
+function pick(range: boolean): TypeError | RangeError {
+  return range ? new RangeError("r") : new TypeError("t");
+}
 function main(): void {
   assert("err " + new Error("x") === "err Error: x");
   assert("err " + new TypeError("x") === "err TypeError: x");
@@ -16,6 +19,7 @@ function main(): void {
   assert("err " + new Error("") === "err Error");
   assert("err " + new Named("n") === "err Named: n");
   assert("err " + new Custom("c") === "err custom!");
+  assert("err " + pick(true) === "err RangeError: r");
   try {
     throw new NotFound("missing");
   } catch (e) {

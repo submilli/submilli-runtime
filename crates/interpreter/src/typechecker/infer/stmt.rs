@@ -2838,10 +2838,23 @@ impl Inferer<'_> {
         let sym = binary_op_text(op);
         let culprit = self
             .nullable_binary_culprit(lhs, rhs, |l, r| self.compound_accepts(op, l, r).is_some());
+        let help = if op == BinOp::Add {
+            let span_of = |id: ExprId| {
+                self.typed_ast
+                    .try_expr(id)
+                    .map(|expr| expr.span)
+                    .map_err(crate::typechecker::arena_failure)
+            };
+            self.string_concat_fix(span_of(lhs.0)?, lt, span_of(rhs.0)?, rt)
+                .map(|(_, help)| vec![help])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         self.error_with_narrowing_hint(
             op_span,
             format!("`{sym}=` not defined for `{lt}` and `{rt}`"),
-            Vec::new(),
+            help,
             culprit,
         )?;
         Ok((Type::Error, lhs.0, rhs.0))
@@ -2862,18 +2875,11 @@ impl Inferer<'_> {
 
 /// The hint for a compound assignment's value: the target's widened read type,
 /// except that a `never` target hints nothing, so the result's own type is
-/// what gets reported against it, once. Nor does a string target of `+=`,
-/// whose value may be a number or an `Error` that concatenation converts.
+/// what gets reported against it, once. Nor does `+=`: its value need not
+/// share the target's type (`s += n`, or `x += "a"` with `x` narrowed to a
+/// number), and tsc gives `+`'s operands no contextual type either.
 fn compound_value_hint(op: BinOp, read_ty: &Type) -> Option<Type> {
-    if matches!(read_ty.peel(), Type::Never) {
-        return None;
-    }
-    if op == BinOp::Add
-        && matches!(
-            read_ty.primitive_behavior(),
-            Type::String | Type::StringLiteral(_)
-        )
-    {
+    if matches!(read_ty.peel(), Type::Never) || op == BinOp::Add {
         return None;
     }
     Some(read_ty.widen_literal())

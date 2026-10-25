@@ -23,4 +23,7 @@ function main(): void {
   const box = { label: "#" };
   box.label += 7;
   assert(box.label === "#7");
+  let mixed: string | number = 1;
+  mixed += "a";
+  assert(mixed === "1a");
 }

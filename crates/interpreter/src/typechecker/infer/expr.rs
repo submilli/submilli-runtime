@@ -1424,10 +1424,13 @@ impl Inferer<'_> {
                     ty
                 } else {
                     let message = format!("`+` not defined for `{lt}` and `{rt}`");
-                    let (error_span, help) = match self.string_concat_fix(lhs, &lt, rhs, &rt)? {
-                        Some((operand, help)) => (operand, vec![help]),
-                        None => (span, Vec::new()),
-                    };
+                    let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+                    let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
+                    let (error_span, help) =
+                        match self.string_concat_fix(lhs_span, &lt, rhs_span, &rt) {
+                            Some((operand, help)) => (operand, vec![help]),
+                            None => (span, Vec::new()),
+                        };
                     let culprit =
                         self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
                             self.plus_accepts(l, r).is_some()
@@ -1459,22 +1462,20 @@ impl Inferer<'_> {
     /// beside a string. Other types stay rejected (booleans, bigints, nullish
     /// values and plain objects), as the help on their error explains.
     fn concatenation_converts(&self, lt: &Type, rt: &Type) -> Option<ConcatOperand> {
-        let is_string = |ty: &Type| {
-            matches!(
-                ty.primitive_behavior(),
-                Type::String | Type::StringLiteral(_)
-            )
-        };
-        let converts = |ty: &Type| match ty.primitive_behavior() {
-            Type::Number | Type::NumberLiteral(_) => true,
+        let is_error = |ty: &Type| match ty.peel() {
             Type::ClassRef { mangled, .. } => self
                 .resolver()
                 .is_subclass(mangled, &crate::mangle::prelude("Error")),
             _ => false,
         };
-        if is_string(lt) && converts(rt) {
+        let converts = |ty: &Type| match ty.primitive_behavior() {
+            Type::Number | Type::NumberLiteral(_) => true,
+            Type::Union(members) => members.iter().all(is_error),
+            other => is_error(other),
+        };
+        if lt.is_string_shaped() && converts(rt) {
             Some(ConcatOperand::Rhs)
-        } else if converts(lt) && is_string(rt) {
+        } else if converts(lt) && rt.is_string_shaped() {
             Some(ConcatOperand::Lhs)
         } else {
             None
@@ -1496,18 +1497,16 @@ impl Inferer<'_> {
             return Ok((lhs.0, rhs.0));
         }
         Ok(match self.concatenation_converts(lhs.1, rhs.1) {
-            Some(ConcatOperand::Lhs) => (self.converted_to_string(lhs, span)?, rhs.0),
-            Some(ConcatOperand::Rhs) => (lhs.0, self.converted_to_string(rhs, span)?),
+            Some(ConcatOperand::Lhs) => (
+                self.wrap_interpolation_in_to_string(lhs.0, lhs.1, span, span)?,
+                rhs.0,
+            ),
+            Some(ConcatOperand::Rhs) => (
+                lhs.0,
+                self.wrap_interpolation_in_to_string(rhs.0, rhs.1, span, span)?,
+            ),
             None => (lhs.0, rhs.0),
         })
-    }
-
-    fn converted_to_string(
-        &mut self,
-        (id, ty): (ExprId, &Type),
-        span: Span,
-    ) -> Result<ExprId, CompilerFailure> {
-        self.wrap_interpolation_in_to_string(id, ty, span, span)
     }
 
     /// `value as T` written against the expression's source. An operand other
@@ -1658,46 +1657,41 @@ impl Inferer<'_> {
     /// fix goes, and the rewrite to apply there. In a long `"a" + x + " " + flag`
     /// chain the whole left side is the string built so far, so underlining the
     /// operator's span would hide which operand to wrap.
-    fn string_concat_fix(
+    pub(super) fn string_concat_fix(
         &self,
-        lhs: ExprId,
+        lhs_span: Span,
         lt: &Type,
-        rhs: ExprId,
+        rhs_span: Span,
         rt: &Type,
-    ) -> Result<Option<(Span, String)>, CompilerFailure> {
-        let is_string = |ty: &Type| {
-            matches!(
-                ty.primitive_behavior(),
-                Type::String | Type::StringLiteral(_)
-            )
-        };
-        let (operand, ty) = if is_string(lt) && !is_string(rt) {
-            (rhs, rt)
-        } else if is_string(rt) && !is_string(lt) {
-            (lhs, lt)
+    ) -> Option<(Span, String)> {
+        let (span, ty) = if lt.is_string_shaped() && !rt.is_string_shaped() {
+            (rhs_span, rt)
+        } else if rt.is_string_shaped() && !lt.is_string_shaped() {
+            (lhs_span, lt)
         } else {
-            return Ok(None);
+            return None;
         };
-        // A nullable operand gets the narrowing hint instead.
+        // `String(null)` is no fix, and a nullable operand wants a guard; the
+        // narrowing hint names one when a guard was lost.
+        let is_nullish = |ty: &Type| matches!(ty.peel(), Type::Null | Type::Undefined | Type::Void);
         let behavior = ty.primitive_behavior();
-        if matches!(behavior, Type::Union(_)) || !has_to_string(behavior) {
-            return Ok(None);
+        let nullable = match behavior {
+            Type::Union(members) => members.iter().any(is_nullish),
+            other => is_nullish(other),
+        };
+        if nullable || !has_to_string(behavior) {
+            return None;
         }
-        let span = self
-            .ast
-            .try_expr(operand)
-            .map_err(super::arena_failure)?
-            .span;
         let rewrite = match self.short_source(span) {
             Some(source) => format!("write `String({source})`"),
             None => "wrap it with `String(...)`".to_string(),
         };
-        Ok(Some((
+        Some((
             span,
             format!(
                 "`+` converts only a number or an `Error` onto a string; {rewrite} to concatenate"
             ),
-        )))
+        ))
     }
 
     /// Arithmetic and bitwise operators other than `+`.
@@ -15403,6 +15397,30 @@ mod tests {
                 "`+` converts only a number or an `Error` onto a string; write `String(e.dir)` to concatenate"
             ]
         );
+    }
+
+    #[test]
+    fn string_plus_assign_boolean_names_the_fix() {
+        let (_, diags) =
+            run(r#"function f(s: string, flag: boolean): string { s += flag; return s; }"#);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(
+            diags[0].message,
+            "`+=` not defined for `string` and `boolean`"
+        );
+        assert_eq!(
+            diags[0].help,
+            vec![
+                "`+` converts only a number or an `Error` onto a string; write `String(flag)` to concatenate"
+            ]
+        );
+    }
+
+    #[test]
+    fn number_plus_assign_string_reports_once() {
+        let (_, diags) = run(r#"function f(n: number): number { n += "a"; return n; }"#);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert_eq!(diags[0].message, "expected `number`, got `string`");
     }
 
     #[test]
