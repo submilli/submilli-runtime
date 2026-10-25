@@ -23,7 +23,7 @@ pub struct SkillInfo {
     pub description: Option<String>,
 }
 
-/// A loaded skill. Read its bundled files through `submilli:skills.readFile`,
+/// A loaded skill. Read its bundled files through its `readFile(path)` method,
 /// never through `submilli:fs`: skills are not mounted on the virtual filesystem.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skill {
@@ -32,7 +32,7 @@ pub struct Skill {
     /// The skill's instructions.
     pub content: String,
     /// Bundled file names relative to this skill, accepted by `read_file`.
-    /// These are not filesystem paths; programs use `skills.readFile(name, path)`.
+    /// These are not filesystem paths; programs use `skill.readFile(path)`.
     /// The engine omits invalid paths without limiting the number of files.
     #[serde(default)]
     pub files: Vec<String>,

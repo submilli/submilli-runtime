@@ -120,14 +120,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_value_async(
         linker,
         MODULE_NAME,
-        crate::mangle::package_symbol(MODULE_NAME, "readFile"),
-        FuncType::new(&engine, [string.clone(), string.clone()], [string.clone()]),
+        crate::mangle::extend(
+            &crate::mangle::package_symbol(MODULE_NAME, "Skill"),
+            "readFile",
+        ),
+        FuncType::new(&engine, [object.clone(), string.clone()], [string.clone()]),
         |caller, params| {
             Box::pin(async move {
-                let name =
-                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "skills.readFile (name)")?;
+                let receiver = abi::backing_receiver(caller, abi_arg(params, 0)?)?;
+                let name = receiver
+                    .field(&mut *caller, S_NAME)
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+                let name = read_string_arg(&mut *caller, &name, "Skill.readFile (name)")?;
                 let path =
-                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "skills.readFile (path)")?;
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "Skill.readFile (path)")?;
                 read_file(caller, name, path).await
             })
         },
@@ -242,7 +248,7 @@ fn filter_skill_files(
     fuel::settle(caller, fuel::IO, path_bytes)
 }
 
-/// `readFile(name, path)`: in the order `load` follows, with the path checked
+/// `skill.readFile(path)`: in the order `load` follows, with the path checked
 /// beside the name.
 async fn read_file(
     caller: &mut wasmtime::Caller<'_, StoreData>,
