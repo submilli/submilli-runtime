@@ -253,7 +253,10 @@ mod unix {
     fn edit(path: &Path, from: &str, to: &str) {
         let text = std::fs::read_to_string(path).unwrap();
         assert!(text.contains(from), "`{from}` is in {}", path.display());
-        std::fs::write(path, text.replace(from, to)).unwrap();
+        // The watcher must see the complete edit, not a temporarily empty file.
+        let replacement = tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
+        std::fs::write(replacement.path(), text.replace(from, to)).unwrap();
+        replacement.persist(path).unwrap();
     }
 
     fn agent() -> ureq::Agent {
