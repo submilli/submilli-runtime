@@ -1,9 +1,12 @@
-//! Rebuild an installed package when the compiler that produced its wasm is
-//! not the compiler now loading it.
+//! Rebuild an installed package whose artifact schema is not the one this
+//! process writes.
 //!
-//! Codegen changes are assumed safe to replay. Unfinished durable runs therefore
-//! load the rebuilt packages. Dropping the server version from
-//! `runner::durable::COMPATIBILITY` belongs to SUB-1881, not this path.
+//! The release skill increments [`artifact::ARTIFACT_SCHEMA_VERSION`] on every
+//! runtime release, so a compiler change reaches installed packages then instead
+//! of leaving their wasm running. Codegen changes are assumed safe to replay.
+//! Unfinished durable runs therefore load the rebuilt packages. Dropping the
+//! server version from `runner::durable::COMPATIBILITY` belongs to SUB-1881,
+//! not this path.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -20,13 +23,8 @@ use crate::{Artifact, CapabilitySchema};
 const COMPLETE_MARKER: &str = "COMPLETE";
 const CACHE_KEY_FILE: &str = "cache-key";
 
-pub(crate) fn current_compiler() -> &'static str {
-    interpreter::compiler_id()
-}
-
 pub(crate) fn needs_rebuild(metadata: &ArtifactMetadata) -> bool {
     metadata.schema_version != artifact::ARTIFACT_SCHEMA_VERSION
-        || metadata.compiler.as_deref() != Some(current_compiler())
 }
 
 /// A package rebuilt from the sources retained in its artifact.
@@ -42,7 +40,8 @@ pub(crate) struct Recompiled {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct RecordedFailure {
-    compiler: String,
+    /// Schema this failure was recorded under. A later release retries.
+    schema_version: u32,
     /// Hash of the sources the failure was compiled from. A later install with
     /// different sources retries instead of keeping this error.
     sources: String,
@@ -65,7 +64,7 @@ pub(crate) fn recorded_failure(
     let Ok(recorded) = serde_json::from_slice::<RecordedFailure>(&bytes) else {
         return Ok(None);
     };
-    if recorded.compiler == current_compiler()
+    if recorded.schema_version == artifact::ARTIFACT_SCHEMA_VERSION
         && recorded.sources == source_hash(sources)
         && recorded.dependencies == dependencies
     {
@@ -87,7 +86,7 @@ pub(crate) fn record_failure(
         create_dir(parent)?;
     }
     let bytes = serde_json::to_vec(&RecordedFailure {
-        compiler: current_compiler().to_string(),
+        schema_version: artifact::ARTIFACT_SCHEMA_VERSION,
         sources: source_hash(sources),
         dependencies: dependencies.to_string(),
         detail: detail.to_string(),
@@ -133,14 +132,7 @@ pub(crate) fn dependency_key(dependencies: &[Artifact]) -> String {
         hasher.update([0]);
         hasher.update(artifact.metadata.package_version.as_bytes());
         hasher.update([0]);
-        hasher.update(
-            artifact
-                .metadata
-                .compiler
-                .as_deref()
-                .unwrap_or("")
-                .as_bytes(),
-        );
+        hasher.update(artifact.metadata.schema_version.to_le_bytes());
         hasher.update([0]);
         hasher.update(source_hash(&artifact.sources).as_bytes());
         hasher.update([0]);
@@ -337,8 +329,8 @@ pub(crate) fn publish(
     )
 }
 
-/// Replace `live` even when its stamp already matches. Install uses this so a
-/// same-compiler reinstall still writes the new sources, and so the write is
+/// Replace `live` even when its schema already matches. Install uses this so a
+/// same-schema reinstall still writes the new sources, and so the write is
 /// the same atomic swap as a rebuild.
 pub(crate) fn replace_installed(
     store_root: &Path,
@@ -507,7 +499,6 @@ pub(crate) fn recompile(
     );
     let mut metadata = identity.metadata.clone();
     metadata.schema_version = artifact::ARTIFACT_SCHEMA_VERSION;
-    metadata.compiler = Some(current_compiler().to_string());
     metadata.config = config;
     Ok(Recompiled {
         wasm: compiled.wasm,
@@ -931,7 +922,7 @@ mod tests {
         version: &str,
         sources: &[(&str, &str)],
         dependencies: &[(&str, &str)],
-        compiler: Option<&str>,
+        current: bool,
     ) {
         let dir = package_dir_under(root, name).expect("package dir");
         let mut declaration = PackageDeclaration::with_package(name);
@@ -944,7 +935,9 @@ mod tests {
                 .map(|(dependency, version)| ArtifactDependency::new(*dependency, *version))
                 .collect(),
         );
-        metadata.compiler = compiler.map(str::to_string);
+        if !current {
+            metadata.schema_version = artifact::ARTIFACT_SCHEMA_VERSION - 1;
+        }
         let sources = sources
             .iter()
             .map(|(path, text)| ArtifactSource {
@@ -986,7 +979,7 @@ mod tests {
             "1.0.0",
             &[("lib", LIB)],
             &[],
-            None,
+            false,
         );
         let store = PackageStore::new(owned.path()).with_fallback(fallback.path());
 
@@ -995,8 +988,8 @@ mod tests {
             .expect("first load publishes into the owned store");
 
         assert_eq!(
-            loaded.metadata.compiler.as_deref(),
-            Some(current_compiler())
+            loaded.metadata.schema_version,
+            artifact::ARTIFACT_SCHEMA_VERSION
         );
         assert!(
             !owned.path().join("@t").join("lib").exists(),
@@ -1017,20 +1010,16 @@ mod tests {
     }
 
     #[test]
-    fn an_older_stamp_is_recompiled_once() {
+    fn an_older_schema_is_recompiled_once() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(
-            root.path(),
-            "@t/lib",
-            "1.0.0",
-            &[("lib", LIB)],
-            &[],
-            Some("0.0.0+old"),
-        );
+        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], false);
         let store = PackageStore::new(root.path());
 
         let first = store.load("@t/lib").expect("rebuild on load");
-        assert_eq!(first.metadata.compiler.as_deref(), Some(current_compiler()));
+        assert_eq!(
+            first.metadata.schema_version,
+            artifact::ARTIFACT_SCHEMA_VERSION
+        );
         assert_ne!(first.wasm, b"STALE-WASM");
         let mtime = wasm_mtime(root.path(), "@t/lib");
 
@@ -1041,9 +1030,9 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_stamp_is_recompiled_at_startup() {
+    fn a_previous_schema_is_recompiled_at_startup() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], None);
+        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], false);
         let store = PackageStore::new(root.path());
 
         let report = store.reconcile_installed();
@@ -1051,8 +1040,8 @@ mod tests {
         assert!(report.failures.is_empty(), "{:?}", report.failures);
         let loaded = store.load("@t/lib").expect("load after startup");
         assert_eq!(
-            loaded.metadata.compiler.as_deref(),
-            Some(current_compiler())
+            loaded.metadata.schema_version,
+            artifact::ARTIFACT_SCHEMA_VERSION
         );
         assert_ne!(loaded.wasm, b"STALE-WASM");
     }
@@ -1066,7 +1055,7 @@ mod tests {
             "1.0.0",
             &[("lib", LIB)],
             &[("@t/old", "1.0.0")],
-            Some(current_compiler()),
+            true,
         );
         write_stale(
             root.path(),
@@ -1074,7 +1063,7 @@ mod tests {
             "1.0.0",
             &[("lib", LIB)],
             &[("@t/new", "1.0.0")],
-            None,
+            false,
         );
         let store = PackageStore::new(root.path());
 
@@ -1088,7 +1077,7 @@ mod tests {
     #[test]
     fn a_current_middle_package_still_supplies_its_dependency() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(root.path(), "@t/leaf", "1.0.0", &[("lib", LIB)], &[], None);
+        write_stale(root.path(), "@t/leaf", "1.0.0", &[("lib", LIB)], &[], false);
         write_stale(
             root.path(),
             "@t/mid",
@@ -1098,7 +1087,7 @@ mod tests {
                 "import { hello } from \"@t/leaf\";\nexport function mid(): string {\n    return hello();\n}\n",
             )],
             &[("@t/leaf", "1.0.0")],
-            None,
+            false,
         );
         let store = PackageStore::new(root.path());
         store.reconcile_installed();
@@ -1111,15 +1100,15 @@ mod tests {
                 "import { mid } from \"@t/mid\";\nexport function top(): string {\n    return mid();\n}\n",
             )],
             &[("@t/mid", "1.0.0")],
-            Some("0.0.0+old"),
+            false,
         );
 
         let loaded = store
             .load("@t/top")
             .expect("top rebuilds against the current middle package");
         assert_eq!(
-            loaded.metadata.compiler.as_deref(),
-            Some(current_compiler())
+            loaded.metadata.schema_version,
+            artifact::ARTIFACT_SCHEMA_VERSION
         );
         assert_ne!(loaded.wasm, b"STALE-WASM");
     }
@@ -1127,7 +1116,7 @@ mod tests {
     #[test]
     fn a_dependency_chain_rebuilds_in_order_and_a_broken_package_does_not_hide_the_others() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(root.path(), "@t/dep", "1.0.0", &[("lib", LIB)], &[], None);
+        write_stale(root.path(), "@t/dep", "1.0.0", &[("lib", LIB)], &[], false);
         write_stale(
             root.path(),
             "@t/app",
@@ -1137,7 +1126,7 @@ mod tests {
                 "import { hello } from \"@t/dep\";\nexport function greet(): string {\n    return hello();\n}\n",
             )],
             &[("@t/dep", "1.0.0")],
-            None,
+            false,
         );
         write_stale(
             root.path(),
@@ -1145,7 +1134,7 @@ mod tests {
             "1.0.0",
             &[("lib", "export function broken( {\n")],
             &[],
-            None,
+            false,
         );
         write_stale(
             root.path(),
@@ -1156,9 +1145,9 @@ mod tests {
                 "import { broken } from \"@t/bad\";\nexport function go(): string {\n    return \"no\";\n}\n",
             )],
             &[("@t/bad", "1.0.0")],
-            None,
+            false,
         );
-        write_stale(root.path(), "@t/ok", "1.0.0", &[("lib", LIB)], &[], None);
+        write_stale(root.path(), "@t/ok", "1.0.0", &[("lib", LIB)], &[], false);
         let store = PackageStore::new(root.path());
 
         let report = store.reconcile_installed();
@@ -1181,11 +1170,7 @@ mod tests {
             .iter()
             .find(|failure| failure.name == "@t/bad")
             .expect("bad package reported");
-        assert!(
-            bad.compiler.contains(env!("CARGO_PKG_VERSION")),
-            "{}",
-            bad.compiler
-        );
+        assert_eq!(bad.schema_version, artifact::ARTIFACT_SCHEMA_VERSION);
         assert!(
             bad.detail.contains("broken") || !bad.detail.is_empty(),
             "{}",
@@ -1204,7 +1189,13 @@ mod tests {
             .expect_err("broken package stays unavailable");
         let text = error.to_string();
         assert!(text.contains("@t/bad"), "{text}");
-        assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+        assert!(
+            text.contains(&format!(
+                "artifact schema {}",
+                artifact::ARTIFACT_SCHEMA_VERSION
+            )),
+            "{text}"
+        );
         assert!(matches!(error, PackageStoreError::Unavailable { .. }));
         assert_eq!(
             fs::read(
@@ -1220,13 +1211,19 @@ mod tests {
     #[test]
     fn missing_sources_refuse_the_stale_wasm() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(root.path(), "@t/bare", "1.0.0", &[], &[], None);
+        write_stale(root.path(), "@t/bare", "1.0.0", &[], &[], false);
         let store = PackageStore::new(root.path());
 
         let error = store.load("@t/bare").expect_err("missing sources");
         let text = error.to_string();
         assert!(text.contains("@t/bare"), "{text}");
-        assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+        assert!(
+            text.contains(&format!(
+                "artifact schema {}",
+                artifact::ARTIFACT_SCHEMA_VERSION
+            )),
+            "{text}"
+        );
         assert!(text.contains("sources are missing"), "{text}");
         assert_eq!(
             fs::read(
@@ -1242,14 +1239,7 @@ mod tests {
     #[test]
     fn a_crash_between_renames_leaves_a_complete_artifact() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(
-            root.path(),
-            "@t/lib",
-            "1.0.0",
-            &[("lib", LIB)],
-            &[],
-            Some(current_compiler()),
-        );
+        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], true);
         let live = package_dir_under(root.path(), "@t/lib").unwrap();
         let previous = previous_dir(root.path(), "@t/lib", OWNED_SLOT).unwrap();
         fs::create_dir_all(previous.parent().unwrap()).unwrap();
@@ -1285,14 +1275,7 @@ mod tests {
     #[test]
     fn an_incomplete_staging_directory_keeps_the_old_artifact() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(
-            root.path(),
-            "@t/lib",
-            "1.0.0",
-            &[("lib", LIB)],
-            &[],
-            Some(current_compiler()),
-        );
+        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], true);
         let live = package_dir_under(root.path(), "@t/lib").unwrap();
         let staging = staging_parent(root.path(), "@t/lib", OWNED_SLOT)
             .unwrap()
@@ -1310,14 +1293,7 @@ mod tests {
     #[test]
     fn concurrent_publish_leaves_one_complete_artifact() {
         let root = tempfile::tempdir().unwrap();
-        write_stale(
-            root.path(),
-            "@t/lib",
-            "1.0.0",
-            &[("lib", LIB)],
-            &[],
-            Some("0.0.0+old"),
-        );
+        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], false);
         let store = PackageStore::new(root.path());
         let identity =
             artifact::read_package_identity(&package_dir_under(root.path(), "@t/lib").unwrap())
@@ -1326,7 +1302,7 @@ mod tests {
         let first = Arc::new(compiled);
         let mut second = first.wasm.clone();
         second.extend_from_slice(b"-other");
-        let mut other = Recompiled {
+        let other = Recompiled {
             wasm: second,
             type_info: first.type_info.clone(),
             capabilities: first.capabilities.clone(),
@@ -1335,7 +1311,6 @@ mod tests {
             documentation: first.documentation.clone(),
             sources: first.sources.clone(),
         };
-        other.metadata.compiler = Some(current_compiler().to_string());
         let live = package_dir_under(root.path(), "@t/lib").unwrap();
         let root_path = root.path().to_path_buf();
         let left = {
@@ -1366,8 +1341,8 @@ mod tests {
             &package_dir_under(root.path(), "@t/lib").unwrap()
         ));
         assert_eq!(
-            artifact.metadata.compiler.as_deref(),
-            Some(current_compiler())
+            artifact.metadata.schema_version,
+            artifact::ARTIFACT_SCHEMA_VERSION
         );
     }
 }

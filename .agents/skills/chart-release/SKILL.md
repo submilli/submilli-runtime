@@ -32,7 +32,8 @@ includes a new runtime; that workflow already publishes its chart.
   verify its default runtime image is already published and anonymously readable.
   If main points at an unreleased runtime, report that prerequisite; do not
   silently downgrade `appVersion` or publish a runtime as part of this task.
-- Keep Cargo versions and runtime tags unchanged. Update chart install pins and
+- Keep Cargo versions, runtime tags, and `ARTIFACT_SCHEMA_VERSION` unchanged.
+  Update chart install pins and
   compatibility notes in `charts/submilli/README.md`,
   `charts/submilli/PUBLISHING.md`, and
   `docs/part-4-server/07-deploy-on-kubernetes.md`. Read `docs/WRITING.md`

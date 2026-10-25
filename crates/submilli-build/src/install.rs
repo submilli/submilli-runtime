@@ -267,7 +267,7 @@ fn compile_repo(
             Ok(artifact) => artifact.metadata.config.overrides,
             Err(PackageStoreError::MissingPackage { .. }) => std::collections::BTreeMap::new(),
             Err(error) if error.is_incomplete_artifact() => std::collections::BTreeMap::new(),
-            // A compiler mismatch with no sources must not run the old wasm, but
+            // A schema mismatch with no sources must not run the old wasm, but
             // the saved overrides are still the inputs this install should keep.
             Err(PackageStoreError::Unavailable { .. }) => {
                 crate::package_store::saved_overrides(store, package.name.as_str())

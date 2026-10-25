@@ -108,8 +108,8 @@ impl PackageStore {
         self.load_with_rebuild(name, budget, &mut rebuild)
     }
 
-    /// Rebuild every installed package whose wasm was produced by another
-    /// compiler, in dependency order. A package that cannot be rebuilt is
+    /// Rebuild every installed package whose artifact schema is not the current
+    /// one, in dependency order. A package that cannot be rebuilt is
     /// reported and skipped; packages that do not depend on it are still rebuilt.
     ///
     /// Does not execute stale wasm. A fallback package is published into the
@@ -121,7 +121,7 @@ impl PackageStore {
             if let Err(error) = self.ensure_current(&name, &mut state) {
                 failures.push(PackageUnavailable {
                     name,
-                    compiler: crate::rebuild::current_compiler().to_string(),
+                    schema_version: crate::artifact::ARTIFACT_SCHEMA_VERSION,
                     detail: error.to_string(),
                 });
             }
@@ -144,12 +144,22 @@ impl PackageStore {
         // roots, as a fallback rebuild does.
         let mut saw_stale = false;
         for root in self.roots() {
-            if let Some(artifact) = self.load_from(root, name, budget)? {
-                if !crate::rebuild::needs_rebuild(&artifact.metadata) {
+            match self.load_from(root, name, budget) {
+                Ok(Some(artifact)) if !crate::rebuild::needs_rebuild(&artifact.metadata) => {
                     return Ok(artifact);
                 }
-                saw_stale = true;
-                break;
+                Ok(Some(_)) => {
+                    saw_stale = true;
+                    break;
+                }
+                // A release bump rejects the old files before they can be decoded
+                // as a runnable artifact. The rebuilt copy, if any, is in the cache.
+                Err(error) if error.is_unsupported_schema() => {
+                    saw_stale = true;
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error),
             }
         }
         if let Some(artifact) = rebuild.artifacts.get(name)
@@ -167,7 +177,7 @@ impl PackageStore {
         if saw_stale {
             return Err(self.unavailable(
                 name,
-                "installed wasm does not match the compiler; refusing to run it",
+                "installed wasm is from another artifact schema; refusing to run it",
             ));
         }
         Err(self.missing(name, self.roots().map(Path::to_path_buf).collect()))
@@ -648,7 +658,7 @@ impl PackageStore {
                 if crate::rebuild::needs_rebuild(&artifact.metadata) {
                     return Err(self.unavailable(
                         name,
-                        "installed wasm does not match the compiler; refusing to run it",
+                        "installed wasm is from another artifact schema; refusing to run it",
                     ));
                 }
                 state.artifacts.insert(name.to_string(), artifact);
@@ -661,7 +671,7 @@ impl PackageStore {
     fn unavailable(&self, name: &str, detail: impl Into<String>) -> PackageStoreError {
         PackageStoreError::Unavailable {
             name: name.to_string(),
-            compiler: crate::rebuild::current_compiler().to_string(),
+            schema_version: crate::artifact::ARTIFACT_SCHEMA_VERSION,
             detail: detail.into(),
         }
     }
@@ -794,11 +804,11 @@ pub enum PackageStoreError {
         required: String,
         found: String,
     },
-    /// The installed wasm is not from this compiler, and it could not be rebuilt.
-    /// The stale module is not returned.
+    /// The installed wasm is from another artifact schema, and it could not be
+    /// rebuilt. The stale module is not returned.
     Unavailable {
         name: String,
-        compiler: String,
+        schema_version: u32,
         detail: String,
     },
 }
@@ -811,11 +821,11 @@ pub struct PackageReconcile {
     pub failures: Vec<PackageUnavailable>,
 }
 
-/// One installed package that cannot be loaded under the current compiler.
+/// One installed package that cannot be loaded under the current artifact schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PackageUnavailable {
     pub name: String,
-    pub compiler: String,
+    pub schema_version: u32,
     pub detail: String,
 }
 
@@ -921,11 +931,11 @@ impl fmt::Display for PackageStoreError {
             ),
             PackageStoreError::Unavailable {
                 name,
-                compiler,
+                schema_version,
                 detail,
             } => write!(
                 f,
-                "package `{name}` is unavailable under compiler {compiler}: {detail}"
+                "package `{name}` is unavailable under artifact schema {schema_version}: {detail}"
             ),
         }
     }
@@ -951,9 +961,8 @@ fn write_available(f: &mut fmt::Formatter<'_>, available: &[String]) -> fmt::Res
 }
 
 impl PackageStoreError {
-    /// Whether the package directory exists but lacks one of the artifact's
-    /// files: what an interrupted install leaves behind. A fresh install may
-    /// overwrite such a directory as if the package were absent.
+    /// The artifact's schema is not the one this process writes. Install may
+    /// replace it; a load rebuilds from retained sources instead.
     pub fn is_unsupported_schema(&self) -> bool {
         matches!(
             self,
@@ -964,6 +973,9 @@ impl PackageStoreError {
         )
     }
 
+    /// Whether the package directory exists but lacks one of the artifact's
+    /// files: what an interrupted install leaves behind. A fresh install may
+    /// overwrite such a directory as if the package were absent.
     pub fn is_incomplete_artifact(&self) -> bool {
         matches!(
             self,
@@ -1004,7 +1016,7 @@ pub fn default_package_store_dir() -> PathBuf {
 }
 
 /// Configuration recorded on an installed package, without executing its wasm.
-/// Used when a compiler mismatch cannot be rebuilt.
+/// Used when an artifact-schema mismatch cannot be rebuilt.
 pub fn saved_overrides(
     store: &PackageStore,
     name: &str,

@@ -32,9 +32,12 @@ use crate::CapabilitySchema;
 // v12: a package exporting `finalizer` also exports the check embedders restore
 // its argument through; without it, cleanup cannot run.
 //
-// The schema version is only the shape of the metadata and declaration files.
-// It does not decide whether `pkg.wasm` may run. That is [`ArtifactMetadata::compiler`]:
-// a missing or different stamp is rebuilt from the retained sources.
+// The release skill increments this on every runtime release, even when the
+// metadata and declaration shapes are unchanged. A mismatch means `pkg.wasm`
+// was produced by another release: the package store rebuilds it from the
+// retained sources and does not execute it. The number still gates those file
+// shapes, so a reader that asks for a runnable artifact refuses a version it
+// does not understand instead of decoding it with the wrong types.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 12;
 
 const WASM_FILE: &str = "pkg.wasm";
@@ -156,12 +159,6 @@ pub struct ArtifactMetadata {
     /// additive — older artifacts (no `source`) read back as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<PackageSource>,
-    /// Compiler that produced `pkg.wasm`: workspace version plus a hash of the
-    /// Cargo.toml and Cargo.lock packaged with that compiler. Missing on
-    /// artifacts written before stamps existed. A mismatch does not make this
-    /// file unreadable; the package store rebuilds from [`Artifact::sources`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compiler: Option<String>,
 }
 
 /// Provenance for a package installed from an external source.
@@ -199,7 +196,6 @@ impl ArtifactMetadata {
             keywords: Vec::new(),
             dependencies,
             source: None,
-            compiler: Some(interpreter::compiler_id().to_string()),
         };
         metadata.sort_dependencies();
         metadata
@@ -221,7 +217,6 @@ impl ArtifactMetadata {
             keywords,
             dependencies,
             source: None,
-            compiler: Some(interpreter::compiler_id().to_string()),
         };
         metadata.sort_dependencies();
         metadata
@@ -499,8 +494,8 @@ pub fn read_installed_sources(dir: impl AsRef<Path>) -> Result<InstalledSources,
     })
 }
 
-/// Metadata, sources, and docs. A schema or compiler mismatch is not a read
-/// failure: the wasm is not loaded, so a caller can rebuild without executing it.
+/// Metadata, sources, and docs. A schema mismatch is not a read failure: the
+/// wasm is not loaded, so a caller can rebuild without executing it.
 pub(crate) struct PackageIdentity {
     pub metadata: ArtifactMetadata,
     pub documentation: String,

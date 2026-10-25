@@ -540,15 +540,15 @@ impl AppState {
         if !report.rebuilt.is_empty() {
             tracing::info!(
                 packages = %report.rebuilt.join(", "),
-                compiler = interpreter::compiler_id(),
-                "recompiled installed packages for the current compiler"
+                schema_version = submilli_build::ARTIFACT_SCHEMA_VERSION,
+                "recompiled installed packages for the current artifact schema"
             );
             self.evict_all_prepared_packages();
         }
         for failure in &report.failures {
             tracing::error!(
                 package = %failure.name,
-                compiler = %failure.compiler,
+                schema_version = failure.schema_version,
                 error = %failure.detail,
                 "installed package is unavailable"
             );

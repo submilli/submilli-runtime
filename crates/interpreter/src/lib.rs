@@ -43,9 +43,6 @@ pub mod typechecker;
 pub mod typed_ast;
 pub mod types;
 
-mod compiler_id;
-pub use compiler_id::compiler_id;
-
 pub use asi::Asi;
 pub use ast::{
     AccessorKind, ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, BindingKind, CatchClause,

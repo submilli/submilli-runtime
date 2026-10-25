@@ -6,10 +6,10 @@ use submilli_build::{
 
 use super::*;
 
-/// Boot rebuilds a package that has no compiler stamp, and a package that cannot
-/// be rebuilt does not fail startup or take the others down.
+/// Boot rebuilds a package from a previous artifact schema, and a package that
+/// cannot be rebuilt does not fail startup or take the others down.
 #[tokio::test]
-async fn boot_recompiles_unstamped_packages_and_keeps_serving_the_rest() {
+async fn boot_recompiles_previous_schema_packages_and_keeps_serving_the_rest() {
     let packages = tempfile::tempdir().unwrap();
     write_package(
         packages.path(),
@@ -35,8 +35,8 @@ async fn boot_recompiles_unstamped_packages_and_keeps_serving_the_rest() {
         .load("@t/ok")
         .expect("rebuilt package loads");
     assert_eq!(
-        ok.metadata.compiler.as_deref(),
-        Some(interpreter::compiler_id())
+        ok.metadata.schema_version,
+        submilli_build::ARTIFACT_SCHEMA_VERSION
     );
     assert_ne!(ok.wasm, b"STALE-WASM");
     let error = state
@@ -45,7 +45,13 @@ async fn boot_recompiles_unstamped_packages_and_keeps_serving_the_rest() {
         .expect_err("broken package stays unavailable");
     let text = error.to_string();
     assert!(text.contains("@t/bad"), "{text}");
-    assert!(text.contains(interpreter::compiler_id()), "{text}");
+    assert!(
+        text.contains(&format!(
+            "artifact schema {}",
+            submilli_build::ARTIFACT_SCHEMA_VERSION
+        )),
+        "{text}"
+    );
 }
 
 fn write_package(root: &std::path::Path, name: &str, source: &str) {
@@ -55,7 +61,7 @@ fn write_package(root: &std::path::Path, name: &str, source: &str) {
     let mut declaration = PackageDeclaration::with_package(name);
     declaration.refresh_shapes();
     let mut metadata = ArtifactMetadata::new(name, "1.0.0", Vec::<ArtifactDependency>::new());
-    metadata.compiler = None;
+    metadata.schema_version = submilli_build::ARTIFACT_SCHEMA_VERSION - 1;
     write_package_artifact_with_docs_and_sources(
         dir,
         b"STALE-WASM",

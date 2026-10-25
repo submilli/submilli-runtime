@@ -693,7 +693,10 @@ fn existing_artifacts_without_configuration_metadata_remain_compatible() {
         artifact.metadata.config,
         submilli_build::PackageConfig::default()
     );
-    assert_eq!(artifact.metadata.schema_version, 12);
+    assert_eq!(
+        artifact.metadata.schema_version,
+        submilli_build::ARTIFACT_SCHEMA_VERSION
+    );
     let report = install_from_dir(&store, repo.path(), None, &source, false).unwrap();
     assert_eq!(
         report.up_to_date,
