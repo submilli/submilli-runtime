@@ -2,23 +2,14 @@ import { get, post, Response } from "submilli:http";
 import { encodeQuery } from "submilli:url";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
+import { SlackError } from "./error";
+import { attachMessageMetadata, configuredMessageMetadata, MessageMetadata } from "./metadata";
+
+export { SlackError } from "./error";
 
 const API = "https://slack.com/api/";
 // One Slack user ID: a `U` or `W` followed by capital letters and digits.
 const USER_ID = /^[UW][A-Z0-9]+$/;
-
-/** A Slack transport or application error with a stable Slack error code. */
-export class SlackError extends Error {
-    code: string;
-    status: number;
-
-    constructor(code: string, message: string, status: number) {
-        super(message);
-        this.name = "SlackError";
-        this.code = code;
-        this.status = status;
-    }
-}
 
 /** Identity represented by `SLACK_BOT_TOKEN`. */
 export interface SlackIdentity {
@@ -245,6 +236,7 @@ export function getIdentity(): SlackIdentity {
  * Post a message as the bot and return Slack's stored message.
  * Set `threadTs` to reply in a thread. The bot must be allowed to post in the
  * target conversation, which normally means it must already be a member.
+ * Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
  * @param input Message text, destination, and optional thread/unfurl settings.
   * @returns The message as stored by Slack, including its `ts` for later updates or threading.
  * @capability slack.com/bot/sendMessage { channelId: string }
@@ -252,19 +244,19 @@ export function getIdentity(): SlackIdentity {
 export function sendMessage(input: SendMessageInput): SlackMessage {
     const { channelId, text, threadTs, unfurlLinks, unfurlMedia } = input;
     check("slack.com/bot/sendMessage", { channelId: channelId });
+    const metadata = configuredMessageMetadata();
     const body: MessageWriteRequest = { channel: channelId, text: text };
     if (threadTs !== undefined) body.thread_ts = threadTs;
     if (unfurlLinks !== undefined) body.unfurl_links = unfurlLinks;
     if (unfurlMedia !== undefined) body.unfurl_media = unfurlMedia;
-    const data = slackPost("chat.postMessage", body).json() as MessageResponse;
-    requireOk(data, 200);
-    return messageFrom(data.message);
+    return postMessage(body, metadata);
 }
 
 /**
  * Open or resume a 1:1 DM with a workspace user, send text as the bot, and
  * return Slack's stored message. The recipient must not be the bot itself.
  * Requires Slack's `im:write` and `chat:write` bot-token scopes.
+ * Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
  * @param userId Workspace user ID that should receive the message.
  * @param text Message text.
   * @returns The message as stored by Slack, posted in the DM conversation.
@@ -273,11 +265,10 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
 export function sendDirectMessage(userId: string, text: string): SlackMessage {
     const recipientId = singleUserId(userId);
     check("slack.com/bot/sendDirectMessage", { userId: recipientId });
+    const metadata = configuredMessageMetadata();
     const opened = slackPost("conversations.open", { users: recipientId }).json() as ConversationResponse;
     requireOk(opened, 200);
-    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
-    requireOk(data, 200);
-    return messageFrom(data.message);
+    return postMessage({ channel: opened.channel.id, text: text }, metadata);
 }
 
 /**
@@ -285,6 +276,7 @@ export function sendDirectMessage(userId: string, text: string): SlackMessage {
  * text as the bot, and return Slack's stored message. Do not include the bot's
  * own user ID.
  * Requires Slack's `mpim:write` and `chat:write` bot-token scopes.
+ * Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
  * @param userIds Workspace user IDs that should receive the message.
  * @param text Message text.
   * @returns The message as stored by Slack, posted in the group DM conversation.
@@ -294,16 +286,17 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
     const participantIds: string[] = [];
     for (const userId of userIds) participantIds.push(singleUserId(userId));
     check("slack.com/bot/sendGroupDirectMessage", { userIds: participantIds });
+    const metadata = configuredMessageMetadata();
     const opened = slackPost("conversations.open", { users: participantIds.join(",") }).json() as ConversationResponse;
     requireOk(opened, 200);
-    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
-    requireOk(data, 200);
-    return messageFrom(data.message);
+    return postMessage({ channel: opened.channel.id, text: text }, metadata);
 }
 
 /**
  * Replace the text of a message authored by this bot and return the refreshed message.
  * Slack does not allow a bot token to edit messages authored by another user or app.
+ * Metadata is omitted: Slack keeps the message's existing metadata, and an empty
+ * object would remove it. This does not read `SLACK_BOT_MESSAGE_METADATA`.
  * @param ref Channel and timestamp of the bot-authored message.
  * @param text Replacement message text.
   * @returns The edited message, re-read from Slack after the update.
@@ -339,6 +332,14 @@ interface MessageWriteRequest {
     thread_ts?: string;
     unfurl_links?: boolean;
     unfurl_media?: boolean;
+    metadata?: MessageMetadata;
+}
+
+function postMessage(body: MessageWriteRequest, metadata: MessageMetadata | undefined): SlackMessage {
+    attachMessageMetadata(body, metadata);
+    const data = slackPost("chat.postMessage", body).json() as MessageResponse;
+    requireOk(data, 200);
+    return messageFrom(data.message);
 }
 
 /**

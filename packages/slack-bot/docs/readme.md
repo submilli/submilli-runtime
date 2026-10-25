@@ -75,6 +75,15 @@ inbound-event loop, scheduled-message API, views, file upload, or admin API.
 Credentials are supplied internally. Never request, accept, or pass a Slack
 token in package calls.
 
+<!-- submilli:if any="slack.com/bot/sendMessage slack.com/bot/sendDirectMessage slack.com/bot/sendGroupDirectMessage" -->
+
+New posts include operator-configured message metadata when
+`SLACK_BOT_MESSAGE_METADATA` is set. Callers do not pass it. A malformed
+value throws `SlackError` with code `invalid_metadata` before any Slack
+request. Updating a message does not change its metadata.
+
+<!-- submilli:endif -->
+
 <!-- submilli:if any="slack.com/bot/sendDirectMessage slack.com/bot/openDirectMessage slack.com/bot/sendGroupDirectMessage slack.com/bot/openGroupDirectMessage" -->
 
 A direct-message recipient is one Slack user ID such

@@ -67,23 +67,23 @@ provides:
     channelId:
       type: string
 - name: slack.com/bot/sendDirectMessage
-  description: Open or resume a 1:1 DM with a workspace user, send text as the bot, and return Slack's stored message. The recipient must not be the bot itself. Requires Slack's `im:write` and `chat:write` bot-token scopes.
+  description: Open or resume a 1:1 DM with a workspace user, send text as the bot, and return Slack's stored message. The recipient must not be the bot itself. Requires Slack's `im:write` and `chat:write` bot-token scopes. Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
   fields:
     userId:
       type: string
 - name: slack.com/bot/sendGroupDirectMessage
-  description: Open or resume a multi-person direct message with 2–8 workspace users, send text as the bot, and return Slack's stored message. Do not include the bot's own user ID. Requires Slack's `mpim:write` and `chat:write` bot-token scopes.
+  description: Open or resume a multi-person direct message with 2–8 workspace users, send text as the bot, and return Slack's stored message. Do not include the bot's own user ID. Requires Slack's `mpim:write` and `chat:write` bot-token scopes. Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
   fields:
     userIds:
       type: string[]
       description: Workspace user IDs that should receive the message.
 - name: slack.com/bot/sendMessage
-  description: Post a message as the bot and return Slack's stored message. Set `threadTs` to reply in a thread. The bot must be allowed to post in the target conversation, which normally means it must already be a member.
+  description: Post a message as the bot and return Slack's stored message. Set `threadTs` to reply in a thread. The bot must be allowed to post in the target conversation, which normally means it must already be a member. Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
   fields:
     channelId:
       type: string
 - name: slack.com/bot/updateMessage
-  description: Replace the text of a message authored by this bot and return the refreshed message. Slack does not allow a bot token to edit messages authored by another user or app.
+  description: 'Replace the text of a message authored by this bot and return the refreshed message. Slack does not allow a bot token to edit messages authored by another user or app. Metadata is omitted: Slack keeps the message''s existing metadata, and an empty object would remove it. This does not read `SLACK_BOT_MESSAGE_METADATA`.'
   fields:
     channelId:
       type: string
@@ -94,3 +94,5 @@ requires:
   filter: host == "slack.com"
 - capability: secrets.get
   filter: name == "SLACK_BOT_TOKEN"
+- capability: variables.get
+  filter: name == "SLACK_BOT_MESSAGE_METADATA"

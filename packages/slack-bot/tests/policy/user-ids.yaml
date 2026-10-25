@@ -3,6 +3,9 @@ name: slack-bot-user-ids-test
 packages:
   - '@submilli/slack-bot'
 default: deny
+variables:
+  # Granted and unset, so a send that passes the user-ID check still reaches secrets.get.
+  SLACK_BOT_MESSAGE_METADATA: {}
 permissions:
   main:
     - capability: slack.com/bot/sendDirectMessage
@@ -19,4 +22,8 @@ permissions:
       action: allow
   # Deliberate sentinel: an allowed call must reach secrets.get, which is
   # denied here before a token can be read or a request can be sent.
-  '@submilli/slack-bot': []
+  # variables.get is granted so a new post can see that metadata is unset.
+  '@submilli/slack-bot':
+    - capability: variables.get
+      filter: name == "SLACK_BOT_MESSAGE_METADATA"
+      action: allow

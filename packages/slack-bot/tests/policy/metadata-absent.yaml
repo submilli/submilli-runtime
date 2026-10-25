@@ -1,0 +1,21 @@
+kind: blueprint
+name: slack-bot-metadata-absent
+packages:
+  - '@submilli/slack-bot'
+default: deny
+variables:
+  SLACK_BOT_MESSAGE_METADATA: {}
+permissions:
+  main:
+    - capability: slack.com/bot/sendMessage
+      action: allow
+    - capability: slack.com/bot/sendDirectMessage
+      action: allow
+    - capability: slack.com/bot/sendGroupDirectMessage
+      action: allow
+    - capability: slack.com/bot/updateMessage
+      action: allow
+  '@submilli/slack-bot':
+    - capability: variables.get
+      filter: name == "SLACK_BOT_MESSAGE_METADATA"
+      action: allow

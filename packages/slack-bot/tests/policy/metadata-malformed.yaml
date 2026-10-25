@@ -1,0 +1,24 @@
+kind: blueprint
+name: slack-bot-metadata-malformed
+packages:
+  - '@submilli/slack-bot'
+default: deny
+variables:
+  SLACK_BOT_MESSAGE_METADATA:
+    default: "[]"
+permissions:
+  main:
+    - capability: slack.com/bot/sendMessage
+      action: allow
+    - capability: slack.com/bot/sendDirectMessage
+      action: allow
+    - capability: slack.com/bot/sendGroupDirectMessage
+      action: allow
+    - capability: slack.com/bot/updateMessage
+      action: allow
+  # The package may read the variable. secrets.get stays denied, so a send that
+  # accepts metadata stops there, and a malformed value must fail before that.
+  '@submilli/slack-bot':
+    - capability: variables.get
+      filter: name == "SLACK_BOT_MESSAGE_METADATA"
+      action: allow

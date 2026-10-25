@@ -1,0 +1,20 @@
+kind: blueprint
+name: slack-bot-metadata-denied
+packages:
+  - '@submilli/slack-bot'
+default: deny
+variables:
+  SLACK_BOT_MESSAGE_METADATA:
+    default: '{"event_type":"task_created","event_payload":{"id":"11223"}}'
+permissions:
+  main:
+    - capability: slack.com/bot/sendMessage
+      action: allow
+    - capability: slack.com/bot/sendDirectMessage
+      action: allow
+    - capability: slack.com/bot/sendGroupDirectMessage
+      action: allow
+    - capability: slack.com/bot/updateMessage
+      action: allow
+  # No variables.get grant. A configured value must not be dropped as if absent.
+  '@submilli/slack-bot': []
