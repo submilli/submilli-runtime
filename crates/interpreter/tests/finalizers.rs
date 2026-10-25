@@ -140,7 +140,7 @@ impl Run {
             value,
         };
         let result = invoke_finalizer_async(&mut store, &linked, call).await;
-        store.data_mut().finish_blocking_work().await.unwrap();
+        store.data_mut().blocking_work.finish().await.unwrap();
         let console = String::from_utf8(self.console.0.lock().unwrap().clone()).unwrap();
         let calls = self.policy.calls.lock().unwrap().clone();
         Outcome {
@@ -407,7 +407,7 @@ export function finalizer(key: string, value: string): void {
             .is_err(),
         "the finalizer spins until it is dropped"
     );
-    store.data_mut().finish_blocking_work().await.unwrap();
+    store.data_mut().blocking_work.finish().await.unwrap();
 }
 
 #[tokio::test]

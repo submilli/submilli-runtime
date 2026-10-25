@@ -75,51 +75,6 @@ impl FilesystemError {
     }
 }
 
-/// Own blocking-pool work until completion, including after caller cancellation.
-/// A later operation drains its predecessor before dispatch; execution cleanup
-/// calls `finish` before releasing the filesystem's roots and resource guards.
-#[derive(Clone, Default)]
-pub struct FilesystemWorkers {
-    pending: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-}
-
-impl FilesystemWorkers {
-    pub async fn run<T: Send + 'static>(
-        &self,
-        operation: impl FnOnce() -> Result<T, FilesystemError> + Send + 'static,
-    ) -> Result<T, FilesystemError> {
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|error| FilesystemError::Backend(Box::new(error)))?;
-        let mut pending = self.pending.lock().await;
-        finish_worker(&mut pending).await?;
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        *pending = Some(runtime.spawn_blocking(move || {
-            // If cancelled, destroy the result and its guards before joining.
-            let _ = sender.send(operation());
-        }));
-        finish_worker(&mut pending).await?;
-        receiver
-            .await
-            .map_err(|error| FilesystemError::Backend(Box::new(error)))?
-    }
-
-    pub async fn finish(&self) -> Result<(), FilesystemError> {
-        finish_worker(&mut *self.pending.lock().await).await
-    }
-}
-
-async fn finish_worker(
-    pending: &mut Option<tokio::task::JoinHandle<()>>,
-) -> Result<(), FilesystemError> {
-    let Some(worker) = pending.as_mut() else {
-        return Ok(());
-    };
-    // Cancellation must leave the handle registered for the next drain.
-    let result = worker.await;
-    *pending = None;
-    result.map_err(|error| FilesystemError::Backend(Box::new(error)))
-}
-
 #[derive(Clone)]
 pub struct MountInfo {
     pub path: String,
@@ -161,15 +116,23 @@ pub struct FileUpdateOutput {
     pub memory: super::limits::HostBytes,
 }
 
-/// The native caller supplies text processing and authority, never guest code.
+/// A replacement opened under the backend's existing serialization boundary.
+/// The caller prepares fresh contents or authorizes the saved output before
+/// supplying its normal immutable worker budget to `publish`.
 #[async_trait::async_trait]
 pub trait FileUpdate: Send {
-    /// Read and transform once, including fresh-call capability/size checks.
-    /// No public mutation is allowed here; the filesystem owns publication.
-    async fn prepare(&mut self) -> Result<PreparedFileUpdate, FilesystemError>;
-    /// Recheck caller authority against the saved native result without rereading
-    /// or transforming the public file. Used only for a captured update.
-    fn authorize(&mut self, output: &[u8], bytes: u64) -> Result<(), FilesystemError>;
+    /// Captured native result and replacement-file byte length, when recovering.
+    /// Authorize this result without rereading or transforming the public file.
+    fn saved_output(&self) -> Option<(&[u8], u64)>;
+    /// Supply freshly prepared contents only when `saved_output` is absent.
+    /// Create `work` after preparation or authorization and settle it after this
+    /// call, including failures. No refusing fuel charge may follow publication.
+    async fn publish(
+        self: Box<Self>,
+        work: Arc<WorkBudget>,
+        prepared: Option<PreparedFileUpdate>,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<FileUpdateOutput, FilesystemError>;
 }
 impl FilesystemInfo {
     pub fn from_vfs(vfs: &Vfs) -> Self {
@@ -331,11 +294,7 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
 }
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
-    /// Drain owned native work after cancelling calls, before releasing roots.
-    async fn finish(&self) -> Result<(), FilesystemError> {
-        Ok(())
-    }
-    /// update_file retains prepared bytes/results and completed receipts across retries.
+    /// File updates retain prepared bytes/results and completed receipts across retries.
     fn supports_update_replay(&self) -> bool {
         false
     }
@@ -369,20 +328,16 @@ pub trait Filesystem: Send + Sync {
         maximum_entries: usize,
         limits: &super::limits::TenantLimits,
     ) -> Result<DirectoryNames, FilesystemError>;
-    /// Retry a single prepared replacement under the same identity and request.
-    /// Completed calls return their output without invoking preparation again.
-    /// The caller settles `work` after the call, including failures. Native
-    /// callbacks must narrow its allowance after spending interpreter fuel;
-    /// filesystem workers start only after preparation or authorization returns.
-    async fn update_file(
+    /// Open a replacement and return any captured result before native preparation.
+    /// The returned operation retains the backend's serialization until publication
+    /// finishes or the caller drops it without publishing.
+    async fn begin_file_update(
         &self,
         effect_id: &EffectId,
-        work: Arc<WorkBudget>,
         path: &str,
         request: [u8; 32],
-        update: &mut dyn FileUpdate,
         limits: &super::limits::TenantLimits,
-    ) -> Result<FileUpdateOutput, FilesystemError>;
+    ) -> Result<Box<dyn FileUpdate>, FilesystemError>;
     async fn metadata(
         &self,
         effect_id: &EffectId,
@@ -540,6 +495,3 @@ pub trait MutationBudget: Send {
     fn syscalls(&mut self, count: u64, settled: bool) -> wasmtime::Result<()>;
     fn copied(&mut self, entries: u64, bytes: u64) -> wasmtime::Result<()>;
 }
-
-#[cfg(test)]
-mod tests;

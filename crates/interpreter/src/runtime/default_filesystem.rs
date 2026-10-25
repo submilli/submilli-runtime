@@ -2,10 +2,12 @@
 use super::durable::{EffectId, RunId};
 use super::filesystem::{
     DirectoryEntry, DirectoryHandle, DirectoryReader, FileReader, FileWriter, Filesystem,
-    FilesystemError, FilesystemInfo, FilesystemWorkers, MutationBudget, OpenWrite, ReadItem,
-    ReadOutput, ReadPosition, ReaderHandle, ReaderOptions, TempFile, WriterHandle, bounded_read,
+    FilesystemError, FilesystemInfo, MutationBudget, OpenWrite, ReadItem, ReadOutput, ReadPosition,
+    ReaderHandle, ReaderOptions, TempFile, WriterHandle, bounded_read,
 };
-use super::filesystem::{DirectoryNames, FileContents, FileUpdate, FileUpdateOutput};
+use super::filesystem::{
+    DirectoryNames, FileContents, FileUpdate, FileUpdateOutput, PreparedFileUpdate,
+};
 use super::fs::{self, ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES};
 use super::fuel::WorkBudget;
 use super::limits::{HostBytes, TenantLimits};
@@ -23,22 +25,14 @@ use std::sync::Arc;
 pub struct DefaultFilesystem {
     vfs: Vfs,
     run_id: RunId,
-    workers: FilesystemWorkers,
 }
 impl DefaultFilesystem {
     pub fn new(vfs: Vfs, run_id: RunId) -> Self {
-        Self {
-            vfs,
-            run_id,
-            workers: FilesystemWorkers::default(),
-        }
+        Self { vfs, run_id }
     }
 }
 #[async_trait::async_trait]
 impl Filesystem for DefaultFilesystem {
-    async fn finish(&self) -> Result<(), FilesystemError> {
-        self.workers.finish().await
-    }
     fn info(&self) -> FilesystemInfo {
         FilesystemInfo::from_vfs(&self.vfs)
     }
@@ -48,13 +42,12 @@ impl Filesystem for DefaultFilesystem {
     async fn placement(&self, path: &str) -> Result<Placement, FilesystemError> {
         let vfs = self.vfs.clone();
         let path = path.to_owned();
-        self.workers
-            .run(move || {
-                Ok(fs::resolve_content(&vfs, vfs.cwd(), &path)?
-                    .placement()
-                    .clone())
-            })
-            .await
+        blocking(move || {
+            Ok(fs::resolve_content(&vfs, vfs.cwd(), &path)?
+                .placement()
+                .clone())
+        })
+        .await
     }
     async fn read_regular(
         &self,
@@ -65,10 +58,7 @@ impl Filesystem for DefaultFilesystem {
     ) -> Result<FileContents, FilesystemError> {
         let vfs = self.vfs.clone();
         let path = path.to_owned();
-        let limits = limits.for_worker();
-        self.workers
-            .run(move || read_regular(&vfs, work.as_deref(), &path, maximum_bytes, &limits))
-            .await
+        read_regular(vfs, work, path, maximum_bytes, limits).await
     }
     async fn directory_names(
         &self,
@@ -79,37 +69,19 @@ impl Filesystem for DefaultFilesystem {
     ) -> Result<DirectoryNames, FilesystemError> {
         let vfs = self.vfs.clone();
         let path = path.to_owned();
-        let limits = limits.for_worker();
-        self.workers
-            .run(move || directory_names(&vfs, work.as_deref(), &path, maximum_entries, &limits))
-            .await
+        directory_names(vfs, work, path, maximum_entries, limits).await
     }
-    async fn update_file(
+    async fn begin_file_update(
         &self,
         _effect_id: &EffectId,
-        work: Arc<WorkBudget>,
         path: &str,
         _request: [u8; 32],
-        update: &mut dyn FileUpdate,
-        limits: &TenantLimits,
-    ) -> Result<FileUpdateOutput, FilesystemError> {
-        let prepared = update.prepare().await?;
-        let Some(bytes) = prepared.contents else {
-            return Ok(prepared.output);
-        };
-        let memory = HostBytes::new(limits, bytes.capacity() as u64)
-            .map_err(|e| FilesystemError::Execution(e.into()))?;
-        let vfs = self.vfs.clone();
-        let path = path.to_owned();
-        let result = self
-            .workers
-            .run(move || {
-                let _memory = memory;
-                replace_existing(&vfs, &path, &bytes, &work)
-            })
-            .await;
-        result?;
-        Ok(prepared.output)
+        _limits: &TenantLimits,
+    ) -> Result<Box<dyn FileUpdate>, FilesystemError> {
+        Ok(Box::new(FileReplacement {
+            vfs: self.vfs.clone(),
+            path: path.to_owned(),
+        }))
     }
     async fn metadata(
         &self,
@@ -120,15 +92,14 @@ impl Filesystem for DefaultFilesystem {
     ) -> Result<cap_std::fs::Metadata, FilesystemError> {
         let vfs = self.vfs.clone();
         let path = path.to_owned();
-        self.workers
-            .run(move || {
-                if follow {
-                    Ok(fs::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()?)
-                } else {
-                    Ok(fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()?)
-                }
-            })
-            .await
+        blocking(move || {
+            if follow {
+                Ok(fs::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()?)
+            } else {
+                Ok(fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()?)
+            }
+        })
+        .await
     }
     async fn read(
         &self,
@@ -426,15 +397,18 @@ impl Filesystem for DefaultFilesystem {
 
 /// Shared bounded observations for native filesystem implementations. They do
 /// not record history: the enclosing host observation commits before exposure.
-pub fn read_regular(
-    vfs: &Vfs,
-    work: Option<&WorkBudget>,
-    path: &str,
+pub async fn read_regular(
+    vfs: Vfs,
+    work: Option<Arc<WorkBudget>>,
+    path: String,
     maximum_bytes: u64,
     limits: &TenantLimits,
 ) -> Result<FileContents, FilesystemError> {
-    let resolved = fs::resolve_content(vfs, vfs.cwd(), path)?;
-    let (file, metadata) = resolved.open_regular()?;
+    let (file, metadata) = blocking(move || {
+        let resolved = fs::resolve_content(&vfs, vfs.cwd(), &path)?;
+        Ok(resolved.open_regular()?)
+    })
+    .await?;
     let length = metadata.len();
     if length > maximum_bytes {
         return Err(FilesystemError::Rejected(
@@ -448,54 +422,65 @@ pub fn read_regular(
     if let Some(work) = work {
         work.charge(super::fuel::IO, bound)?;
     }
-    let capacity =
-        usize::try_from(bound).map_err(|_| FilesystemError::Unsupported("file is too large"))?;
-    let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(capacity)
-        .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
-    // read_to_end may reserve speculative capacity at EOF. A fixed slice keeps
-    // the admitted allocation exact, including the single growth-detection byte.
-    bytes.resize(capacity, 0);
-    let mut file = file;
-    let mut filled = 0;
-    while filled < capacity {
-        let count = file.read(&mut bytes[filled..])?;
-        if count == 0 {
-            break;
+    blocking(move || {
+        let capacity = usize::try_from(bound)
+            .map_err(|_| FilesystemError::Unsupported("file is too large"))?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(capacity)
+            .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
+        // read_to_end may reserve speculative capacity at EOF. A fixed slice keeps
+        // the admitted allocation exact, including the single growth-detection byte.
+        bytes.resize(capacity, 0);
+        let mut file = file;
+        let mut filled = 0;
+        while filled < capacity {
+            let count = file.read(&mut bytes[filled..])?;
+            if count == 0 {
+                break;
+            }
+            filled += count;
         }
-        filled += count;
-    }
-    bytes.truncate(filled);
-    if bytes.len() as u64 > length {
-        return Err(FilesystemError::Rejected(
-            "file grew during read; retry".into(),
-        ));
-    }
-    Ok(FileContents {
-        bytes,
-        _memory: memory,
+        bytes.truncate(filled);
+        if bytes.len() as u64 > length {
+            return Err(FilesystemError::Rejected(
+                "file grew during read; retry".into(),
+            ));
+        }
+        Ok(FileContents {
+            bytes,
+            _memory: memory,
+        })
     })
+    .await
 }
 
-pub fn directory_names(
-    vfs: &Vfs,
-    work: Option<&WorkBudget>,
-    path: &str,
+pub async fn directory_names(
+    vfs: Vfs,
+    work: Option<Arc<WorkBudget>>,
+    path: String,
     maximum_entries: usize,
     limits: &TenantLimits,
 ) -> Result<DirectoryNames, FilesystemError> {
-    let resolved = fs::resolve_content(vfs, vfs.cwd(), path)?;
+    let worker_path = path.clone();
+    let mut entries = blocking(move || {
+        let resolved = fs::resolve_content(&vfs, vfs.cwd(), &worker_path)?;
+        Ok(resolved.entries()?)
+    })
+    .await?;
     let mut memory = HostBytes::new(limits, 0).map_err(|e| FilesystemError::Execution(e.into()))?;
     let mut names = Vec::new();
-    for entry in resolved.entries()? {
+    loop {
+        let (entry, remaining) = blocking(move || Ok((entries.next(), entries))).await?;
+        entries = remaining;
+        let Some(entry) = entry else { break };
         let entry = entry?;
         if names.len() == maximum_entries {
             return Err(FilesystemError::Rejected(
                 "traversal exceeds 20000 entries; choose a smaller root".into(),
             ));
         }
-        if let Some(work) = work {
+        if let Some(work) = &work {
             work.charge(super::fuel::SYSCALL, 1)?;
         }
         let raw = entry.file_name();
@@ -527,6 +512,45 @@ pub fn directory_names(
         names,
         _memory: memory,
     })
+}
+
+struct FileReplacement {
+    vfs: Vfs,
+    path: String,
+}
+#[async_trait::async_trait]
+impl FileUpdate for FileReplacement {
+    fn saved_output(&self) -> Option<(&[u8], u64)> {
+        None
+    }
+    async fn publish(
+        self: Box<Self>,
+        work: Arc<WorkBudget>,
+        prepared: Option<PreparedFileUpdate>,
+        limits: &TenantLimits,
+    ) -> Result<FileUpdateOutput, FilesystemError> {
+        let prepared =
+            prepared.ok_or(FilesystemError::Unsupported("missing prepared file update"))?;
+        let Some(bytes) = prepared.contents else {
+            return Ok(prepared.output);
+        };
+        let memory = HostBytes::new(limits, bytes.capacity() as u64)
+            .map_err(|e| FilesystemError::Execution(e.into()))?;
+        blocking(move || {
+            let _memory = memory;
+            replace_existing(&self.vfs, &self.path, &bytes, &work)
+        })
+        .await?;
+        Ok(prepared.output)
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> Result<T, FilesystemError> + Send + 'static,
+) -> Result<T, FilesystemError> {
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|e| FilesystemError::Backend(Box::new(e)))?
 }
 
 fn replace_existing(
@@ -1653,70 +1677,10 @@ fn copy_entry(
 
 #[cfg(test)]
 mod tests {
-    #[tokio::test]
-    async fn cancelled_combined_cleanup_retains_an_earlier_worker_failure() {
-        use super::super::{StoreData, Vfs};
-        let mut data = StoreData::with_vfs("run".into(), Vfs::tempdir().unwrap());
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let (release_native, wait_native) = tokio::sync::oneshot::channel();
-        let mut native = Box::pin(data.blocking_work.spawn(move || {
-            started.send(()).unwrap();
-            wait_native.blocking_recv().unwrap();
-            panic!("injected native failure");
-        }));
-        tokio::select! {
-            _ = &mut native => panic!("native worker finished early"),
-            result = ready => result.unwrap(),
-        }
-        drop(native);
-        release_native.send(()).unwrap();
-
-        // Keep filesystem cleanup pending after the native failure is observed.
-        let workers = FilesystemWorkers::default();
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let (release, wait) = tokio::sync::oneshot::channel();
-        let mut operation = Box::pin(workers.run(move || {
-            started.send(()).unwrap();
-            wait.blocking_recv().unwrap();
-            Ok(())
-        }));
-        tokio::select! {
-            _ = &mut operation => panic!("filesystem worker finished early"),
-            result = ready => result.unwrap(),
-        }
-        drop(operation);
-        // Use the real default backend's worker registry for execution cleanup.
-        let filesystem = DefaultFilesystem {
-            vfs: data.vfs.clone(),
-            workers,
-            run_id: "run".into(),
-        };
-        data.filesystem = Arc::new(filesystem);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let mut cleanup = Box::pin(data.finish_blocking_work());
-                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
-                assert!(std::future::Future::poll(cleanup.as_mut(), &mut context).is_pending());
-                drop(cleanup);
-                if data.worker_cleanup_error.is_some() {
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        release.send(()).unwrap();
-        let error = data.finish_blocking_work().await.unwrap_err();
-        assert!(error.to_string().contains("blocking worker panicked"));
-        data.finish_blocking_work().await.unwrap();
-    }
-
-    use super::super::filesystem::PreparedFileUpdate;
     use super::*;
 
     #[test]
-    fn code_observations_wait_for_the_blocking_pool() {
+    fn code_io_waits_for_the_blocking_pool() {
         single_worker_runtime().block_on(async {
             let root = tempfile::tempdir().unwrap();
             std::fs::write(root.path().join("input"), b"abc").unwrap();
@@ -1744,75 +1708,27 @@ mod tests {
                     .unwrap();
                 assert_eq!(metadata.len(), 3);
             }
+            let update = filesystem
+                .begin_file_update(&"update".into(), "/input", [0; 32], &limits)
+                .await
+                .unwrap();
+            let prepared = PreparedFileUpdate {
+                contents: Some(b"changed".to_vec()),
+                output: FileUpdateOutput {
+                    bytes: Vec::new(),
+                    memory: HostBytes::new(&limits, 0).unwrap(),
+                },
+            };
+            queued(update.publish(Arc::new(WorkBudget::new(u64::MAX)), Some(prepared), &limits))
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read(root.path().join("input")).unwrap(),
+                b"changed"
+            );
             assert_eq!(limits.host_attached_bytes(), 0);
             assert!(limits.peak_bytes() > 0);
         });
-    }
-
-    #[test]
-    fn cancelled_code_update_retains_worker_memory_until_publication() {
-        single_worker_runtime().block_on(async {
-            let root = tempfile::tempdir().unwrap();
-            let path = root.path().join("input");
-            std::fs::write(&path, b"before").unwrap();
-            let mut data = crate::runtime::StoreData::with_vfs(
-                "run".into(),
-                Vfs::external(root.path().to_owned()).unwrap(),
-            );
-            let filesystem = data.filesystem.clone();
-            let limits = TenantLimits::new(1024);
-            let mut update = Replacement {
-                limits: limits.for_worker(),
-            };
-            let effect = "replace".into();
-            let (release, wait) = tokio::sync::oneshot::channel();
-            let blocker = tokio::task::spawn_blocking(move || wait.blocking_recv());
-            let mut pending = Box::pin(filesystem.update_file(
-                &effect,
-                Arc::new(WorkBudget::new(u64::MAX)),
-                "/input",
-                [0; 32],
-                &mut update,
-                &limits,
-            ));
-            assert_pending(pending.as_mut());
-            assert_eq!(std::fs::read(&path).unwrap(), b"before");
-            assert_eq!(limits.host_attached_bytes(), 256);
-            drop(pending);
-            drop(update);
-            assert_eq!(limits.host_attached_bytes(), 256);
-            let mut cleanup = Box::pin(data.finish_blocking_work());
-            assert_pending(cleanup.as_mut());
-            drop(cleanup);
-            release.send(()).unwrap();
-            blocker.await.unwrap().unwrap();
-            data.finish_blocking_work().await.unwrap();
-            assert_eq!(limits.host_attached_bytes(), 0);
-            assert_eq!(std::fs::read(&path).unwrap(), b"after");
-            assert_eq!(limits.peak_bytes(), 256);
-        });
-    }
-
-    struct Replacement {
-        limits: TenantLimits,
-    }
-    #[async_trait::async_trait]
-    impl FileUpdate for Replacement {
-        async fn prepare(&mut self) -> Result<PreparedFileUpdate, FilesystemError> {
-            let mut bytes = Vec::with_capacity(256);
-            bytes.extend_from_slice(b"after");
-            Ok(PreparedFileUpdate {
-                contents: Some(bytes),
-                output: FileUpdateOutput {
-                    bytes: Vec::new(),
-                    memory: HostBytes::new(&self.limits, 0)
-                        .map_err(|e| FilesystemError::Execution(e.into()))?,
-                },
-            })
-        }
-        fn authorize(&mut self, _: &[u8], _: u64) -> Result<(), FilesystemError> {
-            panic!("default updates do not replay");
-        }
     }
 
     fn single_worker_runtime() -> tokio::runtime::Runtime {

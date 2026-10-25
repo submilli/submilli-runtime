@@ -1431,7 +1431,7 @@ Size variables:
 Every gated function also runs `check_security` (`stdlib/shared.rs`) with a freshly built `serde_json` context. I treat it as part of the per-function flat cost; it should get its own constant, placed once in `check_security`.
 
 **Threads.** Filesystem and code host registrations are async. Code text processing
-runs with the store caller; durable candidate publication runs on owned blocking
+runs with the store caller; filesystem observations and candidate publication run on Tokio blocking
 workers. Each phase receives a fresh remaining-fuel budget and settles it before
 the next phase. Native helpers report work to their callers: `copy_bounded` counts
 settled copy work, the removal ledger uses `meter_mutation`, and iterator/line
@@ -1596,10 +1596,10 @@ validate the native result size before writing; Wasm conversion follows the
 native operation and, for recorded runs, the committed outcome. Conversion can
 fail normally after publication. No adapter-level mutation idempotency is added.
 
-`edit`, `insertAt`, and `applyPatch` pass a `WorkBudget` and `TenantLimits` to
-`Filesystem::update_file`. Native preparation and saved-result authorization
-narrow the worker allowance to the remaining caller fuel before publication
-workers start. The code host settles worker fuel on success or failure inside
+`edit`, `insertAt`, and `applyPatch` open a replacement through
+`Filesystem::begin_file_update`. After native preparation or saved-result
+authorization, the host creates the ordinary immutable `WorkBudget` from its
+remaining fuel and passes it with `TenantLimits` to publication. The code host settles worker fuel on success or failure inside
 the effect action, before history completion; completed-history replay skips
 this work and pays the ordinary history decoding and guest conversion charges.
 The filesystem retains memory guards through worker completion. The durable

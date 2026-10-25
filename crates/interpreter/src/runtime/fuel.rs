@@ -284,7 +284,7 @@ pub struct Exhausted;
 /// The caller settles the total once all workers have drained, even on failure.
 #[derive(Debug)]
 pub struct WorkBudget {
-    limit: AtomicU64,
+    limit: u64,
     spent: AtomicU64,
     after_effect: AtomicBool,
     cancel: Option<Arc<AtomicBool>>,
@@ -293,7 +293,7 @@ pub struct WorkBudget {
 impl WorkBudget {
     pub fn new(limit: u64) -> Self {
         Self {
-            limit: AtomicU64::new(limit),
+            limit,
             spent: AtomicU64::new(0),
             after_effect: AtomicBool::new(false),
             cancel: None,
@@ -307,18 +307,6 @@ impl WorkBudget {
         self
     }
 
-    /// Account for caller work performed after constructing this budget. Call
-    /// before dispatching workers, while none can admit work against the old
-    /// allowance. Caller charges are already accounted for and must not count again
-    /// toward this budget's `spent` total.
-    pub fn limit_to_remaining_fuel(
-        &self,
-        ctx: impl AsContextMut<Data = StoreData>,
-    ) -> wasmtime::Result<()> {
-        self.limit.fetch_min(remaining_fuel(ctx)?, Ordering::AcqRel);
-        Ok(())
-    }
-
     pub fn charge(&self, rate: Rate, count: u64) -> Result<(), Exhausted> {
         self.charge_fuel(rate.cost(count))
     }
@@ -328,7 +316,7 @@ impl WorkBudget {
         let _ = self
             .spent
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
-                let remaining = self.limit.load(Ordering::Acquire).saturating_sub(spent);
+                let remaining = self.limit.saturating_sub(spent);
                 refused = !settled && amount > remaining;
                 let admitted = if settled {
                     amount
@@ -347,9 +335,7 @@ impl WorkBudget {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |spent| {
                 Some(spent.saturating_add(amount))
             });
-        if !self.after_effect.load(Ordering::Acquire)
-            && self.spent() > self.limit.load(Ordering::Acquire)
-        {
+        if !self.after_effect.load(Ordering::Acquire) && self.spent() > self.limit {
             self.exhausted.store(true, Ordering::Release);
             if let Some(cancel) = &self.cancel {
                 cancel.store(true, Ordering::Release);
@@ -482,25 +468,6 @@ mod tests {
         assert_eq!(store.get_fuel().unwrap(), 0);
         assert_eq!(budget.spent(), 90);
         assert_eq!(store.data().host_fuel, 100);
-    }
-
-    #[test]
-    fn worker_allowance_excludes_later_caller_charges_without_settling_them_twice() {
-        let config = RuntimeConfig::default();
-        let engine = config.engine().unwrap();
-        for (requested, remaining) in [(60, 10), (71, 0)] {
-            let mut store = config
-                .store(&engine, StoreData::with_vfs("test-run".into(), Vfs::none()))
-                .unwrap();
-            store.set_fuel(100).unwrap();
-            let budget = WorkBudget::new(remaining_fuel(&mut store).unwrap());
-            charge_host_fuel(&mut store, 30).unwrap();
-            budget.limit_to_remaining_fuel(&mut store).unwrap();
-            assert_eq!(budget.charge_fuel(requested).is_ok(), requested <= 70);
-            budget.settle(&mut store).unwrap();
-            assert_eq!(remaining_fuel(&mut store).unwrap(), remaining);
-            assert_eq!(store.data().host_fuel, 100 - remaining);
-        }
     }
 
     #[test]

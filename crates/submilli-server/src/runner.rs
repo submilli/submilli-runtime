@@ -465,7 +465,7 @@ async fn run_inner(
         () = cancel_sent => cancelled_outcome(),
         outcome = execution => outcome,
     };
-    if let Err(error) = store.data_mut().finish_blocking_work().await {
+    if let Err(error) = store.data_mut().blocking_work.finish().await {
         record_worker_cleanup_failure(&mut outcome, &error);
     }
     match ExecutionUsage::capture(&store, runtime.config.fuel) {
@@ -483,7 +483,10 @@ fn cancelled_outcome() -> RunOutcome {
     outcome
 }
 
-fn record_worker_cleanup_failure(outcome: &mut RunOutcome, error: &impl std::fmt::Display) {
+fn record_worker_cleanup_failure(
+    outcome: &mut RunOutcome,
+    error: &interpreter::runtime::blocking::BlockingWorkDrainError,
+) {
     outcome.durable_completion = false;
     let secondary = format!("worker cleanup failure: {error}");
     if let Some(primary) = outcome.error.as_mut() {

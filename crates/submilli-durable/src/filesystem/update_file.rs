@@ -1,6 +1,6 @@
 //! Captured native updates: prepare once, publish the captured bytes, retain the result.
 use super::*;
-use interpreter::runtime::filesystem::{FileUpdate, FileUpdateOutput};
+use interpreter::runtime::filesystem::{FileUpdate, FileUpdateOutput, PreparedFileUpdate};
 use interpreter::runtime::fuel;
 use interpreter::runtime::limits::HostBytes;
 use serde::{Deserialize, Serialize};
@@ -16,15 +16,13 @@ enum FileUpdateState {
 }
 
 impl DurableFilesystem {
-    pub(super) async fn update_file(
+    pub(super) async fn begin_file_update(
         &self,
         effect: &EffectId,
-        work: Arc<WorkBudget>,
         path: &str,
         request: [u8; 32],
-        update: &mut dyn FileUpdate,
         limits: &TenantLimits,
-    ) -> Result<FileUpdateOutput, PortError> {
+    ) -> Result<Box<dyn FileUpdate>, PortError> {
         paths::validate_guest_path(path)
             .map_err(FilesystemError::from)
             .map_err(backend)?;
@@ -45,41 +43,85 @@ impl DurableFilesystem {
             .await
             .map_err(backend)?;
         let state = decode_state(&journal).map_err(backend)?;
-        let operation = UpdatePublication {
+        let mut operation = UpdatePublication {
             filesystem: self.clone(),
-            work,
+            state,
+            unit: Some(unit),
+            output: None,
             gate,
             journal,
             path: path.to_owned(),
         };
-        operation.execute(unit, state, update, limits).await
+        if !matches!(operation.state, FileUpdateState::Initial) {
+            operation.load_saved_output(limits).await?;
+        }
+        Ok(Box::new(operation))
     }
 }
 
 /// Owns serialization through native work, SQL completion, and cancellation.
 struct UpdatePublication {
     filesystem: DurableFilesystem,
-    work: Arc<WorkBudget>,
+    state: FileUpdateState,
+    unit: Option<Box<dyn UnitOfWork>>,
+    output: Option<FileUpdateOutput>,
     gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
     journal: JournalEntry,
     path: String,
 }
-impl UpdatePublication {
-    async fn execute(
-        self,
-        mut unit: Box<dyn UnitOfWork>,
-        state: FileUpdateState,
-        update: &mut dyn FileUpdate,
-        limits: &TenantLimits,
-    ) -> Result<FileUpdateOutput, PortError> {
-        let bytes = match &state {
-            FileUpdateState::Initial => return self.prepare(unit, update, limits).await,
+#[async_trait::async_trait]
+impl FileUpdate for UpdatePublication {
+    fn saved_output(&self) -> Option<(&[u8], u64)> {
+        let bytes = match &self.state {
             FileUpdateState::Prepared(content) => content.bytes,
             FileUpdateState::Completed(Ok(outcome)) => outcome.bytes,
-            FileUpdateState::Completed(Err(_)) => {
-                return Err(backend(RecoveryError::Conflict.into()));
-            }
+            _ => return None,
         };
+        self.output
+            .as_ref()
+            .map(|output| (output.bytes.as_slice(), bytes))
+    }
+    async fn publish(
+        mut self: Box<Self>,
+        work: Arc<WorkBudget>,
+        prepared: Option<PreparedFileUpdate>,
+        limits: &TenantLimits,
+    ) -> Result<FileUpdateOutput, PortError> {
+        match &self.state {
+            FileUpdateState::Initial => {
+                let unit = self
+                    .unit
+                    .take()
+                    .ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
+                let prepared = prepared.ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
+                self.prepare(unit, prepared, work, limits).await
+            }
+            FileUpdateState::Prepared(content) => {
+                let content = content.clone();
+                let output = self
+                    .output
+                    .take()
+                    .ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
+                work.before_effect();
+                self.complete(content, output, work).await.map_err(backend)
+            }
+            FileUpdateState::Completed(Ok(_)) => self
+                .output
+                .take()
+                .ok_or_else(|| backend(RecoveryError::Conflict.into())),
+            FileUpdateState::Completed(Err(_)) => Err(backend(RecoveryError::Conflict.into())),
+        }
+    }
+}
+impl UpdatePublication {
+    async fn load_saved_output(&mut self, limits: &TenantLimits) -> Result<(), PortError> {
+        if matches!(self.state, FileUpdateState::Completed(Err(_))) {
+            return Err(backend(RecoveryError::Conflict.into()));
+        }
+        let mut unit = self
+            .unit
+            .take()
+            .ok_or_else(|| backend(RecoveryError::Conflict.into()))?;
         let size = unit
             .update_output_bytes(&self.filesystem.run_id, &self.journal.id)
             .await
@@ -107,27 +149,16 @@ impl UpdatePublication {
         })
         .await
         .map_err(backend)?;
-        // A saved preparation may already have been published. A failed check
-        // must terminate this attempt rather than let guest code skip its receipt.
-        update
-            .authorize(&output.bytes, bytes)
-            .map_err(PortError::after_effect)?;
-        if matches!(state, FileUpdateState::Completed(_)) {
-            return Ok(output);
-        }
-        let FileUpdateState::Prepared(content) = state else {
-            return Err(backend(RecoveryError::Conflict.into()));
-        };
-        self.work.before_effect();
-        self.complete(content, output).await.map_err(backend)
+        self.output = Some(output);
+        Ok(())
     }
     async fn prepare(
         mut self,
         mut unit: Box<dyn UnitOfWork>,
-        update: &mut dyn FileUpdate,
+        prepared: PreparedFileUpdate,
+        work: Arc<WorkBudget>,
         limits: &TenantLimits,
     ) -> Result<FileUpdateOutput, PortError> {
-        let prepared = update.prepare().await?;
         let Some(contents) = prepared.contents else {
             return Ok(prepared.output);
         };
@@ -154,7 +185,6 @@ impl UpdatePublication {
         .map_err(|e| PortError::Execution(e.into()))?;
         finish_owned(async move {
             let _memory = memory;
-            let work = self.work.clone();
             work.charge(fuel::HASH, (contents.len() as u64).saturating_mul(2))
                 .map_err(RecoveryError::from)?;
             work.charge(fuel::IO, contents.len() as u64)
@@ -197,7 +227,7 @@ impl UpdatePublication {
                 bytes: output,
                 memory: prepared.output.memory,
             };
-            self.complete(content, output).await
+            self.complete(content, output, work).await
         })
         .await
         .map_err(backend)
@@ -206,9 +236,9 @@ impl UpdatePublication {
         mut self,
         content: Content,
         output: FileUpdateOutput,
+        work: Arc<WorkBudget>,
     ) -> Result<FileUpdateOutput, FilesystemError> {
         finish_owned(async move {
-            let work = self.work.clone();
             work.charge(fuel::HASH, content.bytes)
                 .map_err(RecoveryError::from)?;
             work.charge(fuel::IO, content.bytes)
@@ -254,8 +284,7 @@ mod tests {
         calls: usize,
         limits: TenantLimits,
     }
-    #[async_trait::async_trait]
-    impl FileUpdate for PreparedOnce {
+    impl PreparedOnce {
         async fn prepare(&mut self) -> Result<PreparedFileUpdate, PortError> {
             self.calls += 1;
             assert_eq!(
@@ -289,21 +318,23 @@ mod tests {
                 .await
                 .unwrap();
         let effect = uuid::Uuid::new_v4().to_string().into();
-        let limits = TenantLimits::new(8 << 20);
         let mut update = PreparedOnce {
             calls: 0,
-            limits: limits.for_worker(),
+            limits: TenantLimits::new(8 << 20),
         };
         store.lock().unwrap().stop_after_prepared = true;
+        let pending = filesystem
+            .begin_file_update(&effect, "/file", [1; 32], &update.limits)
+            .await
+            .unwrap();
+        assert!(pending.saved_output().is_none());
+        let prepared = update.prepare().await.unwrap();
         assert!(
-            filesystem
-                .update_file(
-                    &effect,
+            pending
+                .publish(
                     Arc::new(WorkBudget::new(u64::MAX)),
-                    "/file",
-                    [1; 32],
-                    &mut update,
-                    &limits
+                    Some(prepared),
+                    &update.limits
                 )
                 .await
                 .is_err()
@@ -312,15 +343,14 @@ mod tests {
             std::fs::read(root.path().join("file")).unwrap(),
             b"original\n"
         );
-        let output = filesystem
-            .update_file(
-                &effect,
-                Arc::new(WorkBudget::new(u64::MAX)),
-                "/file",
-                [1; 32],
-                &mut update,
-                &limits,
-            )
+        let pending = filesystem
+            .begin_file_update(&effect, "/file", [1; 32], &update.limits)
+            .await
+            .unwrap();
+        let (output, bytes) = pending.saved_output().unwrap();
+        update.authorize(output, bytes).unwrap();
+        let output = pending
+            .publish(Arc::new(WorkBudget::new(u64::MAX)), None, &update.limits)
             .await
             .unwrap();
         assert_eq!(output.bytes, b"exact native output");

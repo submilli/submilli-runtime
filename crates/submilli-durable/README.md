@@ -135,8 +135,9 @@ possible, and drain native workers and handles before disposing of the roots.
 There is no run-state lookup, automatic retirement or cleanup sweep here.
 
 Code tools use the filesystem port for all observations and updates. The native
-caller prepares final bytes and its complete result; `update_file` syncs a retained
-candidate, captures that result with the preparation in one transaction, publishes
+caller opens a file update, then prepares final bytes and its complete result or
+authorizes a saved result. Publication syncs a retained candidate, captures the
+result with the preparation in one transaction, publishes
 the candidate, and commits a receipt. A retry returns the saved result without
 recomputing the transformation. Noop and rejected text matches publish nothing.
 Recorded code mutations require a backend with `supports_update_replay`.

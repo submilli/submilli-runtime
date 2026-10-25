@@ -31,7 +31,7 @@ use interpreter::runtime::durable::EffectId;
 use interpreter::runtime::durable::RunId;
 use interpreter::runtime::filesystem::{
     DirectoryEntry, DirectoryReader, FileReader, FileWriter, Filesystem,
-    FilesystemError as PortError, FilesystemInfo, FilesystemWorkers, ReadOutput, ReaderOptions,
+    FilesystemError as PortError, FilesystemInfo, ReadOutput, ReaderOptions,
 };
 use interpreter::runtime::fuel::WorkBudget;
 use interpreter::runtime::limits::TenantLimits;
@@ -73,7 +73,6 @@ pub struct DurableFilesystem {
     /// Reopened VFS values must use the counters held by existing handles.
     filesystem_quotas: Arc<tokio::sync::Mutex<paths::SharedQuotas>>,
     pub(crate) run_id: RunId,
-    workers: FilesystemWorkers,
 }
 
 impl DurableFilesystem {
@@ -85,15 +84,7 @@ impl DurableFilesystem {
         run_id: &RunId,
         units: UnitFactory,
     ) -> Result<Self, FilesystemError> {
-        Self::open_shared(
-            vfs,
-            run_id,
-            units,
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        )
-        .await
+        Self::open_shared(vfs, run_id, units, Default::default(), Default::default()).await
     }
 
     /// Reopen with shared mutation admission and quota counters. The same gate
@@ -111,7 +102,6 @@ impl DurableFilesystem {
             units,
             self.filesystem_gate.clone(),
             self.filesystem_quotas.clone(),
-            self.workers.clone(),
         )
         .await
     }
@@ -122,7 +112,6 @@ impl DurableFilesystem {
         units: UnitFactory,
         filesystem_gate: Arc<tokio::sync::Mutex<()>>,
         filesystem_quotas: Arc<tokio::sync::Mutex<paths::SharedQuotas>>,
-        workers: FilesystemWorkers,
     ) -> Result<Self, FilesystemError> {
         validate_id(run_id)?;
         let gate = Arc::new(filesystem_gate.clone().lock_owned().await);
@@ -138,7 +127,6 @@ impl DurableFilesystem {
         .await?;
         Ok(Self {
             files: Arc::new(workspace),
-            workers,
             units,
             filesystem_config_fingerprint,
             filesystem_gate,
@@ -230,11 +218,6 @@ impl DurableFilesystem {
 
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
-    async fn finish(&self) -> Result<(), PortError> {
-        // Mutation workers retain this gate through publication and journal work.
-        let _gate = self.filesystem_gate.lock().await;
-        self.workers.finish().await
-    }
     fn supports_update_replay(&self) -> bool {
         true
     }
@@ -257,13 +240,13 @@ impl Filesystem for DurableFilesystem {
     async fn placement(&self, path: &str) -> Result<Placement, PortError> {
         let vfs = self.files.vfs().clone();
         let path = path.to_owned();
-        self.workers
-            .run(move || {
-                Ok(paths::resolve_content(&vfs, vfs.cwd(), &path)?
-                    .placement()
-                    .clone())
-            })
-            .await
+        tokio::task::spawn_blocking(move || {
+            Ok(paths::resolve_content(&vfs, vfs.cwd(), &path)?
+                .placement()
+                .clone())
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))?
     }
     async fn read_regular(
         &self,
@@ -274,19 +257,21 @@ impl Filesystem for DurableFilesystem {
     ) -> Result<interpreter::runtime::filesystem::FileContents, PortError> {
         let vfs = self.files.vfs().clone();
         let path = path.to_owned();
-        let limits = limits.for_worker();
-        self.workers
-            .run(move || {
-                paths::check_access(&vfs, vfs.cwd(), &path)?;
-                interpreter::runtime::default_filesystem::read_regular(
-                    &vfs,
-                    work.as_deref(),
-                    &path,
-                    maximum_bytes,
-                    &limits,
-                )
-            })
-            .await
+        let checked_vfs = vfs.clone();
+        let checked_path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            paths::check_access(&checked_vfs, checked_vfs.cwd(), &checked_path)
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))??;
+        interpreter::runtime::default_filesystem::read_regular(
+            vfs,
+            work,
+            path,
+            maximum_bytes,
+            limits,
+        )
+        .await
     }
     async fn directory_names(
         &self,
@@ -297,30 +282,30 @@ impl Filesystem for DurableFilesystem {
     ) -> Result<interpreter::runtime::filesystem::DirectoryNames, PortError> {
         let vfs = self.files.vfs().clone();
         let path = path.to_owned();
-        let limits = limits.for_worker();
-        self.workers
-            .run(move || {
-                paths::check_access(&vfs, vfs.cwd(), &path)?;
-                interpreter::runtime::default_filesystem::directory_names(
-                    &vfs,
-                    work.as_deref(),
-                    &path,
-                    maximum_entries,
-                    &limits,
-                )
-            })
-            .await
+        let checked_vfs = vfs.clone();
+        let checked_path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            paths::check_access(&checked_vfs, checked_vfs.cwd(), &checked_path)
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))??;
+        interpreter::runtime::default_filesystem::directory_names(
+            vfs,
+            work,
+            path,
+            maximum_entries,
+            limits,
+        )
+        .await
     }
-    async fn update_file(
+    async fn begin_file_update(
         &self,
         effect: &EffectId,
-        work: Arc<WorkBudget>,
         path: &str,
         request: [u8; 32],
-        update: &mut dyn interpreter::runtime::filesystem::FileUpdate,
         limits: &TenantLimits,
-    ) -> Result<interpreter::runtime::filesystem::FileUpdateOutput, PortError> {
-        DurableFilesystem::update_file(self, effect, work, path, request, update, limits).await
+    ) -> Result<Box<dyn interpreter::runtime::filesystem::FileUpdate>, PortError> {
+        DurableFilesystem::begin_file_update(self, effect, path, request, limits).await
     }
     async fn metadata(
         &self,
@@ -331,16 +316,16 @@ impl Filesystem for DurableFilesystem {
     ) -> Result<cap_std::fs::Metadata, PortError> {
         let vfs = self.files.vfs().clone();
         let path = path.to_owned();
-        self.workers
-            .run(move || {
-                if follow {
-                    Ok(paths::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()?)
-                } else {
-                    paths::check_access(&vfs, vfs.cwd(), &path)?;
-                    Ok(fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()?)
-                }
-            })
-            .await
+        tokio::task::spawn_blocking(move || {
+            if follow {
+                Ok(paths::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()?)
+            } else {
+                paths::check_access(&vfs, vfs.cwd(), &path)?;
+                Ok(fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()?)
+            }
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))?
     }
     async fn read(
         &self,

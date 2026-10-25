@@ -410,7 +410,7 @@ async fn try_run_script_with(
     if result.is_ok() {
         history.ensure_history_consumed().await.unwrap();
     }
-    store.data_mut().finish_blocking_work().await.unwrap();
+    store.data_mut().blocking_work.finish().await.unwrap();
     result
 }
 
@@ -499,7 +499,7 @@ async fn execution_history_rejects_process_local_resources_with_run_ids() {
         let error = dispatch_main_async(&mut store, &instance)
             .await
             .unwrap_err();
-        store.data_mut().finish_blocking_work().await.unwrap();
+        store.data_mut().blocking_work.finish().await.unwrap();
         assert!(
             error.is::<interpreter::runtime::host::FatalHostError>(),
             "{error:#}"
@@ -593,7 +593,7 @@ async fn measure_filesystem_script(
     install_runtime_async(&mut linker, &mut store).await?;
     let instance = instantiate_program_async(&linker, &mut store, &module).await?;
     let result = dispatch_main_async(&mut store, &instance).await;
-    store.data_mut().finish_blocking_work().await?;
+    store.data_mut().blocking_work.finish().await?;
     let value = result?;
     history.ensure_history_consumed().await?;
     let usage = interpreter::runtime::limits::ExecutionUsage::capture(&store, config.fuel)?;

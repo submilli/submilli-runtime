@@ -1,15 +1,12 @@
 //! Native transformations prepare final bytes and an opaque result for the filesystem.
 use super::budget::Budget;
 use crate::runtime::durable::EffectId;
-use crate::runtime::filesystem::{
-    FileUpdate, FileUpdateOutput, FilesystemError, PreparedFileUpdate,
-};
+use crate::runtime::filesystem::{FileUpdateOutput, PreparedFileUpdate};
 use crate::runtime::limits::HostBytes;
 use crate::runtime::{StoreData, effects, fuel};
 use futures::future::BoxFuture;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
 use wasmtime::{Caller, Result};
 
 type Prepare<'store, A> = for<'call> fn(
@@ -34,18 +31,25 @@ pub(super) async fn execute<'store, A: Serialize + Send + Sync>(
     }
     let request = effects::fingerprint(caller, &(operation, &arguments))?;
     let filesystem = caller.data().filesystem.clone();
-    let limits = caller.data().tenant_limits.for_worker();
-    let work = super::begin_work(caller)?;
-    let mut update = CodeUpdate {
-        caller,
-        budget,
-        work: work.clone(),
-        path,
-        arguments,
-        prepare,
+    let update = filesystem
+        .begin_file_update(effect, path, request, &caller.data().tenant_limits)
+        .await
+        .map_err(|e| super::backend_error(operation, path, e))?;
+    let prepared = match update.saved_output() {
+        Some((output, bytes)) => {
+            // Captured intent may already be public. Failed authorization must
+            // stop this attempt without recording a catchable completion.
+            authorize_saved(caller, budget, path, output, bytes)
+                .map_err(crate::runtime::filesystem::FilesystemError::Execution)
+                .map_err(crate::runtime::filesystem::FilesystemError::after_effect)
+                .map_err(|e| super::backend_error(operation, path, e))?;
+            None
+        }
+        None => Some(prepare(caller, budget, &arguments).await?),
     };
-    let result = filesystem
-        .update_file(effect, work.clone(), path, request, &mut update, &limits)
+    let work = super::begin_work(caller)?;
+    let result = update
+        .publish(work.clone(), prepared, &caller.data().tenant_limits)
         .await;
     work.settle(&mut *caller)?;
     let output = result.map_err(|e| super::backend_error(operation, path, e))?;
@@ -54,56 +58,32 @@ pub(super) async fn execute<'store, A: Serialize + Send + Sync>(
     fuel::settle(&mut *caller, fuel::PARSE, output.bytes.len() as u64)?;
     serde_json::from_slice(&output.bytes).map_err(crate::runtime::host::fatal_host_error)
 }
-struct CodeUpdate<'a, 'store, A> {
-    caller: &'a mut Caller<'store, StoreData>,
-    budget: &'a mut Budget,
-    work: Arc<fuel::WorkBudget>,
-    path: &'a str,
-    arguments: A,
-    prepare: Prepare<'store, A>,
-}
-#[async_trait::async_trait]
-impl<A: Send + Sync> FileUpdate for CodeUpdate<'_, '_, A> {
-    async fn prepare(&mut self) -> std::result::Result<PreparedFileUpdate, FilesystemError> {
-        let prepared = (self.prepare)(self.caller, self.budget, &self.arguments)
-            .await
-            .map_err(FilesystemError::Execution)?;
-        self.work
-            .limit_to_remaining_fuel(&mut *self.caller)
-            .map_err(FilesystemError::Execution)?;
-        Ok(prepared)
-    }
-    fn authorize(&mut self, output: &[u8], bytes: u64) -> std::result::Result<(), FilesystemError> {
-        self.authorize_saved(output, bytes)
-            .map_err(FilesystemError::Execution)?;
-        self.work
-            .limit_to_remaining_fuel(&mut *self.caller)
-            .map_err(FilesystemError::Execution)
-    }
-}
-impl<A> CodeUpdate<'_, '_, A> {
-    fn authorize_saved(&mut self, output: &[u8], bytes: u64) -> Result<()> {
-        self.budget.check_size(output.len())?;
-        self.budget.check_size(usize::try_from(bytes)?)?;
-        let _memory = HostBytes::new(
-            &self.caller.data().tenant_limits,
-            (output.len() as u64).saturating_mul(8),
-        )?;
-        fuel::charge(&mut *self.caller, fuel::PARSE, output.len() as u64)?;
-        let value: Value =
-            serde_json::from_slice(output).map_err(crate::runtime::host::fatal_host_error)?;
-        let diff = value.get("diff").and_then(Value::as_str).ok_or_else(|| {
-            crate::runtime::host::fatal_host_error("invalid saved code update result")
-        })?;
-        let path = self.path;
-        super::gate(self.caller, "fs.read", path)?;
-        super::check_security_call(
-            &mut *self.caller,
-            "fs.write",
-            json!({"path":path,"length":bytes,"diff":diff}),
-        )?;
-        Ok(())
-    }
+fn authorize_saved(
+    caller: &mut Caller<'_, StoreData>,
+    budget: &Budget,
+    path: &str,
+    output: &[u8],
+    bytes: u64,
+) -> Result<()> {
+    budget.check_size(output.len())?;
+    budget.check_size(usize::try_from(bytes)?)?;
+    let _memory = HostBytes::new(
+        &caller.data().tenant_limits,
+        (output.len() as u64).saturating_mul(8),
+    )?;
+    fuel::charge(&mut *caller, fuel::PARSE, output.len() as u64)?;
+    let value: Value =
+        serde_json::from_slice(output).map_err(crate::runtime::host::fatal_host_error)?;
+    let diff = value.get("diff").and_then(Value::as_str).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("invalid saved code update result")
+    })?;
+    super::gate(caller, "fs.read", path)?;
+    super::check_security_call(
+        &mut *caller,
+        "fs.write",
+        json!({"path":path,"length":bytes,"diff":diff}),
+    )?;
+    Ok(())
 }
 
 pub(super) fn encode(
@@ -217,7 +197,7 @@ mod tests {
             .call_async(&mut store, &[], &mut [])
             .await
             .unwrap_err();
-        store.data_mut().finish_blocking_work().await.unwrap();
+        store.data_mut().blocking_work.finish().await.unwrap();
         assert_eq!(
             error.downcast_ref::<wasmtime::Trap>(),
             Some(&wasmtime::Trap::OutOfFuel)

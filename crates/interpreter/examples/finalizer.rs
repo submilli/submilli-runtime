@@ -68,7 +68,7 @@ async fn main() -> wasmtime::Result<()> {
         value: &value,
     };
     let outcome = invoke_finalizer_async(&mut store, &linked, call).await;
-    store.data_mut().finish_blocking_work().await?;
+    store.data_mut().blocking_work.finish().await?;
     match outcome {
         Ok(()) => println!("finalizer completed"),
         Err(error) => println!("{error}"),

@@ -1,6 +1,6 @@
 use super::*;
 use interpreter::runtime::filesystem::{
-    FileUpdate, FileUpdateOutput, FilesystemError as PortError, PreparedFileUpdate,
+    FileUpdateOutput, FilesystemError as PortError, PreparedFileUpdate,
 };
 use interpreter::runtime::fuel::WorkBudget;
 use interpreter::runtime::limits::{HostBytes, TenantLimits};
@@ -28,8 +28,7 @@ impl Insert {
         }
     }
 }
-#[async_trait::async_trait]
-impl FileUpdate for Insert {
+impl Insert {
     async fn prepare(&mut self) -> Result<PreparedFileUpdate, PortError> {
         assert!(
             !self.forbid_prepare,
@@ -70,10 +69,19 @@ impl Insert {
         path: &str,
         request: [u8; 32],
     ) -> Result<FileUpdateOutput, PortError> {
-        let work = Arc::new(WorkBudget::new(self.fuel));
-        let limits = self.limits.clone();
-        filesystem
-            .update_file(effect, work, path, request, self, &limits)
+        let update = filesystem
+            .begin_file_update(effect, path, request, &self.limits)
+            .await?;
+        let prepared = match update.saved_output() {
+            Some((output, bytes)) => {
+                self.authorize(output, bytes)
+                    .map_err(PortError::after_effect)?;
+                None
+            }
+            None => Some(self.prepare().await?),
+        };
+        update
+            .publish(Arc::new(WorkBudget::new(self.fuel)), prepared, &self.limits)
             .await
     }
     fn reserve(&mut self, bytes: u64) -> Result<HostBytes, PortError> {

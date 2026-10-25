@@ -990,22 +990,35 @@ async fn code_uses_the_installed_filesystem_for_every_observation_and_update() {
     "#, data).await.unwrap();
 }
 
-#[test]
-fn regular_read_keeps_its_allocation_inside_the_admitted_bound() {
+#[tokio::test]
+async fn regular_read_keeps_its_allocation_inside_the_admitted_bound() {
     let vfs = crate::runtime::Vfs::tempdir().unwrap();
     std::fs::write(vfs.root().join("file"), vec![b'x'; 10_000]).unwrap();
     let limits = crate::runtime::limits::TenantLimits::new(10_001);
-    let read =
-        crate::runtime::default_filesystem::read_regular(&vfs, None, "/file", 10_000, &limits)
-            .unwrap();
+    let read = crate::runtime::default_filesystem::read_regular(
+        vfs.clone(),
+        None,
+        "/file".into(),
+        10_000,
+        &limits,
+    )
+    .await
+    .unwrap();
     assert_eq!(read.bytes.len(), 10_000);
     assert!(read.bytes.capacity() as u64 <= limits.host_attached_bytes());
     drop(read);
     assert_eq!(limits.host_attached_bytes(), 0);
     let limits = crate::runtime::limits::TenantLimits::new(10_000);
     assert!(
-        crate::runtime::default_filesystem::read_regular(&vfs, None, "/file", 10_000, &limits)
-            .is_err()
+        crate::runtime::default_filesystem::read_regular(
+            vfs.clone(),
+            None,
+            "/file".into(),
+            10_000,
+            &limits
+        )
+        .await
+        .is_err()
     );
     assert_eq!(limits.host_attached_bytes(), 0);
 }

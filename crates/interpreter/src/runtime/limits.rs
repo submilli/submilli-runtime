@@ -3,8 +3,8 @@
 //! `host_attached_bytes` is `Arc<AtomicU64>` so externref `Drop` impls can
 //! decrement it without a `&mut TenantLimits` borrow.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use wasmtime::{ResourceLimiter, Store};
 
@@ -99,11 +99,8 @@ impl Drop for HostBytes {
 
 pub struct TenantLimits {
     pub max_total_bytes: u64,
-    // Admission shares this lock with native workers so engine growth and host
-    // allocation cannot each admit against the other's old usage. Poisoning
-    // means admission state may be inconsistent; access deliberately panics.
-    observed_bytes: Arc<Mutex<u64>>,
-    peak_bytes: Arc<AtomicU64>,
+    observed_bytes: u64,
+    peak_bytes: AtomicU64,
     host_attached_bytes: Arc<AtomicU64>,
 }
 
@@ -111,29 +108,14 @@ impl TenantLimits {
     pub fn new(max_total_bytes: u64) -> Self {
         Self {
             max_total_bytes,
-            observed_bytes: Arc::new(Mutex::new(0)),
-            peak_bytes: Arc::new(AtomicU64::new(0)),
+            observed_bytes: 0,
+            peak_bytes: AtomicU64::new(0),
             host_attached_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn observed_bytes(&self) -> u64 {
-        *self
-            .observed_bytes
-            .lock()
-            .expect("memory admission poisoned")
-    }
-
-    /// Own the configured cap and share live usage with a native worker. Engine
-    /// growth, host admission and the high-water mark remain coordinated even
-    /// when cancellation lets the worker outlive its awaiting caller.
-    pub fn for_worker(&self) -> Self {
-        Self {
-            max_total_bytes: self.max_total_bytes,
-            observed_bytes: self.observed_bytes.clone(),
-            peak_bytes: self.peak_bytes.clone(),
-            host_attached_bytes: self.host_attached_bytes.clone(),
-        }
+        self.observed_bytes
     }
 
     /// High-water mark of admitted engine memory plus charged host bytes, not RSS.
@@ -149,26 +131,25 @@ impl TenantLimits {
         Arc::clone(&self.host_attached_bytes)
     }
 
-    /// Admit host memory against live engine usage, including from native workers.
+    /// Charges happen on the store thread, but cancelled Git workers can refund
+    /// their reservations concurrently during execution cleanup.
     pub fn charge_host_bytes(&self, n: u64) -> Result<(), MemoryCapExceeded> {
-        let observed = self
-            .observed_bytes
-            .lock()
-            .expect("memory admission poisoned");
         self.host_attached_bytes
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 let next = current.checked_add(n)?;
-                (observed.saturating_add(next) <= self.max_total_bytes).then_some(next)
+                (self.observed_bytes.saturating_add(next) <= self.max_total_bytes).then_some(next)
             })
             .map(|previous| {
                 self.peak_bytes.fetch_max(
-                    observed.saturating_add(previous).saturating_add(n),
+                    self.observed_bytes
+                        .saturating_add(previous)
+                        .saturating_add(n),
                     Ordering::Relaxed,
                 );
             })
             .map_err(|current| MemoryCapExceeded {
                 requested: n,
-                already_observed: *observed,
+                already_observed: self.observed_bytes,
                 already_host_attached: current,
                 cap: self.max_total_bytes,
             })
@@ -191,17 +172,13 @@ impl ResourceLimiter for TenantLimits {
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         let delta = (desired as u64).saturating_sub(current as u64);
-        let mut observed = self
-            .observed_bytes
-            .lock()
-            .expect("memory admission poisoned");
-        let next = observed.saturating_add(delta);
+        let next = self.observed_bytes.saturating_add(delta);
         // host_attached_bytes is read-only here; writes belong to charge/release_host_bytes.
         let host = self.host_attached_bytes.load(Ordering::Relaxed);
         if next.saturating_add(host) > self.max_total_bytes {
             return Ok(false);
         }
-        *observed = next;
+        self.observed_bytes = next;
         self.peak_bytes
             .fetch_max(next.saturating_add(host), Ordering::Relaxed);
         Ok(true)
@@ -263,41 +240,6 @@ impl ExecutionUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn worker_limits_share_live_engine_usage_and_peak() {
-        let mut limits = TenantLimits::new(1000);
-        let worker = limits.for_worker();
-        assert!(limits.memory_growing(0, 600, None).unwrap());
-        assert!(HostBytes::new(&worker, 401).is_err());
-        let allocation = HostBytes::new(&worker, 400).unwrap();
-        assert_eq!(limits.host_attached_bytes(), 400);
-        assert_eq!(limits.peak_bytes(), 1000);
-        assert!(!limits.memory_growing(600, 601, None).unwrap());
-        drop(allocation);
-        assert!(limits.memory_growing(600, 1000, None).unwrap());
-        assert!(HostBytes::new(&worker, 1).is_err());
-    }
-
-    #[test]
-    fn worker_admission_and_engine_growth_cannot_exceed_the_shared_cap() {
-        for _ in 0..100 {
-            let mut limits = TenantLimits::new(1000);
-            let worker = limits.for_worker();
-            let barrier = Arc::new(std::sync::Barrier::new(2));
-            let worker_barrier = barrier.clone();
-            let thread = std::thread::spawn(move || {
-                worker_barrier.wait();
-                HostBytes::new(&worker, 600)
-            });
-            barrier.wait();
-            let engine_admitted = limits.memory_growing(0, 600, None).unwrap();
-            let host = thread.join().unwrap();
-            assert_ne!(engine_admitted, host.is_ok());
-            assert!(limits.observed_bytes() + limits.host_attached_bytes() <= 1000);
-            assert_eq!(limits.peak_bytes(), 600);
-        }
-    }
 
     #[test]
     fn memory_peak_retains_released_host_allocations_and_excludes_refusals() {
