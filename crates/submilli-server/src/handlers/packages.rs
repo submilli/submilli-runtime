@@ -134,7 +134,22 @@ pub async fn uninstall(
             format!("package '{name}' is not installed"),
         ));
     }
-    let removed = std::fs::remove_dir_all(&dir);
+    let removed = submilli_build::with_package_lock(store.root(), &name, || {
+        submilli_build::discard_rebuild_state(store.root(), &name)?;
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|source| {
+                submilli_build::PackageStoreError::Artifact {
+                    name: name.clone(),
+                    package_dir: dir.clone(),
+                    source: submilli_build::ArtifactError::Io {
+                        path: dir.clone(),
+                        source,
+                    },
+                }
+            })?;
+        }
+        Ok(())
+    });
     // Drop every cached module set so the removal takes effect without a
     // restart, even a partial one that left the directory incomplete.
     // Blueprints that declare the package are not the only ones affected: it

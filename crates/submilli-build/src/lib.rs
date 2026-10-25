@@ -12,6 +12,7 @@ pub mod driver;
 pub mod install;
 pub mod lockfile;
 pub mod package_store;
+mod rebuild;
 pub mod resolve;
 pub mod scaffold;
 mod warning_policy;
@@ -48,8 +49,10 @@ pub use install::{
 };
 pub use lockfile::{LOCKFILE_NAME, LockedPackage, Lockfile, LockfileError};
 pub use package_store::{
-    LocatedPackage, PackageStore, PackageStoreError, default_data_root, default_package_store_dir,
+    LocatedPackage, PackageReconcile, PackageStore, PackageStoreError, PackageUnavailable,
+    default_data_root, default_package_store_dir, saved_overrides,
 };
+pub use rebuild::{discard_rebuild_state, with_package_lock};
 pub use resolve::{
     FetchError, FetchErrorKind, FetchedRepo, GithubClosure, PlannedInstall, RepoFetcher,
     ResolveError, resolve_github_closure,

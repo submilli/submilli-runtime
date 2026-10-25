@@ -487,6 +487,10 @@ impl AppState {
         if self.inner.booted.load(Ordering::Acquire) {
             return Ok(());
         }
+        // Before sessions resume: a finalizer or recovered run must not link
+        // wasm built by another compiler. A package that cannot be rebuilt is
+        // logged and left unavailable; it does not take the others down.
+        self.reconcile_installed_packages();
         self.session_manager()
             .set_finalizer_executor(Arc::new(AppFinalizerExecutor(Arc::downgrade(&self.inner))));
         self.inner.session_manager.boot().await?;
@@ -529,6 +533,26 @@ impl AppState {
         self.start_run_recovery();
         self.inner.booted.store(true, Ordering::Release);
         Ok(())
+    }
+
+    fn reconcile_installed_packages(&self) {
+        let report = self.package_store().reconcile_installed();
+        if !report.rebuilt.is_empty() {
+            tracing::info!(
+                packages = %report.rebuilt.join(", "),
+                schema_version = submilli_build::ARTIFACT_SCHEMA_VERSION,
+                "recompiled installed packages for the current artifact schema"
+            );
+            self.evict_all_prepared_packages();
+        }
+        for failure in &report.failures {
+            tracing::error!(
+                package = %failure.name,
+                schema_version = failure.schema_version,
+                error = %failure.detail,
+                "installed package is unavailable"
+            );
+        }
     }
 
     /// Bring a pre-database secret-store directory into the database, once,
@@ -1880,6 +1904,9 @@ mod mcp_setup_tests;
 
 #[cfg(test)]
 mod blueprint_mutation_tests;
+
+#[cfg(test)]
+mod compiler_rebuild_tests;
 
 struct AppFinalizerExecutor(std::sync::Weak<AppStateInner>);
 #[async_trait::async_trait]

@@ -31,6 +31,13 @@ use crate::CapabilitySchema;
 // v10: `submilli:fs` `Info` drops `pathLimit`, so its intrinsic layout loses a field.
 // v12: a package exporting `finalizer` also exports the check embedders restore
 // its argument through; without it, cleanup cannot run.
+//
+// The release skill increments this on every runtime release, even when the
+// metadata and declaration shapes are unchanged. A mismatch means `pkg.wasm`
+// was produced by another release: the package store rebuilds it from the
+// retained sources and does not execute it. The number still gates those file
+// shapes, so a reader that asks for a runnable artifact refuses a version it
+// does not understand instead of decoding it with the wrong types.
 pub const ARTIFACT_SCHEMA_VERSION: u32 = 12;
 
 const WASM_FILE: &str = "pkg.wasm";
@@ -485,6 +492,41 @@ pub fn read_installed_sources(dir: impl AsRef<Path>) -> Result<InstalledSources,
         documentation,
         sources,
     })
+}
+
+/// Metadata, sources, and docs. A schema mismatch is not a read failure: the
+/// wasm is not loaded, so a caller can rebuild without executing it.
+pub(crate) struct PackageIdentity {
+    pub metadata: ArtifactMetadata,
+    pub documentation: String,
+    pub sources: Vec<ArtifactSource>,
+}
+
+pub(crate) fn read_package_identity(dir: &Path) -> Result<PackageIdentity, ArtifactError> {
+    let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+    budget.begin_package(dir)?;
+    let metadata = read_json(dir.join(METADATA_FILE), &mut budget)?;
+    let documentation = read_optional_text(dir.join(DOCS_README_FILE), &mut budget)?;
+    let sources = read_optional_json(dir.join(SOURCES_FILE), &mut budget)?.unwrap_or_default();
+    Ok(PackageIdentity {
+        metadata,
+        documentation,
+        sources,
+    })
+}
+
+/// Whether `dir` has every file a reader needs. Used to tell a committed
+/// artifact from a staging directory that was still being written.
+pub(crate) fn artifact_dir_is_complete(dir: &Path) -> bool {
+    [
+        METADATA_FILE,
+        WASM_FILE,
+        TYPE_INFO_FILE,
+        CAPABILITIES_FILE,
+        PACKAGE_DECLARATION_FILE,
+    ]
+    .iter()
+    .all(|name| dir.join(name).is_file())
 }
 
 pub(crate) fn read_package_artifact_with_budget(
