@@ -540,7 +540,7 @@ impl AppState {
         if !report.rebuilt.is_empty() {
             tracing::info!(
                 packages = %report.rebuilt.join(", "),
-                compiler = interpreter::COMPILER_ID,
+                compiler = interpreter::compiler_id(),
                 "recompiled installed packages for the current compiler"
             );
             self.evict_all_prepared_packages();

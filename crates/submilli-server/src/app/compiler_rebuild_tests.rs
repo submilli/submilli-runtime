@@ -36,7 +36,7 @@ async fn boot_recompiles_unstamped_packages_and_keeps_serving_the_rest() {
         .expect("rebuilt package loads");
     assert_eq!(
         ok.metadata.compiler.as_deref(),
-        Some(interpreter::COMPILER_ID)
+        Some(interpreter::compiler_id())
     );
     assert_ne!(ok.wasm, b"STALE-WASM");
     let error = state
@@ -45,7 +45,7 @@ async fn boot_recompiles_unstamped_packages_and_keeps_serving_the_rest() {
         .expect_err("broken package stays unavailable");
     let text = error.to_string();
     assert!(text.contains("@t/bad"), "{text}");
-    assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+    assert!(text.contains(interpreter::compiler_id()), "{text}");
 }
 
 fn write_package(root: &std::path::Path, name: &str, source: &str) {

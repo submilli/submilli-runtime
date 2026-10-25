@@ -156,7 +156,8 @@ pub struct ArtifactMetadata {
     /// additive — older artifacts (no `source`) read back as `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<PackageSource>,
-    /// Compiler that produced `pkg.wasm`, `{version}+{fingerprint}`. Missing on
+    /// Compiler that produced `pkg.wasm`: workspace version plus a hash of the
+    /// Cargo.toml and Cargo.lock packaged with that compiler. Missing on
     /// artifacts written before stamps existed. A mismatch does not make this
     /// file unreadable; the package store rebuilds from [`Artifact::sources`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -198,7 +199,7 @@ impl ArtifactMetadata {
             keywords: Vec::new(),
             dependencies,
             source: None,
-            compiler: Some(interpreter::COMPILER_ID.to_string()),
+            compiler: Some(interpreter::compiler_id().to_string()),
         };
         metadata.sort_dependencies();
         metadata
@@ -220,7 +221,7 @@ impl ArtifactMetadata {
             keywords,
             dependencies,
             source: None,
-            compiler: Some(interpreter::COMPILER_ID.to_string()),
+            compiler: Some(interpreter::compiler_id().to_string()),
         };
         metadata.sort_dependencies();
         metadata

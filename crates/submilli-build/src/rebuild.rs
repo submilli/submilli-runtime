@@ -21,7 +21,7 @@ const COMPLETE_MARKER: &str = "COMPLETE";
 const CACHE_KEY_FILE: &str = "cache-key";
 
 pub(crate) fn current_compiler() -> &'static str {
-    interpreter::COMPILER_ID
+    interpreter::compiler_id()
 }
 
 pub(crate) fn needs_rebuild(metadata: &ArtifactMetadata) -> bool {

@@ -4,70 +4,62 @@ fn main() {
     if std::env::var_os("SUBMILLI_SKIP_HTTP_TESTS").is_some_and(|value| value == "1") {
         println!("cargo:rustc-cfg=skip_http_tests");
     }
-    println!(
-        "cargo:rustc-env=SUBMILLI_COMPILER_FINGERPRINT={}",
-        compiler_fingerprint()
+    verify_packaged_manifests();
+}
+
+/// The published crate cannot see the workspace root, so the manifests it checks
+/// are copies under `compiler-identity/`. In this repository those copies must
+/// be the workspace files, or the stamp would describe a different compiler
+/// than the one being built.
+fn verify_packaged_manifests() {
+    let manifest_dir = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by cargo"),
+    );
+    println!("cargo:rerun-if-changed=compiler-identity/workspace-Cargo.toml");
+    println!("cargo:rerun-if-changed=compiler-identity/workspace-Cargo.lock");
+    let Some(workspace) = workspace_root(&manifest_dir) else {
+        return;
+    };
+    println!("cargo:rerun-if-changed=../../Cargo.toml");
+    println!("cargo:rerun-if-changed=../../Cargo.lock");
+    assert_same(
+        &workspace.join("Cargo.toml"),
+        &manifest_dir.join("compiler-identity/workspace-Cargo.toml"),
+    );
+    assert_same(
+        &workspace.join("Cargo.lock"),
+        &manifest_dir.join("compiler-identity/workspace-Cargo.lock"),
     );
 }
 
-/// Hash of the compiler sources. Installed packages record it so an unreleased
-/// compiler change rebuilds them without a hand-bumped schema version.
-///
-/// Paths use `/` and are sorted, so the stamp does not depend on the host.
-/// `tests` directories and dotfiles are omitted; a change that only lives there
-/// cannot affect emitted wasm.
-fn compiler_fingerprint() -> String {
-    use sha2::{Digest, Sha256};
-    use std::path::PathBuf;
-
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let src = PathBuf::from(manifest_dir).join("src");
-    println!("cargo:rerun-if-changed=src");
-    let mut files = Vec::new();
-    collect(&src, &src, &mut files);
-    files.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut hasher = Sha256::new();
-    for (relative, bytes) in &files {
-        hasher.update((relative.len() as u64).to_le_bytes());
-        hasher.update(relative.as_bytes());
-        hasher.update((bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
+fn workspace_root(manifest_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let candidate = manifest_dir.join("../..");
+    let member = candidate.join("crates/interpreter");
+    let manifest = std::fs::canonicalize(manifest_dir).ok()?;
+    let member = std::fs::canonicalize(member).ok()?;
+    if manifest == member {
+        std::fs::canonicalize(candidate).ok()
+    } else {
+        None
     }
-    hasher
-        .finalize()
-        .iter()
-        .take(8)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
-fn collect(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
-    let entries = std::fs::read_dir(dir)
-        .unwrap_or_else(|error| panic!("read compiler sources in {}: {error}", dir.display()));
-    for entry in entries {
-        let entry = entry.unwrap_or_else(|error| panic!("read compiler source entry: {error}"));
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') || name == "tests" {
-            continue;
-        }
-        if path.is_dir() {
-            collect(root, &path, out);
-            continue;
-        }
-        if !path.is_file() {
-            continue;
-        }
-        let relative = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .components()
-            .map(|component| component.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/");
-        let bytes = std::fs::read(&path)
-            .unwrap_or_else(|error| panic!("read compiler source {}: {error}", path.display()));
-        out.push((relative, bytes));
+fn assert_same(workspace: &std::path::Path, packaged: &std::path::Path) {
+    let left = std::fs::read(workspace)
+        .unwrap_or_else(|error| panic!("read workspace manifest {}: {error}", workspace.display()));
+    let right = std::fs::read(packaged).unwrap_or_else(|error| {
+        panic!(
+            "compiler identity file {} is missing ({error}); copy {} to {}",
+            packaged.display(),
+            workspace.display(),
+            packaged.display()
+        )
+    });
+    if left != right {
+        panic!(
+            "{} does not match {}. Copy the workspace file over the packaged one so the published crate checks the manifests this build used.",
+            packaged.display(),
+            workspace.display()
+        );
     }
 }
