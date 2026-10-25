@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 const MAX_OUTPUT: u64 = 64 * 1024 * 1024;
 const MAX_RUN_OUTPUT: u64 = 1024 * 1024 * 1024;
 #[derive(Serialize, Deserialize)]
-enum State {
+enum FileUpdateState {
+    #[serde(skip)]
+    Initial,
     Prepared(Content),
     Completed(Result<Outcome, String>),
 }
@@ -39,22 +41,14 @@ impl DurableFilesystem {
             )
             .await
             .map_err(backend)?;
-        let state = journal
-            .state
-            .as_deref()
-            .map(deserialize::<State>)
-            .transpose()
-            .map_err(backend)?;
+        let state = decode_state(&journal).map_err(backend)?;
         let operation = UpdatePublication {
             filesystem: self.clone(),
             gate,
             journal,
             path: path.to_owned(),
         };
-        match state {
-            Some(state) => operation.resume(unit, state, update).await,
-            None => operation.prepare(unit, update).await,
-        }
+        operation.execute(unit, state, update).await
     }
 }
 
@@ -66,12 +60,20 @@ struct UpdatePublication {
     path: String,
 }
 impl UpdatePublication {
-    async fn resume(
+    async fn execute(
         self,
         mut unit: Box<dyn UnitOfWork>,
-        state: State,
+        state: FileUpdateState,
         update: &mut dyn FileUpdate,
     ) -> Result<FileUpdateOutput, PortError> {
+        let bytes = match &state {
+            FileUpdateState::Initial => return self.prepare(unit, update).await,
+            FileUpdateState::Prepared(content) => content.bytes,
+            FileUpdateState::Completed(Ok(outcome)) => outcome.bytes,
+            FileUpdateState::Completed(Err(_)) => {
+                return Err(backend(RecoveryError::Conflict.into()));
+            }
+        };
         let size = unit
             .update_output_bytes(&self.filesystem.run_id, &self.journal.id)
             .await
@@ -98,20 +100,15 @@ impl UpdatePublication {
         })
         .await
         .map_err(backend)?;
-        let bytes = match &state {
-            State::Prepared(content) => content.bytes,
-            State::Completed(Ok(outcome)) => outcome.bytes,
-            State::Completed(Err(_)) => return Err(backend(RecoveryError::Conflict.into())),
-        };
         // A saved preparation may already have been published. A failed check
         // must terminate this attempt rather than let guest code skip its receipt.
         update
             .authorize(&output.bytes, bytes)
             .map_err(PortError::after_effect)?;
-        if matches!(state, State::Completed(_)) {
+        if matches!(state, FileUpdateState::Completed(_)) {
             return Ok(output);
         }
-        let State::Prepared(content) = state else {
+        let FileUpdateState::Prepared(content) = state else {
             return Err(backend(RecoveryError::Conflict.into()));
         };
         let work = update.work()?;
@@ -180,7 +177,7 @@ impl UpdatePublication {
                 }
                 other => other,
             })?;
-            self.journal.state = Some(serialize(&State::Prepared(content.clone()))?);
+            self.journal.state = Some(serialize(&FileUpdateState::Prepared(content.clone()))?);
             unit.save_journal_entry(self.journal.clone()).await?;
             let output = Arc::new(prepared.output.bytes);
             unit.save_update_output(&self.journal.run_id, &self.journal.id, output.clone())
@@ -221,7 +218,7 @@ impl UpdatePublication {
                 files.publish_file_update(&id, &path, &captured, &work)
             })
             .await?;
-            self.journal.state = Some(serialize(&State::Completed(Ok(Outcome {
+            self.journal.state = Some(serialize(&FileUpdateState::Completed(Ok(Outcome {
                 bytes: content.bytes,
             })))?);
             self.filesystem
@@ -233,6 +230,13 @@ impl UpdatePublication {
             Ok(output)
         })
         .await
+    }
+}
+
+fn decode_state(journal: &JournalEntry) -> Result<FileUpdateState, FilesystemError> {
+    match &journal.state {
+        Some(bytes) => deserialize(bytes),
+        None => Ok(FileUpdateState::Initial),
     }
 }
 
