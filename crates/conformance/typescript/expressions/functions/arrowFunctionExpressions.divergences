@@ -1,17 +1,1 @@
-types: 74 of 123 tsc entries compared, 3 differ
-
-line 55: arr(4).charAt(0)
-  tsc:  string
-  ours: <error>
-
-line 55: arr(4)
-  tsc:  string
-  ours: <error>
-
-line 55: arr
-  tsc:  (n: number) => string
-  ours: (arg0: number) => <error>
-
-errors:
-line 54: ours: `+` not defined for `string` and `number` (tsc accepts)
-line 70: ours: `+` not defined for `string` and `number` (tsc accepts)
+types: 79 of 123 tsc entries compared, 0 differ

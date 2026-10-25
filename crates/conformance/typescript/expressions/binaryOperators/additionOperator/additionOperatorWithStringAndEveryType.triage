@@ -1,2 +1,2 @@
-line 17, 18, 26, 27, 35, 37, 38, 39 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
-line 21 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
+line 17, 26, 38, 39 extra: by-design spec §1.6 `+` concatenates a string only with a string or a number, and converts no other operand
+line 21 extra: by-design spec §1.6 `+` concatenates a string only with a string or a number, and converts no other operand

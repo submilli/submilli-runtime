@@ -1376,9 +1376,14 @@ impl Inferer<'_> {
         };
         let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
         let (typed_value, value_ty) =
-            self.infer_expr(value, compound_value_hint(&lhs_ty).as_ref())?;
-        let result_ty =
-            self.check_compound_arith(op, (synth_lhs, &lhs_ty), (typed_value, &value_ty), op_span)?;
+            self.infer_expr(value, compound_value_hint(op, &lhs_ty).as_ref())?;
+        let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
+            op,
+            (synth_lhs, &lhs_ty),
+            (typed_value, &value_ty),
+            op_span,
+            span,
+        )?;
         let check_ty = compound_result_target(&lhs_ty, &ty);
         if !matches!(result_ty, Type::Error)
             && !matches!(check_ty, Type::Error)
@@ -2334,12 +2339,13 @@ impl Inferer<'_> {
             };
             let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
             let (typed_value, value_ty) =
-                self.infer_expr(value, compound_value_hint(&lhs_ty).as_ref())?;
-            let result_ty = self.check_compound_arith(
+                self.infer_expr(value, compound_value_hint(op, &lhs_ty).as_ref())?;
+            let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
                 (typed_value, &value_ty),
                 op_span,
+                span,
             )?;
             // Re-check assignability: catches literal-refined slots (e.g. `1|2|3`)
             // where arithmetic widens the result to `number`.
@@ -2643,7 +2649,7 @@ impl Inferer<'_> {
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let (typed_value, value_ty) =
-            self.infer_expr(value, compound_value_hint(&rw.read).as_ref())?;
+            self.infer_expr(value, compound_value_hint(op, &rw.read).as_ref())?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         // A prelude interface property is read through its host getter, not a
@@ -2667,11 +2673,12 @@ impl Inferer<'_> {
                 ty: rw.read.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        let result_ty = self.check_compound_arith(
+        let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
             op,
             (synth_lhs, &rw.read),
             (typed_value, &value_ty),
             op_span,
+            stmt_span,
         )?;
         // The setter's type decides, even beside a getter typed `never`.
         if !matches!(result_ty, Type::Error)
@@ -2749,7 +2756,7 @@ impl Inferer<'_> {
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
         let (typed_value, value_ty) =
-            self.infer_expr(value, compound_value_hint(&elem_ty).as_ref())?;
+            self.infer_expr(value, compound_value_hint(op, &elem_ty).as_ref())?;
         // Built before the operator check so the check can name it as the
         // narrowing culprit.
         let synth_lhs = self
@@ -2763,11 +2770,12 @@ impl Inferer<'_> {
                 ty: read_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        let result_ty = self.check_compound_arith(
+        let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
             op,
             (synth_lhs, &read_ty),
             (typed_value, &value_ty),
             op_span,
+            stmt_span,
         )?;
         let check_ty = compound_result_target(&read_ty, &elem_ty);
         if !matches!(result_ty, Type::Error)
@@ -2805,38 +2813,67 @@ impl Inferer<'_> {
     }
 
     /// The result of `lhs op= rhs`, reported against `op_span` when the operator
-    /// has no rule for the pair. The operand expressions come along so a dead
-    /// narrowing on either side can be named as the real cause — the guard is
-    /// often written and correct, just not where the compound assignment sits.
+    /// has no rule for the pair, and the operands to combine: `s += n` converts
+    /// `n` as `s + n` does, at `span`, the assignment's. The operand expressions
+    /// come along so a dead narrowing on either side can be named as the real
+    /// cause — the guard is often written and correct, just not where the
+    /// compound assignment sits.
     fn check_compound_arith(
         &mut self,
         op: BinOp,
         lhs: (ExprId, &Type),
         rhs: (ExprId, &Type),
         op_span: Span,
-    ) -> Result<Type, crate::compiler_error::CompilerFailure> {
+        span: Span,
+    ) -> Result<(Type, ExprId, ExprId), crate::compiler_error::CompilerFailure> {
         let (lt, rt) = (lhs.1, rhs.1);
-        if let Some(ty) = compound_arith_result(op, lt, rt) {
-            return Ok(ty);
+        if let Some(ty) = self.compound_accepts(op, lt, rt) {
+            let (lhs, rhs) = if op == BinOp::Add {
+                self.convert_for_concatenation(lhs, rhs, span)?
+            } else {
+                (lhs.0, rhs.0)
+            };
+            return Ok((ty, lhs, rhs));
         }
         let sym = binary_op_text(op);
         let culprit = self
-            .nullable_binary_culprit(lhs, rhs, |l, r| compound_arith_result(op, l, r).is_some());
+            .nullable_binary_culprit(lhs, rhs, |l, r| self.compound_accepts(op, l, r).is_some());
         self.error_with_narrowing_hint(
             op_span,
             format!("`{sym}=` not defined for `{lt}` and `{rt}`"),
             Vec::new(),
             culprit,
         )?;
-        Ok(Type::Error)
+        Ok((Type::Error, lhs.0, rhs.0))
+    }
+
+    /// [`compound_arith_result`], with `+=` also concatenating a number onto a
+    /// string, as `+` does.
+    fn compound_accepts(&self, op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
+        compound_arith_result(op, lt, rt).or_else(|| {
+            if op == BinOp::Add {
+                self.plus_accepts(lt, rt)
+            } else {
+                None
+            }
+        })
     }
 }
 
 /// The hint for a compound assignment's value: the target's widened read type,
 /// except that a `never` target hints nothing, so the result's own type is
-/// what gets reported against it, once.
-fn compound_value_hint(read_ty: &Type) -> Option<Type> {
+/// what gets reported against it, once. Nor does a string target of `+=`,
+/// whose value may be a number that concatenation converts.
+fn compound_value_hint(op: BinOp, read_ty: &Type) -> Option<Type> {
     if matches!(read_ty.peel(), Type::Never) {
+        return None;
+    }
+    if op == BinOp::Add
+        && matches!(
+            read_ty.primitive_behavior(),
+            Type::String | Type::StringLiteral(_)
+        )
+    {
         return None;
     }
     Some(read_ty.widen_literal())
