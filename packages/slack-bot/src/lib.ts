@@ -236,7 +236,6 @@ export function getIdentity(): SlackIdentity {
  * Post a message as the bot and return Slack's stored message.
  * Set `threadTs` to reply in a thread. The bot must be allowed to post in the
  * target conversation, which normally means it must already be a member.
- * Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
  * @param input Message text, destination, and optional thread/unfurl settings.
   * @returns The message as stored by Slack, including its `ts` for later updates or threading.
  * @capability slack.com/bot/sendMessage { channelId: string }
@@ -256,7 +255,6 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
  * Open or resume a 1:1 DM with a workspace user, send text as the bot, and
  * return Slack's stored message. The recipient must not be the bot itself.
  * Requires Slack's `im:write` and `chat:write` bot-token scopes.
- * Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
  * @param userId Workspace user ID that should receive the message.
  * @param text Message text.
   * @returns The message as stored by Slack, posted in the DM conversation.
@@ -276,7 +274,6 @@ export function sendDirectMessage(userId: string, text: string): SlackMessage {
  * text as the bot, and return Slack's stored message. Do not include the bot's
  * own user ID.
  * Requires Slack's `mpim:write` and `chat:write` bot-token scopes.
- * Callers do not pass metadata. A configured `SLACK_BOT_MESSAGE_METADATA` value is attached.
  * @param userIds Workspace user IDs that should receive the message.
  * @param text Message text.
   * @returns The message as stored by Slack, posted in the group DM conversation.
@@ -295,8 +292,6 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
 /**
  * Replace the text of a message authored by this bot and return the refreshed message.
  * Slack does not allow a bot token to edit messages authored by another user or app.
- * Metadata is omitted: Slack keeps the message's existing metadata, and an empty
- * object would remove it. This does not read `SLACK_BOT_MESSAGE_METADATA`.
  * @param ref Channel and timestamp of the bot-authored message.
  * @param text Replacement message text.
   * @returns The edited message, re-read from Slack after the update.
@@ -305,6 +300,8 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
 export function updateMessage(ref: MessageRef, text: string): SlackMessage {
     const { channelId, ts } = ref;
     check("slack.com/bot/updateMessage", { channelId: channelId });
+    // Omit metadata. Slack keeps the stored value when the field is absent;
+    // an empty object would remove it. Do not read the configured variable here.
     const data = slackPost("chat.update", { channel: channelId, ts: ts, text: text }).json() as UpdateResponse;
     requireOk(data, 200);
     const refreshed = messages("conversations.replies", { channel: data.channel, ts: data.ts, limit: 1 });
