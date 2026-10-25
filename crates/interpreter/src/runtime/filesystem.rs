@@ -75,6 +75,51 @@ impl FilesystemError {
     }
 }
 
+/// Own blocking-pool work until completion, including after caller cancellation.
+/// A later operation drains its predecessor before dispatch; execution cleanup
+/// calls `finish` before releasing the filesystem's roots and resource guards.
+#[derive(Clone, Default)]
+pub struct FilesystemWorkers {
+    pending: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl FilesystemWorkers {
+    pub async fn run<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce() -> Result<T, FilesystemError> + Send + 'static,
+    ) -> Result<T, FilesystemError> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|error| FilesystemError::Backend(Box::new(error)))?;
+        let mut pending = self.pending.lock().await;
+        finish_worker(&mut pending).await?;
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        *pending = Some(runtime.spawn_blocking(move || {
+            // If cancelled, destroy the result and its guards before joining.
+            let _ = sender.send(operation());
+        }));
+        finish_worker(&mut pending).await?;
+        receiver
+            .await
+            .map_err(|error| FilesystemError::Backend(Box::new(error)))?
+    }
+
+    pub async fn finish(&self) -> Result<(), FilesystemError> {
+        finish_worker(&mut *self.pending.lock().await).await
+    }
+}
+
+async fn finish_worker(
+    pending: &mut Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), FilesystemError> {
+    let Some(worker) = pending.as_mut() else {
+        return Ok(());
+    };
+    // Cancellation must leave the handle registered for the next drain.
+    let result = worker.await;
+    *pending = None;
+    result.map_err(|error| FilesystemError::Backend(Box::new(error)))
+}
+
 #[derive(Clone)]
 pub struct MountInfo {
     pub path: String,
@@ -293,6 +338,10 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
 }
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
+    /// Drain owned native work after cancelling calls, before releasing roots.
+    async fn finish(&self) -> Result<(), FilesystemError> {
+        Ok(())
+    }
     /// update_file retains prepared bytes/results and completed receipts across retries.
     fn supports_update_replay(&self) -> bool {
         false
@@ -308,7 +357,8 @@ pub trait Filesystem: Send + Sync {
     fn path_cost(&self, _path: &str) -> u64 {
         0
     }
-    fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
+    /// Resolving placement may follow filesystem links and must not block the host.
+    async fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
     /// Whole regular-file observation, with nonblocking special-file refusal.
     async fn read_regular(
         &self,
@@ -492,3 +542,6 @@ pub trait MutationBudget: Send {
     fn syscalls(&mut self, count: u64, settled: bool) -> wasmtime::Result<()>;
     fn copied(&mut self, entries: u64, bytes: u64) -> wasmtime::Result<()>;
 }
+
+#[cfg(test)]
+mod tests;

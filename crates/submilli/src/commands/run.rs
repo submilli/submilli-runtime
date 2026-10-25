@@ -593,7 +593,7 @@ fn execute_on_this_thread(
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
     });
-    let cleanup = rt.block_on(store.data_mut().blocking_work.finish());
+    let cleanup = rt.block_on(store.data_mut().finish_blocking_work());
     let (dispatch, secondary_cleanup) = settle_worker_cleanup(dispatch, cleanup);
     let run_elapsed = run_started.elapsed();
     let exit = match dispatch {
@@ -634,21 +634,18 @@ fn execute_on_this_thread(
     exit
 }
 
-fn settle_worker_cleanup<T>(
+fn settle_worker_cleanup<T, E: Into<wasmtime::Error>>(
     dispatch: wasmtime::Result<T>,
-    cleanup: Result<(), interpreter::runtime::blocking::BlockingWorkDrainError>,
-) -> (
-    wasmtime::Result<T>,
-    Option<interpreter::runtime::blocking::BlockingWorkDrainError>,
-) {
+    cleanup: Result<(), E>,
+) -> (wasmtime::Result<T>, Option<E>) {
     match (dispatch, cleanup) {
-        (Ok(_), Err(error)) => (
-            Err(
-                interpreter::runtime::host::fatal_host_error("worker cleanup failed")
-                    .context(error),
-            ),
-            None,
-        ),
+        (Ok(_), Err(error)) => {
+            let error = error.into();
+            let marker = interpreter::runtime::host::FatalHostError::new(format!(
+                "worker cleanup failed: {error}"
+            ));
+            (Err(error.context(marker)), None)
+        }
         (dispatch, cleanup) => (dispatch, cleanup.err()),
     }
 }
@@ -1222,7 +1219,7 @@ mod worker_cleanup_tests {
         for message in ["execution failed", "execution cancelled"] {
             let cleanup = injected_drain_failure().await;
             let (result, secondary) =
-                settle_worker_cleanup::<()>(Err(wasmtime::Error::msg(message)), Err(cleanup));
+                settle_worker_cleanup::<(), _>(Err(wasmtime::Error::msg(message)), Err(cleanup));
             assert_eq!(result.unwrap_err().to_string(), message);
             assert_eq!(
                 secondary.unwrap().errors(),

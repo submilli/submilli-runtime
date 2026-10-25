@@ -2,8 +2,8 @@
 use super::durable::{EffectId, RunId};
 use super::filesystem::{
     DirectoryEntry, DirectoryHandle, DirectoryReader, FileReader, FileWriter, Filesystem,
-    FilesystemError, FilesystemInfo, MutationBudget, OpenWrite, ReadItem, ReadOutput, ReadPosition,
-    ReaderHandle, ReaderOptions, TempFile, WriterHandle, bounded_read,
+    FilesystemError, FilesystemInfo, FilesystemWorkers, MutationBudget, OpenWrite, ReadItem,
+    ReadOutput, ReadPosition, ReaderHandle, ReaderOptions, TempFile, WriterHandle, bounded_read,
 };
 use super::filesystem::{DirectoryNames, FileContents, FileUpdate, FileUpdateOutput};
 use super::fs::{self, ContainError, ContentPath, FileIdentity, LinkPath, MAX_REMOVE_ENTRIES};
@@ -23,24 +23,38 @@ use std::sync::Arc;
 pub struct DefaultFilesystem {
     vfs: Vfs,
     run_id: RunId,
+    workers: FilesystemWorkers,
 }
 impl DefaultFilesystem {
     pub fn new(vfs: Vfs, run_id: RunId) -> Self {
-        Self { vfs, run_id }
+        Self {
+            vfs,
+            run_id,
+            workers: FilesystemWorkers::default(),
+        }
     }
 }
 #[async_trait::async_trait]
 impl Filesystem for DefaultFilesystem {
+    async fn finish(&self) -> Result<(), FilesystemError> {
+        self.workers.finish().await
+    }
     fn info(&self) -> FilesystemInfo {
         FilesystemInfo::from_vfs(&self.vfs)
     }
     fn cwd(&self) -> &str {
         self.vfs.cwd()
     }
-    fn placement(&self, path: &str) -> Result<Placement, FilesystemError> {
-        Ok(fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?
-            .placement()
-            .clone())
+    async fn placement(&self, path: &str) -> Result<Placement, FilesystemError> {
+        let vfs = self.vfs.clone();
+        let path = path.to_owned();
+        self.workers
+            .run(move || {
+                Ok(fs::resolve_content(&vfs, vfs.cwd(), &path)?
+                    .placement()
+                    .clone())
+            })
+            .await
     }
     async fn read_regular(
         &self,
@@ -49,7 +63,12 @@ impl Filesystem for DefaultFilesystem {
         maximum_bytes: u64,
         limits: &TenantLimits,
     ) -> Result<FileContents, FilesystemError> {
-        read_regular(&self.vfs, work.as_deref(), path, maximum_bytes, limits)
+        let vfs = self.vfs.clone();
+        let path = path.to_owned();
+        let limits = limits.for_worker();
+        self.workers
+            .run(move || read_regular(&vfs, work.as_deref(), &path, maximum_bytes, &limits))
+            .await
     }
     async fn directory_names(
         &self,
@@ -58,7 +77,12 @@ impl Filesystem for DefaultFilesystem {
         maximum_entries: usize,
         limits: &TenantLimits,
     ) -> Result<DirectoryNames, FilesystemError> {
-        directory_names(&self.vfs, work.as_deref(), path, maximum_entries, limits)
+        let vfs = self.vfs.clone();
+        let path = path.to_owned();
+        let limits = limits.for_worker();
+        self.workers
+            .run(move || directory_names(&vfs, work.as_deref(), &path, maximum_entries, &limits))
+            .await
     }
     async fn update_file(
         &self,
@@ -71,8 +95,18 @@ impl Filesystem for DefaultFilesystem {
         let Some(bytes) = prepared.contents else {
             return Ok(prepared.output);
         };
+        let memory = update.reserve(bytes.capacity() as u64)?;
         let work = update.work()?;
-        let result = replace_existing(&self.vfs, path, &bytes, &work);
+        let worker_work = work.clone();
+        let vfs = self.vfs.clone();
+        let path = path.to_owned();
+        let result = self
+            .workers
+            .run(move || {
+                let _memory = memory;
+                replace_existing(&vfs, &path, &bytes, &worker_work)
+            })
+            .await;
         update.settle(&work)?;
         result?;
         Ok(prepared.output)
@@ -84,11 +118,17 @@ impl Filesystem for DefaultFilesystem {
         path: &str,
         follow: bool,
     ) -> Result<cap_std::fs::Metadata, FilesystemError> {
-        if follow {
-            Ok(fs::resolve_content(&self.vfs, self.vfs.cwd(), path)?.metadata()?)
-        } else {
-            Ok(fs::resolve_link(&self.vfs, self.vfs.cwd(), path)?.symlink_metadata()?)
-        }
+        let vfs = self.vfs.clone();
+        let path = path.to_owned();
+        self.workers
+            .run(move || {
+                if follow {
+                    Ok(fs::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()?)
+                } else {
+                    Ok(fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()?)
+                }
+            })
+            .await
     }
     async fn read(
         &self,
@@ -517,6 +557,9 @@ fn replace_existing(
             .rename_to(&destination)
             .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
         quota.commit();
+        // The default backend is nonpersistent. Windows cannot fsync a
+        // directory through this handle; Unix also persists the rename here.
+        #[cfg(unix)]
         destination
             .sync_parent()
             .map_err(|e| FilesystemError::Backend(Box::new(e)))?;
@@ -1611,6 +1654,194 @@ fn copy_entry(
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    async fn cancelled_combined_cleanup_retains_an_earlier_worker_failure() {
+        use super::super::{StoreData, Vfs};
+        let mut data = StoreData::with_vfs("run".into(), Vfs::tempdir().unwrap());
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release_native, wait_native) = tokio::sync::oneshot::channel();
+        let mut native = Box::pin(data.blocking_work.spawn(move || {
+            started.send(()).unwrap();
+            wait_native.blocking_recv().unwrap();
+            panic!("injected native failure");
+        }));
+        tokio::select! {
+            _ = &mut native => panic!("native worker finished early"),
+            result = ready => result.unwrap(),
+        }
+        drop(native);
+        release_native.send(()).unwrap();
+
+        // Keep filesystem cleanup pending after the native failure is observed.
+        let workers = FilesystemWorkers::default();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let mut operation = Box::pin(workers.run(move || {
+            started.send(()).unwrap();
+            wait.blocking_recv().unwrap();
+            Ok(())
+        }));
+        tokio::select! {
+            _ = &mut operation => panic!("filesystem worker finished early"),
+            result = ready => result.unwrap(),
+        }
+        drop(operation);
+        // Use the real default backend's worker registry for execution cleanup.
+        let filesystem = DefaultFilesystem {
+            vfs: data.vfs.clone(),
+            workers,
+            run_id: "run".into(),
+        };
+        data.filesystem = Arc::new(filesystem);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let mut cleanup = Box::pin(data.finish_blocking_work());
+                let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                assert!(std::future::Future::poll(cleanup.as_mut(), &mut context).is_pending());
+                drop(cleanup);
+                if data.worker_cleanup_error.is_some() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        release.send(()).unwrap();
+        let error = data.finish_blocking_work().await.unwrap_err();
+        assert!(error.to_string().contains("blocking worker panicked"));
+        data.finish_blocking_work().await.unwrap();
+    }
+
+    use super::super::filesystem::PreparedFileUpdate;
+    use super::*;
+
+    #[test]
+    fn code_observations_wait_for_the_blocking_pool() {
+        single_worker_runtime().block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::write(root.path().join("input"), b"abc").unwrap();
+            let filesystem = DefaultFilesystem::new(
+                Vfs::external(root.path().to_owned()).unwrap(),
+                "run".into(),
+            );
+            let limits = TenantLimits::new(1024);
+            queued(filesystem.placement("/input")).await.unwrap();
+            let contents = queued(filesystem.read_regular(None, "/input", 10, &limits))
+                .await
+                .unwrap();
+            assert_eq!(contents.bytes, b"abc");
+            assert_eq!(limits.host_attached_bytes(), 4);
+            drop(contents);
+            let names = queued(filesystem.directory_names(None, "/", 10, &limits))
+                .await
+                .unwrap();
+            assert_eq!(names.names, ["input"]);
+            drop(names);
+            let effect = "stat".into();
+            for follow in [true, false] {
+                let metadata = queued(filesystem.metadata(&effect, None, "/input", follow))
+                    .await
+                    .unwrap();
+                assert_eq!(metadata.len(), 3);
+            }
+            assert_eq!(limits.host_attached_bytes(), 0);
+            assert!(limits.peak_bytes() > 0);
+        });
+    }
+
+    #[test]
+    fn cancelled_code_update_retains_worker_memory_until_publication() {
+        single_worker_runtime().block_on(async {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("input");
+            std::fs::write(&path, b"before").unwrap();
+            let mut data = crate::runtime::StoreData::with_vfs(
+                "run".into(),
+                Vfs::external(root.path().to_owned()).unwrap(),
+            );
+            let filesystem = data.filesystem.clone();
+            let limits = TenantLimits::new(1024);
+            let mut update = Replacement {
+                limits: limits.for_worker(),
+            };
+            let effect = "replace".into();
+            let (release, wait) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || wait.blocking_recv());
+            let mut pending =
+                Box::pin(filesystem.update_file(&effect, "/input", [0; 32], &mut update));
+            assert_pending(pending.as_mut());
+            assert_eq!(std::fs::read(&path).unwrap(), b"before");
+            assert_eq!(limits.host_attached_bytes(), 256);
+            drop(pending);
+            drop(update);
+            assert_eq!(limits.host_attached_bytes(), 256);
+            let mut cleanup = Box::pin(data.finish_blocking_work());
+            assert_pending(cleanup.as_mut());
+            drop(cleanup);
+            release.send(()).unwrap();
+            blocker.await.unwrap().unwrap();
+            data.finish_blocking_work().await.unwrap();
+            assert_eq!(limits.host_attached_bytes(), 0);
+            assert_eq!(std::fs::read(&path).unwrap(), b"after");
+            assert_eq!(limits.peak_bytes(), 256);
+        });
+    }
+
+    struct Replacement {
+        limits: TenantLimits,
+    }
+    #[async_trait::async_trait]
+    impl FileUpdate for Replacement {
+        async fn prepare(&mut self) -> Result<PreparedFileUpdate, FilesystemError> {
+            let mut bytes = Vec::with_capacity(256);
+            bytes.extend_from_slice(b"after");
+            Ok(PreparedFileUpdate {
+                contents: Some(bytes),
+                output: FileUpdateOutput {
+                    bytes: Vec::new(),
+                    memory: self.reserve(0)?,
+                },
+            })
+        }
+        fn authorize(&mut self, _: &[u8], _: u64) -> Result<(), FilesystemError> {
+            panic!("default updates do not replay");
+        }
+        fn work(&mut self) -> Result<Arc<WorkBudget>, FilesystemError> {
+            Ok(Arc::new(WorkBudget::new(u64::MAX)))
+        }
+        fn settle(&mut self, _: &WorkBudget) -> Result<(), FilesystemError> {
+            Ok(())
+        }
+        fn reserve(&mut self, bytes: u64) -> Result<HostBytes, FilesystemError> {
+            HostBytes::new(&self.limits, bytes).map_err(|e| FilesystemError::Execution(e.into()))
+        }
+    }
+
+    fn single_worker_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap()
+    }
+    async fn queued<F: std::future::Future>(future: F) -> F::Output {
+        let (release, wait) = tokio::sync::oneshot::channel();
+        let blocker = tokio::task::spawn_blocking(move || wait.blocking_recv());
+        let mut future = Box::pin(future);
+        assert_pending(future.as_mut());
+        release.send(()).unwrap();
+        blocker.await.unwrap().unwrap();
+        future.await
+    }
+    fn assert_pending<F: std::future::Future>(future: std::pin::Pin<&mut F>) {
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(
+            future.poll(&mut context).is_pending(),
+            "filesystem I/O ran while blocking pool was occupied"
+        );
+    }
+
+    #[tokio::test]
     async fn resource_serialization_keeps_identity_without_local_handles() {
         use super::*;
         use crate::runtime::limits::TenantLimits;
@@ -1818,7 +2049,6 @@ mod tests {
         assert!(work.spent() > 0);
     }
 
-    use super::*;
     use crate::runtime::fs::resolve_link;
     #[test]
     fn copy_entry_and_depth_limits_preserve_completed_work() {

@@ -138,8 +138,10 @@ pub struct StoreData {
     #[cfg(test)]
     pub(crate) array_growth: array_storage::GrowthStats,
     /// After cancelling a host call, the execution owner drains this before
-    /// reusing or releasing the store. Blocking work may still be cleaning up.
+    /// reusing or releasing the store via `finish_blocking_work`.
+    /// Filesystem workers are owned separately and drained by the same method.
     pub blocking_work: blocking::BlockingWork,
+    worker_cleanup_error: Option<wasmtime::Error>,
     pub git: Option<crate::stdlib::git::GitConfig>,
     pub(crate) git_history: Option<Arc<crate::stdlib::git::log_cache::Cache>>,
     pub console: Box<dyn Write + Send>,
@@ -300,6 +302,31 @@ pub struct LinkedPackageModule<'a> {
 }
 
 impl StoreData {
+    /// Drain every native worker before capturing usage, reusing the store or
+    /// releasing session resources. Both groups drain even when one fails.
+    pub async fn finish_blocking_work(&mut self) -> wasmtime::Result<()> {
+        if let Err(error) = self.blocking_work.finish().await {
+            self.record_worker_cleanup_error(error.into());
+        }
+        if let Err(error) = self.filesystem.finish().await {
+            self.record_worker_cleanup_error(error.into());
+        }
+        match self.worker_cleanup_error.take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn record_worker_cleanup_error(&mut self, error: wasmtime::Error) {
+        // A cancelled drain must retain failures observed before its next await.
+        self.worker_cleanup_error = Some(match self.worker_cleanup_error.take() {
+            Some(previous) => {
+                previous.context(format!("additional worker cleanup failure: {error}"))
+            }
+            None => error,
+        });
+    }
+
     pub fn with_vfs(run_id: RunId, vfs: Vfs) -> Self {
         Self::with_vfs_and_cap(run_id, vfs, DEFAULT_MAX_STORE_BYTES)
     }
@@ -324,6 +351,7 @@ impl StoreData {
             git: None,
             git_history: None,
             blocking_work: blocking::BlockingWork::default(),
+            worker_cleanup_error: None,
             fs_max_read_size: DEFAULT_FS_MAX_READ_SIZE,
             http_client: crate::stdlib::http::default_http_client(),
             http_max_response_size: DEFAULT_HTTP_MAX_RESPONSE_SIZE,
@@ -637,7 +665,7 @@ impl RuntimeConfig {
     /// One-shot runner: load compiled Wasm, instantiate, call `main`, return typed result
     /// and captured console. Async like the rest of the runtime — a caller that
     /// isn't on a runtime bridges it itself (`pollster::block_on` for
-    /// compute/`fs`-only programs, a tokio runtime when `http` is involved). For
+    /// compute-only programs, a Tokio runtime for filesystem or network I/O). For
     /// live console streaming, build a custom `Store<StoreData>` and call
     /// [`dispatch_main_async`] directly.
     ///

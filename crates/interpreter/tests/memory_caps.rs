@@ -21,6 +21,11 @@ fn cap_run_with_host_bytes(
     src: &str,
     max_store_bytes: u64,
 ) -> wasmtime::Result<(wasmtime::Result<()>, u64)> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let compiled = compile_script(src, "test.subm", submilli_engine::FileId(0), &[], &[])
         .map_err(|d| wasmtime::Error::msg(format!("compile failed: {d:#?}")))?;
     // One engine may serve tenants with smaller caps than its own defaults.
@@ -31,7 +36,7 @@ fn cap_run_with_host_bytes(
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm)?;
     let mut linker = Linker::<StoreData>::new(&engine);
-    let result = pollster::block_on(async {
+    let result = runtime.block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("runtime initialization fits within cap");
@@ -223,6 +228,11 @@ function main(): void {
 
 #[test]
 fn gc_heap_capacity_returns_sensible_value() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let src = r#"
 function main(): void {
   let arr: number[] = [];
@@ -243,7 +253,7 @@ function main(): void {
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);
-    let instance = pollster::block_on(async {
+    let instance = runtime.block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("install runtime");
@@ -252,7 +262,9 @@ function main(): void {
             .await
             .expect("instantiate")
     });
-    pollster::block_on(dispatch_main_async(&mut store, &instance)).expect("run");
+    runtime
+        .block_on(dispatch_main_async(&mut store, &instance))
+        .expect("run");
 
     let capacity = store.gc_heap_capacity() as u64;
     let observed = store.data().tenant_limits.observed_bytes();
@@ -282,6 +294,11 @@ fn small_tenant_can_run_within_its_cap() {
 
 #[test]
 fn gc_reservation_counts_toward_host_allocations() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let cfg = RuntimeConfig::default();
     let engine = cfg.engine().expect("engine");
     let data =
@@ -289,7 +306,9 @@ fn gc_reservation_counts_toward_host_allocations() {
     let mut store = cfg.store(&engine, data).expect("store");
     install_tenant_limits(&mut store);
     let mut linker = Linker::<StoreData>::new(&engine);
-    pollster::block_on(install_runtime_async(&mut linker, &mut store)).expect("runtime");
+    runtime
+        .block_on(install_runtime_async(&mut linker, &mut store))
+        .expect("runtime");
     let limits = &store.data().tenant_limits;
     let observed = limits.observed_bytes();
     assert!(
@@ -364,6 +383,11 @@ fn download_does_not_count_against_gc_heap_cap() {
     // 4 MB body — 16x the cap; any byte routed to GC heap trips the limiter.
     const BODY_BYTES: u64 = 4 * 1024 * 1024;
 
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let src = r#"
 import { download, DownloadResult } from "submilli:http";
 function main(): void {
@@ -401,7 +425,7 @@ function main(): void {
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);
-    let instance = pollster::block_on(async {
+    let instance = runtime.block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("install runtime");
@@ -410,7 +434,9 @@ function main(): void {
             .await
             .expect("instantiate")
     });
-    pollster::block_on(dispatch_main_async(&mut store, &instance)).expect("main ran without OOM");
+    runtime
+        .block_on(dispatch_main_async(&mut store, &instance))
+        .expect("main ran without OOM");
 
     let written = std::fs::metadata(tmp.path().join("big.bin"))
         .expect("file written")
@@ -511,6 +537,11 @@ function main(): void {
 #[test]
 fn download_stops_at_the_vfs_size_limit() {
     const LIMIT: u64 = 1024 * 1024;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let src = r#"
 import { download } from "submilli:http";
 import { exists, writeText } from "submilli:fs";
@@ -539,7 +570,7 @@ function main(): void {
     let mut store = cfg.store(&engine, data).expect("store");
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);
-    let instance = pollster::block_on(async {
+    let instance = runtime.block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("install runtime");
@@ -548,7 +579,9 @@ function main(): void {
             .await
             .expect("instantiate")
     });
-    pollster::block_on(dispatch_main_async(&mut store, &instance)).expect("main asserts hold");
+    runtime
+        .block_on(dispatch_main_async(&mut store, &instance))
+        .expect("main asserts hold");
 }
 
 /// A download that overwrites a larger file is counted by its growth over it, and
@@ -556,6 +589,11 @@ function main(): void {
 #[test]
 fn a_download_overwrite_is_counted_by_its_growth() {
     const LIMIT: u64 = 1024 * 1024;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
     let src = r#"
 import { download } from "submilli:http";
 import { writeText } from "submilli:fs";
@@ -581,7 +619,7 @@ function main(): void {
     let mut store = cfg.store(&engine, data).expect("store");
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);
-    let instance = pollster::block_on(async {
+    let instance = runtime.block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("install runtime");
@@ -590,7 +628,8 @@ function main(): void {
             .await
             .expect("instantiate")
     });
-    pollster::block_on(dispatch_main_async(&mut store, &instance))
+    runtime
+        .block_on(dispatch_main_async(&mut store, &instance))
         .expect("the overwrite freed 500 KB for the next write");
 }
 

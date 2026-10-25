@@ -285,6 +285,7 @@ async fn write(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.write", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -321,6 +322,7 @@ async fn write_text(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.writeText", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -357,6 +359,7 @@ async fn append(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.append", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -393,6 +396,7 @@ async fn append_text(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.appendText", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;

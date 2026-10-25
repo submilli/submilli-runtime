@@ -356,6 +356,7 @@ impl ContentPath {
     }
 
     /// Persist the directory entry after an atomic replacement.
+    #[cfg(unix)]
     pub(crate) fn sync_parent(&self) -> Result<(), ContainError> {
         let parent = self
             .rel

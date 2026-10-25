@@ -1485,6 +1485,13 @@ pub fn throw_error(caller: &mut Caller<'_, StoreData>, message: &str) -> wasmtim
 #[derive(Debug)]
 pub struct FatalHostError(String);
 
+impl FatalHostError {
+    /// Mark an existing error as fatal without erasing its typed cause.
+    pub fn new(message: impl std::fmt::Display) -> Self {
+        Self(message.to_string())
+    }
+}
+
 impl std::fmt::Display for FatalHostError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(out, "internal host error: {}", self.0)
@@ -1567,7 +1574,7 @@ pub(crate) fn invariant_trap(message: &'static str) -> wasmtime::Error {
 }
 
 pub fn fatal_host_error(message: impl std::fmt::Display) -> wasmtime::Error {
-    wasmtime::Error::new(FatalHostError(message.to_string()))
+    wasmtime::Error::new(FatalHostError::new(message))
 }
 
 /// Convert a host body's `Err` into the guest throw of the matching built-in

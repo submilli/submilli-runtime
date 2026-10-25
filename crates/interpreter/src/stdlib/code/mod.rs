@@ -68,7 +68,7 @@ async fn edit(
     budget.charge(caller, original.len().saturating_mul(64))?;
     fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
     let change = prepare_edit(caller, budget, &original, old, new, replace_all, near_line)?;
-    prepare_change(caller, budget, path, "edit", &original, change)
+    prepare_change(caller, budget, path, "edit", &original, change).await
 }
 
 async fn insert_at(
@@ -82,7 +82,7 @@ async fn insert_at(
     budget.charge(caller, original.len().saturating_mul(64))?;
     fuel::charge(&mut *caller, fuel::SCAN, original.len() as u64)?;
     let change = text::insert(&original, line, text)?;
-    prepare_change(caller, budget, path, "insertAt", &original, change)
+    prepare_change(caller, budget, path, "insertAt", &original, change).await
 }
 
 async fn diff_files(
@@ -119,10 +119,10 @@ async fn apply_patch(
     )?;
     fuel::charge(&mut *caller, fuel::PARSE, patch.len() as u64)?;
     let change = patch::apply(&original, patch)?;
-    prepare_change(caller, budget, path, "applyPatch", &original, change)
+    prepare_change(caller, budget, path, "applyPatch", &original, change).await
 }
 
-fn prepare_change(
+async fn prepare_change(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
@@ -157,6 +157,7 @@ fn prepare_change(
             .data()
             .filesystem
             .placement(path)
+            .await
             .map_err(|e| backend_error(_op, path, e))?;
         require_writable(&*caller, ticket, &placement, "fs.write", path)?;
     }

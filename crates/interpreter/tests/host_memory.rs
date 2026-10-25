@@ -141,6 +141,10 @@ fn measure_scenario(
     seed: impl FnOnce(&std::path::Path),
     install_client: impl FnOnce(&mut StoreData),
 ) -> (usize, tempfile::TempDir) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let compiled = compile_script(
         src,
         "host_memory.subm",
@@ -163,7 +167,7 @@ fn measure_scenario(
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);
-    let instance = pollster::block_on(async {
+    let instance = runtime.block_on(async {
         install_runtime_async(&mut linker, &mut store)
             .await
             .expect("install runtime");
@@ -176,7 +180,9 @@ fn measure_scenario(
     let baseline = ALLOCATED.load(Ordering::Relaxed);
     reset_peak_to_current();
 
-    pollster::block_on(dispatch_main_async(&mut store, &instance)).expect("main ran");
+    runtime
+        .block_on(dispatch_main_async(&mut store, &instance))
+        .expect("main ran");
 
     let post_peak = PEAK.load(Ordering::Relaxed);
     let delta = post_peak.saturating_sub(baseline);

@@ -73,7 +73,7 @@ impl std::error::Error for FinalizerError {}
 /// a deadline ([`RuntimeConfig::arm_timeout`](crate::runtime::RuntimeConfig::arm_timeout)
 /// with a timeout around this future), and the host services and capability
 /// checks in the store's data. Whether this future completes or is dropped,
-/// the caller must then drain `store.data_mut().blocking_work`.
+/// the caller must then call `store.data_mut().finish_blocking_work().await`.
 ///
 /// Every thread polling this future must meet
 /// [`RuntimeConfig::native_stack_size`](crate::runtime::RuntimeConfig::native_stack_size)'s

@@ -379,6 +379,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             let work = begin_work(caller)?;
                             let placement = filesystem
                                 .placement(&path)
+                                .await
                                 .map_err(|e| backend_error("fs.mkdir", &path, e))?;
                             if !(recursive
                                 && filesystem
@@ -429,6 +430,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             let work = begin_work(caller)?;
                             let placement = filesystem
                                 .placement(&path)
+                                .await
                                 .map_err(|e| backend_error("fs.remove", &path, e))?;
                             require_writable(&*caller, ticket, &placement, "fs.remove", &path)?;
                             let mut budget = HostMutationBudget::new(caller);
@@ -479,10 +481,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             let work = begin_work(caller)?;
                             let placement = filesystem
                                 .placement(&from)
+                                .await
                                 .map_err(|e| backend_error("fs.move", &from, e))?;
                             require_writable(&*caller, ticket, &placement, "fs.move", &from)?;
                             let placement = filesystem
                                 .placement(&to)
+                                .await
                                 .map_err(|e| backend_error("fs.move", &to, e))?;
                             require_writable(&*caller, ticket, &placement, "fs.move", &to)?;
                             let mut budget = HostMutationBudget::new(caller);
@@ -540,6 +544,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                             let work = begin_work(caller)?;
                             let placement = filesystem
                                 .placement(&to)
+                                .await
                                 .map_err(|e| backend_error("fs.copy", &to, e))?;
                             require_writable(&*caller, ticket, &placement, "fs.copy", &to)?;
                             let mut budget = HostMutationBudget::new(caller);

@@ -134,11 +134,15 @@ fn run_on(root: &Path, src: &str) -> wasmtime::Result<Option<String>> {
     install_tenant_limits(&mut store);
     let module = Module::new(&engine, &compiled.wasm).expect("module");
     let mut linker = Linker::<StoreData>::new(&engine);
-    pollster::block_on(async {
-        install_runtime_async(&mut linker, &mut store).await?;
-        let instance = linker.instantiate_async(&mut store, &module).await?;
-        dispatch_main_async(&mut store, &instance).await
-    })
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            install_runtime_async(&mut linker, &mut store).await?;
+            let instance = linker.instantiate_async(&mut store, &module).await?;
+            dispatch_main_async(&mut store, &instance).await
+        })
 }
 
 /// Assert the program refused with the containment diagnostic rather than any other error.

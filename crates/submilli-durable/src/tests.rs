@@ -986,3 +986,40 @@ fn empty_write_retries_release_only_public_bytes() {
     assert_eq!(quota.used(), 0);
     assert!(std::fs::read(root.path().join("file")).unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn reopened_filesystem_drains_abandoned_observation_workers() {
+    use interpreter::runtime::filesystem::Filesystem;
+    let root = tempfile::tempdir().unwrap();
+    let run = uuid::Uuid::new_v4().to_string().into();
+    let units: UnitFactory = Arc::new(|| Box::pin(async { Err(StoreError::Conflict) }));
+    let filesystem = DurableFilesystem::open(
+        Vfs::external(root.path().to_owned()).unwrap(),
+        &run,
+        units.clone(),
+    )
+    .await
+    .unwrap();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let (release, wait) = tokio::sync::oneshot::channel();
+    let mut observation = Box::pin(filesystem.workers.run(move || {
+        started.send(()).unwrap();
+        wait.blocking_recv().unwrap();
+        Ok(())
+    }));
+    tokio::select! {
+        _ = &mut observation => panic!("observation finished early"),
+        result = ready => result.unwrap(),
+    }
+    drop(observation);
+    let reopened = filesystem
+        .reopen(filesystem.vfs().clone(), &run, units)
+        .await
+        .unwrap();
+    drop(filesystem);
+    let mut cleanup = Box::pin(reopened.finish());
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(std::future::Future::poll(cleanup.as_mut(), &mut context).is_pending());
+    release.send(()).unwrap();
+    cleanup.await.unwrap();
+}

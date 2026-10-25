@@ -151,8 +151,7 @@ async fn run_finalizer(
     };
     store
         .data_mut()
-        .blocking_work
-        .finish()
+        .finish_blocking_work()
         .await
         .map_err(|_| FinalizerFailure::Execution)?;
     outcome

@@ -1627,6 +1627,10 @@ settlement; it does not select an operation by name. Three phases:
 
 Code tools use the installed filesystem for all reads, directory names, metadata,
 and updates. Read/navigation observations retain their outer history boundary.
+Both filesystem implementations dispatch these native I/O operations and placement
+resolution to Tokio's blocking pool. Workers retain their fuel and memory guards;
+waiting for the pool does not consume fuel. Text transformation, capability checks,
+and result conversion remain on the host caller.
 The three updates retain the transformation/diff formulas above and add
 `HASH(serialized request) + PARSE(2 * encoded result bytes)` before publication.
 A default update charges `IO(new bytes) + SYSCALL(8)` before publication.
@@ -1642,7 +1646,7 @@ charge their capability-context decoding before publication. Noops and rejected
 text matches publish no file and use ordinary outer outcome recording.
 Git and HTTP downloads retain their separate native VFS execution.
 
-Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. The default filesystem continues charging its caller directly. Its implementation, directory traversal, copy/move/remove helpers and writer publication live in `runtime/default_filesystem.rs`; guest handles in `stdlib/fs/handles.rs` retain host-memory accounting. Cost formulas and effect boundaries are unchanged.
+Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. Other default filesystem operations retain their existing caller-side charges. Its implementation, directory traversal, copy/move/remove helpers and writer publication live in `runtime/default_filesystem.rs`; guest handles in `stdlib/fs/handles.rs` retain host-memory accounting. Cost formulas and effect boundaries are unchanged.
 
 SUB-1292 algorithm admission shares the worker's existing meter. Before an externally visible creation, remote request or publication, it switches to settlement: later work cannot replace an effect's outcome with a fuel refusal. After the blocking worker drains, the combined meter settles on both success and failure; guest result conversion runs afterward with normal fuel checks.
 
