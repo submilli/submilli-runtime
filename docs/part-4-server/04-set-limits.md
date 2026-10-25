@@ -10,7 +10,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d3f9e74a3f8c16b4507cd4a7128d4b43f4c91301a46c3141b35f2ff965d9b9ff"
+  contentHash: "8be320a473e309938dfd3737c20897f0942dab695edae538849d6865000b2c97"
   confirmedAt: "2026-10-06T10:27:39.000Z"
 ---
 
@@ -41,6 +41,8 @@ and the fixed limits inside the standard library.
 | Embedding tokens, all runs | 50,000,000 | `max_embedding_tokens` | `QuotaExceededError` |
 | Embedding requests, one run | 1,000 | `max_execution_embedding_requests` | `QuotaExceededError` |
 | Embedding requests in flight | 4 | `max_embedding_concurrency` | Further requests wait |
+| Durable runs executing at once | 4 | `max_durable_runs` | Further durable runs wait in the queue |
+| Runs waiting on an application tool | 256 | `max_suspended_runs` | A durable run becomes `stuck` with `execution_interrupted` |
 
 "The run ends" means the program can't catch it. The caller gets the
 error in place of a result, with a `kind` (`fuel_exhausted`, `timeout`,

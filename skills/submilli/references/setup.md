@@ -125,6 +125,8 @@ the revision files once and moves the directory under
 `server/archive/blueprints/`; stop the old server before an upgrade that performs
 this import and back up the state volume while the server is stopped.
 
+To let session runs survive server crashes and restarts, set `durable_execution: true` in `server.yaml`. The server needs its persistent database and an encryption key, and refuses to start without them. See [run recovery](https://submilli.ai/docs/reference/run-recovery/).
+
 Mistakes to avoid:
 
 - Probes use `GET /healthz` or `submilli-server --health-check`, which need
