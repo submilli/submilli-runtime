@@ -111,10 +111,6 @@ pub(crate) async fn retire(
         .bind(id)
         .execute(&mut *connection)
         .await?;
-    sqlx::query("UPDATE history_objects SET state='deleting' WHERE run_id=?")
-        .bind(id)
-        .execute(&mut *connection)
-        .await?;
     sqlx::query("DELETE FROM durable_outcomes WHERE run_id=?")
         .bind(id)
         .execute(connection)

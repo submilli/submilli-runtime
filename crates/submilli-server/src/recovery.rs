@@ -180,7 +180,9 @@ pub(crate) async fn supervise(
                             })
                         })
                         .collect();
-                    retirements.spawn(retire_runs(app.clone(), ready, draining.clone()));
+                    if !ready.is_empty() {
+                        retirements.spawn(retire_runs(app.clone(), ready, draining.clone()));
+                    }
                 }
                 Err(error) => tracing::warn!(%error, "retirement discovery unavailable"),
             }
@@ -398,11 +400,6 @@ async fn retire_runs(state: AppState, runs: Vec<Run>, draining: CancellationToke
             .session_manager()
             .retire_run(run.reservation_id())
             .await;
-    }
-    if let Some(objects) = state.history_objects()
-        && let Err(error) = objects.collect().await
-    {
-        tracing::warn!(%error, "history object collection will retry");
     }
 }
 
@@ -643,6 +640,12 @@ pub(crate) async fn retire(
     } else {
         false
     };
+    if let Some(objects) = &manager.history_objects {
+        objects
+            .remove_run(run.session_id(), id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     let mut unit = units.begin().await.map_err(|e| e.to_string())?;
     unit.retire_run_resources(id)
         .await

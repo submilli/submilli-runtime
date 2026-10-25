@@ -677,8 +677,6 @@ async fn builtin_migrations_create_blueprint_and_session_tables() {
                 "durable_filesystem_writers",
                 "durable_outcomes",
                 "finalizer_context",
-                "history_object_store",
-                "history_objects",
                 "last_runs",
                 "mcp_grants",
                 "run_programs",

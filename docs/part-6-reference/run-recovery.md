@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "e71cc722e482e2c2f28a48ad0592754cc92a2a62a8c5c22799853364832ad66c"
+  contentHash: "77d1054362b9e1fafb83418a7bbf6d6b522a4e54a47e85e7d3c878c26320fa17"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -83,17 +83,18 @@ work. Session closure preserves its record in run history.
 
 | Property | Contract |
 | --- | --- |
-| Directory | `<volume_dir>/durable-objects/`, private to the server and unavailable through guest filesystems or named volumes |
+| Directory | `<volume_dir>/durable-objects/<session-id>/<run-id>/`, private to the server and unavailable through guest filesystems or named volumes |
+| Directory names | Session and run IDs must each be a single unchanged path component. Empty names, dot components, separators, and NUL are rejected; directory symlinks are never followed. Names of at most 255 bytes containing only lowercase ASCII letters, digits, hyphens, underscores, or dots are used directly. Other valid IDs use `~` followed by their SHA-256 digest, avoiding case and Unicode aliases |
 | Placement | Serialized history entries at or below `inline_threshold` stay in SQLite. Larger entries use encrypted object files with an encrypted SQLite reference. The size includes outcome metadata before encryption |
 | Threshold changes | Apply to new entries. Existing inline entries and object references remain readable |
 | Encryption | Uses the retained secret-store encryption key, including the existing key identifier and authenticated run/sequence binding |
 | Limits | Existing 64 MiB payload limit, 64 KiB entry-metadata allowance, and 1 GiB per-run history limit still apply. Object bytes count toward the run limit. There is no separate object-store capacity limit or guest filesystem quota charge |
 | Publication | The file and its directory are synced before the reference and run progress commit together |
 | Read failure | A missing, corrupt, truncated, or undecryptable object stops recovery. It does not repeat the recorded operation |
-| Retention | Objects remain while the run can recover, including while stuck or waiting for a tool. Terminal run retirement removes history references and schedules object deletion. Deletion failures retry |
-| Ownership | One database-owning server on local or block storage. Database and directory identities must match. EFS and multi-node sharing are unsupported |
+| Retention | Files remain with their run, including interrupted writes without a committed outcome. Terminal retirement removes the run directory and then its SQLite outcomes. Failed deletion is retried before resources are marked retired. An empty session directory is removed |
+| Ownership | One database-owning server on local or block storage. The persisted volume root belongs to that database. EFS and multi-node sharing are unsupported |
 | Backup and restore | Stop the server and preserve SQLite, the complete volume root, and the encryption key together. Restoring only SQLite or replacing the object directory can make retained runs unrecoverable |
-| Disabling durable execution | An existing object store still requires its directory and key for retention and cleanup |
+| Disabling durable execution | Retained recorded runs still require their directory and key for retention and cleanup |
 | HTTP downloads | Use their existing filesystem and effect behavior. They do not use a separate object API |
 
 ```yaml title="server.yaml (fragment)"

@@ -23,8 +23,6 @@ use submilli_shared::secret_store::{KEY_ID_LEN, SecretCipher};
 use tokio::sync::{Mutex, RwLock};
 
 mod files;
-mod initialization;
-mod sql;
 #[cfg(all(test, not(windows)))]
 mod tests;
 
@@ -35,14 +33,8 @@ pub(crate) struct HistoryObjects {
     config: DurableObjectConfig,
     // A collector must exclude complete append/read operations, not just file I/O.
     access: Arc<RwLock<()>>,
-    maintenance: Mutex<Maintenance>,
+    maintenance: Mutex<BlockingWork>,
 }
-#[derive(Default)]
-struct Maintenance {
-    workers: BlockingWork,
-    after: String,
-}
-
 /// One persistence owner per attempt. Cancellation leaves file work registered here.
 struct ObjectHistory {
     objects: Arc<HistoryObjects>,
@@ -75,12 +67,12 @@ impl ObjectReference {
 }
 
 impl HistoryObjects {
-    pub(crate) async fn exists(database: &ServerDatabase) -> Result<bool, StoreError> {
+    pub(crate) async fn has_retained_runs(database: &ServerDatabase) -> Result<bool, StoreError> {
         database
             .read(|connection| {
                 Box::pin(async move {
                     Ok(
-                        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM history_object_store)")
+                        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE recovery_mode='recorded' AND resources_retired=0)")
                             .fetch_one(connection)
                             .await?,
                     )
@@ -108,29 +100,13 @@ impl HistoryObjects {
                 .await
                 .map_err(invalid)??,
         );
-        let candidate = new_id()?;
-        let (identity, has_objects) = database
-            .transaction(move |connection| {
-                Box::pin(sql::initialize_store_identity(connection, candidate))
-            })
-            .await
-            .map_err(|e| StoreError::Database(Box::new(e)))?;
-        validate_id(&identity)?;
-        let retained = files.clone();
-        workers
-            .spawn(move || retained.identify(&identity, has_objects))
-            .await
-            .map_err(invalid)??;
         Ok(Arc::new(Self {
             database,
             files,
             sealer: Sealer::new(Some(cipher)),
             config,
             access: Arc::new(RwLock::new(())),
-            maintenance: Mutex::new(Maintenance {
-                workers,
-                after: String::new(),
-            }),
+            maintenance: Mutex::new(workers),
         }))
     }
 
@@ -142,54 +118,38 @@ impl HistoryObjects {
         })
     }
 
-    /// Bounded sweep, including failed deletion after the owning run was retired.
-    /// Exclusive access also excludes cancelled workers until their native I/O ends.
-    pub(crate) async fn collect(&self) -> Result<(), StoreError> {
-        let mut maintenance = self.maintenance.lock().await;
-        let access = Arc::new(self.access.clone().write_owned().await);
-        let mut unit = SqliteTransaction::begin(self.database.clone())
-            .await
-            .map_err(durable_error)?;
-        let after = maintenance.after.clone();
-        let ids = unit
-            .query_recoverable(move |connection| Box::pin(sql::claim_collection(connection, after)))
-            .await
-            .map_err(durable_error)?;
-        unit.commit().await.map_err(durable_error)?;
-        checkpoint("collection-claimed");
-        maintenance.after = if ids.len() == 100 {
-            ids.last().cloned().unwrap_or_default()
-        } else {
-            String::new()
-        };
-        for id in ids {
-            let files = self.files.clone();
-            let retained = access.clone();
-            let candidate = id.clone();
-            let removed = maintenance
-                .workers
-                .spawn(move || {
-                    let _access = retained;
-                    files.remove(&candidate)
-                })
-                .await
-                .map_err(invalid)?;
-            if let Err(error) = removed {
-                tracing::warn!(object = %id, %error, "history object deletion will retry");
-                continue;
-            }
-            let mut unit = SqliteTransaction::begin(self.database.clone())
-                .await
-                .map_err(durable_error)?;
-            unit.query_recoverable(move |connection| {
-                Box::pin(sql::finish_collection(connection, id))
+    /// The terminal run remains eligible for retirement until deletion and its
+    /// directory barriers succeed. Cancelled workers retain the exclusive guard.
+    pub(crate) async fn remove_run(&self, session: &str, run: &RunId) -> Result<(), StoreError> {
+        let directory = files::RunDirectory::new(session, run.as_str())?;
+        let mut workers = self.maintenance.lock().await;
+        let access = self.access.clone().write_owned().await;
+        let files = self.files.clone();
+        workers
+            .spawn(move || {
+                let _access = access;
+                files.remove_run(&directory)
             })
             .await
-            .map_err(durable_error)?;
-            unit.commit().await.map_err(durable_error)?;
-            checkpoint("collected");
-        }
-        Ok(())
+            .map_err(invalid)?
+    }
+
+    async fn directory(&self, run: &RunId) -> Result<files::RunDirectory, StoreError> {
+        let id = run.to_string();
+        let session: String = self
+            .database
+            .read(move |connection| {
+                Box::pin(async move {
+                    sqlx::query_scalar("SELECT session_id FROM runs WHERE run_id=?")
+                        .bind(id)
+                        .fetch_one(connection)
+                        .await
+                        .map_err(Into::into)
+                })
+            })
+            .await
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
+        files::RunDirectory::new(&session, run.as_str())
     }
 }
 
@@ -227,6 +187,11 @@ impl HistoryStore for ObjectHistory {
         let Some((kind, content)) = record else {
             return Ok(None);
         };
+        let directory = if kind == 1 {
+            Some(self.objects.directory(run).await?)
+        } else {
+            None
+        };
         let files = self.objects.files.clone();
         let sealer = self.objects.sealer.clone();
         let run = run.clone();
@@ -250,8 +215,11 @@ impl HistoryStore for ObjectHistory {
                         if sealer.key_id() != Some(reference.key_id) {
                             return Err(invalid("history object key mismatch"));
                         }
-                        record_object_work(&storage_fuel, reference.sealed_bytes, 3);
-                        let content = files.read(&reference)?;
+                        record_object_work(&storage_fuel, reference.sealed_bytes, 5);
+                        let directory = directory
+                            .as_ref()
+                            .ok_or_else(|| invalid("history object directory unavailable"))?;
+                        let content = files.read(directory, &reference)?;
                         if Sealer::sealed_key_id(&content) != Some(reference.key_id.as_slice()) {
                             return Err(invalid("history object envelope key mismatch"));
                         }
@@ -314,25 +282,28 @@ impl ObjectHistory {
         let Some(reference) = prepared.reference else {
             return Ok(StoredEntry::Inline(prepared.encoded.content));
         };
-        self.reserve(attempt, sequence, &reference.id).await?;
-        checkpoint("reserved");
+        // Fence before touching files. Retirement marks the run terminal before
+        // taking exclusive access, so no late append can recreate a retired tree.
+        let progress = self.progress(attempt).await?;
+        if progress.position != sequence {
+            return Err(StoreError::Conflict);
+        }
+        let directory = self.objects.directory(&attempt.run_id).await?;
         let sealed_reference = submilli_durable::codec::encode(
             &self.objects.sealer,
             &reference_owner(&attempt.run_id, sequence),
             &reference,
         )?;
-        let id = reference.id.clone();
         let bytes = reference.sealed_bytes;
         let files = self.objects.files.clone();
         workers
             .spawn(move || {
                 let _access = access;
-                files.publish(&reference, &prepared.encoded.content)
+                files.publish(&directory, &reference, &prepared.encoded.content)
             })
             .await
             .map_err(invalid)??;
         Ok(StoredEntry::Object {
-            id,
             sealed_reference,
             bytes,
         })
@@ -363,7 +334,6 @@ impl ObjectHistory {
                         .await?;
                     }
                     StoredEntry::Object {
-                        id,
                         sealed_reference,
                         bytes,
                     } => {
@@ -376,7 +346,6 @@ impl ObjectHistory {
                             bytes,
                         )
                         .await?;
-                        sql::bind(connection, &attempt.run_id, sequence, &id).await?;
                     }
                 }
                 Ok(())
@@ -388,25 +357,6 @@ impl ObjectHistory {
         checkpoint("committed");
         Ok(())
     }
-
-    async fn reserve(
-        &self,
-        attempt: &ExecutionAttempt,
-        sequence: u64,
-        id: &str,
-    ) -> Result<(), StoreError> {
-        let mut unit = SqliteTransaction::begin(self.objects.database.clone())
-            .await
-            .map_err(durable_error)?;
-        let attempt = attempt.clone();
-        let id = id.to_owned();
-        unit.query_recoverable(move |connection| {
-            Box::pin(sql::reserve(connection, attempt, sequence, id))
-        })
-        .await
-        .map_err(durable_error)?;
-        unit.commit().await.map_err(durable_error)
-    }
 }
 
 struct PreparedEntry {
@@ -417,7 +367,6 @@ struct PreparedEntry {
 enum StoredEntry {
     Inline(Vec<u8>),
     Object {
-        id: String,
         sealed_reference: Vec<u8>,
         bytes: u64,
     },
@@ -432,7 +381,7 @@ fn prepare_entry(
 ) -> Result<PreparedEntry, StoreError> {
     let encoded = entries::encode(sealer, run, entry).map_err(durable_error)?;
     let reference = if encoded.plaintext_bytes > threshold {
-        record_object_work(storage_fuel, encoded.content.len() as u64, 6);
+        record_object_work(storage_fuel, encoded.content.len() as u64, 14);
         Some(ObjectReference {
             version: 1,
             id: new_id()?,
@@ -493,4 +442,17 @@ fn record_object_work(spent: &AtomicU64, bytes: u64, syscalls: u64) {
     let _ = spent.fetch_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
         Some(prior.saturating_add(cost))
     });
+}
+
+#[cfg(all(test, windows))]
+mod platform_tests {
+    #[test]
+    fn native_windows_reports_unsupported_durability() {
+        assert!(
+            super::require_supported_platform()
+                .unwrap_err()
+                .to_string()
+                .contains("native Windows is not supported")
+        );
+    }
 }

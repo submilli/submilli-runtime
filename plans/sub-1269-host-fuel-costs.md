@@ -2114,8 +2114,8 @@ post-outcome conversion can now refuse for insufficient fuel.
 
 | Boundary | Formula and timing |
 | --- | --- |
-| History object write | Additional `IO(sealed bytes) + HASH(sealed bytes) + SYSCALL(6)`, recorded before publication and settled after history completion, including failure. |
-| History object read | Additional `IO(sealed bytes) + HASH(sealed bytes) + SYSCALL(3)`, recorded before reading and settled before replay decoding. |
+| History object write | Additional `IO(sealed bytes) + HASH(sealed bytes) + SYSCALL(14)`, including session/run directory preparation, recorded before publication and settled after history completion, including failure. |
+| History object read | Additional `IO(sealed bytes) + HASH(sealed bytes) + SYSCALL(5)`, including session/run directory opens, recorded before reading and settled before replay decoding. |
 
 The generic effect boundary and server cleanup settle each report once. A completed
 native result is never refused for insufficient persistence fuel. Cancellation drains

@@ -1,6 +1,6 @@
 //! Private capability-relative files. Only encrypted history ever reaches this layer.
 use super::{ObjectReference, checkpoint, invalid};
-use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt};
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::fs::{Dir, File, OpenOptions};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
@@ -29,9 +29,15 @@ impl ObjectFiles {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        sync_directory(parent).map_err(invalid)?;
-        let lock = root
-            .open_with(".lock", options().read(true).write(true).create(true))
+        let parent =
+            Dir::open_ambient_dir(parent, cap_std::ambient_authority()).map_err(invalid)?;
+        sync(&parent)?;
+        // Keep infrastructure names outside the namespace of valid session IDs.
+        let lock = parent
+            .open_with(
+                ".durable-objects.lock",
+                options().read(true).write(true).create(true),
+            )
             .map_err(invalid)?;
         require_private_file(&lock)?;
         let lock = lock.into_std();
@@ -44,48 +50,9 @@ impl ObjectFiles {
         })
     }
 
-    pub(super) fn identify(&self, identity: &str, has_objects: bool) -> Result<(), StoreError> {
-        match self.root.open_with(".identity", options().read(true)) {
-            Ok(mut file) => {
-                require_private_file(&file)?;
-                if file.metadata().map_err(invalid)?.len() != identity.len() as u64 {
-                    return Err(invalid("durable object store identity mismatch"));
-                }
-                let mut bytes = [0; 36];
-                file.read_exact(&mut bytes).map_err(invalid)?;
-                if bytes.as_slice() != identity.as_bytes() {
-                    return Err(invalid("durable object store belongs to another database"));
-                }
-                // Repeat both barriers when recovering an interrupted initialization.
-                file.sync_all().map_err(invalid)?;
-                self.sync()
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !has_objects => {
-                // A replacement DB must not adopt files whose ownership it has lost.
-                for entry in self.root.entries().map_err(invalid)? {
-                    let name = entry.map_err(invalid)?.file_name();
-                    if name != ".lock" && name != ".identity.partial" {
-                        return Err(invalid("unrecognized files in durable object store"));
-                    }
-                }
-                self.remove_if_present(".identity.partial")?;
-                let mut file = self
-                    .root
-                    .open_with(".identity.partial", options().write(true).create_new(true))
-                    .map_err(invalid)?;
-                file.write_all(identity.as_bytes()).map_err(invalid)?;
-                file.sync_all().map_err(invalid)?;
-                self.root
-                    .rename(".identity.partial", &self.root, ".identity")
-                    .map_err(invalid)?;
-                self.sync()
-            }
-            Err(error) => Err(invalid(error)),
-        }
-    }
-
     pub(super) fn publish(
         &self,
+        directory: &RunDirectory,
         reference: &ObjectReference,
         sealed: &[u8],
     ) -> Result<(), StoreError> {
@@ -93,10 +60,11 @@ impl ObjectFiles {
         if sealed.len() as u64 != reference.sealed_bytes {
             return Err(invalid("object publication content mismatch"));
         }
+        let session = prepare_directory(&self.root, &directory.session)?;
+        let run = prepare_directory(&session, &directory.run)?;
         let partial = format!("{}.partial", reference.id);
         let final_name = format!("{}.object", reference.id);
-        let mut file = self
-            .root
+        let mut file = run
             .open_with(&partial, options().write(true).create_new(true))
             .map_err(invalid)?;
         self.checkpoint("staging")?;
@@ -106,25 +74,31 @@ impl ObjectFiles {
         self.checkpoint("file-synced")?;
         // IDs are fresh, never reused, and the exclusive store owner serializes
         // collection against publication. Existing final names are corruption.
-        match self.root.symlink_metadata(&final_name) {
+        match run.symlink_metadata(&final_name) {
             Ok(_) => return Err(invalid("immutable object already exists")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(invalid(error)),
         }
-        self.root
-            .rename(&partial, &self.root, &final_name)
-            .map_err(invalid)?;
+        run.rename(&partial, &run, &final_name).map_err(invalid)?;
         self.checkpoint("published")?;
-        self.sync()?;
+        sync(&run)?;
         self.checkpoint("directory-synced")?;
         Ok(())
     }
 
-    pub(super) fn read(&self, reference: &ObjectReference) -> Result<Vec<u8>, StoreError> {
+    pub(super) fn read(
+        &self,
+        directory: &RunDirectory,
+        reference: &ObjectReference,
+    ) -> Result<Vec<u8>, StoreError> {
         reference.validate()?;
         self.checkpoint("reading")?;
-        let mut file = self
+        let session = self
             .root
+            .open_dir_nofollow(&directory.session)
+            .map_err(invalid)?;
+        let run = session.open_dir_nofollow(&directory.run).map_err(invalid)?;
+        let mut file = run
             .open_with(format!("{}.object", reference.id), options().read(true))
             .map_err(invalid)?;
         require_private_file(&file)?;
@@ -147,12 +121,27 @@ impl ObjectFiles {
         Ok(content)
     }
 
-    pub(super) fn remove(&self, id: &str) -> Result<(), StoreError> {
-        super::validate_id(id)?;
-        self.remove_if_present(&format!("{id}.partial"))?;
-        self.remove_if_present(&format!("{id}.object"))?;
+    pub(super) fn remove_run(&self, directory: &RunDirectory) -> Result<(), StoreError> {
+        let Some(session) = open_if_present(&self.root, &directory.session)? else {
+            return sync(&self.root);
+        };
+        if let Some(run) = open_if_present(&session, &directory.run)? {
+            // This private directory contains only flat immutable objects and
+            // staging files. Unlink entries without following their targets.
+            for entry in run.entries().map_err(invalid)? {
+                run.remove_file(entry.map_err(invalid)?.file_name())
+                    .map_err(invalid)?;
+            }
+            session.remove_dir(&directory.run).map_err(invalid)?;
+        }
         self.checkpoint("unlinked")?;
-        self.sync()?;
+        sync(&session)?;
+        match self.root.remove_dir(&directory.session) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(error) => return Err(invalid(error)),
+        }
+        sync(&self.root)?;
         self.checkpoint("deletion-synced")?;
         Ok(())
     }
@@ -169,24 +158,8 @@ impl ObjectFiles {
         checkpoint(point);
         Ok(())
     }
-
-    fn remove_if_present(&self, name: &str) -> Result<(), StoreError> {
-        match self.root.remove_file(name) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(invalid(error)),
-        }
-    }
-    fn sync(&self) -> Result<(), StoreError> {
-        // Dir may hold an O_PATH descriptor on Linux, which cannot be fsynced.
-        // Open a readable handle relative to the held directory to retain identity.
-        self.root
-            .open(".")
-            .map_err(invalid)?
-            .sync_all()
-            .map_err(invalid)
-    }
 }
+
 fn options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options.follow(FollowSymlinks::No);
@@ -200,7 +173,58 @@ fn require_private_file(file: &File) -> Result<(), StoreError> {
     Ok(())
 }
 
-pub(super) fn sync_directory(path: &Path) -> std::io::Result<()> {
-    let directory = Dir::open_ambient_dir(path, cap_std::ambient_authority())?;
-    directory.open(".")?.sync_all()
+/// IDs come from persisted records as well as requests. Validate before any
+/// filesystem operation, including cleanup; never normalize an unsafe identity.
+pub(super) struct RunDirectory {
+    session: String,
+    run: String,
+}
+impl RunDirectory {
+    pub(super) fn new(session: &str, run: &str) -> Result<Self, StoreError> {
+        Ok(Self {
+            session: directory_name(session)?,
+            run: directory_name(run)?,
+        })
+    }
+}
+fn directory_name(value: &str) -> Result<String, StoreError> {
+    crate::domain::session::SessionId::parse(value.to_owned()).map_err(invalid)?;
+    // Preserve ordinary UUIDs without case-folding or Unicode-normalization
+    // aliases on supported filesystems. '~' cannot occur in literal names, so
+    // digest names cannot collide with a literal custom identity either.
+    let literal = value.len() <= 255
+        && value.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_' | b'.')
+        });
+    if !literal {
+        return Ok(format!("~{:x}", Sha256::digest(value.as_bytes())));
+    }
+    Ok(value.to_owned())
+}
+fn prepare_directory(parent: &Dir, name: &str) -> Result<Dir, StoreError> {
+    match parent.create_dir(name) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(invalid(error)),
+    }
+    let child = parent.open_dir_nofollow(name).map_err(invalid)?;
+    // Repeat the barrier for existing names too: an earlier attempt may have
+    // stopped after mkdir. The held root is private to the server process.
+    sync(parent)?;
+    Ok(child)
+}
+fn open_if_present(parent: &Dir, name: &str) -> Result<Option<Dir>, StoreError> {
+    match parent.open_dir_nofollow(name) {
+        Ok(directory) => Ok(Some(directory)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(invalid(error)),
+    }
+}
+fn sync(directory: &Dir) -> Result<(), StoreError> {
+    // Dir may hold an O_PATH descriptor on Linux, which cannot be fsynced.
+    directory
+        .open(".")
+        .map_err(invalid)?
+        .sync_all()
+        .map_err(invalid)
 }

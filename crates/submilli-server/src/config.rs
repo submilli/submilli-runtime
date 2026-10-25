@@ -296,28 +296,6 @@ impl VolumeRoot {
         self.path.join("durable-objects")
     }
 
-    /// Parents of missing default-root components, ordered from leaf upward.
-    /// Durable startup records these barriers before creating any directories.
-    pub(crate) fn creation_parents(&self) -> std::io::Result<Vec<PathBuf>> {
-        let mut parents = Vec::new();
-        if self.configured {
-            return Ok(parents);
-        }
-        for directory in self.path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
-            match std::fs::metadata(directory) {
-                Ok(_) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
-            let parent = directory
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            parents.push(parent.to_owned());
-        }
-        Ok(parents)
-    }
-
     /// Make the root ready at startup. A configured root must be an existing
     /// directory; the default one is created. Then `managed-local/`,
     /// `sessions/`, `ephemeral/`, and private `durable-objects/` are created when missing.

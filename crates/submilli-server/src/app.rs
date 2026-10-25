@@ -316,14 +316,14 @@ impl AppState {
         // The only place the volume root and its directories are created: a
         // configured root must already be there, the default one is made now.
         let volume_root = crate::config::VolumeRoot::from_config(config.volume_root);
+        volume_root.prepare()?;
         let history_objects = if !database.is_ephemeral()
             && (config.durable_execution
-                || crate::adapters::history::HistoryObjects::exists(&database).await?)
+                || crate::adapters::history::HistoryObjects::has_retained_runs(&database).await?)
         {
             let cipher = config.session_cipher.clone().ok_or_else(|| {
-                anyhow::anyhow!("existing history objects require their encryption key")
+                anyhow::anyhow!("retained recorded runs require their encryption key")
             })?;
-            crate::adapters::history::HistoryObjects::prepare_root(&database, &volume_root).await?;
             Some(
                 crate::adapters::history::HistoryObjects::open(
                     database.clone(),
@@ -334,7 +334,6 @@ impl AppState {
                 .await?,
             )
         } else {
-            volume_root.prepare()?;
             None
         };
         let session_root = volume_root.sessions_dir();
@@ -375,6 +374,7 @@ impl AppState {
                     ),
                 },
             )
+            .with_history_objects(history_objects.clone())
             .with_cipher(config.session_cipher.clone())
             .with_response_retention(ResponseRetention {
                 ttl: config
@@ -554,13 +554,6 @@ impl AppState {
         // New sessions still provision their volumes on first use.
         if retained.is_empty() {
             self.inner.session_manager.volume_registry().prepare();
-        }
-        if let Some(objects) = self.history_objects() {
-            objects.collect().await.map_err(|e| {
-                crate::session_manager::BootError::Idempotency(crate::blueprint::StoreError::Io(
-                    e.to_string(),
-                ))
-            })?;
         }
         self.start_reaper();
         self.start_run_recovery();

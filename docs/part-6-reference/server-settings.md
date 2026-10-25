@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0382e32d89f3f8d9c4de6fc5520eb550b2bd538e1f8f041108173576f47c902f"
+  contentHash: "82c11efbe1e1191aa70eb4241074204032ad4df0baab71b473a20c04c1d1b686"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -198,7 +198,7 @@ mcp_allowed_hosts:
 | `blueprint_dir` | Obsolete. | `$SUBMILLI_HOME/server/blueprints` |
 | `session_store_dir` | Open sessions' lifecycle records, so sessions and idle timeouts survive a restart. | `$SUBMILLI_HOME/server/sessions` |
 | `package_store_dir` | Packages installed with `submilli server packages install`. | `$SUBMILLI_HOME/server/packages` |
-| `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. `durable-objects/` holds private encrypted effect-history entries. | `$SUBMILLI_HOME/server/volumes` |
+| `volume_dir` | `managed-local/<name>` for each `managed-local` volume, `sessions/<session id>` for the files of each session with a `per_session` filesystem, and `ephemeral/` with one directory per run of an `ephemeral` filesystem, deleted when the run ends. `durable-objects/<session-id>/<run-id>/` holds private encrypted effect-history entries, removed during run retirement. | `$SUBMILLI_HOME/server/volumes` |
 | `secret_store.dir` | The encrypted secret store. | `$SUBMILLI_HOME/server/secrets` |
 | `database_path` + `-last-runs` | Last runs over 64 KiB, one directory per session, deleted when the session ends. | `$SUBMILLI_HOME/server/db/submilli.db-last-runs` |
 
