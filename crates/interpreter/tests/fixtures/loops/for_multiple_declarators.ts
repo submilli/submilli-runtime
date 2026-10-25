@@ -31,6 +31,9 @@ function main(): void {
   for (; k < 3; k++, m += 2) {}
   assert(k === 3 && m === 6, "a comma update without a declaration head");
 
+  for (k = 10, m = 0; k > m; k--, m++) {}
+  assert(k === 5 && m === 5, "an initializer may assign several variables");
+
   const order: string[] = [];
   for (let a = log(order, "a"), b = log(order, "b"); false; ) {}
   assert(order.join("") === "ab", "declarators run in source order");

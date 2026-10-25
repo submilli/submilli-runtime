@@ -2723,19 +2723,19 @@ impl<'a> Parser<'a> {
 
     // The trailing `;` of init-statement parsers doubles as the first `;` of the for header.
     fn parse_c_for_tail(&mut self, kw: Token) -> Option<StmtId> {
-        let init = if matches!(self.peek().kind, TokenKind::Semicolon) {
-            self.advance();
-            Vec::new()
-        } else {
-            self.trailing_declarators.clear();
-            let first = match self.peek().kind {
-                TokenKind::Let => self.parse_let_or_const(false)?,
-                TokenKind::Const => self.parse_let_or_const(true)?,
-                _ => self.parse_expression_statement()?,
-            };
-            let mut init = vec![first];
-            init.extend(self.take_trailing_declarators());
-            init
+        let init = match self.peek().kind {
+            TokenKind::Semicolon => {
+                self.advance();
+                Vec::new()
+            }
+            TokenKind::Let | TokenKind::Const => {
+                self.trailing_declarators.clear();
+                let is_const = matches!(self.peek().kind, TokenKind::Const);
+                let mut init = vec![self.parse_let_or_const(is_const)?];
+                init.extend(self.take_trailing_declarators());
+                init
+            }
+            _ => self.parse_for_init_expressions()?,
         };
         let for_stmt = self.finish_c_for(kw, init.clone());
         if for_stmt.is_none() {
@@ -2801,17 +2801,39 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// `i = 0, j = n` in a `for` initializer runs each expression in turn, so each
+    /// becomes its own statement, as each declarator of a `let` head does.
+    fn parse_for_init_expressions(&mut self) -> Option<Vec<StmtId>> {
+        let mut init = vec![self.parse_for_clause_expr()?];
+        while matches!(self.peek().kind, TokenKind::Comma) {
+            self.advance();
+            init.push(self.parse_for_clause_expr()?);
+        }
+        if !self.at_statement_end() {
+            let last = parse_arena_result(self.ast.try_stmt(*init.last()?), &mut self.fatal)?;
+            let what = if matches!(last.kind, StmtKind::Expr(_)) {
+                "expression"
+            } else {
+                "assignment"
+            };
+            self.error_at_peek(format!("expected `;` after {what}"));
+            return None;
+        }
+        self.finish_statement();
+        Some(init)
+    }
+
     /// `i++, j--` in a `for` update runs each expression in turn, so it becomes a
     /// block of their statements; it declares nothing, so the block scopes nothing.
     fn parse_for_update_stmt(&mut self) -> Option<StmtId> {
-        let first = self.parse_for_update_expr()?;
+        let first = self.parse_for_clause_expr()?;
         if !matches!(self.peek().kind, TokenKind::Comma) {
             return Some(first);
         }
         let mut stmts = vec![first];
         while matches!(self.peek().kind, TokenKind::Comma) {
             self.advance();
-            stmts.push(self.parse_for_update_expr()?);
+            stmts.push(self.parse_for_clause_expr()?);
         }
         let start = parse_arena_result(self.ast.try_stmt(first), &mut self.fatal)?
             .span
@@ -2826,7 +2848,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    fn parse_for_update_expr(&mut self) -> Option<StmtId> {
+    fn parse_for_clause_expr(&mut self) -> Option<StmtId> {
         let expr_id = self.parse_expression()?;
         let span = parse_arena_result(self.ast.try_expr(expr_id), &mut self.fatal)?.span;
         let kind = self.statement_kind_for(expr_id)?;
@@ -9663,6 +9685,12 @@ mod tests {
             panic!("expected For");
         };
         assert_eq!(init.len(), 2);
+        let (ast2, diags) = parse_str("for (i = 0, j = 10; i < j; i++) {}");
+        assert!(diags.is_empty(), "{diags:?}");
+        let crate::StmtKind::For { init: assigns, .. } = &single_stmt(&ast2).kind else {
+            panic!("expected For");
+        };
+        assert_eq!(assigns.len(), 2);
         let update = ast.try_stmt(update.unwrap()).unwrap();
         assert!(
             matches!(&update.kind, crate::StmtKind::Block(stmts) if stmts.len() == 2),
