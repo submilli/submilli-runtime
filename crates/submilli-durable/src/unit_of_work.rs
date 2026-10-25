@@ -65,6 +65,26 @@ pub trait UnitOfWork: Send {
     ) -> Result<Option<EffectId>, StoreError>;
     async fn journal_entry_count(&mut self, run_id: &RunId) -> Result<u64, StoreError>;
 
+    /// Actual stored (encrypted) result size, without fetching the payload.
+    /// Opaque results are captured atomically with a prepared file update.
+    async fn update_output_bytes(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<u64>, StoreError>;
+    async fn total_update_output_bytes(&mut self, run: &RunId) -> Result<u64, StoreError>;
+    async fn get_update_output(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<Vec<u8>>, StoreError>;
+    async fn save_update_output(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+        output: Arc<Vec<u8>>,
+    ) -> Result<(), StoreError>;
+
     async fn get_reader(
         &mut self,
         run_id: &RunId,

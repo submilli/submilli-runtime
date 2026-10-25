@@ -403,3 +403,91 @@ pub(super) async fn writer_chunks(
 ) -> Result<Vec<Chunk>, StoreError> {
     sqlx::query("SELECT * FROM durable_filesystem_chunks WHERE scope_id=? AND resource_id=? ORDER BY sequence LIMIT ?").bind(run_id.as_str()).bind(writer.as_str()).bind(limit.min(10001)).fetch_all(connection).await.map_err(database)?.into_iter().map(|row| decode_chunk(row, sealer, run_id)).collect()
 }
+
+pub(super) async fn update_output_bytes(
+    connection: &mut SqliteConnection,
+    run: &RunId,
+    id: &EffectId,
+) -> Result<Option<u64>, StoreError> {
+    let bytes: Option<i64> = sqlx::query_scalar(
+        "SELECT length(output) FROM durable_file_update_outputs WHERE scope_id=? AND operation_id=?",
+    )
+    .bind(run.as_str())
+    .bind(id.as_str())
+    .fetch_optional(connection)
+    .await
+    .map_err(database)?;
+    bytes.map(|n| u64::try_from(n).map_err(invalid)).transpose()
+}
+pub(super) async fn total_update_output_bytes(
+    connection: &mut SqliteConnection,
+    run: &RunId,
+) -> Result<u64, StoreError> {
+    let bytes: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(length(output)),0) FROM durable_file_update_outputs WHERE scope_id=?",
+    )
+    .bind(run.as_str())
+    .fetch_one(connection)
+    .await
+    .map_err(database)?;
+    u64::try_from(bytes).map_err(invalid)
+}
+pub(super) async fn get_update_output(
+    connection: &mut SqliteConnection,
+    sealer: &Sealer,
+    run: &RunId,
+    id: &EffectId,
+) -> Result<Option<Vec<u8>>, StoreError> {
+    let row = sqlx::query(
+        "SELECT bytes,output FROM durable_file_update_outputs WHERE scope_id=? AND operation_id=?",
+    )
+    .bind(run.as_str())
+    .bind(id.as_str())
+    .fetch_optional(connection)
+    .await
+    .map_err(database)?;
+    row.map(|row| {
+        let size: i64 = row.try_get("bytes").map_err(database)?;
+        let encrypted: Vec<u8> = row.try_get("output").map_err(database)?;
+        let owner = serde_json::to_string(&("file-update-output-v1", run, id)).map_err(invalid)?;
+        let bytes = sealer
+            .open(&owner, &encrypted, "file update output")
+            .map_err(invalid)?;
+        if size < 0 || bytes.len() as u64 != size as u64 || bytes.len() > 64 * 1024 * 1024 {
+            return Err(invalid("invalid file update output size"));
+        }
+        Ok(bytes)
+    })
+    .transpose()
+}
+pub(super) async fn save_update_output(
+    connection: &mut SqliteConnection,
+    sealer: &Sealer,
+    run: &RunId,
+    id: &EffectId,
+    output: &[u8],
+) -> Result<(), StoreError> {
+    if output.len() > 64 * 1024 * 1024 {
+        return Err(invalid("file update output exceeds limit"));
+    }
+    if let Some(prior) = get_update_output(connection, sealer, run, id).await? {
+        return if prior == output {
+            Ok(())
+        } else {
+            Err(invalid("file update output is immutable"))
+        };
+    }
+    if total_update_output_bytes(connection, run)
+        .await?
+        .saturating_add(output.len() as u64)
+        > 1024 * 1024 * 1024
+    {
+        return Err(invalid("file update outputs exceed run limit"));
+    }
+    let owner = serde_json::to_string(&("file-update-output-v1", run, id)).map_err(invalid)?;
+    let encrypted = sealer.seal(&owner, output).map_err(invalid)?;
+    sqlx::query("INSERT INTO durable_file_update_outputs(scope_id,operation_id,bytes,output) VALUES(?,?,?,?)")
+        .bind(run.as_str()).bind(id.as_str()).bind(output.len() as i64).bind(encrypted)
+        .execute(connection).await.map_err(database)?;
+    Ok(())
+}

@@ -638,6 +638,10 @@ mod tests {
             Some(crate::stdlib::code::MODULE_NAME),
         ),
         (
+            "src/stdlib/code/update.rs",
+            Some(crate::stdlib::code::MODULE_NAME),
+        ),
+        (
             "src/stdlib/embedding/mod.rs",
             Some(crate::stdlib::embedding::MODULE_NAME),
         ),

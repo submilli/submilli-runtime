@@ -355,6 +355,18 @@ impl ContentPath {
         self.rel == Path::new(".")
     }
 
+    /// Persist the directory entry after an atomic replacement.
+    #[cfg(unix)]
+    pub(crate) fn sync_parent(&self) -> Result<(), ContainError> {
+        let parent = self
+            .rel
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        self.dir.open_dir(parent)?.open(".")?.sync_all()?;
+        Ok(())
+    }
+
     /// A collision-safe sibling for an atomic rename-into-place write, resolved
     /// through the same handle so the commit cannot be redirected.
     pub fn temp_sibling(&self) -> Self {

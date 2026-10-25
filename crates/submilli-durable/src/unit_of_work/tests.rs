@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, sync::Mutex};
 pub(crate) struct State {
     pub(crate) stop_after_prepared: bool,
     pub(crate) refuse_receipt: bool,
+    outputs: BTreeMap<(RunId, EffectId), Arc<Vec<u8>>>,
     operations: BTreeMap<(RunId, EffectId), JournalEntry>,
 }
 struct MemoryUnit {
@@ -89,6 +90,55 @@ impl UnitOfWork for MemoryUnit {
             .count() as u64)
     }
 
+    async fn update_output_bytes(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<u64>, StoreError> {
+        Ok(self
+            .pending
+            .outputs
+            .get(&(run.clone(), id.clone()))
+            .map(|v| v.len() as u64))
+    }
+    async fn total_update_output_bytes(&mut self, run: &RunId) -> Result<u64, StoreError> {
+        Ok(self
+            .pending
+            .outputs
+            .iter()
+            .filter(|((r, _), _)| r == run)
+            .map(|(_, v)| v.len() as u64)
+            .sum())
+    }
+    async fn get_update_output(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        Ok(self
+            .pending
+            .outputs
+            .get(&(run.clone(), id.clone()))
+            .map(|v| v.as_ref().clone()))
+    }
+    async fn save_update_output(
+        &mut self,
+        run: &RunId,
+        id: &EffectId,
+        output: Arc<Vec<u8>>,
+    ) -> Result<(), StoreError> {
+        let key = (run.clone(), id.clone());
+        if self
+            .pending
+            .outputs
+            .get(&key)
+            .is_some_and(|prior| prior != &output)
+        {
+            return Err(StoreError::Conflict);
+        }
+        self.pending.outputs.insert(key, output);
+        Ok(())
+    }
     async fn get_reader(
         &mut self,
         run_id: &RunId,

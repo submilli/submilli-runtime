@@ -1,11 +1,12 @@
-//! Ignore-aware traversal uses VFS handles only; ignore matchers see virtual paths.
+//! Ignore-aware traversal uses the filesystem port; matchers see virtual paths.
+use super::{backend_error, begin_work, metadata};
 use super::{
     budget::{Budget, OutputBudget},
     gate,
     install::argument,
     normalize, read_contents, read_file, text,
 };
-use crate::runtime::fs::resolve_link;
+use crate::runtime::filesystem::FilesystemError;
 use crate::runtime::fuel;
 use crate::runtime::host::invariant_trap;
 use crate::runtime::{
@@ -13,7 +14,6 @@ use crate::runtime::{
     host::read_boxed_number,
     prelude::collection::{object_field, read_array_vals, unbox_bool},
 };
-use crate::stdlib::shared::{contain_trap, resolve_content_or_trap, resolve_link_or_trap};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use regex::{Regex, RegexBuilder};
@@ -185,7 +185,7 @@ impl WalkEntries {
         Ok(entries)
     }
 }
-pub(super) fn tree(
+pub(super) async fn tree(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     root: &str,
@@ -201,10 +201,11 @@ pub(super) fn tree(
         },
         depth,
         "tree",
-    )?;
+    )
+    .await?;
     listing(caller, budget, &entries)
 }
-pub(super) fn glob(
+pub(super) async fn glob(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     pattern: &str,
@@ -213,7 +214,7 @@ pub(super) fn glob(
     let cwd = if absolute {
         "/"
     } else {
-        caller.data().vfs.cwd()
+        caller.data().filesystem.cwd()
     }
     .to_owned();
     let prefix_root = glob_root(pattern);
@@ -236,7 +237,8 @@ pub(super) fn glob(
         },
         usize::MAX,
         "glob",
-    )?;
+    )
+    .await?;
     let path_bytes = entries
         .iter()
         .filter(|entry| entry.kind == "file")
@@ -273,7 +275,7 @@ fn glob_root(pattern: &str) -> String {
     if root.is_empty() { "/".into() } else { root }
 }
 
-pub(super) fn search(
+pub(super) async fn search(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     pattern: &str,
@@ -297,7 +299,8 @@ pub(super) fn search(
         },
         usize::MAX,
         "search",
-    )?;
+    )
+    .await?;
     let mut results = SearchResults::new(options);
     for entry in entries {
         let relative = entry
@@ -311,7 +314,7 @@ pub(super) fn search(
         {
             continue;
         }
-        search_file(caller, budget, &entry.path, &regex, &mut results)?;
+        search_file(caller, budget, &entry.path, &regex, &mut results).await?;
         if results.truncated {
             break;
         }
@@ -319,7 +322,7 @@ pub(super) fn search(
     Ok(results.into_value())
 }
 
-fn search_file(
+async fn search_file(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     path: &str,
@@ -327,7 +330,7 @@ fn search_file(
     results: &mut SearchResults<'_>,
 ) -> Result<()> {
     let mut file_budget = Budget::new(caller);
-    let source = read_contents(caller, &mut file_budget, path, "search", true)?;
+    let source = read_contents(caller, &mut file_budget, path, "search", true).await?;
     file_budget.charge(
         caller,
         source
@@ -455,7 +458,7 @@ struct WalkStart<'a> {
     origin: &'a str,
 }
 
-fn walk(
+async fn walk(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     start: WalkStart<'_>,
@@ -463,13 +466,14 @@ fn walk(
     op: &str,
 ) -> Result<Vec<Entry>> {
     let root = start.path;
-    if !validate_root(caller, root, op, start.origin)? {
+    if !validate_root(caller, root, op, start.origin).await? {
         return Ok(Vec::new());
     }
     let tree = op == "tree";
     let mut entries = WalkEntries::default();
     let mut rules = IgnoreRules::default();
-    let Some(inherited) = ancestor_ignores(caller, budget, root, op, start.origin, &mut rules)?
+    let Some(inherited) =
+        ancestor_ignores(caller, budget, root, op, start.origin, &mut rules).await?
     else {
         return Ok(Vec::new());
     };
@@ -498,19 +502,26 @@ fn walk(
             op,
             &mut dir.ignores,
             &mut rules,
-        )?;
-        let resolved = resolve_content_or_trap(caller.data(), &dir.path, op)?;
-        for item in resolved
-            .entries()
-            .map_err(|e| contain_trap(op, &dir.path, &e))?
-        {
-            let item = item?;
+        )
+        .await?;
+        let filesystem = caller.data().filesystem.clone();
+        let work = begin_work(caller)?;
+        let result = filesystem
+            .directory_names(
+                Some(work.clone()),
+                &dir.path,
+                MAX_ENTRIES.saturating_sub(visited),
+                &caller.data().tenant_limits,
+            )
+            .await;
+        work.settle(&mut *caller)?;
+        let names = result.map_err(|e| backend_error(op, &dir.path, e))?;
+        for name in &names.names {
             visited += 1;
             if visited > MAX_ENTRIES {
                 bail!("code.{op}: traversal exceeds {MAX_ENTRIES} entries; choose a smaller root");
             }
-            fuel::charge(&mut *caller, fuel::SYSCALL, 1)?;
-            let Some(entry) = inspect_entry(caller, budget, &item, &dir, &rules, op)? else {
+            let Some(entry) = inspect_entry(caller, budget, name, &dir, &rules, op).await? else {
                 continue;
             };
             if entry.kind == "directory" {
@@ -533,7 +544,7 @@ fn walk(
     entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
     Ok(entries)
 }
-fn validate_root(
+async fn validate_root(
     caller: &mut Caller<'_, StoreData>,
     root: &str,
     op: &str,
@@ -557,16 +568,14 @@ fn validate_root(
         {
             return Ok(false);
         }
-        let metadata = match resolve_link(&caller.data().vfs, caller.data().vfs.cwd(), &path)
-            .and_then(|resolved| resolved.symlink_metadata())
-        {
+        let metadata = match metadata(caller, &path).await {
             Ok(metadata) => metadata,
-            Err(crate::runtime::fs::ContainError::Io(error))
+            Err(FilesystemError::Containment(crate::runtime::fs::ContainError::Io(error)))
                 if op == "glob" && error.kind() == std::io::ErrorKind::NotFound =>
             {
                 return Ok(false);
             }
-            Err(error) => return Err(contain_trap(op, root, &error)),
+            Err(error) => return Err(backend_error(op, root, error)),
         };
         if op == "glob" && !metadata.is_dir() {
             return Ok(false);
@@ -577,7 +586,7 @@ fn validate_root(
     }
     Ok(true)
 }
-fn ancestor_ignores(
+async fn ancestor_ignores(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     root: &str,
@@ -608,7 +617,8 @@ fn ancestor_ignores(
             op,
             &mut inherited,
             rules,
-        )?;
+        )
+        .await?;
     }
     if op == "glob"
         && Path::new(root) != Path::new(origin)
@@ -618,28 +628,23 @@ fn ancestor_ignores(
     }
     Ok(Some(inherited))
 }
-fn inspect_entry(
+async fn inspect_entry(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
-    item: &cap_std::fs::DirEntry,
+    name: &str,
     dir: &Directory,
     rules: &IgnoreRules,
     op: &str,
 ) -> Result<Option<Entry>> {
-    let raw = item.file_name();
-    let Some(name) = raw.to_str() else {
-        bail!("code.{op}: non-UTF-8 filename in {}", dir.path);
-    };
     if name.starts_with('.') {
         return Ok(None);
     }
     let path = format!("{}/{}", dir.path.trim_end_matches('/'), name);
     budget.charge(caller, path.len() + 256)?;
     gate(caller, "fs.stat", &path)?;
-    let link = resolve_link_or_trap(caller.data(), &path, op)?;
-    let metadata = link
-        .symlink_metadata()
-        .map_err(|e| contain_trap(op, &path, &e))?;
+    let metadata = metadata(caller, &path)
+        .await
+        .map_err(|e| backend_error(op, &path, e))?;
     let kind = crate::stdlib::fs::handles::kind_of(&metadata.file_type());
     if rules.ignored(caller, dir.ignores, &path, kind == "directory")? {
         return Ok(None);
@@ -727,7 +732,7 @@ enum IgnoreScope {
     /// The root or a directory the walk lists.
     Traversed,
 }
-fn load_ignores(
+async fn load_ignores(
     caller: &mut Caller<'_, StoreData>,
     budget: &mut Budget,
     dir: &str,
@@ -741,20 +746,19 @@ fn load_ignores(
         if !may_probe_ignore(caller, &path, scope)? {
             continue;
         }
-        let resolved = resolve_link_or_trap(caller.data(), &path, op)?;
-        let metadata = match resolved.symlink_metadata() {
+        let metadata = match metadata(caller, &path).await {
             Ok(metadata) => metadata,
-            Err(crate::runtime::fs::ContainError::Io(e))
+            Err(FilesystemError::Containment(crate::runtime::fs::ContainError::Io(e)))
                 if e.kind() == std::io::ErrorKind::NotFound =>
             {
                 continue;
             }
-            Err(e) => return Err(contain_trap(op, &path, &e)),
+            Err(e) => return Err(backend_error(op, &path, e)),
         };
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             continue;
         }
-        let source = read_file(caller, budget, &path, op)?;
+        let source = read_file(caller, budget, &path, op).await?;
         budget.charge(caller, source.len().saturating_mul(32))?;
         let mut builder = GitignoreBuilder::new(dir);
         for line in source.strip_prefix('\u{feff}').unwrap_or(&source).lines() {
@@ -823,9 +827,9 @@ impl Options {
         let path = match present(caller, val, "path")? {
             Some(v) => {
                 let path = argument(caller, budget, &v)?;
-                normalize(caller.data().vfs.cwd(), &path)?
+                normalize(caller.data().filesystem.cwd(), &path)?
             }
-            None => caller.data().vfs.cwd().to_owned(),
+            None => caller.data().filesystem.cwd().to_owned(),
         };
         let mode = match present(caller, val, "mode")? {
             Some(v) => argument(caller, budget, &v)?,

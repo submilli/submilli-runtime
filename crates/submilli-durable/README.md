@@ -134,15 +134,27 @@ keep recovery artifacts and receipts while retries or retained resources remain
 possible, and drain native workers and handles before disposing of the roots.
 There is no run-state lookup, automatic retirement or cleanup sweep here.
 
-Code tools, Git and HTTP downloads retain their existing direct access through
-`StoreData.vfs`. Their operations remain available, but are outside this crate's
-durability guarantees: they do not record or reconcile effects through the
-filesystem backend. Their integration is tracked in
-[SUB-1857](https://linear.app/submilli/issue/SUB-1857),
-[SUB-1870](https://linear.app/submilli/issue/SUB-1870) and
-[SUB-1871](https://linear.app/submilli/issue/SUB-1871), respectively. Read-result
-replay, execution supervision and restart of guest programs also remain separate
-work. The embedding runtime must drain native work before filesystem recovery.
+Code tools use the filesystem port for all observations and updates. The native
+caller opens a file update, then prepares final bytes and its complete result or
+authorizes a saved result. Publication syncs a retained candidate, captures the
+result with the preparation in one transaction, publishes
+the candidate, and commits a receipt. A retry returns the saved result without
+recomputing the transformation. Noop and rejected text matches publish nothing.
+Recorded code mutations require a backend with `supports_update_replay`.
+Results are bounded to 64 MiB each and 1 GiB per run; they are encrypted by the
+persistence adapter and retired with their operation records.
+
+Git and HTTP downloads still use their separate native VFS paths. Their filesystem
+integration is tracked in [SUB-1870](https://linear.app/submilli/issue/SUB-1870) and
+[SUB-1871](https://linear.app/submilli/issue/SUB-1871). Execution history owns
+read-result replay and guest resumption. The embedding runtime must drain native
+work before filesystem recovery.
+
+The portable update protocol is modeled in
+[`verification/filesystem/updates`](../../verification/filesystem/updates/README.md).
+Linux publication optimizations ([SUB-2038](https://linear.app/submilli/issue/SUB-2038))
+and lower-memory text/diff algorithms ([SUB-2039](https://linear.app/submilli/issue/SUB-2039))
+remain separate follow-ups.
 
 ## Verification
 

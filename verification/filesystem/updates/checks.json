@@ -1,0 +1,167 @@
+{
+  "module": "UpdateRecovery",
+  "constants": {
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": "",
+    "Kind": "insert"
+  },
+  "invariants": [
+    "CaptureDurable",
+    "CompletionDurable",
+    "OutcomeStable",
+    "ExposureOrdered",
+    "LaterPreserved",
+    "IdentityChecked",
+    "AtomicPublication"
+  ],
+  "properties": [],
+  "cases": [
+    {
+      "name": "insert",
+      "kind": "safety",
+      "constants": {
+        "Kind": "insert"
+      }
+    },
+    {
+      "name": "edit",
+      "kind": "safety",
+      "constants": {
+        "Kind": "edit"
+      }
+    },
+    {
+      "name": "patch",
+      "kind": "safety",
+      "constants": {
+        "Kind": "patch"
+      }
+    },
+    {
+      "name": "noop",
+      "kind": "safety",
+      "constants": {
+        "Kind": "noop"
+      }
+    },
+    {
+      "name": "rejected",
+      "kind": "safety",
+      "constants": {
+        "Kind": "rejected"
+      }
+    },
+    {
+      "name": "two-crashes",
+      "kind": "safety",
+      "constants": {
+        "MaxCrashes": 2
+      }
+    },
+    {
+      "name": "progress",
+      "kind": "liveness",
+      "specification": "LiveSpec",
+      "properties": [
+        "Progress"
+      ]
+    },
+    {
+      "name": "negative-recompute",
+      "kind": "negative",
+      "constants": {
+        "Fault": "recompute"
+      },
+      "invariant": "CaptureDurable"
+    },
+    {
+      "name": "negative-skip-file-sync",
+      "kind": "negative",
+      "constants": {
+        "Fault": "skip-file-sync"
+      },
+      "invariant": "CaptureDurable"
+    },
+    {
+      "name": "negative-skip-private-sync",
+      "kind": "negative",
+      "constants": {
+        "Fault": "skip-private-sync"
+      },
+      "invariant": "CaptureDurable"
+    },
+    {
+      "name": "negative-lose-result",
+      "kind": "negative",
+      "constants": {
+        "Fault": "lose-result"
+      },
+      "invariant": "CaptureDurable"
+    },
+    {
+      "name": "negative-skip-public-sync",
+      "kind": "negative",
+      "constants": {
+        "Fault": "skip-public-sync"
+      },
+      "invariant": "CompletionDurable"
+    },
+    {
+      "name": "negative-reapply-completed",
+      "kind": "negative",
+      "constants": {
+        "Fault": "reapply-completed"
+      },
+      "invariant": "LaterPreserved"
+    },
+    {
+      "name": "negative-mismatch",
+      "kind": "negative",
+      "constants": {
+        "Fault": "mismatch"
+      },
+      "invariant": "IdentityChecked"
+    },
+    {
+      "name": "negative-early-delivery",
+      "kind": "negative",
+      "constants": {
+        "Fault": "early-delivery"
+      },
+      "invariant": "ExposureOrdered"
+    },
+    {
+      "name": "witness-publication-gap",
+      "kind": "witness",
+      "constants": {
+        "Witness": "publication-gap"
+      },
+      "invariant": "NeverWitness"
+    },
+    {
+      "name": "witness-history-gap",
+      "kind": "witness",
+      "constants": {
+        "Witness": "history-gap"
+      },
+      "invariant": "NeverWitness"
+    },
+    {
+      "name": "witness-cancelled-worker",
+      "kind": "witness",
+      "constants": {
+        "Witness": "cancelled-worker"
+      },
+      "invariant": "NeverWitness"
+    },
+    {
+      "name": "three-crashes",
+      "kind": "safety",
+      "suite": "extended",
+      "constants": {
+        "MaxCrashes": 3
+      }
+    }
+  ]
+}

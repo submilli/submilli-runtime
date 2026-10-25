@@ -871,7 +871,7 @@ async fn cancelled_listing_calls_retain_memory_until_sql_work_finishes() {
     }
 }
 
-fn pause_transaction(
+pub(super) fn pause_transaction(
     original: submilli_durable::UnitFactory,
     paused_call: usize,
     entered: Arc<tokio::sync::Notify>,

@@ -1430,7 +1430,13 @@ Size variables:
 
 Every gated function also runs `check_security` (`stdlib/shared.rs`) with a freshly built `serde_json` context. I treat it as part of the per-function flat cost; it should get its own constant, placed once in `check_security`.
 
-**Threads.** All of `submilli:fs` and `submilli:code` run synchronously on the store's thread (plain `register_host_fn` / `Func::new`), so a charge is possible at any point where a `Caller` is in scope. Native helpers report work to their callers: `copy_bounded` counts settled copy work, the removal ledger uses `meter_mutation`, and iterator/line readers retain their existing scoped counters. All of `submilli:git` runs its real work on the blocking pool (`stdlib/git/mod.rs:414`, `runtime/blocking.rs`); see the git section.
+**Threads.** Filesystem and code host registrations are async. Code text processing
+runs with the store caller; filesystem observations and candidate publication run on Tokio blocking
+workers. Each phase receives a fresh remaining-fuel budget and settles it before
+the next phase. Native helpers report work to their callers: `copy_bounded` counts
+settled copy work, the removal ledger uses `meter_mutation`, and iterator/line
+readers retain their scoped counters. Git runs its real work on the blocking pool;
+see the Git section.
 
 ### Existing mechanisms the new charging must fit with
 
@@ -1590,6 +1596,17 @@ validate the native result size before writing; Wasm conversion follows the
 native operation and, for recorded runs, the committed outcome. Conversion can
 fail normally after publication. No adapter-level mutation idempotency is added.
 
+`edit`, `insertAt`, and `applyPatch` open a replacement through
+`Filesystem::begin_file_update`. After native preparation or saved-result
+authorization, the host creates the ordinary immutable `WorkBudget` from its
+remaining fuel and passes it with `TenantLimits` to publication. The code host settles worker fuel on success or failure inside
+the effect action, before history completion; completed-history replay skips
+this work and pays the ordinary history decoding and guest conversion charges.
+The filesystem retains memory guards through worker completion. The durable
+backend marks the budget as effectful before committing captured intent so
+later charges cannot discard a possibly published update. Existing cost
+formulas are unchanged.
+
 Results other than the two diffs are built as `serde_json::Value`. `install.rs::encode_json` serializes them to text and decodes UTF-16 into guest values through the metered session-value decoder. Diff results use the UTF-16 string writer directly. `F` = file bytes, `out` = result.
 
 | Function | What the host does | Formula | Charge point | Notes |
@@ -1598,7 +1615,7 @@ Results other than the two diffs are built as `serde_json::Value`. `install.rs::
 | `submilli:code#search` | Reads options, compiles the regex, walks the tree, and for each file that passes the include/exclude globs reads it whole and runs `regex.is_match` on every line; records matches with context lines (`stdlib/code/walk.rs:68`, `:95`) | `CALL + PARSE(len(pattern) + glob bytes) + WALK(e) + sum over files [ IO(F) + SCAN(2F) + REGEX(F, len(pattern)) ] + PARSE(len(json)) + ELEM(k * (2*context + 1))` | incremental | Engine is the `regex` crate: no backtracking, worst case O(pattern size * haystack), usually near-linear through the lazy DFA, with 1 MiB size limits. Pattern size does multiply in the worst case, so the existing `F * len(pattern)` charge (`:114`) is the right shape, pessimistic in practice. Existing fuel also: `F` per file, 100 per entry. Total bytes read is unknown up front (every non-ignored file under the root, each up to `maxReadSize`, up to 20,000 entries); the per-file charge before each read is what bounds it. Binary files (contain NUL) are read in full and then dropped. Stops at `limit` (<= 1,000) or when output reaches `maxReadSize`. `WALK(e)` is defined under Findings (c). |
 | `submilli:code#glob` | Compile the glob; walk its complete literal directory prefix; filter files and sort matches by mtime/path | `CALL + PARSE(pattern units) + WALK(visited entries) + SCAN(visited file-path bytes) + SORT(visited entries) + SORT(matches) + result marshalling` | incremental; each ignore matcher charged before evaluation | SUB-1292: prefix selection preserves inherited ignore precedence, hidden-path handling and symlink refusal. Wildcards/escaping before a directory component conservatively start at `/`. Limits still apply to actual visited entries. Unrelated siblings outside the prefix are not traversed. Matching and both sorts were not charged by the old implementation despite the research formula; these terms now bound their actual work. |
 | `submilli:code#tree` | Keep the lowest 1,001 path entries; visit directories in descendant-prefix order and stop when later subtrees cannot change the first page | `CALL + ARG(root) + WALK(visited entries) + ELEM(heap comparisons) + SCAN(path units compared) + SORT(min(visited entries, 1001)) + result marshalling` | incremental, before heap operations and final sort | SUB-1292: returns the same globally sorted first 1,000 entries and correct truncation. `a-/...` is visited before `a/...`. Each opened directory still requires its complete unsorted listing to determine its earliest children; that fanout is inherent, capped at 20,000 actual visited entries. Later unneeded subtrees are skipped. Heap storage, ignore layers and queued directory paths are memory-admitted. |
-| `submilli:code#edit` | Reads the file, finds `old` (exact substring; if none, a whitespace-insensitive line-window match, then a token-overlap hint), builds the new text, diffs old against new, policy check with the full diff in its context, encodes the result, `atomic_write` (`stdlib/code/mod.rs:174`, `:243`; `stdlib/code/text.rs:49`) | `CALL + IO(F) + SCAN(F * A) + COPY(len(new text)) + PARSE(actual Myers steps) + PARSE(len(diff) + len(json)) + IO(len(new text))`, `A = max(len(old), 1)` | before + output | Existing fuel: `F + 4F + F*len(old) + actual Myers steps + len(a) + len(b)`. Exact search is the std two-way matcher, linear; it runs twice (`match_indices` at `:255`, then `occurrences`). The fallback compares every window of `lines(old)` file lines, O(lines(F) * lines(old)) trimmed comparisons, and the hint scans every line for up to 64 tokens; `F * A` covers both. See the diff note under `diffText`; the diff is skipped when nothing changed. The policy check serializes the whole diff. SUB-1292: shared diff admission/work follows `diffText`; other anchor/patch algorithms are unchanged. |
+| `submilli:code#edit` | Reads the file, finds `old` (exact substring; if none, a whitespace-insensitive line-window match, then a token-overlap hint), builds the new text, diffs old against new, policy check with the full diff in its context, encodes the result, prepares a filesystem update (`stdlib/code/mod.rs:174`, `:243`; `stdlib/code/text.rs:49`) | `CALL + IO(F) + SCAN(F * A) + COPY(len(new text)) + PARSE(actual Myers steps) + PARSE(len(diff) + len(json)) + IO(len(new text))`, `A = max(len(old), 1)` | before + output | Existing fuel: `F + 4F + F*len(old) + actual Myers steps + len(a) + len(b)`. Exact search is the std two-way matcher, linear; it runs twice (`match_indices` at `:255`, then `occurrences`). The fallback compares every window of `lines(old)` file lines, O(lines(F) * lines(old)) trimmed comparisons, and the hint scans every line for up to 64 tokens; `F * A` covers both. See the diff note under `diffText`; the diff is skipped when nothing changed. The policy check serializes the whole diff. SUB-1292: shared diff admission/work follows `diffText`; other anchor/patch algorithms are unchanged. |
 | `submilli:code#insertAt` | Reads the file, splits lines, splices `text` in at a line, diffs, policy check, writes (`stdlib/code/text.rs:102`) | `CALL + IO(F) + SCAN(F) + COPY(F + len(text)) + PARSE(actual Myers steps) + PARSE(len(diff) + len(json)) + IO(F + len(text))` | before + output | Existing fuel: `F + 4F + actual Myers steps + len(a) + len(b)`. SUB-1292: shared diff admission/work follows `diffText`; other anchor/patch algorithms are unchanged. |
 | `submilli:code#applyPatch` | Reads the file, parses the unified diff (compiles a fixed `Regex` on every call, `stdlib/code/patch.rs:83`), locates each hunk by testing `starts_with` at every line start of the file, checks overlaps pairwise, splices, diffs, policy check, writes (`stdlib/code/patch.rs:10`) | `CALL + IO(F) + PARSE(len(patch)) + SCAN(h * lines(F) * avg anchor prefix) + SORT(h) + COPY(len(new text)) + PARSE(actual Myers steps) + PARSE(len(diff) + len(json)) + IO(len(new text))`, `h = hunks` | before + output | Existing fuel: `F + 4F + F*lines(patch) + actual Myers steps + ...`. Hunk location is O(lines(F)) prefix tests per hunk; each test is O(len(anchor)) only when the line matches, so worst case is O(lines(F) * len(patch)) on a file of repeated lines. Overlap check is O(h^2). The header regex could be compiled once; it is a fixed cost per call. SUB-1292: shared diff admission/work follows `diffText`; other anchor/patch algorithms are unchanged. |
 | `submilli:code#diffText` | Split UTF-16 lines, intern ids, run iterative linear-space Myers with per-step work charging, then format unified hunks | `CALL + COPY(a units + b units) + SCAN(a units + b units) + PARSE(actual Myers setup/comparisons/frontier steps) + COPY(output units)` | input/setup admission before work; each Myers step charged before evaluation | SUB-1292: work is `O((na + nb) * (D + 1))`; total lines capped at 1,000,000 and native buffers admitted before allocation. Large small edits are accepted; high edit distance exhausts fuel during search. Old actual charge was `PARSE(na * nb)`; its product admission check already ran BEFORE the charge, contrary to the research ordering claim. The previous library was already linear-space; the change makes that work explicitly metered. Ambiguous repeated-line alignment may differ from the old Compact heuristic; minimal edit distance and patch roundtrips are tested. |
@@ -1619,9 +1636,28 @@ settlement; it does not select an operation by name. Three phases:
 2. **Blocking pool** (the selected native function in `stdlib/git/mod.rs`), no access to the store. All real work.
 3. **Store thread, after the worker returns.** the registration's explicit result conversion: `Uint8Array` copy, string copy, or `serde_json::to_string` + `value::deserialize`.
 
-Code tools, Git and HTTP downloads retain their existing native VFS execution and their existing fuel formulas; selecting a filesystem backend does not route these calls through it. Their durability adapters are separate work.
+Code tools use the installed filesystem for all reads, directory names, metadata,
+and updates. Read/navigation observations retain their outer history boundary.
+Both filesystem implementations dispatch these native I/O operations and placement
+resolution to Tokio's blocking pool. Workers retain their fuel and memory guards;
+waiting for the pool does not consume fuel. Text transformation, capability checks,
+and result conversion remain on the host caller.
+The three updates retain the transformation/diff formulas above and add
+`HASH(serialized request) + PARSE(2 * encoded result bytes)` before publication.
+A default update charges `IO(new bytes) + SYSCALL(8)` before publication.
+A durable update additionally charges `HASH(3 * new bytes) + IO(2 * new bytes)
++ PARSE(2 * encoded result bytes) + SYSCALL(20)`: fingerprint, candidate write,
+validation, result capture, and publication. Each phase obtains its remaining-fuel
+budget after preceding host work and settles it once, including on errors. Once
+capture may have committed, native publication and receipt work settle without
+refusing. Each retry still admits result decoding and authorization before
+resuming publication.
+Saved output decoding settles `PARSE(encoded result bytes)`; pending retries also
+charge their capability-context decoding before publication. Noops and rejected
+text matches publish no file and use ordinary outer outcome recording.
+Git and HTTP downloads retain their separate native VFS execution.
 
-Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. The default filesystem continues charging its caller directly. Its implementation, directory traversal, copy/move/remove helpers and writer publication live in `runtime/default_filesystem.rs`; guest handles in `stdlib/fs/handles.rs` retain host-memory accounting. Cost formulas and effect boundaries are unchanged.
+Git and durable filesystem workers share `fuel::WorkBudget` for the remaining-fuel ceiling, admission, effect transition, cooperative cancellation of reported work, and final settlement. `fuel::remaining_fuel` subtracts pending host charges before dispatch. Git retains category counters and records only the change in each category's cumulative cost, preserving rounding across small chunks; its algorithm charges use the same budget. Other default filesystem operations retain their existing caller-side charges. Its implementation, directory traversal, copy/move/remove helpers and writer publication live in `runtime/default_filesystem.rs`; guest handles in `stdlib/fs/handles.rs` retain host-memory accounting. Cost formulas and effect boundaries are unchanged.
 
 SUB-1292 algorithm admission shares the worker's existing meter. Before an externally visible creation, remote request or publication, it switches to settlement: later work cannot replace an effect's outcome with a fuel refusal. After the blocking worker drains, the combined meter settles on both success and failure; guest result conversion runs afterward with normal fuel checks.
 

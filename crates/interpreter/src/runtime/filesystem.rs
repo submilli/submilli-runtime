@@ -63,6 +63,18 @@ pub enum FilesystemError {
     Backend(Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl FilesystemError {
+    /// A mutation may already have happened. Preserve terminating limit/trap
+    /// errors, but never let an ordinary refusal become a catchable completion.
+    pub fn after_effect(self) -> Self {
+        match self {
+            Self::Execution(error) if super::host::ends_the_run(&error) => Self::Execution(error),
+            Self::Exhausted(_) | Self::Backend(_) => self,
+            other => Self::Backend(Box::new(other)),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct MountInfo {
     pub path: String,
@@ -78,6 +90,49 @@ pub struct FilesystemInfo {
     pub volume: Option<String>,
     pub maximum_bytes: Option<u64>,
     pub mounts: Vec<MountInfo>,
+}
+
+/// Bounded native data stays charged until its consumer finishes with it.
+pub struct FileContents {
+    pub bytes: Vec<u8>,
+    pub _memory: super::limits::HostBytes,
+}
+
+pub struct DirectoryNames {
+    pub names: Vec<String>,
+    pub _memory: super::limits::HostBytes,
+}
+
+/// A native transformation has finished, but nothing has been published yet.
+/// The filesystem does not interpret the caller's encoded result.
+pub struct PreparedFileUpdate {
+    /// None records an unchanged/rejected native result without publishing a file.
+    pub contents: Option<Vec<u8>>,
+    pub output: FileUpdateOutput,
+}
+
+pub struct FileUpdateOutput {
+    pub bytes: Vec<u8>,
+    pub memory: super::limits::HostBytes,
+}
+
+/// A replacement opened under the backend's existing serialization boundary.
+/// The caller prepares fresh contents or authorizes the saved output before
+/// supplying its normal immutable worker budget to `publish`.
+#[async_trait::async_trait]
+pub trait FileUpdate: Send {
+    /// Captured native result and replacement-file byte length, when recovering.
+    /// Authorize this result without rereading or transforming the public file.
+    fn saved_output(&self) -> Option<(&[u8], u64)>;
+    /// Supply freshly prepared contents only when `saved_output` is absent.
+    /// Create `work` after preparation or authorization and settle it after this
+    /// call, including failures. No refusing fuel charge may follow publication.
+    async fn publish(
+        self: Box<Self>,
+        work: Arc<WorkBudget>,
+        prepared: Option<PreparedFileUpdate>,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<FileUpdateOutput, FilesystemError>;
 }
 impl FilesystemInfo {
     pub fn from_vfs(vfs: &Vfs) -> Self {
@@ -239,6 +294,10 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
 }
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
+    /// File updates retain prepared bytes/results and completed receipts across retries.
+    fn supports_update_replay(&self) -> bool {
+        false
+    }
     /// Whether resources can be used after decoding without their local handles.
     fn supports_resource_replay(&self) -> bool {
         false
@@ -250,7 +309,35 @@ pub trait Filesystem: Send + Sync {
     fn path_cost(&self, _path: &str) -> u64 {
         0
     }
-    fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
+    /// Resolving placement may follow filesystem links and must not block the host.
+    async fn placement(&self, path: &str) -> Result<Placement, FilesystemError>;
+    /// Whole regular-file observation, with nonblocking special-file refusal.
+    async fn read_regular(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_bytes: u64,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<FileContents, FilesystemError>;
+    /// Names only: the caller checks each child's authority before its metadata.
+    /// This transient observation is not a guest-visible persistent iterator.
+    async fn directory_names(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_entries: usize,
+        limits: &super::limits::TenantLimits,
+    ) -> Result<DirectoryNames, FilesystemError>;
+    /// Open a replacement and return any captured result before native preparation.
+    /// The returned operation retains the backend's serialization until publication
+    /// finishes or the caller drops it without publishing.
+    async fn begin_file_update(
+        &self,
+        effect_id: &EffectId,
+        path: &str,
+        request: [u8; 32],
+        limits: &super::limits::TenantLimits,
+    ) -> Result<Box<dyn FileUpdate>, FilesystemError>;
     async fn metadata(
         &self,
         effect_id: &EffectId,

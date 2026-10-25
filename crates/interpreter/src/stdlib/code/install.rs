@@ -35,7 +35,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 let mut budget = Budget::new(caller);
                 let path = argument(caller, &mut budget, abi_arg(params, 0)?)?;
                 let request = ReadArguments {
-                    path: super::normalize(caller.data().vfs.cwd(), &path)?,
+                    path: super::normalize(caller.data().filesystem.cwd(), &path)?,
                     start: integer(abi_arg(params, 1)?, "offset", 1)? - 1,
                     limit: integer(abi_arg(params, 2)?, "limit", 1)?,
                 };
@@ -48,7 +48,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                                 &request.path,
                                 request.start,
                                 request.limit,
-                            )?;
+                            )
+                            .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
@@ -81,7 +82,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                                 &mut budget,
                                 &request.pattern,
                                 &request.options,
-                            )?;
+                            )
+                            .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
@@ -106,7 +108,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 let result =
                     effects::execute(caller, "code.glob", request, move |caller, _, request| {
                         Box::pin(async move {
-                            let value = super::glob(caller, &mut budget, &request)?;
+                            let value = super::glob(caller, &mut budget, &request).await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
@@ -129,14 +131,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 let mut budget = Budget::new(caller);
                 let path = argument(caller, &mut budget, abi_arg(params, 0)?)?;
                 let request = TreeArguments {
-                    path: super::normalize(caller.data().vfs.cwd(), &path)?,
+                    path: super::normalize(caller.data().filesystem.cwd(), &path)?,
                     depth: integer(abi_arg(params, 1)?, "depth", 0)?,
                 };
                 let result =
                     effects::execute(caller, "code.tree", request, move |caller, _, request| {
                         Box::pin(async move {
                             let value =
-                                super::tree(caller, &mut budget, &request.path, request.depth)?;
+                                super::tree(caller, &mut budget, &request.path, request.depth)
+                                    .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
@@ -175,31 +178,46 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 };
                 let near_line = integer(abi_arg(params, 4)?, "nearLine", 0)?;
                 let request = EditArguments {
-                    path: super::normalize(caller.data().vfs.cwd(), &path)?,
+                    path: super::normalize(caller.data().filesystem.cwd(), &path)?,
                     old,
                     new,
                     replace_all: *replace_all != 0,
                     near_line,
                 };
-                let result =
-                    effects::execute(caller, "code.edit", request, move |caller, _, request| {
+                let result = effects::execute(
+                    caller,
+                    "code.edit",
+                    request,
+                    move |caller, effect, request| {
                         Box::pin(async move {
-                            let value = super::edit(
+                            let value = super::update::execute(
                                 caller,
                                 &mut budget,
-                                &request.path,
-                                &request.old,
-                                &request.new,
-                                request.replace_all,
-                                request.near_line,
-                            )?;
+                                &effect,
+                                "edit",
+                                &request.path.clone(),
+                                request,
+                                |caller, budget, request| {
+                                    Box::pin(super::edit(
+                                        caller,
+                                        budget,
+                                        &request.path,
+                                        &request.old,
+                                        &request.new,
+                                        request.replace_all,
+                                        request.near_line,
+                                    ))
+                                },
+                            )
+                            .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
                             })
                         })
-                    })
-                    .await?;
+                    },
+                )
+                .await?;
                 encode_json(caller, &result.value)
             })
         },
@@ -221,7 +239,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 let line = integer(abi_arg(params, 1)?, "line", 1)?;
                 let text = argument(caller, &mut budget, abi_arg(params, 2)?)?;
                 let request = InsertArguments {
-                    path: super::normalize(caller.data().vfs.cwd(), &path)?,
+                    path: super::normalize(caller.data().filesystem.cwd(), &path)?,
                     line,
                     text,
                 };
@@ -229,15 +247,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                     caller,
                     "code.insertAt",
                     request,
-                    move |caller, _, request| {
+                    move |caller, effect, request| {
                         Box::pin(async move {
-                            let value = super::insert_at(
+                            let value = super::update::execute(
                                 caller,
                                 &mut budget,
-                                &request.path,
-                                request.line,
-                                &request.text,
-                            )?;
+                                &effect,
+                                "insertAt",
+                                &request.path.clone(),
+                                request,
+                                |caller, budget, request| {
+                                    Box::pin(super::insert_at(
+                                        caller,
+                                        budget,
+                                        &request.path,
+                                        request.line,
+                                        &request.text,
+                                    ))
+                                },
+                            )
+                            .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
@@ -280,8 +309,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 let first = argument(caller, &mut budget, abi_arg(params, 0)?)?;
                 let second = argument(caller, &mut budget, abi_arg(params, 1)?)?;
                 let request = DiffFilesArguments {
-                    first: super::normalize(caller.data().vfs.cwd(), &first)?,
-                    second: super::normalize(caller.data().vfs.cwd(), &second)?,
+                    first: super::normalize(caller.data().filesystem.cwd(), &first)?,
+                    second: super::normalize(caller.data().filesystem.cwd(), &second)?,
                 };
                 let result = effects::execute(
                     caller,
@@ -294,7 +323,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                                 &mut budget,
                                 &request.first,
                                 &request.second,
-                            )?;
+                            )
+                            .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),
@@ -321,21 +351,32 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
                 let path = argument(caller, &mut budget, abi_arg(params, 0)?)?;
                 let patch = argument(caller, &mut budget, abi_arg(params, 1)?)?;
                 let request = PatchArguments {
-                    path: super::normalize(caller.data().vfs.cwd(), &path)?,
+                    path: super::normalize(caller.data().filesystem.cwd(), &path)?,
                     patch,
                 };
                 let result = effects::execute(
                     caller,
                     "code.applyPatch",
                     request,
-                    move |caller, _, request| {
+                    move |caller, effect, request| {
                         Box::pin(async move {
-                            let value = super::apply_patch(
+                            let value = super::update::execute(
                                 caller,
                                 &mut budget,
-                                &request.path,
-                                &request.patch,
-                            )?;
+                                &effect,
+                                "applyPatch",
+                                &request.path.clone(),
+                                request,
+                                |caller, budget, request| {
+                                    Box::pin(super::apply_patch(
+                                        caller,
+                                        budget,
+                                        &request.path,
+                                        &request.patch,
+                                    ))
+                                },
+                            )
+                            .await?;
                             Ok(CodeResult {
                                 value,
                                 _budget: Some(budget),

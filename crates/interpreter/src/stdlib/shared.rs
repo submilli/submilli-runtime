@@ -1,8 +1,5 @@
 //! Helpers shared across stdlib libraries.
 
-use std::io::Write;
-use std::sync::Arc;
-
 use crate::runtime::decision::{
     CallOrigin, CallSite, CallTicket, EntryPath, PackageLine, SourceLine,
 };
@@ -14,7 +11,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::security::{AuditDecision, CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
-use crate::runtime::{DiskQuota, QuotaCharge, QuotaExceeded, StoreData};
+use crate::runtime::{QuotaExceeded, StoreData};
 
 /// The package whose code is executing, read off the innermost wasm frame's owning module.
 ///
@@ -495,60 +492,6 @@ pub(crate) fn quota_refusal(
     exceeded: QuotaExceeded,
 ) -> wasmtime::Error {
     quota_exceeded_error(format!("{op} {guest_path}: {exceeded}"))
-}
-
-/// No program code runs before the rename, so the write draws on the size of the file it
-/// replaces and reserves only the growth: a rewrite that ends within the size limit
-/// succeeds even though the old file and the temporary one briefly coexist.
-pub(crate) fn atomic_write(
-    final_path: &ContentPath,
-    bytes: &[u8],
-    permissions: Option<cap_std::fs::Permissions>,
-    guest_path: &str,
-    op: &str,
-    quota: Option<Arc<DiskQuota>>,
-) -> wasmtime::Result<()> {
-    let mut disk_charge = QuotaCharge::new(quota, final_path.regular_file());
-    disk_charge
-        .reserve(bytes.len() as u64)
-        .map_err(|exceeded| quota_refusal(op, guest_path, exceeded))?;
-    write_then_rename(final_path, bytes, permissions, guest_path, op)?;
-    disk_charge.commit();
-    Ok(())
-}
-
-/// No `parent.is_dir()` pre-check: `Dir` reports a missing parent as `NotFound` the way
-/// `std` does, and the old gate turned an escape into "parent directory does not exist" —
-/// costing an LLM a turn on a `mkdir` that could never succeed.
-fn write_then_rename(
-    final_path: &ContentPath,
-    bytes: &[u8],
-    permissions: Option<cap_std::fs::Permissions>,
-    guest_path: &str,
-    op: &str,
-) -> wasmtime::Result<()> {
-    let tmp = final_path.temp_sibling();
-    let mut f = tmp
-        .create_new()
-        .map_err(|e| write_target_trap(op, guest_path, &e))?;
-    let result = (|| {
-        if let Some(permissions) = permissions {
-            f.set_permissions(permissions).map_err(|e| {
-                wasmtime::Error::msg(format!("{op} {guest_path}: permissions: {e}"))
-            })?;
-        }
-        f.write_all(bytes)
-            .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: {e}")))?;
-        f.sync_all()
-            .map_err(|e| wasmtime::Error::msg(format!("{op} {guest_path}: fsync: {e}")))?;
-        drop(f);
-        tmp.rename_to(final_path)
-            .map_err(|e| contain_trap(op, guest_path, &e))
-    })();
-    if result.is_err() {
-        let _ = tmp.remove_file();
-    }
-    result
 }
 
 // --- shared by the model-listing libraries (`submilli:llm`, `submilli:embedding`) ---

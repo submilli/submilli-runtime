@@ -636,8 +636,8 @@ impl RuntimeConfig {
 
     /// One-shot runner: load compiled Wasm, instantiate, call `main`, return typed result
     /// and captured console. Async like the rest of the runtime — a caller that
-    /// isn't on a runtime bridges it itself (`pollster::block_on` for
-    /// compute/`fs`-only programs, a tokio runtime when `http` is involved). For
+    /// isn't on a runtime bridges it itself (`pollster::block_on` for pure
+    /// computation, a Tokio runtime for filesystem or HTTP operations). For
     /// live console streaming, build a custom `Store<StoreData>` and call
     /// [`dispatch_main_async`] directly.
     ///

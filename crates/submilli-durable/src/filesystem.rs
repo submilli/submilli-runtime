@@ -19,6 +19,7 @@ mod open_writer;
 mod operation;
 mod remove_path;
 mod replacement;
+mod update_file;
 mod write_bytes;
 mod write_chunk;
 use crate::io::{self as paths, Files, RecoveryError};
@@ -42,6 +43,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 #[derive(Debug, thiserror::Error)]
 pub enum FilesystemError {
+    #[error(transparent)]
+    Quota(interpreter::runtime::QuotaExceeded),
     #[error(transparent)]
     Memory(#[from] interpreter::runtime::limits::MemoryCapExceeded),
     #[error(transparent)]
@@ -178,6 +181,7 @@ pub(crate) fn preflight_refusal(error: &RecoveryError) -> bool {
         RecoveryError::Unsupported(_)
         | RecoveryError::Containment(_)
         | RecoveryError::Quota
+        | RecoveryError::QuotaRefused(_)
         | RecoveryError::Limit
         | RecoveryError::InvalidRecord => true,
         RecoveryError::Io(error) => matches!(
@@ -214,6 +218,9 @@ impl DurableFilesystem {
 
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
+    fn supports_update_replay(&self) -> bool {
+        true
+    }
     fn supports_resource_replay(&self) -> bool {
         true
     }
@@ -230,10 +237,75 @@ impl Filesystem for DurableFilesystem {
             .cost(path.len() as u64)
             .saturating_add(fuel::SYSCALL.cost(path.split('/').count() as u64))
     }
-    fn placement(&self, path: &str) -> Result<Placement, PortError> {
-        Ok(paths::resolve_content(self.files.vfs(), self.cwd(), path)?
-            .placement()
-            .clone())
+    async fn placement(&self, path: &str) -> Result<Placement, PortError> {
+        let vfs = self.files.vfs().clone();
+        let path = path.to_owned();
+        tokio::task::spawn_blocking(move || {
+            Ok(paths::resolve_content(&vfs, vfs.cwd(), &path)?
+                .placement()
+                .clone())
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))?
+    }
+    async fn read_regular(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_bytes: u64,
+        limits: &TenantLimits,
+    ) -> Result<interpreter::runtime::filesystem::FileContents, PortError> {
+        let vfs = self.files.vfs().clone();
+        let path = path.to_owned();
+        let checked_vfs = vfs.clone();
+        let checked_path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            paths::check_access(&checked_vfs, checked_vfs.cwd(), &checked_path)
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))??;
+        interpreter::runtime::default_filesystem::read_regular(
+            vfs,
+            work,
+            path,
+            maximum_bytes,
+            limits,
+        )
+        .await
+    }
+    async fn directory_names(
+        &self,
+        work: Option<Arc<WorkBudget>>,
+        path: &str,
+        maximum_entries: usize,
+        limits: &TenantLimits,
+    ) -> Result<interpreter::runtime::filesystem::DirectoryNames, PortError> {
+        let vfs = self.files.vfs().clone();
+        let path = path.to_owned();
+        let checked_vfs = vfs.clone();
+        let checked_path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            paths::check_access(&checked_vfs, checked_vfs.cwd(), &checked_path)
+        })
+        .await
+        .map_err(|e| PortError::Backend(Box::new(e)))??;
+        interpreter::runtime::default_filesystem::directory_names(
+            vfs,
+            work,
+            path,
+            maximum_entries,
+            limits,
+        )
+        .await
+    }
+    async fn begin_file_update(
+        &self,
+        effect: &EffectId,
+        path: &str,
+        request: [u8; 32],
+        limits: &TenantLimits,
+    ) -> Result<Box<dyn interpreter::runtime::filesystem::FileUpdate>, PortError> {
+        DurableFilesystem::begin_file_update(self, effect, path, request, limits).await
     }
     async fn metadata(
         &self,
@@ -246,15 +318,14 @@ impl Filesystem for DurableFilesystem {
         let path = path.to_owned();
         tokio::task::spawn_blocking(move || {
             if follow {
-                paths::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()
+                Ok(paths::resolve_content(&vfs, vfs.cwd(), &path)?.metadata()?)
             } else {
                 paths::check_access(&vfs, vfs.cwd(), &path)?;
-                fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()
+                Ok(fs::resolve_link(&vfs, vfs.cwd(), &path)?.symlink_metadata()?)
             }
         })
         .await
-        .map_err(|error| PortError::Backend(Box::new(error)))?
-        .map_err(Into::into)
+        .map_err(|e| PortError::Backend(Box::new(e)))?
     }
     async fn read(
         &self,
@@ -517,6 +588,7 @@ impl Filesystem for DurableFilesystem {
 }
 pub(crate) fn backend(error: FilesystemError) -> PortError {
     match error {
+        FilesystemError::Quota(error) => PortError::Quota(error),
         FilesystemError::Rejected(reason) => PortError::Rejected(reason),
         FilesystemError::Memory(error) => PortError::Execution(error.into()),
         FilesystemError::Recovery(RecoveryError::Fuel(error)) => PortError::Exhausted(error),

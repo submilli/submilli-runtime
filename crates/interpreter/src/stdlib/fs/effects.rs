@@ -111,6 +111,7 @@ pub(super) async fn open_writer(
                 .data()
                 .filesystem
                 .placement(&path)
+                .await
                 .map_err(|e| backend_error("fs.writer", &path, e))?;
             require_writable(&*caller, ticket, &placement, "fs.write", &path)?;
             let work = begin_work(caller)?;

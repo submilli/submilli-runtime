@@ -285,6 +285,7 @@ async fn write(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.write", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -321,6 +322,7 @@ async fn write_text(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.writeText", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -357,6 +359,7 @@ async fn append(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.append", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -393,6 +396,7 @@ async fn append_text(
                 charge_path_work(caller, &[&request.path])?;
                 let placement = filesystem
                     .placement(&request.path)
+                    .await
                     .map_err(|error| backend_error("fs.appendText", &request.path, error))?;
                 require_writable(&*caller, ticket, &placement, "fs.write", &request.path)?;
                 fuel::charge(&mut *caller, fuel::IO, request.bytes.len() as u64)?;
@@ -997,7 +1001,7 @@ fn i32_flag(val: &Val, ctx: &str) -> wasmtime::Result<bool> {
     }
 }
 
-fn backend_error(op: &str, path: &str, error: PortError) -> wasmtime::Error {
+pub(crate) fn backend_error(op: &str, path: &str, error: PortError) -> wasmtime::Error {
     match error {
         PortError::Execution(error) => error,
         PortError::Exhausted(_) => wasmtime::Trap::OutOfFuel.into(),
