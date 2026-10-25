@@ -92,6 +92,24 @@ pub struct FilesystemInfo {
     pub mounts: Vec<MountInfo>,
 }
 
+/// Immutable admission arguments; response bytes and metadata never enter this record.
+#[derive(Clone, serde::Serialize)]
+pub struct DownloadOptions {
+    pub overwrite: bool,
+    pub maximum_bytes: u64,
+    pub request: [u8; 32],
+}
+
+/// Disposable streaming storage owned by the filesystem. Drop cleans up staging.
+/// `publish` consumes ownership; completion belongs to the enclosing effect history.
+#[async_trait::async_trait]
+pub trait Download: std::io::Write + Send {
+    fn bytes_written(&self) -> u64;
+    /// Recover the typed filesystem failure behind an io::Write error.
+    fn take_error(&mut self) -> Option<FilesystemError>;
+    async fn publish(self: Box<Self>, work: Arc<WorkBudget>) -> Result<(), FilesystemError>;
+}
+
 /// Bounded native data stays charged until its consumer finishes with it.
 pub struct FileContents {
     pub bytes: Vec<u8>,
@@ -294,6 +312,11 @@ impl<'de> serde::Deserialize<'de> for DirectoryEntry {
 }
 #[async_trait::async_trait]
 pub trait Filesystem: Send + Sync {
+    /// Download admission survives retry with the same effect identity.
+    fn supports_download_replay(&self) -> bool {
+        false
+    }
+
     /// File updates retain prepared bytes/results and completed receipts across retries.
     fn supports_update_replay(&self) -> bool {
         false
@@ -328,6 +351,15 @@ pub trait Filesystem: Send + Sync {
         maximum_entries: usize,
         limits: &super::limits::TenantLimits,
     ) -> Result<DirectoryNames, FilesystemError>;
+    /// Admit the destination and return fresh disposable staging, retaining native
+    /// serialization until publication or drop. Completion belongs to effect history.
+    async fn begin_download(
+        &self,
+        effect: &EffectId,
+        path: &str,
+        options: DownloadOptions,
+        work: Arc<WorkBudget>,
+    ) -> Result<Box<dyn Download>, FilesystemError>;
     /// Open a replacement and return any captured result before native preparation.
     /// The returned operation retains the backend's serialization until publication
     /// finishes or the caller drops it without publishing.

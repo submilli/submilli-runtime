@@ -6,6 +6,7 @@ use submilli_durable::unit_of_work::Outcome;
 use submilli_shared::secret_store::SecretCipher;
 mod blocking;
 mod boundaries;
+mod downloads;
 pub(crate) mod process;
 mod resources;
 mod updates;

@@ -155,7 +155,7 @@ pub struct Outcome {
 /// One effect's journal. Each operation serializes its own state enum into
 /// `state`; absence means Initial. A prepared state can coexist with an already
 /// applied public mutation when a crash interrupts completion recording.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct JournalEntry {
     pub id: EffectId,
     pub run_id: RunId,
@@ -284,9 +284,18 @@ impl JournalEntry {
             serde_json::from_slice(bytes).map_err(|_| StoreError::Conflict)?;
         Ok(match state {
             StoredMutationState::Prepared(_) => "pending",
+            // This index marks admission complete, not publication. Only effect
+            // history authorizes advancing past an admitted download.
+            StoredMutationState::Checked {} if self.operation == "download-admission" => "done",
+            StoredMutationState::Checked {} => return Err(StoreError::Conflict),
             StoredMutationState::Completed(Ok(_)) => "done",
             StoredMutationState::Completed(Err(_)) => "rejected",
         })
+    }
+
+    fn is_download_admission(&self) -> bool {
+        self.operation == "download-admission"
+            && self.state.as_deref() == Some(br#"{"Checked":{}}"#)
     }
 
     pub fn validate_successor(&self, prior: Option<&Self>) -> Result<(), StoreError> {
@@ -300,7 +309,7 @@ impl JournalEntry {
         }
         let status = self.status()?;
         let Some(prior) = prior else {
-            return if status == "preparing" {
+            return if status == "preparing" || self.is_download_admission() {
                 Ok(())
             } else {
                 Err(StoreError::Conflict)
@@ -331,6 +340,7 @@ impl JournalEntry {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 enum StoredMutationState {
+    Checked {},
     Prepared(serde::de::IgnoredAny),
     Completed(Result<Outcome, String>),
 }
