@@ -4,6 +4,7 @@ use crate::domain::run_status::IndeterminateReason;
 use crate::handlers::durable_runs;
 use submilli_shared::secret_store::SecretCipher;
 
+mod history_objects;
 mod indeterminate;
 mod scheduling;
 mod tool_callbacks;

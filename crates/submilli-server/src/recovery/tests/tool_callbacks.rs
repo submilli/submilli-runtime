@@ -166,6 +166,8 @@ async fn duplicate_execute_and_resume_preserve_one_effect_and_terminal_retry_nee
         .unwrap();
     // Reopen to discard all memory; only the terminal idempotency result remains.
     state.database().unwrap().close().await.unwrap();
+    drop(router);
+    drop(state);
     let reopened = app(root.path(), 10_000_000).await;
     let router = crate::app(reopened.clone());
     assert_eq!(
@@ -186,6 +188,8 @@ async fn resume_before_recovery_waits_then_continues_the_reconstructed_call() {
     let first_id = call(&suspended);
     stop(&first).await;
     first.database().unwrap().close().await.unwrap();
+    drop(router);
+    drop(first);
     let second = app(root.path(), 10_000_000).await;
     let router = resume_router(second.clone());
     let submission = tokio::spawn({
@@ -209,6 +213,8 @@ async fn resume_before_recovery_waits_then_continues_the_reconstructed_call() {
     // Recover a second time, now with a committed first answer in the prefix.
     stop(&second).await;
     second.database().unwrap().close().await.unwrap();
+    drop(router);
+    drop(second);
     let third = app(root.path(), 10_000_000).await;
     third.boot().await.unwrap();
     let router = crate::app(third.clone());
@@ -247,6 +253,8 @@ async fn shutdown_rejects_a_resume_waiting_for_recovery() {
     let run = wait["execution_id"].as_str().unwrap().to_owned();
     stop(&first).await;
     first.database().unwrap().close().await.unwrap();
+    drop(router);
+    drop(first);
     let second = app(root.path(), 10_000_000).await;
     let router = resume_router(second.clone());
     let request = tokio::spawn(async move { resume(&router, &run, &id, 1).await });

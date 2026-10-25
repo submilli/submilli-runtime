@@ -51,6 +51,15 @@ pub trait EffectHistory: Send + Sync {
         call: &EffectCall,
         outcome: RecordedOutcome,
     ) -> Result<(), HistoryError>;
+    /// Additional persistence work, reported once and settled by the host boundary.
+    /// Storage must not reject a completed native outcome because fuel ran out.
+    fn take_storage_fuel(&self) -> u64 {
+        0
+    }
+    /// Finish owned persistence I/O before releasing execution resources.
+    async fn drain(&self) -> Result<(), HistoryError> {
+        Ok(())
+    }
     /// Verify that no effect is pending and all recorded calls have been consumed.
     async fn ensure_history_consumed(&self) -> Result<(), HistoryError>;
 }
@@ -81,10 +90,9 @@ where
         return result.map_err(|error| host::throw_host_error(caller, error));
     };
     let fingerprint = fingerprint(caller, &arguments)?;
-    let call = history
-        .begin(operation, fingerprint)
-        .await
-        .map_err(fatal_host_error)?;
+    let call = history.begin(operation, fingerprint).await;
+    fuel::settle_host_fuel(&mut *caller, history.take_storage_fuel())?;
+    let call = call.map_err(fatal_host_error)?;
     if let Some(recorded) = &call.recorded {
         return match recorded {
             Ok(bytes) => {
@@ -111,10 +119,9 @@ where
         }
         Err(error) => Err(NativeError::capture(error)),
     };
-    history
-        .complete(&call, recorded_result)
-        .await
-        .map_err(fatal_host_error)?;
+    let completed = history.complete(&call, recorded_result).await;
+    fuel::settle_host_fuel(&mut *caller, history.take_storage_fuel())?;
+    completed.map_err(fatal_host_error)?;
     result.map_err(|error| host::throw_host_error(caller, error))
 }
 

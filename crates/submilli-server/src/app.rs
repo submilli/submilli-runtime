@@ -109,6 +109,7 @@ struct AppStateInner {
     runtime: RuntimeConfig,
     blueprints: Arc<dyn BlueprintStore>,
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
+    history_objects: Option<Arc<crate::adapters::history::HistoryObjects>>,
     durable_execution: bool,
     max_durable_runs: usize,
     recovery_wakeup: Arc<Notify>,
@@ -219,6 +220,10 @@ impl AppState {
         llm_dispatch_factory: LlmDispatchFactory,
         embedding_dispatch_factory: EmbeddingDispatchFactory,
     ) -> Result<Self> {
+        config
+            .durable_objects
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         let database = config.resolve_database().await?;
         if config.durable_execution && (database.is_ephemeral() || config.session_cipher.is_none())
         {
@@ -312,6 +317,25 @@ impl AppState {
         // configured root must already be there, the default one is made now.
         let volume_root = crate::config::VolumeRoot::from_config(config.volume_root);
         volume_root.prepare()?;
+        let history_objects = if !database.is_ephemeral()
+            && (config.durable_execution
+                || crate::adapters::history::HistoryObjects::has_retained_runs(&database).await?)
+        {
+            let cipher = config.session_cipher.clone().ok_or_else(|| {
+                anyhow::anyhow!("retained recorded runs require their encryption key")
+            })?;
+            Some(
+                crate::adapters::history::HistoryObjects::open(
+                    database.clone(),
+                    volume_root.durable_objects_dir(),
+                    cipher,
+                    config.durable_objects,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
         let session_root = volume_root.sessions_dir();
         let session_store_dir = config.session_store_dir;
         let session_store = Arc::new(crate::session_store::SqliteSessionStore::new(
@@ -350,6 +374,7 @@ impl AppState {
                     ),
                 },
             )
+            .with_history_objects(history_objects.clone())
             .with_cipher(config.session_cipher.clone())
             .with_response_retention(ResponseRetention {
                 ttl: config
@@ -439,6 +464,7 @@ impl AppState {
                 runtime,
                 blueprints,
                 unit_of_work,
+                history_objects,
                 durable_execution: config.durable_execution,
                 max_durable_runs: config.max_durable_runs.unwrap_or(4),
                 recovery_wakeup: Arc::new(Notify::new()),
@@ -623,6 +649,10 @@ impl AppState {
         }
         self.inner.router_ready.store(true, Ordering::Release);
         Ok(())
+    }
+
+    pub(crate) fn history_objects(&self) -> Option<&Arc<crate::adapters::history::HistoryObjects>> {
+        self.inner.history_objects.as_ref()
     }
 
     pub(crate) fn durable_execution(&self) -> bool {

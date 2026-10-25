@@ -1,0 +1,90 @@
+{
+  "module": "HistoryObjects",
+  "constants": {
+    "MaxCrashes": 1,
+    "Fault": "none",
+    "Witness": "none",
+    "MaxObjects": 2
+  },
+  "invariants": [
+    "TypeOK",
+    "ReferenceDurable",
+    "HistoryAtomic",
+    "ReadersProtected",
+    "WriterProtected",
+    "RetirementFinal",
+    "AcknowledgedCommitted"
+  ],
+  "cases": [
+    {
+      "name": "safety",
+      "kind": "safety",
+      "timeout_seconds": 180
+    },
+    {
+      "name": "retired-collection",
+      "kind": "liveness",
+      "specification": "FairSpec",
+      "properties": [
+        "RetiredCollected"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "name": "negative-early-reference",
+      "kind": "negative",
+      "invariant": "ReferenceDurable",
+      "constants": {
+        "Fault": "early-reference"
+      }
+    },
+    {
+      "name": "negative-collect-bound",
+      "kind": "negative",
+      "invariant": "ReferenceDurable",
+      "constants": {
+        "Fault": "collect-bound"
+      }
+    },
+    {
+      "name": "negative-collect-reader",
+      "kind": "negative",
+      "invariant": "ReadersProtected",
+      "constants": {
+        "Fault": "collect-reader"
+      }
+    },
+    {
+      "name": "negative-collect-writer",
+      "kind": "negative",
+      "invariant": "WriterProtected",
+      "constants": {
+        "Fault": "collect-writer"
+      }
+    },
+    {
+      "name": "cancel-worker",
+      "kind": "witness",
+      "invariant": "NoWitness",
+      "constants": {
+        "Witness": "cancel-worker"
+      }
+    },
+    {
+      "name": "replay-after-crash",
+      "kind": "witness",
+      "invariant": "NoWitness",
+      "constants": {
+        "Witness": "replay-after-crash"
+      }
+    },
+    {
+      "name": "collect-after-crash",
+      "kind": "witness",
+      "invariant": "NoWitness",
+      "constants": {
+        "Witness": "collect-after-crash"
+      }
+    }
+  ]
+}

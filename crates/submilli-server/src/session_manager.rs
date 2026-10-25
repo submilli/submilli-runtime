@@ -98,6 +98,7 @@ impl From<CredentialError> for SessionError {
 }
 
 pub struct SessionManager {
+    pub(crate) history_objects: Option<Arc<crate::adapters::history::HistoryObjects>>,
     finalizers: crate::adapters::session::finalizers::StoredFinalizers,
     finalizer_executor:
         std::sync::OnceLock<Arc<dyn crate::application::sessions::finalization::FinalizerExecutor>>,
@@ -289,6 +290,7 @@ impl SessionManager {
                 database: database.clone(),
                 sealer: crate::adapters::sealing::Sealer::new(database.ephemeral_cipher()),
             },
+            history_objects: None,
             finalizer_executor: std::sync::OnceLock::new(),
             finalization_lock: tokio::sync::Mutex::new(()),
             retirement_retries: tokio::sync::Mutex::new(std::collections::HashMap::new()),
@@ -320,6 +322,14 @@ impl SessionManager {
             )),
             database,
         }
+    }
+
+    pub(crate) fn with_history_objects(
+        mut self,
+        objects: Option<Arc<crate::adapters::history::HistoryObjects>>,
+    ) -> Self {
+        self.history_objects = objects;
+        self
     }
 
     /// Keep a session's last run only up to `max_bytes` of JSON; a larger one

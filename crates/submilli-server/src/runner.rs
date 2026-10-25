@@ -468,6 +468,17 @@ async fn run_inner(
     if let Err(error) = store.data_mut().blocking_work.finish().await {
         record_worker_cleanup_failure(&mut outcome, &error);
     }
+    if let Some(history) = store.data().effects.clone() {
+        let drained = history.drain().await;
+        let settled =
+            interpreter::runtime::fuel::settle_host_fuel(&mut store, history.take_storage_fuel());
+        if let Err(error) = drained {
+            return internal_failure(&format!("history cleanup failed: {error}"));
+        }
+        if let Err(error) = settled {
+            return internal_failure(&format!("history fuel settlement failed: {error}"));
+        }
+    }
     match ExecutionUsage::capture(&store, runtime.config.fuel) {
         Ok(usage) => outcome.usage = usage,
         Err(error) => return internal_failure(&format!("usage capture failed: {error}")),

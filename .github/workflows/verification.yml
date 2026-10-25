@@ -39,6 +39,8 @@ jobs:
         run: python3 verification/check.py --model unit-of-work --output "$RUNNER_TEMP/unit-of-work-model"
       - name: Check byte writes without a filesystem journal
         run: python3 verification/check.py --model filesystem/writes --output "$RUNNER_TEMP/writes-model"
+      - name: Check effect-history object publication and collection
+        run: python3 verification/check.py --model history-objects --output "$RUNNER_TEMP/history-objects-model"
       - name: Check captured file updates
         run: python3 verification/check.py --model filesystem/updates --output "$RUNNER_TEMP/updates-model"
       - name: Check fixed-offset append recovery
@@ -72,6 +74,7 @@ jobs:
             ${{ runner.temp }}/filesystem-model
             ${{ runner.temp }}/writes-model
             ${{ runner.temp }}/updates-model
+            ${{ runner.temp }}/history-objects-model
             ${{ runner.temp }}/namespace-model
             ${{ runner.temp }}/directories-model
             ${{ runner.temp }}/writers-model
