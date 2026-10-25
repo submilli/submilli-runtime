@@ -300,8 +300,6 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
 export function updateMessage(ref: MessageRef, text: string): SlackMessage {
     const { channelId, ts } = ref;
     check("slack.com/bot/updateMessage", { channelId: channelId });
-    // Omit metadata. Slack keeps the stored value when the field is absent;
-    // an empty object would remove it. Do not read the configured variable here.
     const data = slackPost("chat.update", { channel: channelId, ts: ts, text: text }).json() as UpdateResponse;
     requireOk(data, 200);
     const refreshed = messages("conversations.replies", { channel: data.channel, ts: data.ts, limit: 1 });
