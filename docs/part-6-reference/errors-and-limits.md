@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "168e99629ac91ceae1d8573fbb3b0c9efa8865bc9ce4db35bdce55c6100c2387"
+  contentHash: "c19aab9ca3585de1916c09f270f9422e4e79dd718c5d95748e06cc72c3b17ba9"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -382,15 +382,15 @@ A program that doesn't compile never runs. The error lists each diagnostic
 with its position and, where one applies, a `help:` line:
 
 ```text
-error: `+` not defined for `string` and `number`
-  --> sess.ts:15:82
-   |
-14 |     attempt("session key", () => { session.set("k".repeat(257), 1); });
-15 |     attempt("session keys", () => { for (let i = 0; i < 1025; i++) { session.set("k" + i, i); } });
-   |                                                                                  ^^^^^^^
-16 |     attempt("session total", () => { for (let i = 0; i < 40; i++) { session.set("v" + i, "x".repeat(500000)); } });
-   |
-help: `+` does not coerce; wrap the number with `String(...)` before concatenating
+error: `+` not defined for `string` and `boolean`
+ --> scan.ts:6:46
+  |
+5 |         const big = e.size > 1000;
+6 |         out += e.path + " " + e.size + " " + big + "\n";
+  |                                              ^^^
+7 |     }
+  |
+help: `+` converts only a number or an `Error` onto a string; write `String(big)` to concatenate
 ```
 
 An import of a Package the Blueprint doesn't provide, or of an MCP server

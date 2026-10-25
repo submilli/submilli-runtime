@@ -1,2 +1,0 @@
-line 54, 70 extra: by-design spec §1.6 `+` adds two numbers or concatenates two strings, it never coerces the other operand
-line 55 type: artifact we reject `'' + n` on line 54, so `arr` returns an error type

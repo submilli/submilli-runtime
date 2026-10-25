@@ -1,4 +1,1 @@
-types: 181 of 193 tsc entries compared, 0 differ
-
-errors:
-line 14: ours: `+` not defined for `number` and `"bigint" | "boolean" | "function" | "number" | "object" | "string" | "symbol" | "undefined"` (tsc accepts)
+types: 183 of 193 tsc entries compared, 0 differ
