@@ -162,8 +162,6 @@ pub struct FileUpdateOutput {
 }
 
 /// The native caller supplies text processing and authority, never guest code.
-/// Work budgets are created between caller phases, so preparation and publication
-/// cannot each spend the same remaining fuel. Every native phase settles once.
 #[async_trait::async_trait]
 pub trait FileUpdate: Send {
     /// Read and transform once, including fresh-call capability/size checks.
@@ -172,11 +170,6 @@ pub trait FileUpdate: Send {
     /// Recheck caller authority against the saved native result without rereading
     /// or transforming the public file. Used only for a captured update.
     fn authorize(&mut self, output: &[u8], bytes: u64) -> Result<(), FilesystemError>;
-    fn work(&mut self) -> Result<Arc<WorkBudget>, FilesystemError>;
-    fn settle(&mut self, work: &WorkBudget) -> Result<(), FilesystemError>;
-    /// Admit independently owned buffers. Workers retain the returned guard
-    /// until they finish, including when their awaiting caller is cancelled.
-    fn reserve(&mut self, bytes: u64) -> Result<super::limits::HostBytes, FilesystemError>;
 }
 impl FilesystemInfo {
     pub fn from_vfs(vfs: &Vfs) -> Self {
@@ -378,12 +371,17 @@ pub trait Filesystem: Send + Sync {
     ) -> Result<DirectoryNames, FilesystemError>;
     /// Retry a single prepared replacement under the same identity and request.
     /// Completed calls return their output without invoking preparation again.
+    /// The caller settles `work` after the call, including failures. Native
+    /// callbacks must narrow its allowance after spending interpreter fuel;
+    /// filesystem workers start only after preparation or authorization returns.
     async fn update_file(
         &self,
         effect_id: &EffectId,
+        work: Arc<WorkBudget>,
         path: &str,
         request: [u8; 32],
         update: &mut dyn FileUpdate,
+        limits: &super::limits::TenantLimits,
     ) -> Result<FileUpdateOutput, FilesystemError>;
     async fn metadata(
         &self,

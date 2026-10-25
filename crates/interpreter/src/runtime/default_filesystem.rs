@@ -87,27 +87,27 @@ impl Filesystem for DefaultFilesystem {
     async fn update_file(
         &self,
         _effect_id: &EffectId,
+        work: Arc<WorkBudget>,
         path: &str,
         _request: [u8; 32],
         update: &mut dyn FileUpdate,
+        limits: &TenantLimits,
     ) -> Result<FileUpdateOutput, FilesystemError> {
         let prepared = update.prepare().await?;
         let Some(bytes) = prepared.contents else {
             return Ok(prepared.output);
         };
-        let memory = update.reserve(bytes.capacity() as u64)?;
-        let work = update.work()?;
-        let worker_work = work.clone();
+        let memory = HostBytes::new(limits, bytes.capacity() as u64)
+            .map_err(|e| FilesystemError::Execution(e.into()))?;
         let vfs = self.vfs.clone();
         let path = path.to_owned();
         let result = self
             .workers
             .run(move || {
                 let _memory = memory;
-                replace_existing(&vfs, &path, &bytes, &worker_work)
+                replace_existing(&vfs, &path, &bytes, &work)
             })
             .await;
-        update.settle(&work)?;
         result?;
         Ok(prepared.output)
     }
@@ -1767,8 +1767,14 @@ mod tests {
             let effect = "replace".into();
             let (release, wait) = tokio::sync::oneshot::channel();
             let blocker = tokio::task::spawn_blocking(move || wait.blocking_recv());
-            let mut pending =
-                Box::pin(filesystem.update_file(&effect, "/input", [0; 32], &mut update));
+            let mut pending = Box::pin(filesystem.update_file(
+                &effect,
+                Arc::new(WorkBudget::new(u64::MAX)),
+                "/input",
+                [0; 32],
+                &mut update,
+                &limits,
+            ));
             assert_pending(pending.as_mut());
             assert_eq!(std::fs::read(&path).unwrap(), b"before");
             assert_eq!(limits.host_attached_bytes(), 256);
@@ -1799,21 +1805,13 @@ mod tests {
                 contents: Some(bytes),
                 output: FileUpdateOutput {
                     bytes: Vec::new(),
-                    memory: self.reserve(0)?,
+                    memory: HostBytes::new(&self.limits, 0)
+                        .map_err(|e| FilesystemError::Execution(e.into()))?,
                 },
             })
         }
         fn authorize(&mut self, _: &[u8], _: u64) -> Result<(), FilesystemError> {
             panic!("default updates do not replay");
-        }
-        fn work(&mut self) -> Result<Arc<WorkBudget>, FilesystemError> {
-            Ok(Arc::new(WorkBudget::new(u64::MAX)))
-        }
-        fn settle(&mut self, _: &WorkBudget) -> Result<(), FilesystemError> {
-            Ok(())
-        }
-        fn reserve(&mut self, bytes: u64) -> Result<HostBytes, FilesystemError> {
-            HostBytes::new(&self.limits, bytes).map_err(|e| FilesystemError::Execution(e.into()))
         }
     }
 

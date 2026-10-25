@@ -47,7 +47,8 @@ async fn crash_child() {
         let path = filesystem.vfs().root().join("file");
         std::fs::write(&path, b"original\n").unwrap();
         let mut update = super::updates::Insert::new(path);
-        Filesystem::update_file(&filesystem, &EFFECT.into(), "/file", [1; 32], &mut update)
+        update
+            .execute(&filesystem, &EFFECT.into(), "/file", [1; 32])
             .await
             .unwrap();
     } else if kind == "reader" {
@@ -692,10 +693,10 @@ async fn file_update_process_restart_uses_the_captured_result() {
         let mut update = super::updates::Insert::new(path.clone());
         update.forbid_prepare =
             !matches!(point, "update-candidate-sync" | "update-candidate-durable");
-        let output =
-            Filesystem::update_file(&filesystem, &EFFECT.into(), "/file", [1; 32], &mut update)
-                .await
-                .unwrap();
+        let output = update
+            .execute(&filesystem, &EFFECT.into(), "/file", [1; 32])
+            .await
+            .unwrap();
         assert_eq!(output.bytes, b"original\n", "{point}");
         assert_eq!(
             std::fs::read(&path).unwrap(),
@@ -704,10 +705,10 @@ async fn file_update_process_restart_uses_the_captured_result() {
         );
         std::fs::write(&path, b"later").unwrap();
         update.forbid_prepare = true;
-        let replay =
-            Filesystem::update_file(&filesystem, &EFFECT.into(), "/file", [1; 32], &mut update)
-                .await
-                .unwrap();
+        let replay = update
+            .execute(&filesystem, &EFFECT.into(), "/file", [1; 32])
+            .await
+            .unwrap();
         assert_eq!(replay.bytes, output.bytes);
         assert_eq!(std::fs::read(&path).unwrap(), b"later");
     }

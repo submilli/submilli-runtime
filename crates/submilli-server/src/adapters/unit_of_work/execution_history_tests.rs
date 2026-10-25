@@ -560,6 +560,18 @@ async fn run_filesystem_script(
     units: submilli_durable::UnitFactory,
     attempt: &ExecutionAttempt,
 ) -> wasmtime::Result<Option<String>> {
+    measure_filesystem_script(source, history, root, units, attempt)
+        .await
+        .map(|(value, _)| value)
+}
+
+async fn measure_filesystem_script(
+    source: &str,
+    history: Arc<dyn EffectHistory>,
+    root: &std::path::Path,
+    units: submilli_durable::UnitFactory,
+    attempt: &ExecutionAttempt,
+) -> wasmtime::Result<(Option<String>, interpreter::runtime::limits::ExecutionUsage)> {
     use interpreter::runtime::{
         RuntimeConfig, StoreData, Vfs, dispatch_main_async, install_runtime_async,
         instantiate_program_async,
@@ -584,7 +596,8 @@ async fn run_filesystem_script(
     store.data_mut().finish_blocking_work().await?;
     let value = result?;
     history.ensure_history_consumed().await?;
-    Ok(value)
+    let usage = interpreter::runtime::limits::ExecutionUsage::capture(&store, config.fuel)?;
+    Ok((value, usage))
 }
 
 #[tokio::test]
@@ -1505,6 +1518,57 @@ async fn code_updates_resume_after_receipt_before_history_without_recomputing() 
         );
         assert!(!root.join("file").exists());
     }
+}
+
+#[tokio::test]
+async fn execution_history_charges_code_update_workers_only_on_execution() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("files");
+    std::fs::create_dir(&root).unwrap();
+    let original = "original\n".repeat(4096);
+    std::fs::write(root.join("file"), &original).unwrap();
+    let (_database, units, attempt) = fixture(&directory.path().join("db")).await;
+    let source = r#"
+        import { insertAt } from "submilli:code";
+        function main(): string {
+            assert(insertAt("/file", 1, "head\n").changed);
+            return "updated";
+        }
+    "#;
+    let (output, live) = measure_filesystem_script(
+        source,
+        Arc::new(History::new(attempt.clone(), units.clone())),
+        &root,
+        units.clone(),
+        &attempt,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("file")).unwrap(),
+        format!("head\n{original}")
+    );
+    std::fs::remove_file(root.join("file")).unwrap();
+    let (replayed, replay) = measure_filesystem_script(
+        source,
+        Arc::new(History::new(attempt.clone(), units.clone())),
+        &root,
+        units,
+        &attempt,
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, replayed);
+    assert!(!root.join("file").exists());
+    assert!(
+        replay.host_fuel > 0,
+        "history decoding and conversion still cost fuel"
+    );
+    assert!(
+        live.host_fuel
+            > replay.host_fuel + interpreter::runtime::fuel::IO.cost(original.len() as u64),
+        "native read, transform and publication work must not be charged on replay: live={live:?}, replay={replay:?}"
+    );
 }
 
 #[tokio::test]

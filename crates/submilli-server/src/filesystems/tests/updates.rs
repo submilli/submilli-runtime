@@ -61,11 +61,20 @@ impl FileUpdate for Insert {
         assert_eq!(bytes, 18);
         Ok(())
     }
-    fn work(&mut self) -> Result<Arc<WorkBudget>, PortError> {
-        Ok(Arc::new(WorkBudget::new(self.fuel)))
-    }
-    fn settle(&mut self, _: &WorkBudget) -> Result<(), PortError> {
-        Ok(())
+}
+impl Insert {
+    pub(super) async fn execute(
+        &mut self,
+        filesystem: &dyn Filesystem,
+        effect: &EffectId,
+        path: &str,
+        request: [u8; 32],
+    ) -> Result<FileUpdateOutput, PortError> {
+        let work = Arc::new(WorkBudget::new(self.fuel));
+        let limits = self.limits.clone();
+        filesystem
+            .update_file(effect, work, path, request, self, &limits)
+            .await
     }
     fn reserve(&mut self, bytes: u64) -> Result<HostBytes, PortError> {
         HostBytes::new(&self.limits, bytes).map_err(|e| PortError::Execution(e.into()))
@@ -79,30 +88,32 @@ async fn update_receipt_replays_exact_output_without_touching_later_files() {
     std::fs::write(&path, b"original\n").unwrap();
     let effect = uuid::Uuid::new_v4().to_string().into();
     let mut update = Insert::new(path.clone());
-    let output =
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
-            .await
-            .unwrap();
+    let output = update
+        .execute(&fixture.filesystem, &effect, "/file", [1; 32])
+        .await
+        .unwrap();
     assert_eq!(output.bytes, b"original\n");
     assert_eq!(update.preparations, 1);
     drop(output);
     update.forbid_prepare = true;
     std::fs::remove_file(&path).unwrap();
-    let output =
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
-            .await
-            .unwrap();
+    let output = update
+        .execute(&fixture.filesystem, &effect, "/file", [1; 32])
+        .await
+        .unwrap();
     assert_eq!(output.bytes, b"original\n");
     assert!(!path.exists());
     drop(output);
     assert_eq!(update.limits.host_attached_bytes(), 0);
     assert!(
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [2; 32], &mut update)
+        update
+            .execute(&fixture.filesystem, &effect, "/file", [2; 32])
             .await
             .is_err()
     );
     assert!(
-        Filesystem::update_file(&fixture.filesystem, &effect, "/other", [1; 32], &mut update)
+        update
+            .execute(&fixture.filesystem, &effect, "/other", [1; 32])
             .await
             .is_err()
     );
@@ -123,17 +134,18 @@ async fn update_recovers_publication_without_receipt_and_preserves_permissions()
     let mut update = Insert::new(path.clone());
     fail_operation_updates(&fixture, "NEW.status='done'").await;
     assert!(
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+        update
+            .execute(&fixture.filesystem, &effect, "/file", [1; 32])
             .await
             .is_err()
     );
     assert_eq!(std::fs::read(&path).unwrap(), b"inserted\noriginal\n");
     clear_operation_failure(&fixture).await;
     update.forbid_prepare = true;
-    let output =
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
-            .await
-            .unwrap();
+    let output = update
+        .execute(&fixture.filesystem, &effect, "/file", [1; 32])
+        .await
+        .unwrap();
     assert_eq!(output.bytes, b"original\n");
     assert_eq!(std::fs::read(&path).unwrap(), b"inserted\noriginal\n");
     #[cfg(unix)]
@@ -157,7 +169,8 @@ async fn update_recovery_refuses_damaged_candidate_and_missing_result() {
         let mut update = Insert::new(path.clone());
         fail_operation_updates(&fixture, "NEW.status='done'").await;
         assert!(
-            Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+            update
+                .execute(&fixture.filesystem, &effect, "/file", [1; 32])
                 .await
                 .is_err()
         );
@@ -181,7 +194,8 @@ async fn update_recovery_refuses_damaged_candidate_and_missing_result() {
         }
         update.forbid_prepare = true;
         assert!(
-            Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+            update
+                .execute(&fixture.filesystem, &effect, "/file", [1; 32])
                 .await
                 .is_err()
         );
@@ -208,7 +222,8 @@ async fn cancelled_update_owns_memory_and_serialization_until_receipt_finishes()
     let limits = update.limits.clone();
     let task_effect = effect.clone();
     let task = tokio::spawn(async move {
-        Filesystem::update_file(&backend, &task_effect, "/file", [1; 32], &mut update)
+        update
+            .execute(&backend, &task_effect, "/file", [1; 32])
             .await
             .map(|_| ())
     });
@@ -222,7 +237,8 @@ async fn cancelled_update_owns_memory_and_serialization_until_receipt_finishes()
     let mut retry = Insert::new(path.clone());
     retry.forbid_prepare = true;
     let retry = tokio::spawn(async move {
-        Filesystem::update_file(&backend, &effect, "/file", [1; 32], &mut retry)
+        retry
+            .execute(&backend, &effect, "/file", [1; 32])
             .await
             .unwrap()
             .bytes
@@ -267,16 +283,16 @@ async fn update_preflight_limits_refuse_before_publication() {
         if kind == "memory" {
             update.limits = Arc::new(TenantLimits::new(4096));
         }
-        let error = Filesystem::update_file(
-            &fixture.filesystem,
-            &uuid::Uuid::new_v4().to_string().into(),
-            "/file",
-            [1; 32],
-            &mut update,
-        )
-        .await
-        .err()
-        .unwrap();
+        let error = update
+            .execute(
+                &fixture.filesystem,
+                &uuid::Uuid::new_v4().to_string().into(),
+                "/file",
+                [1; 32],
+            )
+            .await
+            .err()
+            .unwrap();
         match kind {
             "fuel" => assert!(matches!(error, PortError::Exhausted(_)), "{error}"),
             "memory" => assert!(matches!(error, PortError::Execution(_)), "{error}"),
@@ -298,7 +314,8 @@ async fn update_recovery_admits_actual_stored_size_and_validation_scratch() {
         let mut update = Insert::new(path.clone());
         fail_operation_updates(&fixture, "NEW.status='done'").await;
         assert!(
-            Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+            update
+                .execute(&fixture.filesystem, &effect, "/file", [1; 32])
                 .await
                 .is_err()
         );
@@ -315,11 +332,11 @@ async fn update_recovery_admits_actual_stored_size_and_validation_scratch() {
         } else {
             32 << 10
         }));
-        let error =
-            Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
-                .await
-                .err()
-                .unwrap();
+        let error = update
+            .execute(&fixture.filesystem, &effect, "/file", [1; 32])
+            .await
+            .err()
+            .unwrap();
         assert!(
             matches!(error, PortError::Execution(error) if error.is::<interpreter::runtime::limits::MemoryCapExceeded>())
         );
@@ -339,16 +356,17 @@ async fn update_replaces_contained_symlink_without_changing_its_target() {
     let mut update = Insert::new(root.join("file"));
     fail_operation_updates(&fixture, "NEW.status='done'").await;
     assert!(
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+        update
+            .execute(&fixture.filesystem, &effect, "/file", [1; 32])
             .await
             .is_err()
     );
     clear_operation_failure(&fixture).await;
     update.forbid_prepare = true;
-    let output =
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
-            .await
-            .unwrap();
+    let output = update
+        .execute(&fixture.filesystem, &effect, "/file", [1; 32])
+        .await
+        .unwrap();
     assert_eq!(output.bytes, b"original\n");
     assert!(
         std::fs::symlink_metadata(root.join("file"))
@@ -371,16 +389,16 @@ async fn update_admits_candidate_capacity_before_detaching_from_the_caller() {
     update.extra_capacity = 512 << 10;
     update.limits = Arc::new(TenantLimits::new(768 << 10));
     let limits = update.limits.clone();
-    let error = Filesystem::update_file(
-        &fixture.filesystem,
-        &uuid::Uuid::new_v4().to_string().into(),
-        "/file",
-        [1; 32],
-        &mut update,
-    )
-    .await
-    .err()
-    .unwrap();
+    let error = update
+        .execute(
+            &fixture.filesystem,
+            &uuid::Uuid::new_v4().to_string().into(),
+            "/file",
+            [1; 32],
+        )
+        .await
+        .err()
+        .unwrap();
     assert!(
         matches!(error, PortError::Execution(error) if error.is::<interpreter::runtime::limits::MemoryCapExceeded>())
     );
@@ -399,21 +417,23 @@ async fn pending_update_authorization_preserves_fuel_exhaustion() {
     let mut update = Insert::new(path.clone());
     fail_operation_updates(&fixture, "NEW.status='done'").await;
     assert!(
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+        update
+            .execute(&fixture.filesystem, &effect, "/file", [1; 32])
             .await
             .is_err()
     );
     clear_operation_failure(&fixture).await;
     update.forbid_prepare = true;
     update.fuel = 0;
-    let error =
-        Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
-            .await
-            .err()
-            .unwrap();
+    let error = update
+        .execute(&fixture.filesystem, &effect, "/file", [1; 32])
+        .await
+        .err()
+        .unwrap();
     assert!(matches!(error, PortError::Exhausted(_)));
     update.fuel = u64::MAX;
-    Filesystem::update_file(&fixture.filesystem, &effect, "/file", [1; 32], &mut update)
+    update
+        .execute(&fixture.filesystem, &effect, "/file", [1; 32])
         .await
         .unwrap();
     assert_eq!(std::fs::read(path).unwrap(), b"inserted\noriginal\n");

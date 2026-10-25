@@ -1596,6 +1596,17 @@ validate the native result size before writing; Wasm conversion follows the
 native operation and, for recorded runs, the committed outcome. Conversion can
 fail normally after publication. No adapter-level mutation idempotency is added.
 
+`edit`, `insertAt`, and `applyPatch` pass a `WorkBudget` and `TenantLimits` to
+`Filesystem::update_file`. Native preparation and saved-result authorization
+narrow the worker allowance to the remaining caller fuel before publication
+workers start. The code host settles worker fuel on success or failure inside
+the effect action, before history completion; completed-history replay skips
+this work and pays the ordinary history decoding and guest conversion charges.
+The filesystem retains memory guards through worker completion. The durable
+backend marks the budget as effectful before committing captured intent so
+later charges cannot discard a possibly published update. Existing cost
+formulas are unchanged.
+
 Results other than the two diffs are built as `serde_json::Value`. `install.rs::encode_json` serializes them to text and decodes UTF-16 into guest values through the metered session-value decoder. Diff results use the UTF-16 string writer directly. `F` = file bytes, `out` = result.
 
 | Function | What the host does | Formula | Charge point | Notes |

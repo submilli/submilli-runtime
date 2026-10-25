@@ -2,6 +2,7 @@
 use super::*;
 use interpreter::runtime::filesystem::{FileUpdate, FileUpdateOutput};
 use interpreter::runtime::fuel;
+use interpreter::runtime::limits::HostBytes;
 use serde::{Deserialize, Serialize};
 
 const MAX_OUTPUT: u64 = 64 * 1024 * 1024;
@@ -18,9 +19,11 @@ impl DurableFilesystem {
     pub(super) async fn update_file(
         &self,
         effect: &EffectId,
+        work: Arc<WorkBudget>,
         path: &str,
         request: [u8; 32],
         update: &mut dyn FileUpdate,
+        limits: &TenantLimits,
     ) -> Result<FileUpdateOutput, PortError> {
         paths::validate_guest_path(path)
             .map_err(FilesystemError::from)
@@ -44,17 +47,19 @@ impl DurableFilesystem {
         let state = decode_state(&journal).map_err(backend)?;
         let operation = UpdatePublication {
             filesystem: self.clone(),
+            work,
             gate,
             journal,
             path: path.to_owned(),
         };
-        operation.execute(unit, state, update).await
+        operation.execute(unit, state, update, limits).await
     }
 }
 
 /// Owns serialization through native work, SQL completion, and cancellation.
 struct UpdatePublication {
     filesystem: DurableFilesystem,
+    work: Arc<WorkBudget>,
     gate: Arc<tokio::sync::OwnedMutexGuard<()>>,
     journal: JournalEntry,
     path: String,
@@ -65,9 +70,10 @@ impl UpdatePublication {
         mut unit: Box<dyn UnitOfWork>,
         state: FileUpdateState,
         update: &mut dyn FileUpdate,
+        limits: &TenantLimits,
     ) -> Result<FileUpdateOutput, PortError> {
         let bytes = match &state {
-            FileUpdateState::Initial => return self.prepare(unit, update).await,
+            FileUpdateState::Initial => return self.prepare(unit, update, limits).await,
             FileUpdateState::Prepared(content) => content.bytes,
             FileUpdateState::Completed(Ok(outcome)) => outcome.bytes,
             FileUpdateState::Completed(Err(_)) => {
@@ -83,7 +89,8 @@ impl UpdatePublication {
         if size > MAX_OUTPUT + 4096 {
             return Err(backend(RecoveryError::Limit.into()));
         }
-        let memory = update.reserve(size.saturating_mul(6).saturating_add(128 * 1024))?;
+        let memory = HostBytes::new(limits, size.saturating_mul(6).saturating_add(128 * 1024))
+            .map_err(|e| PortError::Execution(e.into()))?;
         let run = self.filesystem.run_id.clone();
         let id = self.journal.id.clone();
         let retained_gate = self.gate.clone();
@@ -111,16 +118,14 @@ impl UpdatePublication {
         let FileUpdateState::Prepared(content) = state else {
             return Err(backend(RecoveryError::Conflict.into()));
         };
-        let work = update.work()?;
-        work.before_effect();
-        let result = self.complete(content, output, work.clone()).await;
-        update.settle(&work)?;
-        result.map_err(backend)
+        self.work.before_effect();
+        self.complete(content, output).await.map_err(backend)
     }
     async fn prepare(
         mut self,
         mut unit: Box<dyn UnitOfWork>,
         update: &mut dyn FileUpdate,
+        limits: &TenantLimits,
     ) -> Result<FileUpdateOutput, PortError> {
         let prepared = update.prepare().await?;
         let Some(contents) = prepared.contents else {
@@ -140,16 +145,16 @@ impl UpdatePublication {
                 "file update results exceed durable storage limit".into(),
             ));
         }
-        let memory = update.reserve(
+        let memory = HostBytes::new(
+            limits,
             (contents.capacity() as u64)
                 .saturating_add(size.saturating_mul(6))
                 .saturating_add(128 * 1024),
-        )?;
-        let work = update.work()?;
-        let worker_work = work.clone();
-        let result = finish_owned(async move {
+        )
+        .map_err(|e| PortError::Execution(e.into()))?;
+        finish_owned(async move {
             let _memory = memory;
-            let work = worker_work;
+            let work = self.work.clone();
             work.charge(fuel::HASH, (contents.len() as u64).saturating_mul(2))
                 .map_err(RecoveryError::from)?;
             work.charge(fuel::IO, contents.len() as u64)
@@ -192,19 +197,18 @@ impl UpdatePublication {
                 bytes: output,
                 memory: prepared.output.memory,
             };
-            self.complete(content, output, work).await
+            self.complete(content, output).await
         })
-        .await;
-        update.settle(&work)?;
-        result.map_err(backend)
+        .await
+        .map_err(backend)
     }
     async fn complete(
         mut self,
         content: Content,
         output: FileUpdateOutput,
-        work: Arc<WorkBudget>,
     ) -> Result<FileUpdateOutput, FilesystemError> {
         finish_owned(async move {
+            let work = self.work.clone();
             work.charge(fuel::HASH, content.bytes)
                 .map_err(RecoveryError::from)?;
             work.charge(fuel::IO, content.bytes)
@@ -262,7 +266,8 @@ mod tests {
                 contents: Some(b"inserted\noriginal\n".to_vec()),
                 output: FileUpdateOutput {
                     bytes: b"exact native output".to_vec(),
-                    memory: self.reserve(64)?,
+                    memory: HostBytes::new(&self.limits, 64)
+                        .map_err(|e| PortError::Execution(e.into()))?,
                 },
             })
         }
@@ -270,15 +275,6 @@ mod tests {
             assert_eq!(output, b"exact native output");
             assert_eq!(bytes, 18);
             Ok(())
-        }
-        fn work(&mut self) -> Result<Arc<WorkBudget>, PortError> {
-            Ok(Arc::new(WorkBudget::new(u64::MAX)))
-        }
-        fn settle(&mut self, _: &WorkBudget) -> Result<(), PortError> {
-            Ok(())
-        }
-        fn reserve(&mut self, bytes: u64) -> Result<HostBytes, PortError> {
-            HostBytes::new(&self.limits, bytes).map_err(|e| PortError::Execution(e.into()))
         }
     }
 
@@ -293,14 +289,22 @@ mod tests {
                 .await
                 .unwrap();
         let effect = uuid::Uuid::new_v4().to_string().into();
+        let limits = TenantLimits::new(8 << 20);
         let mut update = PreparedOnce {
             calls: 0,
-            limits: TenantLimits::new(8 << 20),
+            limits: limits.for_worker(),
         };
         store.lock().unwrap().stop_after_prepared = true;
         assert!(
             filesystem
-                .update_file(&effect, "/file", [1; 32], &mut update)
+                .update_file(
+                    &effect,
+                    Arc::new(WorkBudget::new(u64::MAX)),
+                    "/file",
+                    [1; 32],
+                    &mut update,
+                    &limits
+                )
                 .await
                 .is_err()
         );
@@ -309,7 +313,14 @@ mod tests {
             b"original\n"
         );
         let output = filesystem
-            .update_file(&effect, "/file", [1; 32], &mut update)
+            .update_file(
+                &effect,
+                Arc::new(WorkBudget::new(u64::MAX)),
+                "/file",
+                [1; 32],
+                &mut update,
+                &limits,
+            )
             .await
             .unwrap();
         assert_eq!(output.bytes, b"exact native output");

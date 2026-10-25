@@ -314,11 +314,13 @@ impl Filesystem for DurableFilesystem {
     async fn update_file(
         &self,
         effect: &EffectId,
+        work: Arc<WorkBudget>,
         path: &str,
         request: [u8; 32],
         update: &mut dyn interpreter::runtime::filesystem::FileUpdate,
+        limits: &TenantLimits,
     ) -> Result<interpreter::runtime::filesystem::FileUpdateOutput, PortError> {
-        DurableFilesystem::update_file(self, effect, path, request, update).await
+        DurableFilesystem::update_file(self, effect, work, path, request, update, limits).await
     }
     async fn metadata(
         &self,
