@@ -1,0 +1,4 @@
+parserVariableDeclaration1.ts(3,19): error TS2304: Cannot find name 'a'.
+parserVariableDeclaration1.ts(4,15): error TS2304: Cannot find name 'b'.
+parserVariableDeclaration1.ts(5,12): error TS2304: Cannot find name 'c'.
+parserVariableDeclaration1.ts(6,14): error TS2304: Cannot find name 'd'.

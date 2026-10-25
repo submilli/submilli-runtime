@@ -1,0 +1,17 @@
+types: 27 of 35 tsc entries compared, 4 differ
+
+line 3: b
+  tsc:  number
+  ours: undefined
+
+line 5: g
+  tsc:  number
+  ours: undefined
+
+line 5: h
+  tsc:  number
+  ours: undefined
+
+line 5: i
+  tsc:  number
+  ours: undefined

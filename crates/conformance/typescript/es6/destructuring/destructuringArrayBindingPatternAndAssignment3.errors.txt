@@ -1,0 +1,2 @@
+destructuringArrayBindingPatternAndAssignment3.ts(5,22): error TS2448: Block-scoped variable 'i' used before its declaration.
+destructuringArrayBindingPatternAndAssignment3.ts(11,27): error TS2373: Parameter 'h' cannot reference identifier 'i' declared after it.
