@@ -6,7 +6,7 @@ We want agents to carry out longer tasks, recover when things go wrong, and brin
 
 | [Durability](#durability) | [Submilli Registry](#submilli-registry) | [Ask human](#ask-human) | [Managed cloud](#managed-cloud) |
 | :--- | :--- | :--- | :--- |
-| Resume interrupted work | Discover and share Packages | Pause for a person | Run without managing servers |
+| Continue after a fix | Discover and share Packages | Pause for a person | Run without managing servers |
 
 > [!NOTE]
 > **Planned direction, no fixed dates.** Scope and order may change. The examples below describe intended behavior. See the [documentation](https://submilli.ai/docs/) and [release notes](https://github.com/submilli/submilli-runtime/releases) for what is available today.
@@ -15,11 +15,13 @@ We want agents to carry out longer tasks, recover when things go wrong, and brin
 
 ## Durability
 
-**Resume a program after an interruption without starting its work again.**
+**Continue a program after the agent fixes its code.**
 
-We want execution state and completed results to survive a restart, so a long task can continue from where it stopped.
+Since v0.4.4, agent runs survive server crashes and restarts, and finished steps are not repeated. See [run recovery](https://submilli.ai/docs/reference/run-recovery/). Next, we want an agent to recover from its own errors.
 
 **Example:** An agent's code fails with an error partway through a task. The agent fixes the code and continues execution from the point of failure, preserving completed work instead of starting over.
+
+We also plan safe retry of interrupted Git and code operations.
 
 External effects need explicit recovery rules: when a service's response is lost, the runtime must distinguish a completed action from one whose outcome is unknown.
 

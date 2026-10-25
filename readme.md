@@ -116,6 +116,7 @@ and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
 - [Limits](https://submilli.ai/docs/server/set-limits) on memory, time,
   stack depth, model tokens and more. A failing run ends alone, and the rest of the
   server keeps serving.
+- [Durable execution](https://submilli.ai/docs/reference/run-recovery): agent runs survive server crashes and restarts, and finished steps are not repeated. Off by default.
 - An [audit trail](https://submilli.ai/docs/reference/audit-trail) of every
   refusal, run, session, and admin change.
 - MCP servers as Packages, with rules on their tools.

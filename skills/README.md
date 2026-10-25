@@ -56,7 +56,7 @@ day, so a release should be read end to end, and a change documenting new CLI
 behaviour should be tagged only after that CLI ships. Set the release builder's
 `--min-cli` in the workflow to the oldest runtime that supports the documented
 commands; older clients keep their current skill and receive an upgrade hint.
-Skill v11 requires CLI 0.4.3 for install-time Package configuration.
+Skill v13 requires CLI 0.4.4 for durable execution.
 Anything merged to `main`
 without a tag reaches users only inside the next CLI's embedded copy, so bump
 `VERSION` whenever that copy should outrank the last tag.
