@@ -725,7 +725,12 @@ fn sync_tree(path: &Path) -> Result<(), PackageStoreError> {
         if child.is_dir() {
             sync_tree(&child)?;
         } else {
-            let file = File::open(&child).map_err(|source| io_error(&child, source))?;
+            // Windows `sync_all` refuses a read-only handle (error 5).
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&child)
+                .map_err(|source| io_error(&child, source))?;
             file.sync_all().map_err(|source| io_error(&child, source))?;
         }
     }

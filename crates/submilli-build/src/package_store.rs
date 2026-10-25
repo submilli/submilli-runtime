@@ -139,21 +139,36 @@ impl PackageStore {
         rebuild: &mut RebuildState,
     ) -> Result<Artifact, PackageStoreError> {
         self.ensure_current(name, rebuild)?;
-        if let Some(artifact) = rebuild.artifacts.get(name)
-            && !crate::rebuild::needs_rebuild(&artifact.metadata)
-        {
-            return Ok(artifact.clone());
-        }
+        // Charge the caller's budget by reading the store. The rebuild cache is
+        // only a substitute when the current wasm lives outside the package
+        // roots, as a fallback rebuild does.
+        let mut saw_stale = false;
         for root in self.roots() {
             if let Some(artifact) = self.load_from(root, name, budget)? {
                 if !crate::rebuild::needs_rebuild(&artifact.metadata) {
                     return Ok(artifact);
                 }
-                return Err(self.unavailable(
-                    name,
-                    "installed wasm does not match the compiler; refusing to run it",
-                ));
+                saw_stale = true;
+                break;
             }
+        }
+        if let Some(artifact) = rebuild.artifacts.get(name)
+            && !crate::rebuild::needs_rebuild(&artifact.metadata)
+        {
+            let cache = crate::rebuild::cache_dir(self.root(), name)?;
+            return crate::artifact::read_package_artifact_with_budget(&cache, budget).map_err(
+                |source| PackageStoreError::Artifact {
+                    name: name.to_string(),
+                    package_dir: cache,
+                    source,
+                },
+            );
+        }
+        if saw_stale {
+            return Err(self.unavailable(
+                name,
+                "installed wasm does not match the compiler; refusing to run it",
+            ));
         }
         Err(self.missing(name, self.roots().map(Path::to_path_buf).collect()))
     }
