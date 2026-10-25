@@ -1,2 +1,2 @@
-line 17, 26, 38, 39 extra: by-design spec §1.6 `+` concatenates a string only with a string or a number, and converts no other operand
-line 21 extra: by-design spec §1.6 `+` concatenates a string only with a string or a number, and converts no other operand
+line 17, 26, 38, 39 extra: by-design spec §1.6 `+` concatenates a string only with a string, a number, or an `Error`, and converts no other operand
+line 21 extra: by-design spec §1.6 `+` concatenates a string only with a string, a number, or an `Error`, and converts no other operand

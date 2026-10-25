@@ -193,7 +193,7 @@ for (const word of words) {
 | Feature | In Submilli |
 | --- | --- |
 | `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` and `x == null` are compile errors |
-| `+` with a string | Concatenates another string or a number, converted as `String(x)` converts it (`"n=" + 1.5` is `"n=1.5"`). A boolean, a bigint, `null`, `undefined`, or an object is a compile error: write `String(x)` or a template literal |
+| `+` with a string | Concatenates another string, a number, or an `Error`, converted as `String(x)` converts it (`"n=" + 1.5` is `"n=1.5"`, `"err " + e` is `"err Error: <message>"`). A boolean, a bigint, `null`, `undefined`, or an object is a compile error: write `String(x)` or a template literal |
 | Return types | Declared on functions and methods; arrow functions infer them |
 | `items[i]` | Out-of-range reads and writes throw `RangeError`. `items.at(i)` returns `undefined`. `push` appends |
 | `text[i]` | Reads one UTF-16 code unit as a string; out of range it throws `RangeError`. `text.charAt(i)` returns `""` |

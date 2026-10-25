@@ -2847,8 +2847,8 @@ impl Inferer<'_> {
         Ok((Type::Error, lhs.0, rhs.0))
     }
 
-    /// [`compound_arith_result`], with `+=` also concatenating a number onto a
-    /// string, as `+` does.
+    /// [`compound_arith_result`], with `+=` also concatenating a number or an
+    /// `Error` onto a string, as `+` does.
     fn compound_accepts(&self, op: BinOp, lt: &Type, rt: &Type) -> Option<Type> {
         compound_arith_result(op, lt, rt).or_else(|| {
             if op == BinOp::Add {
@@ -2863,7 +2863,7 @@ impl Inferer<'_> {
 /// The hint for a compound assignment's value: the target's widened read type,
 /// except that a `never` target hints nothing, so the result's own type is
 /// what gets reported against it, once. Nor does a string target of `+=`,
-/// whose value may be a number that concatenation converts.
+/// whose value may be a number or an `Error` that concatenation converts.
 fn compound_value_hint(op: BinOp, read_ty: &Type) -> Option<Type> {
     if matches!(read_ty.peel(), Type::Never) {
         return None;

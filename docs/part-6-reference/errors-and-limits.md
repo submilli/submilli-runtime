@@ -390,7 +390,7 @@ error: `+` not defined for `string` and `boolean`
   |                                              ^^^
 7 |     }
   |
-help: `+` converts only a number onto a string; write `String(big)` to concatenate
+help: `+` converts only a number or an `Error` onto a string; write `String(big)` to concatenate
 ```
 
 An import of a Package the Blueprint doesn't provide, or of an MCP server

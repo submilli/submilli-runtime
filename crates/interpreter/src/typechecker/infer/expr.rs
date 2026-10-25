@@ -1449,14 +1449,14 @@ impl Inferer<'_> {
         ))
     }
 
-    /// `+`'s result for an operand pair: [`plus_result`], plus a number
-    /// beside a string, which concatenates as in TypeScript.
+    /// `+`'s result for an operand pair: [`plus_result`], plus a number or an
+    /// `Error` beside a string, which concatenates as in TypeScript.
     pub(super) fn plus_accepts(&self, lt: &Type, rt: &Type) -> Option<Type> {
         plus_result(lt, rt).or_else(|| self.concatenation_converts(lt, rt).map(|_| Type::String))
     }
 
-    /// Which operand a string concatenation converts: a number beside a
-    /// string. Other types stay rejected (booleans, bigints, nullish
+    /// Which operand a string concatenation converts: a number or an `Error`
+    /// beside a string. Other types stay rejected (booleans, bigints, nullish
     /// values and plain objects), as the help on their error explains.
     fn concatenation_converts(&self, lt: &Type, rt: &Type) -> Option<ConcatOperand> {
         let is_string = |ty: &Type| {
@@ -1467,6 +1467,9 @@ impl Inferer<'_> {
         };
         let converts = |ty: &Type| match ty.primitive_behavior() {
             Type::Number | Type::NumberLiteral(_) => true,
+            Type::ClassRef { mangled, .. } => self
+                .resolver()
+                .is_subclass(mangled, &crate::mangle::prelude("Error")),
             _ => false,
         };
         if is_string(lt) && converts(rt) {
@@ -1478,8 +1481,8 @@ impl Inferer<'_> {
         }
     }
 
-    /// The operands of an accepted `+`, with a number beside a string converted
-    /// as `String(x)` converts it, so codegen sees two strings.
+    /// The operands of an accepted `+`, with a number or an `Error` beside a
+    /// string converted as `String(x)` converts it, so codegen sees two strings.
     /// The conversion and the nodes it synthesizes (`toString`'s default radix)
     /// take `span`, the whole concatenation's: at the operand's own span they
     /// would stand in for the operand.
@@ -1691,7 +1694,9 @@ impl Inferer<'_> {
         };
         Ok(Some((
             span,
-            format!("`+` converts only a number onto a string; {rewrite} to concatenate"),
+            format!(
+                "`+` converts only a number or an `Error` onto a string; {rewrite} to concatenate"
+            ),
         )))
     }
 
@@ -15369,6 +15374,16 @@ mod tests {
     }
 
     #[test]
+    fn string_plus_error_concatenates() {
+        run_clean(
+            r#"
+            class Oops extends TypeError {}
+            function report(e: Error, o: Oops): string { return "err " + e + " " + o; }
+        "#,
+        );
+    }
+
+    #[test]
     fn string_plus_boolean_points_at_the_boolean_in_a_chain() {
         let source = r#"
             interface Entry { path: string; dir: boolean; }
@@ -15384,7 +15399,9 @@ mod tests {
         assert_eq!(&source[span.start as usize..span.end as usize], "e.dir");
         assert_eq!(
             diags[0].help,
-            vec!["`+` converts only a number onto a string; write `String(e.dir)` to concatenate"]
+            vec![
+                "`+` converts only a number or an `Error` onto a string; write `String(e.dir)` to concatenate"
+            ]
         );
     }
 
