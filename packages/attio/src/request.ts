@@ -33,6 +33,10 @@ export type AttributeValueType =
  * | `record` | `targetObject` and `targetRecordId` | record-reference |
  * | `member` | `email` of a workspace member | actor-reference, such as `owner` |
  * | `personal-name` | `firstName`, `lastName` and/or `fullName` | personal-name, such as a person's `name` |
+ *
+ * A `personal-name` value replaces all three parts of the name: a part left out
+ * is written as "" and the full name is recomputed, so give every part you
+ * want to keep.
  */
 export interface AttributeValue {
     /** Attribute slug, such as `name`, `value` or `associated_company`. */
@@ -59,11 +63,11 @@ export interface AttributeValue {
     targetObject?: string;
     /** Record id of the referenced record, for `record`. */
     targetRecordId?: string;
-    /** First name, for `personal-name`. */
+    /** First name, for `personal-name`; written as "" when left out, so give it to keep it. */
     firstName?: string;
-    /** Last name, for `personal-name`. */
+    /** Last name, for `personal-name`; written as "" when left out, so give it to keep it. */
     lastName?: string;
-    /** Full name, for `personal-name`; defaults to the first and last name joined by a space. */
+    /** Full name, for `personal-name`; recomputed from the first and last name when left out. */
     fullName?: string;
 }
 
@@ -164,7 +168,7 @@ export interface PageOptions {
 export interface PersonInput {
     /** Email address that identifies the person; trimmed and lowercased. */
     email: string;
-    /** First name. Any name part replaces the person's whole current name. */
+    /** First name. Any name part replaces all three parts of the current name: give every part you want to keep. */
     firstName?: string;
     /** Last name. */
     lastName?: string;
@@ -425,8 +429,9 @@ export function noteWindow(limit: number | undefined, offset: number | undefined
 }
 
 /**
- * Convert one value to Attio's JSON, validating and normalizing it. The field
- * `type` names must be set and every other value field must be absent.
+ * Convert one value to Attio's JSON, validating and normalizing it. Only the
+ * fields `type` names may be set, and they must be: both for `record`, at
+ * least one part for `personal-name`, and the one field for every other type.
  * @param slug Attribute slug, for error messages.
  * @param fields The value's fields.
  * @returns The value kind and its Attio JSON.
@@ -459,9 +464,6 @@ export function prepareValue(slug: string, fields: ValueFields): PreparedValue {
     const firstName = fields.firstName;
     const lastName = fields.lastName;
     const fullName = fields.fullName;
-    if (type === "personal-name" && (firstName !== undefined || lastName !== undefined || fullName !== undefined)) {
-        return { kind: "personal-name", json: personalName(firstName, lastName, fullName, slug) };
-    }
     if (type === "text" && text !== undefined) return { kind: "text", json: { value: text } };
     if (type === "number" && number !== undefined) {
         requireFinite(slug, number);
@@ -496,28 +498,34 @@ export function prepareValue(slug: string, fields: ValueFields): PreparedValue {
     if (type === "member" && email !== undefined) {
         return { kind: "member", json: { workspace_member_email_address: normalizeEmail(email) } };
     }
-    const needs = type === "personal-name" ? "firstName, lastName or fullName" : expected.join(" and ");
-    throw validationError("invalid_value", slug + ": a " + type + " value needs " + needs);
+    if (type === "personal-name") return { kind: "personal-name", json: personalName(slug, firstName, lastName, fullName) };
+    throw validationError("invalid_value", slug + ": a " + type + " value needs " + expected.join(" and "));
 }
 
 /**
- * Attio's JSON for a person's name, which needs all three parts. A part given
- * blank is refused rather than sent, so it cannot clear a name by accident.
+ * Attio's JSON for a person's name. Attio stores the three parts together, so
+ * every write replaces all of them: a part left out is written as "" and the
+ * full name, when not given, is the first and last name joined by a space. At
+ * least one part is required, and a part given blank is refused rather than
+ * sent.
+ * @param slug Attribute slug, for error messages.
  * @param firstName First name, if given.
  * @param lastName Last name, if given.
- * @param fullName Full name, if given; defaults to the first and last name joined by a space.
- * @param name What the name is for, for error messages.
+ * @param fullName Full name, if given.
  * @returns `{ first_name, last_name, full_name }`.
  */
 export function personalName(
+    slug: string,
     firstName: string | undefined,
     lastName: string | undefined,
     fullName: string | undefined,
-    name: string,
 ): Record<string, unknown> {
-    const first = firstName === undefined ? "" : requireText(firstName, name + " firstName");
-    const last = lastName === undefined ? "" : requireText(lastName, name + " lastName");
-    const full = fullName === undefined ? (first + " " + last).trim() : requireText(fullName, name + " fullName");
+    if (firstName === undefined && lastName === undefined && fullName === undefined) {
+        throw validationError("invalid_value", slug + ": a personal-name value needs firstName, lastName or fullName");
+    }
+    const first = firstName === undefined ? "" : requireText(firstName, slug + " firstName");
+    const last = lastName === undefined ? "" : requireText(lastName, slug + " lastName");
+    const full = fullName === undefined ? (first + " " + last).trim() : requireText(fullName, slug + " fullName");
     return { first_name: first, last_name: last, full_name: full };
 }
 
@@ -857,7 +865,7 @@ export function buildPersonValues(
 ): Record<string, unknown> {
     const values: Record<string, unknown> = { email_addresses: [{ email_address: email }] };
     if (firstName !== undefined || lastName !== undefined || fullName !== undefined) {
-        values["name"] = [personalName(firstName, lastName, fullName, "name")];
+        values["name"] = [personalName("name", firstName, lastName, fullName)];
     }
     if (jobTitle !== undefined) values["job_title"] = [{ value: requireText(jobTitle, "jobTitle") }];
     if (description !== undefined) values["description"] = [{ value: requireText(description, "description") }];

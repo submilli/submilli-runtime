@@ -54,7 +54,7 @@ Writes take a list of `AttributeValue` entries. Each entry names its
 | `domain` | `domain` | domain attributes |
 | `record` | `targetObject` and `targetRecordId` | record references, such as `associated_company` |
 | `member` | `email` of a workspace member | actor references, such as a deal's `owner` |
-| `personal-name` | `firstName`, `lastName` and/or `fullName` (default: first and last joined) | a person's `name` |
+| `personal-name` | `firstName`, `lastName` and/or `fullName`; replaces all three parts, so give every part you want to keep (a part left out becomes "", and the full name defaults to first and last joined) | a person's `name` |
 
 Repeat an attribute to give a multi-value attribute, such as
 `associated_people`, several values. A single-value attribute takes one.
@@ -205,10 +205,18 @@ list that attribute's statuses. Attributes with `isRequired` must be
 given: a deal needs its `name`, an `owner` (a workspace member's email) and a
 `stage`, or Attio refuses it with an `AttioError`.
 
-`createRecord` never changes an existing record. A person's email and a
+`createRecord` never matches an existing record. A person's email and a
 company's domain are unique, so creating a person or company that already
 exists fails with code `uniqueness_conflict`: look it up first with
 `findPersonByEmail` or `queryRecords`, and create it only when it is missing.
+Pass a bare lowercase domain (`acme.com`, not a URL) to both: `createRecord`
+normalizes a domain, but a query compares the value as given.
+
+A record reference also writes the other side of its relationship: a new
+person's `company` adds the person to that company's `team`. Where the other
+side holds a single value, as a person's `company` does, the write replaces
+it, so a new company whose `team` lists an existing person moves that person
+to the new company.
 
 <!-- submilli:endif -->
 
@@ -237,7 +245,9 @@ function main(): string {
 `updateRecord(object, recordId, values)` changes only the attributes given
 and returns the record. A multi-value attribute gains the values given and
 keeps its others, so adding a person to `associated_people` keeps the people
-already linked. A status attribute is refused with code `status_attribute`.
+already linked. A single-value attribute is replaced; a `personal-name` value
+replaces all three parts of the name, so give every part you want to keep. A
+status attribute is refused with code `status_attribute`.
 
 <!-- submilli:endif -->
 
@@ -308,14 +318,15 @@ both reads.
 
 ## Example
 
-Record a new lead without changing existing records: find the company by
-domain and the contact by email, create each only when it is missing, then
-create a deal in the Lead stage, owned by a workspace member and linked to
-both, with a note holding the source text.
+Record a new lead: find the company by its bare domain and the contact by
+email, create each only when it is missing, then create a deal in the Lead
+stage, owned by a workspace member and linked to both, with a note holding
+the source text.
 
 ```ts
 import { AttioRecord, createNote, createRecord, findPersonByEmail, queryRecords } from "@submilli/attio";
 
+// `domain` is a bare lowercase domain such as acme.com: the query compares it as given.
 function companyFor(domain: string, name: string): AttioRecord {
     const found = queryRecords("companies", { filter: [{ attribute: "domains", operator: "eq", value: domain }], limit: 1 });
     if (found.items.length > 0) return found.items[0];

@@ -104,8 +104,10 @@ instead (see [Create-only people and companies](#create-only-people-and-companie
 `createRecord` never matches an existing record. `email_addresses` (people) and
 `domains` (companies) are unique attributes, so creating a person whose email,
 or a company whose domain, is already in Attio fails with `AttioError` code
-`uniqueness_conflict` (HTTP 409) and changes nothing; the program then looks
-the record up with `findPersonByEmail` or `queryRecords`.
+`uniqueness_conflict` (HTTP 409); the program then looks the record up with
+`findPersonByEmail` or `queryRecords`. `queryRecords` compares the value as
+given while `createRecord` normalizes a domain, so pass a bare lowercase
+domain (`acme.com`, not a URL) to both.
 
 ```ts ignore
 const person = findPersonByEmail("dana@acme.com") ?? createRecord("people", { values: [
@@ -119,10 +121,18 @@ const company = companies.items.length > 0 ? companies.items[0] : createRecord("
 ] });
 ```
 
-A rule such as `object == "people" and statusAttribute == ""` on
-`records.create` allows this and nothing that changes an existing person.
-Record references are relationships in Attio: linking a new person to a
-company, or a new deal to a person, also adds the link on the other record.
+A create can still change an existing record through a relationship. A record
+reference is one side of a relationship, and writing it also writes the
+inverse on the record it points to: a new person's `company` adds the person
+to that company's `team`. Where the inverse holds one value, the write
+replaces it. A person's `company` holds one company, so a new company whose
+`team` lists an existing person moves that person to the new company, and a
+new company's `associated_deals` takes those deals from their company. A
+create-only rule must therefore allow only attributes whose inverse holds
+several values, or none: list the allowed attributes, as the blueprint below
+does, rather than refusing the ones you know of. The filter language has no
+subset operator; because `attributes` is sorted and distinct, testing each
+position against the allowed slugs expresses one.
 
 ## Capabilities
 
@@ -189,9 +199,11 @@ be bypassed with the object's id. Record ids are lowercase UUIDs.
   fields.
 
 A blueprint for an agent that records leads as deals and moves them through
-any stage. It may add companies and people but never changes an existing one
-(no upserts; a create that hits a known email or domain fails), and changes
-only deals:
+any stage. It changes only deals. It may add companies and people, with no
+upserts (a create that hits a known email or domain fails) and only
+attributes that cannot move an existing record through a relationship
+(a person's `company` adds the person to the company's `team`, which holds
+many):
 
 ```yaml
 permissions:
@@ -213,7 +225,28 @@ permissions:
     - capability: attio.com/people.find
       action: allow
     - capability: attio.com/records.create
-      filter: object == "deals" or ((object == "companies" or object == "people") and statusAttribute == "")
+      filter: object == "deals"
+      action: allow
+    # Companies: created only (no status, so no lookup of existing statuses) and
+    # only with these attributes. `attributes` is sorted and distinct, so testing
+    # each position against the allowed slugs, and that there is no third one,
+    # makes it a subset of ["domains", "name"].
+    - capability: attio.com/records.create
+      filter: >-
+        object == "companies" and statusAttribute == ""
+        and not (attributes.2 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "domains" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "domains" or attributes.1 == "name")
+      action: allow
+    # People: the same, with a subset of ["company", "email_addresses", "job_title", "name"].
+    - capability: attio.com/records.create
+      filter: >-
+        object == "people" and statusAttribute == ""
+        and not (attributes.4 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "company" or attributes.0 == "email_addresses" or attributes.0 == "job_title" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "company" or attributes.1 == "email_addresses" or attributes.1 == "job_title" or attributes.1 == "name")
+        and (not (attributes.2 glob "*") or attributes.2 == "company" or attributes.2 == "email_addresses" or attributes.2 == "job_title" or attributes.2 == "name")
+        and (not (attributes.3 glob "*") or attributes.3 == "company" or attributes.3 == "email_addresses" or attributes.3 == "job_title" or attributes.3 == "name")
       action: allow
     - capability: attio.com/records.update
       filter: object == "deals"

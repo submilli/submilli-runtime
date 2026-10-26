@@ -20,7 +20,25 @@ permissions:
       filter: domain == "acme.com" and not (attributes contains "name")
       action: allow
     - capability: attio.com/records.create
-      filter: object == "deals" or ((object == "companies" or object == "people") and statusAttribute == "")
+      filter: object == "deals"
+      action: allow
+    # The readme's create-only rules: `attributes` (sorted, distinct) is a subset of the
+    # listed slugs, so no relationship attribute can move an existing record.
+    - capability: attio.com/records.create
+      filter: >-
+        object == "companies" and statusAttribute == ""
+        and not (attributes.2 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "domains" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "domains" or attributes.1 == "name")
+      action: allow
+    - capability: attio.com/records.create
+      filter: >-
+        object == "people" and statusAttribute == ""
+        and not (attributes.4 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "company" or attributes.0 == "email_addresses" or attributes.0 == "job_title" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "company" or attributes.1 == "email_addresses" or attributes.1 == "job_title" or attributes.1 == "name")
+        and (not (attributes.2 glob "*") or attributes.2 == "company" or attributes.2 == "email_addresses" or attributes.2 == "job_title" or attributes.2 == "name")
+        and (not (attributes.3 glob "*") or attributes.3 == "company" or attributes.3 == "email_addresses" or attributes.3 == "job_title" or attributes.3 == "name")
       action: allow
     - capability: attio.com/records.update
       filter: object == "deals" and not (attributes contains "owner")

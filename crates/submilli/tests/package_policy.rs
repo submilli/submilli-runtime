@@ -90,8 +90,9 @@ const ATTIO_KEY: &str = "fake-attio-key";
 /// identical but for its API base, talks to a fake Attio, and
 /// `tests/fake-host/status-rules.ts` runs as `main` under its blueprint: the
 /// stage change is allowed and written, a change of another status attribute is
-/// denied and not written, and a status attribute passed as a plain value is
-/// refused wherever it appears.
+/// denied and not written, a status attribute passed as a plain value is
+/// refused wherever it appears, and a company created with a status is denied
+/// by the create-only rule.
 #[test]
 fn attio_status_rules_hold_against_a_fake_attio() {
     let fake = FakeAttio::start();
@@ -303,6 +304,9 @@ fn fake_answer(method: &str, path: &str) -> (&'static str, serde_json::Value) {
             "200 OK",
             json!({ "data": [status("s-lead", "Lead"), status("s-won", "Won 🎉"), status("s-lost", "Lost")] }),
         ),
+        ("GET", "/v2/objects/companies/attributes/stage/statuses") => {
+            ("200 OK", json!({ "data": [status("c-lead", "Lead")] }))
+        }
         ("GET", "/v2/objects/deals/attributes/priority/statuses") => (
             "200 OK",
             json!({ "data": [status("p-high", "High"), status("p-low", "Low")] }),

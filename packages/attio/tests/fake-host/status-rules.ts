@@ -57,5 +57,13 @@ function main(): string {
             status: { attribute: "stage", title: "Lead" },
         });
     });
+    // A company created with a status is refused by the create-only rule, once the
+    // statuses are read and records.create sees the status it would set.
+    deniedAt("attio.com/records.create", "main", () => {
+        createRecord("companies", {
+            values: [{ attribute: "domains", type: "domain", domain: "acme.com" }],
+            status: { attribute: "stage", title: "Lead" },
+        });
+    });
     return "status rules hold against the fake Attio";
 }

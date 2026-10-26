@@ -15,13 +15,21 @@ permissions:
       filter: object == "deals"
       action: allow
     - capability: attio.com/statuses.list
-      filter: object == "deals"
+      filter: object == "deals" or object == "companies"
       action: allow
     - capability: attio.com/records.update
       filter: object == "deals"
       action: allow
     - capability: attio.com/records.create
       filter: object == "deals"
+      action: allow
+    # Create-only companies, as in the readme: no status, and only these attributes.
+    - capability: attio.com/records.create
+      filter: >-
+        object == "companies" and statusAttribute == ""
+        and not (attributes.2 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "domains" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "domains" or attributes.1 == "name")
       action: allow
     - capability: attio.com/records.setStatus
       filter: object == "deals" and attribute == "stage"
