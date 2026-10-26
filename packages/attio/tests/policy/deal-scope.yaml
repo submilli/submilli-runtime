@@ -11,6 +11,9 @@ permissions:
     - capability: attio.com/records.query
       filter: object == "deals" or object == "companies" or object == "people"
       action: allow
+    - capability: attio.com/statuses.list
+      filter: object == "deals"
+      action: allow
     - capability: attio.com/people.find
       action: allow
     - capability: attio.com/people.upsert

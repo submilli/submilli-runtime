@@ -31,6 +31,8 @@ import {
     buildPersonValues,
     buildQueryBody,
     buildValues,
+    companyAttributes,
+    personAttributes,
     groupValues,
     normalizeDomain,
     normalizeEmail,
@@ -61,7 +63,6 @@ import {
     pageAfter,
     RecordEnvelope,
     recordFrom,
-    referencesMembers,
     Status,
 } from "../src/response";
 
@@ -135,6 +136,12 @@ function main(): void {
     for (const bad of ["", "acme", "www.", "ac me.com", "*.acme.com", "acme..com", "-acme.com"]) {
         expectCode("invalid_domain", () => { normalizeDomain(bad); });
     }
+    // Attio would store a Unicode domain in another spelling than a rule compares,
+    // so only ASCII (punycode for internationalized names) is accepted.
+    for (const unicode of ["bücher.de", "аcme.com", "acme.ｃom"]) {
+        expectCode("invalid_domain", () => { normalizeDomain(unicode); });
+    }
+    assert(normalizeDomain("xn--bcher-kva.de") === "xn--bcher-kva.de", "punycode accepted");
 
     label("slugs and record ids are normalized, and UUID object ids refused");
     assert(normalizeSlug(" Deals ", "object") === "deals", "slug lowercased");
@@ -307,6 +314,15 @@ function main(): void {
         "name and description",
     );
 
+    label("upsert checks list the attributes they write");
+    assert(JSON.stringify(personAttributes(false, undefined, undefined, undefined)) === "[\"email_addresses\"]", "email only");
+    assert(
+        JSON.stringify(personAttributes(true, "CTO", "", COMPANY)) === "[\"company\",\"description\",\"email_addresses\",\"job_title\",\"name\"]",
+        "every person field",
+    );
+    assert(JSON.stringify(companyAttributes(undefined, undefined)) === "[\"domains\"]", "domain only");
+    assert(JSON.stringify(companyAttributes("Acme", "Rockets")) === "[\"description\",\"domains\",\"name\"]", "every company field");
+
     label("records map to readable values");
     const raw = (JSON.parse(
         "{\"data\":{\"id\":{\"workspace_id\":\"w\",\"object_id\":\"o\",\"record_id\":\"" + RECORD + "\"},\"created_at\":\"2026-10-26T10:00:00.000000000Z\"," +
@@ -328,16 +344,14 @@ function main(): void {
         "\"phone_numbers\":[{\"attribute_type\":\"phone-number\",\"original_phone_number\":\"+15558675309\",\"normalized_phone_number\":\"+15558675309\",\"country_code\":\"US\"}]," +
         "\"description\":[]}}}",
     ) as RecordEnvelope).data;
-    assert(referencesMembers(raw), "workspace-member owner needs member emails");
-    const emails = new Map<string, string>();
-    emails.set("m-1", "ehud@example.com");
-    const record = recordFrom(raw, "deals", emails);
+    const record = recordFrom(raw, "deals");
     assert(record.object === "deals" && record.recordId === RECORD, "identity");
     assert(record.webUrl.endsWith(RECORD) && record.createdAt.startsWith("2026-10-26"), "link and time");
     assert(first(record, "name").value === "Acme pilot", "text");
     assert(first(record, "stage").value === "Lead" && first(record, "stage").optionId === "s-lead", "status title and id");
     assert(first(record, "value").value === "5000 USD" && first(record, "value").number === 5000, "currency");
-    assert(first(record, "owner").value === "ehud@example.com" && first(record, "owner").actorId === "m-1", "owner email");
+    assert(first(record, "owner").value === "m-1" && first(record, "owner").actorId === "m-1", "owner member id");
+    assert(first(record, "owner").actorType === "workspace-member", "owner actor type");
     assert(first(record, "created_by").value === "api-token", "non-member actor");
     assert(first(record, "associated_company").targetRecordId === COMPANY && first(record, "associated_company").value === COMPANY, "reference");
     assert(first(record, "associated_company").targetObject === "companies", "reference object");
@@ -351,8 +365,6 @@ function main(): void {
     assert(first(record, "office").value === "1 Main St, Springfield, 12345, US", "location");
     assert(first(record, "phone_numbers").value === "+15558675309", "phone");
     assert(record.values["description"] === undefined, "empty attributes left out");
-    const unresolved = recordFrom(raw, "deals", new Map<string, string>());
-    assert(first(unresolved, "owner").value === "m-1", "unknown member falls back to the id");
     assert(currentStatus(raw, "stage").title === "Lead", "current status");
     assert(currentStatus(raw, "name").title === "", "no status");
 

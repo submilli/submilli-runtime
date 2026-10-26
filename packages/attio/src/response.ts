@@ -75,7 +75,8 @@ export interface RecordValue {
      * The value as text: the text itself, a status or select title, an email
      * address, a domain, a person's full name, a number, a currency amount such
      * as "1200 USD", "true"/"false", a date or timestamp, a phone number, an
-     * address, the referenced record's id, or a workspace member's email.
+     * address, the referenced record's id, or a workspace member's id (match it
+     * with `listMembers`).
      */
     value: string;
     /** The number, for number, rating and currency values. */
@@ -393,36 +394,18 @@ export function noteFrom(data: ApiNote): Note {
 }
 
 /**
- * Whether any value of a raw record references a workspace member, so member
- * emails must be looked up to render it.
- * @param data Raw record.
- * @returns True when a workspace-member actor reference is present.
- */
-export function referencesMembers(data: ApiRecord): boolean {
-    const values = data.values;
-    if (values === null || values === undefined) return false;
-    for (const slug of Object.keys(values)) {
-        for (const value of values[slug] ?? []) {
-            if (value.referenced_actor_type === "workspace-member") return true;
-        }
-    }
-    return false;
-}
-
-/**
  * Map a record to its readable form.
  * @param data Raw record.
  * @param object Object slug the record belongs to.
- * @param memberEmails Workspace member id to email, used for actor references.
  * @returns The curated record.
  */
-export function recordFrom(data: ApiRecord, object: string, memberEmails: Map<string, string>): AttioRecord {
+export function recordFrom(data: ApiRecord, object: string): AttioRecord {
     const values: Record<string, RecordValue[]> = {};
     const raw = data.values;
     if (raw !== null && raw !== undefined) {
         for (const slug of Object.keys(raw)) {
             const list: RecordValue[] = [];
-            for (const value of raw[slug] ?? []) list.push(valueFrom(value, memberEmails));
+            for (const value of raw[slug] ?? []) list.push(valueFrom(value));
             if (list.length > 0) values[slug] = list;
         }
     }
@@ -438,10 +421,9 @@ export function recordFrom(data: ApiRecord, object: string, memberEmails: Map<st
 /**
  * Map one attribute value to its readable form.
  * @param data Raw value.
- * @param memberEmails Workspace member id to email.
  * @returns The readable value.
  */
-export function valueFrom(data: ApiValue, memberEmails: Map<string, string>): RecordValue {
+export function valueFrom(data: ApiValue): RecordValue {
     const type = data.attribute_type ?? "";
     const status = data.status;
     if (status !== null && status !== undefined) {
@@ -463,10 +445,9 @@ export function valueFrom(data: ApiValue, memberEmails: Map<string, string>): Re
     const actorType = data.referenced_actor_type;
     if (actorType !== null && actorType !== undefined) {
         const actorId = data.referenced_actor_id ?? "";
-        const email = actorType === "workspace-member" ? memberEmails.get(actorId) : undefined;
         return {
             type: "actor-reference",
-            value: email ?? (actorId.length > 0 ? actorId : actorType),
+            value: actorId.length > 0 ? actorId : actorType,
             actorType: actorType,
             actorId: actorId,
         };

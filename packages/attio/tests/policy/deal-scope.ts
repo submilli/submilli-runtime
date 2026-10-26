@@ -84,13 +84,17 @@ function main(): string {
     deniedAt("attio.com/companies.upsert", "main", () => { upsertCompany({ domain: "victim.com" }); });
     deniedAt("attio.com/companies.upsert", "main", () => { upsertCompany({ domain: "acme.com.victim.com" }); });
 
-    // A status change is checked with the canonical status title and the record's current
-    // status, which only Attio knows. setStatus therefore reads the key and the statuses
-    // before its check, so offline both an allowed and a denied attribute stop at the key.
-    // The rule's decision on those fields is covered by scripts/contract.test.mjs.
+    // setStatus checks statuses.list before it reads the statuses and records.get before it
+    // reads the record, so on an object whose statuses the caller may not list it is denied
+    // before any read. A status given to createRecord is checked the same way.
+    deniedAt("attio.com/statuses.list", "main", () => { setStatus("companies", DEAL, "stage", "Won"); });
+    deniedAt("attio.com/statuses.list", "main", () => { createRecord("companies", { status: { attribute: "stage", title: "Lead" } }); });
+    // On deals both reads are allowed, and the records.setStatus check itself needs the
+    // canonical title and the current status that only Attio knows. Offline both an allowed
+    // and a forbidden attribute therefore stop at the key. The records.setStatus rule's
+    // decision is exercised against a fake Attio by `attio_status_rules_hold_against_a_fake_attio`
+    // in crates/submilli/tests/package_policy.rs.
     reachesCredentialBoundary(() => { setStatus("deals", DEAL, "stage", "Won"); });
     reachesCredentialBoundary(() => { setStatus("deals", DEAL, "priority", "High"); });
-    // A status given at creation is resolved the same way before records.create is checked.
-    reachesCredentialBoundary(() => { createRecord("companies", { status: { attribute: "stage", title: "Lead" } }); });
     return "deal scope checks passed";
 }

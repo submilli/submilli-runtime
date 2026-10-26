@@ -305,7 +305,9 @@ export function normalizeEmail(value: string): string {
 /**
  * Normalize a company domain: trimmed and lowercased, without scheme, user
  * info, `www.`, port, path, query, fragment or trailing dot.
- * `https://www.Acme.com/pricing` becomes `acme.com`.
+ * `https://www.Acme.com/pricing` becomes `acme.com`. Only ASCII is accepted,
+ * so an internationalized domain must be given in punycode: a policy on the
+ * domain then sees the same spelling Attio stores.
  * @param value The domain or URL as given.
  * @returns The bare domain.
  */
@@ -333,7 +335,13 @@ export function normalizeDomain(value: string): string {
         if (label.length === 0 || label.startsWith("-") || label.endsWith("-")) throw invalid;
         for (let i = 0; i < label.length; i += 1) {
             const code = label.charCodeAt(i);
-            const ok = (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 45 || code > 127;
+            if (code > 127) {
+                throw validationError(
+                    "invalid_domain",
+                    "domain must be ASCII; write an internationalized domain in punycode (xn--...), got " + JSON.stringify(value),
+                );
+            }
+            const ok = (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code === 45;
             if (!ok) throw invalid;
         }
     }
@@ -794,6 +802,44 @@ export function buildPersonValues(
         values["company"] = [{ target_object: "companies", target_record_id: companyRecordId }];
     }
     return values;
+}
+
+/**
+ * The attribute slugs a person upsert writes, sorted: `email_addresses` and
+ * each optional field given.
+ * @param hasName Whether any name part is given.
+ * @param jobTitle Job title, if given.
+ * @param description Description, if given.
+ * @param companyRecordId Company record id, if given.
+ * @returns Sorted slugs.
+ */
+export function personAttributes(
+    hasName: boolean,
+    jobTitle: string | undefined,
+    description: string | undefined,
+    companyRecordId: string | undefined,
+): string[] {
+    const slugs: string[] = [];
+    if (companyRecordId !== undefined) slugs.push("company");
+    if (description !== undefined) slugs.push("description");
+    slugs.push("email_addresses");
+    if (jobTitle !== undefined) slugs.push("job_title");
+    if (hasName) slugs.push("name");
+    return slugs;
+}
+
+/**
+ * The attribute slugs a company upsert writes, sorted: `domains` and each optional field given.
+ * @param name Company name, if given.
+ * @param description Description, if given.
+ * @returns Sorted slugs.
+ */
+export function companyAttributes(name: string | undefined, description: string | undefined): string[] {
+    const slugs: string[] = [];
+    if (description !== undefined) slugs.push("description");
+    slugs.push("domains");
+    if (name !== undefined) slugs.push("name");
+    return slugs;
 }
 
 /**

@@ -1,0 +1,41 @@
+# Run by `attio_status_rules_hold_against_a_fake_attio` in crates/submilli/tests/package_policy.rs,
+# against a copy of the package whose API base points at a fake Attio on 127.0.0.1.
+kind: blueprint
+name: attio-status-rules-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/attio'
+secrets:
+  ATTIO_API_KEY:
+    store: policy-token
+default: deny
+permissions:
+  main:
+    - capability: attio.com/records.get
+      filter: object == "deals"
+      action: allow
+    - capability: attio.com/statuses.list
+      filter: object == "deals"
+      action: allow
+    - capability: attio.com/records.update
+      filter: object == "deals"
+      action: allow
+    - capability: attio.com/records.create
+      filter: object == "deals"
+      action: allow
+    - capability: attio.com/records.setStatus
+      filter: object == "deals" and attribute == "stage"
+      action: allow
+  '@submilli/attio':
+    - capability: http.get
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.patch
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.post
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "ATTIO_API_KEY"
+      action: allow

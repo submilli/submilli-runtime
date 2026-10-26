@@ -6,8 +6,10 @@ provides:
     object:
       type: string
 - name: attio.com/companies.upsert
-  description: Create a company, or update the company that has this domain. Only the fields given are written.
+  description: Create a company, or update the company that has this domain. Only the fields given are written; on an existing company they replace its values.
   fields:
+    attributes:
+      type: string[]
     domain:
       type: string
 - name: attio.com/members.list
@@ -36,8 +38,10 @@ provides:
     email:
       type: string
 - name: attio.com/people.upsert
-  description: Create a person, or update the person who has this email address. Only the fields given are written.
+  description: Create a person, or update the person who has this email address. Only the fields given are written; on an existing person they replace its values.
   fields:
+    attributes:
+      type: string[]
     email:
       type: string
 - name: attio.com/records.create

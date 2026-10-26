@@ -14,6 +14,7 @@ import { check } from "submilli:security";
 import { AttioError, validationError } from "./errors";
 import {
     buildCompanyValues,
+    companyAttributes,
     buildNotesQuery,
     buildPersonValues,
     buildQueryBody,
@@ -30,6 +31,7 @@ import {
     PageOptions,
     PageWindow,
     PersonInput,
+    personAttributes,
     groupValues,
     PendingValue,
     PreparedCondition,
@@ -69,7 +71,6 @@ import {
     RecordEnvelope,
     recordFrom,
     RecordList,
-    referencesMembers,
     Status,
     StatusChange,
     statusFrom,
@@ -202,32 +203,35 @@ export function findPersonByEmail(email: string): AttioRecord | null {
 }
 
 /**
- * Create a person, or update the person who has this email address. Only the fields given are written.
+ * Create a person, or update the person who has this email address. Only the fields given are written; on an existing person they replace its values.
  * @param input The email that identifies the person, and the fields to set.
  * @returns The created or updated person.
- * @capability attio.com/people.upsert { email: string }
+ * @capability attio.com/people.upsert { email: string, attributes: string[] }
  */
 export function upsertPerson(input: PersonInput): AttioRecord {
     const { email, firstName, lastName, fullName, jobTitle, description, companyRecordId } = input;
     const address = normalizeEmail(email);
     const company = companyRecordId === undefined ? undefined : normalizeRecordId(companyRecordId, "companyRecordId");
     const values = buildPersonValues(address, firstName, lastName, fullName, jobTitle, description, company);
-    check("attio.com/people.upsert", { email: address });
+    const hasName = firstName !== undefined || lastName !== undefined || fullName !== undefined;
+    const attributes = personAttributes(hasName, jobTitle, description, company);
+    check("attio.com/people.upsert", { email: address, attributes: attributes });
     const response = upsertOn("people", "email_addresses", values, "more than one person in Attio has the email " + address);
     return readRecord((response.json() as RecordEnvelope).data, "people");
 }
 
 /**
- * Create a company, or update the company that has this domain. Only the fields given are written.
+ * Create a company, or update the company that has this domain. Only the fields given are written; on an existing company they replace its values.
  * @param input The domain that identifies the company, and the fields to set.
  * @returns The created or updated company.
- * @capability attio.com/companies.upsert { domain: string }
+ * @capability attio.com/companies.upsert { domain: string, attributes: string[] }
  */
 export function upsertCompany(input: CompanyInput): AttioRecord {
     const { domain, name, description } = input;
     const bare = normalizeDomain(domain);
     const values = buildCompanyValues(bare, name, description);
-    check("attio.com/companies.upsert", { domain: bare });
+    const attributes = companyAttributes(name, description);
+    check("attio.com/companies.upsert", { domain: bare, attributes: attributes });
     const response = upsertOn("companies", "domains", values, "more than one company in Attio has the domain " + bare);
     return readRecord((response.json() as RecordEnvelope).data, "companies");
 }
@@ -238,6 +242,7 @@ export function upsertCompany(input: CompanyInput): AttioRecord {
  * @param input Attribute values, and at most one `status` (`{ attribute, title }`).
  * @returns The created record.
  * @capability attio.com/records.create { object: string, attributes: string[], statusAttribute: string, status: string }
+ * @capability attio.com/statuses.list { object: string, attribute: string }
  */
 export function createRecord(object: string, input: CreateRecordInput): AttioRecord {
     const slug = normalizeSlug(object, "object");
@@ -262,9 +267,12 @@ export function createRecord(object: string, input: CreateRecordInput): AttioRec
         statusAttribute = normalizeSlug(attribute, "status attribute");
         requestedStatus = requireText(title, "status title");
     }
-    const resolved = statusAttribute.length > 0
-        ? findStatus(fetchStatuses(slug, statusAttribute), requestedStatus, slug, statusAttribute)
-        : null;
+    let resolved: Status | null = null;
+    if (statusAttribute.length > 0) {
+        // The statuses are read only once the caller may list them.
+        check("attio.com/statuses.list", { object: slug, attribute: statusAttribute });
+        resolved = findStatus(fetchStatuses(slug, statusAttribute), requestedStatus, slug, statusAttribute);
+    }
     const statusTitle = resolved === null ? "" : resolved.title;
     check("attio.com/records.create", { object: slug, attributes: slugs, statusAttribute: statusAttribute, status: statusTitle });
     // Decided after `check()`, so the shape of `values` never decides whether it runs.
@@ -323,13 +331,19 @@ export function updateRecord(object: string, recordId: string, values: RecordVal
  * @param status The new status: its title (case-insensitive) or status id.
  * @returns The record, the canonical new title, the previous title, and whether anything changed.
  * @capability attio.com/records.setStatus { object: string, recordId: string, attribute: string, status: string, previousStatus: string }
+ * @capability attio.com/statuses.list { object: string, attribute: string }
+ * @capability attio.com/records.get { object: string, recordId: string }
  */
 export function setStatus(object: string, recordId: string, attribute: string, status: string): StatusChange {
     const slug = normalizeSlug(object, "object");
     const id = normalizeRecordId(recordId, "recordId");
     const attributeSlug = normalizeSlug(attribute, "attribute");
     const requested = requireText(status, "status");
+    // Each read is checked as the read operation it is before it happens, so a
+    // caller learns nothing about statuses or records it may not read.
+    check("attio.com/statuses.list", { object: slug, attribute: attributeSlug });
     const target = findStatus(fetchStatuses(slug, attributeSlug), requested, slug, attributeSlug);
+    check("attio.com/records.get", { object: slug, recordId: id });
     const response = attioGetNullable(recordPath(slug, id));
     if (response === null) {
         throw new AttioError("not_found", "Attio has no " + slug + " record " + id, 404, "invalid_request_error", false, "");
@@ -400,7 +414,7 @@ export function listNotes(parentObject: string, parentRecordId: string, page: Pa
     for (const note of list.data) {
         // Attio lists workspace-wide notes when the parent filter is missing, so
         // keep only this record's notes even though both filters are always sent.
-        if (note.parent_record_id === id) items.push(noteFrom(note));
+        if (note.parent_object === parent && note.parent_record_id === id) items.push(noteFrom(note));
     }
     const end = pageAfter(window.offset, window.limit, list.data.length);
     return { items: items, nextOffset: end.nextOffset, isComplete: end.isComplete };
@@ -435,25 +449,13 @@ function fetchMembers(): Member[] {
     return items;
 }
 
-function memberEmails(): Map<string, string> {
-    const emails = new Map<string, string>();
-    for (const member of fetchMembers()) emails.set(member.memberId, member.email);
-    return emails;
-}
-
 function readRecord(data: ApiRecord, object: string): AttioRecord {
-    const emails = referencesMembers(data) ? memberEmails() : new Map<string, string>();
-    return recordFrom(data, object, emails);
+    return recordFrom(data, object);
 }
 
 function recordPage(records: ApiRecord[], object: string, window: PageWindow): Page<AttioRecord> {
-    let needsMembers = false;
-    for (const record of records) {
-        if (referencesMembers(record)) needsMembers = true;
-    }
-    const emails = needsMembers ? memberEmails() : new Map<string, string>();
     const items: AttioRecord[] = [];
-    for (const record of records) items.push(recordFrom(record, object, emails));
+    for (const record of records) items.push(recordFrom(record, object));
     const end = pageAfter(window.offset, window.limit, records.length);
     return { items: items, nextOffset: end.nextOffset, isComplete: end.isComplete };
 }

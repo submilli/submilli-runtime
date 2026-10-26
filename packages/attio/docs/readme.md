@@ -25,7 +25,7 @@ are left out, and each value has a readable `value` string:
 | --- | --- | --- |
 | status (such as `stage`), select | the title | `optionId` |
 | record-reference (such as `associated_company`) | the referenced record id | `targetObject`, `targetRecordId` |
-| actor-reference (such as `owner`) | the workspace member's email | `actorType`, `actorId` |
+| actor-reference (such as `owner`) | the workspace member id (match it with `memberId` from `listMembers`) | `actorType`, `actorId` |
 | currency | amount and code, such as `5000 USD` | `number`, `currencyCode` |
 | number, rating | the number as text | `number` |
 | text, date, timestamp, email, domain, personal name, phone | the text, date, address, domain, full name or number | |
@@ -154,7 +154,8 @@ function main(): string[] {
 ## People and companies
 
 Email addresses are trimmed and lowercased. Domains are reduced to a bare
-lowercase domain, so `https://www.Acme.com/pricing` becomes `acme.com`.
+lowercase domain, so `https://www.Acme.com/pricing` becomes `acme.com`; give
+an internationalized domain in punycode (`xn--…`).
 
 <!-- submilli:endif -->
 
@@ -167,17 +168,19 @@ lowercase domain, so `https://www.Acme.com/pricing` becomes `acme.com`.
 <!-- submilli:if capability="attio.com/people.upsert" -->
 
 - `upsertPerson({ email, firstName?, lastName?, fullName?, jobTitle?, description?, companyRecordId? })`
-  creates the person, or updates the person who has that email. Only the
-  fields given are written: other values and the person's other email
-  addresses stay. A name you give replaces the whole current name.
+  creates the person, or updates the person who has that email. On an
+  existing person each field given replaces its current value, and a name
+  replaces the whole current name; fields left out, and the person's other
+  email addresses, stay. Give only the fields you mean to set.
 
 <!-- submilli:endif -->
 
 <!-- submilli:if capability="attio.com/companies.upsert" -->
 
 - `upsertCompany({ domain, name?, description? })` creates the company, or
-  updates the company that has that domain. Only the fields given are
-  written, and the company's other domains stay.
+  updates the company that has that domain. On an existing company each
+  field given replaces its current value; fields left out, and the company's
+  other domains, stay.
 
 <!-- submilli:endif -->
 
@@ -195,7 +198,8 @@ with code `multiple_match_results` and changes nothing.
 `createRecord(object, { values?, status? })` creates a record and returns it.
 `status` sets one status attribute at creation, such as
 `{ attribute: "stage", title: "Lead" }`; the title is matched without regard
-to case, and a status id also works. Attributes with `isRequired` must be
+to case, and a status id also works. Giving a status also needs permission to
+list that attribute's statuses. Attributes with `isRequired` must be
 given: a deal needs its `name`, an `owner` (a workspace member's email) and a
 `stage`, or Attio refuses it with an `AttioError`.
 
@@ -212,7 +216,7 @@ already linked. A status attribute is refused with code `status_attribute`.
 
 <!-- submilli:endif -->
 
-<!-- submilli:if capability="attio.com/records.setStatus" -->
+<!-- submilli:if all="attio.com/records.setStatus attio.com/statuses.list attio.com/records.get" -->
 
 ## Change a status
 
@@ -222,7 +226,9 @@ is a title, matched without regard to case, or a status id. An unknown status
 fails with code `unknown_status`, and the message lists the valid titles. The
 result is a `StatusChange`: the `record`, the `status` title now set, the
 `previousStatus` title (`""` when there was none), and `changed`, false when
-the record already had that status and nothing was written.
+the record already had that status and nothing was written. It first lists
+the attribute's statuses and reads the record, so it needs permission for
+both reads.
 
 <!-- submilli:endif -->
 
