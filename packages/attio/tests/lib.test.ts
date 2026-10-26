@@ -19,6 +19,8 @@ import {
     listNotes,
     listObjects,
     listStatuses,
+    normalizeDomain as exportedNormalizeDomain,
+    normalizeEmail as exportedNormalizeEmail,
     queryRecords,
     setStatus,
     updateRecord,
@@ -61,6 +63,7 @@ import {
     pageOf,
     RecordEnvelope,
     recordFrom,
+    retryAfterSeconds,
     Status,
 } from "../src/response";
 
@@ -131,6 +134,10 @@ function main(): void {
         expectCode("invalid_email", () => { normalizeEmail(unicode); });
     }
     assert(normalizeEmail("dana@xn--bcher-kva.de") === "dana@xn--bcher-kva.de", "punycode accepted");
+
+    label("the package exports the normalizers, so a program can normalize before a query");
+    assert(exportedNormalizeDomain("https://www.Acme.com/pricing") === "acme.com", "exported domain normalizer");
+    assert(exportedNormalizeEmail(" Dana@Acme.COM ") === "dana@acme.com", "exported email normalizer");
 
     label("domains lose scheme, www, port, path, query and trailing dot");
     assert(normalizeDomain("https://www.Acme.com/pricing?x=1#top") === "acme.com", "URL reduced to its domain");
@@ -309,6 +316,13 @@ function main(): void {
             "\"limit\":500,\"offset\":1000,\"sorts\":[{\"attribute\":\"name\",\"direction\":\"asc\",\"field\":\"last_name\"}]}",
         "combined query body: " + JSON.stringify(body),
     );
+    assert(
+        JSON.stringify(buildQueryBody([prepareCondition({ attribute: "owner", operator: "eq", value: { memberId: COMPANY.toUpperCase() } })], [], window)) ===
+            "{\"filter\":{\"owner\":{\"referenced_actor_id\":\"" + COMPANY + "\",\"referenced_actor_type\":\"workspace-member\"}},\"limit\":50,\"offset\":0}",
+        "member filter",
+    );
+    expectCode("invalid_filter", () => { prepareCondition({ attribute: "owner", operator: "contains", value: { memberId: COMPANY } }); });
+    expectCode("invalid_record_id", () => { prepareCondition({ attribute: "owner", operator: "eq", value: { memberId: "ehud@example.com" } }); });
     expectCode("invalid_filter", () => { prepareCondition({ attribute: "name", operator: "contains", value: 3 }); });
     expectCode("invalid_filter", () => { prepareCondition({ attribute: "value", operator: "gt", value: true }); });
     expectCode("invalid_filter", () => {
@@ -325,6 +339,7 @@ function main(): void {
     expectCode("invalid_offset", () => { queryWindow(10, 1 / 0); });
     expectCode("invalid_offset", () => { noteWindow(undefined, 1e21); });
     expectCode("invalid_page_size", () => { queryWindow(0 / 0, undefined); });
+    assert(queryWindow(2, null).offset === 0, "a null offset (a last page's nextOffset) is the same as 0");
     expectCode("invalid_page_size", () => { noteWindow(51, undefined); });
     assert(buildNotesQuery("deals", RECORD, noteWindow(undefined, 50)) === "?parent_object=deals&parent_record_id=" + RECORD + "&limit=50&offset=50", "notes query");
 
@@ -442,6 +457,17 @@ function main(): void {
     const fallback = failureFrom(502, "Bad Gateway", "<html>");
     assert(fallback.code === "server_error" && fallback.message === "Attio request failed: HTTP 502 Bad Gateway", "non-JSON body");
     assert(failureFrom(403, "Forbidden", "{malformed").code === "forbidden", "malformed body");
+
+    label("Retry-After becomes seconds to wait, from a number or an HTTP date");
+    const now = 1684852861000;
+    assert(retryAfterSeconds("120", now) === 120, "delta seconds");
+    assert(retryAfterSeconds("Tue, 23 May 2023 14:42:01 GMT", now) === 60, "HTTP date a minute ahead");
+    assert(retryAfterSeconds("Tue, 23 May 2023 14:40:01 GMT", now) === 0, "a past date means no wait");
+    assert(retryAfterSeconds("Thu, 29 Feb 2024 00:00:00 GMT", 1709164800000) === 0, "leap day");
+    assert(retryAfterSeconds("", now) === null, "absent");
+    assert(retryAfterSeconds("soon", now) === null, "malformed");
+    assert(retryAfterSeconds("Tue, 23 Foo 2023 14:42:01 GMT", now) === null, "unknown month");
+    assert(retryAfterSeconds("Tue, 23 May 2023 14:42 GMT", now) === null, "short time");
 
     label("pages end on a short or empty page");
     const fullPage = pageOf(["a", "b"], 0, 2, 2);

@@ -593,6 +593,51 @@ export function failureFrom(status: number, statusText: string, body: string): F
     return { code: code, message: message, type: parsed.type ?? "", retryable: retryable };
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Seconds to wait according to a `Retry-After` header: a number of seconds,
+ * or an HTTP date (`Tue, 23 May 2023 14:42:01 GMT`) measured from `nowMilliseconds`.
+ * @param header The raw header value.
+ * @param nowMilliseconds The current time, in milliseconds since the Unix epoch.
+ * @returns Whole seconds to wait, at least 0, or null when the header is empty or malformed.
+ */
+export function retryAfterSeconds(header: string, nowMilliseconds: number): number | null {
+    const value = header.trim();
+    if (value.length === 0) return null;
+    if (isDigits(value)) return Number(value);
+    const parts = value.split(" ");
+    if (parts.length !== 6 || !parts[0].endsWith(",") || parts[5] !== "GMT") return null;
+    const month = MONTHS.indexOf(parts[2]) + 1;
+    const clock = parts[4].split(":");
+    if (month === 0 || clock.length !== 3 || !isDigits(parts[1]) || !isDigits(parts[3])) return null;
+    for (const unit of clock) {
+        if (unit.length !== 2 || !isDigits(unit)) return null;
+    }
+    const at = daysFromCivil(Number(parts[3]), month, Number(parts[1])) * 86400 +
+        Number(clock[0]) * 3600 + Number(clock[1]) * 60 + Number(clock[2]);
+    return Math.max(0, Math.ceil(at - nowMilliseconds / 1000));
+}
+
+function isDigits(value: string): boolean {
+    if (value.length === 0) return false;
+    for (let i = 0; i < value.length; i += 1) {
+        const code = value.charCodeAt(i);
+        if (code < 48 || code > 57) return false;
+    }
+    return true;
+}
+
+// Days from 1970-01-01 to a proleptic Gregorian date (Howard Hinnant's algorithm).
+function daysFromCivil(year: number, month: number, day: number): number {
+    const y = month <= 2 ? year - 1 : year;
+    const era = Math.floor(y / 400);
+    const yearOfEra = y - era * 400;
+    const dayOfYear = Math.floor((153 * (month > 2 ? month - 3 : month + 9) + 2) / 5) + day - 1;
+    const dayOfEra = yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
+    return era * 146097 + dayOfEra - 719468;
+}
+
 /** The parts of an AttioError derived from a failed response. */
 export interface FailureDetails {
     code: string;

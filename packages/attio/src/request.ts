@@ -119,14 +119,31 @@ export interface RecordReference {
 /** Comparison of one query condition. */
 export type QueryOperator = "eq" | "contains" | "starts_with" | "ends_with" | "lt" | "lte" | "gt" | "gte";
 
-/** The value a query condition compares with. A `RecordReference` matches a record-reference attribute (operator `eq` only). */
-export type QueryValue = string | number | boolean | RecordReference;
+/** A workspace member, by id, to match an actor-reference attribute such as a deal's `owner`. */
+export interface MemberReference {
+    /** Workspace member id, as `listMembers` and a record's `actorId` give it. */
+    memberId: string;
+}
+
+/**
+ * The value a query condition compares with. A `RecordReference` matches a
+ * record-reference attribute and a `MemberReference` an actor-reference
+ * attribute, both with operator `eq` only.
+ */
+export type QueryValue = string | number | boolean | RecordReference | MemberReference;
 
 /** One query condition. Conditions in a query are combined with AND. */
 export interface QueryCondition {
     /** Attribute slug, such as `name`, `stage` or `associated_company`. */
     attribute: string;
-    /** Comparison. `eq` works for every attribute type (status and select compare titles); text-like attributes also take `contains`, `starts_with` and `ends_with`; numbers, currencies and dates take `lt`, `lte`, `gt` and `gte`. */
+    /**
+     * Comparison. `eq` compares exactly: a status or select title exactly as
+     * given (case included), a record reference as `{ targetObject, targetRecordId }`,
+     * a workspace member (such as `owner`) as `{ memberId }`. Text-like values
+     * also take `contains`, `starts_with` and `ends_with`, and for an email
+     * address or domain Attio needs the property in `field` (such as `domain` or
+     * `email_domain`). Numbers, currencies and dates take `lt`, `lte`, `gt` and `gte`.
+     */
     operator: QueryOperator;
     /** The value to compare with. */
     value: QueryValue;
@@ -152,16 +169,16 @@ export interface RecordQuery {
     sorts?: QuerySort[];
     /** Page size, 1 through 500. Defaults to 50. */
     limit?: number;
-    /** Number of records to skip; pass a previous page's `nextOffset`. Defaults to 0. */
-    offset?: number;
+    /** Number of records to skip; pass a previous page's `nextOffset` as it is. Defaults to 0; null is the same as 0. */
+    offset?: number | null;
 }
 
 /** Limit/offset pagination for note lists. */
 export interface PageOptions {
     /** Page size, 1 through 50. Defaults to 50. */
     limit?: number;
-    /** Number of items to skip; pass a previous page's `nextOffset`. Defaults to 0. */
-    offset?: number;
+    /** Number of items to skip; pass a previous page's `nextOffset` as it is. Defaults to 0; null is the same as 0. */
+    offset?: number | null;
 }
 
 /** A person to find or create by email address. Absent fields are not sent and keep their current values. */
@@ -224,7 +241,8 @@ export interface PreparedCondition {
     field: string;
     operator: QueryOperator;
     value: string | number | boolean;
-    reference: RecordReference | null;
+    /** The exact-match object for a record or member reference, or null for a plain value. */
+    match: Record<string, unknown> | null;
 }
 
 /** One sort key after validation. */
@@ -396,7 +414,7 @@ export function requireText(value: string, name: string): string {
  * @param max Largest page size Attio accepts.
  * @returns The validated limit and offset.
  */
-export function pageWindow(limit: number | undefined, offset: number | undefined, fallback: number, max: number): PageWindow {
+export function pageWindow(limit: number | undefined, offset: number | null | undefined, fallback: number, max: number): PageWindow {
     const size = limit ?? fallback;
     if (!Number.isSafeInteger(size) || size < 1 || size > max) {
         throw validationError("invalid_page_size", "limit must be an integer from 1 through " + max.toString() + ", got " + size.toString());
@@ -414,7 +432,7 @@ export function pageWindow(limit: number | undefined, offset: number | undefined
  * @param offset Requested offset.
  * @returns The validated window.
  */
-export function queryWindow(limit: number | undefined, offset: number | undefined): PageWindow {
+export function queryWindow(limit: number | undefined, offset: number | null | undefined): PageWindow {
     return pageWindow(limit, offset, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
 }
 
@@ -424,7 +442,7 @@ export function queryWindow(limit: number | undefined, offset: number | undefine
  * @param offset Requested offset.
  * @returns The validated window.
  */
-export function noteWindow(limit: number | undefined, offset: number | undefined): PageWindow {
+export function noteWindow(limit: number | undefined, offset: number | null | undefined): PageWindow {
     return pageWindow(limit, offset, DEFAULT_NOTE_LIMIT, MAX_NOTE_LIMIT);
 }
 
@@ -749,20 +767,31 @@ export function prepareCondition(condition: QueryCondition): PreparedCondition {
         if ((operator === "lt" || operator === "lte" || operator === "gt" || operator === "gte") && typeof value === "boolean") {
             throw validationError("invalid_filter", "filter on " + slug + ": " + operator + " needs a number or a date string");
         }
-        return { attribute: slug, field: property, operator: operator, value: value, reference: null };
+        return { attribute: slug, field: property, operator: operator, value: value, match: null };
     }
     if (operator !== "eq") {
-        throw validationError("invalid_filter", "filter on " + slug + ": a record reference can only be compared with eq");
+        throw validationError("invalid_filter", "filter on " + slug + ": a record or member reference can only be compared with eq");
     }
     if (property.length > 0) {
-        throw validationError("invalid_filter", "filter on " + slug + ": a record reference takes no field");
+        throw validationError("invalid_filter", "filter on " + slug + ": a record or member reference takes no field");
+    }
+    if ("memberId" in value) {
+        const { memberId } = value;
+        const member = normalizeRecordId(memberId, "filter memberId");
+        return {
+            attribute: slug,
+            field: "",
+            operator: "eq",
+            value: "",
+            match: { referenced_actor_type: "workspace-member", referenced_actor_id: member },
+        };
     }
     const { targetObject, targetRecordId } = value;
-    const reference: RecordReference = {
-        targetObject: normalizeSlug(targetObject, "filter targetObject"),
-        targetRecordId: normalizeRecordId(targetRecordId, "filter targetRecordId"),
+    const match: Record<string, unknown> = {
+        target_object: normalizeSlug(targetObject, "filter targetObject"),
+        target_record_id: normalizeRecordId(targetRecordId, "filter targetRecordId"),
     };
-    return { attribute: slug, field: "", operator: "eq", value: "", reference: reference };
+    return { attribute: slug, field: "", operator: "eq", value: "", match: match };
 }
 
 function isOperator(value: string): boolean {
@@ -791,11 +820,8 @@ export function prepareSort(sort: QuerySort): PreparedSort {
  */
 export function buildCondition(condition: PreparedCondition): Record<string, unknown> {
     const filter: Record<string, unknown> = {};
-    if (condition.reference !== null) {
-        filter[condition.attribute] = {
-            target_object: condition.reference.targetObject,
-            target_record_id: condition.reference.targetRecordId,
-        };
+    if (condition.match !== null) {
+        filter[condition.attribute] = condition.match;
         return filter;
     }
     if (condition.operator === "eq" && condition.field.length === 0) {

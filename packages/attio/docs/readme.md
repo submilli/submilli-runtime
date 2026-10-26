@@ -78,17 +78,20 @@ Dates must be real calendar dates, and a blank name part is refused.
 
 <!-- submilli:if capability="attio.com/attributes.list" -->
 
-- `listAttributes(object)` lists an object's active attributes with `slug`,
-  `type`, `isMultiselect` and `isWritable`. Use it to learn the slugs to
-  write and filter on.
+- `listAttributes(object)` lists an object's active attributes, each with
+  `attributeId`, `slug`, `title`, `description`, `type`, `isMultiselect`,
+  `isWritable`, `isRequired`, `isUnique` and `currencyCode` (for a currency
+  attribute, otherwise ""). Use it to learn the slugs to write and filter on.
 
 <!-- submilli:endif -->
 
 <!-- submilli:if capability="attio.com/statuses.list" -->
 
 - `listStatuses(object, attribute)` lists the live statuses of a status
-  attribute, such as the stages of `deals.stage`. Stage titles differ between
-  workspaces, so list them rather than guessing.
+  attribute, such as the stages of `deals.stage`, each with `statusId`,
+  `title` and `celebrationEnabled` (true for a status Attio celebrates,
+  typically a won stage). Stage titles differ between workspaces, so list
+  them rather than guessing.
 
 <!-- submilli:endif -->
 
@@ -103,8 +106,8 @@ Dates must be real calendar dates, and a blank name part is refused.
 
 ## Get a record
 
-`getRecord(object, recordId)` returns the record, or `null` when Attio has no
-such record.
+`getRecord(object, recordId)` returns the record, or `null` when Attio answers
+not found: no such record, or no such object.
 
 <!-- submilli:endif -->
 
@@ -114,18 +117,28 @@ such record.
 
 `queryRecords(object, query?)` returns one page of records: `items`,
 `nextOffset` and `isComplete`. To read the next page, call it again with
-`offset: page.nextOffset` while `isComplete` is false. It never fetches more
-than one page.
+`offset: page.nextOffset` while `isComplete` is false (a null offset is the
+same as 0, so stop when `isComplete` is true). It never fetches more than one
+page.
 
 - `filter` is a list of conditions that must all match. A condition is
   `{ attribute, operator, value }`, with an optional `field` for one property
-  of a value, such as `email_domain` of an email address, `root_domain` of a
-  domain, or `first_name` of a person's name.
-- `eq` compares exactly. For a status or select attribute the value is the
-  title, such as `{ attribute: "stage", operator: "eq", value: "Lead" }`. For a
-  record reference the value is `{ targetObject, targetRecordId }`.
+  of a value, such as `email_domain` of an email address, `domain` or
+  `root_domain` of a domain, or `first_name` of a person's name.
+- `eq` compares exactly, and values are sent as given. A status or select
+  attribute compares the title exactly as given, case included, such as
+  `{ attribute: "stage", operator: "eq", value: "Lead" }`; take titles from
+  `listStatuses`. (`setStatus` and `createRecord` match a status title without
+  regard to case, but a query does not.) A record reference takes
+  `{ targetObject, targetRecordId }`, and a workspace-member attribute such as
+  `owner` takes `{ memberId }`.
 - `contains`, `starts_with` and `ends_with` take a string; `contains`
-  ignores case. `lt`, `lte`, `gt` and `gte` take a number or a date string.
+  ignores case. For an email address or a domain, Attio needs the property
+  in `field`: `{ attribute: "domains", field: "domain", operator: "contains", value: "acme" }`.
+  `lt`, `lte`, `gt` and `gte` take a number or a date string.
+- A domain or email in a filter is not normalized. Pass it through
+  `normalizeDomain` or `normalizeEmail` first, which give the spelling Attio
+  stores (`https://www.Acme.com/x` becomes `acme.com`).
 - `sorts` is a list of `{ attribute, direction }`, with `direction` `asc` or
   `desc` and an optional `field`.
 - `limit` is 1 to 500 and defaults to 50; `offset` defaults to 0.
@@ -149,15 +162,34 @@ function main(): string[] {
 }
 ```
 
+Reading further pages, at most three here:
+
+```ts
+import { normalizeDomain, QueryCondition, queryRecords } from "@submilli/attio";
+
+function main(): number {
+    const byDomain: QueryCondition = { attribute: "domains", operator: "eq", value: normalizeDomain("https://www.Acme.com/") };
+    let page = queryRecords("companies", { filter: [byDomain], limit: 2 });
+    let count = page.items.length;
+    for (let pages = 1; pages < 3 && !page.isComplete; pages += 1) {
+        page = queryRecords("companies", { filter: [byDomain], limit: 2, offset: page.nextOffset });
+        count += page.items.length;
+    }
+    return count;
+}
+```
+
 <!-- submilli:endif -->
 
 <!-- submilli:if any="attio.com/people.find attio.com/people.upsert attio.com/companies.upsert" -->
 
 ## People and companies
 
-Email addresses are trimmed and lowercased. Domains are reduced to a bare
-lowercase domain, so `https://www.Acme.com/pricing` becomes `acme.com`; give
-an internationalized domain in punycode (`xn--…`).
+These operations normalize what they are given: an email is trimmed and
+lowercased, and a domain becomes a bare lowercase domain, so
+`https://www.Acme.com/pricing` becomes `acme.com`. Give an internationalized
+domain in punycode (`xn--…`). Queries do not normalize; use `normalizeDomain`
+and `normalizeEmail` for them.
 
 <!-- submilli:endif -->
 
@@ -203,14 +235,18 @@ with code `multiple_match_results` and changes nothing.
 to case, and a status id also works. Giving a status also needs permission to
 list that attribute's statuses. Attributes with `isRequired` must be
 given: a deal needs its `name`, an `owner` (a workspace member's email) and a
-`stage`, or Attio refuses it with an `AttioError`.
+`stage`. Without one, Attio refuses the create with an `AttioError` of status
+400 and Attio's own code (its reference does not name it for creates).
+Each call reads the object's attribute definitions, and with a status the
+attribute's statuses, before it writes: one or two extra reads per create.
 
 `createRecord` never matches an existing record. A person's email and a
 company's domain are unique, so creating a person or company that already
 exists fails with code `uniqueness_conflict`: look it up first with
 `findPersonByEmail` or `queryRecords`, and create it only when it is missing.
-Pass a bare lowercase domain (`acme.com`, not a URL) to both: `createRecord`
-normalizes a domain, but a query compares the value as given.
+`createRecord` normalizes a domain value, but a query compares the value as
+given, so pass the query `normalizeDomain(domain)` (or a bare lowercase domain
+such as `acme.com`).
 
 A record reference also writes the other side of its relationship: a new
 person's `company` adds the person to that company's `team`. Where the other
@@ -263,7 +299,8 @@ result is a `StatusChange`: the `record`, the `status` title now set, the
 `previousStatus` title (`""` when there was none), and `changed`, false when
 the record already had that status and nothing was written. It first lists
 the attribute's statuses and reads the record, so it needs permission for
-both reads.
+both reads. On an object without that status attribute, or for a missing
+record, it fails with an `AttioError` of status 404.
 
 <!-- submilli:endif -->
 
@@ -295,24 +332,53 @@ both reads.
 - `getRecord` returns `null` when Attio answers not found, which it does both
   for a missing record and for an unknown object slug; `findPersonByEmail`
   returns `null` when nobody has the email.
-- Other failures throw `AttioError` with `code`, `message` and `status`.
-  `status` 0 is an error the package raised itself: invalid input such as an
-  email, slug, record id, value or page size (refused before anything is
-  sent), an unknown status, a status attribute in a plain write, or two
-  people found with one email. Fix the argument rather than retrying. Otherwise `status`
-  is Attio's HTTP status and `code` Attio's own, such as `value_not_found` for
-  an unknown option or member.
+- Other failures from Attio throw `AttioError` with `code`, `message` and
+  `status`. `status` 0 is an error the package raised itself: invalid input
+  such as an email, slug, record id, value or page size (refused before
+  anything is sent), an unknown status, a status attribute in a plain write,
+  or two people found with one email. Fix the argument rather than retrying.
+  Otherwise `status` is Attio's HTTP status and `code` Attio's own, such as
+  `value_not_found` for an unknown option or member.
 - `retryable` is true when Attio did not apply the request: a rate limit
-  (status 429, with the time to wait in `retryAfter`) or a concurrent write
-  (`concurrent_write_conflict`). Nothing is retried automatically.
-- A failed connection or timeout throws the HTTP transport's error, not
-  `AttioError`.
-- A write that fails with a 5xx status or a transport error may still have
-  been applied: there is no idempotency key, and `retryable` is false. Read
-  the record (or the record's notes) again before retrying, so a retry does
-  not create a duplicate deal, person or note.
-- A denied operation throws `PermissionDeniedError`: the operation is not
-  allowed with those arguments, so do not retry it with other spellings.
+  (status 429) or a concurrent write (`concurrent_write_conflict`).
+  `retryAfterSeconds` is how long Attio asked to wait, in seconds (null when
+  it did not say), and `retryAfter` the raw header, an HTTP date. A program
+  cannot sleep, so do not retry at once: stop and report the wait. Nothing is
+  retried automatically.
+- A failed connection or timeout throws a plain `Error` from the HTTP
+  transport, not `AttioError`. Catch `AttioError` first, then `Error`.
+- A denied operation throws `PermissionDeniedError`, a runtime global rather
+  than an export of this package. The operation is not allowed with those
+  arguments, so do not retry it with other spellings.
+
+```ts
+import { AttioError, getRecord } from "@submilli/attio";
+
+function main(): string {
+    try {
+        const deal = getRecord("deals", "8a1b2c3d-1111-4222-8333-944455556666");
+        return deal === null ? "no such deal" : deal.webUrl;
+    } catch (error: PermissionDeniedError) {
+        return "not allowed: " + error.capability;
+    } catch (error: AttioError) {
+        return error.retryable ? "Attio is busy; retry in " + String(error.retryAfterSeconds) + " s" : "Attio refused: " + error.code;
+    } catch (error) {
+        return "could not reach Attio: " + error.message;
+    }
+}
+```
+
+### Writes with an unknown outcome
+
+A write that fails with a 5xx status or a transport error may still have been
+applied: there is no idempotency key, and `retryable` is false. Before
+retrying, look for what the write would have made: a deal with
+`queryRecords("deals", { filter: [{ attribute: "name", operator: "eq", value: name }] })`,
+a company by its normalized domain, a person with `findPersonByEmail`, a
+note in `listNotes` of its record. Retry only when it is missing. The robust
+fix is a unique attribute on the object (such as the id of the message a deal
+came from): a repeated create then fails with `uniqueness_conflict` instead of
+making a duplicate.
 
 <!-- submilli:if all="attio.com/records.query attio.com/people.find attio.com/records.create attio.com/statuses.list attio.com/notes.create" -->
 

@@ -51,6 +51,9 @@ function send(method, url, body, headers) {
     return respond(request);
 }
 
+// Submilli provides Temporal; Node may not. The package reads only the current time.
+globalThis.Temporal ??= { Now: { instant: () => ({ epochMilliseconds: Date.now() }) } };
+
 globalThis.__attioHost = {
     get: (url, headers) => send('GET', url, undefined, headers),
     post: (url, body, headers) => send('POST', url, body, headers),
@@ -273,9 +276,17 @@ test('queryRecords sends one typed page and reports the next offset; it never lo
     assert.equal(full.isComplete, false);
     reset(() => reply(200, { data: [] }));
     const after = attio.queryRecords('deals', { limit: 2, offset: full.nextOffset });
+    assert.equal(attio.queryRecords('deals', { limit: 2, offset: after.nextOffset }).isComplete, true, 'a null offset reads from the start');
+    assert.equal(requests.at(-1).body.offset, 0);
     assert.deepEqual(requests[0].body, { limit: 2, offset: 2 });
     assert.equal(after.nextOffset, null);
     assert.equal(after.isComplete, true);
+});
+
+test('a workspace member filter matches an actor reference such as owner', () => {
+    reset(() => reply(200, { data: [] }));
+    attio.queryRecords('deals', { filter: [{ attribute: 'owner', operator: 'eq', value: { memberId: MEMBER } }] });
+    assert.deepEqual(requests[0].body.filter, { owner: { referenced_actor_type: 'workspace-member', referenced_actor_id: MEMBER } });
 });
 
 test('findPersonByEmail checks and sends the normalized email; no match is null; two matches are an error', () => {
@@ -671,6 +682,9 @@ test('429 carries Retry-After and is retryable; 409 concurrent_write_conflict is
     assert.equal(limited.type, 'rate_limit_error');
     assert.equal(limited.retryable, true);
     assert.equal(limited.retryAfter, 'Tue, 23 May 2023 14:42:01 GMT');
+    assert.equal(limited.retryAfterSeconds, 0, 'a date in the past means no wait');
+    reset(() => reply(429, { code: 'rate_limit_exceeded', message: 'slow down' }, { 'retry-after': '7' }));
+    assert.equal(attioError(() => attio.listObjects()).retryAfterSeconds, 7);
 
     const limited429 = () => reply(429, { code: 'rate_limit_exceeded', message: 'Rate limit exceeded' }, { 'retry-after': 'Tue, 23 May 2023 14:42:01 GMT' });
     for (const call of [
@@ -691,6 +705,7 @@ test('429 carries Retry-After and is retryable; 409 concurrent_write_conflict is
     assert.equal(conflict.status, 409);
     assert.equal(conflict.retryable, true);
     assert.equal(conflict.retryAfter, '');
+    assert.equal(conflict.retryAfterSeconds, null);
 
     reset(attioApi(() => reply(409, { code: 'uniqueness_conflict', message: 'Duplicate.' })));
     assert.equal(attioError(() => attio.createRecord('deals', { values: [{ attribute: 'name', type: 'text', text: 'x' }] })).retryable, false);

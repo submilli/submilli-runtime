@@ -69,6 +69,7 @@ import {
     RecordEnvelope,
     recordFrom,
     RecordList,
+    retryAfterSeconds,
     Status,
     StatusChange,
     statusFrom,
@@ -76,6 +77,7 @@ import {
 } from "./response";
 
 export { AttioError } from "./errors";
+export { normalizeDomain, normalizeEmail } from "./request";
 export {
     AttributeValueType,
     AttributeValue,
@@ -83,6 +85,7 @@ export {
     StatusInput,
     CreateRecordInput,
     RecordReference,
+    MemberReference,
     QueryOperator,
     QueryValue,
     QueryCondition,
@@ -459,7 +462,15 @@ function upsertOn(object: string, matchingAttribute: string, values: Record<stri
     if (response.ok) return response;
     const error = attioError(response);
     if (error.code === "multiple_match_results") {
-        throw new AttioError(error.code, ambiguity + "; merge the duplicates in Attio, then retry (" + error.message + ")", error.status, error.type, false, "");
+        throw new AttioError(
+            error.code,
+            ambiguity + "; merge the duplicates in Attio, then retry (" + error.message + ")",
+            error.status,
+            error.type,
+            false,
+            "",
+            null,
+        );
     }
     throw error;
 }
@@ -501,12 +512,7 @@ function requireOk(response: Response): Response {
 
 function attioError(response: Response): AttioError {
     const failure = failureFrom(response.status, response.statusText, response.body);
-    return new AttioError(
-        failure.code,
-        failure.message,
-        response.status,
-        failure.type,
-        failure.retryable,
-        response.headers.get("retry-after") ?? "",
-    );
+    const retryAfter = response.headers.get("retry-after") ?? "";
+    const wait = retryAfter.length === 0 ? null : retryAfterSeconds(retryAfter, Temporal.Now.instant().epochMilliseconds);
+    return new AttioError(failure.code, failure.message, response.status, failure.type, failure.retryable, retryAfter, wait);
 }

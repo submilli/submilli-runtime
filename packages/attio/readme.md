@@ -106,8 +106,8 @@ instead (see [Create-only people and companies](#create-only-people-and-companie
 or a company whose domain, is already in Attio fails with `AttioError` code
 `uniqueness_conflict` (HTTP 409); the program then looks the record up with
 `findPersonByEmail` or `queryRecords`. `queryRecords` compares the value as
-given while `createRecord` normalizes a domain, so pass a bare lowercase
-domain (`acme.com`, not a URL) to both.
+given while `createRecord` normalizes a domain, so give the query
+`normalizeDomain(domain)`, which the package exports with `normalizeEmail`.
 
 ```ts ignore
 const person = findPersonByEmail("dana@acme.com") ?? createRecord("people", { values: [
@@ -292,22 +292,36 @@ further with fields such as `not (attributes contains "owner")` or
   `parent_object` and `parent_record_id` (Attio lists notes across the whole
   workspace without them) and drops any note whose parent object or record
   differs.
-- Nothing is retried automatically. `AttioError.retryable` marks a 429 (with
-  `retryAfter`, Attio's `Retry-After` HTTP date) and a 409
-  `concurrent_write_conflict`, which Attio did not apply.
+- Nothing is retried automatically. `AttioError.retryable` marks a 429 and a
+  409 `concurrent_write_conflict`, which Attio did not apply.
+  `retryAfterSeconds` is the wait Attio asked for, parsed from `Retry-After`
+  (a number of seconds or an HTTP date, measured from when the error was
+  raised; null when absent or malformed), and `retryAfter` the raw header.
+  The runtime has no sleep, so a program should stop and report a 429
+  rather than retry at once.
 - `getRecord` returns `null` for any 404 `not_found`, which Attio answers both
   for a missing record and for an unknown object; the error code does not
   tell them apart.
 - A failure of the HTTP transport itself (a timeout, a refused connection)
-  throws the `submilli:http` error, not `AttioError`.
+  throws a plain `Error` from `submilli:http`, not `AttioError`.
+- Queries send status titles, domains and emails as given: Attio matches a
+  status title exactly, while `setStatus` and `createRecord` resolve titles
+  without regard to case. A workspace-member filter (such as on `owner`)
+  takes `{ memberId }` and becomes Attio's
+  `{ referenced_actor_type: "workspace-member", referenced_actor_id }`.
+- `setStatus` on an object without that status attribute fails with a 404
+  `AttioError` from the statuses read. `createRecord` reads the object's
+  attributes (and with a status its statuses) on every call, and
+  `updateRecord` its attributes: one or two extra reads per write.
 
 ### Writes with an unknown outcome
 
 A 5xx answer or a transport failure on `createRecord`, `createNote`, an upsert
 or an update may come after Attio applied the write. Attio has no idempotency
-key, and the package marks these errors `retryable: false`. Re-read before
-retrying: look the record up (`findPersonByEmail`, `queryRecords`,
-`listNotes`), and retry only if the write is missing. To make a retried create
+key, and the package marks these errors `retryable: false`. Before retrying,
+look for what the write would have made: a deal by name with `queryRecords`, a
+company by its normalized domain, a person with `findPersonByEmail`, a note in
+`listNotes` of its record. Retry only if it is missing. To make a retried create
 safe, give the object a unique custom attribute (for deals, such as the Slack
 message id the deal came from) and write it on create: a second create then
 fails with `uniqueness_conflict` instead of making a duplicate.

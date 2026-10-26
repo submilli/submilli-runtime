@@ -16,10 +16,25 @@ export class AttioError extends Error {
     type: string;
     /** True when Attio did not apply the request and the same call may be retried: 429 rate limits and 409 `concurrent_write_conflict`. */
     retryable: boolean;
-    /** The raw `Retry-After` header of a 429 (an HTTP date such as `Tue, 23 May 2023 14:42:01 GMT`), or "" when absent. */
+    /** The raw `Retry-After` header of a 429, as Attio sent it (an HTTP date such as `Tue, 23 May 2023 14:42:01 GMT`), or "" when absent. */
     retryAfter: string;
+    /**
+     * Seconds from when the error was raised until Attio's `Retry-After` time
+     * (0 when that time has passed), or null when the header is absent or not a
+     * date or a number of seconds. A program cannot sleep, so it should stop and
+     * report rather than retry at once.
+     */
+    retryAfterSeconds: number | null;
 
-    constructor(code: string, message: string, status: number, type: string, retryable: boolean, retryAfter: string) {
+    constructor(
+        code: string,
+        message: string,
+        status: number,
+        type: string,
+        retryable: boolean,
+        retryAfter: string,
+        retryAfterSeconds: number | null,
+    ) {
         super(message);
         this.name = "AttioError";
         this.code = code;
@@ -27,9 +42,10 @@ export class AttioError extends Error {
         this.type = type;
         this.retryable = retryable;
         this.retryAfter = retryAfter;
+        this.retryAfterSeconds = retryAfterSeconds;
     }
 }
 
 export function validationError(code: string, message: string): AttioError {
-    return new AttioError(code, message, 0, "", false, "");
+    return new AttioError(code, message, 0, "", false, "", null);
 }
