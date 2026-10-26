@@ -27,6 +27,8 @@ mod bridge;
 #[cfg(unix)]
 mod chat;
 #[cfg(unix)]
+mod claude_runner;
+#[cfg(unix)]
 mod client;
 #[cfg(unix)]
 mod control_auth;
@@ -305,13 +307,19 @@ pub struct ChatArgs {
     #[arg(long, value_name = "ID")]
     session: Option<String>,
     /// The model for a new session, as `<provider>:<model>`, from a provider whose key the
-    /// playground started with. Default: the playground's configured model. A session
-    /// carried on keeps its own.
+    /// playground started with, or `claude-code:<sonnet|opus|haiku>` to answer with your
+    /// own Claude Code. Default: the playground's configured model. A session carried on
+    /// keeps its own.
     #[arg(long, value_name = "PROVIDER:MODEL", conflicts_with = "session")]
     model: Option<String>,
-    /// How hard a new session's model reasons. OpenAI models only, for now.
-    #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high"], conflicts_with = "session")]
+    /// How hard a new session's model reasons: OpenAI models take low, medium, or high;
+    /// Claude Code also takes xhigh and max.
+    #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high", "xhigh", "max"], conflicts_with = "session")]
     effort: Option<String>,
+    /// The most a new Claude Code session may spend on one message, in US dollars, above 0
+    /// and at most 100. Default: 1.00. On a subscription it measures usage, not billing.
+    #[arg(long, value_name = "USD", conflicts_with = "session")]
+    max_budget_usd: Option<f64>,
     /// The most tokens one answer of a new session's model may take. Default: 4096.
     #[arg(long, value_name = "TOKENS", value_parser = clap::value_parser!(u64).range(1..=1_000_000), conflicts_with = "session")]
     max_output: Option<u64>,
@@ -321,6 +329,7 @@ pub struct ChatArgs {
     #[arg(long, value_name = "JSON", value_parser = parse_provider_settings, conflicts_with = "session")]
     provider_settings: Option<serde_json::Map<String, serde_json::Value>>,
     /// The most tool calls run for one answer of the model; the rest are refused to it.
+    /// Claude Code counts them across the whole message, and stops at the limit.
     #[arg(
         long,
         value_name = "N",
@@ -779,6 +788,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
                 max_output: args.max_output,
                 provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
+                max_budget_usd: args.max_budget_usd,
                 variables: std::collections::BTreeMap::new(),
             }),
             args.json,

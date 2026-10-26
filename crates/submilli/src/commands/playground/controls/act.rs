@@ -39,6 +39,7 @@ use super::super::host::run::{ErrorKind, ExecuteResponse};
 use super::super::Output;
 use super::super::agent;
 use super::super::api::{MAX_BODY_BYTES, feed};
+use super::super::claude_runner;
 use super::super::client::{self, Probe, Running};
 use super::super::labels;
 use super::super::project;
@@ -424,8 +425,9 @@ pub(crate) struct Actions {
     pub(crate) page: Page,
     /// Runs a cancel was sent for, while they drain.
     pub(crate) cancelling: Mutex<BTreeSet<u64>>,
-    /// Sessions a chat is answering in: one message at a time each.
-    pub(crate) chatting: Arc<Mutex<BTreeSet<String>>>,
+    /// Sessions a chat is answering in, each with that chat's cancel flag: one message
+    /// at a time each.
+    pub(crate) chatting: Chatting,
     /// Where the stand-in's chat goes.
     pub(crate) chat: super::super::chat::ChatIntake,
     /// The server listener's port, for chat's MCP connection.
@@ -881,7 +883,10 @@ impl Actions {
             effort: request.effort.clone(),
             max_output: request.max_output,
             provider: request.provider_settings.clone().unwrap_or_default(),
+            max_budget_usd: request.max_budget_usd,
         };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let _cancel_when_dropped = agent::CancelOnDrop(Arc::clone(&cancelled));
         let (choice, settings, resume, answering) = if let Some(session) = &request.session {
             if !request.variables.is_empty() {
                 return Err(ActError::usage(
@@ -904,11 +909,43 @@ impl Actions {
                 ));
             }
             // Claimed before the conversation is read, so it is read whole.
-            let answering = Answering::claim(&self.chatting, session)?;
-            let (choice, settings, resume) = self
+            let answering = Answering::claim(&self.chatting, session, &cancelled).await?;
+            match self
                 .chat_to_continue(session, request.model.as_deref())
-                .await?;
-            (choice, settings, Some(resume), Some(answering))
+                .await?
+            {
+                Continued::Keyed(choice, settings, resume) => {
+                    (choice, settings, Some(resume), Some(answering))
+                }
+                Continued::ClaudeCode(continued) => {
+                    let start = ClaudeStart::Continue {
+                        continued,
+                        answering,
+                    };
+                    return self
+                        .claude_chat(
+                            label,
+                            request,
+                            selected_name,
+                            max_calls_per_answer,
+                            start,
+                            cancelled,
+                        )
+                        .await;
+                }
+            }
+        } else if let Some(model) = claude_code_model(request.model.as_deref())? {
+            let start = ClaudeStart::New { model, asked };
+            return self
+                .claude_chat(
+                    label,
+                    request,
+                    selected_name,
+                    max_calls_per_answer,
+                    start,
+                    cancelled,
+                )
+                .await;
         } else {
             let choice = match &request.model {
                 Some(named) => agent::configured_named(named, "--model")
@@ -937,8 +974,6 @@ impl Actions {
             .token(label)
             .map_err(|error| ActError::failure(format!("{error:#}")))?;
         let actions = Arc::clone(self);
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let _cancel_when_dropped = agent::CancelOnDrop(Arc::clone(&cancelled));
         let handle = tokio::runtime::Handle::current();
         let ran = tokio::task::spawn_blocking(move || {
             // Held until the chat itself stops, which can be after whoever asked is gone.
@@ -1006,40 +1041,218 @@ impl Actions {
         Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
     }
 
+    /// A chat message answered by the developer's own Claude Code.
+    async fn claude_chat(
+        self: &Arc<Self>,
+        label: &'static str,
+        request: ChatRequest,
+        blueprint_name: String,
+        max_calls: usize,
+        start: ClaudeStart,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Answer, ActError> {
+        let (model, settings, continued, answering) = match start {
+            ClaudeStart::New { model, asked } => {
+                let settings = claude_code_settings(asked)?;
+                (model, settings, None, None)
+            }
+            ClaudeStart::Continue {
+                continued,
+                answering,
+            } => (
+                continued.model.clone(),
+                continued.settings.clone(),
+                Some(continued),
+                Some(answering),
+            ),
+        };
+        let state = StateDir::for_project(&self.project_root);
+        let checked = {
+            let state = StateDir::for_project(&self.project_root);
+            tokio::task::spawn_blocking(move || claude_runner::availability(&state))
+                .await
+                .map_err(|error| {
+                    ActError::failure(format!("checking Claude Code failed: {error}"))
+                })?
+        };
+        let billing = match checked {
+            claude_runner::Availability::Available { billing, .. } => billing,
+            unavailable => return Err(claude_code_unavailable(&unavailable)),
+        };
+        let token = state
+            .token(label)
+            .map_err(|error| ActError::failure(format!("{error:#}")))?;
+        let (blueprint, variables, secrets) = if let Some(continued) = &continued {
+            (None, continued.variables.clone(), BTreeMap::new())
+        } else {
+            let blueprint = self.blueprint(&blueprint_name).await?;
+            let (variables, secrets) = self.for_new_run(&blueprint, &request.variables)?;
+            (Some(blueprint), variables, secrets)
+        };
+        let named = format!("{}:{model}", claude_runner::PROVIDER);
+        let settings_shown =
+            (!settings.is_default()).then(|| serde_json::to_value(&settings).unwrap_or_default());
+        let actions = Arc::clone(self);
+        let handle = tokio::runtime::Handle::current();
+        let ran = tokio::task::spawn_blocking(move || {
+            let mut answering = answering;
+            let session = if let Some(continued) = &continued {
+                continued.session.clone()
+            } else {
+                let session = agent::open_session(
+                    actions.server_port,
+                    &blueprint_name,
+                    &token,
+                    &secrets,
+                    &variables,
+                )
+                .map_err(claude_runner::Failure::Failed)?;
+                if let Some(blueprint) = &blueprint {
+                    handle.block_on(actions.log_chat_session(
+                        &session,
+                        label,
+                        blueprint,
+                        variables.clone(),
+                        &named,
+                        &settings,
+                    ));
+                }
+                // Nothing else knows the session yet, so the claim is free.
+                answering = Answering::try_claim(&actions.chatting, &session, &cancelled).ok();
+                session
+            };
+            // Held until Claude Code has exited, so the next message never resumes the
+            // conversation while it is still being written.
+            let _answering = answering;
+            let log = agent::Log {
+                recorder: &actions.recorder,
+                session: Some(&session),
+                agent: label,
+                model: &model,
+                earlier: continued.as_ref().map_or(0, |continued| continued.said),
+            };
+            let noted = || {
+                let entry = SessionEntry::ClaudeConversation {
+                    session_id: session.clone(),
+                };
+                if let Err(error) = actions.store.append_session(entry) {
+                    super::super::log::note(&format!(
+                        "Claude Code's conversation in session {} was not noted, so the next \
+                         message starts it again: {error}",
+                        clean(&session)
+                    ));
+                }
+            };
+            let system_prompt = agent::system_prompt(&variables);
+            let budget = settings
+                .max_budget_usd
+                .unwrap_or(claude_runner::DEFAULT_MAX_BUDGET_USD);
+            let setup = claude_runner::Setup {
+                model: &model,
+                effort: settings.effort.as_deref(),
+                max_budget_usd: budget,
+                max_calls,
+                state: &state,
+                project_root: &actions.project_root,
+                blueprint: &blueprint_name,
+                label,
+                token: &token,
+                session: &session,
+                continued: continued
+                    .as_ref()
+                    .is_some_and(|continued| continued.conversation),
+                system_prompt: &system_prompt,
+                billing: &billing,
+                log: &log,
+                cancelled: &cancelled,
+                conversation_started: &noted,
+            };
+            let ran = claude_runner::run(&setup, &request.task);
+            if cancelled.load(Ordering::Relaxed) {
+                // As the page's Stop does: the session's runs are cancelled with it.
+                for execution_id in actions.recorder.in_flight_in(&session) {
+                    actions.app.cancel_run(&execution_id);
+                }
+                super::super::log::note(&format!(
+                    "a {label} chat on Claude Code was cancelled: whoever started it is gone"
+                ));
+            }
+            ran
+        })
+        .await
+        .map_err(|error| ActError::failure(format!("the chat failed: {error}")))?;
+        let outcome = ran.map_err(|failure| match failure {
+            claude_runner::Failure::ConversationMissing => ActError::new(
+                EXIT_FAILURE,
+                "conversation-missing",
+                "Claude Code no longer has this session's conversation, so it cannot be \
+                 carried on; start a new chat",
+            ),
+            claude_runner::Failure::BillingChanged(why) => {
+                ActError::new(EXIT_FAILURE, "billing-changed", clean(&why))
+            }
+            claude_runner::Failure::Failed(message) => ActError::failure(clean(&message)),
+        })?;
+        let follow = outcome.session.iter().flat_map(|session| {
+            [
+                Next::RunsInSession(session.clone()),
+                Next::Watch(session.clone()),
+            ]
+        });
+        let result = render::ChatResult {
+            session: outcome.session.clone(),
+            continued: request.session.is_some(),
+            settings: settings_shown,
+            provider: outcome.provider,
+            model: outcome.model,
+            tool_calls: outcome.tool_calls,
+            stopped: outcome.stopped,
+            stop_reason: outcome.stop_reason,
+            next: next(follow),
+            untrusted: render::ChatUntrusted {
+                reply: outcome.reply,
+            },
+        };
+        Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
+    }
+
     /// The model and conversation of chat session `session`, to carry it on. `model`,
     /// when given, must be the session's own.
     async fn chat_to_continue(
         &self,
         session: &str,
         model: Option<&str>,
-    ) -> Result<(agent::Choice, agent::Settings, agent::Resume), ActError> {
+    ) -> Result<Continued, ActError> {
         let store = Arc::clone(&self.store);
         let id = session.to_owned();
-        let (fixed_model, fixed_settings, ended, log) = tokio::task::spawn_blocking(move || {
-            let mut fixed_model = None;
-            let mut fixed_settings = None;
-            let mut ended = false;
-            for line in store.session_log()? {
-                if line.entry.session_id() != id {
-                    continue;
-                }
-                match line.entry {
-                    SessionEntry::Started {
-                        model, settings, ..
-                    } => {
-                        fixed_model = model;
-                        fixed_settings = settings;
+        let (fixed_model, fixed_settings, ended, conversation, log) =
+            tokio::task::spawn_blocking(move || {
+                let mut fixed_model = None;
+                let mut fixed_settings = None;
+                let mut ended = false;
+                let mut conversation = false;
+                for line in store.session_log()? {
+                    if line.entry.session_id() != id {
+                        continue;
                     }
-                    SessionEntry::Ended { .. } => ended = true,
-                    SessionEntry::Chatted { .. } => {}
+                    match line.entry {
+                        SessionEntry::Started {
+                            model, settings, ..
+                        } => {
+                            fixed_model = model;
+                            fixed_settings = settings;
+                        }
+                        SessionEntry::Ended { .. } => ended = true,
+                        SessionEntry::ClaudeConversation { .. } => conversation = true,
+                        SessionEntry::Chatted { .. } => {}
+                    }
                 }
-            }
-            let log = store.read_events(Some(&id))?;
-            Ok::<_, StoreError>((fixed_model, fixed_settings, ended, log))
-        })
-        .await
-        .map_err(|error| ActError::failure(format!("reading the session failed: {error}")))?
-        .map_err(|error| ActError::store(&error))?;
+                let log = store.read_events(Some(&id))?;
+                Ok::<_, StoreError>((fixed_model, fixed_settings, ended, conversation, log))
+            })
+            .await
+            .map_err(|error| ActError::failure(format!("reading the session failed: {error}")))?
+            .map_err(|error| ActError::store(&error))?;
         let shown = clean(session);
         let Some(fixed_model) = fixed_model else {
             return Err(ActError::usage(
@@ -1086,14 +1299,25 @@ impl Actions {
                 ),
             ));
         }
-        let choice = agent::configured_named(&fixed_model, &format!("session {shown}'s model"))
-            .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
         let settings: agent::Settings = match fixed_settings {
             Some(value) => serde_json::from_value(value).map_err(|error| {
                 ActError::failure(format!("session {shown}'s settings do not read: {error}"))
             })?,
             None => agent::Settings::default(),
         };
+        // Claude Code keeps the conversation itself: only where the log's numbering goes on.
+        if let Some(model) = claude_code_model(Some(&fixed_model))? {
+            return Ok(Continued::ClaudeCode(ClaudeContinued {
+                session: session.to_owned(),
+                model,
+                settings,
+                conversation,
+                said: numbered_messages(&log),
+                variables: fixed_variables.unwrap_or_default(),
+            }));
+        }
+        let choice = agent::configured_named(&fixed_model, &format!("session {shown}'s model"))
+            .map_err(|message| ActError::new(EXIT_FAILURE, "no-provider", message))?;
         // Only what the developer and the model said, and the tools the model called: chat
         // from anything else posting to the session is not handed to the model as the
         // developer's words.
@@ -1116,22 +1340,13 @@ impl Actions {
             _ => None,
         }));
         logged.sort_by_key(|(at, _)| *at);
-        // Numbered past every message the log ever held, so none is written over.
-        let numbered: BTreeSet<&str> = log
-            .events
-            .iter()
-            .filter_map(|event| match &event.body {
-                EventBody::Chat(turn) => Some(turn.turn.as_str()),
-                _ => None,
-            })
-            .collect();
         let resume = agent::Resume {
             session: session.to_owned(),
             history: agent::history(logged.into_iter().map(|(_, entry)| entry)),
-            said: numbered.len(),
+            said: numbered_messages(&log),
             variables: fixed_variables.unwrap_or_default(),
         };
-        Ok((choice, settings, resume))
+        Ok(Continued::Keyed(choice, settings, resume))
     }
 
     /// Lists chat session `session` with its model. Only noted when that fails: the chat
@@ -1319,7 +1534,7 @@ impl Actions {
             match line.entry {
                 SessionEntry::Started { session_id, .. } => open.push(session_id),
                 SessionEntry::Ended { session_id } => open.retain(|id| *id != session_id),
-                SessionEntry::Chatted { .. } => {}
+                SessionEntry::Chatted { .. } | SessionEntry::ClaudeConversation { .. } => {}
             }
         }
         Ok(open)
@@ -1791,37 +2006,175 @@ fn missing_secrets(names: &[String], forgotten: &BTreeSet<String>) -> ActError {
 /// The labels own-key chat posts its messages under: from the CLI and from the page.
 const CHAT_LABELS: [&str; 2] = ["chat", "browser-chat"];
 
+/// How a chat session is carried on.
+enum Continued {
+    Keyed(agent::Choice, agent::Settings, agent::Resume),
+    ClaudeCode(ClaudeContinued),
+}
+
+/// A session Claude Code answers in, to carry on.
+struct ClaudeContinued {
+    session: String,
+    model: String,
+    settings: agent::Settings,
+    /// Whether Claude Code saved the conversation, so this message resumes it.
+    conversation: bool,
+    /// How many messages the session's log holds, so new ones are numbered after them.
+    said: usize,
+    variables: BTreeMap<String, String>,
+}
+
+enum ClaudeStart {
+    New {
+        model: String,
+        asked: agent::Settings,
+    },
+    Continue {
+        continued: ClaudeContinued,
+        answering: Answering,
+    },
+}
+
+/// Claude Code's model for `named`, when it names Claude Code: `claude-code:<model>`.
+fn claude_code_model(named: Option<&str>) -> Result<Option<String>, ActError> {
+    let Some(model) = named.and_then(|named| {
+        named
+            .trim()
+            .strip_prefix(claude_runner::PROVIDER)
+            .and_then(|rest| rest.strip_prefix(':'))
+    }) else {
+        return Ok(None);
+    };
+    if !claude_runner::MODELS.contains(&model) {
+        return Err(ActError::usage(
+            "invalid-model",
+            format!(
+                "Claude Code's models here are {}; `{}` is not one",
+                claude_runner::MODELS.join(", "),
+                clean(model)
+            ),
+        ));
+    }
+    Ok(Some(model.to_owned()))
+}
+
+/// `asked`, checked for Claude Code, with the spending limit a session starts with.
+fn claude_code_settings(mut asked: agent::Settings) -> Result<agent::Settings, ActError> {
+    let refused = |message: String| ActError::usage("invalid-settings", message);
+    if asked.max_output.is_some() || !asked.provider.is_empty() {
+        return Err(refused(
+            "Claude Code takes no output limit or provider settings; set a spending limit \
+             instead"
+                .to_owned(),
+        ));
+    }
+    if let Some(effort) = &asked.effort
+        && !claude_runner::EFFORTS.contains(&effort.as_str())
+    {
+        return Err(refused(format!(
+            "effort is `{}`; Claude Code takes {}",
+            clean(effort),
+            claude_runner::EFFORTS.join(", ")
+        )));
+    }
+    let budget = asked
+        .max_budget_usd
+        .unwrap_or(claude_runner::DEFAULT_MAX_BUDGET_USD);
+    if !(budget > 0.0 && budget <= claude_runner::MAX_BUDGET_USD) {
+        return Err(refused(format!(
+            "the spending limit is ${budget}; it must be more than $0 and at most ${}",
+            claude_runner::MAX_BUDGET_USD
+        )));
+    }
+    asked.max_budget_usd = Some(budget);
+    Ok(asked)
+}
+
+/// The refusal when Claude Code cannot answer, saying what to do.
+fn claude_code_unavailable(why: &claude_runner::Availability) -> ActError {
+    ActError::new(
+        EXIT_FAILURE,
+        "claude-code-unavailable",
+        claude_runner::unavailable_reason(why),
+    )
+}
+
+/// How many messages `log` ever held, so the next is numbered past them and none is
+/// written over.
+fn numbered_messages(log: &super::super::store::events::EventLog) -> usize {
+    log.events
+        .iter()
+        .filter_map(|event| match &event.body {
+            EventBody::Chat(turn) => Some(turn.turn.as_str()),
+            _ => None,
+        })
+        .collect::<BTreeSet<&str>>()
+        .len()
+}
+
+/// The sessions chats are answering in, each with the answering chat's cancel flag.
+pub(crate) type Chatting = Arc<Mutex<BTreeMap<String, Arc<AtomicBool>>>>;
+
+/// How long a message waits for a cancelled one in its session to stop: Claude Code has
+/// a few seconds to end its turn before it is killed.
+const STOPPING_WAIT: std::time::Duration = std::time::Duration::from_secs(7);
+
 /// Holds session `session` for one chat message, so a second waits its turn.
 pub(super) struct Answering {
-    chatting: Arc<Mutex<BTreeSet<String>>>,
+    chatting: Chatting,
     session: String,
 }
 
 impl Answering {
-    pub(super) fn claim(
-        chatting: &Arc<Mutex<BTreeSet<String>>>,
+    /// Claims `session` for a chat cancelled by `cancelled`. A message that was cancelled
+    /// and is still stopping is waited for; one still answering refuses the claim.
+    pub(super) async fn claim(
+        chatting: &Chatting,
         session: &str,
+        cancelled: &Arc<AtomicBool>,
     ) -> Result<Self, ActError> {
-        let fresh = chatting
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(session.to_owned());
-        if !fresh {
-            return Err(ActError::new(
-                EXIT_FAILURE,
-                "session-busy",
-                format!(
-                    "the agent is still answering in session {}; send the next message when \
-                     it is done",
-                    clean(session)
-                ),
-            ));
+        let deadline = tokio::time::Instant::now() + STOPPING_WAIT;
+        loop {
+            match Self::try_claim(chatting, session, cancelled) {
+                Ok(answering) => return Ok(answering),
+                Err(Some(error)) => return Err(error),
+                Err(None) if tokio::time::Instant::now() < deadline => {}
+                Err(None) => return Err(busy(session)),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+
+    /// [`Self::claim`] without waiting: `Err(None)` while the holder is stopping.
+    pub(super) fn try_claim(
+        chatting: &Chatting,
+        session: &str,
+        cancelled: &Arc<AtomicBool>,
+    ) -> Result<Self, Option<ActError>> {
+        let mut held = chatting.lock().unwrap_or_else(PoisonError::into_inner);
+        match held.get(session) {
+            Some(holder) if holder.load(Ordering::Relaxed) => return Err(None),
+            Some(_) => return Err(Some(busy(session))),
+            None => {}
+        }
+        held.insert(session.to_owned(), Arc::clone(cancelled));
         Ok(Self {
             chatting: Arc::clone(chatting),
             session: session.to_owned(),
         })
     }
+}
+
+fn busy(session: &str) -> ActError {
+    ActError::new(
+        EXIT_FAILURE,
+        "session-busy",
+        format!(
+            "the agent is still answering in session {}; send the next message when it is \
+             done",
+            clean(session)
+        ),
+    )
 }
 
 impl Drop for Answering {
@@ -2467,9 +2820,14 @@ pub(crate) struct ChatRequest {
     /// Fields a new session adds to every request to its provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) provider_settings: Option<serde_json::Map<String, Value>>,
-    /// The most tool calls run for one answer; the default when absent.
+    /// The most tool calls run for one answer; the default when absent. Claude Code
+    /// counts them across the whole message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_calls_per_answer: Option<u16>,
+    /// The most a new Claude Code session may spend on one message, in US dollars:
+    /// $1.00 when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_budget_usd: Option<f64>,
     /// Variable values a new session starts with, over the binding's. A session carried
     /// on keeps its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

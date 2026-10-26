@@ -6,7 +6,8 @@
 //! has runs, and says whether it is still open; and the sessions a stand-in chatted in,
 //! so one that ran no program is listed too. An older playground skips a kind of line it
 //! doesn't know. A session own-key chat started names its model, which every later
-//! message in it uses.
+//! message in it uses; one Claude Code answers in notes when Claude Code saved its
+//! conversation.
 
 use std::collections::BTreeMap;
 
@@ -59,6 +60,9 @@ pub(crate) enum SessionEntry {
         variables: BTreeMap<String, String>,
         label: String,
     },
+    /// Claude Code saved the session's conversation, under the session's id, so the next
+    /// message resumes it.
+    ClaudeConversation { session_id: String },
 }
 
 impl SessionEntry {
@@ -66,7 +70,8 @@ impl SessionEntry {
         match self {
             Self::Started { session_id, .. }
             | Self::Ended { session_id }
-            | Self::Chatted { session_id, .. } => session_id,
+            | Self::Chatted { session_id, .. }
+            | Self::ClaudeConversation { session_id } => session_id,
         }
     }
 }
