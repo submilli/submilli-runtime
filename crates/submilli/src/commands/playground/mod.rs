@@ -206,14 +206,18 @@ pub enum PlaygroundCmd {
     /// runs are labeled `stand-in`.
     #[command(about = "Serve playground tools to a coding assistant", long_about)]
     Mcp(McpArgs),
-    /// Chat with an agent using your own model key, the way a production agent runs: it uses
-    /// the playground's tools and prints its answer. Each chat starts a session; send the
-    /// next message in it with `--session`. The session stays open until it sits idle past
-    /// the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY,
-    /// OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the
-    /// project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or
-    /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
-    #[command(about = "Give an agent a task using your model key", long_about)]
+    /// Chat with an agent using your own model key or your own Claude Code, the way a
+    /// production agent runs: it uses the playground's tools and prints its answer. Each chat
+    /// starts a session; send the next message in it with `--session`. The session stays
+    /// open until it sits idle past the blueprint's idle timeout or `session end` ends it.
+    /// The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the
+    /// playground's environment, else the project's `.env`, else `submilli secret put
+    /// <NAME>`; Claude Code (`--model claude-code:<model>`) needs none. The model comes from
+    /// `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+    #[command(
+        about = "Give an agent a task using your model key or Claude Code",
+        long_about
+    )]
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
     /// Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks
@@ -1298,7 +1302,7 @@ fn print_description(description: &host::Description, packages_error: Option<&st
             }
             if !description.chat_models.is_empty() {
                 println!(
-                    "  chat:       {} (another: chat --model <provider>:<model>)",
+                    "  chat:       {} (another: chat --model <provider>:<model>, or claude-code:sonnet)",
                     description.chat_models.join(", ")
                 );
             }

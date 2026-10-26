@@ -40,6 +40,7 @@ that general knowledge gets wrong; what goes wrong without it is named.
   [blueprints](references/blueprints.md); without it the blueprint lints but
   the server rejects it, or an MCP server is allowed whole.
 - Ideas or suitability: [use cases](references/use-cases.md).
+- Playground: [playground](references/playground.md).
 - Agent implementation: [harness integration](references/harnesses.md), then
   the user's harness reference; without it the adapter or identity binding is
   wrong and denials are misread.

@@ -2262,7 +2262,8 @@ Commands:
     stop                     Stop the playground and finish active runs
 
   Run from the terminal:
-    chat <MESSAGE>           Give an agent a task using your model key
+    chat <MESSAGE>           Give an agent a task using your model key or
+                             Claude Code
     exec <FILE|--example>    Run a program or the demo example
     bind                     Set variables and development secrets for new
                              runs
@@ -2460,12 +2461,13 @@ Options:
 ### `submilli playground chat`
 
 ```text
-Chat with an agent using your own model key, the way a production agent runs: it uses the
-playground's tools and prints its answer. Each chat starts a session; send the next message in it
-with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or
-`session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the
-playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model
-from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+Chat with an agent using your own model key or your own Claude Code, the way a production agent
+runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the
+next message in it with `--session`. The session stays open until it sits idle past the blueprint's
+idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or
+GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli
+secret put <NAME>`; Claude Code (`--model claude-code:<model>`) needs none. The model comes from
+`--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
 
 Usage: submilli playground chat [OPTIONS] <MESSAGE>
 
