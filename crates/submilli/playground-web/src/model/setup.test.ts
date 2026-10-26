@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { billingLine, checkSetup, declaredVariables, effortHint, effortOptions, initialSetup, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
+import { agentSummary, billingLine, checkSetup, declaredVariables, effortHint, effortOptions, initialSetup, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
 import type { ClaudeCodeStatus, SessionSummary } from "../api/types";
 import { chatSession } from "./testdata";
 import type { Status } from "../api/types";
@@ -189,6 +189,12 @@ describe("Claude Code as the agent", () => {
     expect(check.model).toBe("claude-code:sonnet");
     // The limit is always set, so the session shows what it runs under.
     expect(check.settings).toEqual({ max_budget_usd: 1 });
+  });
+
+  it("names the spending limit once the agent step is done", () => {
+    expect(agentSummary("Claude Code", cc({ model: "haiku" }), checkSetup(withCc(ready), cc({ model: "haiku" })).settings)).toBe("Claude Code · haiku · spending limit $1.00");
+    expect(agentSummary("Claude Code", cc({ budget: "0.05" }), checkSetup(withCc(ready), cc({ budget: "0.05" })).settings)).toBe("Claude Code · sonnet · spending limit $0.05");
+    expect(agentSummary("OpenAI", form({ provider: "openai", model: "gpt-6-luna" }), { max_output: 100 })).toBe("OpenAI · gpt-6-luna");
   });
 
   it("says it's still being checked before the first status names it", () => {

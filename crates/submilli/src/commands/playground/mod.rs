@@ -322,6 +322,7 @@ pub struct ChatArgs {
     effort: Option<String>,
     /// The most a new Claude Code session may spend on one message, in US dollars, above 0
     /// and at most 100. Default: 1.00. On a subscription it measures usage, not billing.
+    /// Claude Code checks it between steps, so a message's last step can go a little over.
     #[arg(long, value_name = "USD", conflicts_with = "session")]
     max_budget_usd: Option<f64>,
     /// Let Claude Code bill what isn't your Claude subscription, such as an API key or an

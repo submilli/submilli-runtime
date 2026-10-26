@@ -3084,7 +3084,9 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
             assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
             let said = refused["error"]["message"].as_str().unwrap();
             assert!(
-                said.contains("api_key") && said.contains("restart the playground"),
+                said.contains("would bill an Anthropic API key,")
+                    && said.contains("--confirm-billing \"api_key\"")
+                    && said.contains("restart the playground"),
                 "{said}"
             );
             assert_eq!(claude.messages(), 0);

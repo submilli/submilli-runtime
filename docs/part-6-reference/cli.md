@@ -2494,7 +2494,8 @@ Options:
 
       --max-budget-usd <USD>
           The most a new Claude Code session may spend on one message, in US dollars, above 0 and at
-          most 100. Default: 1.00. On a subscription it measures usage, not billing
+          most 100. Default: 1.00. On a subscription it measures usage, not billing. Claude Code
+          checks it between steps, so a message's last step can go a little over
 
       --confirm-billing <BILLING>
           Let Claude Code bill what isn't your Claude subscription, such as an API key or an

@@ -340,6 +340,12 @@ function claudeCodeUnavailable(cc: ClaudeCodeStatus | undefined): { suffix: stri
   return { suffix, reason: (cc.reason || "Claude Code can’t answer").replace(/\.$/, "") + "." };
 }
 
+/** The agent step's line once it's done: the agent, its model, and Claude Code's spending limit. */
+export function agentSummary(label: string | undefined, form: SetupForm, settings: ChatSettings | null): string {
+  const limit = form.provider === CLAUDE_CODE && settings?.max_budget_usd ? "spending limit " + dollars(settings.max_budget_usd) : "";
+  return [label, form.model.trim(), limit].filter(Boolean).join(" · ") || "Choose an agent";
+}
+
 /** Whom Claude Code bills, as the line under the agent choice says it; "" until it can answer. */
 export function billingLine(status: Status): string {
   const cc = status.claude_code;

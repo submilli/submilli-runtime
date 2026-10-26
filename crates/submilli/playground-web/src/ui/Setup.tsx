@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ActionOutcome } from "../api/client";
 import type { SavedKey, Status } from "../api/types";
 import {
+  agentSummary,
   billingLine,
   checkSetup,
   CLAUDE_CODE,
@@ -149,7 +150,7 @@ export function Setup(props: {
     setTimeout(() => formRef.current?.querySelector<HTMLButtonElement>('[type="submit"]')?.focus(), 0);
   };
   const variableSummary = Object.entries(check.variables).map(([name, value]) => `${name}: ${value}`).join(" · ") || "No application variables";
-  const settingsLabel = [picked?.label, form.model.trim()].filter(Boolean).join(" · ") || "Choose an agent";
+  const settingsLabel = agentSummary(picked?.label, form, check.settings);
   return (
     <>
       <form ref={formRef} className="pg-setup" onSubmit={submit}>
@@ -254,7 +255,7 @@ export function Setup(props: {
                       <span className="pg-vname">Spending limit <em className="opt">optional</em></span>
                       <input value={form.budget} onChange={(ev) => set({ budget: ev.target.value }, "budget")} inputMode="decimal" placeholder={DEFAULT_BUDGET.toFixed(2)} {...bad("budget")} />
                       {why("budget")}
-                      <small>The most one message may spend, in dollars. Claude Code stops when it’s reached.</small>
+                      <small>The most one message may spend, in dollars. Claude Code checks it between steps, so the last step can go a little over.</small>
                     </label>
                   ) : (
                   <label className="pg-vfield">

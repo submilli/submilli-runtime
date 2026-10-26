@@ -2154,15 +2154,16 @@ fn billing_to_confirm(
         return Ok(Some(billed));
     }
     let shown = clean(&billed);
+    let named = clean(&billing.described());
     let (kind, said) = if session.is_some() {
         (
             "billing-changed",
-            format!("Claude Code now bills {shown}, not what this session confirmed"),
+            format!("Claude Code now bills {named}, not what this session confirmed"),
         )
     } else {
         (
             "billing-unconfirmed",
-            format!("Claude Code would bill {shown}, not your Claude subscription"),
+            format!("Claude Code would bill {named}, not your Claude subscription"),
         )
     };
     Err(ActError::new(

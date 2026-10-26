@@ -72,6 +72,8 @@ don't apply. Each follow-up resumes the conversation.
 
 - `--max-budget-usd` sets the most one message may spend: more than 0, at most
   100, default 1.00. On a subscription it measures usage rather than billing.
+  Claude Code checks it between steps, so a message's last step can go a
+  little over it.
   `--effort` takes `low`, `medium`, `high`, `xhigh`, or `max`. The call cap
   counts across the whole message, and Claude Code stops when it is reached.
 - **Billing.** A claude.ai login sending to Anthropic bills the developer's

@@ -65,6 +65,23 @@ impl Billing {
         }
     }
 
+    /// Who is billed, in plain words, with the address when one is set. The page names
+    /// sources the same way.
+    pub(crate) fn described(&self) -> String {
+        let name = match self.source.as_str() {
+            "claude.ai" => "your Claude login",
+            "api_key" => "an Anthropic API key",
+            "api_key_helper" => "the key your apiKeyHelper gives",
+            "oauth_token" => "a Claude login token (CLAUDE_CODE_OAUTH_TOKEN)",
+            "third_party" => "a cloud provider account",
+            other => other,
+        };
+        match &self.base_url {
+            Some(address) => format!("{name}, sending to {address}"),
+            None => name.to_string(),
+        }
+    }
+
     /// Only a claude.ai login, sending to Anthropic, is the subscription.
     pub(crate) fn is_subscription(&self) -> bool {
         self.source == "claude.ai" && self.base_url.is_none()
