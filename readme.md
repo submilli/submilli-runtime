@@ -24,7 +24,7 @@ The developer could try to add that rule as a safeguard to the prompt, but due t
 
 ## Demo
 
-https://github.com/user-attachments/assets/e601c541-400b-4ac1-ad96-23dc0b0e6f90
+https://github.com/user-attachments/assets/8dff6714-b8af-41bd-9d18-b57e7796ae02
 
 A support agent creates a replacement with $18 shipping. A $42 replacement is blocked until the developer raises the Blueprint limit from $25 to $50.
 
