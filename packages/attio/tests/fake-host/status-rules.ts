@@ -57,11 +57,17 @@ function main(): string {
             status: { attribute: "stage", title: "Lead" },
         });
     });
-    // A company created with a status is refused by the create-only rule, once the
-    // statuses are read and records.create sees the status it would set.
+    // A company or person created with a status is refused by the create-only rules, once
+    // the statuses are read and records.create sees the status it would set.
     deniedAt("attio.com/records.create", "main", () => {
         createRecord("companies", {
             values: [{ attribute: "domains", type: "domain", domain: "acme.com" }],
+            status: { attribute: "stage", title: "Lead" },
+        });
+    });
+    deniedAt("attio.com/records.create", "main", () => {
+        createRecord("people", {
+            values: [{ attribute: "email_addresses", type: "email", email: "dana@acme.com" }],
             status: { attribute: "stage", title: "Lead" },
         });
     });

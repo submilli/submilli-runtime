@@ -101,8 +101,43 @@ function main(): string {
             { attribute: "associated_users", type: "record", targetObject: "users", targetRecordId: PERSON },
         ] });
     });
+    // The length bound: slugs sort, so an attribute sorting after the allowed ones lands
+    // past them and is caught only by the position clauses. `twitter` is a text attribute
+    // of people; the rule decides before any request, so Attio's schema does not matter.
+    deniedAt("attio.com/records.create", "main", () => {
+        createRecord("companies", { values: [
+            { attribute: "domains", type: "domain", domain: "acme.com" },
+            { attribute: "name", type: "text", text: "Acme" },
+            { attribute: "team", type: "record", targetObject: "people", targetRecordId: PERSON },
+        ] });
+    });
+    deniedAt("attio.com/records.create", "main", () => {
+        createRecord("people", { values: [
+            { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+            { attribute: "name", type: "personal-name", firstName: "Dana" },
+            { attribute: "twitter", type: "text", text: "@dana" },
+        ] });
+    });
+    deniedAt("attio.com/records.create", "main", () => {
+        createRecord("people", { values: [
+            { attribute: "company", type: "record", targetObject: "companies", targetRecordId: COMPANY },
+            { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+            { attribute: "job_title", type: "text", text: "CTO" },
+            { attribute: "name", type: "personal-name", firstName: "Dana" },
+            { attribute: "twitter", type: "text", text: "@dana" },
+        ] });
+    });
+    reachesCredentialBoundary(() => {
+        createRecord("people", { values: [
+            { attribute: "company", type: "record", targetObject: "companies", targetRecordId: COMPANY },
+            { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+            { attribute: "job_title", type: "text", text: "CTO" },
+            { attribute: "name", type: "personal-name", firstName: "Dana" },
+        ] });
+    });
     // A create with a status is checked at statuses.list first, which this blueprint grants
-    // on deals only; the fake-host test shows records.create itself refusing it.
+    // on deals only. Allowing it would only move the stop to the key, before records.create,
+    // so the fake-host test shows records.create itself refusing a company or person with one.
     deniedAt("attio.com/statuses.list", "main", () => {
         createRecord("people", { values: [{ attribute: "email_addresses", type: "email", email: "dana@acme.com" }], status: { attribute: "stage", title: "Lead" } });
     });
