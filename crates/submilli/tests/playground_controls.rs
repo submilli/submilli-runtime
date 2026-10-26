@@ -2771,7 +2771,25 @@ printf '%s\n' '{initialize}' '{{"jsonrpc":"2.0","method":"notifications/initiali
                 "{missing}"
             );
             assert_eq!(claude.messages(), 3);
+            let token = playground.token("chat");
             playground.stop();
+            // The chat's token stays in its own file: never in what Claude Code was given,
+            // nor anywhere else the playground keeps.
+            let mut files = 0;
+            for dir in [playground.state(), claude.dir.clone()] {
+                walk(&dir, &mut |path| {
+                    if path
+                        .parent()
+                        .is_some_and(|parent| parent.ends_with("tokens"))
+                    {
+                        return;
+                    }
+                    let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
+                    assert!(!text.contains(&token), "{} holds the token", path.display());
+                    files += 1;
+                });
+            }
+            assert!(files > 5);
         }
 
         #[test]
