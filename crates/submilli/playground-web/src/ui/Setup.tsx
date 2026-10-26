@@ -50,6 +50,8 @@ export function Setup(props: {
   const [modelDone, setModelDone] = useState(false);
   const [variablesDone, setVariablesDone] = useState(false);
   const providers = providerOptions(status, form.provider);
+  // An effort carries over to another agent only when that agent takes it too.
+  const keptEffort = (provider: string) => (effortOptions(provider, form.effort).some((o) => o.pressed && !o.disabled) ? form.effort : "");
   // With no provider picked yet, one with a key is picked, else the first.
   useEffect(() => {
     if (form.provider || !providers.length) return;
@@ -58,8 +60,6 @@ export function Setup(props: {
   }, [providers, form, onForm]);
   const picked = providers.find((o) => o.pressed);
   const claudeCode = form.provider === CLAUDE_CODE;
-  // An effort carries over to another agent only when that agent takes it too.
-  const keptEffort = (provider: string) => (effortOptions(provider, form.effort).some((o) => o.pressed && !o.disabled) ? form.effort : "");
   // Set when a provider is picked by saving its key; its model follows once status names it.
   const fillModel = useRef(false);
   useEffect(() => {

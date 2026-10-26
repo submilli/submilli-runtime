@@ -248,9 +248,6 @@ impl Recorder {
         );
     }
 
-    /// The host's execution id of run `id` while it is in flight: started, and not yet
-    /// finished. A run's id is handed out when it starts, so this is how a playground run
-    /// id reaches the host's cancellation.
     /// The host execution ids of session `session`'s runs in flight.
     pub(crate) fn in_flight_in(&self, session: &str) -> Vec<String> {
         self.shared
@@ -263,6 +260,9 @@ impl Recorder {
             .collect()
     }
 
+    /// The host's execution id of run `id` while it is in flight: started, and not yet
+    /// finished. A run's id is handed out when it starts, so this is how a playground run
+    /// id reaches the host's cancellation.
     pub(crate) fn in_flight(&self, id: u64) -> Option<String> {
         self.shared
             .tracks()

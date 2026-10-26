@@ -1020,27 +1020,7 @@ impl Actions {
         .await
         .map_err(|error| ActError::failure(format!("the chat failed: {error}")))?;
         let outcome = ran.map_err(|message| ActError::failure(clean(&message)))?;
-        let follow = outcome.session.iter().flat_map(|session| {
-            [
-                Next::RunsInSession(session.clone()),
-                Next::Watch(session.clone()),
-            ]
-        });
-        let result = render::ChatResult {
-            session: outcome.session.clone(),
-            continued,
-            settings: settings_shown,
-            provider: outcome.provider,
-            model: outcome.model,
-            tool_calls: outcome.tool_calls,
-            stopped: outcome.stopped,
-            stop_reason: outcome.stop_reason,
-            next: next(follow),
-            untrusted: render::ChatUntrusted {
-                reply: outcome.reply,
-            },
-        };
-        Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
+        Ok(chat_answer(outcome, continued, settings_shown))
     }
 
     /// A chat message answered by the developer's own Claude Code.
@@ -1069,14 +1049,12 @@ impl Actions {
             ),
         };
         let state = StateDir::for_project(&self.project_root);
-        let checked = {
-            let state = StateDir::for_project(&self.project_root);
-            tokio::task::spawn_blocking(move || claude_runner::availability(&state))
-                .await
-                .map_err(|error| {
-                    ActError::failure(format!("checking Claude Code failed: {error}"))
-                })?
-        };
+        let (state, checked) = tokio::task::spawn_blocking(move || {
+            let checked = claude_runner::availability(&state);
+            (state, checked)
+        })
+        .await
+        .map_err(|error| ActError::failure(format!("checking Claude Code failed: {error}")))?;
         let billing = match checked {
             claude_runner::Availability::Available { billing, .. } => billing,
             unavailable => return Err(claude_code_unavailable(&unavailable)),
@@ -1126,14 +1104,11 @@ impl Actions {
                         &settings,
                     ));
                 }
-                actions.confirm_billing(&session, confirm.as_deref());
                 // Nothing else knows the session yet, so the claim is free.
                 answering = Answering::try_claim(&actions.chatting, &session, &cancelled).ok();
                 session
             };
-            if continued.is_some() {
-                actions.confirm_billing(&session, confirm.as_deref());
-            }
+            actions.confirm_billing(&session, confirm.as_deref());
             // Held until Claude Code has exited, so the next message never resumes the
             // conversation while it is still being written.
             let _answering = answering;
@@ -1206,27 +1181,11 @@ impl Actions {
             }
             claude_runner::Failure::Failed(message) => ActError::failure(clean(&message)),
         })?;
-        let follow = outcome.session.iter().flat_map(|session| {
-            [
-                Next::RunsInSession(session.clone()),
-                Next::Watch(session.clone()),
-            ]
-        });
-        let result = render::ChatResult {
-            session: outcome.session.clone(),
-            continued: request.session.is_some(),
-            settings: settings_shown,
-            provider: outcome.provider,
-            model: outcome.model,
-            tool_calls: outcome.tool_calls,
-            stopped: outcome.stopped,
-            stop_reason: outcome.stop_reason,
-            next: next(follow),
-            untrusted: render::ChatUntrusted {
-                reply: outcome.reply,
-            },
-        };
-        Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
+        Ok(chat_answer(
+            outcome,
+            request.session.is_some(),
+            settings_shown,
+        ))
     }
 
     /// Notes that the developer confirmed `confirmed` billing in `session`. Only noted
@@ -2138,6 +2097,31 @@ fn claude_code_settings(mut asked: agent::Settings) -> Result<agent::Settings, A
     }
     asked.max_budget_usd = Some(budget);
     Ok(asked)
+}
+
+/// A chat's answer: what the agent said and how it stopped, and where to look next.
+fn chat_answer(outcome: agent::Outcome, continued: bool, settings: Option<Value>) -> Answer {
+    let follow = outcome.session.iter().flat_map(|session| {
+        [
+            Next::RunsInSession(session.clone()),
+            Next::Watch(session.clone()),
+        ]
+    });
+    let result = render::ChatResult {
+        session: outcome.session.clone(),
+        continued,
+        settings,
+        provider: outcome.provider,
+        model: outcome.model,
+        tool_calls: outcome.tool_calls,
+        stopped: outcome.stopped,
+        stop_reason: outcome.stop_reason,
+        next: next(follow),
+        untrusted: render::ChatUntrusted {
+            reply: outcome.reply,
+        },
+    };
+    Answer::of(EXIT_SUCCESS, &result, render::chat_text)
 }
 
 /// Whether a message may run on `billing`: what to note as newly confirmed, if anything,

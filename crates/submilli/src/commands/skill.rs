@@ -280,9 +280,8 @@ fn sync() -> anyhow::Result<ExitCode> {
     };
     let home = user_home().and_then(|home| home.canonicalize().ok());
     for path in installs {
-        let root = path
-            .ancestors()
-            .nth(3)
+        let root = install_root(&path)
+            .ok()
             .and_then(|root| root.canonicalize().ok());
         let project = root.is_some() && root != home;
         match sync_one(&path, &target, project) {

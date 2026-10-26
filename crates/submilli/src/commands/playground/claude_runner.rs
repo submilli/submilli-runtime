@@ -463,6 +463,7 @@ fn mcp_config(setup: &Setup<'_>) -> Result<Value, Failure> {
 
 /// `claude`'s arguments for one message.
 fn arguments(setup: &Setup<'_>, config: &Path, resume: bool) -> Vec<OsString> {
+    let allowed = format!("{TOOL_PREFIX}*");
     let mut args: Vec<OsString> = [
         "-p",
         "--input-format",
@@ -477,7 +478,7 @@ fn arguments(setup: &Setup<'_>, config: &Path, resume: bool) -> Vec<OsString> {
         "--permission-mode",
         "dontAsk",
         "--allowedTools",
-        "mcp__playground__*",
+        allowed.as_str(),
         "--permission-prompts",
         "none",
         "--setting-sources",
@@ -543,8 +544,14 @@ fn drive(setup: &Setup<'_>, mut child: Child, task: &str) -> Result<Outcome, Att
     let stopper = Stopper::new(child.id());
     let stderr = child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
+            let mut stderr = stderr;
             let mut kept = Vec::new();
-            let _ = stderr.take(MAX_STDERR_BYTES as u64).read_to_end(&mut kept);
+            let _ = stderr
+                .by_ref()
+                .take(MAX_STDERR_BYTES as u64)
+                .read_to_end(&mut kept);
+            // Read to the end, so `claude` never blocks on a full pipe.
+            let _ = std::io::copy(&mut stderr, &mut std::io::sink());
             String::from_utf8_lossy(&kept).into_owned()
         })
     });

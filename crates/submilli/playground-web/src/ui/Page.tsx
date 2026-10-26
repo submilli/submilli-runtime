@@ -594,9 +594,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
         // The failure shows where the message went: in the session the playground made
         // for it, or, when none was made, in the new session still being set up.
         const stopped = outcome.kind === STOPPED;
-        const asked = billingAsked(outcome, status);
-        if (asked) setBilling({ ...asked, session });
-        else setFailure({ session, message: outcome.message, kind: outcome.kind, started: session !== null, stopped });
+        notAnswered(outcome, session, session !== null);
         if (session === null) setUi((u) => (u.mode === "fresh" && u.fresh ? { ...u, fresh: { ...u.fresh, messages: u.fresh.messages.filter((m) => m !== text) } } : u));
         // Kept to send again in the box it was sent from, or in the session it started,
         // unless it was stopped there, which has it already.
@@ -614,13 +612,18 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     if (outcome.ok) stoppedShort(outcome.result);
     else {
       const stopped = outcome.kind === STOPPED;
-      const asked = billingAsked(outcome, status);
-      if (asked) setBilling({ ...asked, session });
-      else setFailure({ session, message: outcome.message, kind: outcome.kind, started: true, stopped });
+      notAnswered(outcome, session, true);
       // Kept for the reader to send again, in the session it was written for; a stopped
       // message is already in the session.
       if (session === askingIn.current && !stopped) keepToSendAgain(text);
     }
+  };
+
+  // A message not answered asks to confirm billing, or says why, where it was sent.
+  const notAnswered = (outcome: { kind: string; message: string }, session: string | null, started: boolean) => {
+    const asked = billingAsked(outcome, status);
+    if (asked) setBilling({ ...asked, session });
+    else setFailure({ session, message: outcome.message, kind: outcome.kind, started, stopped: outcome.kind === STOPPED });
   };
 
   // An answer cut short by a limit says so, in the session it stopped in.
@@ -1008,7 +1011,7 @@ interface BillingAsk {
 /** What a billing refusal asks to confirm, or `null` for any other outcome. */
 function billingAsked(outcome: { kind: string; message: string }, status: Status | null): Omit<BillingAsk, "session"> | null {
   if (outcome.kind !== "billing-unconfirmed" && outcome.kind !== "billing-changed") return null;
-  // The refusal names what to confirm as it is now; the status may be a minute old.
+  // The refusal names what to confirm as it is now; the status may be older.
   const cc = status?.claude_code;
   const confirmation = /--confirm-billing "([^"]*)"/.exec(outcome.message)?.[1] ?? cc?.confirmation ?? "";
   const billed = cc?.state === "available" && cc.confirmation === confirmation ? billedName(cc) : confirmation;

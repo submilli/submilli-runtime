@@ -211,6 +211,19 @@ fn an_answer_is_logged_as_it_streams_and_the_conversation_noted() {
 }
 
 #[test]
+fn a_flood_on_stderr_never_stalls_the_answer() {
+    let world = World::new();
+    // Far more than a pipe holds, before the answer.
+    let (outcome, _, took) = drive_fake(
+        &world,
+        Given::default(),
+        "head -c 1000000 /dev/zero | tr '\\0' x >&2; cat answered.jsonl",
+    );
+    assert!(took < STOP_GRACE, "{took:?}");
+    assert_eq!(ended(outcome).unwrap().stopped, Stopped::Answered);
+}
+
+#[test]
 fn a_resumed_conversation_is_not_noted_again() {
     let world = World::new();
     let given = Given {
