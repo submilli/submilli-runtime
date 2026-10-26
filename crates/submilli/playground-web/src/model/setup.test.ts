@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkSetup, declaredVariables, effortHint, effortOptions, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
+import { billingLine, checkSetup, declaredVariables, effortHint, effortOptions, initialSetup, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
+import type { ClaudeCodeStatus, SessionSummary } from "../api/types";
 import { chatSession } from "./testdata";
 import type { Status } from "../api/types";
 
@@ -128,10 +129,12 @@ describe("the agent and its settings", () => {
 
   it("offer one provider per model the playground started with, and its default model", () => {
     expect(providerOptions(status, "anthropic")).toEqual([
-      { provider: "anthropic", label: "Claude", model: "claude-sonnet-5-5", pressed: true, needs: null },
+      { provider: "anthropic", label: "Claude", model: "claude-sonnet-5-5", pressed: true, needs: null, unavailable: null },
       // Every provider chat works with can be picked; one without a key says so.
-      { provider: "openai", label: "OpenAI", model: "", pressed: false, needs: "No OpenAI key yet (OPENAI_API_KEY)." },
-      { provider: "google", label: "Gemini", model: "", pressed: false, needs: "No Gemini key yet (GEMINI_API_KEY)." },
+      { provider: "openai", label: "OpenAI", model: "", pressed: false, needs: "No OpenAI key yet (OPENAI_API_KEY).", unavailable: null },
+      { provider: "google", label: "Gemini", model: "", pressed: false, needs: "No Gemini key yet (GEMINI_API_KEY).", unavailable: null },
+      // Claude Code needs no key; until the playground has looked for it, it says so.
+      { provider: "claude-code", label: "Claude Code", model: "sonnet", pressed: false, needs: null, unavailable: { suffix: "checking", reason: "Checking for Claude Code on this machine…" } },
     ]);
     expect(modelHint(status, "anthropic")).toBe(
       "Default for Claude: claude-sonnet-5-5. Any model name the provider knows works; an unknown one gets the provider’s own error.",
@@ -171,4 +174,74 @@ it("selects existing blueprint declarations without changing shared status or ac
   expect(ready.variables).toEqual({ region: "eu" });
   expect(reports.blueprint.name).toBe(status.blueprint.name);
   expect(checkSetup(reports, form({ blueprint: "../other.yaml", fields: { customerId: "cus_northwind" } })).cantStart).toBe(true);
+});
+
+describe("Claude Code as the agent", () => {
+  const ready: ClaudeCodeStatus = { state: "available", version: "2.1.310", source: "claude.ai", subscription: true };
+  const withCc = (cc?: ClaudeCodeStatus): Status => ({ ...status, claude_code: cc });
+  const cc = (over: Partial<SetupForm> = {}): SetupForm => form({ provider: "claude-code", model: "sonnet", fields: { customerId: "cus_a" }, ...over });
+  const option = (s: Status) => providerOptions(s, "claude-code").find((o) => o.provider === "claude-code")!;
+
+  it("is offered once Claude Code can answer, with no key needed", () => {
+    expect(option(withCc(ready))).toEqual({ provider: "claude-code", label: "Claude Code", model: "sonnet", pressed: true, needs: null, unavailable: null });
+    const check = checkSetup(withCc(ready), cc());
+    expect(check.cantStart).toBe(false);
+    expect(check.model).toBe("claude-code:sonnet");
+    // The limit is always set, so the session shows what it runs under.
+    expect(check.settings).toEqual({ max_budget_usd: 1 });
+  });
+
+  it("says it's still being checked before the first status names it", () => {
+    expect(option(withCc(undefined)).unavailable?.suffix).toBe("checking");
+    expect(checkSetup(withCc(undefined), cc()).problem).toBe("Still checking for Claude Code. Try again in a moment.");
+  });
+
+  it("is marked unavailable with each reason in view, and no key problem", () => {
+    for (const [state, suffix] of [["missing", "not installed"], ["too-old", "too old"], ["signed-out", "signed out"], ["failed", "not checked"]] as const) {
+      const s = withCc({ state, subscription: false, reason: "Claude Code is signed out; run `claude` once to sign in" });
+      expect(option(s).unavailable).toEqual({ suffix, reason: "Claude Code is signed out; run `claude` once to sign in." });
+      const check = checkSetup(s, cc());
+      expect(check.cantStart).toBe(true);
+      expect(check.problem).toBe("Claude Code can’t answer: Claude Code is signed out; run `claude` once to sign in.");
+      expect(check.problem).not.toMatch(/key/);
+    }
+  });
+
+  it("takes Sonnet, Opus, or Haiku, and every Claude Code effort", () => {
+    expect(checkSetup(withCc(ready), cc({ model: "claude-sonnet-5-5" })).modelInvalid.model).toBe("Choose Sonnet, Opus, or Haiku.");
+    expect(effortOptions("claude-code", "xhigh").filter((o) => !o.disabled).map((o) => o.label)).toEqual(["Default", "Low", "Medium", "High", "Extra high", "Max"]);
+    expect(checkSetup(withCc(ready), cc({ effort: "max" })).settings).toEqual({ effort: "max", max_budget_usd: 1 });
+  });
+
+  it("leaves out max output and provider settings carried in the form", () => {
+    expect(checkSetup(withCc(ready), cc({ max: "abc", providerJson: "{nope" })).settings).toEqual({ max_budget_usd: 1 });
+  });
+
+  it("checks the spending limit: more than 0, at most 100 dollars", () => {
+    const limit = (budget: string) => checkSetup(withCc(ready), cc({ budget }));
+    expect(limit("2.50").settings).toEqual({ max_budget_usd: 2.5 });
+    expect(limit("100").settings).toEqual({ max_budget_usd: 100 });
+    expect(limit("0").modelInvalid.budget).toBe("The spending limit is an amount in dollars, more than 0.");
+    expect(limit("-1").modelInvalid.budget).toBe("The spending limit is an amount in dollars, more than 0.");
+    expect(limit("$5").modelInvalid.budget).toBe("The spending limit is an amount in dollars, more than 0.");
+    expect(limit("100.01").modelInvalid.budget).toBe("The spending limit is at most $100.00.");
+  });
+
+  it("carries the last session's model, effort, and limit into a new one", () => {
+    const last = { session: "s", started_at_micros: 1, model: "claude-code:opus", settings: { effort: "xhigh", max_budget_usd: 3 } } as SessionSummary;
+    expect(initialSetup(withCc(ready), [last])).toMatchObject({ provider: "claude-code", model: "opus", effort: "xhigh", budget: "3.00" });
+  });
+
+  it("says whom it bills", () => {
+    expect(billingLine(withCc(undefined))).toBe("");
+    expect(billingLine(withCc(ready))).toMatch(/^Bills your Claude subscription/);
+    expect(billingLine(withCc({ ...ready, source: "api_key", subscription: false }))).toBe("Bills an Anthropic API key, not your Claude subscription. The first message asks you to confirm.");
+    expect(billingLine(withCc({ ...ready, base_url: "https://proxy.example", subscription: false }))).toBe(
+      "Bills your Claude login, sending to https://proxy.example, not your Claude subscription. The first message asks you to confirm.",
+    );
+  });
+
+  it("has its own effort note", () => {
+    expect(effortHint("claude-code")).toBe("How hard Claude Code thinks before it answers. Default leaves it to Claude Code.");
+  });
 });

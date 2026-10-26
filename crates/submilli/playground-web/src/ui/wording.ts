@@ -42,6 +42,9 @@ export function chatFailed(message: string, started: boolean, kind?: string): { 
   // A provider that refused the request (a 4xx) refuses it again: only other settings help.
   // A rate limit (429) or a timeout (408) passes, so sending again can work.
   const text = "The agent couldn’t answer: " + message.replace(/\.$/, "") + ".";
+  if (kind === "conversation-missing") return { text, note: "Claude Code no longer has this session’s conversation, so it can’t go on. Start a New session; your message is kept." };
+  if (kind === "session-busy") return { text, note: "Another message in this session is still being answered. Wait for it, then Send again. Your message is kept." };
+  if (kind === "claude-code-unavailable") return { text, note: "Do what it says, then Send again. Your message is kept." };
   if (kind === "unreachable") return { text, note: "The response was lost; execution may have started. Reconnect and inspect this session’s recorded runs before sending again. Your draft is kept." };
   if (/HTTP (401|403)/.test(message)) return { text, note: "Check the provider key and its access. Your message is kept. This session keeps its model settings; use New session if those need to change." };
   if (/quota|insufficient.quota|billing|credit balance/i.test(message)) return { text, note: "The provider reports a quota or credit problem. Check the provider account before sending again. Your message is kept." };
@@ -59,8 +62,22 @@ export function chatFailed(message: string, started: boolean, kind?: string): { 
   };
 }
 
-/** A message whose answer the reader stopped, where it was sent. */
-export function chatStopped(started: boolean): { text: string; note: string } {
+/** Why an agent stopped before it finished answering, and what to do next; by `AgentResult.stopped`. */
+const STOPS: Record<string, { text: string; note: string }> = {
+  "turn-limit": { text: "The agent stopped at the most turns one message may take.", note: "Send another message to let it carry on." },
+  "output-limit": { text: "The answer reached its max output.", note: "Start a New session with a higher max output, or ask for a shorter answer." },
+  provider: { text: "The provider stopped the answer, as with a refusal or a safety filter.", note: "Try the message in other words." },
+  "spending-limit": { text: "Claude Code reached this message’s spending limit.", note: "Send another message to carry on with a fresh limit, or start a New session with a higher one." },
+  "call-limit": { text: "The agent made as many tool calls as one message allows.", note: "Send another message to let it carry on." },
+  "usage-limit": { text: "Your Claude subscription has no usage left for now.", note: "Wait until it resets, then Send again." },
+};
+
+/**
+ * A message whose answer stopped, where it was sent: stopped by the reader, or, with
+ * `reason`, by a limit the agent reached.
+ */
+export function chatStopped(started: boolean, reason?: string): { text: string; note: string } {
+  if (reason) return STOPS[reason] ?? { text: "The agent stopped: " + reason + ".", note: "Send another message to carry on." };
   return {
     text: "You stopped the agent.",
     note: started
@@ -68,6 +85,18 @@ export function chatStopped(started: boolean): { text: string; note: string } {
       : "Nothing was started. Send again when you’re ready.",
   };
 }
+
+/** What the page asks before a message bills Claude Code's `billed`, rather than the subscription. */
+export function billingAsk(billed: string, changed: boolean): { text: string; note: string } {
+  return {
+    text: changed ? "Claude Code now bills " + billed + ", not what this session confirmed." : "Claude Code would bill " + billed + ", not your Claude subscription.",
+    note: "Confirm to send your message on it. The session keeps the confirmation.",
+  };
+}
+
+/** After Cancel: the message wasn't sent, and how to use the subscription instead. */
+export const BILLING_CANCELLED =
+  "Not sent; your message is still in the box. To use your Claude subscription instead, unset ANTHROPIC_API_KEY or ANTHROPIC_BASE_URL where the playground starts, then restart it.";
 
 export const SIGNED_OUT_WHY = "You’re signed out: the login link was used or has expired, or the playground restarted.";
 

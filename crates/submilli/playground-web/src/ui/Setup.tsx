@@ -5,7 +5,11 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ActionOutcome } from "../api/client";
 import type { SavedKey, Status } from "../api/types";
 import {
+  billingLine,
   checkSetup,
+  CLAUDE_CODE,
+  CLAUDE_CODE_MODELS,
+  DEFAULT_BUDGET,
   declaredVariables,
   effortHint,
   effortOptions,
@@ -49,10 +53,13 @@ export function Setup(props: {
   // With no provider picked yet, one with a key is picked, else the first.
   useEffect(() => {
     if (form.provider || !providers.length) return;
-    const first = providers.find((o) => !o.needs) ?? providers[0];
-    onForm({ ...form, provider: first.provider, model: first.model, effort: first.provider === "openai" ? form.effort : "" });
+    const first = providers.find((o) => !o.needs && !o.unavailable) ?? providers[0];
+    onForm({ ...form, provider: first.provider, model: first.model, effort: keptEffort(first.provider) });
   }, [providers, form, onForm]);
   const picked = providers.find((o) => o.pressed);
+  const claudeCode = form.provider === CLAUDE_CODE;
+  // An effort carries over to another agent only when that agent takes it too.
+  const keptEffort = (provider: string) => (effortOptions(provider, form.effort).some((o) => o.pressed && !o.disabled) ? form.effort : "");
   // Set when a provider is picked by saving its key; its model follows once status names it.
   const fillModel = useRef(false);
   useEffect(() => {
@@ -112,7 +119,7 @@ export function Setup(props: {
     if (opensModel) {
       setTriedModel(true);
       setModelDone(false);
-      if (check.modelInvalid.max || check.modelInvalid.provider) setAdvancedOpen(true);
+      if (check.modelInvalid.max || check.modelInvalid.budget || check.modelInvalid.provider) setAdvancedOpen(true);
       if (check.modelInvalid.provider) setProviderSettingsOpen(true);
     } else {
       setTried(true);
@@ -177,20 +184,39 @@ export function Setup(props: {
                       key={o.provider}
                       aria-pressed={o.pressed}
                       className={cls("pg-btn", o.pressed && "pg-primary")}
-                      title={o.needs ?? undefined}
-                      onClick={() => set({ provider: o.provider, model: o.model, effort: o.provider === "openai" ? form.effort : "" })}
+                      title={o.needs ?? o.unavailable?.reason ?? undefined}
+                      onClick={() => set({ provider: o.provider, model: o.model, effort: keptEffort(o.provider) })}
                     >
                       {o.label}
+                      {o.unavailable && <span className="pg-choice-note"> · {o.unavailable.suffix}</span>}
                     </button>
                   ))}
                 </div>
-                <ProviderKeyStatus
-                  configured={!!picked && !picked.needs}
-                  providerLabel={picked?.label}
-                  onManage={() => setKeyFor(form.provider || providers[0]?.provider || "")}
-                />
+                {claudeCode ? (
+                  // Claude Code runs on the developer's own login: no key, but whom it bills.
+                  <small role="status">{picked?.unavailable ? picked.unavailable.reason : billingLine(status)}</small>
+                ) : (
+                  <ProviderKeyStatus
+                    configured={!!picked && !picked.needs}
+                    providerLabel={picked?.label}
+                    onManage={() => setKeyFor(form.provider || providers[0]?.provider || "")}
+                  />
+                )}
               </div>
-              {form.provider !== "" && (
+              {claudeCode && (
+                <div className="pg-vfield" role="group" aria-label="Model">
+                  <span className="pg-vname">Model</span>
+                  <div className="pg-choices">
+                    {CLAUDE_CODE_MODELS.map(([m, label]) => (
+                      <button type="button" key={m} aria-pressed={form.model === m} className={cls("pg-btn", form.model === m && "pg-primary")} onClick={() => set({ model: m }, "model")}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {why("model")}
+                </div>
+              )}
+              {form.provider !== "" && !claudeCode && (
                 <label className="pg-vfield">
                   <span className="pg-vname">Model</span>
                   <input value={form.model} onChange={(ev) => set({ model: ev.target.value }, "model")} spellCheck={false} {...bad("model")} />
@@ -223,14 +249,23 @@ export function Setup(props: {
                       <small id="effort-help">{effortHint(form.provider)}</small>
                     </div>
                   )}
+                  {claudeCode ? (
+                    <label className="pg-vfield">
+                      <span className="pg-vname">Spending limit <em className="opt">optional</em></span>
+                      <input value={form.budget} onChange={(ev) => set({ budget: ev.target.value }, "budget")} inputMode="decimal" placeholder={DEFAULT_BUDGET.toFixed(2)} {...bad("budget")} />
+                      {why("budget")}
+                      <small>The most one message may spend, in dollars. Claude Code stops when it’s reached.</small>
+                    </label>
+                  ) : (
                   <label className="pg-vfield">
                     <span className="pg-vname">Max output <em className="opt">optional</em></span>
                     <input value={form.max} onChange={(ev) => set({ max: ev.target.value }, "max")} inputMode="numeric" placeholder="4096" {...bad("max")} />
                     {why("max")}
                     <small>Maximum tokens in one answer.</small>
                   </label>
+                  )}
                 </div>
-                <details className="pg-advanced-details" open={providerSettingsOpen} onToggle={(ev) => setProviderSettingsOpen(ev.currentTarget.open)}>
+                {!claudeCode && <details className="pg-advanced-details" open={providerSettingsOpen} onToggle={(ev) => setProviderSettingsOpen(ev.currentTarget.open)}>
                   <summary>Provider settings <em className="opt">optional JSON</em></summary>
                   <div className="pg-vfield pg-provider-json">
                     <textarea
@@ -246,7 +281,7 @@ export function Setup(props: {
                     {why("provider")}
                     <small>Extra fields for the provider’s request. The playground controls the model, conversation, tools, and instructions.</small>
                   </div>
-                </details>
+                </details>}
               </details>
             )}
             {triedModel && check.problem && <p className="pg-field-err" role="alert">{check.problem}</p>}
@@ -338,7 +373,7 @@ export function Setup(props: {
             // A key just added is for the provider wanted: pick it, with its model once status says.
             if (!removed && provider !== form.provider) {
               fillModel.current = true;
-              onForm({ ...form, provider, model: "", effort: provider === "openai" ? form.effort : "" });
+              onForm({ ...form, provider, model: "", effort: keptEffort(provider) });
             }
           }}
           onClose={closeKey}

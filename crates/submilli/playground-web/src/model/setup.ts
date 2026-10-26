@@ -1,8 +1,8 @@
 // The New session form: its variables, the agent and its settings, checked as the
 // playground would check them before the first message goes.
-import type { ChatSettings, DeclaredVariable, SavedKey, SessionSummary, Status } from "../api/types";
+import type { ChatSettings, ClaudeCodeStatus, DeclaredVariable, SavedKey, SessionSummary, Status } from "../api/types";
 import { namesOf } from "./refs";
-import { providerName } from "./format";
+import { dollars, providerName } from "./format";
 
 export interface SetupForm {
   blueprint?: string;
@@ -11,6 +11,8 @@ export interface SetupForm {
   /** "" for the provider's default. */
   effort: string;
   max: string;
+  /** Claude Code's spending limit for each message, in dollars; "" for the default. */
+  budget: string;
   /** Provider settings, as JSON text. */
   providerJson: string;
   /** Variables are being edited as one JSON object rather than as fields. */
@@ -19,13 +21,27 @@ export interface SetupForm {
   fields: Record<string, string>;
 }
 
-export const INITIAL_SETUP: SetupForm = { blueprint: "", provider: "", model: "", effort: "", max: "", providerJson: "", varJson: false, varJsonText: "", fields: {} };
+export const INITIAL_SETUP: SetupForm = { blueprint: "", provider: "", model: "", effort: "", max: "", budget: "", providerJson: "", varJson: false, varJsonText: "", fields: {} };
 
 /** What the playground sets itself in each provider's request, so provider settings can't. */
 export const OWN_FIELDS: Record<string, string[]> = {
   anthropic: ["model", "messages", "system", "tools", "max_tokens", "stream", "thinking"],
   openai: ["model", "input", "instructions", "tools", "max_output_tokens", "stream"],
 };
+
+/** The developer's own Claude Code, which needs no key: it runs on their login. */
+export const CLAUDE_CODE = "claude-code";
+
+/** The models Claude Code is asked for by name, the default first. */
+export const CLAUDE_CODE_MODELS: [string, string][] = [
+  ["sonnet", "Sonnet"],
+  ["opus", "Opus"],
+  ["haiku", "Haiku"],
+];
+
+/** Claude Code's spending limit for each message unless one is set, and the most it may be, in dollars. */
+export const DEFAULT_BUDGET = 1;
+export const MAX_BUDGET = 100;
 
 /** A form's selected blueprint, leaving the shared server status unchanged. */
 export function selectedSetupStatus(status: Status, name?: string): Status {
@@ -67,8 +83,9 @@ export function initialSetup(status: Status, sessions: SessionSummary[] = []): S
       blueprint: status.blueprint.name,
       provider,
       model,
-      effort: provider === "openai" ? s.effort ?? "" : "",
+      effort: takesEffort(provider) ? s.effort ?? "" : "",
       max: s.max_output !== undefined ? String(s.max_output) : "",
+      budget: s.max_budget_usd !== undefined ? s.max_budget_usd.toFixed(2) : "",
       providerJson: s.provider && Object.keys(s.provider).length ? JSON.stringify(s.provider) : "",
       fields,
     };
@@ -145,17 +162,31 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
     modelInvalid[field] = text;
     problem = problem || text;
   };
+  const claudeCode = form.provider === CLAUDE_CODE;
+  if (claudeCode) {
+    // Claude Code runs on the developer's own login, so it needs no key, only to be ready.
+    const cc = status.claude_code;
+    if (cc?.state !== "available") problem = cc ? "Claude Code can’t answer: " + (cc.reason || "it isn’t ready") + "." : "Still checking for Claude Code. Try again in a moment.";
+    else if (!CLAUDE_CODE_MODELS.some(([m]) => m === model)) fail("model", "Choose Sonnet, Opus, or Haiku.");
+  }
   // Without a model key there's no agent to set up; the Agent field says how to add one.
-  if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add key under Provider.";
+  else if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add key under Provider.";
   else if (!model) fail("model", "Give the model’s name.");
   else if (!/^(models\/)?[A-Za-z0-9._-]+$/.test(model)) fail("model", "A model name is letters, digits, “.”, “_”, and “-”.");
   if (form.effort) set.effort = form.effort;
-  if (max) {
+  if (claudeCode) {
+    // Always set, so the session shows the limit it runs under.
+    const budget = form.budget.trim();
+    const amount = budget ? Number(budget) : DEFAULT_BUDGET;
+    if (budget && (!/^([0-9]+(\.[0-9]*)?|\.[0-9]+)$/.test(budget) || !(amount > 0))) fail("budget", "The spending limit is an amount in dollars, more than 0.");
+    else if (amount > MAX_BUDGET) fail("budget", "The spending limit is at most " + dollars(MAX_BUDGET) + ".");
+    else set.max_budget_usd = amount;
+  } else if (max) {
     if (!/^[0-9]+$/.test(max) || Number(max) < 1) fail("max", "Max output is a whole number of tokens.");
     else if (Number(max) > MAX_OUTPUT) fail("max", "Max output is at most " + MAX_OUTPUT.toLocaleString("en-US") + " tokens.");
     else set.max_output = Number(max);
   }
-  if (json) {
+  if (json && !claudeCode) {
     let given: unknown = null;
     try {
       given = JSON.parse(json);
@@ -232,6 +263,11 @@ export function fieldNote(status: Status): string {
   return "Declared in blueprint " + blueprintLabel(status) + ".";
 }
 
+/** Whether the page offers efforts for `provider`. */
+export function takesEffort(provider: string): boolean {
+  return provider === "openai" || provider === CLAUDE_CODE;
+}
+
 /** The providers chat works with, in the order the page offers them, and the key each needs. */
 const CHAT_PROVIDERS: [string, string][] = [
   ["anthropic", "ANTHROPIC_API_KEY"],
@@ -251,14 +287,23 @@ export function agentNote(status: Status): string {
     : "No model key yet. Add one with Add a key, put it in the project’s .env, or run `submilli secret put OPENAI_API_KEY`.";
 }
 
+export interface ProviderOption {
+  provider: string;
+  label: string;
+  model: string;
+  pressed: boolean;
+  /** The key it still needs, or `null`. */
+  needs: string | null;
+  /** For Claude Code: a word after its name and the line under the choices while it can't answer, or `null`. */
+  unavailable: { suffix: string; reason: string } | null;
+}
+
 /**
- * One button per provider chat works with, each with its default model. Every one can be
- * picked; one without a key says so, and the form won't start until it has one.
+ * One button per provider chat works with, each with its default model, then Claude Code.
+ * Every one can be picked; one without a key, or a Claude Code that can't answer, says
+ * so, and the form won't start until it can.
  */
-export function providerOptions(
-  status: Status,
-  provider: string,
-): { provider: string; label: string; model: string; pressed: boolean; needs: string | null }[] {
+export function providerOptions(status: Status, provider: string): ProviderOption[] {
   const models = new Map<string, string>();
   for (const named of status.chat_models) {
     const [p, m] = split(named);
@@ -268,13 +313,52 @@ export function providerOptions(
   const known = CHAT_PROVIDERS.map(([p]) => p);
   // A provider the server offers that the page doesn't know yet still shows, after the rest.
   const all = [...CHAT_PROVIDERS, ...[...models.keys()].filter((p) => !known.includes(p)).map((p): [string, string] => [p, ""])];
-  return all.map(([p, key]) => ({
+  const keyed = all.map(([p, key]): ProviderOption => ({
     provider: p,
     label: providerName(p),
     model: models.get(p) || "",
     pressed: p === provider,
     needs: hasKey(status, p) ? null : "No " + providerName(p) + " key yet (" + key + ").",
+    unavailable: null,
   }));
+  const claudeCode: ProviderOption = {
+    provider: CLAUDE_CODE,
+    label: providerName(CLAUDE_CODE),
+    model: CLAUDE_CODE_MODELS[0][0],
+    pressed: provider === CLAUDE_CODE,
+    needs: null,
+    unavailable: claudeCodeUnavailable(status.claude_code),
+  };
+  return [...keyed, claudeCode];
+}
+
+/** Why Claude Code can't answer, in a word and in a line saying what to do; `null` once it can. */
+function claudeCodeUnavailable(cc: ClaudeCodeStatus | undefined): { suffix: string; reason: string } | null {
+  if (!cc) return { suffix: "checking", reason: "Checking for Claude Code on this machine…" };
+  if (cc.state === "available") return null;
+  const suffix = { missing: "not installed", "too-old": "too old", "signed-out": "signed out", failed: "not checked" }[cc.state] ?? "unavailable";
+  return { suffix, reason: (cc.reason || "Claude Code can’t answer").replace(/\.$/, "") + "." };
+}
+
+/** Whom Claude Code bills, as the line under the agent choice says it; "" until it can answer. */
+export function billingLine(status: Status): string {
+  const cc = status.claude_code;
+  if (cc?.state !== "available") return "";
+  if (cc.subscription) return "Bills your Claude subscription, as your own Claude Code does. Your settings, hooks, and CLAUDE.md files don’t apply here.";
+  return "Bills " + billedName(cc) + ", not your Claude subscription. The first message asks you to confirm.";
+}
+
+/** What Claude Code bills other than the subscription, and where it sends, when an address is set. */
+export function billedName(cc: ClaudeCodeStatus): string {
+  const names: Record<string, string> = {
+    "claude.ai": "your Claude login",
+    api_key: "an Anthropic API key",
+    api_key_helper: "the key your apiKeyHelper gives",
+    oauth_token: "a Claude login token (CLAUDE_CODE_OAUTH_TOKEN)",
+    third_party: "a cloud provider account",
+  };
+  const name = names[cc.source ?? ""] ?? cc.source ?? "an unknown account";
+  return name + (cc.base_url ? ", sending to " + cc.base_url : "");
 }
 
 export function modelHint(status: Status, provider: string): string {
@@ -282,17 +366,20 @@ export function modelHint(status: Status, provider: string): string {
   return "Default for " + providerName(provider) + ": " + split(named)[1] + ". Any model name the provider knows works; an unknown one gets the provider’s own error.";
 }
 
-/** Only OpenAI takes an effort for now, so elsewhere only Default can be picked. */
+/** Only OpenAI and Claude Code take an effort for now, so elsewhere only Default can be picked. */
 export function effortOptions(provider: string, effort: string): { effort: string; label: string; pressed: boolean; disabled: boolean }[] {
-  return [
+  const levels = [
     ["", "Default"],
     ["low", "Low"],
     ["medium", "Medium"],
     ["high", "High"],
-  ].map(([e, label]) => ({ effort: e, label, pressed: e === effort, disabled: provider !== "openai" && e !== "" }));
+    ...(provider === CLAUDE_CODE ? [["xhigh", "Extra high"], ["max", "Max"]] : []),
+  ];
+  return levels.map(([e, label]) => ({ effort: e, label, pressed: e === effort, disabled: !takesEffort(provider) && e !== "" }));
 }
 
 export function effortHint(provider: string): string {
+  if (provider === CLAUDE_CODE) return "How hard Claude Code thinks before it answers. Default leaves it to Claude Code.";
   if (provider === "anthropic") return "Not available for Claude yet: its thinking has to be handed back with each tool result, which chat doesn’t do yet.";
   if (provider === "openai") return "How hard the model reasons before it answers. Default leaves it to the model.";
   return "Not available for " + providerName(provider) + " yet: its thinking setting differs from model to model.";

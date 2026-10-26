@@ -15,6 +15,8 @@ export function ChatPane(props: {
   onText: (text: string) => void;
   onSend: () => void;
   onStop: () => void;
+  /** A question to answer before the message goes, beside the box: what Claude Code would bill. */
+  confirm?: { text: string; note: string; open: boolean; onConfirm: () => void; onCancel: () => void };
   onBack?: () => void;
   onPick: (run: number) => void;
 }) {
@@ -108,7 +110,24 @@ export function ChatPane(props: {
 
         </div>
       ) : (
-      /* Stays focusable when it can't be used, so its reason can be read. */
+      <>
+      {props.confirm && (
+        <div className="pg-ask-confirm" role={props.confirm.open ? "alert" : "status"}>
+          <p>{props.confirm.text}</p>
+          {props.confirm.note && <small>{props.confirm.note}</small>}
+          {props.confirm.open && (
+            <div className="pg-setup-row">
+              <button type="button" className="pg-btn pg-primary" onClick={props.confirm.onConfirm}>
+                Confirm and send
+              </button>
+              <button type="button" className="pg-btn" onClick={props.confirm.onCancel}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Stays focusable when it can't be used, so its reason can be read. */}
       <form className="pg-ask" onSubmit={submit}>
         {/* Grows with what's typed, up to a few lines; Enter sends, Shift+Enter starts a new line. */}
         <textarea
@@ -140,6 +159,7 @@ export function ChatPane(props: {
           </button>
         )}
       </form>
+      </>
       )}
       {box.reason && (
         <p id="ask-reason" className="pg-reason pg-ask-reason">
