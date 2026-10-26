@@ -169,16 +169,16 @@ export interface RecordQuery {
     sorts?: QuerySort[];
     /** Page size, 1 through 500. Defaults to 50. */
     limit?: number;
-    /** Number of records to skip; pass a previous page's `nextOffset` as it is. Defaults to 0; null is the same as 0. */
-    offset?: number | null;
+    /** Number of records to skip; pass a previous page's `nextOffset`. Defaults to 0. */
+    offset?: number;
 }
 
 /** Limit/offset pagination for note lists. */
 export interface PageOptions {
     /** Page size, 1 through 50. Defaults to 50. */
     limit?: number;
-    /** Number of items to skip; pass a previous page's `nextOffset` as it is. Defaults to 0; null is the same as 0. */
-    offset?: number | null;
+    /** Number of items to skip; pass a previous page's `nextOffset`. Defaults to 0. */
+    offset?: number;
 }
 
 /** A person to find or create by email address. Absent fields are not sent and keep their current values. */
@@ -414,7 +414,7 @@ export function requireText(value: string, name: string): string {
  * @param max Largest page size Attio accepts.
  * @returns The validated limit and offset.
  */
-export function pageWindow(limit: number | undefined, offset: number | null | undefined, fallback: number, max: number): PageWindow {
+export function pageWindow(limit: number | undefined, offset: number | undefined, fallback: number, max: number): PageWindow {
     const size = limit ?? fallback;
     if (!Number.isSafeInteger(size) || size < 1 || size > max) {
         throw validationError("invalid_page_size", "limit must be an integer from 1 through " + max.toString() + ", got " + size.toString());
@@ -432,7 +432,7 @@ export function pageWindow(limit: number | undefined, offset: number | null | un
  * @param offset Requested offset.
  * @returns The validated window.
  */
-export function queryWindow(limit: number | undefined, offset: number | null | undefined): PageWindow {
+export function queryWindow(limit: number | undefined, offset: number | undefined): PageWindow {
     return pageWindow(limit, offset, DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT);
 }
 
@@ -442,7 +442,7 @@ export function queryWindow(limit: number | undefined, offset: number | null | u
  * @param offset Requested offset.
  * @returns The validated window.
  */
-export function noteWindow(limit: number | undefined, offset: number | null | undefined): PageWindow {
+export function noteWindow(limit: number | undefined, offset: number | undefined): PageWindow {
     return pageWindow(limit, offset, DEFAULT_NOTE_LIMIT, MAX_NOTE_LIMIT);
 }
 

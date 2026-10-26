@@ -117,9 +117,9 @@ not found: no such record, or no such object.
 
 `queryRecords(object, query?)` returns one page of records: `items`,
 `nextOffset` and `isComplete`. To read the next page, call it again with
-`offset: page.nextOffset` while `isComplete` is false (a null offset is the
-same as 0, so stop when `isComplete` is true). It never fetches more than one
-page.
+`offset: page.nextOffset` while `isComplete` is false, and stop when it is
+true; a call past the end returns an empty page. It never fetches more than
+one page.
 
 - `filter` is a list of conditions that must all match. A condition is
   `{ attribute, operator, value }`, with an optional `field` for one property
@@ -340,11 +340,11 @@ record, it fails with an `AttioError` of status 404.
   Otherwise `status` is Attio's HTTP status and `code` Attio's own, such as
   `value_not_found` for an unknown option or member.
 - `retryable` is true when Attio did not apply the request: a rate limit
-  (status 429) or a concurrent write (`concurrent_write_conflict`).
-  `retryAfterSeconds` is how long Attio asked to wait, in seconds (null when
-  it did not say), and `retryAfter` the raw header, an HTTP date. A program
-  cannot sleep, so do not retry at once: stop and report the wait. Nothing is
-  retried automatically.
+  (status 429) or a concurrent write (status 409, code
+  `concurrent_write_conflict`). `retryAfterSeconds` is how long Attio asked
+  to wait, in seconds, or null when it did not say, as for a 409. A program
+  cannot sleep, so do not retry at once: stop and report. Nothing is retried
+  automatically.
 - A failed connection or timeout throws a plain `Error` from the HTTP
   transport, not `AttioError`. Catch `AttioError` first, then `Error`.
 - A denied operation throws `PermissionDeniedError`, a runtime global rather
@@ -361,7 +361,9 @@ function main(): string {
     } catch (error: PermissionDeniedError) {
         return "not allowed: " + error.capability;
     } catch (error: AttioError) {
-        return error.retryable ? "Attio is busy; retry in " + String(error.retryAfterSeconds) + " s" : "Attio refused: " + error.code;
+        if (!error.retryable) return "Attio refused: " + error.code;
+        const wait = error.retryAfterSeconds;
+        return wait === null ? "Attio is busy (" + error.code + "); retry later" : "Attio is busy; retry in " + wait.toString() + " s";
     } catch (error) {
         return "could not reach Attio: " + error.message;
     }
@@ -384,16 +386,17 @@ making a duplicate.
 
 ## Example
 
-Record a new lead: find the company by its bare domain and the contact by
-email, create each only when it is missing, then create a deal in the Lead
+Record a new lead: find the company by its normalized domain and the contact
+by email, create each only when it is missing, then create a deal in the Lead
 stage, owned by a workspace member and linked to both, with a note holding
 the source text.
 
 ```ts
-import { AttioRecord, createNote, createRecord, findPersonByEmail, queryRecords } from "@submilli/attio";
+import { AttioRecord, createNote, createRecord, findPersonByEmail, normalizeDomain, queryRecords } from "@submilli/attio";
 
-// `domain` is a bare lowercase domain such as acme.com: the query compares it as given.
-function companyFor(domain: string, name: string): AttioRecord {
+function companyFor(url: string, name: string): AttioRecord {
+    // A query compares the value as given, so normalize it as createRecord does.
+    const domain = normalizeDomain(url);
     const found = queryRecords("companies", { filter: [{ attribute: "domains", operator: "eq", value: domain }], limit: 1 });
     if (found.items.length > 0) return found.items[0];
     return createRecord("companies", { values: [
@@ -403,7 +406,7 @@ function companyFor(domain: string, name: string): AttioRecord {
 }
 
 function main(): { deal: string; url: string } {
-    const company = companyFor("acme.com", "Acme");
+    const company = companyFor("https://www.acme.com/", "Acme");
     const person = findPersonByEmail("dana@acme.com") ?? createRecord("people", { values: [
         { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
         { attribute: "name", type: "personal-name", firstName: "Dana" },

@@ -261,13 +261,13 @@ test('queryRecords sends one typed page and reports the next offset; it never lo
     reset(() => reply(200, { data: rows.slice(0, 1) }));
     const last = attio.queryRecords('deals', { limit: 3, offset: 9 });
     assert.deepEqual(requests[0].body, { limit: 3, offset: 9 });
-    assert.equal(last.nextOffset, null);
+    assert.equal(last.nextOffset, 10, 'the offset after the last record');
     assert.equal(last.isComplete, true);
 
     reset(() => reply(200, { data: [] }));
     const empty = attio.queryRecords('deals');
     assert.deepEqual(requests[0].body, { limit: 50, offset: 0 }, 'default page of 50');
-    assert.deepEqual({ items: empty.items, nextOffset: empty.nextOffset, isComplete: empty.isComplete }, { items: [], nextOffset: null, isComplete: true });
+    assert.deepEqual({ items: empty.items, nextOffset: empty.nextOffset, isComplete: empty.isComplete }, { items: [], nextOffset: 0, isComplete: true });
 
     // Exactly two records: a full last page, then an empty page ends the list.
     reset(() => reply(200, { data: rows.slice(0, 2) }));
@@ -276,10 +276,12 @@ test('queryRecords sends one typed page and reports the next offset; it never lo
     assert.equal(full.isComplete, false);
     reset(() => reply(200, { data: [] }));
     const after = attio.queryRecords('deals', { limit: 2, offset: full.nextOffset });
-    assert.equal(attio.queryRecords('deals', { limit: 2, offset: after.nextOffset }).isComplete, true, 'a null offset reads from the start');
-    assert.equal(requests.at(-1).body.offset, 0);
+    // A loop that goes one call past the end reads an empty page, never page 1 again.
+    const past = attio.queryRecords('deals', { limit: 2, offset: after.nextOffset });
+    assert.equal(requests.at(-1).body.offset, 2);
+    assert.deepEqual([past.items.length, past.nextOffset, past.isComplete], [0, 2, true]);
     assert.deepEqual(requests[0].body, { limit: 2, offset: 2 });
-    assert.equal(after.nextOffset, null);
+    assert.equal(after.nextOffset, 2);
     assert.equal(after.isComplete, true);
 });
 
@@ -681,8 +683,8 @@ test('429 carries Retry-After and is retryable; 409 concurrent_write_conflict is
     assert.equal(limited.status, 429);
     assert.equal(limited.type, 'rate_limit_error');
     assert.equal(limited.retryable, true);
-    assert.equal(limited.retryAfter, 'Tue, 23 May 2023 14:42:01 GMT');
     assert.equal(limited.retryAfterSeconds, 0, 'a date in the past means no wait');
+    assert.ok(!('retryAfter' in limited), 'only the parsed wait is kept');
     reset(() => reply(429, { code: 'rate_limit_exceeded', message: 'slow down' }, { 'retry-after': '7' }));
     assert.equal(attioError(() => attio.listObjects()).retryAfterSeconds, 7);
 
@@ -695,7 +697,7 @@ test('429 carries Retry-After and is retryable; 409 concurrent_write_conflict is
         const error = attioError(call);
         assert.equal(error.status, 429);
         assert.equal(error.retryable, true);
-        assert.equal(error.retryAfter, 'Tue, 23 May 2023 14:42:01 GMT');
+        assert.equal(error.retryAfterSeconds, 0);
         assert.equal(writeRequests().length, 1, 'not retried by the package');
     }
 
@@ -704,8 +706,7 @@ test('429 carries Retry-After and is retryable; 409 concurrent_write_conflict is
     assert.equal(conflict.code, 'concurrent_write_conflict');
     assert.equal(conflict.status, 409);
     assert.equal(conflict.retryable, true);
-    assert.equal(conflict.retryAfter, '');
-    assert.equal(conflict.retryAfterSeconds, null);
+    assert.equal(conflict.retryAfterSeconds, null, 'retryable without a Retry-After header');
 
     reset(attioApi(() => reply(409, { code: 'uniqueness_conflict', message: 'Duplicate.' })));
     assert.equal(attioError(() => attio.createRecord('deals', { values: [{ attribute: 'name', type: 'text', text: 'x' }] })).retryable, false);

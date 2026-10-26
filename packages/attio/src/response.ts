@@ -143,9 +143,9 @@ export interface Note {
 export interface Page<T> {
     /** Items on this page. */
     items: T[];
-    /** Offset of the next page, or null when this page is the last. */
-    nextOffset: number | null;
-    /** True when there are no more items after this page. */
+    /** Offset of the next page: this page's offset plus the items Attio returned. A call past the end returns an empty page. */
+    nextOffset: number;
+    /** True when there are no more items after this page: stop here. */
     isComplete: boolean;
 }
 
@@ -594,28 +594,41 @@ export function failureFrom(status: number, statusText: string, body: string): F
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 /**
  * Seconds to wait according to a `Retry-After` header: a number of seconds,
  * or an HTTP date (`Tue, 23 May 2023 14:42:01 GMT`) measured from `nowMilliseconds`.
  * @param header The raw header value.
  * @param nowMilliseconds The current time, in milliseconds since the Unix epoch.
- * @returns Whole seconds to wait, at least 0, or null when the header is empty or malformed.
+ * @returns Whole seconds to wait, at least 0, or null when the header is empty or malformed:
+ * a number of seconds that is not a safe integer, or a date with an unknown weekday or
+ * month, a year that is not four digits, or a day, hour, minute or second out of range.
  */
 export function retryAfterSeconds(header: string, nowMilliseconds: number): number | null {
     const value = header.trim();
     if (value.length === 0) return null;
-    if (isDigits(value)) return Number(value);
+    if (isDigits(value)) {
+        const seconds = Number(value);
+        return Number.isSafeInteger(seconds) ? seconds : null;
+    }
     const parts = value.split(" ");
-    if (parts.length !== 6 || !parts[0].endsWith(",") || parts[5] !== "GMT") return null;
+    if (parts.length !== 6 || parts[5] !== "GMT") return null;
+    const weekday = parts[0];
+    if (!weekday.endsWith(",") || !WEEKDAYS.includes(weekday.slice(0, weekday.length - 1))) return null;
     const month = MONTHS.indexOf(parts[2]) + 1;
+    if (month === 0 || parts[1].length > 2 || !isDigits(parts[1]) || parts[3].length !== 4 || !isDigits(parts[3])) return null;
     const clock = parts[4].split(":");
-    if (month === 0 || clock.length !== 3 || !isDigits(parts[1]) || !isDigits(parts[3])) return null;
+    if (clock.length !== 3) return null;
     for (const unit of clock) {
         if (unit.length !== 2 || !isDigits(unit)) return null;
     }
-    const at = daysFromCivil(Number(parts[3]), month, Number(parts[1])) * 86400 +
-        Number(clock[0]) * 3600 + Number(clock[1]) * 60 + Number(clock[2]);
+    const day = Number(parts[1]);
+    const hour = Number(clock[0]);
+    const minute = Number(clock[1]);
+    const second = Number(clock[2]);
+    if (day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return null;
+    const at = daysFromCivil(Number(parts[3]), month, day) * 86400 + hour * 3600 + minute * 60 + second;
     return Math.max(0, Math.ceil(at - nowMilliseconds / 1000));
 }
 
@@ -648,7 +661,9 @@ export interface FailureDetails {
 
 /**
  * One page of a limit/offset list. A page shorter than the limit is the last
- * one; a full page may be followed by an empty one.
+ * one; a full page may be followed by an empty one. `nextOffset` is always the
+ * offset after this page, so a call past the end reads an empty page rather
+ * than the first one.
  * @param items The page's items, after any filtering.
  * @param offset Offset of this page.
  * @param limit Requested page size.
@@ -657,5 +672,5 @@ export interface FailureDetails {
  */
 export function pageOf<T>(items: T[], offset: number, limit: number, received: number): Page<T> {
     const complete = received < limit;
-    return { items: items, nextOffset: complete ? null : offset + received, isComplete: complete };
+    return { items: items, nextOffset: offset + received, isComplete: complete };
 }

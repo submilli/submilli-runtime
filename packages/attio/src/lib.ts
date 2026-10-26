@@ -468,7 +468,6 @@ function upsertOn(object: string, matchingAttribute: string, values: Record<stri
             error.status,
             error.type,
             false,
-            "",
             null,
         );
     }
@@ -512,7 +511,6 @@ function requireOk(response: Response): Response {
 
 function attioError(response: Response): AttioError {
     const failure = failureFrom(response.status, response.statusText, response.body);
-    const retryAfter = response.headers.get("retry-after") ?? "";
-    const wait = retryAfter.length === 0 ? null : retryAfterSeconds(retryAfter, Temporal.Now.instant().epochMilliseconds);
-    return new AttioError(failure.code, failure.message, response.status, failure.type, failure.retryable, retryAfter, wait);
+    const wait = retryAfterSeconds(response.headers.get("retry-after") ?? "", Temporal.Now.instant().epochMilliseconds);
+    return new AttioError(failure.code, failure.message, response.status, failure.type, failure.retryable, wait);
 }

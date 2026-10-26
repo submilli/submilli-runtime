@@ -295,10 +295,10 @@ further with fields such as `not (attributes contains "owner")` or
 - Nothing is retried automatically. `AttioError.retryable` marks a 429 and a
   409 `concurrent_write_conflict`, which Attio did not apply.
   `retryAfterSeconds` is the wait Attio asked for, parsed from `Retry-After`
-  (a number of seconds or an HTTP date, measured from when the error was
-  raised; null when absent or malformed), and `retryAfter` the raw header.
-  The runtime has no sleep, so a program should stop and report a 429
-  rather than retry at once.
+  (a number of seconds, or an HTTP date measured from when the error was
+  raised); it is null when the header is absent or malformed, as for a 409,
+  which has none. The runtime has no sleep, so a program should stop and
+  report a 429 rather than retry at once.
 - `getRecord` returns `null` for any 404 `not_found`, which Attio answers both
   for a missing record and for an unknown object; the error code does not
   tell them apart.
@@ -327,7 +327,9 @@ message id the deal came from) and write it on create: a second create then
 fails with `uniqueness_conflict` instead of making a duplicate.
 
 Queries and note lists return one page (`items`, `nextOffset`,
-`isComplete`); the package never follows pages on its own.
+`isComplete`); the package never follows pages on its own. `nextOffset` is
+always the offset after the page, so a caller that reads one page past the end
+gets an empty page, not the first one again; `isComplete` marks the end.
 
 ## Development
 

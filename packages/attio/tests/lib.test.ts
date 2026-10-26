@@ -339,7 +339,6 @@ function main(): void {
     expectCode("invalid_offset", () => { queryWindow(10, 1 / 0); });
     expectCode("invalid_offset", () => { noteWindow(undefined, 1e21); });
     expectCode("invalid_page_size", () => { queryWindow(0 / 0, undefined); });
-    assert(queryWindow(2, null).offset === 0, "a null offset (a last page's nextOffset) is the same as 0");
     expectCode("invalid_page_size", () => { noteWindow(51, undefined); });
     assert(buildNotesQuery("deals", RECORD, noteWindow(undefined, 50)) === "?parent_object=deals&parent_record_id=" + RECORD + "&limit=50&offset=50", "notes query");
 
@@ -468,14 +467,24 @@ function main(): void {
     assert(retryAfterSeconds("soon", now) === null, "malformed");
     assert(retryAfterSeconds("Tue, 23 Foo 2023 14:42:01 GMT", now) === null, "unknown month");
     assert(retryAfterSeconds("Tue, 23 May 2023 14:42 GMT", now) === null, "short time");
+    assert(retryAfterSeconds("99999999999999999999", now) === null, "seconds beyond a safe integer");
+    assert(retryAfterSeconds("9".repeat(400), now) === null, "a 400-digit number");
+    assert(retryAfterSeconds("Tue, 99 May 2023 14:42:01 GMT", now) === null, "day out of range");
+    assert(retryAfterSeconds("Tue, 0 May 2023 14:42:01 GMT", now) === null, "day zero");
+    assert(retryAfterSeconds("Tue, 23 May 2023 99:99:99 GMT", now) === null, "time out of range");
+    assert(retryAfterSeconds("Tue, 23 May 2023 24:00:00 GMT", now) === null, "hour 24");
+    assert(retryAfterSeconds("Tue, 23 May 2023 14:60:01 GMT", now) === null, "minute 60");
+    assert(retryAfterSeconds("Xyz, 23 May 2023 14:42:01 GMT", now) === null, "unknown weekday");
+    assert(retryAfterSeconds("Tue, 23 May 23 14:42:01 GMT", now) === null, "two-digit year");
+    assert(retryAfterSeconds("Tue, 23 May 02023 14:42:01 GMT", now) === null, "five-digit year");
 
     label("pages end on a short or empty page");
     const fullPage = pageOf(["a", "b"], 0, 2, 2);
     assert(fullPage.nextOffset === 2 && !fullPage.isComplete && fullPage.items.length === 2, "full page continues");
     const short = pageOf(["a"], 50, 50, 7);
-    assert(short.nextOffset === null && short.isComplete, "short page completes");
+    assert(short.nextOffset === 57 && short.isComplete, "short page completes, and its next offset is past the end");
     const emptyPage = pageOf<string>([], 2, 2, 0);
-    assert(emptyPage.nextOffset === null && emptyPage.isComplete, "empty page completes");
+    assert(emptyPage.nextOffset === 2 && emptyPage.isComplete, "an empty page completes and stays at the end");
     const filtered = pageOf<string>([], 0, 2, 2);
     assert(filtered.nextOffset === 2 && !filtered.isComplete, "paging counts what Attio returned, not what was kept");
 
