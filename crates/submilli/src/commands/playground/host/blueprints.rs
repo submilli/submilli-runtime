@@ -6,12 +6,13 @@
 //! the filter-field check against capability metadata). The blueprint is stored
 //! with an opaque version tag, and a run reads both in one lookup. A volume the
 //! blueprint names that the host does not declare is declared on the spot as
-//! `managed-local`, so a new volume needs no restart. The host serves one
-//! blueprint, by the name it had at start, so a file that renames it is refused.
+//! `managed-local`, so a new volume needs no restart. The host registers project
+//! blueprints by their discovered names, so a file that renames it is refused by its watcher.
 //!
 //! Nothing is kept on disk: the version tag lives with the registration, and the
 //! file is applied again at every start.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -122,7 +123,7 @@ pub(crate) struct Blueprints {
     package_store: PackageStore,
     /// Held for writing across the volume declarations and the store, so no run
     /// reads the blueprint before its volumes are declared.
-    current: RwLock<Option<AppliedBlueprint>>,
+    current: RwLock<BTreeMap<String, Option<AppliedBlueprint>>>,
 }
 
 impl Blueprints {
@@ -132,20 +133,37 @@ impl Blueprints {
         secret_store: Option<Arc<dyn SecretStore>>,
         package_store: PackageStore,
     ) -> Self {
+        let current = BTreeMap::from([(name.clone(), None)]);
         Self {
             name,
             volumes,
             secret_store,
             package_store,
-            current: RwLock::new(None),
+            current: RwLock::new(current),
         }
     }
 
     /// The blueprint in force and its version tag, in one lookup; `None` before
     /// the first apply. A session reads it again for every run, so its next run
     /// gets the blueprint the last apply stored.
+    #[cfg(test)]
     pub(crate) async fn for_run(&self) -> Option<AppliedBlueprint> {
-        self.current.read().await.clone()
+        self.named(&self.name).await
+    }
+
+    /// Admit a name discovered from an existing project file, before its watcher
+    /// applies it. Requests never register names or paths.
+    pub(crate) async fn register(&self, name: &str) {
+        self.current
+            .write()
+            .await
+            .entry(name.to_owned())
+            .or_default();
+    }
+
+    /// Read one registered blueprint and its tag together.
+    pub(crate) async fn named(&self, name: &str) -> Option<AppliedBlueprint> {
+        self.current.read().await.get(name).cloned().flatten()
     }
 
     /// What [`Self::apply`] would refuse, without changing anything: the YAML
@@ -153,7 +171,7 @@ impl Blueprints {
     /// host does not declare passes when its name can be a managed volume.
     pub(crate) async fn check(&self, yaml: &str) -> Result<Blueprint, LocalApplyError> {
         let blueprint = parse_blueprint(yaml)?;
-        if blueprint.name != self.name {
+        if !self.current.read().await.contains_key(&blueprint.name) {
             let message = format!(
                 "the blueprint's `name:` changed from `{}` to `{}`; the playground serves `{}` \
                  until it restarts, so put the name back or restart it",
@@ -185,11 +203,14 @@ impl Blueprints {
         let mut current = self.current.write().await;
         self.check_new_volumes(&references)?;
         let declared_volumes = self.declare_local_volumes(&references)?;
-        let created = current.is_none();
-        *current = Some(AppliedBlueprint {
-            blueprint: Arc::new(blueprint),
-            version_tag: version_tag.to_owned(),
-        });
+        let created = current.get(&name).is_none_or(Option::is_none);
+        current.insert(
+            name.clone(),
+            Some(AppliedBlueprint {
+                blueprint: Arc::new(blueprint),
+                version_tag: version_tag.to_owned(),
+            }),
+        );
         Ok(LocalApplied {
             name,
             created,

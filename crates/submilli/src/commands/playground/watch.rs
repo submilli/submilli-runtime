@@ -299,9 +299,12 @@ impl Applier {
             }
         };
         *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = Some(yaml.clone());
-        // No other apply can log a version while this one holds the turn, so the
-        // version read here stays the one in force until this save is logged.
-        let current = changes.current();
+        // This applier serializes saves for one name. The store allocates unique
+        // global version numbers when other blueprint appliers log concurrently.
+        let current = changes.versions.iter().rev().find(|version| {
+            submilli_blueprint::parse(&version.bytes)
+                .is_ok_and(|blueprint| blueprint.name == self.name)
+        });
         let previous = Previous::of(current);
         if let Err(failure) = self.prepare_packages(&yaml, previous.blueprint()).await {
             return self.refuse(package_refusal(&failure));

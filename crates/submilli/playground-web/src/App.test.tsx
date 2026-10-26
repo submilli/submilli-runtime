@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test } from "vitest";
 
@@ -31,10 +31,10 @@ async function show(server: FakeServer, hash: string) {
 test("a link's login code becomes a session token, leaves the address bar, and the page opens", async () => {
   const server = new FakeServer();
   await show(server, "#login=good");
-  expect(await screen.findByRole("region", { name: "Chat" })).toBeInTheDocument();
+  expect(await screen.findByRole("region", { name: "Conversation" })).toBeInTheDocument();
   expect(location.hash).toBe("");
   expect(localStorage.getItem(SESSION_KEY)).toBe(server.token);
-  expect(screen.getByRole("button", { name: /^Blueprint billing · v2/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^Current blueprint billing · v2/ })).toBeInTheDocument();
 });
 
 test("a refused session shows how to get a new link", async () => {
@@ -60,11 +60,9 @@ test("with no sessions yet, the page says so and offers New session", async () =
   server.sessions = { sessions: [], more: 0 };
   localStorage.setItem(SESSION_KEY, server.token);
   await show(server, "");
-  expect(await screen.findByText("No sessions yet. Start one with New session.")).toBeInTheDocument();
-  // The chat has no box to type in yet: it says why and offers New session there too.
-  const chat = within(screen.getByRole("region", { name: "Chat" }));
-  expect(chat.queryByRole("textbox")).not.toBeInTheDocument();
-  expect(chat.getByText("No session yet.")).toBeInTheDocument();
-  await userEvent.click(chat.getByRole("button", { name: "New session" }));
-  expect(await screen.findByRole("button", { name: "Start session" })).toBeInTheDocument();
+  expect(await screen.findByText("Start a playground session")).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Conversation" })).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "New session" })).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "New session" }));
+  expect(await screen.findByRole("button", { name: "Done configuring model" })).toBeInTheDocument();
 });

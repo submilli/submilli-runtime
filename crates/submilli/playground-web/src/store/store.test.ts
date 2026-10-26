@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 
-import type { SessionList } from "../api/types";
+import { packageDocsKey, type SessionList } from "../api/types";
 import { SESSION_KEY } from "../api/client";
 import { FakeServer, SESSION, fixture, fixtureJson } from "../api/testing/fakeServer";
 import { createStore, type PageStore } from "./store";
@@ -72,6 +72,50 @@ test("a link's login code is exchanged once, leaves the address bar, and its run
   ]);
   expect(store.getSnapshot().data.runs[2].untrusted.program).toContain("listCharges");
   await expect.poll(() => store.getSnapshot().data.events.length).toBe(43);
+});
+
+test("another tab's sign-in updates a mounted signed-out page without a login exchange", async () => {
+  const server = new FakeServer();
+  const { store, started } = start(server, "");
+  await started;
+  expect(store.getSnapshot().auth).toBe("signed-out");
+  signedIn(server);
+  window.dispatchEvent(new StorageEvent("storage", { key: SESSION_KEY, newValue: server.token, storageArea: localStorage }));
+  await expect.poll(() => store.getSnapshot().auth).toBe("signed-in");
+  expect(server.requests()).not.toContain("POST /api/login");
+  expect(server.calls.find((call) => call.url === "/api/status")?.headers.get("authorization")).toBe(`Bearer ${server.token}`);
+});
+
+test("a token from another tab still has to pass server authentication", async () => {
+  const server = new FakeServer();
+  const { store, started } = start(server, "");
+  await started;
+  localStorage.setItem(SESSION_KEY, "expired");
+  window.dispatchEvent(new StorageEvent("storage", { key: SESSION_KEY, newValue: "expired", storageArea: localStorage }));
+  await expect.poll(() => localStorage.getItem(SESSION_KEY)).toBeNull();
+  expect(store.getSnapshot().auth).toBe("signed-out");
+});
+
+test("focus recovers a sign-in whose storage event was missed", async () => {
+  const server = new FakeServer();
+  const { store, started } = start(server, "");
+  await started;
+  signedIn(server);
+  window.dispatchEvent(new Event("focus"));
+  await expect.poll(() => store.getSnapshot().auth).toBe("signed-in");
+  expect(server.requests()).not.toContain("POST /api/login");
+});
+
+test("a disposed signed-out page does not react to another tab's sign-in", async () => {
+  const server = new FakeServer();
+  const { store, started } = start(server, "");
+  await started;
+  store.dispose();
+  signedIn(server);
+  window.dispatchEvent(new StorageEvent("storage", { key: SESSION_KEY, newValue: server.token, storageArea: localStorage }));
+  window.dispatchEvent(new Event("focus"));
+  expect(store.getSnapshot().auth).toBe("signed-out");
+  expect(server.calls).toHaveLength(0);
 });
 
 test("an expired login code shows the signed-out screen and sends no other request", async () => {
@@ -177,7 +221,9 @@ test("status is read again on run-idle, on a finished run, and when the window r
   // Let the reads under way finish before counting.
   await new Promise((resolve) => setTimeout(resolve, 50));
   const before = count("/api/status");
-  expect(before).toBeLessThan(6);
+  // Initial status + four run-finished signals + run-idle is the most possible;
+  // requests that overlap are coalesced, but this in-memory server may finish each first.
+  expect(before).toBeLessThanOrEqual(6);
   window.dispatchEvent(new Event("focus"));
   await expect.poll(() => count("/api/status")).toBe(before + 1);
 });
@@ -351,6 +397,34 @@ test("explains, versions and sources load once, and a missing source says why", 
     message: "package `@pied-piper/billing` has no module `nope`",
   });
   expect(server.requests()).toContain("GET /api/packages/source?package=%40pied-piper%2Fbilling&module=lib");
+});
+
+test("a blueprint version load reports failures, missing versions and missing text, and may be retried", async () => {
+  const server = new FakeServer();
+  let versionOneFails = true;
+  server.handle = (call) => {
+    if (call.url === "/api/changes?version=1" && versionOneFails) {
+      return Response.json({ error: "busy", message: "version text is temporarily unavailable" }, { status: 503 });
+    }
+    if (call.url === "/api/changes?version=98") return Response.json({ versions: [{ version: 98, text: "" }], voided: [] });
+    if (call.url === "/api/changes?version=99") return Response.json({ versions: [], voided: [] });
+    return undefined;
+  };
+  signedIn(server);
+  const { store, started } = start(server, "");
+  await started;
+
+  await store.loadVersion(1);
+  expect(store.getSnapshot().versionErrors[1]).toBe("version text is temporarily unavailable");
+  versionOneFails = false;
+  await store.loadVersion(1);
+  expect(store.getSnapshot().versionErrors[1]).toBeUndefined();
+  expect(store.getSnapshot().data.versions[1].text).toContain("kind: blueprint");
+
+  await store.loadVersion(98);
+  expect(store.getSnapshot().versionErrors[98]).toBe("Blueprint v98 has no saved text.");
+  await store.loadVersion(99);
+  expect(store.getSnapshot().versionErrors[99]).toBe("The playground didn't return blueprint v99.");
 });
 
 test("opening another session stops the current feed and loads the other", async () => {
@@ -543,9 +617,11 @@ test("a session the list leaves out, as an old rerun's own, is asked for by name
   server.handle = (call) => (call.url === "/api/sessions?session=" + encodeURIComponent(rerun.session) ? Response.json(all) : undefined);
   const { store, started } = start(server, "");
   await started;
-  expect(store.getSnapshot().data.runs[7]).toBeUndefined();
+  const named = "GET /api/sessions?session=" + encodeURIComponent(rerun.session);
+  expect(server.requests()).not.toContain(named);
 
   await store.openSession(rerun.session);
+  expect(server.requests()).toContain(named);
   expect(store.getSnapshot().data.sessions.some((s) => s.session === rerun.session)).toBe(true);
   expect(store.getSnapshot().data.runs[7]?.run).toBe(7);
   // Read again with the list, it stays listed while shown.
@@ -564,4 +640,36 @@ test("a reload comes back to the session it showed, though the list leaves it ou
   const { store, started } = start(server, "");
   await started;
   expect(store.getSnapshot().data.sessionId).toBe(rerun.session);
+});
+
+
+test("package guides isolate blueprint caches and late errors while returning A to its own guide", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  const { store, started } = start(server, "");
+  await started;
+  let finishA!: (response: Response) => void;
+  server.handle = (call) => {
+    if (!call.url.startsWith("/api/packages/docs?")) return undefined;
+    const blueprint = new URL(call.url, "http://fixture").searchParams.get("blueprint");
+    if (blueprint === "billing") return new Promise<Response>((resolve) => { finishA = resolve; });
+    return Response.json({ package: "@acme/shared", bytes: 1, truncated: false, untrusted: { markdown: "Reports guide" } });
+  };
+  const a = store.loadPackageDocs("@acme/shared", "billing");
+  await store.loadPackageDocs("@acme/shared", "reports");
+  finishA(Response.json({ error: "unknown_package", message: "Not in billing" }, { status: 404 }));
+  await a;
+  const aKey = packageDocsKey("billing", "@acme/shared");
+  const bKey = packageDocsKey("reports", "@acme/shared");
+  expect(store.getSnapshot().data.packageDocs[bKey].untrusted.markdown).toBe("Reports guide");
+  expect(store.getSnapshot().packageDocsErrors[aKey].message).toBe("Not in billing");
+  expect(store.getSnapshot().packageDocsErrors[bKey]).toBeUndefined();
+  server.handle = (call) => call.url.startsWith("/api/packages/docs?")
+    ? Response.json({ package: "@acme/shared", bytes: 1, truncated: false, untrusted: { markdown: "Billing guide" } }) : undefined;
+  await store.loadPackageDocs("@acme/shared", "billing");
+  await store.loadPackageDocs("@acme/shared", "reports");
+  expect(store.getSnapshot().data.packageDocs[aKey].untrusted.markdown).toBe("Billing guide");
+  expect(store.getSnapshot().data.packageDocs[bKey].untrusted.markdown).toBe("Reports guide");
+  expect(server.calls.filter((call) => call.url.includes("/api/packages/docs?") && call.url.includes("blueprint=reports"))).toHaveLength(1);
+  expect(store.getSnapshot().packageDocsErrors[aKey]).toBeUndefined();
 });

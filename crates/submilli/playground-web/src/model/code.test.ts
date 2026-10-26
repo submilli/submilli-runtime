@@ -21,7 +21,7 @@ describe("the code pane while stepping", () => {
 
   it("shows the program's line that calls into the package first", () => {
     const pane = at(data, 3);
-    expect(pane.sub).toBe("program 1 · run 1");
+    expect(pane.sub).toBe("Program 1 · Run 1");
     expect(active(pane)).toBe(4);
     expect(pane.isPackage).toBe(false);
     expect(pane.stepNote).toBe("Line 4 calls into @pied-piper/billing (listCharges). Step → to follow it into the package’s code.");
@@ -56,7 +56,7 @@ describe("the code pane while stepping", () => {
 
   it("at a run's end shows its program with no step note", () => {
     const pane = at(data, 6);
-    expect(pane.sub).toBe("program 1 · run 1");
+    expect(pane.sub).toBe("Program 1 · Run 1");
     expect(active(pane)).toBeNull();
     expect(pane.stepNote).toBe("");
   });
@@ -68,8 +68,8 @@ describe("the code pane while stepping", () => {
   });
 
   it("shows a run picked while stepping, until the next step", () => {
-    expect(at(data, 7, { sel: "r1" }).sub).toBe("program 1 · run 1");
-    expect(at(data, 8).sub).toBe("program 2 · run 2");
+    expect(at(data, 7, { sel: "r1" }).sub).toBe("Program 1 · Run 1");
+    expect(at(data, 8).sub).toBe("Program 2 · Run 2");
   });
 
   it("says when the package source isn't available", () => {
@@ -84,7 +84,7 @@ describe("the code pane while stepping", () => {
   it("a plain call is one step on the program's line", () => {
     const plain = plainSession();
     const pane = at(plain, 4);
-    expect(pane.sub).toBe("program 1 · run 10");
+    expect(pane.sub).toBe("Program 1 · Run 10");
     expect(active(pane)).toBe(3);
     expect(pane.stepNote).toBe("Line 3 made a call: main → http.get, allowed by the blueprint (check 10.1), 1.2 kB fetched.");
   });
@@ -104,10 +104,10 @@ describe("the code pane while stepping", () => {
 describe("the code pane at the latest event", () => {
   it("shows the last program, and the program a picked follow-up ran", () => {
     const data = chatSession();
-    expect(codePane(frame(data, INITIAL_UI)).sub).toBe("program 4 · run 4");
+    expect(codePane(frame(data, INITIAL_UI)).sub).toBe("Program 4 · Run 4");
     const picked = codePane(frame(data, { ...INITIAL_UI, sel: "f5" }));
-    expect(picked.sub).toBe("program 2 · run 2");
-    expect(picked.codeNote).toBe("Run 5 ran this same program, from run 2.");
+    expect(picked.sub).toBe("Source: Program 2 · Run 2");
+    expect(picked.codeNote).toBe("Used by Run 5. This is the original program from Run 2.");
     expect(picked.programRef).toBe(
       "Submilli playground, the program of run 2 (details - project: `billing-demo`, see_with: `submilli playground show 2 --program`)",
     );
@@ -129,17 +129,27 @@ describe("the code pane at the latest event", () => {
       } as unknown as (typeof data.events)[number],
     ];
     // Before its program is read, the last finished program still shows.
-    expect(codePane(frame(data, INITIAL_UI)).sub).toBe("program 4 · run 4");
+    expect(codePane(frame(data, INITIAL_UI)).sub).toBe("Program 4 · Run 4");
     data.running = { 9: "function main(): number {\n  return 1;\n}" };
     const pane = codePane(frame(data, INITIAL_UI));
-    expect(pane.sub).toBe("program 5 · run 9 · running");
+    expect(pane.sub).toBe("Program 5 · Run 9 · Running");
     expect(pane.lines.length).toBe(3);
     expect(pane.codeNote).toBe("Still running: its result shows in the log when it ends.");
   });
 
   it("marks a picked decision's program line", () => {
     const pane = codePane(frame(chatSession(), { ...INITIAL_UI, sel: "d2.1", program: 2 }));
-    expect(pane.sub).toBe("program 2 · run 2");
+    expect(pane.sub).toBe("Program 2 · Run 2");
     expect(active(pane)).toBe(4);
   });
+});
+
+
+it("does not substitute the newest program when a selected historical source is missing", () => {
+  const data = chatSession();
+  delete data.runs[2];
+  const pane = codePane(frame(data, { ...INITIAL_UI, sel: "r2" }));
+  expect(pane.sub).toBe("run 2");
+  expect(pane.lines).toEqual([]);
+  expect(pane.empty).toBe("Source was not recorded for this run.");
 });

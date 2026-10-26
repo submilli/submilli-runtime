@@ -2297,6 +2297,7 @@ fn build_test_help_describes_explicit_controls() {
     let out = build_test(tmp.path(), tmp.path(), &["--help"]);
     assert!(out.status.success());
     let help = stdout(&out);
+    let normalized_help = help.split_whitespace().collect::<Vec<_>>().join(" ");
     for expected in [
         "--all-env",
         "--env-var",
@@ -2307,7 +2308,10 @@ fn build_test_help_describes_explicit_controls() {
         "no credentials by default",
         "--env-var > --env-file > --all-env",
     ] {
-        assert!(help.contains(expected), "missing {expected}: {help}");
+        assert!(
+            normalized_help.contains(expected),
+            "missing {expected}: {help}"
+        );
     }
     assert!(!help.contains("SUBMILLI_SKIP_HTTP_TESTS"));
 }

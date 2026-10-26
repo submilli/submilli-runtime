@@ -7,7 +7,6 @@
 
 use std::fs::File;
 use std::mem::ManuallyDrop;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -16,7 +15,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use axum::Json;
 use axum::Router;
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, X_CONTENT_TYPE_OPTIONS,
 };
@@ -118,6 +117,7 @@ pub(crate) struct BlueprintInfo {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Status {
+    pub(crate) blueprints: Vec<SessionBlueprint>,
     #[serde(flatten)]
     pub(crate) description: Description,
     /// Serving, and not draining.
@@ -142,12 +142,27 @@ pub(crate) struct Status {
     pub(crate) model_keys: Vec<super::agent::ProviderKey>,
 }
 
+/// Metadata for one registered, selectable project blueprint.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct SessionBlueprint {
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
+    pub(crate) declared_variables: Vec<DeclaredVariable>,
+    pub(crate) packages: Vec<ClosureEntry>,
+    pub(crate) packages_error: Option<String>,
+    pub(crate) blueprint_status: BlueprintStatus,
+}
+
 /// A variable the blueprint declares, and whether a run must have a value for it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct DeclaredVariable {
     pub(crate) name: String,
     pub(crate) required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) example: Option<String>,
 }
 
 /// The binding as `status` shows it: the variables, and only the names of the secrets.
@@ -376,12 +391,15 @@ async fn serve_sessions(
     stops: serve::Stops,
 ) -> Result<Served> {
     let closure = std::mem::take(&mut serving.closure);
-    let auth = Arc::new(ControlAuth::new(serving.tokens.clone()));
+    let auth = Arc::new(ControlAuth::open(
+        serving.tokens.clone(),
+        state_dir.browser_sessions_path(),
+        Now::current(),
+    )?);
+    // Keep the saved browser origin reserved before any ephemeral runtime listener.
+    let control = super::control_origin::bind(state_dir.root()).await?;
     let host = start_host(&options, state_dir, serving, sessions).await?;
     let server = serve::bind().await?;
-    let control = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-        .await
-        .context("binding the control listener")?;
     let server_port = server.local_addr()?.port();
     let control_port = control.local_addr()?.port();
 
@@ -479,6 +497,8 @@ struct Started {
     mcp: Arc<mcp::McpHost>,
     _reaper: ReaperTask,
     _watch: watch::Watch,
+    session_blueprints: std::collections::BTreeMap<String, (PathBuf, Arc<Applier>)>,
+    _session_watches: Vec<watch::Watch>,
     _store_watch: packages::StoreWatch,
 }
 
@@ -530,15 +550,70 @@ async fn start_host(
             options.project.blueprint.clone(),
             serving.name.clone(),
         )
-        .with_packages(serving.freshness),
+        .with_packages(Arc::clone(&serving.freshness)),
     );
     let watch = watch::watch(Arc::clone(&applier), watch::DEBOUNCE)?;
     applier.start().await?;
-    // A close a stop cut short finishes now, under the blueprint just applied.
+    let mut session_blueprints = std::collections::BTreeMap::new();
+    session_blueprints.insert(
+        serving.name.clone(),
+        (options.project.blueprint.clone(), Arc::clone(&applier)),
+    );
+    let mut session_watches = Vec::new();
+    for path in super::project::session_blueprints(&options.project) {
+        if path == options.project.blueprint {
+            continue;
+        }
+        let parsed = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|yaml| submilli_blueprint::parse(&yaml).ok());
+        let Some(blueprint) = parsed else {
+            warn(&format!(
+                "{} is not a valid selectable blueprint; fix it and restart",
+                path.display()
+            ));
+            continue;
+        };
+        if session_blueprints.contains_key(&blueprint.name) {
+            warn(&format!(
+                "{} has duplicate blueprint name `{}`; it is not selectable",
+                path.display(),
+                blueprint.name
+            ));
+            continue;
+        }
+        let additional = Arc::new(
+            Applier::new(
+                Arc::clone(&app) as Arc<dyn watch::LocalBlueprints>,
+                Arc::clone(&serving.store),
+                path.clone(),
+                blueprint.name.clone(),
+            )
+            .with_packages(Arc::clone(&serving.freshness)),
+        );
+        let additional_watch = match watch::watch(Arc::clone(&additional), watch::DEBOUNCE) {
+            Ok(watch) => watch,
+            Err(error) => {
+                warn(&format!(
+                    "{} cannot be watched: {error}; it is not selectable",
+                    path.display()
+                ));
+                continue;
+            }
+        };
+        app.register_blueprint(&blueprint.name).await;
+        if let Err(error) = additional.start().await {
+            warn(&format!("{} is not selectable: {error}", path.display()));
+            continue;
+        }
+        session_watches.push(additional_watch);
+        session_blueprints.insert(blueprint.name, (path, additional));
+    }
+    // A close a stop cut short finishes now, under the blueprints just applied.
     sessions.finish_closing().await?;
     let reaper = ReaperTask(sessions.spawn_reaper(REAP_INTERVAL));
 
-    let mcp = Arc::new(mcp::McpHost::new(
+    let mcp = Arc::new(mcp::McpHost::new_many(
         mcp::Shared {
             run: Arc::clone(&run_host),
             sessions: Arc::clone(&sessions),
@@ -548,7 +623,7 @@ async fn start_host(
             events: Some(Arc::clone(serving.recorder.events())),
         },
         Arc::from(serving.tokens),
-        &serving.name,
+        &session_blueprints.keys().cloned().collect::<Vec<_>>(),
     ));
     let started = Started {
         name: serving.name,
@@ -561,6 +636,8 @@ async fn start_host(
         mcp,
         _reaper: reaper,
         _watch: watch,
+        session_blueprints,
+        _session_watches: session_watches,
         _store_watch: store_watch,
     };
     Ok(started)
@@ -591,9 +668,8 @@ fn actions(
         secrets: host.secrets.clone(),
         binding: std::sync::Mutex::new(binding),
         binding_file: state_dir.binding_path(),
-        applier: Arc::clone(&host.applier),
+        session_blueprints: host.session_blueprints.clone(),
         blueprint_name: host.name.clone(),
-        blueprint_path: options.project.blueprint.clone(),
         project_root: options.project.root.clone(),
         page: Page { base: Some(url) },
         cancelling: std::sync::Mutex::default(),
@@ -1019,6 +1095,11 @@ pub(crate) async fn login(
             "the login code is unknown, used, or expired; run `submilli playground open` for a \
              new link",
         ),
+        Err(LoginRefusal::Persistence) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "session_not_saved",
+            "the browser session could not be saved; check the playground state directory",
+        ),
         Err(LoginRefusal::RateLimited) => error(
             StatusCode::TOO_MANY_REQUESTS,
             "rate_limited",
@@ -1069,9 +1150,12 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
             declared_variables = blueprint
                 .variables
                 .iter()
+                .filter(|(_, declared)| declared.alias.is_none())
                 .map(|(name, declared)| DeclaredVariable {
                     name: name.clone(),
                     required: declared.required,
+                    description: declared.description.clone(),
+                    example: declared.example.clone(),
                 })
                 .collect();
             match closure_of(&state, blueprint).await {
@@ -1092,7 +1176,42 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     let stopping = state.0.held.is_stopping();
+    let mut catalog = Vec::new();
+    for (name, (path, applier)) in &state.actions().session_blueprints {
+        applier.catch_up().await;
+        let Some(blueprint) = state.0.app.blueprint(name).await else {
+            continue;
+        };
+        let declared_variables = blueprint
+            .variables
+            .iter()
+            .filter(|(_, d)| d.alias.is_none())
+            .map(|(name, d)| DeclaredVariable {
+                name: name.clone(),
+                required: d.required,
+                description: d.description.clone(),
+                example: d.example.clone(),
+            })
+            .collect();
+        let (packages, packages_error) = match closure_of(&state, blueprint).await {
+            Ok(packages) => (packages, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        catalog.push(SessionBlueprint {
+            name: name.clone(),
+            path: path.clone(),
+            declared_variables,
+            packages,
+            packages_error,
+            blueprint_status: applier
+                .status()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        });
+    }
     Json(Status {
+        blueprints: catalog,
         description,
         running: !stopping,
         stopping,
@@ -1123,7 +1242,7 @@ async fn blueprint_in_force(
     Ok(state.0.app.blueprint(&state.0.blueprint_name).await)
 }
 
-async fn closure_of(
+pub(crate) async fn closure_of(
     state: &ControlState,
     blueprint: submilli_blueprint::Blueprint,
 ) -> Result<Vec<ClosureEntry>, String> {
@@ -1134,7 +1253,23 @@ async fn closure_of(
         .map_err(|failure| failure.to_string())
 }
 
-pub(crate) async fn stop(State(state): State<ControlState>) -> Response {
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct StopQuery {
+    restart: bool,
+}
+
+pub(crate) async fn stop(
+    State(state): State<ControlState>,
+    Query(query): Query<StopQuery>,
+) -> Response {
+    if !query.restart && state.0.auth.revoke_sessions().is_err() {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "sessions_not_revoked",
+            "browser sessions could not be revoked; check the playground state directory",
+        );
+    }
     state.0.held.begin_stopping();
     state.0.server_shutdown.notify_one();
     (StatusCode::ACCEPTED, Json(json!({ "stopping": true }))).into_response()

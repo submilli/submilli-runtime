@@ -1,0 +1,72 @@
+/* Shared control geometry. Load after tokens.css. */
+
+.ds-input,
+.ds-select select {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--control-height);
+  font-family: var(--font-mono);
+  font-size: var(--control-font-size);
+  line-height: var(--control-line-height);
+  color: var(--text-primary);
+  background: var(--surface-card);
+  border: var(--control-border-width) solid var(--border-subtle);
+  border-radius: var(--control-radius);
+  padding: var(--control-padding-block) var(--control-padding-inline);
+  outline: none;
+}
+
+.ds-input:focus-visible,
+.ds-select select:focus-visible {
+  border-color: var(--border-accent);
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.ds-input:disabled,
+.ds-select select:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.65;
+}
+
+.ds-select {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.ds-select select {
+  appearance: none;
+  padding-right: var(--control-select-padding-end);
+  cursor: pointer;
+}
+
+.ds-select::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: var(--control-arrow-inset);
+  width: var(--control-arrow-size);
+  height: var(--control-arrow-size);
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
+  transform: translateY(-65%) rotate(45deg);
+  pointer-events: none;
+}
+
+.ds-select:has(select:disabled)::after,
+.ds-select.is-disabled::after {
+  border-color: var(--text-muted);
+}
+
+@media (forced-colors: active) {
+  .ds-select select {
+    appearance: auto;
+    padding-right: var(--control-padding-inline);
+  }
+
+  .ds-select::after {
+    display: none;
+  }
+}

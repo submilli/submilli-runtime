@@ -34,7 +34,7 @@ const SECRET_POLICY: &str = "name: finalizers\ndefault: allow\npackages: ['@test
 struct Current(Mutex<Option<Arc<Blueprint>>>);
 
 impl CurrentBlueprint for Current {
-    fn current(&self) -> BoxFuture<'_, Option<Arc<Blueprint>>> {
+    fn current<'a>(&'a self, _: &'a str) -> BoxFuture<'a, Option<Arc<Blueprint>>> {
         let blueprint = self.0.lock().unwrap().clone();
         Box::pin(async move { blueprint })
     }

@@ -33,10 +33,10 @@ export function CodePane(props: {
   }, [props.sel, props.program, props.cursor, lines, pane.sub]);
 
   return (
-    <section className="pg-pane code" aria-label="Code">
+    <section id="pg-panel-code" className="pg-pane code" aria-label="Program">
       <div className="pg-pane-head">
-        <h2>
-          Code<span className="sub">{pane.sub}</span>
+        <h2 tabIndex={-1}>
+          {pane.sub || "Program"}
         </h2>
         <div className="pg-pane-tools">
           {pane.programRef && (
@@ -53,7 +53,7 @@ export function CodePane(props: {
       </div>
       {pane.codeNote && <div className="pg-code-note">{pane.codeNote}</div>}
       {pane.stepNote && <div className="pg-code-note">{pane.stepNote}</div>}
-      <div className={cls("pg-code", pane.isPackage && "pkg")} aria-label="Code" ref={box} tabIndex={0}>
+      <div className={cls("pg-code", pane.isPackage && "pkg")} aria-label="Program" ref={box} tabIndex={0}>
         {pane.lines.map((l) => (
           <div className={cls("pg-line", l.active && "active")} key={l.num}>
             <span className="num">{l.num}</span>

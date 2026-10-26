@@ -1,0 +1,26 @@
+{
+  "repository": "https://github.com/submilli/submilli-private",
+  "path": "design-system/tokens.css",
+  "base_revision": "64c0bca5d796e2887bbfbf98ef8dd7861ba96602",
+  "revision": "67dbe5b4cee358436a85681edeb46a74352778b7",
+  "branch": "codex/progressive-setup-steps",
+  "status": "Proposed canonical design-system change; awaiting human PR review.",
+  "sha256": "50df86151ff9172d9502b1a8811441d20ba5a44affb818be0b63ac687a9c5c52",
+  "sync_from_canonical_checkout": "git -C <submilli-private-checkout> show 67dbe5b4cee358436a85681edeb46a74352778b7:design-system/tokens.css > src/styles/design-system.css",
+  "verify": "shasum -a 256 src/styles/design-system.css",
+  "pull_request": "https://github.com/submilli/submilli-private/pull/123",
+  "shared_patterns": [
+    {
+      "path": "design-system/forms.css",
+      "local_path": "src/styles/forms.css",
+      "sha256": "e675cbbe25e6dad5bdc53d8b807874e175bc10df27a3db2716ad957b6930eb0f",
+      "sync_from_canonical_checkout": "git -C <submilli-private-checkout> show 67dbe5b4cee358436a85681edeb46a74352778b7:design-system/forms.css > src/styles/forms.css"
+    },
+    {
+      "path": "design-system/controls.css",
+      "local_path": "src/styles/controls.css",
+      "sha256": "240d34fc55ba5b5a311c063718bf303ce436de097c52102adcaeddbfd8afc3a3",
+      "sync_from_canonical_checkout": "git -C <submilli-private-checkout> show 67dbe5b4cee358436a85681edeb46a74352778b7:design-system/controls.css > src/styles/controls.css"
+    }
+  ]
+}

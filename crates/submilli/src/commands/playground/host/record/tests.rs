@@ -332,6 +332,15 @@ async fn a_recorded_test_serves_its_calls_from_the_recording_with_the_site_gone(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_the_recording_lacks_stops_the_test_and_the_report_names_it() {
+    missing_recorded_call_stops_cancelled().await;
+}
+
+#[tokio::test]
+async fn a_missing_recorded_call_is_cancelled_on_a_current_thread_runtime() {
+    missing_recorded_call_stops_cancelled().await;
+}
+
+async fn missing_recorded_call_stops_cancelled() {
     let host = host().await;
     let blueprint = applied(OPEN);
     let site = site().await;

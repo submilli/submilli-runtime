@@ -49,7 +49,7 @@ describe("formatting", () => {
     expect(end({ kind: "failed", error: "runtime_error" })).toBe("failed");
     expect(end({ kind: "failed", error: "something_new" })).toBe("failed");
     expect(end({ kind: "stopped" })).toBe("stopped");
-    expect(["completed", "stopped", "denied"].map(tone)).toEqual(["ok", "warn", "bad"]);
+    expect(["completed", "stopped", "denied"].map(tone)).toEqual(["ok", "warn", "warn"]);
   });
 
   it("sizes, times, ordinals and contexts", () => {

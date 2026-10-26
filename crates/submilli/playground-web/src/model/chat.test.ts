@@ -37,13 +37,13 @@ describe("the chat while stepping", () => {
     const calls = chatSession();
     calls.runs[1] = { ...calls.runs[1], entry: "mcp:submilli__files__list", untrusted: { contexts: { "1.1": { path: "/billing", recursive: true } } } };
     const f = frame(calls, { ...INITIAL_UI, cursor: steps[5].key });
-    expect(chatItems(f).at(-1)).toMatchObject({ kind: "run", text: "Called files.list /billing · completed →", run: 1, hint: 'path = "/billing", recursive = true' });
+    expect(chatItems(f).at(-1)).toMatchObject({ kind: "run", text: "View result · Call · files.list · Run 1 · /billing · Completed", run: 1, hint: 'path = "/billing", recursive = true' });
   });
 
   it("puts the run's chip in once the run ends", () => {
     const f = atStep(6);
     const chat = chatItems(f);
-    expect(chat[chat.length - 1]).toEqual({ kind: "run", text: "Ran program 1 · completed →", run: 1, selected: false });
+    expect(chat[chat.length - 1]).toEqual({ kind: "run", text: "View result · Program 1 · Run 1 · Completed", run: 1, selected: false });
     expect(logPane(f).count).toBe("1 run");
     expect(logPane(f).runningNote).toBe("");
   });
@@ -68,15 +68,15 @@ describe("the chat at the latest event", () => {
     expect(chat.map((c) => c.text)).toEqual([
       "What's my total, and how many charges do I have?",
       "Let me total your charges.",
-      "Ran program 1 · completed →",
+      "View result · Program 1 · Run 1 · Completed",
       "Checking another account too.",
-      "Ran program 2 · denied →",
+      "View details · Program 2 · Run 2 · Blocked by blueprint",
       "One more.",
-      "Ran program 3 · rejected →",
+      "View details · Program 3 · Run 3 · Rejected",
       "You have the charges listed; the total is in cents. I couldn't read cus_globex: that was denied.",
       "Which are the largest three?",
       "Here are your top three.",
-      "Ran program 4 · completed →",
+      "View result · Program 4 · Run 4 · Completed",
       "Your three largest charges are listed above.",
     ]);
     expect(chat.find((c) => c.kind === "run" && c.run === 2)).toMatchObject({ selected: true });
@@ -90,10 +90,10 @@ describe("the chat at the latest event", () => {
   it("an open chat session takes a reply; a stepped-back or ended one doesn't", () => {
     expect(askBox(frame(data, INITIAL_UI))).toEqual({ placeholder: "Reply in this session…", disabled: false, primary: true });
     expect(askBox(atStep(3))).toMatchObject({ disabled: true, reason: "Back to latest to use this" });
-    // An ended one has no box to type in: it says so, and offers New session.
-    expect(askBox(frame(plainSession(), INITIAL_UI)).none).toEqual({ text: "This session has ended.", offer: true });
+    // An ended one has no box to type in: it says so; New session belongs to the header.
+    expect(askBox(frame(plainSession(), INITIAL_UI)).none).toEqual({ text: "This session has ended." });
     // While the New session form is open, its own Start session is the way on.
-    expect(askBox(frame(data, { ...INITIAL_UI, mode: "setup" })).none).toEqual({ text: "Start the session above to chat.", offer: false });
+    expect(askBox(frame(data, { ...INITIAL_UI, mode: "setup" })).none).toEqual({ text: "Start the session above to chat." });
   });
 
   it("a new session's messages show while the agent answers", () => {
@@ -124,4 +124,12 @@ describe("a rerun's own session", () => {
     expect(chatEmptyText(f)).toBe("No chat: this session is a rerun that you started. The agent never saw it. Step through its calls with ← →.");
     expect(askBox(f).none?.text).toBe("A rerun takes no messages.");
   });
+});
+
+
+it("distinguishes program ordinal, run ID and a selected follow-up's source", () => {
+  const original = chatItems(frame(plainSession(), INITIAL_UI)).find((item) => item.kind === "run" && item.run === 10);
+  expect(original?.text).toContain("Program 1 · Run 10");
+  const source = chatItems(frame(chatSession(), { ...INITIAL_UI, sel: "f5" })).find((item) => item.kind === "run" && item.run === 2);
+  expect(source).toMatchObject({ selected: false, text: "View details · Program 2 · Run 2 · Blocked by blueprint · Source for Run 5" });
 });

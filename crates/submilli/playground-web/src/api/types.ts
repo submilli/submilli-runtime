@@ -4,6 +4,7 @@
 
 /** `GET /api/status`. */
 export interface Status {
+  blueprints?: SessionBlueprint[];
   project: string;
   blueprint: { name: string; path: string };
   url: string;
@@ -21,9 +22,22 @@ export interface Status {
   declared_variables: DeclaredVariable[];
 }
 
+export interface SessionBlueprint {
+  name: string;
+  path: string;
+  declared_variables: DeclaredVariable[];
+  packages: PackageEntry[];
+  packages_error?: string | null;
+  blueprint_status: Status["blueprint_status"];
+}
+
 export interface DeclaredVariable {
   name: string;
   required: boolean;
+  /** Human-facing context supplied by the blueprint author. */
+  description?: string;
+  /** An illustrative value; the form never binds it automatically. */
+  example?: string;
 }
 
 export interface PackageEntry {
@@ -48,6 +62,7 @@ export interface SessionList {
 }
 
 export interface SessionSummary {
+  blueprint?: string;
   session: string;
   started_at: string;
   started_at_micros: number;
@@ -119,6 +134,8 @@ export interface Outcome {
 /** `GET /api/runs/{run}?program=true`. */
 export interface Show {
   run: number;
+  /** Recorded Blueprint identity; older imported records may omit it. */
+  blueprint?: string;
   blueprint_version: string;
   source: string;
   started_at: string;
@@ -225,6 +242,15 @@ export interface PackageSource {
   /** When the text was cut, how much of the module it holds. */
   note?: string | null;
   untrusted: { text: string };
+}
+
+/** `GET /api/packages/docs`. Authored package Markdown is untrusted display text. */
+export interface PackageDocs {
+  package: string;
+  bytes: number;
+  truncated: boolean;
+  note?: string | null;
+  untrusted: { markdown: string };
 }
 
 /** What an action route (test, rerun, cancel, draft-rule, agent) answers, always HTTP 200. */
@@ -389,6 +415,8 @@ export interface PageData {
   versions: Record<number, BlueprintVersion>;
   /** Package sources by `sourceKey(package, module)`. */
   sources: Record<string, PackageSource>;
+  /** Authored package documentation, by package name. */
+  packageDocs: Record<string, PackageDocs>;
 }
 
 export function sourceKey(pkg: string, module: string): string {
@@ -410,4 +438,9 @@ export interface ModelKey {
 export interface SavedKey {
   variable: string;
   from: KeySource | null;
+}
+
+/** Documentation and its failures belong to a blueprint/package pair. */
+export function packageDocsKey(blueprint: string | undefined, pkg: string): string {
+  return JSON.stringify([blueprint ?? null, pkg]);
 }

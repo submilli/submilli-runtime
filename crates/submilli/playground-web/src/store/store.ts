@@ -11,6 +11,7 @@ import type {
   Explain,
   FeedSignal,
   PackageSource,
+  PackageDocs,
   PageData,
   RunList,
   RunningRow,
@@ -21,7 +22,7 @@ import type {
   Status,
   StoredEvent,
 } from "../api/types";
-import { sourceKey } from "../api/types";
+import { packageDocsKey, sourceKey } from "../api/types";
 import { Client, ReadError, SESSION_KEY, SignedOutError, UNREACHABLE, type ActionOutcome } from "../api/client";
 import { openFeed, type FeedState } from "../api/feed";
 import { SIGNED_OUT_LINE, exchangeCode, readLink, runHash, type RequestedRun } from "../api/login";
@@ -33,6 +34,7 @@ export type TestMode = "recorded" | "reads-live" | "live";
 
 /** What a new chat session starts with; a reply carries none of it. */
 export interface NewSessionSettings {
+  blueprint?: string;
   /** As `<provider>:<model>`, one of the status's `chat_models`. */
   model: string;
   effort?: string;
@@ -69,6 +71,10 @@ export interface Snapshot {
   pendingChat: { message: string; session: string | null } | null;
   /** Package sources that couldn't be shown, by `sourceKey`, with the server's reason. */
   sourceErrors: Record<string, { code: string; message: string }>;
+  /** Blueprint versions whose saved text couldn't be loaded, by version. */
+  versionErrors: Record<number, string>;
+  /** Package documentation that couldn't be shown, by package name. */
+  packageDocsErrors: Record<string, { code: string; message: string }>;
 }
 
 export interface StoreOptions {
@@ -100,6 +106,7 @@ const emptyData = (): PageData => ({
   compares: {},
   versions: {},
   sources: {},
+  packageDocs: {},
 });
 
 export function createStore(options: StoreOptions = {}) {
@@ -127,6 +134,8 @@ export function createStore(options: StoreOptions = {}) {
     newSession: null,
     pendingChat: null,
     sourceErrors: {},
+    versionErrors: {},
+    packageDocsErrors: {},
   };
   const listeners = new Set<() => void>();
 
@@ -521,12 +530,40 @@ export function createStore(options: StoreOptions = {}) {
       setData({ explains: { ...snap.data.explains, [ref]: explain } });
     });
 
-  const loadVersion = (version: number) =>
-    once(`version:${version}`, async () => {
-      const changes = await client.read<Changes>(`/api/changes?version=${version}`);
+  const loadVersion = (version: number) => {
+    if (snap.data.versions[version]?.text) return Promise.resolve();
+    return once(`version:${version}`, async () => {
+      if (snap.versionErrors[version]) {
+        const errors = { ...snap.versionErrors };
+        delete errors[version];
+        set({ versionErrors: errors });
+      }
+      let changes: Changes;
+      try {
+        changes = await client.read<Changes>(`/api/changes?version=${version}`);
+      } catch (error) {
+        set({
+          versionErrors: {
+            ...snap.versionErrors,
+            [version]: error instanceof ReadError ? error.message : UNREACHABLE,
+          },
+        });
+        throw error;
+      }
       const found: BlueprintVersion | undefined = changes.versions.find((v) => v.version === version);
-      if (found) setData({ versions: { ...snap.data.versions, [version]: found } });
+      if (!found) {
+        const problem = `The playground didn't return blueprint v${version}.`;
+        set({ versionErrors: { ...snap.versionErrors, [version]: problem } });
+        throw new Error(problem);
+      }
+      if (!found.text) {
+        const problem = `Blueprint v${version} has no saved text.`;
+        set({ versionErrors: { ...snap.versionErrors, [version]: problem } });
+        throw new Error(problem);
+      }
+      setData({ versions: { ...snap.data.versions, [version]: found } });
     });
+  };
 
   /** The list of blueprint versions, read each time, keeping any text already loaded. */
   const loadVersions = async () => {
@@ -551,6 +588,28 @@ export function createStore(options: StoreOptions = {}) {
       } catch (error) {
         if (!(error instanceof ReadError)) throw error;
         set({ sourceErrors: { ...snap.sourceErrors, [key]: { code: error.code, message: error.message } } });
+      }
+    });
+  };
+
+  const loadPackageDocs = (pkg: string, blueprint?: string) => {
+    const key = packageDocsKey(blueprint, pkg);
+    if (snap.data.packageDocs[key]) return Promise.resolve();
+    return once(`package-docs:${key}`, async () => {
+      if (snap.packageDocsErrors[key]) {
+        const errors = { ...snap.packageDocsErrors };
+        delete errors[key];
+        set({ packageDocsErrors: errors });
+      }
+      const query = new URLSearchParams({ package: pkg });
+      if (blueprint !== undefined) query.set("blueprint", blueprint);
+      try {
+        const docs = await client.read<PackageDocs>(`/api/packages/docs?${query}`);
+        setData({ packageDocs: { ...snap.data.packageDocs, [key]: docs } });
+      } catch (error) {
+        const problem = error instanceof ReadError ? { code: error.code, message: error.message } : { code: "unreachable", message: UNREACHABLE };
+        set({ packageDocsErrors: { ...snap.packageDocsErrors, [key]: problem } });
+        throw error;
       }
     });
   };
@@ -584,8 +643,8 @@ export function createStore(options: StoreOptions = {}) {
   const test = async (run: number, mode?: TestMode) =>
     followedUp(run, await act<Show>("/api/test", mode ? { run, mode } : { run }));
 
-  const rerun = async (run: number) =>
-    followedUp(run, await act<Show>("/api/rerun", { run }));
+  const rerun = async (run: number, variables?: Record<string, string>) =>
+    followedUp(run, await act<Show>("/api/rerun", variables ? { run, variables } : { run }));
 
   const cancel = (run: number) => act("/api/cancel", { run });
 
@@ -734,9 +793,20 @@ export function createStore(options: StoreOptions = {}) {
     void refreshStatus();
     void refreshSessions();
   };
-  // A blueprint saved in the editor shows when the developer comes back to the page.
+  // Another tab can sign in while this page is still showing its signed-out screen.
+  // Reuse the current stored token only after the server validates it through signIn.
+  const resumeSignIn = () => {
+    if (snap.auth === "signed-out" && localStorage.getItem(SESSION_KEY)) void signIn(location.hash);
+  };
+  const onStorage = (event: StorageEvent) => {
+    if (event.storageArea === localStorage && event.key === SESSION_KEY) resumeSignIn();
+  };
+  // Also recover when returning to a page that missed another tab's storage event.
   const onFocus = () => {
-    if (snap.auth !== "signed-in") return;
+    if (snap.auth !== "signed-in") {
+      resumeSignIn();
+      return;
+    }
     void refreshStatus();
     void refreshSessions();
   };
@@ -755,6 +825,7 @@ export function createStore(options: StoreOptions = {}) {
     async start() {
       window.addEventListener("hashchange", onHashChange);
       window.addEventListener("focus", onFocus);
+      window.addEventListener("storage", onStorage);
       document.addEventListener("visibilitychange", onVisibility);
       if (livePollMs > 0) liveTimer = setInterval(livePoll, livePollMs);
       await signIn(location.hash);
@@ -768,6 +839,7 @@ export function createStore(options: StoreOptions = {}) {
       if (loadRetry) clearTimeout(loadRetry);
       window.removeEventListener("hashchange", onHashChange);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("storage", onStorage);
       window.removeEventListener("beforeunload", warnBeforeLeaving);
       document.removeEventListener("visibilitychange", onVisibility);
     },
@@ -800,6 +872,7 @@ export function createStore(options: StoreOptions = {}) {
     loadVersion,
     loadVersions,
     loadSource,
+    loadPackageDocs,
 
     test,
     rerun,

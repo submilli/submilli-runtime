@@ -11,7 +11,7 @@ const SLACK = 24;
  * `changed` is what counts as something new; `from` is what the pane shows, such as
  * the session: when it changes, the pane starts over at its end with nothing missed.
  */
-export function useFollow<T extends HTMLElement>(changed: unknown, onAway: (away: boolean) => void, from?: unknown) {
+export function useFollow<T extends HTMLElement>(changed: unknown, onAway: (away: boolean) => void, from?: unknown, storageKey?: string) {
   const ref = useRef<T>(null);
   const atEnd = useRef(true);
   const missed = useRef(false);
@@ -19,9 +19,14 @@ export function useFollow<T extends HTMLElement>(changed: unknown, onAway: (away
   const last = useRef<unknown>(Symbol());
   const shown = useRef<unknown>(from);
 
+  const restored = useRef<string | undefined>(undefined);
+
   const onScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
+    if (storageKey) {
+      try { sessionStorage.setItem(storageKey, String(el.scrollTop)); } catch { /* Storage may be disabled. */ }
+    }
     const at = el.scrollHeight - el.scrollTop - el.clientHeight <= SLACK;
     if (at === atEnd.current) return;
     atEnd.current = at;
@@ -29,7 +34,7 @@ export function useFollow<T extends HTMLElement>(changed: unknown, onAway: (away
       missed.current = false;
       onAway(false);
     }
-  }, [onAway]);
+  }, [onAway, storageKey]);
 
   useLayoutEffect(() => {
     if (shown.current !== from) {
@@ -38,6 +43,18 @@ export function useFollow<T extends HTMLElement>(changed: unknown, onAway: (away
       if (missed.current) {
         missed.current = false;
         onAway(false);
+      }
+    }
+    const current = ref.current;
+    if (storageKey && restored.current !== storageKey && current && current.scrollHeight > current.clientHeight) {
+      restored.current = storageKey;
+      let saved: string | null = null;
+      try { saved = sessionStorage.getItem(storageKey); } catch { /* Storage may be disabled. */ }
+      if (saved !== null && Number.isFinite(Number(saved))) {
+        current.scrollTop = Number(saved);
+        atEnd.current = current.scrollHeight - current.scrollTop - current.clientHeight <= SLACK;
+        last.current = changed;
+        return;
       }
     }
     if (last.current === changed) return;
@@ -51,7 +68,7 @@ export function useFollow<T extends HTMLElement>(changed: unknown, onAway: (away
       missed.current = true;
       onAway(true);
     }
-  }, [changed, onAway, from]);
+  });
 
   const toEnd = useCallback(() => {
     const el = ref.current;

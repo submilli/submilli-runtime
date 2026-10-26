@@ -35,7 +35,7 @@ fn playground_outside_a_project_names_init() {
     }
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("playground init"), "stderr: {stderr}");
+    assert!(stderr.contains("playground init-demo"), "stderr: {stderr}");
 }
 
 #[cfg(unix)]
@@ -2064,6 +2064,181 @@ mod unix {
         let record = parse(&output);
         assert_eq!(record["attached"], true);
         assert_eq!(record["egress_grants"], json!([]));
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn browser_session_survives_restart_but_explicit_stop_revokes_it() {
+        let project = Project::new();
+        let first = project.start(&[]);
+        let code = login_code(&first);
+        let (_, _, body) = exchange(&first, &code);
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let token = response["session_token"].as_str().unwrap();
+        let output = project.run(&["restart", "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        let restarted = parse(&output);
+        assert_ne!(first["pid"], restarted["pid"]);
+        assert_eq!(first["url"], restarted["url"]);
+        assert_eq!(
+            request(
+                "GET",
+                &control(&restarted, "/api/status"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            200
+        );
+        assert_ne!(exchange(&restarted, &code).0, 200);
+        // The restart intent remains an admin-only action.
+        assert_eq!(
+            request(
+                "POST",
+                &control(&restarted, "/api/stop?restart=true"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            403
+        );
+        // Abrupt process death has no shutdown cleanup; the already-synced digest survives.
+        let pid = i32::try_from(restarted["pid"].as_u64().unwrap()).unwrap();
+        // SAFETY: this pid is the child just started in this test's isolated project.
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        wait_until(
+            "the crashed playground to release its lock",
+            Duration::from_secs(10),
+            || !instance_held(&project),
+        );
+        let recovered = project.start(&[]);
+        assert_eq!(first["url"], recovered["url"]);
+        assert_eq!(
+            request(
+                "GET",
+                &control(&recovered, "/api/status"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            200
+        );
+        assert!(project.stop().status.success());
+        let stopped_then_started = project.start(&[]);
+        assert_eq!(first["url"], stopped_then_started["url"]);
+        assert_eq!(
+            request(
+                "GET",
+                &control(&stopped_then_started, "/api/status"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            401
+        );
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn saved_browser_origin_refuses_an_occupied_port_without_moving() {
+        let project = Project::new();
+        let first = project.start(&[]);
+        let port = url::Url::parse(first["url"].as_str().unwrap())
+            .unwrap()
+            .port()
+            .unwrap();
+        assert!(project.stop().status.success());
+        let saved_path = project.state().join("control-origin.json");
+        let saved = std::fs::read(&saved_path).unwrap();
+        let occupant = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        let output = project.run(&["start", "--foreground", "--json"]);
+        assert!(!output.status.success());
+        let error = stderr(&output);
+        assert!(
+            error.contains("cannot bind the saved Playground URL"),
+            "{error}"
+        );
+        assert!(error.contains("stop it and try again"), "{error}");
+        assert!(!project.lock().exists());
+        assert!(!project.ready_file().exists());
+        assert!(!instance_held(&project));
+        assert_eq!(std::fs::read(&saved_path).unwrap(), saved);
+        drop(occupant);
+        let recovered = project.start(&[]);
+        assert_eq!(first["url"], recovered["url"]);
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn projects_keep_distinct_origins_and_browser_sign_in() {
+        let first_project = Project::new();
+        let first = first_project.start(&[]);
+        let (_, _, body) = exchange(&first, &login_code(&first));
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let token = response["session_token"].as_str().unwrap();
+        let other_project = Project::new();
+        let other = other_project.start(&[]);
+        assert_ne!(first["url"], other["url"]);
+        assert_eq!(
+            request(
+                "GET",
+                &control(&other, "/api/status"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            401
+        );
+        let restarted = first_project.run(&["restart", "--json"]);
+        assert!(restarted.status.success(), "{}", stderr(&restarted));
+        assert_eq!(first["url"], parse(&restarted)["url"]);
+        assert_eq!(
+            request(
+                "GET",
+                &control(&other, "/api/status"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            401
+        );
+    }
+
+    #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
+    #[test]
+    fn explicit_stop_after_a_crash_revokes_saved_browser_sessions() {
+        let project = Project::new();
+        let first = project.start(&[]);
+        let (_, _, body) = exchange(&first, &login_code(&first));
+        let response: Value = serde_json::from_str(&body).unwrap();
+        let token = response["session_token"].as_str().unwrap();
+        let pid = i32::try_from(first["pid"].as_u64().unwrap()).unwrap();
+        // SAFETY: this pid belongs to the child just started in this isolated test project.
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+        wait_until(
+            "the crashed playground to release its lock",
+            Duration::from_secs(10),
+            || !instance_held(&project),
+        );
+        assert!(project.stop().status.success());
+        let restarted = project.start(&[]);
+        assert_eq!(
+            request(
+                "GET",
+                &control(&restarted, "/api/status"),
+                Some(token),
+                &[],
+                None
+            )
+            .0,
+            401
+        );
     }
 
     #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]

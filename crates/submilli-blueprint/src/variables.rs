@@ -15,6 +15,12 @@ use crate::{Blueprint, BlueprintError, Fault, yaml_path};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VariableDecl {
+    /// Human-facing explanation shown when an application asks for this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// An illustrative value applications may show without binding it automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub example: Option<String>,
     /// The session is rejected at init if this variable is missing or empty.
     #[serde(default, skip_serializing_if = "is_false")]
     pub required: bool,
@@ -381,7 +387,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_yaml() {
-        let yaml = "name: x\nvariables:\n  region:\n    default: us\n  tenant:\n    required: true\n  alias: { alias: tenant, required: true }\n";
+        let yaml = "name: x\nvariables:\n  region:\n    default: us\n  tenant:\n    required: true\n    description: The tenant this session acts for.\n    example: tenant_123\n  alias: { alias: tenant, required: true }\n";
         let bp = parse(yaml).unwrap();
         let reparsed = parse(&crate::to_yaml(&bp)).unwrap();
         assert_eq!(bp.variables, reparsed.variables);

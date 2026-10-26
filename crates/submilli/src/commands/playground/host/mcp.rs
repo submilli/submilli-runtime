@@ -4,10 +4,11 @@
 //! Copied from `submilli-server`'s `mcp/router.rs` (the handler, the
 //! `initialize` pre-check, DELETE answered 204 once the session is closed) and
 //! `mcp/server.rs` (`call_tool`, which reports each tool call as an event). The
-//! host serves one blueprint, so it builds one service, at start. Every request
+//! host builds a separate service for each registered project blueprint. Every request
 //! needs one of the playground's tokens, and rmcp's default `Host` check stays
 //! on, so only a loopback name reaches the endpoint.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Router;
@@ -40,6 +41,7 @@ use session::{EXPLICIT_DELETE, HostSessionManager, HostSessionStore, initialize_
 use tools::SubmilliMcp;
 
 /// What the endpoint's sessions and tools share.
+#[derive(Clone)]
 pub(crate) struct Shared {
     pub(crate) run: Arc<RunHost>,
     pub(crate) sessions: Arc<Sessions>,
@@ -53,19 +55,20 @@ pub(crate) struct Shared {
 impl Shared {
     /// The blueprint in force, when it is the one `name` addresses.
     async fn blueprint(&self, name: &str) -> Option<AppliedBlueprint> {
-        self.blueprints
-            .for_run()
-            .await
-            .filter(|applied| applied.blueprint.name == name)
+        self.blueprints.named(name).await
     }
 }
 
 /// The endpoint, ready to mount with [`routes`].
 pub(crate) struct McpHost {
-    transport: StreamableHttpService<SubmilliMcp, HostSessionManager>,
-    sessions: Arc<HostSessionManager>,
+    endpoints: BTreeMap<String, McpEndpoint>,
     shared: Arc<Shared>,
     tokens: Arc<[ApiToken]>,
+}
+
+struct McpEndpoint {
+    transport: StreamableHttpService<SubmilliMcp, HostSessionManager>,
+    sessions: Arc<HostSessionManager>,
     /// Serializes DELETEs, so a retry sees the first one's close.
     deletion: tokio::sync::Mutex<()>,
 }
@@ -77,11 +80,29 @@ struct Caller(String);
 impl McpHost {
     /// The endpoint for the blueprint the host serves, `blueprint_name`, open to
     /// callers holding one of `tokens`.
+    #[cfg(test)]
     pub(crate) fn new(shared: Shared, tokens: Arc<[ApiToken]>, blueprint_name: &str) -> Self {
+        Self::new_many(shared, tokens, &[blueprint_name.to_owned()])
+    }
+
+    /// One isolated transport/session manager for each registered project name.
+    pub(crate) fn new_many(shared: Shared, tokens: Arc<[ApiToken]>, names: &[String]) -> Self {
         let shared = Arc::new(shared);
-        // Every session is stateful, so each connection has an `MCP-Session-Id`,
-        // the id its runs, files and values are kept under. The default allowed
-        // hosts stay: `localhost`, `127.0.0.1` and `::1`.
+        let endpoints = names
+            .iter()
+            .map(|name| (name.clone(), McpEndpoint::new(Arc::clone(&shared), name)))
+            .collect();
+        Self {
+            endpoints,
+            shared,
+            tokens,
+        }
+    }
+}
+
+impl McpEndpoint {
+    fn new(shared: Arc<Shared>, blueprint_name: &str) -> Self {
+        // Default loopback Host checks and stateful session recovery remain on.
         let mut config = StreamableHttpServerConfig::default()
             .with_stateful_mode(true)
             .with_sse_keep_alive(None)
@@ -102,8 +123,6 @@ impl McpHost {
         Self {
             transport: StreamableHttpService::new(factory, Arc::clone(&sessions), config),
             sessions,
-            shared,
-            tokens,
             deletion: tokio::sync::Mutex::new(()),
         }
     }
@@ -125,6 +144,13 @@ async fn handle(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     req.extensions_mut().insert(Caller(token.name().to_owned()));
+    let Some(endpoint) = host.endpoints.get(&blueprint) else {
+        return (
+            StatusCode::NOT_FOUND,
+            format!("unknown blueprint: {blueprint}"),
+        )
+            .into_response();
+    };
     let Some(applied) = host.shared.blueprint(&blueprint).await else {
         return (
             StatusCode::NOT_FOUND,
@@ -142,7 +168,7 @@ async fn handle(
 
     let terminates_session = req.method() == Method::DELETE;
     let _deletion = if terminates_session {
-        match hold_deletion(&host, req.headers()).await {
+        match hold_deletion(endpoint, req.headers()).await {
             Ok(guard) => Some(guard),
             Err(response) => return *response,
         }
@@ -151,7 +177,7 @@ async fn handle(
     };
 
     let mut response = match EXPLICIT_DELETE
-        .scope(terminates_session, host.transport.clone().oneshot(req))
+        .scope(terminates_session, endpoint.transport.clone().oneshot(req))
         .await
     {
         Ok(resp) => resp.map(Body::new),
@@ -169,7 +195,7 @@ async fn handle(
 /// Hold the DELETE lock, so a retry sees the first one's close; a DELETE for a
 /// session that is not open is answered 404 here.
 async fn hold_deletion<'a>(
-    host: &'a McpHost,
+    host: &'a McpEndpoint,
     headers: &axum::http::HeaderMap,
 ) -> Result<tokio::sync::MutexGuard<'a, ()>, Box<Response>> {
     let guard = host.deletion.lock().await;

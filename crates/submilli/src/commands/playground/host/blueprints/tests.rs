@@ -340,3 +340,39 @@ async fn an_uninstalled_package_is_refused() {
         .await;
     assert_eq!(error.code, "package_missing", "{error:?}");
 }
+
+#[tokio::test]
+async fn registered_project_names_keep_their_own_versions_and_refuse_unknown_names() {
+    let host = Host::new();
+    host.apply(V1, "v1").await;
+    host.blueprints.register("reports").await;
+    let reports = V1.replace("name: demo", "name: reports");
+    host.apply(&reports, "v2").await;
+    assert_eq!(
+        host.blueprints.named("demo").await.unwrap().version_tag,
+        "v1"
+    );
+    assert_eq!(
+        host.blueprints.named("reports").await.unwrap().version_tag,
+        "v2"
+    );
+    host.apply(&reports.replace("name: ok", "name: changed"), "v3")
+        .await;
+    assert_eq!(
+        host.blueprints.named("demo").await.unwrap().version_tag,
+        "v1"
+    );
+    assert_eq!(
+        host.blueprints.named("reports").await.unwrap().version_tag,
+        "v3"
+    );
+    assert!(host.blueprints.named("../reports.yaml").await.is_none());
+    assert!(host.blueprints.named("unknown").await.is_none());
+    assert!(
+        host.blueprints
+            .apply("name: unknown\n", "v4")
+            .await
+            .is_err()
+    );
+    assert_eq!(host.version_in_force().await.as_deref(), Some("v1"));
+}

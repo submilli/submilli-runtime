@@ -19,7 +19,7 @@ submilli-blueprint = { path = "../submilli-blueprint" }
 submilli-build = { path = "../submilli-build" }
 submilli-durable = { path = "../submilli-durable" }
 submilli-shared = { path = "../submilli-shared" }
-clap = { workspace = true }
+clap = { workspace = true, features = ["wrap_help"] }
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
 ureq = { workspace = true }

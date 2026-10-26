@@ -203,6 +203,10 @@ impl StateDir {
         self.root.join("binding.json")
     }
 
+    pub(crate) fn browser_sessions_path(&self) -> PathBuf {
+        self.root.join("browser-sessions.json")
+    }
+
     pub(crate) fn token_path(&self, name: &str) -> PathBuf {
         self.root.join("tokens").join(name)
     }
@@ -450,7 +454,7 @@ impl StateDir {
         }))
     }
 
-    fn instance_lock_path(&self) -> PathBuf {
+    pub(crate) fn instance_lock_path(&self) -> PathBuf {
         self.root.join("instance.lock")
     }
 
@@ -597,6 +601,20 @@ fn read_private(path: &Path) -> Result<Option<String>> {
     };
     let mut text = String::new();
     file.read_to_string(&mut text)?;
+    Ok(Some(text))
+}
+
+/// Read a small private record without allocating beyond its format's limit.
+pub(crate) fn read_private_bounded(path: &Path, limit: u64) -> Result<Option<String>> {
+    let Some(file) = open_existing_private(path)? else {
+        return Ok(None);
+    };
+    let mut text = String::new();
+    file.take(limit.saturating_add(1))
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > limit {
+        bail!("private state record exceeds its size limit");
+    }
     Ok(Some(text))
 }
 

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "185aab5a82e78427645f6f598a1f3803e485f70b135a5733192d13a94ed44fb9"
+  contentHash: "d281b55ddd833f4ee25f911cba4f5dd458d6630c448ea986e66b3084b215750a"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -426,6 +426,8 @@ Neither can change the bindings.
 
 | Field | Type | Default | Constraints |
 | --- | --- | --- | --- |
+| `description` | string | none | Human-facing explanation an application may show when asking for the value |
+| `example` | string | none | Illustrative value an application may show; it is not bound automatically |
 | `required` | boolean | `false` | `true` refuses a session that doesn't supply a non-empty value |
 | `default` | string | none | The value bound when the session supplies none. Can't be combined with `required: true` or `alias` |
 | `alias` | string | none | Another declared variable name. Resolves from its target; direct bindings for this name are refused. May be combined with `required: true` |

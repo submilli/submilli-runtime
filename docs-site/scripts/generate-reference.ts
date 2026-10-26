@@ -26,12 +26,12 @@ function run(binary: string, args: string[]): string {
 		env: { ...process.env, SUBMILLI_HOME: join(home, 'home'), NO_COLOR: '1' },
 		encoding: 'utf8',
 		stdio: ['ignore', 'pipe', 'pipe'],
-	}).trimEnd();
+	}).trimEnd().split('\n').map((line) => line.trimEnd()).join('\n');
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
-/** The subcommand names listed under a help text's `Commands:` heading. */
+/** Subcommand rows, including task groups within the `Commands:` section. */
 function subcommands(help: string): string[] {
 	const names: string[] = [];
 	let inCommands = false;
@@ -39,7 +39,7 @@ function subcommands(help: string): string[] {
 		if (/^Commands:/.test(line)) inCommands = true;
 		else if (inCommands && /^\S/.test(line)) inCommands = false;
 		else if (inCommands) {
-			const name = line.match(/^ {2}(\S+)/)?.[1];
+			const name = line.match(/^ {2}(?: {2})?([a-z][a-z0-9-]*)(?: |$)/)?.[1];
 			if (name && name !== 'help') names.push(name);
 		}
 	}

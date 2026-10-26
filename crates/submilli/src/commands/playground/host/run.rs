@@ -765,6 +765,28 @@ impl RunHost {
         self.packages.clear();
     }
 
+    /// Refresh only the registry packages visible to this discovery request.
+    pub(crate) async fn refresh_package_discovery(
+        self: &Arc<Self>,
+        blueprint: &Blueprint,
+        name: Option<&str>,
+    ) -> Result<(), String> {
+        let wanted = blueprint
+            .packages
+            .iter()
+            .filter(|package| name.is_none_or(|name| package.as_str() == name))
+            .cloned()
+            .collect();
+        if let Some(freshness) = &self.freshness {
+            let host = Arc::clone(self);
+            freshness
+                .before_discovery(wanted, move || host.clear_prepared_packages())
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
     /// Drop every discovered `@mcp/<server>` catalog, so the next run discovers
     /// against the blueprint in force.
     pub(crate) fn clear_mcp_catalogs(&self) {
@@ -1448,13 +1470,9 @@ async fn dispatch(
     services.session_run.dispatched = true;
     let owner = tokio::spawn(async move {
         let mut services = services;
-        // Closing the session cancels its work, as an explicit cancel does.
-        let requested = std::mem::replace(
-            &mut services.inputs.cancel_requested,
-            tokio::sync::oneshot::channel().1,
-        );
-        services.inputs.cancel_requested =
-            cancel_on_close_or_request(services.resource_use.cancel.clone(), requested);
+        // Poll both signals in the runner: forwarding a request through another
+        // task can let a recorded-call failure overtake its cancellation.
+        let session_closed = services.resource_use.cancel.clone();
         let owner_recording = services.recording.take();
         let log = owner_recording.as_ref().map(Recording::log);
         let resource_use = services.resource_use;
@@ -1474,6 +1492,7 @@ async fn dispatch(
             &packages,
             &owner_mcps,
             caller_gone,
+            session_closed,
             log.clone(),
         )
         .await;
@@ -1516,24 +1535,6 @@ async fn dispatch(
     outcome
 }
 
-/// A cancel signal that fires when `resource_cancel` does, as closing the session
-/// does, or when `requested` is sent. A forwarding task watches both until the
-/// returned receiver is dropped.
-fn cancel_on_close_or_request(
-    resource_cancel: tokio_util::sync::CancellationToken,
-    requested: tokio::sync::oneshot::Receiver<()>,
-) -> tokio::sync::oneshot::Receiver<()> {
-    let (mut sender, receiver) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        tokio::select! {
-            () = resource_cancel.cancelled() => { let _ = sender.send(()); }
-            Ok(()) = requested => { let _ = sender.send(()); }
-            () = sender.closed() => {}
-        }
-    });
-    receiver
-}
-
 /// The per-run host capabilities [`run_inner`] installs in the store.
 struct Inputs {
     git: Result<Option<interpreter::stdlib::git::GitConfig>, String>,
@@ -1567,6 +1568,7 @@ async fn run_inner(
     packages: &PreparedPackages,
     mcps: &McpCatalog,
     mut caller_gone: tokio::sync::oneshot::Receiver<()>,
+    session_closed: tokio_util::sync::CancellationToken,
     log: Option<Arc<DecisionLog>>,
 ) -> RunOutcome {
     let git = match inputs.git {
@@ -1716,6 +1718,7 @@ async fn run_inner(
     let mut outcome = tokio::select! {
         biased;
         _ = &mut caller_gone => RunOutcome::cancelled(),
+        () = session_closed.cancelled() => RunOutcome::cancelled(),
         () = cancel_sent => RunOutcome::cancelled(),
         outcome = execution => outcome,
     };

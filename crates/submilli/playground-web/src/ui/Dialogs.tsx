@@ -1,16 +1,18 @@
-// The page's dialogs, the More panel and the toast. Each dialog takes focus when it opens;
+import { packageDocsKey } from "../api/types";
+// The page's dialogs and toast. Each dialog takes focus when it opens;
 // the page gives focus back to whatever opened it when it closes.
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import type { ActionOutcome } from "../api/client";
-import type { Draft, SavedKey, Status } from "../api/types";
+import type { DeclaredVariable, Draft, PackageDocs, SavedKey, Status } from "../api/types";
 import type { BlueprintDialog } from "../model/blueprint";
 import { forAsst } from "../model/refs";
 import type { FixedVar, SessionRow } from "../model/sessions";
 import { keyNote, keyNow, keySaved } from "../model/setup";
 import { providerName } from "../model/format";
-import { CloseIcon, cls, Inline } from "./controls";
+import { CloseIcon, cls, Inline, Markdown } from "./controls";
 import { BP_LOADING, DRAFT_NOTE, draftCommand, draftWhere } from "./wording";
+import "../styles/setup-dialogs.css";
 
 function useTakeFocus<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -260,10 +262,8 @@ export function KeyDialog(props: {
                   {error}
                 </small>
               )}
-              <small id="key-note">
-                <Inline text={keyNote(props.status, provider)} />
-              </small>
             </label>
+            <details className="ds-help"><summary>Key storage and precedence</summary><p id="key-note"><Inline text={keyNote(props.status, provider)} /></p></details>
             <div className="pg-setup-row">
               <button type="submit" className="pg-btn pg-primary" aria-disabled={!key.trim() || busy || undefined} disabled={busy}>
                 {now.saved ? "Replace key" : "Save key"}
@@ -328,40 +328,106 @@ export function PackagesDialog(props: {
   inForceLabel: string;
   status: Status;
   packages: PackageLine[];
+  docs: Record<string, PackageDocs>;
+  docsErrors: Record<string, { code: string; message: string }>;
+  onLoadDocs: (name: string, blueprint: string) => void;
   onClose: () => void;
   onOpenRules: (name: string, line: number) => void;
 }) {
   const n = props.packages.length;
+  const [selected, setSelected] = useState(props.packages[0]?.name ?? "");
+  const line = props.packages.find((p) => p.name === selected);
+  const entry = props.status.packages.find((p) => p.name === selected);
+  const docs = props.docs[packageDocsKey(props.blueprint, selected)];
+  const error = props.docsErrors[packageDocsKey(props.blueprint, selected)];
+  useEffect(() => {
+    if (selected) props.onLoadDocs(selected, props.blueprint);
+  }, [selected, props.blueprint, props.onLoadDocs]);
   return (
-    <Dialog id="dlg-pkgs" title={props.blueprint + " · " + n + (n === 1 ? " package" : " packages")} size="narrow" onClose={props.onClose}>
+    <Dialog
+      id="dlg-pkgs"
+      title={"Packages in " + props.blueprint + (props.inForceLabel ? " " + props.inForceLabel : "")}
+      size="bp"
+      onClose={props.onClose}
+    >
       <div className="pg-dialog-body">
-        <p className="pg-muted">
-          Packages blueprint {props.blueprint} {props.inForceLabel} lets programs import, and the rules each package has for what it may do itself.
-        </p>
-        <table className="pg-table">
-          <thead>
-            <tr>
-              <th>Package</th>
-              <th>Own rules</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
+        {n > 1 && (
+          <div className="pg-pills pg-package-picker" role="group" aria-label="Package">
             {props.packages.map((p) => (
-              <tr key={p.name}>
-                <td className="mono">{p.name}</td>
-                <td>{p.rules ? String(p.rules.count) : "0"}</td>
-                <td className="pg-rowend">
-                  {p.rules && (
-                    <button className="pg-btn" onClick={() => p.rules && props.onOpenRules(p.name, p.rules.line)}>
-                      Open in blueprint
-                    </button>
-                  )}
-                </td>
-              </tr>
+              <button
+                type="button"
+                key={p.name}
+                className={cls("pg-pill", selected === p.name && "on")}
+                aria-pressed={selected === p.name}
+                onClick={() => setSelected(p.name)}
+              >
+                {p.name}
+              </button>
             ))}
-          </tbody>
-        </table>
+          </div>
+        )}
+        {entry && (
+          <section className="pg-package" aria-labelledby="pg-package-name">
+            <div className="pg-package-head">
+              <div>
+                <h3 id="pg-package-name">{entry.name}</h3>
+                <p className="pg-muted">
+                  v{entry.version} · {entry.project ? "Project package" : "Installed package"} · {entry.importable ? "Programs can import it" : "Dependency"}
+                </p>
+              </div>
+              {line?.rules && (
+                <button
+                  className="pg-btn"
+                  aria-label={`View its ${line.rules.count === 1 ? "rule" : `${line.rules.count} rules`}`}
+                  onClick={() => line.rules && props.onOpenRules(line.name, line.rules.line)}
+                >
+                  View internal permissions ({line.rules.count} {line.rules.count === 1 ? "rule" : "rules"})
+                </button>
+              )}
+            </div>
+            <section className="pg-package-section" aria-labelledby="pg-package-api-guide">
+              <h4 id="pg-package-api-guide">API guide</h4>
+              <p>Authored package documentation and examples. This guide is the source of truth for the package’s public API.</p>
+            {docs && (
+              <div className="pg-package-docs" aria-label={entry.name + " package guide"}>
+                <Markdown text={docs.untrusted.markdown} />
+              </div>
+            )}
+            {docs?.note && <p className="pg-muted">{docs.note}</p>}
+            {!docs && !error && <p className="pg-muted">Loading the package guide…</p>}
+            {!docs && error && (
+              <div className="pg-package-error">
+                <p className="pg-error">{error.message}</p>
+                <button className="pg-btn" onClick={() => props.onLoadDocs(selected, props.blueprint)}>
+                  Try again
+                </button>
+              </div>
+            )}
+            </section>
+            <section className="pg-package-section" aria-labelledby="pg-package-operation-rules">
+              <h4 id="pg-package-operation-rules">Operation rules</h4>
+              <p>Separate public operation rules are not recorded in the available package metadata. Use View blueprint to review the exact YAML and the rules that govern calls.</p>
+              {line?.rules && (
+                <button className="pg-link" onClick={() => props.onOpenRules(line.name, line.rules!.line)}>
+                  View blueprint YAML
+                </button>
+              )}
+            </section>
+            <section className="pg-package-section" aria-labelledby="pg-package-internal-permissions">
+              <h4 id="pg-package-internal-permissions">Internal permissions</h4>
+              <p>
+                {line?.rules
+                  ? `The package has ${line.rules.count} explicit permission ${line.rules.count === 1 ? "rule" : "rules"} in its blueprint block. These describe capabilities the implementation may call.`
+                  : "No explicit rules are recorded in this section. Review the blueprint YAML before drawing conclusions about access."}
+              </p>
+              {line?.rules && (
+                <button className="pg-link" onClick={() => props.onOpenRules(line.name, line.rules!.line)}>
+                  View package permission block
+                </button>
+              )}
+            </section>
+          </section>
+        )}
       </div>
     </Dialog>
   );
@@ -369,14 +435,21 @@ export function PackagesDialog(props: {
 
 export function BlueprintView(props: {
   d: BlueprintDialog;
+  error: string;
   /** Said when the version shown isn't the one in force. */
   differs: string;
   file: string;
   onClose: () => void;
   onVersion: (v: number) => void;
+  onRetry: () => void;
   copy: (text: string, what: "reference") => void;
 }) {
   const { d } = props;
+  const currentVersion = d.versions.find((v) => v.name.includes("in force"))?.version;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  useEffect(() => {
+    if (currentVersion !== undefined && currentVersion !== d.version) setHistoryOpen(true);
+  }, [currentVersion, d.version]);
   const box = useRef<HTMLDivElement>(null);
   // The lit rule comes to the middle of the text when the dialog opens or the version
   // changes; only the text scrolls, so the versions and what is lit stay in view.
@@ -391,14 +464,18 @@ export function BlueprintView(props: {
     <Dialog id="dlg-bp" title={d.title} size="bp" onClose={props.onClose}>
       <div className="pg-dialog-body">
         <div className="pg-bp-versions">
-          <span className="pg-muted pg-small">Versions</span>
-          <div className="pg-pills" role="group" aria-label="Blueprint versions">
-            {d.versions.map((v) => (
-              <button className={cls("pg-pill", v.on && "on")} aria-pressed={v.on} key={v.version} onClick={() => props.onVersion(v.version)}>
-                {v.name}
-              </button>
-            ))}
-          </div>
+          <button className="pg-link" aria-expanded={historyOpen} onClick={() => setHistoryOpen((open) => !open)}>
+            Project blueprint history ({d.versions.length})
+          </button>
+          {historyOpen && (
+            <><p className="pg-muted">Versions from all blueprints in this local project. The in-force marker refers to the selected blueprint.</p><div className="pg-pills" role="group" aria-label="Project blueprint versions">
+              {d.versions.map((v) => (
+                <button className={cls("pg-pill", v.on && "on")} aria-pressed={v.on} key={v.version} onClick={() => props.onVersion(v.version)}>
+                  {v.name}
+                </button>
+              ))}
+            </div></>
+          )}
         </div>
         <p className="pg-muted">{d.summary}</p>
         {props.differs && <p className="pg-muted">{props.differs}</p>}
@@ -417,7 +494,15 @@ export function BlueprintView(props: {
               <span className="txt">{l.text}</span>
             </div>
           ))}
-          {!d.lines.length && <div className="pg-empty">{BP_LOADING}</div>}
+          {!d.lines.length && !props.error && <div className="pg-empty">{BP_LOADING}</div>}
+          {!d.lines.length && props.error && (
+            <div className="pg-empty">
+              <p>{props.error}</p>
+              <button className="pg-btn" onClick={props.onRetry}>
+                Try again
+              </button>
+            </div>
+          )}
         </div>
         <p className="pg-muted">
           {props.file} · printed by <code>{d.cli}</code>
@@ -427,20 +512,61 @@ export function BlueprintView(props: {
   );
 }
 
-export function ConfirmDialog(props: { title: string; body: string; go: string; command: string; onGo: () => void; onClose: () => void }) {
+type ConfirmDialogCommon = {
+  title: string;
+  body: string;
+  go: string;
+  command: string;
+  onGo: () => void;
+  onClose: () => void;
+};
+
+export type ConfirmDialogProps =
+  | (ConfirmDialogCommon & { rerun?: undefined })
+  | (ConfirmDialogCommon & {
+      rerun: {
+        variables: DeclaredVariable[];
+        values: Record<string, string>;
+        onVariable: (name: string, value: string) => void;
+        error: string;
+        running: boolean;
+      };
+    });
+
+export function ConfirmDialog(props: ConfirmDialogProps) {
+  const missing = props.rerun?.variables.filter(({ name, required }) => required && !props.rerun?.values[name]) ?? [];
   return (
     <Dialog id="dlg-confirm" title={props.title} size="narrow" onClose={props.onClose}>
       <div className="pg-dialog-body">
         <p>{props.body}</p>
-        <p className="pg-muted">
+        {props.rerun ? (
+          <>
+            <p className="pg-muted">Recorded values from this run are filled in. Review or edit them for this rerun.</p>
+            {props.rerun.variables.map((variable) => (
+              <label className="pg-vfield" key={variable.name}>
+                {variable.name}{variable.required ? " (required)" : ""}
+                <input
+                  value={props.rerun.values[variable.name] ?? ""}
+                  onChange={(event) => props.rerun?.onVariable(variable.name, event.target.value)}
+                  placeholder={variable.example}
+                  aria-required={variable.required}
+                  disabled={props.rerun.running}
+                />
+                {variable.description && <small>{variable.description}</small>}
+              </label>
+            ))}
+            {missing.length > 0 && <p className="pg-field-err">Enter {missing.map(({ name }) => name).join(", ")} before rerunning.</p>}
+          </>
+        ) : <p className="pg-muted">
           Same from the CLI: <code>{props.command}</code>
-        </p>
+        </p>}
+        {props.rerun?.error && <p role="alert" className="pg-field-err"><Inline text={props.rerun.error} /></p>}
         <div className="pg-setup-row">
-          <button className="pg-btn pg-caution" onClick={props.onGo}>
-            {props.go}
+          <button className="pg-btn pg-caution" disabled={missing.length > 0 || props.rerun?.running} onClick={props.onGo}>
+            {props.rerun?.running ? "Rerunning…" : props.go}
           </button>
           <button className="pg-btn" onClick={props.onClose}>
-            Don’t run
+            {props.rerun?.running ? "Close" : "Don’t run"}
           </button>
         </div>
       </div>
@@ -467,43 +593,6 @@ export function DraftDialog(props: { draft: Draft; refText: string; onClose: () 
         </div>
       </div>
     </Dialog>
-  );
-}
-
-export function MorePanel(props: { commands: string[]; focus: boolean; onFocus: () => void; onLeave: (to: Element | null) => void; onBack: () => void }) {
-  const ref = useTakeFocus<HTMLDivElement>();
-  return (
-    <div
-      className="pg-more"
-      role="dialog"
-      aria-label="More"
-      tabIndex={-1}
-      ref={ref}
-      // Focus leaving it, as Tab past its last button does, closes it.
-      onBlur={(ev) => !ev.currentTarget.contains(ev.relatedTarget) && props.onLeave(ev.relatedTarget instanceof Element ? ev.relatedTarget : null)}
-      // It opens from More, so Shift+Tab out of it goes back to More, not to the page's end.
-      onKeyDown={(ev) => {
-        if (ev.key !== "Tab" || !ev.shiftKey) return;
-        const first = ev.currentTarget.querySelector<HTMLElement>("button, [href], [tabindex='0']");
-        if (document.activeElement === first || document.activeElement === ev.currentTarget) {
-          ev.preventDefault();
-          props.onBack();
-        }
-      }}
-    >
-      <h3>Use with your coding assistant</h3>
-      <p>
-        Every Copy for assistant gives one line: what the item is, and the command that prints it. Paste it into Claude Code or another coding
-        assistant and ask for what you want, such as “why was this denied?”.
-      </p>
-      {props.commands.length > 0 && <pre>{props.commands.join("\n")}</pre>}
-      <p>Run and decision numbers are per project and never reused, so references name the project.</p>
-      <h3>About these numbers</h3>
-      <p>Bytes as recorded. Reruns by you (tests and live reruns) don't count toward the session's totals.</p>
-      <button className="pg-btn" onClick={props.onFocus}>
-        {props.focus ? "Exit focus view" : "Focus view"}
-      </button>
-    </div>
   );
 }
 

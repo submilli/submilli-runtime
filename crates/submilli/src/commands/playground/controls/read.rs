@@ -1976,6 +1976,8 @@ pub(crate) struct SessionsResult {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SessionRow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) blueprint: Option<String>,
     pub(crate) session: String,
     pub(crate) started_at_micros: u64,
     pub(crate) started_at: String,
@@ -2076,6 +2078,7 @@ fn session_row<'r>(
     at: u64,
 ) -> &'r mut SessionRow {
     rows.entry(id.to_owned()).or_insert_with(|| SessionRow {
+        blueprint: None,
         session: id.to_owned(),
         started_at_micros: at,
         started_at: String::new(),
@@ -2181,6 +2184,7 @@ pub(crate) fn sessions_with(
             let session = session_row(&mut rows, line.entry.session_id(), line.at_micros);
             match line.entry {
                 SessionEntry::Started {
+                    blueprint,
                     variables,
                     label,
                     idle_timeout_ms,
@@ -2191,6 +2195,7 @@ pub(crate) fn sessions_with(
                     session.started_at_micros = session.started_at_micros.min(line.at_micros);
                     session.last_active_micros = session.last_active_micros.max(line.at_micros);
                     session.variables = variables;
+                    session.blueprint = blueprint;
                     if !session.sources.contains(&label) {
                         session.sources.push(label);
                     }
@@ -2223,6 +2228,9 @@ pub(crate) fn sessions_with(
         session.started_at_micros = session.started_at_micros.min(summary.started_at_micros);
         if session.variables.is_empty() {
             session.variables = summary.variables.clone();
+        }
+        if session.blueprint.is_none() {
+            session.blueprint = Some(summary.blueprint.clone());
         }
         if !session.sources.contains(&summary.label) {
             session.sources.push(summary.label.clone());

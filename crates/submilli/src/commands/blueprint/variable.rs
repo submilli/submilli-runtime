@@ -88,6 +88,8 @@ fn add(args: &AddArgs) -> Result<String> {
     }
 
     let decl = VariableDecl {
+        description: None,
+        example: None,
         required: args.required,
         default: args.default.clone(),
         alias: args.alias.clone(),
@@ -263,6 +265,8 @@ permissions:
         assert_eq!(
             reload(&path).variables["customerId"],
             VariableDecl {
+                description: None,
+                example: None,
                 required: true,
                 default: None,
                 alias: None,
@@ -279,6 +283,8 @@ permissions:
         assert_eq!(
             reload(&path).variables["region"],
             VariableDecl {
+                description: None,
+                example: None,
                 required: false,
                 default: Some("us".into()),
                 alias: None,

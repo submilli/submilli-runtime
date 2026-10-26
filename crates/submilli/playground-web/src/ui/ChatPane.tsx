@@ -15,7 +15,6 @@ export function ChatPane(props: {
   onText: (text: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onNew: () => void;
   onBack?: () => void;
   onPick: (run: number) => void;
 }) {
@@ -34,9 +33,9 @@ export function ChatPane(props: {
     if (!box.disabled) props.onSend();
   };
   return (
-    <section className="pg-pane chat" aria-label="Chat">
+    <section id="pg-panel-chat" className="pg-pane chat" aria-label="Conversation">
       <div className="pg-pane-head">
-        <h2>Chat</h2>
+        <h2>Conversation</h2>
       </div>
       {/* Focusable, so a long conversation can be scrolled from the keyboard. */}
       <div className="pg-chat" ref={props.scrollRef} onScroll={props.onScroll} tabIndex={0} aria-label="Conversation">
@@ -61,7 +60,7 @@ export function ChatPane(props: {
               return (
                 <button
                   className={cls("pg-chip", m.selected && "selected")}
-                  title={(m.hint ? "Asked for " + m.hint + ". " : "") + "Show this run in the log"}
+                  title={(m.hint ? "Asked for " + m.hint + ". " : "") + "Open this run’s evidence in Execution"}
                   key={i}
                   onClick={() => props.onPick(m.run)}
                 >
@@ -106,11 +105,7 @@ export function ChatPane(props: {
               Back to session {box.none.back}
             </button>
           )}
-          {box.none.offer && (
-            <button className="pg-btn pg-primary" onClick={props.onNew}>
-              New session
-            </button>
-          )}
+
         </div>
       ) : (
       /* Stays focusable when it can't be used, so its reason can be read. */

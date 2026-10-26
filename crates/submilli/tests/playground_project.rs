@@ -1,5 +1,5 @@
 //! The playground's project (U9) through the real binary: finding the project from
-//! anywhere in it, `playground init` and its starter, the package closure in the
+//! anywhere in it, `playground init-demo` and its starter, the package closure in the
 //! ready record and `status`, and the package check every run gets, whoever sends it:
 //! an edited project package is rebuilt before the run, one that no longer builds
 //! fails the run as a package-resolution error, and an install from outside the
@@ -48,7 +48,7 @@ mod unix {
         /// A repository with the starter scaffolded into it.
         fn starter() -> Self {
             let workspace = Self::repository();
-            let output = workspace.playground(&workspace.root, &["init", "--json"]);
+            let output = workspace.playground(&workspace.root, &["init-demo", "--json"]);
             assert!(output.status.success(), "init: {}", stderr(&output));
             workspace
         }
@@ -356,8 +356,10 @@ mod unix {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         // From deep inside the repository, the project goes at its root.
-        let output =
-            workspace.playground(&workspace.root.join("src/handlers"), &["init", "--json"]);
+        let output = workspace.playground(
+            &workspace.root.join("src/handlers"),
+            &["init-demo", "--json"],
+        );
         assert!(output.status.success(), "init: {}", stderr(&output));
         let record = parse(&output);
         assert_eq!(record["project"], json!(workspace.root));
@@ -381,7 +383,7 @@ mod unix {
         );
 
         // A second init refuses rather than touching the project.
-        let again = workspace.playground(&workspace.root, &["init"]);
+        let again = workspace.playground(&workspace.root, &["init-demo"]);
         assert_eq!(again.status.code(), Some(1));
         assert!(
             stderr(&again).contains("already holds"),
@@ -425,7 +427,7 @@ mod unix {
         let output = workspace.playground(&workspace.root.join("src"), &["start", "--json"]);
         assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
         assert!(
-            stderr(&output).contains("submilli playground init"),
+            stderr(&output).contains("submilli playground init-demo"),
             "{}",
             stderr(&output)
         );

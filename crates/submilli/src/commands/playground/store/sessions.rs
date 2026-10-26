@@ -29,6 +29,8 @@ pub(crate) struct SessionLine {
 pub(crate) enum SessionEntry {
     /// A session started with its variables fixed.
     Started {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        blueprint: Option<String>,
         session_id: String,
         variables: BTreeMap<String, String>,
         /// Who started it: the playground's label for the runs it holds (`assistant`,
@@ -105,6 +107,7 @@ mod tests {
         let store = Store::open(&dir.path().join("store")).unwrap();
         store
             .append_session(SessionEntry::Started {
+                blueprint: None,
                 session_id: "s-1".into(),
                 variables: BTreeMap::from([("customerId".into(), "pied_piper".into())]),
                 label: "assistant".into(),

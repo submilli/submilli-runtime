@@ -19,7 +19,24 @@ export function end(outcome: Outcome): string {
 export type Tone = "ok" | "warn" | "bad" | "quiet";
 
 export function tone(word: string): Tone {
-  return word === "completed" ? "ok" : word === "stopped" ? "warn" : word === "cancelled" ? "quiet" : "bad";
+  return word === "completed" ? "ok" : word === "stopped" || word === "denied" ? "warn" : word === "cancelled" ? "quiet" : "bad";
+}
+
+/** Visible outcome wording, independent of the underlying outcome used by filters. */
+export function outcomeLabel(word: string): string {
+  return word === "denied" ? "Blocked by blueprint" : capitalize(word);
+}
+
+/** A recorded execution's kind, without inferring a mode missing from historical JSON. */
+export function executionLabel(show: Show): string {
+  if (show.rerun_of) return "Live rerun";
+  if (!show.test) return outcomeLabel(end(show.outcome));
+  switch (show.test.mode) {
+    case "recorded": return "Recorded test";
+    case "reads-live": return "Test with real reads";
+    case "live": return "Live test";
+    default: return "Test · mode unavailable";
+  }
 }
 
 /** How long a run took: milliseconds under a second, then seconds with one decimal. */
@@ -88,6 +105,8 @@ export interface ValuesNote {
   lead: string;
   changes: ValueChange[];
   tail: string;
+  /** A short summary shown before the value details, when those details are optional. */
+  summary?: string;
 }
 
 /** The values that differ between `before` and `after`, a name unset on one side shown as "not set". */

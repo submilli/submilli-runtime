@@ -3,8 +3,9 @@
 //! - The CLI presents the admin token, checked with the server's own digest
 //!   comparison ([`authenticate`](super::host::auth::authenticate)).
 //! - The page presents a browser session token, which it got by exchanging a
-//!   single-use login code from a link. Both live only in this process's memory,
-//!   as digests, and a stop drops them.
+//!   single-use login code from a link. Session digests and absolute expiries survive
+//!   a restart in private project state; login codes remain in memory. An explicit
+//!   stop revokes saved sessions.
 //! - The nonce challenge proves the listener belongs to the instance the lock
 //!   names before any command sends a credential to it.
 //!
@@ -12,7 +13,10 @@
 //! the machine sleeps, so a code minted before a night's sleep would otherwise
 //! still work in the morning.
 
+use anyhow::{Context, bail};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -53,10 +57,12 @@ pub(crate) enum Caller {
 pub(crate) enum LoginRefusal {
     Invalid,
     RateLimited,
+    Persistence,
 }
 
 pub(crate) struct ControlAuth {
     tokens: Vec<ApiToken>,
+    session_file: Option<PathBuf>,
     // Poison means a panic interrupted an update of the code or session tables;
     // AGENTS.md permits the poisoned-lock panic rather than trusting partial state.
     secrets: Mutex<Secrets>,
@@ -107,8 +113,33 @@ impl Deadline {
     }
 }
 
+/// Sync the directory entry too: a successful revoke must survive a machine crash.
+fn write_sessions(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    super::state::write_private(path, bytes)?;
+    let parent = path
+        .parent()
+        .context("browser sessions file has no parent")?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedSessions {
+    version: u32,
+    sessions: Vec<SavedSession>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedSession {
+    digest: [u8; 32],
+    expires_at: SystemTime,
+}
+
 #[derive(Default)]
 struct Secrets {
+    revoked: bool,
     /// Digest of an unused login code, and when it expires, oldest first.
     codes: VecDeque<([u8; 32], Deadline)>,
     /// Digest of a browser session token, and when it expires.
@@ -122,8 +153,87 @@ impl ControlAuth {
     pub(crate) fn new(tokens: Vec<ApiToken>) -> Self {
         Self {
             tokens,
+            session_file: None,
             secrets: Mutex::new(Secrets::default()),
         }
+    }
+
+    /// Restore only this project's browser sessions. Login codes never survive startup.
+    pub(crate) fn open(tokens: Vec<ApiToken>, path: PathBuf, now: Now) -> anyhow::Result<Self> {
+        let mut auth = Self::new(tokens);
+        if let Some(text) = super::state::read_private_bounded(&path, 1024 * 1024)? {
+            let saved: SavedSessions =
+                serde_json::from_str(&text).context("saved browser sessions are invalid")?;
+            if saved.version != 1 {
+                bail!("unsupported saved browser sessions version");
+            }
+            let mut secrets = auth.lock();
+            for session in saved.sessions {
+                let Ok(remaining) = session.expires_at.duration_since(now.wall) else {
+                    continue;
+                };
+                // A backwards wall-clock jump cannot grant more than the original lifetime.
+                if remaining.is_zero() || remaining > SESSION_TTL {
+                    continue;
+                }
+                if let Some(monotonic) = now.monotonic.checked_add(remaining) {
+                    secrets.sessions.insert(
+                        session.digest,
+                        Deadline {
+                            monotonic,
+                            wall: session.expires_at,
+                        },
+                    );
+                }
+            }
+        }
+        auth.session_file = Some(path);
+        Ok(auth)
+    }
+
+    fn save_sessions(&self, sessions: &HashMap<[u8; 32], Deadline>) -> anyhow::Result<()> {
+        let Some(path) = &self.session_file else {
+            return Ok(());
+        };
+        let saved = SavedSessions {
+            version: 1,
+            sessions: sessions
+                .iter()
+                .map(|(digest, deadline)| SavedSession {
+                    digest: *digest,
+                    expires_at: deadline.wall,
+                })
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&saved)?;
+        if bytes.len() > 1024 * 1024 {
+            bail!("saved browser sessions exceed the size limit");
+        }
+        write_sessions(path, &bytes)
+    }
+
+    /// Revoke persisted sessions before acknowledging an explicit stop.
+    pub(crate) fn revoke_sessions(&self) -> anyhow::Result<()> {
+        let mut secrets = self.lock();
+        self.save_sessions(&HashMap::new())?;
+        secrets.revoked = true;
+        secrets.codes.clear();
+        secrets.sessions.clear();
+        Ok(())
+    }
+
+    /// Also let an explicit stop revoke sessions after a crash left no process running.
+    pub(crate) fn revoke_saved(path: &Path) -> anyhow::Result<()> {
+        if super::state::read_private_bounded(path, 1024 * 1024)?.is_some() {
+            write_sessions(
+                path,
+                &serde_json::to_vec(&SavedSessions {
+                    version: 1,
+                    sessions: Vec::new(),
+                })?,
+            )?;
+        }
+        Ok(())
     }
 
     /// A new single-use login code.
@@ -133,6 +243,9 @@ impl ControlAuth {
             .plus(LOGIN_CODE_TTL)
             .ok_or_else(|| anyhow::anyhow!("the clock cannot represent a login code's expiry"))?;
         let mut secrets = self.lock();
+        if secrets.revoked {
+            bail!("the playground is stopping");
+        }
         secrets.codes.retain(|(_, expiry)| expiry.live_at(now));
         while secrets.codes.len() >= MAX_CODES {
             secrets.codes.pop_front();
@@ -145,6 +258,9 @@ impl ControlAuth {
     /// or not the caller reads the answer.
     pub(crate) fn exchange(&self, code: &str, now: Now) -> Result<String, LoginRefusal> {
         let mut secrets = self.lock();
+        if secrets.revoked {
+            return Err(LoginRefusal::Invalid);
+        }
         while secrets.failures.front().is_some_and(|failed| {
             now.monotonic.saturating_duration_since(*failed) >= FAILURE_WINDOW
         }) {
@@ -167,6 +283,10 @@ impl ControlAuth {
         let expires = now.plus(SESSION_TTL).ok_or(LoginRefusal::Invalid)?;
         secrets.sessions.retain(|_, expiry| expiry.live_at(now));
         secrets.sessions.insert(digest(&token), expires);
+        if self.save_sessions(&secrets.sessions).is_err() {
+            secrets.sessions.remove(&digest(&token));
+            return Err(LoginRefusal::Persistence);
+        }
         Ok(token)
     }
 
@@ -196,7 +316,7 @@ impl ControlAuth {
             .count()
     }
 
-    /// Forget every login code and browser session, as a stop does.
+    /// Forget this process's credentials during shutdown; saved sessions remain for restart.
     pub(crate) fn drop_sessions(&self) {
         let mut secrets = self.lock();
         secrets.codes.clear();
@@ -290,6 +410,78 @@ mod tests {
             HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
         );
         headers
+    }
+
+    fn session_path(dir: &tempfile::TempDir) -> PathBuf {
+        let state = super::super::state::StateDir::for_project(dir.path());
+        state.create().unwrap();
+        state.browser_sessions_path()
+    }
+
+    #[test]
+    fn saved_sessions_survive_restart_with_original_expiry_and_project_scope() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = session_path(&dir);
+        let now = Now::current();
+        let first = ControlAuth::open(vec![], path.clone(), now).unwrap();
+        let code = first.mint_login_code(now).unwrap();
+        let token = first.exchange(&code, now).unwrap();
+        let unused = first.mint_login_code(now).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains(&token));
+        assert!(!saved.contains(&code));
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(first);
+        let hour = Duration::from_secs(3600);
+        let restarted = ControlAuth::open(vec![], path.clone(), now.later(hour, hour)).unwrap();
+        assert_eq!(
+            restarted.caller(&bearer(&token), now.later(hour, hour)),
+            Some(Caller::Browser)
+        );
+        assert_eq!(restarted.exchange(&code, now), Err(LoginRefusal::Invalid));
+        assert_eq!(restarted.exchange(&unused, now), Err(LoginRefusal::Invalid));
+        let end = now.later(SESSION_TTL, SESSION_TTL);
+        assert_eq!(restarted.caller(&bearer(&token), end), None);
+        let expired = ControlAuth::open(vec![], path.clone(), end).unwrap();
+        assert_eq!(expired.caller(&bearer(&token), end), None);
+        let other = tempfile::tempdir().unwrap();
+        let separate = ControlAuth::open(vec![], session_path(&other), now).unwrap();
+        assert_eq!(separate.caller(&bearer(&token), now), None);
+        restarted.revoke_sessions().unwrap();
+        assert!(restarted.mint_login_code(now).is_err());
+        let revoked = ControlAuth::open(vec![], path, now).unwrap();
+        assert_eq!(revoked.caller(&bearer(&token), now), None);
+    }
+
+    #[test]
+    fn invalid_saved_sessions_fail_closed_and_failed_writes_issue_no_token() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let path = session_path(&dir);
+        for contents in [
+            "broken".to_owned(),
+            r#"{"version":2,"sessions":[]}"#.to_owned(),
+            "x".repeat(1024 * 1024 + 1),
+        ] {
+            std::fs::write(&path, contents).unwrap();
+            assert!(ControlAuth::open(vec![], path.clone(), Now::current()).is_err());
+        }
+        std::fs::remove_file(&path).unwrap();
+        let target = dir.path().join("target");
+        std::fs::write(&target, r#"{"version":1,"sessions":[]}"#).unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(ControlAuth::open(vec![], path, Now::current()).is_err());
+        let now = Now::current();
+        let auth =
+            ControlAuth::open(vec![], dir.path().join("missing/sessions.json"), now).unwrap();
+        let code = auth.mint_login_code(now).unwrap();
+        assert_eq!(auth.exchange(&code, now), Err(LoginRefusal::Persistence));
+        assert_eq!(auth.browser_sessions(now), 0);
+        assert_eq!(auth.exchange(&code, now), Err(LoginRefusal::Invalid));
     }
 
     #[test]

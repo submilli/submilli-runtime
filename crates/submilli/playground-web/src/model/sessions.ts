@@ -42,7 +42,7 @@ export function keptValues(f: Frame): ValuesNote | null {
   if (!s || !bound || s.open !== true || isThrowaway(s)) return null;
   const changes = differing(s.variables, bound).filter((change) => Object.hasOwn(bound, change.name));
   return changes.length
-    ? { lead: "This session keeps the values it started with; the ones bound now differ: ", changes, tail: ". Its messages still use its own." }
+    ? { lead: "", changes, tail: "", summary: "New sessions will use different settings." }
     : null;
 }
 

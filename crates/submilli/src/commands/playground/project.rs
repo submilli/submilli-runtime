@@ -1,10 +1,11 @@
-//! Which project and which blueprint a playground serves.
+//! The project, launch-default blueprint, and existing blueprints new sessions may use.
 //!
 //! The project is the nearest directory, walking up from where the command runs,
 //! that holds a `submilli/` folder with a `submilli.toml`, or a root
 //! `submilli.toml`. The blueprint is the one `--blueprint` names, otherwise the
 //! single file under `submilli/blueprints/`, or the project's root
-//! `blueprint.yaml`; a playground serves one blueprint. Either way the blueprint's
+//! `blueprint.yaml`. Existing valid project blueprints are also registered at launch
+//! for per-session selection. The launch-default blueprint's
 //! path is resolved through symlinks, so the watcher watches the file saves land in,
 //! and a blueprint inside the playground's state directory is refused: the serving
 //! process never opens its own state through a path the developer chose.
@@ -59,7 +60,7 @@ impl fmt::Display for DiscoveryError {
             Self::NoProject { from } => write!(
                 f,
                 "no Submilli project at or above {}: looked for `submilli/submilli.toml` and \
-                 `submilli.toml`. Create one with `submilli playground init`.",
+                 `submilli.toml`. Create one with `submilli playground init-demo`.",
                 from.display()
             ),
             Self::NoBlueprint { searched } => {
@@ -72,7 +73,7 @@ impl fmt::Display for DiscoveryError {
             Self::SeveralBlueprints { found } => {
                 write!(
                     f,
-                    "a playground serves one blueprint, and the project has {}:",
+                    "choose the playground's default blueprint; the project has {}:",
                     found.len()
                 )?;
                 for path in found {
@@ -180,6 +181,34 @@ fn only_blueprint(root: &Path, package_dir: &Path) -> Result<PathBuf, DiscoveryE
         1 => Ok(found.remove(0)),
         _ => Err(DiscoveryError::SeveralBlueprints { found }),
     }
+}
+
+/// Existing project files allowed for new sessions; callers never supply paths.
+pub(crate) fn session_blueprints(project: &Project) -> Vec<PathBuf> {
+    let mut paths = vec![project.blueprint.clone()];
+    let directory = project.package_dir.join("blueprints");
+    if let Ok(entries) = std::fs::read_dir(&directory) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path.extension().is_some_and(|e| e == "yaml" || e == "yml")
+                && let Ok(resolved) = path.canonicalize()
+                && resolved.starts_with(&project.root)
+                && inside_state_dir(&project.root, &resolved).is_none()
+            {
+                paths.push(resolved);
+            }
+        }
+    }
+    if let Ok(resolved) = project.root.join("blueprint.yaml").canonicalize()
+        && resolved.starts_with(&project.root)
+        && inside_state_dir(&project.root, &resolved).is_none()
+    {
+        paths.push(resolved);
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// The project's volumes: each directory under `submilli/volumes/` is a read-only
@@ -412,6 +441,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let error = discover(dir.path(), None).err().unwrap();
         assert!(matches!(error, DiscoveryError::NoProject { .. }));
-        assert!(error.to_string().contains("submilli playground init"));
+        assert!(error.to_string().contains("submilli playground init-demo"));
     }
 }

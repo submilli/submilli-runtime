@@ -33,9 +33,13 @@ mod client;
 #[cfg(unix)]
 mod control_auth;
 #[cfg(unix)]
+mod control_origin;
+#[cfg(unix)]
 mod controls;
 #[cfg(unix)]
 mod fsx;
+mod help;
+mod help_usage;
 #[cfg(unix)]
 mod host;
 #[cfg(unix)]
@@ -80,7 +84,11 @@ const MAX_CALLS_PER_ANSWER_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 // the caller ignores (`nohup`) stays ignored.
 
 #[derive(ClapArgs)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(
+    args_conflicts_with_subcommands = true,
+    help_template = help::template(),
+    max_term_width = 100
+)]
 pub struct Args {
     #[command(subcommand)]
     cmd: Option<PlaygroundCmd>,
@@ -93,68 +101,105 @@ pub enum PlaygroundCmd {
     /// Start the playground in the background, or attach to the running one,
     /// print its ready record with a fresh login link, and open the link in your
     /// browser (the default).
+    #[command(
+        about = "Start the playground and open the browser (default)",
+        long_about
+    )]
     Start(StartArgs),
     /// Report whether the playground is running, where, and with what.
+    #[command(about = "Show whether the playground is running", long_about)]
     Status(OutputArgs),
     /// Print a fresh single-use login link for the running playground, and open it in
     /// your browser.
+    #[command(about = "Open the playground in your browser", long_about)]
     Open(OpenArgs),
     /// Stop the running playground: drain its runs and end browser sessions.
+    #[command(about = "Stop the playground and finish active runs", long_about)]
     Stop(OutputArgs),
     /// Stop the running playground and start it again, with its blueprint and egress
-    /// grants unless given here, and open a fresh login link. Browser sessions end,
-    /// and bound secrets have to be bound again.
+    /// grants unless given here, and open a fresh login link. Browser sessions keep
+    /// their original 12-hour expiry; bound secrets have to be bound again.
+    #[command(about = "Restart the playground and open the browser", long_about)]
     Restart(StartArgs),
     /// Create a `submilli/` folder with a starter billing package, a blueprint that
     /// pins charges to the signed-in customer, and an example program. Writes
     /// nothing outside `submilli/`.
-    Init(OutputArgs),
+    #[command(
+        about = "Create a demo project with example billing operations",
+        long_about,
+        name = "init-demo",
+        alias = "init"
+    )]
+    InitDemo(OutputArgs),
     /// List stored runs, newest first. Works with the playground stopped.
+    #[command(about = "List recorded runs, newest first", long_about)]
     Runs(RunsArgs),
     /// Show one run: its decisions, calls, and outcome.
+    #[command(about = "Show a run, its calls, and its outcome", long_about)]
     Show(ShowArgs),
     /// Explain one decision: the rule that decided it (or the default) and every rule
     /// that nearly matched.
+    #[command(about = "Explain why a decision was allowed or refused", long_about)]
     Explain(ExplainArgs),
     /// Compare two runs: only the decisions that changed.
+    #[command(about = "Show which decisions differ between two runs", long_about)]
     Compare(CompareArgs),
     /// Audit the runs since the last blueprint edit.
+    #[command(about = "Audit runs since the last Blueprint edit", long_about)]
     Audit(AuditArgs),
     /// List the blueprint versions and what each changed.
+    #[command(about = "List Blueprint versions and their changes", long_about)]
     Changes(ChangesArgs),
     /// List sessions, newest first.
+    #[command(about = "List sessions, newest first", long_about)]
     Sessions(SessionsArgs),
     /// Run a program in the running playground, labeled `assistant` (or the scaffolded
     /// example, labeled `example`), under the binding or in a started session.
+    #[command(about = "Run a program or the demo example", long_about)]
     Exec(ExecArgs),
     /// Set the variables and harness-secret development values new runs use, or print
     /// them. Variables are kept for the next start; secret values only in the running
     /// playground's memory.
+    #[command(
+        about = "Set variables and development secrets for new runs",
+        long_about
+    )]
     Bind(BindArgs),
     /// Start a session with its variables fixed, or end one.
+    #[command(about = "Start or end a session", long_about)]
     Session(SessionArgs),
     /// After a blueprint edit, see which of a run's decisions would change: re-resolves
     /// them under the blueprint in force. Runs nothing and records nothing.
+    #[command(
+        about = "Check recorded decisions against the current Blueprint",
+        long_about
+    )]
     Recheck(RunArg),
     /// After a blueprint edit, see whether a recorded program gets through now: runs it
     /// again under the blueprint in force, with its calls answered from the recording.
     /// It stops at a call with nothing recorded.
+    #[command(about = "Run again using recorded call responses", long_about)]
     Test(TestArgs),
     /// After a package edit, or to try other variables, run a recorded program again for
     /// real under the current binding, as a new run linked to its source.
+    #[command(about = "Run again for real, using current variables", long_about)]
     Rerun(RunArg),
     /// Draft a rule that allows exactly one refused call; `--write` puts it in the
     /// blueprint file. Works with the playground stopped.
+    #[command(about = "Draft a permission rule for one refused call", long_about)]
     DraftRule(DraftRuleArgs),
     /// Remove every stored run and its sessions' events, and start a new audit window.
     /// Run ids keep counting, and started sessions stay listed.
+    #[command(about = "Delete recorded runs and session events", long_about)]
     Clear(OutputArgs),
     /// Cancel a run in flight.
+    #[command(about = "Cancel an active run", long_about)]
     Cancel(RunArg),
     /// Follow a session's events as JSON lines until its last run finishes (`--follow`:
     /// until the session ends). Without a session, follows the most recent one. On a
     /// session already idle it prints the events so far and exits at once, so start it
     /// after the run it is to follow has started, or pass `--follow`.
+    #[command(about = "Follow session events as JSON lines", long_about)]
     Watch(WatchArgs),
     /// Set Claude Code up in this project to try tasks through the playground on your
     /// Claude subscription: writes the `submilli-standin` subagent, which has only the
@@ -162,10 +207,12 @@ pub enum PlaygroundCmd {
     /// that show its chat on the page and a rule that lets it use those tools without
     /// asking, so your blueprint decides its calls. Run it again to check; it changes
     /// only what's missing.
+    #[command(about = "Connect Claude Code to this playground", long_about)]
     ClaudeCode(ClaudeCodeArgs),
     /// Serve the running playground's tools over stdio, for a coding assistant's
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
+    #[command(about = "Serve playground tools to a coding assistant", long_about)]
     Mcp,
     /// Chat with an agent using your own model key, the way a production agent runs: it uses
     /// the playground's tools and prints its answer. Each chat starts a session; send the
@@ -174,10 +221,12 @@ pub enum PlaygroundCmd {
     /// OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the
     /// project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or
     /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+    #[command(about = "Give an agent a task using your model key", long_about)]
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
     /// Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks
     /// post anything. Always exits 0 and prints nothing.
+    #[command(hide = true)]
     ChatHook,
 }
 
@@ -599,7 +648,7 @@ impl Args {
             Some(PlaygroundCmd::Open(_)) => "playground.open",
             Some(PlaygroundCmd::Stop(_)) => "playground.stop",
             Some(PlaygroundCmd::Restart(_)) => "playground.restart",
-            Some(PlaygroundCmd::Init(_)) => "playground.init",
+            Some(PlaygroundCmd::InitDemo(_)) => "playground.init",
             Some(PlaygroundCmd::Runs(_)) => "playground.runs",
             Some(PlaygroundCmd::Show(_)) => "playground.show",
             Some(PlaygroundCmd::Explain(_)) => "playground.explain",
@@ -654,7 +703,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Open(args) => unix::open(&args),
         PlaygroundCmd::Stop(output) => unix::stop(Output::from_json(output.json)),
         PlaygroundCmd::Restart(start) => unix::restart(start),
-        PlaygroundCmd::Init(output) => unix::init(Output::from_json(output.json)),
+        PlaygroundCmd::InitDemo(output) => unix::init(Output::from_json(output.json)),
         PlaygroundCmd::Runs(args) => runs(args),
         PlaygroundCmd::Show(args) => read(
             ReadRequest::Show {
@@ -692,6 +741,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
             cmd: SessionCmd::Start(args),
         }) => act(
             ActionRequest::SessionStart(SessionStartRequest {
+                blueprint: None,
                 variables: args.vars.into_iter().collect(),
             }),
             args.json,
@@ -717,6 +767,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Mcp => bridge::execute(),
         PlaygroundCmd::Chat(args) => act(
             ActionRequest::Chat(controls::act::ChatRequest {
+                blueprint: None,
                 task: args.task,
                 session: args.session,
                 model: args.model,
@@ -854,7 +905,7 @@ fn exec_program(file: Option<&std::path::Path>, example: bool) -> Result<String,
     let path = if example {
         let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
         let root = project::find_project_root(&cwd)
-            .ok_or("no Submilli project here; create one with `submilli playground init`")?;
+            .ok_or("no Submilli project here; create one with `submilli playground init-demo`")?;
         root.join(scaffold::FOLDER).join(scaffold::EXAMPLE)
     } else {
         file.ok_or("name a program file, or pass --example")?
@@ -863,7 +914,7 @@ fn exec_program(file: Option<&std::path::Path>, example: bool) -> Result<String,
     std::fs::read_to_string(&path).map_err(|error| {
         if example {
             format!(
-                "the example {} cannot be read ({error}); `submilli playground init` creates it \
+                "the example {} cannot be read ({error}); `submilli playground init-demo` creates it \
                  in a new project",
                 path.display()
             )
@@ -1499,7 +1550,7 @@ mod unix {
         let cwd = std::env::current_dir().context("reading the current directory")?;
         let Some(root) = project::find_project_root(&cwd) else {
             eprintln!(
-                "No Submilli project here; create one with `submilli playground init`, \
+                "No Submilli project here; create one with `submilli playground init-demo`, \
                  then set Claude Code up in it"
             );
             return Ok(ExitCode::from(EXIT_NO_PROJECT));
@@ -1952,8 +2003,25 @@ mod unix {
         let Some(state) = state_for_cwd()? else {
             return stopped(output, None, "not running");
         };
-        match halt(&state)? {
-            Halt::Stopped { pid, message } => stopped(output, pid, message),
+        if !state.instance_lock_path().try_exists()?
+            && !state.browser_sessions_path().try_exists()?
+        {
+            return stopped(output, None, "not running");
+        }
+        state.create()?;
+        match halt(&state, false)? {
+            Halt::Stopped { pid, message } => {
+                // First halt without the start lock so a still-starting process can be
+                // interrupted. Then exclude new starts, stopping any that won the race,
+                // before revoking the saved sessions they would otherwise restore.
+                let _start_lock = state.start_lock()?;
+                match halt(&state, false)? {
+                    Halt::Busy(busy) => return busy_exit(output, &busy),
+                    Halt::Stopped { .. } => {}
+                }
+                super::control_auth::ControlAuth::revoke_saved(&state.browser_sessions_path())?;
+                stopped(output, pid, message)
+            }
             Halt::Busy(busy) => busy_exit(output, &busy),
         }
     }
@@ -1971,7 +2039,7 @@ mod unix {
                     args.egress = super::EgressArgs::from_grants(&description.egress_grants)?;
                 }
             }
-            match halt(&state)? {
+            match halt(&state, true)? {
                 // Said before the start's own lines; JSON prints only the start's record.
                 Halt::Stopped { pid, message } if !args.json => {
                     stopped(Output::Text, pid, message)?;
@@ -1993,7 +2061,7 @@ mod unix {
         Busy(Busy),
     }
 
-    fn halt(state: &StateDir) -> Result<Halt> {
+    fn halt(state: &StateDir, restart: bool) -> Result<Halt> {
         let running = match client::probe(state)? {
             Probe::NotRunning => {
                 return Ok(Halt::Stopped {
@@ -2033,7 +2101,7 @@ mod unix {
             .instance_holder()?
             .and_then(|holder| holder.pid())
             .unwrap_or(record.pid);
-        running.stop()?;
+        running.stop(restart)?;
         if !wait_for_exit(state, holder_pid, Some(&record.nonce))? {
             bail!("{}", did_not_stop(record.pid));
         }

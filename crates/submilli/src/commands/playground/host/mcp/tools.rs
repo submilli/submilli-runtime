@@ -380,6 +380,11 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let lookup = match self.shared.blueprint(&self.blueprint_name).await {
             Some(applied) => {
+                self.shared
+                    .run
+                    .refresh_package_discovery(&applied.blueprint, Some(&args.name))
+                    .await
+                    .map_err(|message| ErrorData::internal_error(message, None))?;
                 let catalog = self.catalog(&applied.blueprint).await?;
                 let scope = self.docs_scope(&applied.blueprint);
                 packages::lookup_with_blueprint(&args.name, &catalog, &scope)
@@ -402,6 +407,11 @@ impl SubmilliMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let value = match self.shared.blueprint(&self.blueprint_name).await {
             Some(applied) => {
+                self.shared
+                    .run
+                    .refresh_package_discovery(&applied.blueprint, None)
+                    .await
+                    .map_err(|message| ErrorData::internal_error(message, None))?;
                 let catalog = self.catalog(&applied.blueprint).await?;
                 let scope = self.docs_scope(&applied.blueprint);
                 packages::search_json_with_blueprint(&args.query, &catalog, &scope)
