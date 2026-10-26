@@ -213,7 +213,7 @@ pub enum PlaygroundCmd {
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     #[command(about = "Serve playground tools to a coding assistant", long_about)]
-    Mcp,
+    Mcp(McpArgs),
     /// Chat with an agent using your own model key, the way a production agent runs: it uses
     /// the playground's tools and prints its answer. Each chat starts a session; send the
     /// next message in it with `--session`. The session stays open until it sits idle past
@@ -556,6 +556,25 @@ pub struct EgressArgs {
     allow_ip: Vec<IpNet>,
 }
 
+/// How chat on Claude Code starts the bridge: joined to an MCP session the playground
+/// already started. Only the playground passes these.
+#[derive(ClapArgs)]
+pub struct McpArgs {
+    #[arg(long, value_name = "SESSION", hide = true,
+        requires_all = ["root", "token", "blueprint", "protocol", "max_calls"])]
+    join: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    root: Option<PathBuf>,
+    #[arg(long, hide = true, requires = "join")]
+    token: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    blueprint: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    protocol: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    max_calls: Option<usize>,
+}
+
 #[derive(ClapArgs, Clone, Copy)]
 pub struct ClaudeCodeArgs {
     /// Replace a `submilli-standin` subagent file that differs from the playground's.
@@ -672,7 +691,7 @@ impl Args {
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
             Some(PlaygroundCmd::ClaudeCode(_)) => "playground.claude-code",
-            Some(PlaygroundCmd::Mcp) => "playground.mcp",
+            Some(PlaygroundCmd::Mcp(_)) => "playground.mcp",
             Some(PlaygroundCmd::Chat(_)) => "playground.chat",
             Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
         }
@@ -764,7 +783,14 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
         PlaygroundCmd::ClaudeCode(args) => unix::claude_code(&args),
-        PlaygroundCmd::Mcp => bridge::execute(),
+        PlaygroundCmd::Mcp(args) => bridge::execute(args.join.map(|session| bridge::Join {
+            session,
+            root: args.root.unwrap_or_default(),
+            token: args.token.unwrap_or_default(),
+            blueprint: args.blueprint.unwrap_or_default(),
+            protocol: args.protocol.unwrap_or_default(),
+            max_calls: args.max_calls.unwrap_or_default(),
+        })),
         PlaygroundCmd::Chat(args) => act(
             ActionRequest::Chat(controls::act::ChatRequest {
                 blueprint: None,

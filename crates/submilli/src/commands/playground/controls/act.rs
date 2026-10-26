@@ -2534,7 +2534,13 @@ pub(crate) fn connect_as(name: &str) -> Result<Result<Running, Answer>> {
     let Some(root) = project::find_project_root(&cwd) else {
         return not_running();
     };
-    match client::probe_as(&StateDir::for_project(&root), name)? {
+    connect_at(&root, name)
+}
+
+/// [`connect_as`], for the project at `root`.
+pub(crate) fn connect_at(root: &Path, name: &str) -> Result<Result<Running, Answer>> {
+    let not_running = || Ok(Err(Answer::from(ActError::not_running())));
+    match client::probe_as(&StateDir::for_project(root), name)? {
         Probe::Running(running) => Ok(Ok(running)),
         Probe::Busy(busy) => Ok(Err(Answer::from(ActError::new(
             EXIT_NOT_RUNNING,

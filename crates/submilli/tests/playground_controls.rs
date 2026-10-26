@@ -1344,6 +1344,10 @@ variables:\n  customerId:\n    required: true\n\
 secrets:\n  API_KEY:\n    harness:\n      required: true\n\
 permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
+        /// A blueprint that needs nothing bound.
+        const JOIN_BLUEPRINT: &str =
+            "name: demo\npermissions:\n  main:\n  - capability: http.get\n    action: allow\n";
+
         /// The stand-in's bridge as a coding assistant runs it: JSON-RPC lines in and out.
         struct Bridge {
             child: Child,
@@ -1353,8 +1357,22 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
         impl Bridge {
             fn start(playground: &Playground) -> Self {
+                Self::spawn(playground, &["mcp"])
+            }
+
+            /// A bridge joining MCP session `session`, as Claude Code chat starts one.
+            fn join(playground: &Playground, session: &str, max_calls: u32) -> Self {
+                let root = playground.root.to_str().unwrap();
+                let max_calls = max_calls.to_string();
+                let mut args = vec!["mcp", "--root", root, "--token", "chat"];
+                args.extend(["--blueprint", "demo", "--protocol", "2025-06-18"]);
+                args.extend(["--join", session, "--max-calls", &max_calls]);
+                Self::spawn(playground, &args)
+            }
+
+            fn spawn(playground: &Playground, args: &[&str]) -> Self {
                 let mut child = playground
-                    .command(&["mcp"])
+                    .command(args)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -2374,6 +2392,97 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let (code, stderr) = bridge.finish();
             assert_eq!(code, 2);
             assert!(stderr.contains("bind --secret API_KEY"), "{stderr}");
+        }
+
+        #[test]
+        fn a_joining_bridge_carries_on_a_session_and_never_ends_it() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let output = playground.run(&["start", "--json", "--allow-localhost"]);
+            assert!(output.status.success(), "start: {}", stderr(&output));
+            let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let server = ready["server_url"].as_str().unwrap().trim_end_matches('/');
+            let session = initialize(
+                &format!("{server}/mcp/demo"),
+                &playground.token("chat"),
+                json!({}),
+            );
+            let call = |id: u32| {
+                json!({
+                    "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": {
+                        "name": "submilli__typescript__execute",
+                        "arguments": { "code": "function main(): string { return \"joined\"; }" }
+                    }
+                })
+            };
+            let runs = || {
+                playground.expect(0, &["runs", "--session", &session])["runs"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+            };
+
+            // The handshake is the bridge's own: the session started long ago.
+            let mut bridge = Bridge::join(&playground, &session, 2);
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 0, "method": "server/discover" }));
+            assert_eq!(bridge.reply()["error"]["code"], -32601);
+            let initialized = bridge.initialize();
+            assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+            assert_eq!(
+                initialized["result"]["serverInfo"]["name"], "submilli-playground",
+                "{initialized}"
+            );
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            assert!(bridge.reply()["result"]["tools"].is_array());
+            bridge.send(call(3));
+            let called = bridge.reply();
+            assert!(called.to_string().contains("joined"), "{called}");
+            assert_eq!(runs(), 1);
+            bridge.send(call(4));
+            assert_eq!(bridge.reply()["id"], 4);
+            assert_eq!(runs(), 2);
+
+            // A call past the message's limit is refused without running.
+            bridge.send(call(5));
+            let refused = bridge.reply();
+            assert_eq!(refused["result"]["isError"], true, "{refused}");
+            assert!(refused.to_string().contains("limit"), "{refused}");
+            assert_eq!(runs(), 2);
+            assert_eq!(bridge.finish().0, 0);
+
+            // However it stops, the session stays open for the next message's bridge.
+            for signal in ["-INT", "-KILL"] {
+                let mut bridge = Bridge::join(&playground, &session, 16);
+                bridge.initialize();
+                bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+                assert!(bridge.reply()["result"]["tools"].is_array());
+                let killed = Command::new("kill")
+                    .args([signal, &bridge.child.id().to_string()])
+                    .status()
+                    .unwrap();
+                assert!(killed.success());
+                bridge.exit();
+            }
+            let mut bridge = Bridge::join(&playground, &session, 16);
+            bridge.initialize();
+            bridge.send(call(2));
+            assert!(bridge.reply().to_string().contains("joined"));
+            assert_eq!(bridge.finish().0, 0);
+            assert_eq!(runs(), 3);
+
+            // An unknown or ended session fails before the handshake is answered.
+            playground.expect(0, &["session", "end", &session]);
+            for gone in [session.as_str(), "8a4ff0e6-6d0d-4c4e-9d1b-31c1ad6f3f0b"] {
+                let mut bridge = Bridge::join(&playground, gone, 16);
+                bridge.send(json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
+                }));
+                let (code, said) = bridge.exit();
+                assert_ne!(code, 0, "{said}");
+                assert!(said.contains("session"), "{said}");
+            }
+            playground.stop();
         }
 
         #[test]
@@ -3590,70 +3699,74 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             playground.stop();
         }
 
+        /// One JSON-RPC message POSTed to the MCP endpoint: the status, the session id the
+        /// server gave, and the reply.
+        fn mcp_post(
+            url: &str,
+            token: &str,
+            session: Option<&str>,
+            body: Value,
+        ) -> (u16, Option<String>, Value) {
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .timeout_global(Some(Duration::from_secs(60)))
+                .build()
+                .into();
+            let mut request = agent
+                .post(url)
+                .header("authorization", &format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream");
+            if let Some(session) = session {
+                request = request.header("mcp-session-id", session);
+            }
+            let mut response = request.send(body.to_string()).unwrap();
+            let status = response.status().as_u16();
+            let session = response
+                .headers()
+                .get("mcp-session-id")
+                .map(|value| value.to_str().unwrap().to_owned());
+            let text = response.body_mut().read_to_string().unwrap();
+            let data = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .next_back()
+                .map_or(text.as_str(), str::trim);
+            let message = serde_json::from_str(data).unwrap_or(Value::String(text.clone()));
+            (status, session, message)
+        }
+        /// Starts an MCP session on `url` with `token`; its id.
+        fn initialize(url: &str, token: &str, variables: Value) -> String {
+            let (status, session, message) = mcp_post(
+                url,
+                token,
+                None,
+                json!({
+                    "jsonrpc":"2.0", "id":1, "method":"initialize",
+                    "params": {"protocolVersion":"2025-06-18", "capabilities":{},
+                        "clientInfo":{"name":"selected-blueprint-test","version":"0"},
+                        "_meta":{"variables":variables}}
+                }),
+            );
+            assert_eq!(status, 200, "initialize: {message}");
+            let session = session.expect("native MCP session id");
+            let (status, _, message) = mcp_post(
+                url,
+                token,
+                Some(&session),
+                json!({
+                    "jsonrpc":"2.0", "method":"notifications/initialized"
+                }),
+            );
+            assert!(status == 200 || status == 202, "initialized: {message}");
+            session
+        }
+
         #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
         #[test]
         fn selected_project_blueprints_keep_sessions_packages_and_versions_distinct() {
             // Native MCP replaces the old server-backed /v1 package-discovery routes.
             // Keep a real transport session per Blueprint, with the same bound values.
-            fn mcp_post(
-                url: &str,
-                token: &str,
-                session: Option<&str>,
-                body: Value,
-            ) -> (u16, Option<String>, Value) {
-                let agent: ureq::Agent = ureq::Agent::config_builder()
-                    .http_status_as_error(false)
-                    .timeout_global(Some(Duration::from_secs(60)))
-                    .build()
-                    .into();
-                let mut request = agent
-                    .post(url)
-                    .header("authorization", &format!("Bearer {token}"))
-                    .header("content-type", "application/json")
-                    .header("accept", "application/json, text/event-stream");
-                if let Some(session) = session {
-                    request = request.header("mcp-session-id", session);
-                }
-                let mut response = request.send(body.to_string()).unwrap();
-                let status = response.status().as_u16();
-                let session = response
-                    .headers()
-                    .get("mcp-session-id")
-                    .map(|value| value.to_str().unwrap().to_owned());
-                let text = response.body_mut().read_to_string().unwrap();
-                let data = text
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("data:"))
-                    .next_back()
-                    .map_or(text.as_str(), str::trim);
-                let message = serde_json::from_str(data).unwrap_or(Value::String(text.clone()));
-                (status, session, message)
-            }
-            fn initialize(url: &str, token: &str, variables: Value) -> String {
-                let (status, session, message) = mcp_post(
-                    url,
-                    token,
-                    None,
-                    json!({
-                        "jsonrpc":"2.0", "id":1, "method":"initialize",
-                        "params": {"protocolVersion":"2025-06-18", "capabilities":{},
-                            "clientInfo":{"name":"selected-blueprint-test","version":"0"},
-                            "_meta":{"variables":variables}}
-                    }),
-                );
-                assert_eq!(status, 200, "initialize: {message}");
-                let session = session.expect("native MCP session id");
-                let (status, _, message) = mcp_post(
-                    url,
-                    token,
-                    Some(&session),
-                    json!({
-                        "jsonrpc":"2.0", "method":"notifications/initialized"
-                    }),
-                );
-                assert!(status == 200 || status == 202, "initialized: {message}");
-                session
-            }
             let playground = Playground::starter();
             let package = playground.root.join("submilli/packages/reports");
             std::fs::create_dir_all(package.join("src")).unwrap();
