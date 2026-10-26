@@ -386,7 +386,10 @@ impl ProjectPackages {
             {
                 let overrides = match store.load(package.name.as_str()) {
                     Ok(artifact) => artifact.metadata.config.overrides,
-                    Err(PackageStoreError::MissingPackage { .. }) => BTreeMap::new(),
+                    Err(
+                        PackageStoreError::MissingPackage { .. }
+                        | PackageStoreError::Unavailable { .. },
+                    ) => submilli_build::saved_overrides(store, package.name.as_str()),
                     Err(error) => return Err(ResolutionFailure::Store(error)),
                 };
                 configuration.insert(package.name.clone(), overrides);

@@ -10,6 +10,10 @@ caller-sequence models. The filesystem has no durable-object dependency;
 input payloads are supplied by execution replay, while the filesystem retains
 only its own mutation evidence. See [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
+HTTP downloads use a separate [admission and effect-completion model](downloads/README.md).
+They retain Checked admission only and fetch again on missing history; their
+publication does not create a filesystem receipt.
+
 ## Append protocol
 
 Before writing, bind the effect identity to a digest of the path, input and

@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    Dispatch, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
-    ValueSymbol,
+    Dispatch, MethodSig, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind, TypeSymbol,
+    ValueKind, ValueSymbol,
 };
 
 use super::MODULE_NAME;
@@ -15,13 +15,15 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut defs,
         "SkillInfo",
         skill_properties(false),
+        BTreeMap::new(),
         "/** One skill this caller may load. Constructed only by `list()`. */",
     );
     insert_interface(
         &mut defs,
         "Skill",
         skill_properties(true),
-        "/** A loaded skill: its instructions, and the name to read its files under. Constructed only by `load()`. */",
+        skill_methods(),
+        "/** A loaded skill. Read bundled files with `skill.readFile(path)`. Skills are never mounted or accessible through `submilli:fs`. Constructed only by `load()`. */",
     );
     insert_fn(
         &mut defs,
@@ -38,33 +40,31 @@ pub fn package_declaration() -> PackageDeclaration {
         "load",
         vec![Param::new("name", Type::String)],
         interface_type("Skill"),
-        "/**\n * Load the skill `name`: its description and its instructions.\n *\n * \
+        "/**\n * Load the skill `name`: its description, instructions and bundled file names.\n *\n * \
          A name that is not one skill name — empty, `.` or `..`, containing `/`, \
          `\\` or NUL, or over 4096 bytes — throws a `RangeError` without asking the \
          harness. Throws a catchable error when the harness has no skill of that name, \
          or when this runtime has no skill provider.\n * @param name Skill name, as \
          `list()` returns it.\n * @capability skill.load { name: $name }\n */",
     );
-    insert_fn(
-        &mut defs,
-        "readFile",
-        vec![
-            Param::new("name", Type::String),
-            Param::new("path", Type::String),
-        ],
-        Type::String,
-        "/**\n * Read a file bundled with the skill `name`, as text.\n *\n * `path` is \
-         relative to the skill, with `/` separators, as the skill's instructions name \
-         it — `\"templates/report.md\"`. An absolute path, one with an empty, `.` \
-         or `..` segment, one containing `\\`, `:` or NUL, or one over 4096 bytes, \
-         throws a `RangeError` \
-         without asking the harness, as does a name that is not one skill name; a file \
-         the skill does not have throws a catchable error.\n * @param name Skill name, \
-         as `list()` returns it.\n \
-         * @param path The file's path inside the skill.\n * @capability skill.load { \
-         name: $name }\n */",
-    );
     defs
+}
+
+fn skill_methods() -> BTreeMap<String, MethodSig> {
+    BTreeMap::from([(
+        "readFile".to_string(),
+        MethodSig {
+            optional: false,
+            generics: Vec::new(),
+            params: vec![Param::new("path", Type::String)],
+            ret: Type::String,
+            predicate: None,
+            doc: crate::doc(
+                crate::FileId::SKILLS,
+                "/** Read a bundled file as text. Pass a path from `files`, relative to this skill with `/` separators. Absolute paths, empty, `.` or `..` segments, `\\`, `:` or NUL, and paths over 4096 bytes throw a `RangeError` before asking the provider. A missing file throws a catchable error. Files are never accessible through `submilli:fs`. The `skill.load` policy is checked again using this skill's name.\n * @param path The file's path inside this skill.\n * @capability skill.load\n */",
+            ),
+        },
+    )])
 }
 
 fn interface_type(name: &str) -> Type {
@@ -76,7 +76,7 @@ fn interface_type(name: &str) -> Type {
     }
 }
 
-/// `name` and `description`, plus `content` for a loaded skill.
+/// `name` and `description`, plus instructions and file names for a loaded skill.
 fn skill_properties(loaded: bool) -> BTreeMap<String, PropertySig> {
     let mut properties = BTreeMap::new();
     insert_property(
@@ -94,6 +94,12 @@ fn skill_properties(loaded: bool) -> BTreeMap<String, PropertySig> {
     if loaded {
         insert_property(
             &mut properties,
+            "files",
+            Type::Array(Box::new(Type::String)),
+            "/** Bundled file names relative to this skill, without reading their contents. Pass each to `skill.readFile(path)`. These are not filesystem paths and cannot be read through `submilli:fs`. Invalid paths are omitted. */",
+        );
+        insert_property(
+            &mut properties,
             "content",
             Type::String,
             "/** The skill's instructions. */",
@@ -106,6 +112,7 @@ fn insert_interface(
     defs: &mut PackageDeclaration,
     name: &str,
     properties: BTreeMap<String, PropertySig>,
+    methods: BTreeMap<String, MethodSig>,
     doc: &str,
 ) {
     defs.types.insert(
@@ -117,7 +124,7 @@ fn insert_interface(
             kind: TypeKind::Interface {
                 index: None,
                 generics: Vec::new(),
-                methods: BTreeMap::new(),
+                methods,
                 properties,
                 dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::SKILLS, doc),

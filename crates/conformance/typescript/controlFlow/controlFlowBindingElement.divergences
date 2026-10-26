@@ -1,7 +1,6 @@
-types: 28 of 67 tsc entries compared, 0 differ
+types: 31 of 67 tsc entries compared, 0 differ
 
 errors:
-line 42: ours: `+` not defined for `string` and `number` (tsc accepts)
 line 55: ours: unresolved identifier `window` (tsc accepts)
 line 70: ours: unresolved identifier `window` (tsc accepts)
 line 85: ours: unresolved identifier `window` (tsc accepts)

@@ -64,9 +64,40 @@ const MCP_LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct DurableObjectFileConfig {
+    pub inline_threshold: Option<HistorySize>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum HistorySize {
+    Bytes(u64),
+    Text(String),
+}
+impl DurableObjectFileConfig {
+    fn resolve(self) -> Result<submilli_server::config::DurableObjectConfig, String> {
+        let mut config = submilli_server::config::DurableObjectConfig::default();
+        if let Some(size) = self.inline_threshold {
+            let bytes = match size {
+                HistorySize::Bytes(bytes) => bytes,
+                HistorySize::Text(text) => {
+                    submilli_blueprint::parse_size(&text).map_err(|e| e.to_string())?
+                }
+            };
+            config.inline_threshold = usize::try_from(bytes)
+                .map_err(|_| "durable_objects.inline_threshold is too large")?;
+        }
+        config.validate()?;
+        Ok(config)
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileConfig {
     #[serde(default)]
     pub durable_execution: bool,
+    #[serde(default)]
+    pub durable_objects: DurableObjectFileConfig,
     pub max_durable_runs: Option<usize>,
     pub bind: Option<IpAddr>,
     pub port: Option<u16>,
@@ -1074,6 +1105,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
 
     let config = ServerConfig {
         durable_execution: file.durable_execution,
+        durable_objects: file.durable_objects.resolve().map_err(anyhow::Error::msg)?,
         max_durable_runs: file.max_durable_runs,
         audit: file.logging.audit,
         runtime,
@@ -2024,6 +2056,44 @@ network:
         ] {
             let err = parse_volumes(yaml).expect_err(yaml);
             assert!(err.contains(expected), "{yaml}: got {err}");
+        }
+    }
+
+    #[test]
+    fn durable_object_threshold_accepts_bytes_and_sizes_and_rejects_unknown_policy() {
+        for (yaml, expected) in [
+            ("{}", 65536),
+            ("durable_objects: {}", 65536),
+            ("durable_objects: {inline_threshold: 0}", 0),
+            ("durable_objects: {inline_threshold: 65536}", 65536),
+            ("durable_objects: {inline_threshold: 64KiB}", 65536),
+            (
+                "durable_objects: {inline_threshold: 64MiB}",
+                64 * 1024 * 1024,
+            ),
+        ] {
+            let file: FileConfig = serde_yml::from_str(yaml).unwrap();
+            let (_, config) = merge(empty_cli(), file, EnvConfig::default()).unwrap();
+            assert_eq!(config.durable_objects.inline_threshold, expected, "{yaml}");
+        }
+        for yaml in [
+            "durable_objects: {inline_threshold: -1}",
+            "durable_objects: {inline_threshold: 1.5}",
+            "durable_objects: {directory: /tmp/objects}",
+            "durable_objects: {max_bytes: 1024}",
+        ] {
+            assert!(serde_yml::from_str::<FileConfig>(yaml).is_err(), "{yaml}");
+        }
+        for yaml in [
+            "durable_objects: {inline_threshold: 65MiB}",
+            "durable_objects: {inline_threshold: enormous}",
+            "durable_objects: {inline_threshold: 18446744073709551615}",
+        ] {
+            let file: FileConfig = serde_yml::from_str(yaml).unwrap();
+            assert!(
+                merge(empty_cli(), file, EnvConfig::default()).is_err(),
+                "{yaml}"
+            );
         }
     }
 

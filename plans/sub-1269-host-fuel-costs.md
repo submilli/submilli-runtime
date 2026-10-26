@@ -1844,7 +1844,7 @@ Timeline: everything up to and including the first `IO(B + hu + u)` is charged b
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:http#delete` | `perform_request`, no body (`stdlib/http/mod.rs:135`) | `VERB` with `B = 0` | before + output | See the common notes after this table. |
-| `submilli:http#download` | validate bounded options, policy checks, stream into a quota-controlled temporary file, publish and marshal result | `CALL + gates + argument/options marshalling + IO(request bytes) + IO(W) + IO(D) + result marshalling` | request before; received/written bytes settle after effect on success or failure; result marshalling charges normally | `W` is observed wire bytes (including rejected chunks); `D` actual disk writes. Previous code charged `IO(2D)` on success only, not the more elaborate formula formerly listed here. `maxBytes` cannot exceed the operator response limit; timeout cannot exceed `http_max_download_timeout_ms` (default 60 s). Fractional/non-finite options throw RangeError before request. The built-in transport reports wire bytes before decoding; legacy embedded clients default to bytes accepted by the destination and can override `download_with_progress` for wire accuracy. |
+| `submilli:http#download` | validate bounded options, policy checks, admit filesystem-owned bounded staging, stream, publish and marshal result | `CALL + gates + argument/options marshalling + request fingerprint + filesystem.path_cost(path) + SYSCALL × 8 + backend validation work + IO(request bytes) + IO(W) + IO(D) + result marshalling` | request before; received/written bytes settle after effect on success or failure; result marshalling charges normally | `W` is observed wire bytes (including rejected chunks); `D` actual disk writes. Filesystem fixed overhead and admission validation are admitted before the request; variable recovery-tree validation is charged per entry through WorkBudget, with publication validation settled after the request; streaming settles on success and failure. Durable staging excludes public quota and publication accounts public bytes. Checked admission is the only filesystem database commit; effect history owns completion. Previous code charged `IO(2D)` on success only, not the more elaborate formula formerly listed here. `maxBytes` cannot exceed the operator response limit; timeout cannot exceed `http_max_download_timeout_ms` (default 60 s). Fractional/non-finite options throw RangeError before request. The built-in transport reports wire bytes before decoding; legacy embedded clients default to bytes accepted by the destination and can override `download_with_progress` for wire accuracy. |
 | `submilli:http#DownloadResult#bytesWritten` | Field read | `CALL` | before | |
 | `submilli:http#DownloadResult#contentType` | Field read | `CALL` | before | |
 | `submilli:http#DownloadResult#duration_ms` | Field read | `CALL` | before | |
@@ -1928,15 +1928,16 @@ Optional: installed only for an embedder that enables it. Variables: `I` = input
 
 ### submilli:skills
 
-Optional: installed only for an embedder that enables it. Variables: `T` = bytes of the skill's content or the file read; `m` = skills offered.
+Optional: installed only for an embedder that enables it. Variables: `T` = bytes of the skill's content or the file read; `m` = skills offered; `f` = all file names returned by the provider (including discarded entries); `S` = bytes scanned in paths of at most 4096 bytes; `P` = bytes in retained file names.
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:skills#list` | Gate, list the skills, run the policy check once per skill, sanitize each description, build `SkillInfo` structs and an array (`stdlib/skills/mod.rs` `list`) | `CALL + (1 + m) x GATE + ELEM(m)` plus the strings through `write_submilli_string_struct` | before + output | `m` is known after `provider.list().await`. |
-| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T)` plus the strings through `write_submilli_string_struct` | `IO(T)` and the result after the read | Native `IO(T)` settles; the guest result is built with normal fuel checks. A name that is not one skill name is refused before the provider is asked. |
-| `submilli:skills#readFile` | Gate, check the name and the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the string through `write_submilli_string_struct` | `IO(T)` and the result after the read | A name or path outside the skills is refused before the provider is asked. |
+| `submilli:skills#load` | Gate, check the name, one provider read, build the `Skill` struct (`stdlib/skills/mod.rs` `load`) | `CALL + GATE + IO(T + P) + ELEM(f) + SCAN(S)` plus the strings and file array through shared writers | metadata validation and IO settle after the provider read; output through shared writers | All file names are considered; invalid paths are omitted. Native IO and validation settle; the guest result is built with normal fuel checks. A name that is not one skill name is refused before the provider is asked. |
+| `submilli:skills#Skill#readFile` | Read the skill name from the receiver, gate, check the path, one provider read, build the string (`stdlib/skills/mod.rs` `read_file`) | `CALL + GATE + IO(T)` plus the receiver name through `read_string_arg` and the result through `write_submilli_string_struct` | `IO(T)` and the result after the read | A name or path outside the skills is refused before the provider is asked. |
 | `submilli:skills#Skill#content` | Field read | `CALL` | before | |
 | `submilli:skills#Skill#description` | Field read | `CALL` | before | |
+| `submilli:skills#Skill#files` | Field read | `CALL` | before | Reads the array in place. |
 | `submilli:skills#Skill#name` | Field read | `CALL` | before | |
 | `submilli:skills#SkillInfo#description` | Field read | `CALL` | before | |
 | `submilli:skills#SkillInfo#name` | Field read | `CALL` | before | |
@@ -2109,3 +2110,16 @@ host adapters own ABI result slots; native outcome recording returns the Rust va
 and ordinary conversion code charges its marshalling work. Resource serialization
 skips native handles. The formulas and native-work settlement stay unchanged;
 post-outcome conversion can now refuse for insufficient fuel.
+
+## External effect-history payloads (SUB-1846)
+
+| Boundary | Formula and timing |
+| --- | --- |
+| History object write | Additional `IO(sealed bytes) + HASH(sealed bytes) + SYSCALL(14)`, including session/run directory preparation, recorded before publication and settled after history completion, including failure. |
+| History object read | Additional `IO(sealed bytes) + HASH(sealed bytes) + SYSCALL(5)`, including session/run directory opens, recorded before reading and settled before replay decoding. |
+
+The generic effect boundary and server cleanup settle each report once. A completed
+native result is never refused for insufficient persistence fuel. Cancellation drains
+history workers before final fuel settlement and resource release. Inline placement
+retains its existing charges; database waiting and background collection are not
+charged to guest execution. Native outcome limits and decoding charges are unchanged.

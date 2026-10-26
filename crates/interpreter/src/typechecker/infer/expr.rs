@@ -1420,23 +1420,28 @@ impl Inferer<'_> {
                 Type::Error
             }
             _ => {
-                if let Some(ty) = plus_result(&lt, &rt) {
+                if let Some(ty) = self.plus_accepts(&lt, &rt) {
                     ty
                 } else {
                     let message = format!("`+` not defined for `{lt}` and `{rt}`");
-                    let (error_span, help) = match self.string_number_add_fix(lhs, &lt, rhs, &rt)? {
-                        Some((operand, help)) => (operand, vec![help]),
-                        None => (span, Vec::new()),
-                    };
+                    let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
+                    let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
+                    let (error_span, help) =
+                        match self.string_concat_fix(lhs_span, &lt, rhs_span, &rt) {
+                            Some((operand, help)) => (operand, vec![help]),
+                            None => (span, Vec::new()),
+                        };
                     let culprit =
                         self.nullable_binary_culprit((typed_lhs, &lt), (typed_rhs, &rt), |l, r| {
-                            plus_result(l, r).is_some()
+                            self.plus_accepts(l, r).is_some()
                         });
                     self.error_with_narrowing_hint(error_span, message, help, culprit)?;
                     Type::Error
                 }
             }
         };
+        let (typed_lhs, typed_rhs) =
+            self.convert_for_concatenation((typed_lhs, &lt), (typed_rhs, &rt), span)?;
         Ok((
             TypedExprKind::Binary {
                 op: BinOp::Add,
@@ -1445,6 +1450,63 @@ impl Inferer<'_> {
             },
             result_ty,
         ))
+    }
+
+    /// `+`'s result for an operand pair: [`plus_result`], plus a number or an
+    /// `Error` beside a string, which concatenates as in TypeScript.
+    pub(super) fn plus_accepts(&self, lt: &Type, rt: &Type) -> Option<Type> {
+        plus_result(lt, rt).or_else(|| self.concatenation_converts(lt, rt).map(|_| Type::String))
+    }
+
+    /// Which operand a string concatenation converts: a number or an `Error`
+    /// beside a string. Other types stay rejected (booleans, bigints, nullish
+    /// values and plain objects), as the help on their error explains.
+    fn concatenation_converts(&self, lt: &Type, rt: &Type) -> Option<ConcatOperand> {
+        let is_error = |ty: &Type| match ty.peel() {
+            Type::ClassRef { mangled, .. } => self
+                .resolver()
+                .is_subclass(mangled, &crate::mangle::prelude("Error")),
+            _ => false,
+        };
+        let converts = |ty: &Type| match ty.primitive_behavior() {
+            Type::Number | Type::NumberLiteral(_) => true,
+            Type::Union(members) => members.iter().all(is_error),
+            other => is_error(other),
+        };
+        if lt.is_string_shaped() && converts(rt) {
+            Some(ConcatOperand::Rhs)
+        } else if converts(lt) && rt.is_string_shaped() {
+            Some(ConcatOperand::Lhs)
+        } else {
+            None
+        }
+    }
+
+    /// The operands of an accepted `+`, with a number or an `Error` beside a
+    /// string converted as `String(x)` converts it, so codegen sees two strings.
+    /// The conversion and the nodes it synthesizes (`toString`'s default radix)
+    /// take `span`, the whole concatenation's: at the operand's own span they
+    /// would stand in for the operand.
+    pub(super) fn convert_for_concatenation(
+        &mut self,
+        lhs: (ExprId, &Type),
+        rhs: (ExprId, &Type),
+        span: Span,
+    ) -> Result<(ExprId, ExprId), CompilerFailure> {
+        if plus_result(lhs.1, rhs.1).is_some() {
+            return Ok((lhs.0, rhs.0));
+        }
+        Ok(match self.concatenation_converts(lhs.1, rhs.1) {
+            Some(ConcatOperand::Lhs) => (
+                self.wrap_interpolation_in_to_string(lhs.0, lhs.1, span, span)?,
+                rhs.0,
+            ),
+            Some(ConcatOperand::Rhs) => (
+                lhs.0,
+                self.wrap_interpolation_in_to_string(rhs.0, rhs.1, span, span)?,
+            ),
+            None => (lhs.0, rhs.0),
+        })
     }
 
     /// `value as T` written against the expression's source. An operand other
@@ -1591,42 +1653,45 @@ impl Inferer<'_> {
         }
     }
 
-    /// A string and a number under `+`, which does not coerce: the number
-    /// operand, where the fix goes, and the rewrite to apply there. In a long
-    /// `"a" + x + " " + n` chain the whole left side is the string built so far,
-    /// so underlining the operator's span would hide which operand to wrap.
-    fn string_number_add_fix(
+    /// A string beside an operand `+` doesn't convert: that operand, where the
+    /// fix goes, and the rewrite to apply there. In a long `"a" + x + " " + flag`
+    /// chain the whole left side is the string built so far, so underlining the
+    /// operator's span would hide which operand to wrap.
+    pub(super) fn string_concat_fix(
         &self,
-        lhs: ExprId,
+        lhs_span: Span,
         lt: &Type,
-        rhs: ExprId,
+        rhs_span: Span,
         rt: &Type,
-    ) -> Result<Option<(Span, String)>, CompilerFailure> {
-        let is_string = |ty: &Type| matches!(ty.peel(), Type::String | Type::StringLiteral(_));
-        let is_number = |ty: &Type| matches!(ty.peel(), Type::Number | Type::NumberLiteral(_));
-        let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
-        let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
-        let wrap = |span: Span| match self.short_source(span) {
-            Some(number) => format!("write `String({number})`"),
-            None => "wrap the number with `String(...)`".to_string(),
-        };
-        Ok(if is_string(lt) && is_number(rt) {
-            Some((
-                rhs_span,
-                format!("`+` does not coerce; {} to concatenate", wrap(rhs_span)),
-            ))
-        } else if is_number(lt) && is_string(rt) {
-            Some((
-                lhs_span,
-                format!(
-                    "`+` does not coerce; {} to concatenate, or convert the string with \
-                     `Number(...)`, `parseInt(...)`, or `parseFloat(...)` to add",
-                    wrap(lhs_span)
-                ),
-            ))
+    ) -> Option<(Span, String)> {
+        let (span, ty) = if lt.is_string_shaped() && !rt.is_string_shaped() {
+            (rhs_span, rt)
+        } else if rt.is_string_shaped() && !lt.is_string_shaped() {
+            (lhs_span, lt)
         } else {
-            None
-        })
+            return None;
+        };
+        // `String(null)` is no fix, and a nullable operand wants a guard; the
+        // narrowing hint names one when a guard was lost.
+        let is_nullish = |ty: &Type| matches!(ty.peel(), Type::Null | Type::Undefined | Type::Void);
+        let behavior = ty.primitive_behavior();
+        let nullable = match behavior {
+            Type::Union(members) => members.iter().any(is_nullish),
+            other => is_nullish(other),
+        };
+        if nullable || !has_to_string(behavior) {
+            return None;
+        }
+        let rewrite = match self.short_source(span) {
+            Some(source) => format!("write `String({source})`"),
+            None => "wrap it with `String(...)`".to_string(),
+        };
+        Some((
+            span,
+            format!(
+                "`+` converts only a number or an `Error` onto a string; {rewrite} to concatenate"
+            ),
+        ))
     }
 
     /// Arithmetic and bitwise operators other than `+`.
@@ -14453,9 +14518,18 @@ fn op_symbol(op: BinOp) -> &'static str {
     }
 }
 
-/// The pairs `+` is defined for, and the result. The single source of truth for both
-/// [`Inferer::infer_addition`] and the narrowing hint it emits: a hint may only claim
-/// a guard is the fix when the guarded pair is one this accepts.
+/// The operand of a string concatenation that `+` converts to a string.
+#[derive(Clone, Copy)]
+enum ConcatOperand {
+    Lhs,
+    Rhs,
+}
+
+/// The pairs of the same kind `+` is defined for, and the result.
+/// [`Inferer::plus_accepts`] adds the string concatenations that convert one side,
+/// and is the single source of truth for both [`Inferer::infer_addition`] and the
+/// narrowing hint it emits: a hint may only claim a guard is the fix when the
+/// guarded pair is one it accepts.
 pub(super) fn plus_result(lt: &Type, rt: &Type) -> Option<Type> {
     match never_operand_result(lt, rt, NeverPartners::NumericOrString) {
         NeverOperand::Accepted(result) => return Some(result),
@@ -15272,48 +15346,90 @@ mod tests {
     }
 
     #[test]
-    fn number_plus_string_diagnoses() {
-        let (_, diags) = run(r#"let x: number = 1 + "a";"#);
-        assert_eq!(diags.len(), 1);
+    fn number_plus_string_concatenates() {
+        let ta = run_clean(r#"let x: string = 1 + "a";"#);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+    }
+
+    #[test]
+    fn string_plus_number_concatenates() {
+        let ta = run_clean(r#"let x: string = "a" + 1;"#);
+        assert_eq!(nth_decl_value_ty(&ta, 0), Type::String);
+    }
+
+    #[test]
+    fn string_plus_number_chain_concatenates() {
+        run_clean(
+            r#"
+            interface Entry { kind: string; path: string; size: number; }
+            function line(e: Entry): string { return e.kind + " " + e.path + " " + e.size; }
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_plus_error_concatenates() {
+        run_clean(
+            r#"
+            class Oops extends TypeError {}
+            function report(e: Error, o: Oops): string { return "err " + e + " " + o; }
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_plus_boolean_points_at_the_boolean_in_a_chain() {
+        let source = r#"
+            interface Entry { path: string; dir: boolean; }
+            function line(e: Entry): string { return e.path + " " + e.dir; }
+        "#;
+        let (_, diags) = run(source);
+        assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
             diags[0].message,
-            "`+` not defined for `number` and `string`"
+            "`+` not defined for `string` and `boolean`"
         );
+        let span = diags[0].span;
+        assert_eq!(&source[span.start as usize..span.end as usize], "e.dir");
         assert_eq!(
             diags[0].help,
             vec![
-                "`+` does not coerce; write `String(1)` to concatenate, or convert the string with `Number(...)`, `parseInt(...)`, or `parseFloat(...)` to add"
+                "`+` converts only a number or an `Error` onto a string; write `String(e.dir)` to concatenate"
             ]
         );
     }
 
     #[test]
-    fn string_plus_number_diagnoses_with_string_help() {
-        let (_, diags) = run(r#"let x: string = "a" + 1;"#);
-        assert_eq!(diags.len(), 1);
+    fn string_plus_assign_boolean_names_the_fix() {
+        let (_, diags) =
+            run(r#"function f(s: string, flag: boolean): string { s += flag; return s; }"#);
+        assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
             diags[0].message,
-            "`+` not defined for `string` and `number`"
+            "`+=` not defined for `string` and `boolean`"
         );
         assert_eq!(
             diags[0].help,
-            vec!["`+` does not coerce; write `String(1)` to concatenate"]
+            vec![
+                "`+` converts only a number or an `Error` onto a string; write `String(flag)` to concatenate"
+            ]
         );
     }
 
     #[test]
-    fn string_plus_number_points_at_the_number_in_a_chain() {
-        let source = r#"
-            interface Entry { kind: string; path: string; size: number; }
-            function line(e: Entry): string { return e.kind + " " + e.path + " " + e.size; }
-        "#;
-        let (_, diags) = run(source);
+    fn number_plus_assign_string_reports_once() {
+        let (_, diags) = run(r#"function f(n: number): number { n += "a"; return n; }"#);
         assert_eq!(diags.len(), 1, "{diags:?}");
-        let span = diags[0].span;
-        assert_eq!(&source[span.start as usize..span.end as usize], "e.size");
+        assert_eq!(diags[0].message, "expected `number`, got `string`");
+    }
+
+    #[test]
+    fn string_plus_object_stays_rejected() {
+        let (_, diags) = run(r#"function f(o: { a: number }): string { return "x" + o; }"#);
+        assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(
-            diags[0].help,
-            vec!["`+` does not coerce; write `String(e.size)` to concatenate"]
+            diags[0].message,
+            "`+` not defined for `string` and `{ a: number }`"
         );
     }
 

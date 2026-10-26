@@ -17,7 +17,7 @@ We want agents to carry out longer tasks, recover when things go wrong, and brin
 
 **Continue a program after the agent fixes its code.**
 
-Since v0.4.4, agent runs survive server crashes and restarts, and finished steps are not repeated. See [run recovery](https://submilli.ai/docs/reference/run-recovery/). Next, we want an agent to recover from its own errors.
+Since v0.5.0, agent runs survive server crashes and restarts, and finished steps are not repeated. See [run recovery](https://submilli.ai/docs/reference/run-recovery/). Next, we want an agent to recover from its own errors.
 
 **Example:** An agent's code fails with an error partway through a task. The agent fixes the code and continues execution from the point of failure, preserving completed work instead of starting over.
 

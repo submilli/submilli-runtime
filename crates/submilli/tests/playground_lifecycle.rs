@@ -1243,8 +1243,13 @@ mod unix {
         let previous = project.start(&[]);
         assert!(project.stop().status.success());
 
-        let output = project.run(&["start", "--json", "--ready-timeout-ms", "1"]);
-        assert_eq!(output.status.code(), Some(1));
+        // Keep the child unready regardless of how quickly this machine starts it.
+        let output = project
+            .command(&["start", "--json", "--ready-timeout-ms", "1"])
+            .env("SUBMILLI_PLAYGROUND_TEST_START_DELAY_MS", "30000")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
         let out = stdout(&output);
         assert!(!out.contains(previous["url"].as_str().unwrap()), "{out}");
         assert!(stderr(&output).contains("not ready"), "{}", stderr(&output));

@@ -14,10 +14,36 @@ use submilli_shared::secret_store::SecretStore;
 use crate::auth::AuthConfig;
 use crate::blueprint::BlueprintStore;
 
+/// Effect-history placement; capacity remains governed by existing history limits.
+#[derive(Clone, Copy, Debug)]
+pub struct DurableObjectConfig {
+    /// Serialized history-entry bytes before encryption; equality stays inline.
+    pub inline_threshold: usize,
+}
+impl Default for DurableObjectConfig {
+    fn default() -> Self {
+        Self {
+            inline_threshold: 64 * 1024,
+        }
+    }
+}
+impl DurableObjectConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.inline_threshold > submilli_durable::history::MAX_ENTRY_BYTES {
+            return Err(
+                "durable_objects.inline_threshold exceeds the maximum history entry size".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ServerConfig {
     /// Persist and recover session executions. Requires a database and retained key.
     pub durable_execution: bool,
+    /// Placement policy for effect history under the private volume-root subtree.
+    pub durable_objects: DurableObjectConfig,
     /// Limit for admitting live durable work, excluding suspended tool waits.
     /// Defaults to four. Resuming an existing attempt does not acquire a new slot.
     pub max_durable_runs: Option<usize>,
@@ -56,7 +82,7 @@ pub struct ServerConfig {
     /// it to `<parent>/archive/secrets`.
     pub secret_store_dir: Option<PathBuf>,
     pub session_cipher: Option<Arc<submilli_shared::secret_store::SecretCipher>>,
-    /// Root of every VFS directory the server allocates: `managed-local`
+    /// Root of private durable objects and every VFS directory: `managed-local`
     /// volumes, `per_session` workspaces and `ephemeral` scratch (see
     /// [`VolumeRoot`]). Mount it on **durable** storage (a PersistentVolume): a
     /// named volume outlives sessions, and a client that reconnects with the
@@ -265,9 +291,14 @@ impl VolumeRoot {
         self.path.join("ephemeral")
     }
 
+    /// Private effect payloads; never a guest mount or part of workspace cleanup.
+    pub fn durable_objects_dir(&self) -> PathBuf {
+        self.path.join("durable-objects")
+    }
+
     /// Make the root ready at startup. A configured root must be an existing
     /// directory; the default one is created. Then `managed-local/`,
-    /// `sessions/` and `ephemeral/` are created beneath it when missing.
+    /// `sessions/`, `ephemeral/`, and private `durable-objects/` are created when missing.
     pub fn prepare(&self) -> Result<(), VolumeRootError> {
         let unusable = |source: std::io::Error| VolumeRootError::Root {
             path: self.path.clone(),
@@ -289,6 +320,11 @@ impl VolumeRoot {
             create_plain_dir(&dir, false)
                 .map_err(|source| VolumeRootError::Subdirectory { path: dir, source })?;
         }
+        let objects = self.durable_objects_dir();
+        create_plain_dir(&objects, true).map_err(|source| VolumeRootError::Subdirectory {
+            path: objects,
+            source,
+        })?;
         Ok(())
     }
 }
@@ -1376,6 +1412,7 @@ mod tests {
             volume_root.managed_dir(),
             volume_root.sessions_dir(),
             volume_root.ephemeral_dir(),
+            volume_root.durable_objects_dir(),
         ] {
             assert!(dir.is_dir(), "{}", dir.display());
         }
@@ -1420,6 +1457,7 @@ mod tests {
             volume_root.managed_dir(),
             volume_root.sessions_dir(),
             volume_root.ephemeral_dir(),
+            volume_root.durable_objects_dir(),
         ] {
             assert!(dir.is_dir(), "{}", dir.display());
         }

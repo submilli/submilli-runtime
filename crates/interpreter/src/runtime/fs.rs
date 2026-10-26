@@ -341,7 +341,7 @@ impl ContentPath {
     /// The checks for one end of a rename. A rename replaces a link rather than
     /// writing through it, so the mount-point guard looks at the final component
     /// where it sits; the Git metadata guard keeps following it, as it always has.
-    pub(crate) fn check_rename_end(&self) -> Result<(), ContainError> {
+    pub fn check_rename_end(&self) -> Result<(), ContainError> {
         self.writable()?;
         check_mount_points(&self.dir, &self.rel, &self.placement, true, false)?;
         check_metadata_mutation(&self.dir, &self.rel, true, true)

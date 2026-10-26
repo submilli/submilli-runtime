@@ -61,6 +61,11 @@ new crates.
   pins with it.
   Do not bump independent dependencies such as `submilli-wasm` or package versions
   just because the runtime changes.
+- Increment `ARTIFACT_SCHEMA_VERSION` in `crates/submilli-build/src/artifact.rs`
+  by one. Installed packages rebuild when this number changes, so a runtime
+  release must move it even when the metadata and declaration shapes are
+  unchanged. Add a one-line note above the constant only when those shapes
+  change. Chart-only releases do not increment it.
 - Run `cargo build --release --bin submilli --bin submilli-server` to build and
   refresh `Cargo.lock`. Inspect the lock diff for expected workspace changes;
   avoid unrelated dependency upgrades and blanket `cargo update`. Repeat the

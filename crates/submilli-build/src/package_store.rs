@@ -95,7 +95,8 @@ impl PackageStore {
     /// worse than refusing.
     pub fn load(&self, name: &str) -> Result<Artifact, PackageStoreError> {
         let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
-        self.load_with_budget(name, &mut budget)
+        let mut rebuild = RebuildState::default();
+        self.load_with_rebuild(name, &mut budget, &mut rebuild)
     }
 
     pub(crate) fn load_with_budget(
@@ -103,10 +104,81 @@ impl PackageStore {
         name: &str,
         budget: &mut ArtifactReadBudget,
     ) -> Result<Artifact, PackageStoreError> {
-        for root in self.roots() {
-            if let Some(artifact) = self.load_from(root, name, budget)? {
-                return Ok(artifact);
+        let mut rebuild = RebuildState::default();
+        self.load_with_rebuild(name, budget, &mut rebuild)
+    }
+
+    /// Rebuild every installed package whose artifact schema is not the current
+    /// one, in dependency order. A package that cannot be rebuilt is
+    /// reported and skipped; packages that do not depend on it are still rebuilt.
+    ///
+    /// Does not execute stale wasm. A fallback package is published into the
+    /// owned root — the fallback itself is never written.
+    pub fn reconcile_installed(&self) -> PackageReconcile {
+        let mut state = RebuildState::default();
+        let mut failures = Vec::new();
+        for name in self.available_packages() {
+            if let Err(error) = self.ensure_current(&name, &mut state) {
+                failures.push(PackageUnavailable {
+                    name,
+                    schema_version: crate::artifact::ARTIFACT_SCHEMA_VERSION,
+                    detail: error.to_string(),
+                });
             }
+        }
+        PackageReconcile {
+            rebuilt: state.rebuilt,
+            failures,
+        }
+    }
+
+    fn load_with_rebuild(
+        &self,
+        name: &str,
+        budget: &mut ArtifactReadBudget,
+        rebuild: &mut RebuildState,
+    ) -> Result<Artifact, PackageStoreError> {
+        self.ensure_current(name, rebuild)?;
+        // Charge the caller's budget by reading the store. The rebuild cache is
+        // only a substitute when the current wasm lives outside the package
+        // roots, as a fallback rebuild does.
+        let mut saw_stale = false;
+        for root in self.roots() {
+            match self.load_from(root, name, budget) {
+                Ok(Some(artifact)) if !crate::rebuild::needs_rebuild(&artifact.metadata) => {
+                    return Ok(artifact);
+                }
+                Ok(Some(_)) => {
+                    saw_stale = true;
+                    break;
+                }
+                // A release bump rejects the old files before they can be decoded
+                // as a runnable artifact. The rebuilt copy, if any, is in the cache.
+                Err(error) if error.is_unsupported_schema() => {
+                    saw_stale = true;
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        if let Some(artifact) = rebuild.artifacts.get(name)
+            && !crate::rebuild::needs_rebuild(&artifact.metadata)
+        {
+            let cache = crate::rebuild::cache_dir(self.root(), name)?;
+            return crate::artifact::read_package_artifact_with_budget(&cache, budget).map_err(
+                |source| PackageStoreError::Artifact {
+                    name: name.to_string(),
+                    package_dir: cache,
+                    source,
+                },
+            );
+        }
+        if saw_stale {
+            return Err(self.unavailable(
+                name,
+                "installed wasm is from another artifact schema; refusing to run it",
+            ));
         }
         Err(self.missing(name, self.roots().map(Path::to_path_buf).collect()))
     }
@@ -115,6 +187,7 @@ impl PackageStore {
     /// decisions (conflicts, upgrades, lockfile satisfaction) use this so the
     /// owned store stays self-contained.
     pub fn load_owned(&self, name: &str) -> Result<Artifact, PackageStoreError> {
+        crate::rebuild::recover_exclusive(self.root(), name)?;
         let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
         match self.load_from(&self.root, name, &mut budget)? {
             Some(artifact) => Ok(artifact),
@@ -192,82 +265,76 @@ impl PackageStore {
         names: impl IntoIterator<Item = &'a str>,
         limits: ArtifactReadLimits,
     ) -> Result<Vec<Artifact>, PackageStoreError> {
-        let mut marks = BTreeMap::new();
-        let mut stack = Vec::new();
-        let mut order = Vec::new();
-        let mut budget = ArtifactReadBudget::new(limits);
+        let mut walk = ClosureWalk {
+            marks: BTreeMap::new(),
+            stack: Vec::new(),
+            order: Vec::new(),
+            budget: ArtifactReadBudget::new(limits),
+            rebuild: RebuildState::default(),
+        };
         for name in names {
-            self.visit_closure(name, None, &mut marks, &mut stack, &mut order, &mut budget)?;
+            self.visit_closure(name, None, &mut walk)?;
         }
-        Ok(order)
+        Ok(walk.order)
     }
 
     fn visit_closure(
         &self,
         name: &str,
         required_by: Option<(&str, &str)>,
-        marks: &mut BTreeMap<String, ClosureMark>,
-        stack: &mut Vec<String>,
-        order: &mut Vec<Artifact>,
-        budget: &mut ArtifactReadBudget,
+        walk: &mut ClosureWalk,
     ) -> Result<(), PackageStoreError> {
-        match marks.get(name) {
+        match walk.marks.get(name) {
             Some(ClosureMark::Done { version }) => {
                 return check_edge_version(name, required_by, version);
             }
             Some(ClosureMark::Visiting) => {
-                let start = stack.iter().position(|n| n == name).unwrap_or(0);
-                let mut cycle: Vec<_> = stack.iter().skip(start).cloned().collect();
+                let start = walk.stack.iter().position(|n| n == name).unwrap_or(0);
+                let mut cycle: Vec<_> = walk.stack.iter().skip(start).cloned().collect();
                 cycle.push(name.to_string());
                 return Err(PackageStoreError::DependencyCycle { cycle });
             }
             None => {}
         }
-        if stack.len() >= MAX_DEPENDENCY_DEPTH {
+        if walk.stack.len() >= MAX_DEPENDENCY_DEPTH {
             return Err(PackageStoreError::DependencyDepthExceeded {
                 name: name.to_string(),
                 limit: MAX_DEPENDENCY_DEPTH,
             });
         }
-        let artifact =
-            self.load_with_budget(name, budget)
-                .map_err(|err| match (err, required_by) {
-                    (
-                        PackageStoreError::MissingPackage {
-                            searched_roots,
-                            available,
-                            ..
-                        },
-                        Some((dependent, _)),
-                    ) => PackageStoreError::MissingDependency {
-                        name: name.to_string(),
-                        required_by: dependent.to_string(),
+        let artifact = self
+            .load_with_rebuild(name, &mut walk.budget, &mut walk.rebuild)
+            .map_err(|err| match (err, required_by) {
+                (
+                    PackageStoreError::MissingPackage {
                         searched_roots,
                         available,
+                        ..
                     },
-                    (err, _) => err,
-                })?;
+                    Some((dependent, _)),
+                ) => PackageStoreError::MissingDependency {
+                    name: name.to_string(),
+                    required_by: dependent.to_string(),
+                    searched_roots,
+                    available,
+                },
+                (err, _) => err,
+            })?;
         check_edge_version(name, required_by, &artifact.metadata.package_version)?;
-        marks.insert(name.to_string(), ClosureMark::Visiting);
-        stack.push(name.to_string());
-        for dep in &artifact.metadata.dependencies {
-            self.visit_closure(
-                &dep.name,
-                Some((name, &dep.version)),
-                marks,
-                stack,
-                order,
-                budget,
-            )?;
+        walk.marks.insert(name.to_string(), ClosureMark::Visiting);
+        walk.stack.push(name.to_string());
+        let dependencies = artifact.metadata.dependencies.clone();
+        for dep in &dependencies {
+            self.visit_closure(&dep.name, Some((name, &dep.version)), walk)?;
         }
-        stack.pop();
-        marks.insert(
+        walk.stack.pop();
+        walk.marks.insert(
             name.to_string(),
             ClosureMark::Done {
                 version: artifact.metadata.package_version.clone(),
             },
         );
-        order.push(artifact);
+        walk.order.push(artifact);
         Ok(())
     }
 
@@ -300,10 +367,318 @@ impl PackageStore {
         }
         located.into_values().collect()
     }
+
+    fn ensure_current(
+        &self,
+        name: &str,
+        state: &mut RebuildState,
+    ) -> Result<Ensure, PackageStoreError> {
+        if let Some(finished) = state.finished.get(name) {
+            return match finished {
+                Finished::Current => Ok(Ensure::Current),
+                Finished::Rebuilt => Ok(Ensure::Rebuilt),
+                Finished::Failed(detail) => Err(self.unavailable(name, detail.clone())),
+            };
+        }
+        if state.visiting.iter().any(|visiting| visiting == name) {
+            let start = state
+                .visiting
+                .iter()
+                .position(|visiting| visiting == name)
+                .unwrap_or(0);
+            let mut cycle: Vec<_> = state.visiting.iter().skip(start).cloned().collect();
+            cycle.push(name.to_string());
+            return Err(PackageStoreError::DependencyCycle { cycle });
+        }
+        if state.visiting.len() >= MAX_DEPENDENCY_DEPTH {
+            return Err(PackageStoreError::DependencyDepthExceeded {
+                name: name.to_string(),
+                limit: MAX_DEPENDENCY_DEPTH,
+            });
+        }
+        crate::rebuild::recover_exclusive(self.root(), name)?;
+        let Some(located) = self.locate(name)? else {
+            return Err(self.missing(name, self.roots().map(Path::to_path_buf).collect()));
+        };
+        let identity = match crate::artifact::read_package_identity(&located.dir) {
+            Ok(identity) => identity,
+            // A directory with no metadata is an interrupted install, not a stale
+            // wasm. Keep that as an artifact error so a new install can replace it.
+            Err(source) if is_missing_file(&source) => {
+                return Err(PackageStoreError::Artifact {
+                    name: name.to_string(),
+                    package_dir: located.dir,
+                    source,
+                });
+            }
+            Err(source) => {
+                return self.fail_rebuild(
+                    name,
+                    state,
+                    format!("could not read retained sources: {source}"),
+                );
+            }
+        };
+        if identity.metadata.package_name != name {
+            return Err(PackageStoreError::NameMismatch {
+                requested: name.to_string(),
+                package_dir: located.dir,
+                metadata_name: identity.metadata.package_name.clone(),
+                declaration_name: identity.metadata.package_name,
+            });
+        }
+        if !crate::rebuild::needs_rebuild(&identity.metadata) {
+            crate::rebuild::clear_failure(self.root(), name)?;
+            self.remember(name, state)?;
+            state.finished.insert(name.to_string(), Finished::Current);
+            return Ok(Ensure::Current);
+        }
+        // Stay on the visiting stack through the closure walk. A current
+        // package does not walk its own dependencies, so this name must still
+        // be visible when that walk re-enters it.
+        state.visiting.push(name.to_string());
+        let result = self.rebuild_visiting(name, &located, &identity, state);
+        state.visiting.pop();
+        result
+    }
+
+    fn rebuild_visiting(
+        &self,
+        name: &str,
+        located: &LocatedPackage,
+        identity: &crate::artifact::PackageIdentity,
+        state: &mut RebuildState,
+    ) -> Result<Ensure, PackageStoreError> {
+        if let Err(error) = self.ensure_dependencies(name, identity, state) {
+            return self.keep_structural(name, state, error);
+        }
+        let dependencies = match self.artifacts_for_compile(&identity.metadata.dependencies, state)
+        {
+            Ok(dependencies) => dependencies,
+            Err(error) => return self.keep_structural(name, state, error),
+        };
+        let dependency_key = crate::rebuild::dependency_key(&dependencies);
+        let cache_key = crate::rebuild::cache_key(
+            &identity.sources,
+            &dependency_key,
+            &identity.metadata.config.overrides,
+        );
+        if !self.owns(&located.root)
+            && let Some(cached) = self.cached_fallback(name, &cache_key)?
+        {
+            state.artifacts.insert(name.to_string(), cached);
+            state.finished.insert(name.to_string(), Finished::Current);
+            return Ok(Ensure::Current);
+        }
+        if let Some(detail) =
+            crate::rebuild::recorded_failure(self.root(), name, &identity.sources, &dependency_key)?
+        {
+            return self.fail_rebuild(name, state, detail);
+        }
+        let compiled = match crate::rebuild::recompile(identity, &dependencies) {
+            Ok(compiled) => compiled,
+            Err(detail) => {
+                crate::rebuild::record_failure(
+                    self.root(),
+                    name,
+                    &identity.sources,
+                    &dependency_key,
+                    &detail,
+                )?;
+                return self.fail_rebuild(name, state, detail);
+            }
+        };
+        // A fallback package is cached under the owned root. Publishing it as
+        // a real package directory would shadow a later CLI upgrade and undo
+        // a delete that was supposed to fall back.
+        let live = if self.owns(&located.root) {
+            self.package_dir(name)?
+        } else {
+            crate::rebuild::cache_dir(self.root(), name)?
+        };
+        let slot = if self.owns(&located.root) {
+            "owned"
+        } else {
+            "cache"
+        };
+        match crate::rebuild::publish(
+            self.root(),
+            name,
+            &live,
+            &compiled,
+            slot,
+            (!self.owns(&located.root)).then_some(cache_key.as_str()),
+        )? {
+            crate::rebuild::PublishOutcome::Published => {
+                crate::rebuild::clear_failure(self.root(), name)?;
+                state.rebuilt.push(name.to_string());
+            }
+            crate::rebuild::PublishOutcome::AlreadyCurrent => {}
+            crate::rebuild::PublishOutcome::Removed => {
+                return self.fail_rebuild(
+                    name,
+                    state,
+                    "package was removed during rebuild".to_string(),
+                );
+            }
+        }
+        let published = crate::artifact::read_package_artifact(&live).map_err(|source| {
+            PackageStoreError::Artifact {
+                name: name.to_string(),
+                package_dir: live,
+                source,
+            }
+        })?;
+        state.artifacts.insert(name.to_string(), published);
+        state.finished.insert(name.to_string(), Finished::Rebuilt);
+        Ok(Ensure::Rebuilt)
+    }
+
+    /// Direct dependencies plus the rest of their closure. A current package
+    /// does not walk its own dependencies, so a stale dependent must load those
+    /// transitive artifacts itself.
+    fn artifacts_for_compile(
+        &self,
+        direct: &[crate::ArtifactDependency],
+        state: &mut RebuildState,
+    ) -> Result<Vec<Artifact>, PackageStoreError> {
+        let mut queue: Vec<String> = direct
+            .iter()
+            .map(|dependency| dependency.name.clone())
+            .collect();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut artifacts = Vec::new();
+        while let Some(name) = queue.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if !state.artifacts.contains_key(&name) {
+                self.ensure_current(&name, state)?;
+            }
+            let Some(artifact) = state.artifacts.get(&name) else {
+                return Err(
+                    self.unavailable(&name, "dependency is not available to rebuild against")
+                );
+            };
+            queue.extend(
+                artifact
+                    .metadata
+                    .dependencies
+                    .iter()
+                    .map(|dependency| dependency.name.clone()),
+            );
+            artifacts.push(artifact.clone());
+        }
+        Ok(artifacts)
+    }
+
+    fn cached_fallback(
+        &self,
+        name: &str,
+        cache_key: &str,
+    ) -> Result<Option<Artifact>, PackageStoreError> {
+        let cache = crate::rebuild::cache_dir(self.root(), name)?;
+        if !crate::artifact::artifact_dir_is_complete(&cache) {
+            return Ok(None);
+        }
+        let Ok(key) = std::fs::read_to_string(cache.join("cache-key")) else {
+            return Ok(None);
+        };
+        if key != cache_key {
+            return Ok(None);
+        }
+        match crate::artifact::read_package_artifact(&cache) {
+            Ok(artifact)
+                if artifact.metadata.package_name == name
+                    && !crate::rebuild::needs_rebuild(&artifact.metadata) =>
+            {
+                Ok(Some(artifact))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn ensure_dependencies(
+        &self,
+        name: &str,
+        identity: &crate::artifact::PackageIdentity,
+        state: &mut RebuildState,
+    ) -> Result<(), PackageStoreError> {
+        for dependency in &identity.metadata.dependencies {
+            self.ensure_current(&dependency.name, state)?;
+            if let Some(artifact) = state.artifacts.get(&dependency.name)
+                && artifact.metadata.package_version != dependency.version
+            {
+                return Err(PackageStoreError::DependencyVersionMismatch {
+                    name: dependency.name.clone(),
+                    required_by: name.to_string(),
+                    required: dependency.version.clone(),
+                    found: artifact.metadata.package_version.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn keep_structural(
+        &self,
+        name: &str,
+        state: &mut RebuildState,
+        error: PackageStoreError,
+    ) -> Result<Ensure, PackageStoreError> {
+        if matches!(
+            error,
+            PackageStoreError::DependencyCycle { .. }
+                | PackageStoreError::DependencyDepthExceeded { .. }
+        ) {
+            return Err(error);
+        }
+        self.fail_rebuild(name, state, error.to_string())
+    }
+
+    fn fail_rebuild(
+        &self,
+        name: &str,
+        state: &mut RebuildState,
+        detail: String,
+    ) -> Result<Ensure, PackageStoreError> {
+        state
+            .finished
+            .insert(name.to_string(), Finished::Failed(detail.clone()));
+        Err(self.unavailable(name, detail))
+    }
+
+    fn remember(&self, name: &str, state: &mut RebuildState) -> Result<(), PackageStoreError> {
+        if state.artifacts.contains_key(name) {
+            return Ok(());
+        }
+        let mut budget = ArtifactReadBudget::new(ArtifactReadLimits::default());
+        for root in self.roots() {
+            if let Some(artifact) = self.load_from(root, name, &mut budget)? {
+                if crate::rebuild::needs_rebuild(&artifact.metadata) {
+                    return Err(self.unavailable(
+                        name,
+                        "installed wasm is from another artifact schema; refusing to run it",
+                    ));
+                }
+                state.artifacts.insert(name.to_string(), artifact);
+                return Ok(());
+            }
+        }
+        Err(self.missing(name, self.roots().map(Path::to_path_buf).collect()))
+    }
+
+    fn unavailable(&self, name: &str, detail: impl Into<String>) -> PackageStoreError {
+        PackageStoreError::Unavailable {
+            name: name.to_string(),
+            schema_version: crate::artifact::ARTIFACT_SCHEMA_VERSION,
+            detail: detail.into(),
+        }
+    }
 }
 
 /// The `@scope/leaf` directory for `name` under `root`, validating the name.
-fn package_dir_under(root: &Path, name: &str) -> Result<PathBuf, PackageStoreError> {
+pub(crate) fn package_dir_under(root: &Path, name: &str) -> Result<PathBuf, PackageStoreError> {
     let (scope, package) =
         split_scoped_name(name).ok_or_else(|| PackageStoreError::InvalidPackageName {
             name: name.to_string(),
@@ -429,6 +804,56 @@ pub enum PackageStoreError {
         required: String,
         found: String,
     },
+    /// The installed wasm is from another artifact schema, and it could not be
+    /// rebuilt. The stale module is not returned.
+    Unavailable {
+        name: String,
+        schema_version: u32,
+        detail: String,
+    },
+}
+
+/// What [`PackageStore::reconcile_installed`] did. Failures do not hide packages
+/// that rebuilt.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PackageReconcile {
+    pub rebuilt: Vec<String>,
+    pub failures: Vec<PackageUnavailable>,
+}
+
+/// One installed package that cannot be loaded under the current artifact schema.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageUnavailable {
+    pub name: String,
+    pub schema_version: u32,
+    pub detail: String,
+}
+
+enum Ensure {
+    Current,
+    Rebuilt,
+}
+
+enum Finished {
+    Current,
+    Rebuilt,
+    Failed(String),
+}
+
+#[derive(Default)]
+struct RebuildState {
+    finished: BTreeMap<String, Finished>,
+    artifacts: BTreeMap<String, Artifact>,
+    visiting: Vec<String>,
+    rebuilt: Vec<String>,
+}
+
+struct ClosureWalk {
+    marks: BTreeMap<String, ClosureMark>,
+    stack: Vec<String>,
+    order: Vec<Artifact>,
+    budget: ArtifactReadBudget,
+    rebuild: RebuildState,
 }
 
 impl fmt::Display for PackageStoreError {
@@ -504,6 +929,14 @@ impl fmt::Display for PackageStoreError {
                 f,
                 "package `{required_by}` requires `{name}` {required}, but the store has {found}; rebuild `{name}` at {required} or rebuild `{required_by}` against {found}"
             ),
+            PackageStoreError::Unavailable {
+                name,
+                schema_version,
+                detail,
+            } => write!(
+                f,
+                "package `{name}` is unavailable under artifact schema {schema_version}: {detail}"
+            ),
         }
     }
 }
@@ -528,6 +961,18 @@ fn write_available(f: &mut fmt::Formatter<'_>, available: &[String]) -> fmt::Res
 }
 
 impl PackageStoreError {
+    /// The artifact's schema is not the one this process writes. Install may
+    /// replace it; a load rebuilds from retained sources instead.
+    pub fn is_unsupported_schema(&self) -> bool {
+        matches!(
+            self,
+            PackageStoreError::Artifact {
+                source: ArtifactError::UnsupportedSchema { .. },
+                ..
+            }
+        )
+    }
+
     /// Whether the package directory exists but lacks one of the artifact's
     /// files: what an interrupted install leaves behind. A fresh install may
     /// overwrite such a directory as if the package were absent.
@@ -568,6 +1013,28 @@ pub fn default_data_root() -> PathBuf {
 
 pub fn default_package_store_dir() -> PathBuf {
     default_data_root().join("packages")
+}
+
+/// Configuration recorded on an installed package, without executing its wasm.
+/// Used when an artifact-schema mismatch cannot be rebuilt.
+pub fn saved_overrides(
+    store: &PackageStore,
+    name: &str,
+) -> std::collections::BTreeMap<String, String> {
+    store
+        .locate(name)
+        .ok()
+        .flatten()
+        .and_then(|located| crate::artifact::read_package_identity(&located.dir).ok())
+        .map(|identity| identity.metadata.config.overrides)
+        .unwrap_or_default()
+}
+
+fn is_missing_file(error: &ArtifactError) -> bool {
+    matches!(
+        error,
+        ArtifactError::Io { source, .. } if source.kind() == io::ErrorKind::NotFound
+    )
 }
 
 fn validate_artifact_name(

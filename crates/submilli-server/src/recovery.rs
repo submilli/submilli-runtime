@@ -501,7 +501,13 @@ async fn run_attempt(
         state.database().ok_or(StuckReason::Storage)?,
         state.secret_cipher().ok_or(StuckReason::Credentials)?,
     );
-    let history = runner::durable::history(run, units.clone());
+    let history = runner::durable::history(
+        run,
+        state
+            .history_objects()
+            .ok_or(StuckReason::Storage)?
+            .history(),
+    );
     if let Some(entry) = entry {
         prepared.services.effects = Some(Arc::new(crate::runs::durable::ToolHistory::new(
             history.clone(),
@@ -577,7 +583,7 @@ async fn run_attempt(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 mod tests;
 
 /// Also called on startup for a crash between terminal commit and retirement.
@@ -634,6 +640,12 @@ pub(crate) async fn retire(
     } else {
         false
     };
+    if let Some(objects) = &manager.history_objects {
+        objects
+            .remove_run(run.session_id(), id)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
     let mut unit = units.begin().await.map_err(|e| e.to_string())?;
     unit.retire_run_resources(id)
         .await
@@ -680,7 +692,7 @@ fn run_tools(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
 pub(crate) fn tool_checkpoint(point: &str) {
     tests::process::checkpoint(point);
 }

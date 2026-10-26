@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, sync::Mutex};
 #[derive(Default, Clone)]
 pub(crate) struct State {
     pub(crate) stop_after_prepared: bool,
+    pub(crate) lose_checked_ack: bool,
     pub(crate) refuse_receipt: bool,
     outputs: BTreeMap<(RunId, EffectId), Arc<Vec<u8>>>,
     operations: BTreeMap<(RunId, EffectId), JournalEntry>,
@@ -256,7 +257,13 @@ impl UnitOfWork for MemoryUnit {
                 "injected prepared acknowledgement loss".into(),
             ));
         }
-        if self.lose_ack {
+        let lose_checked_ack = store.lose_checked_ack
+            && store
+                .operations
+                .values()
+                .any(|entry| entry.operation == "download-admission");
+        store.lose_checked_ack = false;
+        if self.lose_ack || lose_checked_ack {
             Err(StoreError::Io("lost commit acknowledgement".into()))
         } else {
             Ok(())
