@@ -4262,16 +4262,16 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                 )
             };
 
-            let (status, body) = docs("%40acme%2Fbilling");
+            let (status, body) = docs("%40pied-piper%2Fbilling");
             assert_eq!(status, 200, "{body}");
-            assert_eq!(body["package"], "@acme/billing", "{body}");
+            assert_eq!(body["package"], "@pied-piper/billing", "{body}");
             assert_eq!(body["truncated"], false, "{body}");
             let guide = body["untrusted"]["markdown"].as_str().unwrap();
             assert!(guide.contains("listCharges(customerId)"), "{guide}");
-            assert!(guide.contains("cus_northwind"), "{guide}");
-            assert!(guide.contains("cus_initech"), "{guide}");
+            assert!(guide.contains("pied_piper"), "{guide}");
+            assert!(guide.contains("hooli"), "{guide}");
 
-            let (status, body) = docs("%40acme%2Fextra");
+            let (status, body) = docs("%40pied-piper%2Fextra");
             assert_eq!(status, 404, "{body}");
             assert_eq!(body["error"], "unknown_package", "{body}");
             assert!(body.get("untrusted").is_none(), "{body}");
