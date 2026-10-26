@@ -226,6 +226,8 @@ pub(crate) fn serve(options: HostOptions) -> Result<Served> {
         Arc::new(HeldInstance::new(instance)),
         serving,
     ));
+    // A Claude Code chat still answering would outlive the process otherwise.
+    super::claude_runner::stop_all();
     // Teardown is bounded: a stray connection task must not keep the process up.
     runtime.shutdown_timeout(Duration::from_millis(250));
     result

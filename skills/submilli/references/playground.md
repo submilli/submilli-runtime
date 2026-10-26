@@ -55,7 +55,8 @@ then send the task. A session's variables and agent stay fixed once it starts.
 
 From the terminal: `submilli playground chat "<task>" --model <provider>:<model>`
 starts a session and prints its id. `--session <ID>` sends the next message in
-that session. Keyed providers need ANTHROPIC_API_KEY, OPENAI_API_KEY, or
+that session, which keeps its own model and settings: `--model`, `--effort`,
+and `--max-budget-usd` are refused with `--session`. Keyed providers need ANTHROPIC_API_KEY, OPENAI_API_KEY, or
 GEMINI_API_KEY, from the playground's environment, the project's `.env`, or
 `submilli secret put <NAME>`. `--max-calls-per-answer` (default 16) caps the
 tool calls one answer may make.
@@ -81,8 +82,9 @@ don't apply. Each follow-up resumes the conversation.
   developer, and only after they agree, resend with
   `--confirm-billing "<value>"`. Never confirm on your own initiative: it
   spends their money. The session keeps the confirmation. If the billing
-  changes later, the message is refused with `billing-changed`. To use the
-  subscription instead, unset the variable and restart the playground.
+  changes later, the message is refused with `billing-changed`, which is
+  confirmed the same way. To use the subscription instead, unset the variable
+  and restart the playground.
 - **Why an answer stopped.** `stopped` in the result is `answered`,
   `turn-limit`, `output-limit`, `provider`, `spending-limit`, `call-limit`,
   or `usage-limit` (the subscription has no usage left for now). After a

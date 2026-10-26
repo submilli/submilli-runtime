@@ -224,6 +224,17 @@ fn a_flood_on_stderr_never_stalls_the_answer() {
 }
 
 #[test]
+fn an_answer_without_its_start_message_is_not_trusted() {
+    let world = World::new();
+    let (outcome, noted, _) = drive_fake(&world, Given::default(), "tail -n +2 answered.jsonl");
+    assert!(!noted);
+    match ended(outcome) {
+        Err(Failure::Failed(why)) => assert!(why.contains("without its start message"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn a_resumed_conversation_is_not_noted_again() {
     let world = World::new();
     let given = Given {
@@ -312,6 +323,17 @@ fn a_start_message_that_does_not_fit_stops_the_message_at_once() {
     assert!(
         matches!(&billed, Failure::BillingChanged(why) if why.contains("ANTHROPIC_API_KEY")),
         "{billed:?}"
+    );
+    // A start message that doesn't say who it bills is not taken as the subscription.
+    let unsaid = start(json!({ "apiKeySource": null }));
+    assert!(
+        matches!(&unsaid, Failure::BillingChanged(why) if why.contains("an unreported source")),
+        "{unsaid:?}"
+    );
+    let other = start(json!({ "session_id": "another-conversation" }));
+    assert!(
+        matches!(&other, Failure::Failed(why) if why.contains("not the session's own")),
+        "{other:?}"
     );
     let not_connected = [
         json!({ "mcp_servers": [{ "name": "playground", "status": "pending" }] }),

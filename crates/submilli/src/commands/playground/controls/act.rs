@@ -1094,6 +1094,17 @@ impl Actions {
                     &variables,
                 )
                 .map_err(claude_runner::Failure::Failed)?;
+                // Claimed before the session is listed, so a message sent to it as soon as
+                // it shows waits for this one.
+                answering = Some(
+                    Answering::try_claim(&actions.chatting, &session, &cancelled).map_err(
+                        |_| {
+                            claude_runner::Failure::Failed(
+                                "the new session was already being answered".to_owned(),
+                            )
+                        },
+                    )?,
+                );
                 if let Some(blueprint) = &blueprint {
                     handle.block_on(actions.log_chat_session(
                         &session,
@@ -1104,8 +1115,6 @@ impl Actions {
                         &settings,
                     ));
                 }
-                // Nothing else knows the session yet, so the claim is free.
-                answering = Answering::try_claim(&actions.chatting, &session, &cancelled).ok();
                 session
             };
             actions.confirm_billing(&session, confirm.as_deref());

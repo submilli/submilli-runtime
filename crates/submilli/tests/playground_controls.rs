@@ -2957,6 +2957,82 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
             playground.stop();
         }
 
+        #[test]
+        fn a_conversation_claude_code_already_holds_is_resumed_once_then_refused() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            // As when the playground stopped before it noted the conversation: starting it
+            // again is refused, and resuming it answers.
+            let in_use = r#"echo "Error: Session ID $SESSION is already in use." >&2; exit 1"#;
+            claude.behave(&format!(
+                "if [ -z \"$RESUMED\" ]; then {in_use}; fi\n{}",
+                claude_answers(CLAUDE_INIT, "Resumed.")
+            ));
+            claude.start(&playground);
+            let answered =
+                playground.expect(0, &["chat", "--model", "claude-code:sonnet", "Go on."]);
+            assert_eq!(answered["untrusted"]["reply"], "Resumed.", "{answered}");
+            let session = answered["session"].as_str().unwrap();
+            assert!(claude.argv(0).iter().any(|arg| arg == "--session-id"));
+            let resumed = claude.argv(1);
+            let at = resumed.iter().position(|arg| arg == "--resume").unwrap();
+            assert_eq!(resumed[at + 1], session);
+
+            // In use both ways: refused with a plain reason, not tried again.
+            claude.behave(&format!("{in_use}\n"));
+            let (refused, code) =
+                playground.json(&["chat", "--model", "claude-code:sonnet", "Again."]);
+            assert_eq!(code, 1, "{refused}");
+            assert!(
+                refused["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("already answering in this session"),
+                "{refused}"
+            );
+            assert!(!claude.dir.join("argv-4").exists());
+            playground.stop();
+        }
+
+        #[test]
+        fn a_claude_code_chat_still_answering_is_stopped_with_the_playground() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            // One that goes on after an interrupt, as Claude Code finishing a call does.
+            claude.behave(&format!(
+                r#"{CLAUDE_INIT}
+echo $$ > "$D/pid"; trap 'touch "$D/interrupted"' INT; touch "$D/waiting"
+i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+"#
+            ));
+            claude.start(&playground);
+            let chatting = claude_chat(&playground, &["--model", "claude-code:sonnet", "Wait."])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            claude.wait_for("waiting");
+            let pid = std::fs::read_to_string(claude.dir.join("pid")).unwrap();
+            playground.stop();
+            assert!(claude.dir.join("interrupted").exists());
+            // Gone with the playground, not left answering after it.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "Claude Code outlived the playground"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let _ = wait(chatting);
+        }
+
         /// Claude Code's start message, reporting `api_key_source`.
         fn claude_init(api_key_source: &str) -> String {
             CLAUDE_INIT.replace(

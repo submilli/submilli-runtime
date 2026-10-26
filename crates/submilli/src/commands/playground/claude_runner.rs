@@ -11,6 +11,7 @@
 //! product running Claude Code may not restrict its sign-in methods, so this one shows the
 //! billing and has the developer confirm it instead.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read as _, Write as _};
 use std::os::unix::process::CommandExt as _;
@@ -542,6 +543,7 @@ fn attempt(setup: &Setup<'_>, mut command: Command, task: &str) -> Result<Outcom
 /// Writes `task` to a started `claude`, follows its stream to the end, and reaps it.
 fn drive(setup: &Setup<'_>, mut child: Child, task: &str) -> Result<Outcome, Attempt> {
     let stopper = Stopper::new(child.id());
+    let _running = Running::new(child.id());
     let stderr = child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
             let mut stderr = stderr;
@@ -693,6 +695,64 @@ impl Stopper {
     }
 }
 
+/// The process groups of every Claude Code running a message, so a stopping
+/// playground can end them: each runs in its own group, which the terminal's Ctrl-C
+/// never reaches.
+static RUNNING: Mutex<BTreeSet<u32>> = Mutex::new(BTreeSet::new());
+
+/// Lists a started Claude Code in [`RUNNING`] until its message is over.
+struct Running(u32);
+
+impl Running {
+    fn new(pid: u32) -> Self {
+        RUNNING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(pid);
+        Self(pid)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// Stops every Claude Code still running a message, as Stop does: interrupted, then
+/// its whole group killed if it hasn't ended within [`STOP_GRACE`]. Blocking; for a
+/// playground that is about to exit.
+pub(crate) fn stop_all() {
+    let running = || {
+        RUNNING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    };
+    let pids = running();
+    if pids.is_empty() {
+        return;
+    }
+    for &pid in &pids {
+        if let Ok(pid) = i32::try_from(pid) {
+            // SAFETY: kill takes only scalar arguments.
+            unsafe {
+                libc::kill(pid, libc::SIGINT);
+            }
+        }
+    }
+    let deadline = Instant::now() + STOP_GRACE;
+    while Instant::now() < deadline && !running().is_empty() {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for pid in running() {
+        kill_group(pid);
+    }
+}
+
 fn kill_group(pid: u32) {
     if let Ok(pid) = i32::try_from(pid) {
         // SAFETY: the child leads its own process group; kill takes only scalar
@@ -769,7 +829,10 @@ impl<'s, 'a> Stream<'s, 'a> {
             return None;
         }
         self.started = true;
-        let reported = init["apiKeySource"].as_str().unwrap_or("none");
+        // A start message that doesn't say who it bills stops the message too.
+        let reported = init["apiKeySource"]
+            .as_str()
+            .unwrap_or("an unreported source");
         if !self.setup.billing.reported_as(reported) {
             return Some(Stop::Start(Failure::BillingChanged(format!(
                 "Claude Code started billing {reported}, not {} as confirmed",
@@ -923,13 +986,20 @@ impl<'s, 'a> Stream<'s, 'a> {
             .map(str::to_owned);
         let errors = errors(&result);
         match result["subtype"].as_str() {
+            _ if !self.started && errors.contains("No conversation found") => {
+                Err(Attempt::NotFound)
+            }
+            // Its start message is where the billing is checked, so an answer without one
+            // isn't trusted.
+            _ if !self.started => Err(Attempt::Ended(Failure::Failed(
+                "Claude Code answered without its start message, so who it billed was not \
+                 checked"
+                    .to_owned(),
+            ))),
             Some("success") if result["is_error"] != true => Ok(outcome(Stopped::Answered, reply)),
             Some("error_max_turns") => Ok(outcome(Stopped::TurnLimit, None)),
             Some("error_max_budget_usd") => Ok(outcome(Stopped::SpendingLimit, None)),
             _ if self.usage_limited => Ok(outcome(Stopped::UsageLimit, None)),
-            _ if !self.started && errors.contains("No conversation found") => {
-                Err(Attempt::NotFound)
-            }
             _ => {
                 let said = reply.unwrap_or(errors);
                 Err(Attempt::Ended(Failure::Failed(failed(

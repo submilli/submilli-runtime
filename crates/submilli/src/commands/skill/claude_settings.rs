@@ -124,9 +124,8 @@ fn plan_settings(existing: Option<&str>) -> Result<Option<String>, String> {
     Ok(Some(text))
 }
 
-/// Gives every hook event an entry that runs [`HOOK_COMMAND`], unless one already does,
-/// and narrows the matcher of any that does: earlier setups matched every tool. Entries
-/// that run something else are left alone. Whether anything changed.
+/// Gives every hook event an entry that runs [`HOOK_COMMAND`], unless one already does.
+/// Entries already there are left alone. Whether anything changed.
 fn add_hooks(settings: &mut Map<String, Value>) -> Result<bool, String> {
     let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
     let Some(hooks) = hooks.as_object_mut() else {
@@ -138,22 +137,11 @@ fn add_hooks(settings: &mut Map<String, Value>) -> Result<bool, String> {
         let Some(entries) = entries.as_array_mut() else {
             return Err(format!("its `hooks.{event}` isn't a list"));
         };
-        let mut runs_it = false;
-        for entry in entries.iter_mut() {
-            let ours = entry["hooks"]
+        let runs_it = entries.iter().any(|entry| {
+            entry["hooks"]
                 .as_array()
-                .is_some_and(|hooks| hooks.iter().any(|hook| hook["command"] == HOOK_COMMAND));
-            if !ours {
-                continue;
-            }
-            runs_it = true;
-            if entry["matcher"] != matcher
-                && let Some(entry) = entry.as_object_mut()
-            {
-                entry.insert("matcher".to_owned(), json!(matcher));
-                changed = true;
-            }
-        }
+                .is_some_and(|hooks| hooks.iter().any(|hook| hook["command"] == HOOK_COMMAND))
+        });
         if !runs_it {
             entries.push(json!({
                 "matcher": matcher,
@@ -274,25 +262,6 @@ mod tests {
         // From nothing, or an empty file.
         assert!(plan_settings(None).unwrap().is_some());
         assert!(plan_settings(Some("\n")).unwrap().is_some());
-    }
-
-    #[test]
-    fn a_catch_all_chat_hook_is_narrowed_and_other_hooks_are_left_alone() {
-        let old = json!({
-            "permissions": { "allow": [ALLOW_RULE] },
-            "hooks": {
-                "PreToolUse": [
-                    { "matcher": "*", "hooks": [{ "type": "command", "command": HOOK_COMMAND }] },
-                    { "matcher": "*", "hooks": [{ "type": "command", "command": "mine" }] },
-                ],
-            },
-        });
-        let text = plan_settings(Some(&old.to_string())).unwrap().unwrap();
-        let settings: Value = serde_json::from_str(&text).unwrap();
-        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre.len(), 2);
-        assert_eq!(pre[0]["matcher"], "mcp__playground__.*");
-        assert_eq!(pre[1], old["hooks"]["PreToolUse"][1]);
     }
 
     #[test]

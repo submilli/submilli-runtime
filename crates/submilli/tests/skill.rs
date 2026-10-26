@@ -709,15 +709,15 @@ fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
 
-/// The matchers of every `chat-hook` entry for `event`, and how many entries it has.
-fn chat_hook_matchers(settings: &serde_json::Value, event: &str) -> (Vec<String>, usize) {
-    let entries = settings["hooks"][event].as_array().unwrap();
-    let matchers = entries
+/// The matchers of every `chat-hook` entry for `event`.
+fn chat_hook_matchers(settings: &serde_json::Value, event: &str) -> Vec<String> {
+    settings["hooks"][event]
+        .as_array()
+        .unwrap()
         .iter()
         .filter(|entry| entry["hooks"][0]["command"] == CHAT_HOOK)
         .map(|entry| entry["matcher"].as_str().unwrap().to_owned())
-        .collect();
-    (matchers, entries.len())
+        .collect()
 }
 
 /// Only the stand-in's playground tools, and the stand-in's own stop, start `chat-hook`:
@@ -725,13 +725,13 @@ fn chat_hook_matchers(settings: &serde_json::Value, event: &str) -> (Vec<String>
 fn assert_narrowed(settings: &serde_json::Value) {
     for event in TOOL_EVENTS {
         assert_eq!(
-            chat_hook_matchers(settings, event).0,
+            chat_hook_matchers(settings, event),
             ["mcp__playground__.*"],
             "{event}: {settings}"
         );
     }
     assert_eq!(
-        chat_hook_matchers(settings, "SubagentStop").0,
+        chat_hook_matchers(settings, "SubagentStop"),
         ["submilli-standin"],
         "{settings}"
     );
@@ -791,39 +791,6 @@ fn a_user_install_writes_the_stand_in_but_no_hooks() {
     assert!(!home.path().join(".claude/settings.local.json").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--project"), "{stdout}");
-}
-
-#[test]
-fn catch_all_chat_hooks_are_narrowed_on_update_and_sync_and_other_hooks_stay() {
-    let (project, home) = project_with_install("claude");
-    let settings_path = project.path().join(".claude/settings.local.json");
-    let entry = |command: &str| serde_json::json!({"matcher": "*", "hooks": [{"type": "command", "command": command}]});
-    let mut old =
-        serde_json::json!({"permissions": {"allow": ["mcp__playground__*"]}, "hooks": {}});
-    for event in TOOL_EVENTS.into_iter().chain(["SubagentStop"]) {
-        old["hooks"][event] = serde_json::json!([entry(CHAT_HOOK), entry("my-own-hook")]);
-    }
-    let old = serde_json::to_vec_pretty(&old).unwrap();
-
-    // The skill bundle is current, so only the settings have anything to change.
-    for refresh in ["update", "sync"] {
-        fs::write(&settings_path, &old).unwrap();
-        if refresh == "update" {
-            ok(run(project.path(), "update", "claude"));
-        } else {
-            sync(project.path(), home.path(), None);
-        }
-        let settings = read_json(&settings_path);
-        assert_narrowed(&settings);
-        for event in TOOL_EVENTS.into_iter().chain(["SubagentStop"]) {
-            assert_eq!(chat_hook_matchers(&settings, event).1, 2, "{refresh}");
-            assert_eq!(
-                settings["hooks"][event][1],
-                entry("my-own-hook"),
-                "{refresh}"
-            );
-        }
-    }
 }
 
 #[test]
