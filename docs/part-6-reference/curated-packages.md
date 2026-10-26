@@ -23,6 +23,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 
 | Package | For | Secret | Hosts |
 | --- | --- | --- | --- |
+| [`@submilli/attio`](#submilliattio) | Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes. | `ATTIO_API_KEY` | `api.attio.com` |
 | [`@submilli/brave-search`](#submillibrave-search) | Web search, one page of results at a time, and extracted passages grouped by source URL. | `BRAVE_SEARCH_API_KEY` | `api.search.brave.com` |
 | [`@submilli/exa`](#submilliexa) | Web search with highlights, and extraction of known URLs with a status for each URL. | `EXA_API_KEY` | `api.exa.ai` |
 | [`@submilli/firecrawl`](#submillifirecrawl) | Firecrawl v2 web search, page scraping, site URL discovery, and explicit Batch Scrape and Crawl jobs. | `FIRECRAWL_API_KEY` | `api.firecrawl.dev` |
@@ -64,6 +65,26 @@ Blueprint:
 
 `submilli docs @submilli/<name>` prints an installed Package's
 declarations.
+
+## @submilli/attio
+
+Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes.
+
+| | |
+| --- | --- |
+| Secret | `ATTIO_API_KEY` |
+| Credential | An Attio workspace API key with the scopes the operations need: `object_configuration:read`, `record_permission:read-write`, `note:read-write`, `user_management:read` |
+| Without the secret | Throws `AttioError` with code `missing_token` |
+| HTTP | `api.attio.com`: GET, PATCH, POST, PUT |
+| Filesystem | None |
+| Readme | [`packages/attio/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/attio/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/attio
+submilli blueprint add-package @submilli/attio --no-capabilities
+submilli blueprint capability list @submilli/attio
+submilli blueprint capability add attio.com/records.query
+```
 
 ## @submilli/brave-search
 

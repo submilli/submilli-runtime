@@ -12,6 +12,7 @@ use std::process::{Command, Output, Stdio};
 
 /// Packages that ship policy scripts under `tests/policy/`.
 const PACKAGES: &[&str] = &[
+    "attio",
     "firecrawl",
     "github",
     "gmail",

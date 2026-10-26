@@ -1,0 +1,105 @@
+namespace: submilli
+provides:
+- name: attio.com/attributes.list
+  description: List an object's active attributes, with their slugs and types.
+  fields:
+    object:
+      type: string
+- name: attio.com/companies.upsert
+  description: Create a company, or update the company that has this domain. Only the fields given are written.
+  fields:
+    domain:
+      type: string
+- name: attio.com/members.list
+  description: List the members of the Attio workspace.
+  fields: {}
+- name: attio.com/notes.create
+  description: Attach a note to a record.
+  fields:
+    parentObject:
+      type: string
+    parentRecordId:
+      type: string
+- name: attio.com/notes.list
+  description: List one page of the notes attached to a record, newest first as Attio returns them.
+  fields:
+    parentObject:
+      type: string
+    parentRecordId:
+      type: string
+- name: attio.com/objects.list
+  description: List the workspace's objects, such as `people`, `companies` and `deals` (when enabled), and custom objects.
+  fields: {}
+- name: attio.com/people.find
+  description: Find the person with an email address; null when nobody has it.
+  fields:
+    email:
+      type: string
+- name: attio.com/people.upsert
+  description: Create a person, or update the person who has this email address. Only the fields given are written.
+  fields:
+    email:
+      type: string
+- name: attio.com/records.create
+  description: Create a record, optionally in an initial status such as a deal stage.
+  fields:
+    attributes:
+      type: string[]
+    object:
+      type: string
+    status:
+      type: string
+    statusAttribute:
+      type: string
+- name: attio.com/records.get
+  description: Get one record with its current values; null when it does not exist.
+  fields:
+    object:
+      type: string
+    recordId:
+      type: string
+- name: attio.com/records.query
+  description: Query an object's records with AND-combined conditions, sorts and one page of limit/offset pagination.
+  fields:
+    object:
+      type: string
+- name: attio.com/records.setStatus
+  description: Change a record's status attribute, such as a deal's stage, to a live status given by title or id.
+  fields:
+    attribute:
+      type: string
+    object:
+      type: string
+    previousStatus:
+      type: string
+    recordId:
+      type: string
+    status:
+      type: string
+- name: attio.com/records.update
+  description: Update a record's attributes. Only the given attributes change; multi-value attributes gain the given values. Status attributes are refused.
+  fields:
+    attributes:
+      type: string[]
+    object:
+      type: string
+    recordId:
+      type: string
+- name: attio.com/statuses.list
+  description: List the live (non-archived) statuses of a status attribute, such as the stages of `deals.stage`.
+  fields:
+    attribute:
+      type: string
+    object:
+      type: string
+requires:
+- capability: http.get
+  filter: host == "api.attio.com"
+- capability: http.patch
+  filter: host == "api.attio.com"
+- capability: http.post
+  filter: host == "api.attio.com"
+- capability: http.put
+  filter: host == "api.attio.com"
+- capability: secrets.get
+  filter: name == "ATTIO_API_KEY"
