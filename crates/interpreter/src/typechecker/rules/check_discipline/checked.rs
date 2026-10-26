@@ -752,7 +752,7 @@ impl<'a> Walker<'a, '_> {
                 body,
             } => {
                 self.scopes.push();
-                let walked = self.for_loop(*init, *condition, *update, *body, stmt.span);
+                let walked = self.for_loop(init, *condition, *update, *body, stmt.span);
                 self.scopes.pop();
                 walked?;
             }
@@ -833,13 +833,13 @@ impl<'a> Walker<'a, '_> {
 
     fn for_loop(
         &mut self,
-        init: Option<StmtId>,
+        init: &[StmtId],
         condition: Option<ExprId>,
         update: Option<StmtId>,
         body: StmtId,
         span: Span,
     ) -> Result<(), CompilerFailure> {
-        if let Some(init) = init {
+        for &init in init {
             self.stmt(init)?;
         }
         let decider = match condition {

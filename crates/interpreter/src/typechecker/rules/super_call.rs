@@ -194,7 +194,7 @@ impl SuperCallWalk {
             TypedStmtKind::For {
                 init, update, body, ..
             } => {
-                for s in [*init, *update].into_iter().flatten() {
+                for s in init.iter().copied().chain(*update) {
                     self.walk(ta, s, super_called)?;
                 }
                 self.walk(ta, *body, super_called)?;

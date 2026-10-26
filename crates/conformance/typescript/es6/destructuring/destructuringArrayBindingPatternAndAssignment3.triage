@@ -1,0 +1,1 @@
+line 3, 5 type: artifact the runner reads a module-level pattern binding from its global slot, which is typed before the default applies; reads and writes use the defaulted type

@@ -3547,7 +3547,7 @@ mod tests {
                 update,
                 body,
             } => {
-                if let Some(i) = init {
+                for i in init {
                     collect_body_expr_types(ta, *i, out);
                 }
                 if let Some(c) = condition {

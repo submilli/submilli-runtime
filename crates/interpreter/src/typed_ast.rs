@@ -687,7 +687,7 @@ pub enum TypedStmtKind {
     },
     /// Pre-desugar; codegen never sees this variant.
     For {
-        init: Option<StmtId>,
+        init: Vec<StmtId>,
         condition: Option<ExprId>,
         update: Option<StmtId>,
         body: StmtId,

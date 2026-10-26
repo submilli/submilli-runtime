@@ -1,0 +1,92 @@
+=== destructuringArrayBindingPatternAndAssignment3.ts ===
+const [a, b = a] = [1]; // ok
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+>[1] : [number]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;                    // error for e = e
+const [f, g = f, h = i, i = f] = [1]; // error for h = i
+>f : number
+>  : ^^^^^^
+>g : number
+>  : ^^^^^^
+>f : number
+>  : ^^^^^^
+>h : number
+>  : ^^^^^^
+>i : number
+>  : ^^^^^^
+>i : number
+>  : ^^^^^^
+>f : number
+>  : ^^^^^^
+>[1] : [number]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+
+(function ([a, b = a]) { // ok
+>(function ([a, b = a]) { // ok })([1]) : void
+>                                       : ^^^^
+>(function ([a, b = a]) { // ok }) : ([a, b]: number[]) => void
+>                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>function ([a, b = a]) { // ok } : ([a, b]: number[]) => void
+>                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>a : number
+>  : ^^^^^^
+
+})([1]);
+>[1] : number[]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+/*pruned*/;
+
+(function ([f, g = f, h = i, i = f]) { // error for h = i
+>(function ([f, g = f, h = i, i = f]) { // error for h = i })([1]) : void
+>                                                                  : ^^^^
+>(function ([f, g = f, h = i, i = f]) { // error for h = i }) : ([f, g, h, i]: number[]) => void
+>                                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>function ([f, g = f, h = i, i = f]) { // error for h = i } : ([f, g, h, i]: number[]) => void
+>                                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>f : number
+>  : ^^^^^^
+>g : number
+>  : ^^^^^^
+>f : number
+>  : ^^^^^^
+>h : number
+>  : ^^^^^^
+>i : number
+>  : ^^^^^^
+>i : number
+>  : ^^^^^^
+>f : number
+>  : ^^^^^^
+
+})([1])
+>[1] : number[]
+>    : ^^^^^^^^
+>1 : 1
+>  : ^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

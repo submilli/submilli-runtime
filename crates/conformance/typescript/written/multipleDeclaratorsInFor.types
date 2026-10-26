@@ -1,0 +1,263 @@
+=== multipleDeclaratorsInFor.ts ===
+// Written for Submilli: no upstream case Submilli can run declares several
+// variables in a `for` head or lists several expressions in a `for` initializer
+// or update.
+
+function reverse(xs: number[]): number[] {
+>reverse : (xs: number[]) => number[]
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+
+    for (let lo = 0, hi = xs.length - 1; lo < hi; lo++, hi--) {
+>lo : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+>hi : number
+>   : ^^^^^^
+>xs.length - 1 : number
+>              : ^^^^^^
+>xs.length : number
+>          : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>length : number
+>       : ^^^^^^
+>1 : 1
+>  : ^
+>lo < hi : boolean
+>        : ^^^^^^^
+>lo : number
+>   : ^^^^^^
+>hi : number
+>   : ^^^^^^
+>lo++, hi-- : number
+>           : ^^^^^^
+>lo++ : number
+>     : ^^^^^^
+>lo : number
+>   : ^^^^^^
+>hi-- : number
+>     : ^^^^^^
+>hi : number
+>   : ^^^^^^
+
+        const t = xs[lo];
+>t : number
+>  : ^^^^^^
+>xs[lo] : number
+>       : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>lo : number
+>   : ^^^^^^
+
+        xs[lo] = xs[hi];
+>xs[lo] = xs[hi] : number
+>                : ^^^^^^
+>xs[lo] : number
+>       : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>lo : number
+>   : ^^^^^^
+>xs[hi] : number
+>       : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>hi : number
+>   : ^^^^^^
+
+        xs[hi] = t;
+>xs[hi] = t : number
+>           : ^^^^^^
+>xs[hi] : number
+>       : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>hi : number
+>   : ^^^^^^
+>t : number
+>  : ^^^^^^
+
+    }
+    return xs;
+>xs : number[]
+>   : ^^^^^^^^
+
+}
+
+function sum(xs: number[]): number {
+>sum : (xs: number[]) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+
+    let total = 0;
+>total : number
+>      : ^^^^^^
+>0 : 0
+>  : ^
+
+    for (let i = 0, n = xs.length, label = "sum"; i < n; i++) {
+>i : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>n : number
+>  : ^^^^^^
+>xs.length : number
+>          : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>length : number
+>       : ^^^^^^
+>label : string
+>      : ^^^^^^
+>"sum" : "sum"
+>      : ^^^^^
+>i < n : boolean
+>      : ^^^^^^^
+>i : number
+>  : ^^^^^^
+>n : number
+>  : ^^^^^^
+>i++ : number
+>    : ^^^^^^
+>i : number
+>  : ^^^^^^
+
+        total += label.length > 0 ? xs[i] : 0;
+>total += label.length > 0 ? xs[i] : 0 : number
+>                                      : ^^^^^^
+>total : number
+>      : ^^^^^^
+>label.length > 0 ? xs[i] : 0 : number
+>                             : ^^^^^^
+>label.length > 0 : boolean
+>                 : ^^^^^^^
+>label.length : number
+>             : ^^^^^^
+>label : string
+>      : ^^^^^^
+>length : number
+>       : ^^^^^^
+>0 : 0
+>  : ^
+>xs[i] : number
+>      : ^^^^^^
+>xs : number[]
+>   : ^^^^^^^^
+>i : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
+    }
+    return total;
+>total : number
+>      : ^^^^^^
+
+}
+
+function steps(limit: number): string {
+>steps : (limit: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>limit : number
+>      : ^^^^^^
+
+    let i = -1, s = "?";
+>i : number
+>  : ^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
+>s : string
+>  : ^^^^^^
+>"?" : "?"
+>    : ^^^
+
+    for (i = 0, s = ""; i < limit; i++, s += "x") {}
+>i = 0, s = "" : ""
+>              : ^^
+>i = 0 : 0
+>      : ^
+>i : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>s = "" : ""
+>       : ^^
+>s : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>i < limit : boolean
+>          : ^^^^^^^
+>i : number
+>  : ^^^^^^
+>limit : number
+>      : ^^^^^^
+>i++, s += "x" : string
+>              : ^^^^^^
+>i++ : number
+>    : ^^^^^^
+>i : number
+>  : ^^^^^^
+>s += "x" : string
+>         : ^^^^^^
+>s : string
+>  : ^^^^^^
+>"x" : "x"
+>    : ^^^
+
+    return s;
+>s : string
+>  : ^^^^^^
+
+}
+
+function main(): void {
+>main : () => void
+>     : ^^^^^^^^^^
+
+    const reversed = reverse([1, 2, 3]);
+>reversed : number[]
+>         : ^^^^^^^^
+>reverse([1, 2, 3]) : number[]
+>                   : ^^^^^^^^
+>reverse : (xs: number[]) => number[]
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
+
+    const total = sum(reversed);
+>total : number
+>      : ^^^^^^
+>sum(reversed) : number
+>              : ^^^^^^
+>sum : (xs: number[]) => number
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>reversed : number[]
+>         : ^^^^^^^^
+
+    const trail = steps(total);
+>trail : string
+>      : ^^^^^^
+>steps(total) : string
+>             : ^^^^^^
+>steps : (limit: number) => string
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>total : number
+>      : ^^^^^^
+
+}
+

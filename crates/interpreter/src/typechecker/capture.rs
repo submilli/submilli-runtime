@@ -457,7 +457,7 @@ impl State<'_> {
             } => {
                 // Init binding's scope is the for-body.
                 self.frames.push(Frame::default());
-                if let Some(i) = init {
+                for i in init {
                     self.walk_stmt(i)?;
                 }
                 if let Some(c) = condition {
@@ -1352,7 +1352,7 @@ mod tests {
                 update,
                 body,
             } => {
-                if let Some(i) = init {
+                for i in init {
                     walk_stmt(ta, *i, out);
                 }
                 if let Some(c) = condition {
@@ -1661,7 +1661,8 @@ mod tests {
                 update,
                 body,
             } => init
-                .and_then(|i| scan_stmt(ta, i))
+                .iter()
+                .find_map(|i| scan_stmt(ta, *i))
                 .or_else(|| condition.and_then(|c| scan_expr(ta, c)))
                 .or_else(|| update.and_then(|u| scan_stmt(ta, u)))
                 .or_else(|| scan_stmt(ta, *body)),

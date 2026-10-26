@@ -5992,7 +5992,7 @@ function main(): void {
                 update,
                 body,
             } => {
-                if let Some(i) = init {
+                for i in init {
                     box_walk_stmt(ta, i, names);
                 }
                 if let Some(c) = condition {

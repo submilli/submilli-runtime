@@ -145,6 +145,10 @@ const FEATURES = [
   ["Declarations", [
     { name: "`let`", spec: "1.3", node: (n) => ts.isVariableDeclarationList(n) && (n.flags & ts.NodeFlags.Let) !== 0 },
     { name: "`const`", spec: "1.3", node: (n) => ts.isVariableDeclarationList(n) && (n.flags & ts.NodeFlags.Const) !== 0 },
+    { name: "Several declarators (`let a = 0, b = 1;`)", spec: "1.3", node: (n) => ts.isVariableDeclarationList(n) && n.declarations.length > 1, forms: [
+      { name: "statement", node: (n) => ts.isVariableDeclarationList(n) && n.declarations.length > 1 && ts.isVariableStatement(n.parent) },
+      { name: "`for` head", node: (n) => ts.isVariableDeclarationList(n) && n.declarations.length > 1 && ts.isForStatement(n.parent) },
+    ] },
     { name: "Type inference on `let`/`const`", spec: "1.3", node: (n) => ts.isVariableDeclaration(n) && !n.type && !!n.initializer },
   ]],
   ["Functions", [
@@ -161,7 +165,10 @@ const FEATURES = [
     { name: "`if` / `else`", spec: "1.5", node: is(K.IfStatement) },
     { name: "`while`", spec: "1.5", node: is(K.WhileStatement) },
     { name: "`do…while`", spec: "1.5", node: is(K.DoStatement) },
-    { name: "`for` (C-style)", spec: "1.5", node: is(K.ForStatement) },
+    { name: "`for` (C-style)", spec: "1.5", node: is(K.ForStatement), forms: [
+      { name: "plain", node: is(K.ForStatement) },
+      { name: "comma initializer or update", node: (n) => ts.isForStatement(n) && [n.initializer, n.incrementor].some((c) => c && ts.isBinaryExpression(c) && c.operatorToken.kind === K.CommaToken) },
+    ] },
     { name: "`for…of`", spec: "1.5", node: is(K.ForOfStatement), binds: (n) => ts.isForOfStatement(n) && ts.isVariableDeclarationList(n.initializer) ? n.initializer.declarations.flatMap((d) => boundNames(d.name)) : [] },
     { name: "`switch`", spec: "1.5", node: is(K.SwitchStatement, K.CaseClause) },
     { name: "`break` / `continue`", spec: "1.5", node: is(K.BreakStatement, K.ContinueStatement), forms: [

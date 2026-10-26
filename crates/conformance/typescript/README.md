@@ -540,3 +540,4 @@ the next `port-suite.cjs` run leaves it out too.
 | `written/instanceofUint8Array` | `instanceof Uint8Array` |
 | `written/gettersAndSetters` | Setters |
 | `written/typeofBigint` | `typeof x === "bigint"` |
+| `written/multipleDeclaratorsInFor` | Several declarators in a `for` head; several expressions in a `for` initializer and update |

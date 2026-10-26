@@ -367,32 +367,33 @@ impl LowerCtx {
             .stmt_ids()
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
         {
-            let StmtKind::For {
-                init: Some(init), ..
-            } = ast
+            let StmtKind::For { init, .. } = &ast
                 .try_stmt(id)
                 .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
                 .kind
             else {
                 continue;
             };
-            let is_let = match ast
-                .try_stmt(init)
-                .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
-                .kind
-            {
-                StmtKind::LetPattern { .. } => true,
-                StmtKind::ConstPattern { .. } => false,
-                _ => continue,
-            };
-            self.hoist_for_pattern_init(ast, id, init, is_let)?;
+            let init = init.clone();
+            let mut has_pattern = false;
+            for &declarator in &init {
+                has_pattern |= matches!(
+                    ast.try_stmt(declarator)
+                        .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
+                        .kind,
+                    StmtKind::LetPattern { .. } | StmtKind::ConstPattern { .. }
+                );
+            }
+            if has_pattern {
+                self.hoist_for_pattern_init(ast, id, init)?;
+            }
         }
 
         Ok(())
     }
 
-    /// `for (let [i, j] = a; c; u) body` becomes
-    /// `{ const dst = a; let i = dst[0]; let j = dst[1]; for (; c; u) body }`.
+    /// `for (let [i, j] = a, k = 0; c; u) body` becomes
+    /// `{ const dst = a; let i = dst[0]; let j = dst[1]; let k = 0; for (; c; u) body }`.
     /// The bindings keep the loop's scope but lose the per-iteration copies a
     /// `for` head's `let` gets, which only a closure capturing them observes;
     /// inference rejects that case using [`Ast::for_pattern_init_bindings`].
@@ -400,10 +401,9 @@ impl LowerCtx {
         &mut self,
         ast: &mut Ast,
         id: StmtId,
-        init: StmtId,
-        is_let: bool,
+        init: Vec<StmtId>,
     ) -> Result<(), CompilerFailure> {
-        let mut hoisted = self.expand_pattern_stmt(ast, init)?;
+        let mut hoisted = self.expand_list(ast, init)?;
         let loop_stmt = ast
             .try_stmt_mut(id)
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
@@ -423,7 +423,7 @@ impl LowerCtx {
         let lowered_loop = ast
             .try_push_stmt(Stmt {
                 kind: StmtKind::For {
-                    init: None,
+                    init: Vec::new(),
                     condition,
                     update,
                     body,
@@ -431,11 +431,9 @@ impl LowerCtx {
                 span,
             })
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?;
-        if is_let {
-            let bindings = let_names(ast, &hoisted)?;
-            if !bindings.is_empty() {
-                ast.for_pattern_init_bindings.insert(lowered_loop, bindings);
-            }
+        let bindings = let_names(ast, &hoisted)?;
+        if !bindings.is_empty() {
+            ast.for_pattern_init_bindings.insert(lowered_loop, bindings);
         }
         hoisted.push(lowered_loop);
         ast.try_stmt_mut(id)

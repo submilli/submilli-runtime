@@ -155,10 +155,8 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             body,
         } => {
             out.scopes.push(Default::default());
-            if let Some(init) = init {
-                out.reserve_statements(ast, &[*init])?;
-            }
-            for s in [init, update].into_iter().flatten() {
+            out.reserve_statements(ast, init)?;
+            for s in init.iter().chain(update) {
                 visit_stmt(ast, *s, out)?;
             }
             if let Some(c) = condition {

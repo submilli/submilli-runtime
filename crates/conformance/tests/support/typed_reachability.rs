@@ -58,7 +58,7 @@ impl Reachable {
                 update,
                 body,
             } => {
-                if let Some(init) = init {
+                for init in init {
                     self.walk_stmt(ta, *init);
                 }
                 if let Some(condition) = condition {

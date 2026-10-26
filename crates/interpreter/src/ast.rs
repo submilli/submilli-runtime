@@ -388,7 +388,9 @@ pub enum StmtKind {
     },
     /// C-style `for` loop. `update` is a `StmtId` so an assignment there is an assignment statement.
     For {
-        init: Option<StmtId>,
+        /// One statement per declarator of a `let`/`const` head, or per
+        /// comma-separated expression; empty without an initializer.
+        init: Vec<StmtId>,
         condition: Option<ExprId>,
         update: Option<StmtId>,
         /// Always a `Block` — parser requires `{ … }`.

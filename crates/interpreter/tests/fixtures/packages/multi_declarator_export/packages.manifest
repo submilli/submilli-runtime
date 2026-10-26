@@ -1,0 +1,4 @@
+# `export const a = …, b = …;` exports every declarator, not only the first.
+# name          dir    deps          root
+@test/decls     lib    -
+main            app    @test/decls   root

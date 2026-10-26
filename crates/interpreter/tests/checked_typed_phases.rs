@@ -228,7 +228,7 @@ fn desugaring_validates_rewritten_loop_references() {
                             0 => *body = StmtId(u32::MAX),
                             1 => *condition = Some(ExprId(u32::MAX)),
                             2 => *update = Some(StmtId(u32::MAX)),
-                            _ => *init = Some(StmtId(u32::MAX)),
+                            _ => *init = vec![StmtId(u32::MAX)],
                         }
                         replaced = true;
                     }
