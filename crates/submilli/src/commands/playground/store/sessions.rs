@@ -63,6 +63,9 @@ pub(crate) enum SessionEntry {
     /// Claude Code saved the session's conversation, under the session's id, so the next
     /// message resumes it.
     ClaudeConversation { session_id: String },
+    /// The developer confirmed that Claude Code bills `source` in the session: its
+    /// sign-in method, with ` via <address>` when `ANTHROPIC_BASE_URL` set one.
+    BillingConfirmed { session_id: String, source: String },
 }
 
 impl SessionEntry {
@@ -71,7 +74,8 @@ impl SessionEntry {
             Self::Started { session_id, .. }
             | Self::Ended { session_id }
             | Self::Chatted { session_id, .. }
-            | Self::ClaudeConversation { session_id } => session_id,
+            | Self::ClaudeConversation { session_id }
+            | Self::BillingConfirmed { session_id, .. } => session_id,
         }
     }
 }

@@ -64,6 +64,11 @@ impl Billing {
         }
     }
 
+    /// Only a claude.ai login, sending to Anthropic, is the subscription.
+    pub(crate) fn is_subscription(&self) -> bool {
+        self.source == "claude.ai" && self.base_url.is_none()
+    }
+
     /// Whether the key source Claude Code's start message reports fits this billing.
     fn reported_as(&self, api_key_source: &str) -> bool {
         match self.source.as_str() {
@@ -91,6 +96,104 @@ pub(crate) enum Availability {
     },
     /// `--version` or `auth status` failed, or took too long.
     Failed(String),
+}
+
+/// How often the status asks `claude` again, at most.
+const STATUS_MAX_AGE: Duration = Duration::from_secs(60);
+
+/// Claude Code's availability as the status shows it, for the page's agent choice.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Shown {
+    /// `available`, `missing`, `too-old`, `signed-out`, or `failed`.
+    pub(crate) state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+    /// Who it bills, as `auth status` names it, and the address it sends to when
+    /// `ANTHROPIC_BASE_URL` sets one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) base_url: Option<String>,
+    /// Whether it bills the developer's Claude subscription, needing no confirmation.
+    pub(crate) subscription: bool,
+    /// What a message confirms to bill anything else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) confirmation: Option<String>,
+    /// Why it is unavailable, and what to do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reason: Option<String>,
+}
+
+impl From<&Availability> for Shown {
+    fn from(availability: &Availability) -> Self {
+        let mut shown = Self {
+            state: match availability {
+                Availability::Available { .. } => "available",
+                Availability::Missing => "missing",
+                Availability::TooOld { .. } => "too-old",
+                Availability::SignedOut { .. } => "signed-out",
+                Availability::Failed(_) => "failed",
+            }
+            .to_owned(),
+            version: None,
+            source: None,
+            base_url: None,
+            subscription: false,
+            confirmation: None,
+            reason: None,
+        };
+        match availability {
+            Availability::Available { version, billing } => {
+                shown.version = Some(version.clone());
+                shown.source = Some(billing.source.clone());
+                shown.base_url.clone_from(&billing.base_url);
+                shown.subscription = billing.is_subscription();
+                shown.confirmation = Some(billing.confirmation());
+            }
+            Availability::TooOld { version } | Availability::SignedOut { version } => {
+                shown.version = Some(version.clone());
+                shown.reason = Some(unavailable_reason(availability));
+            }
+            Availability::Missing | Availability::Failed(_) => {
+                shown.reason = Some(unavailable_reason(availability));
+            }
+        }
+        shown
+    }
+}
+
+/// The status's last look at Claude Code. A look older than a minute starts one fresh
+/// one in the background and is shown meanwhile, so the page's polling never waits on
+/// `claude`, and nothing runs while no one asks.
+#[derive(Default)]
+pub(crate) struct StatusCache {
+    looked: Mutex<Option<(Instant, Shown)>>,
+    looking: AtomicBool,
+}
+
+impl StatusCache {
+    /// The last look, or `None` before the first is done.
+    pub(crate) fn shown(self: &Arc<Self>, project_root: &Path) -> Option<Shown> {
+        let looked = self
+            .looked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let stale = looked
+            .as_ref()
+            .is_none_or(|(at, _)| at.elapsed() >= STATUS_MAX_AGE);
+        if stale && !self.looking.swap(true, Ordering::Relaxed) {
+            let cache = Arc::clone(self);
+            let state = StateDir::for_project(project_root);
+            std::thread::spawn(move || {
+                let shown = Shown::from(&availability(&state));
+                *cache.looked.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some((Instant::now(), shown));
+                cache.looking.store(false, Ordering::Relaxed);
+            });
+        }
+        looked.map(|(_, shown)| shown)
+    }
 }
 
 /// What to tell the developer when Claude Code is not [`Availability::Available`].

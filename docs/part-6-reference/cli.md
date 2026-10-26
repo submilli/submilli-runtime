@@ -2480,13 +2480,24 @@ Options:
 
       --model <PROVIDER:MODEL>
           The model for a new session, as `<provider>:<model>`, from a provider whose key the
-          playground started with. Default: the playground's configured model. A session carried on
-          keeps its own
+          playground started with, or `claude-code:<sonnet|opus|haiku>` to answer with your own
+          Claude Code. Default: the playground's configured model. A session carried on keeps its
+          own
 
       --effort <LEVEL>
-          How hard a new session's model reasons. OpenAI models only, for now
+          How hard a new session's model reasons: OpenAI models take low, medium, or high; Claude
+          Code also takes xhigh and max
 
-          [possible values: low, medium, high]
+          [possible values: low, medium, high, xhigh, max]
+
+      --max-budget-usd <USD>
+          The most a new Claude Code session may spend on one message, in US dollars, above 0 and at
+          most 100. Default: 1.00. On a subscription it measures usage, not billing
+
+      --confirm-billing <BILLING>
+          Let Claude Code bill what isn't your Claude subscription, such as an API key or an
+          `ANTHROPIC_BASE_URL` address, in this session: the value the refusal names, such as
+          `api_key` or `claude.ai via https://proxy.example`
 
       --max-output <TOKENS>
           The most tokens one answer of a new session's model may take. Default: 4096
@@ -2497,7 +2508,8 @@ Options:
           itself (the model, messages, tools, instructions) are refused
 
       --max-calls-per-answer <N>
-          The most tool calls run for one answer of the model; the rest are refused to it
+          The most tool calls run for one answer of the model; the rest are refused to it. Claude
+          Code counts them across the whole message, and stops at the limit
 
           [default: 16]
 

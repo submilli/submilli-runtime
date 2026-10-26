@@ -738,6 +738,9 @@ permissions:
                     .arg("playground")
                     .args(args)
                     .current_dir(&self.root)
+                    // The developer's own Claude Code is never run: only a fake, put on
+                    // the PATH by the test that wants one.
+                    .env("PATH", path_without_claude())
                     .env("SUBMILLI_HOME", self.dir.path().join("home"))
                     .env("HOME", self.dir.path().join("home"))
                     .env_remove("SUBMILLI_TELEMETRY")
@@ -2482,6 +2485,15 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             playground.stop();
         }
 
+        /// This process's PATH, without any directory holding a `claude`.
+        fn path_without_claude() -> String {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let kept: Vec<PathBuf> = std::env::split_paths(&path)
+                .filter(|dir| !dir.join("claude").exists())
+                .collect();
+            std::env::join_paths(kept).unwrap().into_string().unwrap()
+        }
+
         /// The developer's `claude`, faked: it answers `--version` and `auth status`, records
         /// each message's arguments and input, and does what `behave.sh` says, with
         /// `$SESSION`, `$CONFIG` (its MCP config), `$RESUMED` and `$D` (this directory) set.
@@ -2503,8 +2515,8 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     r#"#!/bin/sh
 D={d}
 case "$1" in
-  --version) echo "2.1.310 (Claude Code)"; exit 0 ;;
-  auth) cat "$D/auth.json"; exit 0 ;;
+  --version) cat "$D/version"; exit 0 ;;
+  auth) echo x >> "$D/auth-asked"; . "$D/auth.sh"; exit 0 ;;
 esac
 n=$(ls "$D" | grep -c '^argv-')
 printf '%s\n' "$@" > "$D/argv-$n"
@@ -2531,14 +2543,17 @@ done
                 let mut permissions = std::fs::metadata(&claude).unwrap().permissions();
                 std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
                 std::fs::set_permissions(&claude, permissions).unwrap();
-                std::fs::write(
-                    dir.join("auth.json"),
-                    r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty"}"#,
-                )
-                .unwrap();
+                std::fs::write(dir.join("version"), "2.1.310 (Claude Code)\n").unwrap();
                 let fake = Self { dir };
+                fake.signed_in("claude.ai");
                 fake.answers("The answer is 42.");
                 fake
+            }
+
+            /// `auth status` says the login is `method`.
+            fn signed_in(&self, method: &str) {
+                let status = json!({ "loggedIn": method != "none", "authMethod": method });
+                std::fs::write(self.dir.join("auth.sh"), format!("echo '{status}'\n")).unwrap();
             }
 
             fn behave(&self, script: &str) {
@@ -2569,15 +2584,37 @@ done
                     .count()
             }
 
-            /// Starts `playground` with this `claude` first on its PATH.
+            /// Starts `playground` with this `claude` the only one on its PATH, so the
+            /// developer's own is never run.
             fn start(&self, playground: &Playground) {
-                let path = format!("{}:{}", self.dir.display(), std::env::var("PATH").unwrap());
-                let output = playground
-                    .command(&["start", "--json", "--allow-localhost"])
-                    .env("PATH", path)
-                    .output()
-                    .unwrap();
+                self.start_with(playground, &[]);
+            }
+
+            fn start_with(&self, playground: &Playground, env: &[(&str, &str)]) {
+                let mut command = playground.command(&["start", "--json", "--allow-localhost"]);
+                command.env("PATH", format!("{}:/usr/bin:/bin", self.dir.display()));
+                for (name, value) in env {
+                    command.env(name, value);
+                }
+                let output = command.output().unwrap();
                 assert!(output.status.success(), "start: {}", stderr(&output));
+            }
+
+            /// The status's look at Claude Code, once it has one.
+            fn shown(playground: &Playground) -> Value {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let (status, code) = playground.json(&["status"]);
+                    assert_eq!(code, 0, "{status}");
+                    if !status["claude_code"].is_null() {
+                        return status["claude_code"].clone();
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "no look at Claude Code: {status}"
+                    );
+                    std::thread::sleep(Duration::from_millis(100));
+                }
             }
 
             fn wait_for(&self, name: &str) {
@@ -2917,6 +2954,198 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
                 );
                 std::thread::sleep(Duration::from_millis(100));
             }
+            playground.stop();
+        }
+
+        /// Claude Code's start message, reporting `api_key_source`.
+        fn claude_init(api_key_source: &str) -> String {
+            CLAUDE_INIT.replace(
+                r#"\"apiKeySource\":\"none\""#,
+                &format!(r#"\"apiKeySource\":\"{api_key_source}\""#),
+            )
+        }
+
+        fn claude_answers(init: &str, reply: &str) -> String {
+            format!(
+                "{init}\n{}\n",
+                claude_line(
+                    &json!({ "type": "result", "subtype": "success", "is_error": false, "result": reply })
+                ),
+            )
+        }
+
+        #[test]
+        fn a_claude_code_chat_that_would_not_bill_the_subscription_waits_for_a_confirmation() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.signed_in("api_key");
+            claude.behave(&claude_answers(
+                &claude_init("ANTHROPIC_API_KEY"),
+                "Billed.",
+            ));
+            claude.start(&playground);
+            let (refused, code) =
+                playground.json(&["chat", "--model", "claude-code:sonnet", "Hi."]);
+            assert_eq!(code, 1, "{refused}");
+            assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
+            let said = refused["error"]["message"].as_str().unwrap();
+            assert!(
+                said.contains("api_key") && said.contains("restart the playground"),
+                "{said}"
+            );
+            assert_eq!(claude.messages(), 0);
+            assert!(
+                playground.expect(0, &["sessions"])["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let answered = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:sonnet",
+                    "--confirm-billing",
+                    "api_key",
+                    "Hi.",
+                ],
+            );
+            assert_eq!(answered["untrusted"]["reply"], "Billed.", "{answered}");
+            let session = answered["session"].as_str().unwrap().to_owned();
+            assert_eq!(
+                session_kinds(&playground, &session),
+                ["started", "billing-confirmed", "claude-conversation"]
+            );
+            // The session's confirmation holds for its next message.
+            playground.expect(0, &["chat", "--session", &session, "Again."]);
+
+            // Signed in to the subscription now: not what the session confirmed.
+            claude.signed_in("claude.ai");
+            let (changed, code) = playground.json(&["chat", "--session", &session, "And now?"]);
+            assert_eq!(code, 1, "{changed}");
+            assert_eq!(changed["error"]["kind"], "billing-changed", "{changed}");
+            assert!(
+                changed["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("claude.ai")
+            );
+
+            // Claude Code's start message reporting other billing than `auth status` did
+            // stops the message.
+            claude.signed_in("api_key");
+            claude.behave(&format!("{}\n{CLAUDE_WAITS}\n", claude_init("none")));
+            let (stopped, code) = playground.json(&["chat", "--session", &session, "Last."]);
+            assert_eq!(code, 1, "{stopped}");
+            assert_eq!(stopped["error"]["kind"], "billing-changed", "{stopped}");
+            assert!(claude.dir.join("interrupted").exists());
+            playground.stop();
+        }
+
+        #[test]
+        fn a_claude_code_chat_names_and_confirms_an_address_requests_are_sent_to() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.behave(&claude_answers(CLAUDE_INIT, "Proxied."));
+            claude.start_with(
+                &playground,
+                &[("ANTHROPIC_BASE_URL", "https://proxy.example")],
+            );
+            let shown = FakeClaude::shown(&playground);
+            assert_eq!(shown["subscription"], false, "{shown}");
+            assert_eq!(
+                shown["confirmation"], "claude.ai via https://proxy.example",
+                "{shown}"
+            );
+            let (refused, code) =
+                playground.json(&["chat", "--model", "claude-code:sonnet", "Hi."]);
+            assert_eq!(code, 1, "{refused}");
+            assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
+            assert!(
+                refused["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("https://proxy.example")
+            );
+            let answered = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:sonnet",
+                    "--confirm-billing",
+                    "claude.ai via https://proxy.example",
+                    "Hi.",
+                ],
+            );
+            assert_eq!(answered["untrusted"]["reply"], "Proxied.", "{answered}");
+            playground.stop();
+        }
+
+        #[test]
+        fn claude_code_that_cannot_answer_is_shown_unavailable_with_what_to_do() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.start(&playground);
+            let shown = FakeClaude::shown(&playground);
+            assert_eq!(shown["state"], "available", "{shown}");
+            assert_eq!(shown["subscription"], true, "{shown}");
+            // Polled again within the minute, the look is not taken again.
+            for _ in 0..3 {
+                FakeClaude::shown(&playground);
+            }
+            let asked = std::fs::read_to_string(claude.dir.join("auth-asked")).unwrap();
+            assert_eq!(asked.lines().count(), 1, "{asked}");
+            playground.stop();
+
+            let unavailable = |prepare: &dyn Fn(), state: &str, says: &str| {
+                prepare();
+                claude.start(&playground);
+                let shown = FakeClaude::shown(&playground);
+                assert_eq!(shown["state"], state, "{shown}");
+                assert!(shown["reason"].as_str().unwrap().contains(says), "{shown}");
+                let (refused, code) =
+                    playground.json(&["chat", "--model", "claude-code:sonnet", "Hi."]);
+                assert_eq!(code, 1, "{refused}");
+                assert_eq!(
+                    refused["error"]["kind"], "claude-code-unavailable",
+                    "{refused}"
+                );
+                assert!(refused["error"]["message"].as_str().unwrap().contains(says));
+                playground.stop();
+            };
+            unavailable(
+                &|| std::fs::write(claude.dir.join("version"), "2.1.299 (Claude Code)\n").unwrap(),
+                "too-old",
+                "claude update",
+            );
+            std::fs::write(claude.dir.join("version"), "2.1.310 (Claude Code)\n").unwrap();
+            unavailable(&|| claude.signed_in("none"), "signed-out", "sign in");
+            // An `auth status` that never answers is given up on, not waited for.
+            unavailable(
+                &|| std::fs::write(claude.dir.join("auth.sh"), "sleep 30\n").unwrap(),
+                "failed",
+                "did not answer",
+            );
+
+            // No `claude` on the playground's PATH.
+            let output = playground
+                .command(&["start", "--json", "--allow-localhost"])
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "start: {}", stderr(&output));
+            let shown = FakeClaude::shown(&playground);
+            assert_eq!(shown["state"], "missing", "{shown}");
+            assert!(
+                shown["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("isn't installed"),
+                "{shown}"
+            );
             playground.stop();
         }
 

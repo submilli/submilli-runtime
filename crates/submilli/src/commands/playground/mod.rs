@@ -320,6 +320,11 @@ pub struct ChatArgs {
     /// and at most 100. Default: 1.00. On a subscription it measures usage, not billing.
     #[arg(long, value_name = "USD", conflicts_with = "session")]
     max_budget_usd: Option<f64>,
+    /// Let Claude Code bill what isn't your Claude subscription, such as an API key or an
+    /// `ANTHROPIC_BASE_URL` address, in this session: the value the refusal names, such
+    /// as `api_key` or `claude.ai via https://proxy.example`.
+    #[arg(long, value_name = "BILLING")]
+    confirm_billing: Option<String>,
     /// The most tokens one answer of a new session's model may take. Default: 4096.
     #[arg(long, value_name = "TOKENS", value_parser = clap::value_parser!(u64).range(1..=1_000_000), conflicts_with = "session")]
     max_output: Option<u64>,
@@ -789,6 +794,7 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
                 provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
                 max_budget_usd: args.max_budget_usd,
+                confirm_billing: args.confirm_billing,
                 variables: std::collections::BTreeMap::new(),
             }),
             args.json,

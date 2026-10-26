@@ -140,6 +140,10 @@ pub(crate) struct Status {
     /// Each provider chat works with, the variable its key goes under, and where its key
     /// is found now: the page offers to add or replace one.
     pub(crate) model_keys: Vec<super::agent::ProviderKey>,
+    /// Whether the developer's Claude Code can answer chat, and who it bills; absent
+    /// until it was first asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claude_code: Option<super::claude_runner::Shown>,
 }
 
 /// Metadata for one registered, selectable project blueprint.
@@ -674,6 +678,7 @@ fn actions(
         page: Page { base: Some(url) },
         cancelling: std::sync::Mutex::default(),
         chatting: Arc::default(),
+        claude_code: Arc::default(),
         chat: super::chat::ChatIntake::default(),
         server_port,
     }
@@ -1222,6 +1227,10 @@ pub(crate) async fn status(State(state): State<ControlState>) -> Response {
         health: None,
         binding: state.actions().binding_view(),
         model_keys,
+        claude_code: state
+            .actions()
+            .claude_code
+            .shown(&state.actions().project_root),
     })
     .into_response()
 }

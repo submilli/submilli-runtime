@@ -428,6 +428,8 @@ pub(crate) struct Actions {
     /// Sessions a chat is answering in, each with that chat's cancel flag: one message
     /// at a time each.
     pub(crate) chatting: Chatting,
+    /// The status's last look at the developer's Claude Code.
+    pub(crate) claude_code: Arc<claude_runner::StatusCache>,
     /// Where the stand-in's chat goes.
     pub(crate) chat: super::super::chat::ChatIntake,
     /// The server listener's port, for chat's MCP connection.
@@ -1079,6 +1081,13 @@ impl Actions {
             claude_runner::Availability::Available { billing, .. } => billing,
             unavailable => return Err(claude_code_unavailable(&unavailable)),
         };
+        let confirm = billing_to_confirm(
+            &billing,
+            continued
+                .as_ref()
+                .map(|continued| continued.confirmed.as_deref()),
+            request.confirm_billing.as_deref(),
+        )?;
         let token = state
             .token(label)
             .map_err(|error| ActError::failure(format!("{error:#}")))?;
@@ -1117,10 +1126,14 @@ impl Actions {
                         &settings,
                     ));
                 }
+                actions.confirm_billing(&session, confirm.as_deref());
                 // Nothing else knows the session yet, so the claim is free.
                 answering = Answering::try_claim(&actions.chatting, &session, &cancelled).ok();
                 session
             };
+            if continued.is_some() {
+                actions.confirm_billing(&session, confirm.as_deref());
+            }
             // Held until Claude Code has exited, so the next message never resumes the
             // conversation while it is still being written.
             let _answering = answering;
@@ -1216,6 +1229,24 @@ impl Actions {
         Ok(Answer::of(EXIT_SUCCESS, &result, render::chat_text))
     }
 
+    /// Notes that the developer confirmed `confirmed` billing in `session`. Only noted
+    /// when that fails: the message goes on, and the next one asks again.
+    fn confirm_billing(&self, session: &str, confirmed: Option<&str>) {
+        let Some(source) = confirmed else {
+            return;
+        };
+        let entry = SessionEntry::BillingConfirmed {
+            session_id: session.to_owned(),
+            source: source.to_owned(),
+        };
+        if let Err(error) = self.store.append_session(entry) {
+            super::super::log::note(&format!(
+                "the billing confirmed in session {} was not noted: {error}",
+                clean(session)
+            ));
+        }
+    }
+
     /// The model and conversation of chat session `session`, to carry it on. `model`,
     /// when given, must be the session's own.
     async fn chat_to_continue(
@@ -1225,12 +1256,13 @@ impl Actions {
     ) -> Result<Continued, ActError> {
         let store = Arc::clone(&self.store);
         let id = session.to_owned();
-        let (fixed_model, fixed_settings, ended, conversation, log) =
+        let (fixed_model, fixed_settings, ended, claude, log) =
             tokio::task::spawn_blocking(move || {
                 let mut fixed_model = None;
                 let mut fixed_settings = None;
                 let mut ended = false;
                 let mut conversation = false;
+                let mut confirmed = None;
                 for line in store.session_log()? {
                     if line.entry.session_id() != id {
                         continue;
@@ -1244,11 +1276,18 @@ impl Actions {
                         }
                         SessionEntry::Ended { .. } => ended = true,
                         SessionEntry::ClaudeConversation { .. } => conversation = true,
+                        SessionEntry::BillingConfirmed { source, .. } => {
+                            confirmed = Some(source);
+                        }
                         SessionEntry::Chatted { .. } => {}
                     }
                 }
                 let log = store.read_events(Some(&id))?;
-                Ok::<_, StoreError>((fixed_model, fixed_settings, ended, conversation, log))
+                let claude = ClaudeEntries {
+                    conversation,
+                    confirmed,
+                };
+                Ok::<_, StoreError>((fixed_model, fixed_settings, ended, claude, log))
             })
             .await
             .map_err(|error| ActError::failure(format!("reading the session failed: {error}")))?
@@ -1311,7 +1350,8 @@ impl Actions {
                 session: session.to_owned(),
                 model,
                 settings,
-                conversation,
+                conversation: claude.conversation,
+                confirmed: claude.confirmed,
                 said: numbered_messages(&log),
                 variables: fixed_variables.unwrap_or_default(),
             }));
@@ -1534,7 +1574,9 @@ impl Actions {
             match line.entry {
                 SessionEntry::Started { session_id, .. } => open.push(session_id),
                 SessionEntry::Ended { session_id } => open.retain(|id| *id != session_id),
-                SessionEntry::Chatted { .. } | SessionEntry::ClaudeConversation { .. } => {}
+                SessionEntry::Chatted { .. }
+                | SessionEntry::ClaudeConversation { .. }
+                | SessionEntry::BillingConfirmed { .. } => {}
             }
         }
         Ok(open)
@@ -2019,9 +2061,17 @@ struct ClaudeContinued {
     settings: agent::Settings,
     /// Whether Claude Code saved the conversation, so this message resumes it.
     conversation: bool,
+    /// The billing the developer last confirmed in the session.
+    confirmed: Option<String>,
     /// How many messages the session's log holds, so new ones are numbered after them.
     said: usize,
     variables: BTreeMap<String, String>,
+}
+
+/// What the session log says of a session's Claude Code conversation.
+struct ClaudeEntries {
+    conversation: bool,
+    confirmed: Option<String>,
 }
 
 enum ClaudeStart {
@@ -2088,6 +2138,49 @@ fn claude_code_settings(mut asked: agent::Settings) -> Result<agent::Settings, A
     }
     asked.max_budget_usd = Some(budget);
     Ok(asked)
+}
+
+/// Whether a message may run on `billing`: what to note as newly confirmed, if anything,
+/// or the refusal. `session` is the confirmation a session carried on holds, if it is one;
+/// `asked` is what the message confirms.
+fn billing_to_confirm(
+    billing: &claude_runner::Billing,
+    session: Option<Option<&str>>,
+    asked: Option<&str>,
+) -> Result<Option<String>, ActError> {
+    let billed = billing.confirmation();
+    let held = match session {
+        Some(Some(confirmed)) => confirmed == billed,
+        // A session that confirmed nothing ran on the subscription.
+        Some(None) | None => billing.is_subscription(),
+    };
+    if held {
+        return Ok(None);
+    }
+    if asked.map(str::trim) == Some(billed.as_str()) {
+        return Ok(Some(billed));
+    }
+    let shown = clean(&billed);
+    let (kind, said) = if session.is_some() {
+        (
+            "billing-changed",
+            format!("Claude Code now bills {shown}, not what this session confirmed"),
+        )
+    } else {
+        (
+            "billing-unconfirmed",
+            format!("Claude Code would bill {shown}, not your Claude subscription"),
+        )
+    };
+    Err(ActError::new(
+        EXIT_FAILURE,
+        kind,
+        format!(
+            "{said}. Confirm it with `--confirm-billing \"{shown}\"`. To use your Claude \
+             subscription instead, unset the variable that sets it (such as \
+             ANTHROPIC_API_KEY or ANTHROPIC_BASE_URL) and restart the playground."
+        ),
+    ))
 }
 
 /// The refusal when Claude Code cannot answer, saying what to do.
@@ -2828,6 +2921,10 @@ pub(crate) struct ChatRequest {
     /// $1.00 when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_budget_usd: Option<f64>,
+    /// The billing the developer confirms for Claude Code, as the refusal named it, when
+    /// it is not their Claude subscription.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) confirm_billing: Option<String>,
     /// Variable values a new session starts with, over the binding's. A session carried
     /// on keeps its own.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
