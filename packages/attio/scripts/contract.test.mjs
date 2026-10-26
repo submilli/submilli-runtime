@@ -112,6 +112,21 @@ const DEAL_ATTRIBUTES = [
     attribute('legacy', 'text', { is_archived: true }),
 ];
 
+const PEOPLE_ATTRIBUTES = [
+    attribute('email_addresses', 'email-address', { is_multiselect: true, is_unique: true }),
+    attribute('name', 'personal-name'),
+    attribute('job_title', 'text'),
+];
+
+const COMPANY_ATTRIBUTES = [
+    attribute('domains', 'domain', { is_multiselect: true, is_unique: true }),
+    attribute('name', 'text'),
+];
+
+function plainRecord(id) {
+    return { id: { workspace_id: 'w', object_id: 'o', record_id: id }, created_at: 't', web_url: 'u', values: {} };
+}
+
 function dealRecord(stage = 'Lead', statusId = 's-lead', extra = {}) {
     return {
         id: { workspace_id: 'w', object_id: 'o', record_id: DEAL },
@@ -135,6 +150,10 @@ function attioApi(writes = () => reply(500, { message: 'unexpected write' }), re
         if (method === 'GET' && path === '/objects/deals/attributes/stage/statuses') return reply(200, { data: STAGES });
         if (method === 'GET' && path === '/objects/deals/attributes/priority/statuses') return reply(200, { data: PRIORITIES });
         if (method === 'GET' && path === '/objects/deals/attributes') return reply(200, { data: DEAL_ATTRIBUTES });
+        if (method === 'GET' && path === '/objects/people/attributes') return reply(200, { data: PEOPLE_ATTRIBUTES });
+        if (method === 'GET' && path === '/objects/companies/attributes') return reply(200, { data: COMPANY_ATTRIBUTES });
+        // A statuses answer for a select attribute, to reach the definition check.
+        if (method === 'GET' && path === '/objects/deals/attributes/owner/statuses') return reply(200, { data: STAGES });
         if (method === 'GET' && path === '/workspace_members') return reply(200, { data: MEMBERS });
         if (method === 'GET' && path === `/objects/deals/records/${DEAL}`) return reply(200, { data: record });
         return writes(request);
@@ -243,8 +262,20 @@ test('queryRecords sends one typed page and reports the next offset; it never lo
     assert.equal(last.isComplete, true);
 
     reset(() => reply(200, { data: [] }));
-    attio.queryRecords('deals');
+    const empty = attio.queryRecords('deals');
     assert.deepEqual(requests[0].body, { limit: 50, offset: 0 }, 'default page of 50');
+    assert.deepEqual({ items: empty.items, nextOffset: empty.nextOffset, isComplete: empty.isComplete }, { items: [], nextOffset: null, isComplete: true });
+
+    // Exactly two records: a full last page, then an empty page ends the list.
+    reset(() => reply(200, { data: rows.slice(0, 2) }));
+    const full = attio.queryRecords('deals', { limit: 2 });
+    assert.equal(full.nextOffset, 2);
+    assert.equal(full.isComplete, false);
+    reset(() => reply(200, { data: [] }));
+    const after = attio.queryRecords('deals', { limit: 2, offset: full.nextOffset });
+    assert.deepEqual(requests[0].body, { limit: 2, offset: 2 });
+    assert.equal(after.nextOffset, null);
+    assert.equal(after.isComplete, true);
 });
 
 test('findPersonByEmail checks and sends the normalized email; no match is null; two matches are an error', () => {
@@ -288,8 +319,18 @@ test('upserts send only the given fields on the matching attribute; ambiguity is
         company: [{ target_object: 'companies', target_record_id: COMPANY }],
     } } });
 
-    // Every key the upsert body carries is in the checked attributes.
-    assert.deepEqual(Object.keys(requests[0].body.data.values).sort(), checks[0].context.attributes);
+    // The checked attributes are exactly the keys of the body sent.
+    for (const [call, capability] of [
+        [() => attio.upsertPerson({ email: 'dana@acme.com' }), 'attio.com/people.upsert'],
+        [() => attio.upsertPerson({ email: 'dana@acme.com', lastName: 'Lee', jobTitle: 'CTO', description: 'Met at the meetup' }), 'attio.com/people.upsert'],
+        [() => attio.upsertCompany({ domain: 'acme.com', description: 'Rockets' }), 'attio.com/companies.upsert'],
+        [() => attio.upsertCompany({ domain: 'acme.com', name: 'Acme', description: 'Rockets' }), 'attio.com/companies.upsert'],
+    ]) {
+        reset(() => reply(200, { data: plainRecord(PERSON) }));
+        call();
+        assert.equal(checks[0].capability, capability);
+        assert.deepEqual(checks[0].context.attributes, Object.keys(requests[0].body.data.values).sort());
+    }
 
     for (const status of [400, 409]) {
         reset(() => reply(status, { status_code: status, type: 'invalid_request_error', code: 'multiple_match_results', message: 'Multiple records matched.' }));
@@ -298,6 +339,9 @@ test('upserts send only the given fields on the matching attribute; ambiguity is
         assert.equal(error.status, status);
         assert.match(error.message, /more than one person in Attio has the email dana@acme\.com/);
         assert.equal(error.retryable, false);
+        const company = attioError(() => attio.upsertCompany({ domain: 'https://www.acme.com/' }));
+        assert.equal(company.code, 'multiple_match_results');
+        assert.match(company.message, /more than one company in Attio has the domain acme\.com; merge the duplicates in Attio/);
     }
 });
 
@@ -342,6 +386,62 @@ test('createRecord resolves the status, checks it, and writes values and status 
     attio.createRecord('deals', { values: [{ attribute: 'name', type: 'text', text: 'No stage' }] });
     assert.deepEqual(checks, [{ capability: 'attio.com/records.create', context: { object: 'deals', attributes: ['name'], statusAttribute: '', status: '' } }]);
     assert.ok(!requests.some((request) => request.path.endsWith('/statuses')), 'no status lookup without a status');
+});
+
+test('create-only people and companies: a personal name, a domain, and 409 when one exists', () => {
+    reset(attioApi(() => reply(200, { data: plainRecord(PERSON) })));
+    attio.createRecord('people', { values: [
+        { attribute: 'email_addresses', type: 'email', email: ' Dana@Acme.com' },
+        { attribute: 'name', type: 'personal-name', firstName: 'Dana', lastName: 'Lee' },
+    ] });
+    assert.deepEqual(checks, [{ capability: 'attio.com/records.create', context: { object: 'people', attributes: ['email_addresses', 'name'], statusAttribute: '', status: '' } }]);
+    assert.deepEqual(writeRequests()[0].body, { data: { values: {
+        email_addresses: [{ email_address: 'dana@acme.com' }],
+        name: [{ first_name: 'Dana', last_name: 'Lee', full_name: 'Dana Lee' }],
+    } } });
+    assert.equal(writeRequests()[0].method, 'POST', 'create, never the overwriting PUT');
+
+    reset(attioApi(() => reply(200, { data: plainRecord(PERSON) })));
+    attio.createRecord('people', { values: [{ attribute: 'name', type: 'personal-name', fullName: 'Dana' }] });
+    assert.deepEqual(writeRequests()[0].body.data.values.name, [{ first_name: '', last_name: '', full_name: 'Dana' }]);
+
+    reset(attioApi(() => reply(200, { data: plainRecord(COMPANY) })));
+    attio.createRecord('companies', { values: [
+        { attribute: 'domains', type: 'domain', domain: 'https://www.Acme.com/' },
+        { attribute: 'name', type: 'text', text: 'Acme' },
+    ] });
+    assert.deepEqual(writeRequests()[0].body, { data: { values: { domains: [{ domain: 'acme.com' }], name: [{ value: 'Acme' }] } } });
+
+    reset(attioApi(() => reply(409, { status_code: 409, type: 'invalid_request_error', code: 'uniqueness_conflict', message: 'A record with this email already exists.' })));
+    const taken = attioError(() => attio.createRecord('people', { values: [{ attribute: 'email_addresses', type: 'email', email: 'dana@acme.com' }] }));
+    assert.equal(taken.code, 'uniqueness_conflict');
+    assert.equal(taken.status, 409);
+    assert.equal(taken.retryable, false);
+
+    // A personal name only suits a personal-name attribute, and a blank part is refused.
+    reset(attioApi());
+    assert.equal(attioError(() => attio.updateRecord('deals', DEAL, [{ attribute: 'name', type: 'personal-name', firstName: 'Dana' }])).code, 'invalid_value');
+    assert.deepEqual(writeRequests(), []);
+    assert.equal(attioError(() => attio.createRecord('people', { values: [{ attribute: 'name', type: 'personal-name', firstName: ' ' }] })).code, 'invalid_input');
+    assert.equal(attioError(() => attio.createRecord('people', { values: [{ attribute: 'name', type: 'personal-name', firstName: 'Dana', text: 'x' }] })).code, 'invalid_value');
+});
+
+test('createRecord refuses a status attribute that Attio does not define as one', () => {
+    reset(attioApi(() => reply(200, { data: dealRecord() })));
+    const error = attioError(() => attio.createRecord('deals', { values: [{ attribute: 'name', type: 'text', text: 'x' }], status: { attribute: 'owner', title: 'Lead' } }));
+    assert.equal(error.code, 'invalid_status_attribute');
+    assert.equal(error.status, 0);
+    assert.deepEqual(writeRequests(), []);
+});
+
+test('a 5xx on a write surfaces as a final, non-retryable error', () => {
+    reset(attioApi(() => reply(500, '<html>upstream</html>')));
+    const error = attioError(() => attio.createRecord('deals', { values: [{ attribute: 'name', type: 'text', text: 'x' }] }));
+    assert.equal(error.name, 'AttioError');
+    assert.equal(error.code, 'server_error');
+    assert.equal(error.status, 500);
+    assert.equal(error.retryable, false, 'the create may have applied, so it is not marked safe to retry');
+    assert.equal(writeRequests().length, 1, 'sent once, never retried');
 });
 
 test('createRecord refuses a status attribute anywhere in values, after the check and before any write', () => {
@@ -521,6 +621,15 @@ test('invalid input fails before the check and before the secret is read', () =>
         () => attio.setStatus('deals', 'not-a-uuid', 'stage', 'Won'),
         () => attio.createNote('deals', DEAL, { title: '', content: 'x' }),
         () => attio.listNotes('deals', DEAL, { offset: -1 }),
+        () => attio.queryRecords('deals', { offset: Infinity }),
+        () => attio.queryRecords('deals', { limit: 10, offset: 1e21 }),
+        () => attio.listNotes('deals', DEAL, { offset: 1e21 }),
+        () => attio.findPersonByEmail('dana@competitor.\uff43om'),
+        () => attio.findPersonByEmail('dana@competitor.com\u200b'),
+        () => attio.upsertPerson({ email: 'dana@acme.com', jobTitle: ' ' }),
+        () => attio.upsertCompany({ domain: 'acme.com', description: '' }),
+        () => attio.createRecord('people', { values: [{ attribute: 'name', type: 'personal-name' }] }),
+        () => attio.createRecord('deals', { values: [{ attribute: 'close_date', type: 'date', date: '2026-02-31' }] }),
     ]) {
         reset(attioApi());
         const error = attioError(call);
@@ -562,6 +671,19 @@ test('429 carries Retry-After and is retryable; 409 concurrent_write_conflict is
     assert.equal(limited.type, 'rate_limit_error');
     assert.equal(limited.retryable, true);
     assert.equal(limited.retryAfter, 'Tue, 23 May 2023 14:42:01 GMT');
+
+    const limited429 = () => reply(429, { code: 'rate_limit_exceeded', message: 'Rate limit exceeded' }, { 'retry-after': 'Tue, 23 May 2023 14:42:01 GMT' });
+    for (const call of [
+        () => attio.upsertCompany({ domain: 'acme.com' }),
+        () => attio.updateRecord('deals', DEAL, [{ attribute: 'name', type: 'text', text: 'x' }]),
+    ]) {
+        reset(attioApi(limited429));
+        const error = attioError(call);
+        assert.equal(error.status, 429);
+        assert.equal(error.retryable, true);
+        assert.equal(error.retryAfter, 'Tue, 23 May 2023 14:42:01 GMT');
+        assert.equal(writeRequests().length, 1, 'not retried by the package');
+    }
 
     reset(attioApi(() => reply(409, { status_code: 409, type: 'invalid_request_error', code: 'concurrent_write_conflict', message: 'The record was modified by another request.' })));
     const conflict = attioError(() => attio.updateRecord('deals', DEAL, [{ attribute: 'name', type: 'text', text: 'x' }]));

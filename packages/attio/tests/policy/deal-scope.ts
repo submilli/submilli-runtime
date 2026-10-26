@@ -1,7 +1,8 @@
 // Run through `submilli run --blueprint deal-scope.yaml`, not the allow-all build test runner.
-// The blueprint lets a leads agent write deals only: create and update them (but not
-// their owner), move their stage, and attach notes to them. Records of other objects
-// may be read, and companies upserted only for one domain.
+// The blueprint lets a leads agent change deals only: create and update them (but not
+// their owner), move their stage, and attach notes to them. Companies and people may be
+// created but not upserted, records of the three objects read, and one company domain
+// upserted without renaming it.
 import {
     AttioError,
     createNote,
@@ -63,7 +64,18 @@ function main(): string {
     // An object id instead of the slug cannot slip past an `object == "deals"` rule.
     rejectedAs("invalid_slug", () => { updateRecord(DEALS_OBJECT_ID, DEAL, [{ attribute: "name", type: "text", text: "x" }]); });
     reachesCredentialBoundary(() => { createRecord("deals", { values: [{ attribute: "name", type: "text", text: "Acme pilot" }] }); });
-    deniedAt("attio.com/records.create", "main", () => { createRecord("companies", { values: [{ attribute: "name", type: "text", text: "Acme" }] }); });
+    deniedAt("attio.com/records.create", "main", () => { createRecord("workspaces", { values: [{ attribute: "name", type: "text", text: "Acme" }] }); });
+    // Companies and people are create-only: a create without a status is allowed, and no
+    // upsert, which could overwrite an existing record, is granted.
+    reachesCredentialBoundary(() => {
+        createRecord("companies", { values: [{ attribute: "domains", type: "domain", domain: "acme.com" }, { attribute: "name", type: "text", text: "Acme" }] });
+    });
+    reachesCredentialBoundary(() => {
+        createRecord("people", { values: [
+            { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+            { attribute: "name", type: "personal-name", firstName: "Dana" },
+        ] });
+    });
 
     // Notes only on deals.
     reachesCredentialBoundary(() => { createNote("deals", DEAL, { title: "Met at meetup", content: "Wants a demo" }); });
@@ -76,11 +88,13 @@ function main(): string {
     reachesCredentialBoundary(() => { queryRecords("people", { limit: 1 }); });
     deniedAt("attio.com/records.query", "main", () => { queryRecords("workspaces"); });
     reachesCredentialBoundary(() => { findPersonByEmail(" Dana@Acme.com "); });
-    reachesCredentialBoundary(() => { upsertPerson({ email: "dana@acme.com", firstName: "Dana" }); });
+    deniedAt("attio.com/people.upsert", "main", () => { upsertPerson({ email: "dana@acme.com", firstName: "Dana" }); });
 
-    // The domain rule sees the normalized domain, so a URL of the same company passes
-    // and another company does not.
+    // The upsert rule sees the normalized domain and the attributes written, so a URL of
+    // the same company that writes only the domain passes, and another company or an
+    // upsert that would rename an existing one does not.
     reachesCredentialBoundary(() => { upsertCompany({ domain: "https://www.ACME.com/pricing" }); });
+    deniedAt("attio.com/companies.upsert", "main", () => { upsertCompany({ domain: "acme.com", name: "Acme" }); });
     deniedAt("attio.com/companies.upsert", "main", () => { upsertCompany({ domain: "victim.com" }); });
     deniedAt("attio.com/companies.upsert", "main", () => { upsertCompany({ domain: "acme.com.victim.com" }); });
 

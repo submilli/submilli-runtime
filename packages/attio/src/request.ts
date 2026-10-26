@@ -13,7 +13,7 @@ const MAX_NOTE_LIMIT = 50;
 
 /** The kinds of value an attribute write can carry. */
 export type AttributeValueType =
-    "text" | "number" | "currency" | "checkbox" | "date" | "select" | "email" | "domain" | "record" | "member";
+    "text" | "number" | "currency" | "checkbox" | "date" | "select" | "email" | "domain" | "record" | "member" | "personal-name";
 
 /**
  * One value for one attribute. Set `type` and the field it names; leave the
@@ -32,6 +32,7 @@ export type AttributeValueType =
  * | `domain` | `domain` | domain |
  * | `record` | `targetObject` and `targetRecordId` | record-reference |
  * | `member` | `email` of a workspace member | actor-reference, such as `owner` |
+ * | `personal-name` | `firstName`, `lastName` and/or `fullName` | personal-name, such as a person's `name` |
  */
 export interface AttributeValue {
     /** Attribute slug, such as `name`, `value` or `associated_company`. */
@@ -58,6 +59,12 @@ export interface AttributeValue {
     targetObject?: string;
     /** Record id of the referenced record, for `record`. */
     targetRecordId?: string;
+    /** First name, for `personal-name`. */
+    firstName?: string;
+    /** Last name, for `personal-name`. */
+    lastName?: string;
+    /** Full name, for `personal-name`; defaults to the first and last name joined by a space. */
+    fullName?: string;
 }
 
 /** The values to write: one entry per value, in any order. */
@@ -76,6 +83,9 @@ export interface ValueFields {
     domain: string | undefined;
     targetObject: string | undefined;
     targetRecordId: string | undefined;
+    firstName: string | undefined;
+    lastName: string | undefined;
+    fullName: string | undefined;
 }
 
 /** The initial status of a new record. */
@@ -160,9 +170,9 @@ export interface PersonInput {
     lastName?: string;
     /** Full name; defaults to the first and last name joined by a space. */
     fullName?: string;
-    /** Job title; replaces the current one. */
+    /** Job title; replaces the current one. A blank title is refused: omit it to keep the current one. */
     jobTitle?: string;
-    /** Description; replaces the current one. */
+    /** Description; replaces the current one. A blank description is refused: omit it to keep the current one. */
     description?: string;
     /** Record id of the person's company; replaces the current company link. */
     companyRecordId?: string;
@@ -172,9 +182,9 @@ export interface PersonInput {
 export interface CompanyInput {
     /** Domain or URL that identifies the company; normalized to a bare lowercase domain. */
     domain: string;
-    /** Company name; replaces the current one. */
+    /** Company name; replaces the current one. A blank name is refused. */
     name?: string;
-    /** Description; replaces the current one. */
+    /** Description; replaces the current one. A blank description is refused: omit it to keep the current one. */
     description?: string;
 }
 
@@ -284,7 +294,10 @@ export function isUuid(value: string): boolean {
 
 /**
  * Normalize an email address: trimmed and lowercased, with one `@`, a
- * non-empty local part, a dotted domain, and no whitespace.
+ * non-empty local part, a dotted domain, no whitespace, and ASCII only. An
+ * internationalized domain must be given in punycode, and invisible or
+ * look-alike characters (such as U+200B, a no-break space or fullwidth
+ * letters) are refused, so a policy on the email sees what Attio stores.
  * @param value The address as given.
  * @returns The normalized address.
  */
@@ -297,6 +310,12 @@ export function normalizeEmail(value: string): string {
     if (domain.indexOf(".") <= 0 || domain.endsWith(".") || domain.indexOf("..") >= 0) throw invalid;
     for (let i = 0; i < email.length; i += 1) {
         const code = email.charCodeAt(i);
+        if (code > 127) {
+            throw validationError(
+                "invalid_email",
+                "email must be ASCII; write an internationalized domain in punycode (xn--...), got " + JSON.stringify(value),
+            );
+        }
         if (code <= 32 || code === 127 || code === 60 || code === 62 || code === 44 || code === 59) throw invalid;
     }
     return email;
@@ -375,12 +394,12 @@ export function requireText(value: string, name: string): string {
  */
 export function pageWindow(limit: number | undefined, offset: number | undefined, fallback: number, max: number): PageWindow {
     const size = limit ?? fallback;
-    if (!(size >= 1 && size <= max) || size !== Math.floor(size)) {
+    if (!Number.isSafeInteger(size) || size < 1 || size > max) {
         throw validationError("invalid_page_size", "limit must be an integer from 1 through " + max.toString() + ", got " + size.toString());
     }
     const skip = offset ?? 0;
-    if (!(skip >= 0) || skip !== Math.floor(skip)) {
-        throw validationError("invalid_offset", "offset must be a non-negative integer, got " + skip.toString());
+    if (!Number.isSafeInteger(skip) || skip < 0) {
+        throw validationError("invalid_offset", "offset must be a non-negative safe integer, got " + skip.toString());
     }
     return { limit: size, offset: skip };
 }
@@ -418,7 +437,8 @@ export function prepareValue(slug: string, fields: ValueFields): PreparedValue {
     if (expected.length === 0) {
         throw validationError(
             "invalid_value",
-            slug + ": type must be one of text, number, currency, checkbox, date, select, email, domain, record, member, got " + JSON.stringify(type),
+            slug + ": type must be one of text, number, currency, checkbox, date, select, email, domain, record, member, personal-name, got " +
+                JSON.stringify(type),
         );
     }
     for (const name of presentFields(fields)) {
@@ -436,6 +456,12 @@ export function prepareValue(slug: string, fields: ValueFields): PreparedValue {
     const domain = fields.domain;
     const targetObject = fields.targetObject;
     const targetRecordId = fields.targetRecordId;
+    const firstName = fields.firstName;
+    const lastName = fields.lastName;
+    const fullName = fields.fullName;
+    if (type === "personal-name" && (firstName !== undefined || lastName !== undefined || fullName !== undefined)) {
+        return { kind: "personal-name", json: personalName(firstName, lastName, fullName, slug) };
+    }
     if (type === "text" && text !== undefined) return { kind: "text", json: { value: text } };
     if (type === "number" && number !== undefined) {
         requireFinite(slug, number);
@@ -470,7 +496,29 @@ export function prepareValue(slug: string, fields: ValueFields): PreparedValue {
     if (type === "member" && email !== undefined) {
         return { kind: "member", json: { workspace_member_email_address: normalizeEmail(email) } };
     }
-    throw validationError("invalid_value", slug + ": a " + type + " value needs " + expected.join(" and "));
+    const needs = type === "personal-name" ? "firstName, lastName or fullName" : expected.join(" and ");
+    throw validationError("invalid_value", slug + ": a " + type + " value needs " + needs);
+}
+
+/**
+ * Attio's JSON for a person's name, which needs all three parts. A part given
+ * blank is refused rather than sent, so it cannot clear a name by accident.
+ * @param firstName First name, if given.
+ * @param lastName Last name, if given.
+ * @param fullName Full name, if given; defaults to the first and last name joined by a space.
+ * @param name What the name is for, for error messages.
+ * @returns `{ first_name, last_name, full_name }`.
+ */
+export function personalName(
+    firstName: string | undefined,
+    lastName: string | undefined,
+    fullName: string | undefined,
+    name: string,
+): Record<string, unknown> {
+    const first = firstName === undefined ? "" : requireText(firstName, name + " firstName");
+    const last = lastName === undefined ? "" : requireText(lastName, name + " lastName");
+    const full = fullName === undefined ? (first + " " + last).trim() : requireText(fullName, name + " fullName");
+    return { first_name: first, last_name: last, full_name: full };
 }
 
 function valueFieldsOf(type: string): string[] {
@@ -484,6 +532,7 @@ function valueFieldsOf(type: string): string[] {
     if (type === "domain") return ["domain"];
     if (type === "record") return ["targetObject", "targetRecordId"];
     if (type === "member") return ["email"];
+    if (type === "personal-name") return ["firstName", "lastName", "fullName"];
     return [];
 }
 
@@ -499,6 +548,9 @@ function presentFields(fields: ValueFields): string[] {
     if (fields.domain !== undefined) present.push("domain");
     if (fields.targetObject !== undefined) present.push("targetObject");
     if (fields.targetRecordId !== undefined) present.push("targetRecordId");
+    if (fields.firstName !== undefined) present.push("firstName");
+    if (fields.lastName !== undefined) present.push("lastName");
+    if (fields.fullName !== undefined) present.push("fullName");
     return present;
 }
 
@@ -513,9 +565,13 @@ function isIsoDate(value: string): boolean {
         const code = value.charCodeAt(i);
         if (code < 48 || code > 57) return false;
     }
+    const year = Number(value.slice(0, 4));
     const month = Number(value.slice(5, 7));
     const day = Number(value.slice(8, 10));
-    return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+    if (month < 1 || month > 12 || day < 1) return false;
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    return day <= days[month - 1];
 }
 
 /** One converted value with the attribute it is for. */
@@ -561,6 +617,17 @@ export function groupValues(pending: PendingValue[]): PreparedAttribute[] {
 }
 
 /**
+ * The slugs of prepared attributes, in their order (sorted, as `groupValues` returns them).
+ * @param attributes Prepared attributes.
+ * @returns Their slugs.
+ */
+export function slugsOf(attributes: PreparedAttribute[]): string[] {
+    const slugs: string[] = [];
+    for (const attribute of attributes) slugs.push(attribute.slug);
+    return slugs;
+}
+
+/**
  * Attio's `values` object for prepared attributes: each slug maps to an array of value objects.
  * @param attributes Prepared attributes.
  * @returns The `values` object.
@@ -591,6 +658,7 @@ export function compatibleTypes(kind: string): string[] {
     if (kind === "domain") return ["domain"];
     if (kind === "record") return ["record-reference"];
     if (kind === "member") return ["actor-reference"];
+    if (kind === "personal-name") return ["personal-name"];
     return [];
 }
 
@@ -789,57 +857,14 @@ export function buildPersonValues(
 ): Record<string, unknown> {
     const values: Record<string, unknown> = { email_addresses: [{ email_address: email }] };
     if (firstName !== undefined || lastName !== undefined || fullName !== undefined) {
-        const first = (firstName ?? "").trim();
-        const last = (lastName ?? "").trim();
-        const joined = (first + " " + last).trim();
-        const full = fullName === undefined ? joined : fullName.trim();
-        if (full.length === 0) throw validationError("invalid_input", "a person's name cannot be empty");
-        values["name"] = [{ first_name: first, last_name: last, full_name: full }];
+        values["name"] = [personalName(firstName, lastName, fullName, "name")];
     }
-    if (jobTitle !== undefined) values["job_title"] = [{ value: jobTitle }];
-    if (description !== undefined) values["description"] = [{ value: description }];
+    if (jobTitle !== undefined) values["job_title"] = [{ value: requireText(jobTitle, "jobTitle") }];
+    if (description !== undefined) values["description"] = [{ value: requireText(description, "description") }];
     if (companyRecordId !== undefined) {
         values["company"] = [{ target_object: "companies", target_record_id: companyRecordId }];
     }
     return values;
-}
-
-/**
- * The attribute slugs a person upsert writes, sorted: `email_addresses` and
- * each optional field given.
- * @param hasName Whether any name part is given.
- * @param jobTitle Job title, if given.
- * @param description Description, if given.
- * @param companyRecordId Company record id, if given.
- * @returns Sorted slugs.
- */
-export function personAttributes(
-    hasName: boolean,
-    jobTitle: string | undefined,
-    description: string | undefined,
-    companyRecordId: string | undefined,
-): string[] {
-    const slugs: string[] = [];
-    if (companyRecordId !== undefined) slugs.push("company");
-    if (description !== undefined) slugs.push("description");
-    slugs.push("email_addresses");
-    if (jobTitle !== undefined) slugs.push("job_title");
-    if (hasName) slugs.push("name");
-    return slugs;
-}
-
-/**
- * The attribute slugs a company upsert writes, sorted: `domains` and each optional field given.
- * @param name Company name, if given.
- * @param description Description, if given.
- * @returns Sorted slugs.
- */
-export function companyAttributes(name: string | undefined, description: string | undefined): string[] {
-    const slugs: string[] = [];
-    if (description !== undefined) slugs.push("description");
-    slugs.push("domains");
-    if (name !== undefined) slugs.push("name");
-    return slugs;
 }
 
 /**
@@ -852,7 +877,7 @@ export function companyAttributes(name: string | undefined, description: string 
 export function buildCompanyValues(domain: string, name: string | undefined, description: string | undefined): Record<string, unknown> {
     const values: Record<string, unknown> = { domains: [{ domain: domain }] };
     if (name !== undefined) values["name"] = [{ value: requireText(name, "name") }];
-    if (description !== undefined) values["description"] = [{ value: description }];
+    if (description !== undefined) values["description"] = [{ value: requireText(description, "description") }];
     return values;
 }
 

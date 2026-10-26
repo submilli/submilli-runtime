@@ -77,10 +77,15 @@ email (or no company has the domain), and otherwise **update the existing
 record: every field the call gives replaces that record's current value**.
 `upsertPerson({ email, firstName: "Dana" })` renames whoever in the workspace
 already has that email; `upsertCompany({ domain, name })` renames the company
-that owns the domain. The check's `attributes` field lists what the call
-writes (`email_addresses` or `domains`, plus `name`, `job_title`,
-`description`, `company`), so a blueprint can allow an upsert that only links
-or creates and refuse one that would overwrite:
+that owns the domain. Fields the call leaves out are not sent and keep their
+values, and the record's other email addresses or domains stay. A blank
+`name`, `jobTitle` or `description` is refused rather than sent, so it cannot
+clear a field.
+
+The check's `attributes` field is the sorted list of attributes the request
+body writes: `email_addresses` or `domains`, plus `name`, `job_title`,
+`description` and `company` when given. A filter on it limits **which fields
+an upsert may write**, for example only the identifying email or domain:
 
 ```yaml
     - capability: attio.com/companies.upsert
@@ -88,8 +93,36 @@ or creates and refuse one that would overwrite:
       action: allow
 ```
 
-Fields the call leaves out are not sent and keep their values, and the
-record's other email addresses or domains stay.
+It cannot tell whether the call will create or update: the package does not
+know before Attio answers. A blueprint that allows an upsert writing `name`
+allows renaming an existing person or company. For people and companies that
+an agent may add but must never change, grant `records.create` on them
+instead (see [Create-only people and companies](#create-only-people-and-companies)).
+
+## Create-only people and companies
+
+`createRecord` never matches an existing record. `email_addresses` (people) and
+`domains` (companies) are unique attributes, so creating a person whose email,
+or a company whose domain, is already in Attio fails with `AttioError` code
+`uniqueness_conflict` (HTTP 409) and changes nothing; the program then looks
+the record up with `findPersonByEmail` or `queryRecords`.
+
+```ts ignore
+const person = findPersonByEmail("dana@acme.com") ?? createRecord("people", { values: [
+    { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+    { attribute: "name", type: "personal-name", firstName: "Dana", lastName: "Lee" },
+] });
+const companies = queryRecords("companies", { filter: [{ attribute: "domains", operator: "eq", value: "acme.com" }], limit: 1 });
+const company = companies.items.length > 0 ? companies.items[0] : createRecord("companies", { values: [
+    { attribute: "domains", type: "domain", domain: "acme.com" },
+    { attribute: "name", type: "text", text: "Acme" },
+] });
+```
+
+A rule such as `object == "people" and statusAttribute == ""` on
+`records.create` allows this and nothing that changes an existing person.
+Record references are relationships in Attio: linking a new person to a
+company, or a new deal to a person, also adds the link on the other record.
 
 ## Capabilities
 
@@ -145,11 +178,20 @@ be bypassed with the object's id. Record ids are lowercase UUIDs.
 - Returned records show actor references, such as a deal's `owner`, as the
   workspace member id; the package does not look members up. `listMembers`
   maps ids to emails.
+- Some reads follow a passed write check without a read check of their own,
+  and their results reach the program: an upsert returns the whole matched
+  record, `createRecord`, `updateRecord` and `setStatus` return the record
+  with all its current values, and `createRecord` and `updateRecord` read the
+  object's attribute definitions, so their errors reveal whether an attribute
+  exists and its type. Grant a write only where the program may also see
+  those records.
 - Values written, note text, query conditions and page options are not check
   fields.
 
 A blueprint for an agent that records leads as deals and moves them through
-any stage, without touching other objects' records:
+any stage. It may add companies and people but never changes an existing one
+(no upserts; a create that hits a known email or domain fails), and changes
+only deals:
 
 ```yaml
 permissions:
@@ -170,13 +212,8 @@ permissions:
       action: allow
     - capability: attio.com/people.find
       action: allow
-    - capability: attio.com/people.upsert
-      action: allow
-    - capability: attio.com/companies.upsert
-      filter: not (attributes contains "name") and not (attributes contains "description")
-      action: allow
     - capability: attio.com/records.create
-      filter: object == "deals"
+      filter: object == "deals" or ((object == "companies" or object == "people") and statusAttribute == "")
       action: allow
     - capability: attio.com/records.update
       filter: object == "deals"
@@ -192,7 +229,9 @@ permissions:
       action: allow
 ```
 
-Narrow it further with fields such as `not (attributes contains "owner")` or
+`statuses.list` and `records.get` on deals are what `setStatus`, and
+`createRecord` with a stage, check before their reads. Narrow the rules
+further with fields such as `not (attributes contains "owner")` or
 `status != "Lost"`.
 
 ## Write semantics
@@ -223,6 +262,22 @@ Narrow it further with fields such as `not (attributes contains "owner")` or
 - Nothing is retried automatically. `AttioError.retryable` marks a 429 (with
   `retryAfter`, Attio's `Retry-After` HTTP date) and a 409
   `concurrent_write_conflict`, which Attio did not apply.
+- `getRecord` returns `null` for any 404 `not_found`, which Attio answers both
+  for a missing record and for an unknown object; the error code does not
+  tell them apart.
+- A failure of the HTTP transport itself (a timeout, a refused connection)
+  throws the `submilli:http` error, not `AttioError`.
+
+### Writes with an unknown outcome
+
+A 5xx answer or a transport failure on `createRecord`, `createNote`, an upsert
+or an update may come after Attio applied the write. Attio has no idempotency
+key, and the package marks these errors `retryable: false`. Re-read before
+retrying: look the record up (`findPersonByEmail`, `queryRecords`,
+`listNotes`), and retry only if the write is missing. To make a retried create
+safe, give the object a unique custom attribute (for deals, such as the Slack
+message id the deal came from) and write it on create: a second create then
+fails with `uniqueness_conflict` instead of making a duplicate.
 
 Queries and note lists return one page (`items`, `nextOffset`,
 `isComplete`); the package never follows pages on its own.
@@ -264,12 +319,14 @@ cargo run -p submilli -- build test -p @submilli/attio --env-var ATTIO_API_KEY
 The scripts in `tests/policy/` run as a real `main` caller under restricted
 blueprints of the same name, without a key or network:
 
-- `deal-scope.ts` shows deal writes and deal notes allowed while the same
-  writes to companies, an `owner` change, notes on people and queries of other
-  objects are denied; that an object UUID is refused before the check; and that
-  the company rule sees the normalized domain. It also shows `setStatus` and a
-  creation status denied at `statuses.list` on another object; on deals they
-  stop at the key, because the `setStatus` check needs Attio's answers.
+- `deal-scope.ts` shows deal writes and deal notes allowed while updates of
+  companies, an `owner` change, notes on people and queries of other objects
+  are denied; companies and people created (with a personal name) but a person
+  upsert denied; that an object UUID is refused before the check; and that the
+  company upsert rule sees the normalized domain and refuses one that writes a
+  name. It also shows `setStatus` and a creation status denied at
+  `statuses.list` on another object; on deals they stop at the key, because
+  the `setStatus` check needs Attio's answers.
 - `read-once.ts` shows that an attribute slug, a domain or an email whose
   getter answers differently on a second read is read once, so the value the
   rule approved is the value sent.

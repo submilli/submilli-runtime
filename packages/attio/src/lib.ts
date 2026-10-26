@@ -14,7 +14,6 @@ import { check } from "submilli:security";
 import { AttioError, validationError } from "./errors";
 import {
     buildCompanyValues,
-    companyAttributes,
     buildNotesQuery,
     buildPersonValues,
     buildQueryBody,
@@ -31,7 +30,6 @@ import {
     PageOptions,
     PageWindow,
     PersonInput,
-    personAttributes,
     groupValues,
     PendingValue,
     PreparedCondition,
@@ -44,7 +42,7 @@ import {
     RecordValuesInput,
     requirePlainAttributes,
     requireText,
-    uniqueSlugs,
+    slugsOf,
     ValueFields,
 } from "./request";
 import {
@@ -67,7 +65,7 @@ import {
     ObjectList,
     objectFrom,
     Page,
-    pageAfter,
+    pageOf,
     RecordEnvelope,
     recordFrom,
     RecordList,
@@ -145,14 +143,17 @@ export function listStatuses(object: string, attribute: string): Status[] {
  */
 export function listMembers(): Member[] {
     check("attio.com/members.list", {});
-    return fetchMembers();
+    const list = attioGet("/workspace_members").json() as MemberList;
+    const items: Member[] = [];
+    for (const item of list.data) items.push(memberFrom(item));
+    return items;
 }
 
 /**
  * Get one record with its current values; null when it does not exist.
  * @param object Object slug, such as `deals`.
  * @param recordId Record id (UUID).
- * @returns The record, or null when Attio has no such record (or no such object).
+ * @returns The record, or null when Attio answers 404 `not_found`: no such record, or no such object.
  * @capability attio.com/records.get { object: string, recordId: string }
  */
 export function getRecord(object: string, recordId: string): AttioRecord | null {
@@ -161,7 +162,7 @@ export function getRecord(object: string, recordId: string): AttioRecord | null 
     check("attio.com/records.get", { object: slug, recordId: id });
     const response = attioGetNullable(recordPath(slug, id));
     if (response === null) return null;
-    return readRecord((response.json() as RecordEnvelope).data, slug);
+    return recordFrom((response.json() as RecordEnvelope).data, slug);
 }
 
 /**
@@ -199,7 +200,7 @@ export function findPersonByEmail(email: string): AttioRecord | null {
     if (list.data.length > 1) {
         throw validationError("multiple_match_results", "more than one person in Attio has the email " + address + "; merge them in Attio");
     }
-    return readRecord(list.data[0], "people");
+    return recordFrom(list.data[0], "people");
 }
 
 /**
@@ -213,11 +214,10 @@ export function upsertPerson(input: PersonInput): AttioRecord {
     const address = normalizeEmail(email);
     const company = companyRecordId === undefined ? undefined : normalizeRecordId(companyRecordId, "companyRecordId");
     const values = buildPersonValues(address, firstName, lastName, fullName, jobTitle, description, company);
-    const hasName = firstName !== undefined || lastName !== undefined || fullName !== undefined;
-    const attributes = personAttributes(hasName, jobTitle, description, company);
+    const attributes = sortedKeys(values);
     check("attio.com/people.upsert", { email: address, attributes: attributes });
     const response = upsertOn("people", "email_addresses", values, "more than one person in Attio has the email " + address);
-    return readRecord((response.json() as RecordEnvelope).data, "people");
+    return recordFrom((response.json() as RecordEnvelope).data, "people");
 }
 
 /**
@@ -230,10 +230,10 @@ export function upsertCompany(input: CompanyInput): AttioRecord {
     const { domain, name, description } = input;
     const bare = normalizeDomain(domain);
     const values = buildCompanyValues(bare, name, description);
-    const attributes = companyAttributes(name, description);
+    const attributes = sortedKeys(values);
     check("attio.com/companies.upsert", { domain: bare, attributes: attributes });
     const response = upsertOn("companies", "domains", values, "more than one company in Attio has the domain " + bare);
-    return readRecord((response.json() as RecordEnvelope).data, "companies");
+    return recordFrom((response.json() as RecordEnvelope).data, "companies");
 }
 
 /**
@@ -247,28 +247,26 @@ export function upsertCompany(input: CompanyInput): AttioRecord {
 export function createRecord(object: string, input: CreateRecordInput): AttioRecord {
     const slug = normalizeSlug(object, "object");
     const { values, status } = input;
-    // The checked slugs and the values they carry are kept apart: only the
-    // slugs reach `check()`, and the request pairs each with its values.
-    const written: string[] = [];
     const pending: PendingValue[] = [];
     for (const write of values ?? []) {
-        const { attribute, type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId } = write;
+        const {
+            attribute, type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId,
+            firstName, lastName, fullName,
+        } = write;
         const attributeSlug = normalizeSlug(attribute, "attribute");
-        written.push(attributeSlug);
-        const fields: ValueFields = { type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId };
+        const fields: ValueFields = {
+            type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId, firstName, lastName, fullName,
+        };
         pending.push({ slug: attributeSlug, value: prepareValue(attributeSlug, fields) });
     }
-    const slugs = uniqueSlugs(written);
     const attributes = groupValues(pending);
+    const slugs = slugsOf(attributes);
     let statusAttribute = "";
-    let requestedStatus = "";
+    let resolved: Status | null = null;
     if (status !== undefined) {
         const { attribute, title } = status;
         statusAttribute = normalizeSlug(attribute, "status attribute");
-        requestedStatus = requireText(title, "status title");
-    }
-    let resolved: Status | null = null;
-    if (statusAttribute.length > 0) {
+        const requestedStatus = requireText(title, "status title");
         // The statuses are read only once the caller may list them.
         check("attio.com/statuses.list", { object: slug, attribute: statusAttribute });
         resolved = findStatus(fetchStatuses(slug, statusAttribute), requestedStatus, slug, statusAttribute);
@@ -290,7 +288,7 @@ export function createRecord(object: string, input: CreateRecordInput): AttioRec
         body[statusAttribute] = [{ status: resolved.statusId }];
     }
     const response = attioPost("/objects/" + slug + "/records", { data: { values: body } });
-    return readRecord((response.json() as RecordEnvelope).data, slug);
+    return recordFrom((response.json() as RecordEnvelope).data, slug);
 }
 
 /**
@@ -304,23 +302,26 @@ export function createRecord(object: string, input: CreateRecordInput): AttioRec
 export function updateRecord(object: string, recordId: string, values: RecordValuesInput): AttioRecord {
     const slug = normalizeSlug(object, "object");
     const id = normalizeRecordId(recordId, "recordId");
-    const written: string[] = [];
     const pending: PendingValue[] = [];
     for (const write of values) {
-        const { attribute, type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId } = write;
+        const {
+            attribute, type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId,
+            firstName, lastName, fullName,
+        } = write;
         const attributeSlug = normalizeSlug(attribute, "attribute");
-        written.push(attributeSlug);
-        const fields: ValueFields = { type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId };
+        const fields: ValueFields = {
+            type, text, number, amount, checked, date, option, email, domain, targetObject, targetRecordId, firstName, lastName, fullName,
+        };
         pending.push({ slug: attributeSlug, value: prepareValue(attributeSlug, fields) });
     }
-    const slugs = uniqueSlugs(written);
     const attributes = groupValues(pending);
+    const slugs = slugsOf(attributes);
     check("attio.com/records.update", { object: slug, recordId: id, attributes: slugs });
     // Decided after `check()`, so the shape of `values` never decides whether it runs.
     if (attributes.length === 0) throw validationError("empty_update", "updateRecord needs at least one attribute value");
     requirePlainAttributes(slug, attributes, fetchAttributes(slug), "change it with setStatus");
     const response = attioPatch(recordPath(slug, id), { data: { values: buildValues(attributes) } });
-    return readRecord((response.json() as RecordEnvelope).data, slug);
+    return recordFrom((response.json() as RecordEnvelope).data, slug);
 }
 
 /**
@@ -344,11 +345,7 @@ export function setStatus(object: string, recordId: string, attribute: string, s
     check("attio.com/statuses.list", { object: slug, attribute: attributeSlug });
     const target = findStatus(fetchStatuses(slug, attributeSlug), requested, slug, attributeSlug);
     check("attio.com/records.get", { object: slug, recordId: id });
-    const response = attioGetNullable(recordPath(slug, id));
-    if (response === null) {
-        throw new AttioError("not_found", "Attio has no " + slug + " record " + id, 404, "invalid_request_error", false, "");
-    }
-    const current = (response.json() as RecordEnvelope).data;
+    const current = (attioGet(recordPath(slug, id)).json() as RecordEnvelope).data;
     const previous = currentStatus(current, attributeSlug);
     check("attio.com/records.setStatus", {
         object: slug,
@@ -358,13 +355,13 @@ export function setStatus(object: string, recordId: string, attribute: string, s
         previousStatus: previous.title,
     });
     if (previous.statusId === target.statusId) {
-        return { record: readRecord(current, slug), status: target.title, previousStatus: previous.title, changed: false };
+        return { record: recordFrom(current, slug), status: target.title, previousStatus: previous.title, changed: false };
     }
     const values: Record<string, unknown> = {};
     values[attributeSlug] = [{ status: target.statusId }];
     const updated = attioPatch(recordPath(slug, id), { data: { values: values } });
     return {
-        record: readRecord((updated.json() as RecordEnvelope).data, slug),
+        record: recordFrom((updated.json() as RecordEnvelope).data, slug),
         status: target.title,
         previousStatus: previous.title,
         changed: true,
@@ -416,8 +413,7 @@ export function listNotes(parentObject: string, parentRecordId: string, page: Pa
         // keep only this record's notes even though both filters are always sent.
         if (note.parent_object === parent && note.parent_record_id === id) items.push(noteFrom(note));
     }
-    const end = pageAfter(window.offset, window.limit, list.data.length);
-    return { items: items, nextOffset: end.nextOffset, isComplete: end.isComplete };
+    return pageOf(items, window.offset, window.limit, list.data.length);
 }
 
 function recordPath(object: string, recordId: string): string {
@@ -442,22 +438,16 @@ function fetchStatuses(object: string, attribute: string): Status[] {
     return items;
 }
 
-function fetchMembers(): Member[] {
-    const list = attioGet("/workspace_members").json() as MemberList;
-    const items: Member[] = [];
-    for (const item of list.data) items.push(memberFrom(item));
-    return items;
-}
-
-function readRecord(data: ApiRecord, object: string): AttioRecord {
-    return recordFrom(data, object);
-}
-
 function recordPage(records: ApiRecord[], object: string, window: PageWindow): Page<AttioRecord> {
     const items: AttioRecord[] = [];
     for (const record of records) items.push(recordFrom(record, object));
-    const end = pageAfter(window.offset, window.limit, records.length);
-    return { items: items, nextOffset: end.nextOffset, isComplete: end.isComplete };
+    return pageOf(items, window.offset, window.limit, records.length);
+}
+
+function sortedKeys(values: Record<string, unknown>): string[] {
+    const keys = Object.keys(values);
+    keys.sort();
+    return keys;
 }
 
 function upsertOn(object: string, matchingAttribute: string, values: Record<string, unknown>, ambiguity: string): Response {

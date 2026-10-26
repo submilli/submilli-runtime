@@ -54,10 +54,12 @@ Writes take a list of `AttributeValue` entries. Each entry names its
 | `domain` | `domain` | domain attributes |
 | `record` | `targetObject` and `targetRecordId` | record references, such as `associated_company` |
 | `member` | `email` of a workspace member | actor references, such as a deal's `owner` |
+| `personal-name` | `firstName`, `lastName` and/or `fullName` (default: first and last joined) | a person's `name` |
 
 Repeat an attribute to give a multi-value attribute, such as
 `associated_people`, several values. A single-value attribute takes one.
 Status attributes, such as a deal's `stage`, are never written this way.
+Dates must be real calendar dates, and a blank name part is refused.
 
 <!-- submilli:endif -->
 
@@ -203,6 +205,29 @@ list that attribute's statuses. Attributes with `isRequired` must be
 given: a deal needs its `name`, an `owner` (a workspace member's email) and a
 `stage`, or Attio refuses it with an `AttioError`.
 
+`createRecord` never changes an existing record. A person's email and a
+company's domain are unique, so creating a person or company that already
+exists fails with code `uniqueness_conflict`: look it up first with
+`findPersonByEmail` or `queryRecords`, and create it only when it is missing.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if all="attio.com/records.create attio.com/people.find" -->
+
+```ts
+import { createRecord, findPersonByEmail } from "@submilli/attio";
+
+function main(): string {
+    const existing = findPersonByEmail("dana@acme.com");
+    if (existing !== null) return existing.recordId;
+    const person = createRecord("people", { values: [
+        { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+        { attribute: "name", type: "personal-name", firstName: "Dana", lastName: "Lee" },
+    ] });
+    return person.recordId;
+}
+```
+
 <!-- submilli:endif -->
 
 <!-- submilli:if capability="attio.com/records.update" -->
@@ -257,7 +282,9 @@ both reads.
 
 ## Errors
 
-- A missing record returns `null` from `getRecord` and `findPersonByEmail`.
+- `getRecord` returns `null` when Attio answers not found, which it does both
+  for a missing record and for an unknown object slug; `findPersonByEmail`
+  returns `null` when nobody has the email.
 - Other failures throw `AttioError` with `code`, `message` and `status`.
   `status` 0 is an error the package raised itself: invalid input such as an
   email, slug, record id, value or page size (refused before anything is
@@ -268,23 +295,43 @@ both reads.
 - `retryable` is true when Attio did not apply the request: a rate limit
   (status 429, with the time to wait in `retryAfter`) or a concurrent write
   (`concurrent_write_conflict`). Nothing is retried automatically.
+- A failed connection or timeout throws the HTTP transport's error, not
+  `AttioError`.
+- A write that fails with a 5xx status or a transport error may still have
+  been applied: there is no idempotency key, and `retryable` is false. Read
+  the record (or the record's notes) again before retrying, so a retry does
+  not create a duplicate deal, person or note.
 - A denied operation throws `PermissionDeniedError`: the operation is not
   allowed with those arguments, so do not retry it with other spellings.
 
-<!-- submilli:if all="attio.com/companies.upsert attio.com/people.upsert attio.com/records.create attio.com/notes.create" -->
+<!-- submilli:if all="attio.com/records.query attio.com/people.find attio.com/records.create attio.com/statuses.list attio.com/notes.create" -->
 
 ## Example
 
-Record a new lead: the company by domain, the contact by email, a deal in the
-Lead stage owned by a workspace member and linked to both, and a note with the
-source text.
+Record a new lead without changing existing records: find the company by
+domain and the contact by email, create each only when it is missing, then
+create a deal in the Lead stage, owned by a workspace member and linked to
+both, with a note holding the source text.
 
 ```ts
-import { createNote, createRecord, upsertCompany, upsertPerson } from "@submilli/attio";
+import { AttioRecord, createNote, createRecord, findPersonByEmail, queryRecords } from "@submilli/attio";
+
+function companyFor(domain: string, name: string): AttioRecord {
+    const found = queryRecords("companies", { filter: [{ attribute: "domains", operator: "eq", value: domain }], limit: 1 });
+    if (found.items.length > 0) return found.items[0];
+    return createRecord("companies", { values: [
+        { attribute: "domains", type: "domain", domain: domain },
+        { attribute: "name", type: "text", text: name },
+    ] });
+}
 
 function main(): { deal: string; url: string } {
-    const company = upsertCompany({ domain: "acme.com", name: "Acme" });
-    const person = upsertPerson({ email: "dana@acme.com", firstName: "Dana", companyRecordId: company.recordId });
+    const company = companyFor("acme.com", "Acme");
+    const person = findPersonByEmail("dana@acme.com") ?? createRecord("people", { values: [
+        { attribute: "email_addresses", type: "email", email: "dana@acme.com" },
+        { attribute: "name", type: "personal-name", firstName: "Dana" },
+        { attribute: "company", type: "record", targetObject: "companies", targetRecordId: company.recordId },
+    ] });
     const deal = createRecord("deals", {
         values: [
             { attribute: "name", type: "text", text: "Acme demo" },

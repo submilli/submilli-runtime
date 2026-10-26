@@ -492,23 +492,31 @@ function locationText(data: ApiValue): string {
     return parts.join(", ");
 }
 
+/** A record's current value of one status attribute. */
+export interface CurrentStatus {
+    /** Status id, or "" when the record has no status. */
+    statusId: string;
+    /** Status title, or "" when the record has no status. */
+    title: string;
+}
+
 /**
- * The title of a record's current status for one attribute.
+ * A record's current status for one status attribute.
  * @param data Raw record.
  * @param attribute Status attribute slug.
- * @returns The current status id and title, or empty strings when the record has none.
+ * @returns The current status id and title, both "" when the record has none.
  */
-export function currentStatus(data: ApiRecord, attribute: string): Status {
+export function currentStatus(data: ApiRecord, attribute: string): CurrentStatus {
     const values = data.values;
     if (values !== null && values !== undefined) {
         for (const value of values[attribute] ?? []) {
             const status = value.status;
             if (status !== null && status !== undefined) {
-                return { statusId: status.id?.status_id ?? "", title: status.title ?? "", celebrationEnabled: false };
+                return { statusId: status.id?.status_id ?? "", title: status.title ?? "" };
             }
         }
     }
-    return { statusId: "", title: "", celebrationEnabled: false };
+    return { statusId: "", title: "" };
 }
 
 /**
@@ -594,19 +602,15 @@ export interface FailureDetails {
 }
 
 /**
- * The next-page fields of a limit/offset page.
+ * One page of a limit/offset list. A page shorter than the limit is the last
+ * one; a full page may be followed by an empty one.
+ * @param items The page's items, after any filtering.
  * @param offset Offset of this page.
  * @param limit Requested page size.
- * @param received Number of items Attio returned.
- * @returns `nextOffset` and `isComplete`; a short page is the last one.
+ * @param received Number of items Attio returned, before any filtering.
+ * @returns The page with `nextOffset` and `isComplete`.
  */
-export function pageAfter(offset: number, limit: number, received: number): PageEnd {
+export function pageOf<T>(items: T[], offset: number, limit: number, received: number): Page<T> {
     const complete = received < limit;
-    return { nextOffset: complete ? null : offset + received, isComplete: complete };
-}
-
-/** The next-page fields of a page. */
-export interface PageEnd {
-    nextOffset: number | null;
-    isComplete: boolean;
+    return { items: items, nextOffset: complete ? null : offset + received, isComplete: complete };
 }

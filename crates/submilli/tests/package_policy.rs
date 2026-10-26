@@ -15,6 +15,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Packages that ship policy scripts under `tests/policy/`.
 const PACKAGES: &[&str] = &[
@@ -171,8 +172,9 @@ fn copy_attio_with_base(project: &Path, base: &str) {
         std::fs::create_dir_all(target.join(directory)).expect("package directory");
         for entry in std::fs::read_dir(source.join(directory)).expect("package sources") {
             let path = entry.expect("source entry").path();
+            let name = path.file_name().expect("a source file name");
             let mut text = std::fs::read_to_string(&path).expect("package source");
-            if path.file_name().is_some_and(|name| name == "lib.ts") {
+            if name == "lib.ts" {
                 assert_eq!(
                     text.matches(SHIPPED).count(),
                     1,
@@ -180,8 +182,7 @@ fn copy_attio_with_base(project: &Path, base: &str) {
                 );
                 text = text.replace(SHIPPED, &format!("const API = \"{base}\";"));
             }
-            std::fs::write(target.join(directory).join(entry_name(&path)), text)
-                .expect("copied source");
+            std::fs::write(target.join(directory).join(name), text).expect("copied source");
         }
     }
     std::fs::write(
@@ -191,10 +192,6 @@ fn copy_attio_with_base(project: &Path, base: &str) {
          path = \"packages/attio\"\n",
     )
     .expect("manifest");
-}
-
-fn entry_name(path: &Path) -> &std::ffi::OsStr {
-    path.file_name().expect("a file name")
 }
 
 #[derive(Debug)]
@@ -235,6 +232,13 @@ impl FakeAttio {
 }
 
 fn serve(stream: TcpStream, recorded: &Mutex<Vec<FakeRequest>>) {
+    // A client that stops sending fails this request instead of stalling the server.
+    if stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .is_err()
+    {
+        return;
+    }
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     if reader.read_line(&mut line).is_err() {

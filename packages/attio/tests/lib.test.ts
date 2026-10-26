@@ -31,8 +31,6 @@ import {
     buildPersonValues,
     buildQueryBody,
     buildValues,
-    companyAttributes,
-    personAttributes,
     groupValues,
     normalizeDomain,
     normalizeEmail,
@@ -60,7 +58,7 @@ import {
     NoteEnvelope,
     objectFrom,
     ObjectList,
-    pageAfter,
+    pageOf,
     RecordEnvelope,
     recordFrom,
     Status,
@@ -99,6 +97,9 @@ function fields(type: string): ValueFields {
         domain: undefined,
         targetObject: undefined,
         targetRecordId: undefined,
+        firstName: undefined,
+        lastName: undefined,
+        fullName: undefined,
     };
 }
 
@@ -124,6 +125,12 @@ function main(): void {
     for (const bad of ["", "dana", "dana@", "@acme.com", "dana@acme", "dana@@acme.com", "da na@acme.com", "dana@acme..com", "dana@acme.com."]) {
         expectCode("invalid_email", () => { normalizeEmail(bad); });
     }
+    // Invisible, look-alike and non-ASCII characters are refused, so an email rule
+    // compares the spelling Attio stores; an internationalized domain uses punycode.
+    for (const unicode of ["dana@competitor.\uff43om", "dana@competitor.com\u200b", "dana\u00a0x@acme.com", "dana@b\u00fccher.de"]) {
+        expectCode("invalid_email", () => { normalizeEmail(unicode); });
+    }
+    assert(normalizeEmail("dana@xn--bcher-kva.de") === "dana@xn--bcher-kva.de", "punycode accepted");
 
     label("domains lose scheme, www, port, path, query and trailing dot");
     assert(normalizeDomain("https://www.Acme.com/pricing?x=1#top") === "acme.com", "URL reduced to its domain");
@@ -203,9 +210,33 @@ function main(): void {
     half.targetObject = "companies";
     expectCode("invalid_value", () => { prepareValue("associated_company", half); });
     expectCode("invalid_value", () => { prepareValue("name", fields("status")); });
-    const badDay = fields("date");
-    badDay.date = "26/10/2026";
-    expectCode("invalid_value", () => { prepareValue("close_date", badDay); });
+    for (const bad of ["26/10/2026", "2026-02-31", "2026-02-29", "1900-02-29", "2026-04-31", "2026-13-01", "2026-00-10"]) {
+        const badDay = fields("date");
+        badDay.date = bad;
+        expectCode("invalid_value", () => { prepareValue("close_date", badDay); });
+    }
+    for (const good of ["2024-02-29", "2000-02-29", "2026-12-31"]) {
+        const goodDay = fields("date");
+        goodDay.date = good;
+        assert(prepareValue("close_date", goodDay).kind === "date", good + " is a real date");
+    }
+
+    label("a personal name needs a part, and fills all three Attio fields");
+    const name = fields("personal-name");
+    name.firstName = "Dana";
+    name.lastName = "Lee";
+    assert(JSON.stringify(prepareValue("name", name).json) === "{\"first_name\":\"Dana\",\"full_name\":\"Dana Lee\",\"last_name\":\"Lee\"}", "first and last");
+    const full = fields("personal-name");
+    full.fullName = "Dana";
+    assert(JSON.stringify(prepareValue("name", full).json) === "{\"first_name\":\"\",\"full_name\":\"Dana\",\"last_name\":\"\"}", "full name only");
+    expectCode("invalid_value", () => { prepareValue("name", fields("personal-name")); });
+    const blank = fields("personal-name");
+    blank.firstName = " ";
+    expectCode("invalid_input", () => { prepareValue("name", blank); });
+    const mixed = fields("personal-name");
+    mixed.firstName = "Dana";
+    mixed.text = "Dana";
+    expectCode("invalid_value", () => { prepareValue("name", mixed); });
     const infinite = fields("number");
     infinite.number = 1 / 0;
     expectCode("invalid_value", () => { prepareValue("score", infinite); });
@@ -291,6 +322,9 @@ function main(): void {
     expectCode("invalid_page_size", () => { queryWindow(501, undefined); });
     expectCode("invalid_page_size", () => { queryWindow(2.5, undefined); });
     expectCode("invalid_offset", () => { queryWindow(10, -1); });
+    expectCode("invalid_offset", () => { queryWindow(10, 1 / 0); });
+    expectCode("invalid_offset", () => { noteWindow(undefined, 1e21); });
+    expectCode("invalid_page_size", () => { queryWindow(0 / 0, undefined); });
     expectCode("invalid_page_size", () => { noteWindow(51, undefined); });
     assert(buildNotesQuery("deals", RECORD, noteWindow(undefined, 50)) === "?parent_object=deals&parent_record_id=" + RECORD + "&limit=50&offset=50", "notes query");
 
@@ -307,21 +341,15 @@ function main(): void {
         "name, title and company",
     );
     expectCode("invalid_input", () => { buildPersonValues("dana@acme.com", " ", undefined, undefined, undefined, undefined, undefined); });
+    expectCode("invalid_input", () => { buildPersonValues("dana@acme.com", undefined, undefined, undefined, "", undefined, undefined); });
+    expectCode("invalid_input", () => { buildPersonValues("dana@acme.com", undefined, undefined, undefined, undefined, " ", undefined); });
+    expectCode("invalid_input", () => { buildCompanyValues("acme.com", undefined, " "); });
     assert(JSON.stringify(buildCompanyValues("acme.com", undefined, undefined)) === "{\"domains\":[{\"domain\":\"acme.com\"}]}", "domain only");
     assert(
         JSON.stringify(buildCompanyValues("acme.com", "Acme", "Rockets")) ===
             "{\"description\":[{\"value\":\"Rockets\"}],\"domains\":[{\"domain\":\"acme.com\"}],\"name\":[{\"value\":\"Acme\"}]}",
         "name and description",
     );
-
-    label("upsert checks list the attributes they write");
-    assert(JSON.stringify(personAttributes(false, undefined, undefined, undefined)) === "[\"email_addresses\"]", "email only");
-    assert(
-        JSON.stringify(personAttributes(true, "CTO", "", COMPANY)) === "[\"company\",\"description\",\"email_addresses\",\"job_title\",\"name\"]",
-        "every person field",
-    );
-    assert(JSON.stringify(companyAttributes(undefined, undefined)) === "[\"domains\"]", "domain only");
-    assert(JSON.stringify(companyAttributes("Acme", "Rockets")) === "[\"description\",\"domains\",\"name\"]", "every company field");
 
     label("records map to readable values");
     const raw = (JSON.parse(
@@ -415,11 +443,15 @@ function main(): void {
     assert(fallback.code === "server_error" && fallback.message === "Attio request failed: HTTP 502 Bad Gateway", "non-JSON body");
     assert(failureFrom(403, "Forbidden", "{malformed").code === "forbidden", "malformed body");
 
-    label("pages end on a short page");
-    const full = pageAfter(0, 50, 50);
-    assert(full.nextOffset === 50 && !full.isComplete, "full page continues");
-    const short = pageAfter(50, 50, 7);
+    label("pages end on a short or empty page");
+    const fullPage = pageOf(["a", "b"], 0, 2, 2);
+    assert(fullPage.nextOffset === 2 && !fullPage.isComplete && fullPage.items.length === 2, "full page continues");
+    const short = pageOf(["a"], 50, 50, 7);
     assert(short.nextOffset === null && short.isComplete, "short page completes");
+    const emptyPage = pageOf<string>([], 2, 2, 0);
+    assert(emptyPage.nextOffset === null && emptyPage.isComplete, "empty page completes");
+    const filtered = pageOf<string>([], 0, 2, 2);
+    assert(filtered.nextOffset === 2 && !filtered.isComplete, "paging counts what Attio returned, not what was kept");
 
     label("operations validate input before any check or request");
     expectCode("invalid_slug", () => { listAttributes("97052eb9-e65e-443f-a297-f2d9a4a7f795"); });
@@ -438,6 +470,9 @@ function main(): void {
     expectCode("invalid_record_id", () => { setStatus("deals", "x", "stage", "Won"); });
     expectCode("invalid_input", () => { createNote("deals", RECORD, { title: " ", content: "x" }); });
     expectCode("invalid_page_size", () => { listNotes("deals", RECORD, { limit: 51 }); });
+    expectCode("invalid_offset", () => { queryRecords("deals", { offset: 1 / 0 }); });
+    expectCode("invalid_offset", () => { listNotes("deals", RECORD, { offset: 1e21 }); });
+    expectCode("invalid_input", () => { upsertPerson({ email: "dana@acme.com", jobTitle: "" }); });
 
     if (secrets.get("ATTIO_API_KEY") !== undefined) {
         label("skip: valid input reaches the token read only when ATTIO_API_KEY is not bound");

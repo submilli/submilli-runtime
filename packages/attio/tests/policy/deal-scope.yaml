@@ -16,13 +16,11 @@ permissions:
       action: allow
     - capability: attio.com/people.find
       action: allow
-    - capability: attio.com/people.upsert
-      action: allow
     - capability: attio.com/companies.upsert
-      filter: domain == "acme.com"
+      filter: domain == "acme.com" and not (attributes contains "name")
       action: allow
     - capability: attio.com/records.create
-      filter: object == "deals"
+      filter: object == "deals" or ((object == "companies" or object == "people") and statusAttribute == "")
       action: allow
     - capability: attio.com/records.update
       filter: object == "deals" and not (attributes contains "owner")
