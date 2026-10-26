@@ -424,21 +424,6 @@ pub(crate) fn require_writable(
     ))
 }
 
-/// Refuse a write aimed at the VFS root or a mount point: each is a directory,
-/// and replacing one would take a volume with it.
-pub(crate) fn refuse_volume_root(
-    resolved: &ContentPath,
-    op: &str,
-    guest_path: &str,
-) -> wasmtime::Result<()> {
-    if resolved.is_root() {
-        wasmtime::bail!(
-            "{op} {guest_path}: the VFS root or a mount point is a directory, not a file"
-        );
-    }
-    Ok(())
-}
-
 fn read_only_denial(
     caller: &str,
     capability: &str,

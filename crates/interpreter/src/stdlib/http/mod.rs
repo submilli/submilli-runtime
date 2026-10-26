@@ -24,24 +24,22 @@ use wasmtime::{
     Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef, StructType, Val, ValType,
 };
 
+use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, mask_headers, mask_url, record_payload};
-use crate::runtime::fs::{ContainError, ContentPath};
+use crate::runtime::filesystem::{Download, DownloadOptions as FilesystemDownloadOptions};
 use crate::runtime::fuel;
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types, intrinsic_types};
 use crate::runtime::metrics::{HttpMetric, MetricsSink};
 use crate::runtime::prelude::collection::{is_a, object_field, unbox_bool};
 use crate::runtime::prelude::map;
 use crate::runtime::prelude::vtable::dispatch_vtable_slot;
-use crate::runtime::{QuotaCharge, QuotaExceeded, StoreData};
 use crate::stdlib::abi::{
     self, HostView, backing_receiver, backing_struct, f64_field, i32_field, install_field_getters,
     nullable_object_field, string_field,
 };
 use crate::stdlib::dot_segments::refuse_dot_segments;
-use crate::stdlib::shared::{
-    check_security_call, contain_trap, quota_refusal, refuse_volume_root, require_writable,
-    resolve_content_or_trap,
-};
+use crate::stdlib::fs::backend_error;
+use crate::stdlib::shared::{check_security_call, require_writable};
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, RequestForm, host_and_path, request_check,
 };
@@ -671,9 +669,8 @@ fn present_field(
     Ok(Some(value))
 }
 
-/// `download(url, path, options?)`: two security checks (`http.download` then
-/// `fs.write`), refuse-on-exists, stream to a temp sibling, then commit with
-/// fsync + atomic rename and build the `$DownloadResultBacking`.
+/// Authorize HTTP and filesystem access, stream into backend-owned staging,
+/// publish, and commit response metadata before constructing the guest result.
 async fn perform_download(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
@@ -711,128 +708,179 @@ async fn perform_download(
         path: guest_path.clone(),
         options,
     };
-    let downloaded = effects::execute(caller, "http.download", request, move |caller, _, request| Box::pin(async move {
-        let url = request.url;
-        let guest_path = request.path;
-        let options = request.options;
-    // Resolution follows the policy checks, matching every `fs` module's ordering: no
-    // filesystem work happens until the call is authorized.
-    let resolved = resolve_content_or_trap(caller.data(), &guest_path, "http.download")?;
-    // Before the request goes out, so a target that can never be written costs no
-    // network traffic.
-    require_writable(
-        &*caller,
-        write_ticket,
-        resolved.placement(),
-        "fs.write",
-        &guest_path,
-    )?;
-    refuse_volume_root(&resolved, "http.download", &guest_path)?;
+    let downloaded = effects::execute(
+        caller,
+        "http.download",
+        request,
+        move |caller, effect, request| {
+            Box::pin(async move {
+                let mut staging = begin_download(caller, &effect, &request, write_ticket).await?;
+                let url = request.url;
+                let guest_path = request.path;
+                let options = request.options;
 
-    if !options.overwrite
-        && resolved
-            .try_exists()
-            .map_err(|err| contain_trap("http.download", &guest_path, &err))?
-    {
-        wasmtime::bail!(
-            "http.download {guest_path}: file exists (pass {{ overwrite: true }} to clobber)"
-        );
-    }
-    // The checks the final rename runs, so a target spelled by an alias of a
-    // mount point is refused before the request rather than after the body.
-    resolved
-        .check_rename_end()
-        .map_err(|err| contain_trap("http.download", &guest_path, &err))?;
+                let (who, guard) =
+                    request_principal(caller, GuardedRequest::Download(target), ticket)?;
+                record_payload(&*caller, ticket, Side::Request, || {
+                    request_payload("GET", &url, &options.headers, &[]).with_size(0)
+                });
+                let recorded_as = recorded_request(&*caller, || {
+                    request_payload("GET", &url, &options.headers, &[])
+                });
+                let req = HttpRequest {
+                    method: "GET".to_string(),
+                    url: url.clone(),
+                    headers: options.headers,
+                    body: Vec::new(),
+                    timeout_ms: options.timeout_ms,
+                    max_response_size: options.max_bytes,
+                    decompress: options.decompress,
+                    transport_policy: None,
+                    redirect_guard: None,
+                    recorded_as,
+                };
+                let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
+                let mut req = auth_proxy
+                    .transform(req, &who)
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(format!("http.download: auth proxy: {e}")))?;
+                // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
+                req.redirect_guard = Some(guard);
 
-    let (who, guard) = request_principal(caller, GuardedRequest::Download(target), ticket)?;
-    record_payload(&*caller, ticket, Side::Request, || {
-        request_payload("GET", &url, &options.headers, &[]).with_size(0)
-    });
-    let recorded_as = recorded_request(&*caller, || {
-        request_payload("GET", &url, &options.headers, &[])
-    });
-    let req = HttpRequest {
-        method: "GET".to_string(),
-        url: url.clone(),
-        headers: options.headers,
-        body: Vec::new(),
-        timeout_ms: options.timeout_ms,
-        max_response_size: options.max_bytes,
-        decompress: options.decompress,
-        transport_policy: None,
-        redirect_guard: None,
-        recorded_as,
-    };
-    let auth_proxy = std::sync::Arc::clone(&caller.data().auth_proxy);
-    let mut req = auth_proxy
-        .transform(req, &who)
-        .await
-        .map_err(|e| wasmtime::Error::msg(format!("http.download: auth proxy: {e}")))?;
-    // Attached after the proxy, so no proxy can drop it and leave hops unchecked.
-    req.redirect_guard = Some(guard);
-
-    // No auto-mkdir; a missing parent surfaces when the temp sibling is created, which
-    // is also where an escaping parent is refused.
-    let tmp = resolved.temp_sibling();
-    let start = std::time::Instant::now();
-    // No program code runs while the download streams, so an overwrite draws on the
-    // size of the file it replaces and reserves only what goes beyond it.
-    let disk_charge = QuotaCharge::new(
-        resolved.placement().quota().cloned(),
-        resolved.regular_file(),
-    );
-    fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
-    let progress = DownloadProgress::default();
-    let streamed = stream_to_temp(caller, &req, &tmp, &guest_path, disk_charge, &progress).await;
-    // Network receipt and disk writes already happened, even on failure.
-    // The body went to disk, not to the program: the record keeps its size alone.
-    record_payload(&*caller, ticket, Side::Response, || {
-        let meta = match &streamed {
-            Ok(streamed) => serde_json::json!({
-                "status": streamed.meta.status,
-                "path": guest_path,
-                "bytes_written": streamed.meta.bytes_written,
-            }),
-            Err(DownloadFailure::Transport(error, message)) => {
-                serde_json::json!({ "kind": error.kind(), "error": message })
-            }
-            Err(DownloadFailure::Full(_, message)) => {
-                serde_json::json!({ "kind": "full", "error": message })
-            }
-            Err(DownloadFailure::Fs(error)) => serde_json::json!({ "error": error.to_string() }),
-        };
-        Payload::meta(meta).with_size(progress.bytes_received())
-    });
-    fuel::settle(&mut *caller, fuel::IO, progress.bytes_received())?;
-    fuel::settle(&mut *caller, fuel::IO, progress.bytes_written())?;
-    // A filesystem failure has no transport outcome to record.
-    match &streamed {
-        Ok(streamed) => record_http_metric(
-            caller.data().metrics.as_ref(),
-            "http.download".to_string(),
-            host_str,
-            start.elapsed().as_millis() as u64,
-            Ok((streamed.meta.status, streamed.meta.bytes_written)),
-        ),
-        Err(DownloadFailure::Transport(e, _)) => record_http_metric(
-            caller.data().metrics.as_ref(),
-            "http.download".to_string(),
-            host_str,
-            start.elapsed().as_millis() as u64,
-            Err(e),
-        ),
-        Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
-    }
-        let Streamed { meta, file, disk_charge } = streamed.map_err(DownloadFailure::into_error)?;
-        commit_temp(file, disk_charge, &tmp, &resolved, &guest_path)?;
-        Ok(Downloaded { meta, duration_ms: start.elapsed().as_millis() as f64 })
-    })).await?;
+                let start = std::time::Instant::now();
+                fuel::charge(&mut *caller, fuel::IO, request_bytes(&req))?;
+                let progress = DownloadProgress::default();
+                let streamed =
+                    stream_download(caller, &req, staging.as_mut(), &guest_path, &progress).await;
+                // Network receipt and disk writes already happened, even on failure.
+                // The body went to disk, not to the program: the record keeps its size alone.
+                record_payload(&*caller, ticket, Side::Response, || {
+                    let meta = match &streamed {
+                        Ok(streamed) => serde_json::json!({
+                            "status": streamed.status,
+                            "path": guest_path,
+                            "bytes_written": streamed.bytes_written,
+                        }),
+                        Err(DownloadFailure::Transport(error, message)) => {
+                            serde_json::json!({ "kind": error.kind(), "error": message })
+                        }
+                        Err(DownloadFailure::Full(_, path)) => {
+                            serde_json::json!({ "kind": "full", "error": path })
+                        }
+                        Err(DownloadFailure::Fs(error)) => {
+                            serde_json::json!({ "error": error.to_string() })
+                        }
+                    };
+                    Payload::meta(meta).with_size(progress.bytes_received())
+                });
+                fuel::settle(&mut *caller, fuel::IO, progress.bytes_received())?;
+                fuel::settle(&mut *caller, fuel::IO, progress.bytes_written())?;
+                // A filesystem failure has no transport outcome to record.
+                match &streamed {
+                    Ok(streamed) => record_http_metric(
+                        caller.data().metrics.as_ref(),
+                        "http.download".to_string(),
+                        host_str,
+                        start.elapsed().as_millis() as u64,
+                        Ok((streamed.status, streamed.bytes_written)),
+                    ),
+                    Err(DownloadFailure::Transport(e, _)) => record_http_metric(
+                        caller.data().metrics.as_ref(),
+                        "http.download".to_string(),
+                        host_str,
+                        start.elapsed().as_millis() as u64,
+                        Err(e),
+                    ),
+                    Err(DownloadFailure::Fs(_) | DownloadFailure::Full(..)) => {}
+                }
+                let meta = streamed.map_err(DownloadFailure::into_error)?;
+                publish_download(caller, staging, &guest_path).await?;
+                Ok(Downloaded {
+                    meta,
+                    duration_ms: start.elapsed().as_millis() as f64,
+                })
+            })
+        },
+    )
+    .await?;
     write_download_result(
         caller,
         &downloaded.meta,
         &guest_path,
         downloaded.duration_ms,
     )
+}
+
+/// Keep admission and its SQL acknowledgement handling on the execution's drain
+/// list. Dropping the caller cannot release the workspace before this work ends.
+async fn begin_download(
+    caller: &mut Caller<'_, StoreData>,
+    effect: &crate::runtime::durable::EffectId,
+    request: &DownloadRequest,
+    write_ticket: Option<crate::runtime::CallTicket>,
+) -> wasmtime::Result<Box<dyn Download>> {
+    let filesystem = caller.data().filesystem.clone();
+    if caller.data().effects.is_some() && !filesystem.supports_download_replay() {
+        return Err(crate::runtime::host::fatal_host_error(
+            "recorded downloads require persistent filesystem admission",
+        ));
+    }
+    let fingerprint = effects::fingerprint(caller, request)?;
+    fuel::charge_host_fuel(&mut *caller, filesystem.path_cost(&request.path))?;
+    let placement = filesystem
+        .placement(&request.path)
+        .await
+        .map_err(|error| backend_error("http.download", &request.path, error))?;
+    require_writable(
+        &*caller,
+        write_ticket,
+        &placement,
+        "fs.write",
+        &request.path,
+    )?;
+    fuel::charge(&mut *caller, fuel::SYSCALL, 8)?;
+    let runtime =
+        tokio::runtime::Handle::try_current().map_err(crate::runtime::host::fatal_host_error)?;
+    let effect = effect.clone();
+    let path = request.path.clone();
+    let options = FilesystemDownloadOptions {
+        overwrite: request.options.overwrite,
+        maximum_bytes: request.options.max_bytes,
+        request: fingerprint,
+    };
+    let work = std::sync::Arc::new(fuel::WorkBudget::new(fuel::remaining_fuel(&mut *caller)?));
+    let worker_work = work.clone();
+    let staging = caller
+        .data_mut()
+        .blocking_work
+        .spawn(move || {
+            runtime.block_on(filesystem.begin_download(&effect, &path, options, worker_work))
+        })
+        .await
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    work.settle(&mut *caller)?;
+    staging.map_err(|error| backend_error("http.download", &request.path, error))
+}
+
+async fn publish_download(
+    caller: &mut Caller<'_, StoreData>,
+    staging: Box<dyn Download>,
+    path: &str,
+) -> wasmtime::Result<()> {
+    let work = std::sync::Arc::new(fuel::WorkBudget::new(fuel::remaining_fuel(&mut *caller)?));
+    // The HTTP request has happened. Publication validation and sync must settle.
+    work.before_effect();
+    let worker_work = work.clone();
+    let runtime =
+        tokio::runtime::Handle::try_current().map_err(crate::runtime::host::fatal_host_error)?;
+    let published = caller
+        .data_mut()
+        .blocking_work
+        .spawn(move || runtime.block_on(staging.publish(worker_work)))
+        .await
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    work.settle(&mut *caller)?;
+    published.map_err(|error| backend_error("http.download", path, error))
 }
 
 /// Only metadata enters history. The downloaded body remains in the mounted file.
@@ -848,8 +896,7 @@ struct Downloaded {
 enum DownloadFailure {
     Transport(HttpError, String),
     Fs(wasmtime::Error),
-    /// The body would have passed the VFS's size limit.
-    Full(QuotaExceeded, String),
+    Full(crate::runtime::QuotaExceeded, String),
 }
 
 impl DownloadFailure {
@@ -869,152 +916,49 @@ impl DownloadFailure {
             }
             DownloadFailure::Transport(_, msg) => wasmtime::Error::msg(msg),
             DownloadFailure::Fs(err) => err,
-            DownloadFailure::Full(exceeded, guest_path) => {
-                quota_refusal("http.download", &guest_path, exceeded)
+            DownloadFailure::Full(exceeded, path) => {
+                crate::stdlib::shared::quota_refusal("http.download", &path, exceeded)
             }
         }
     }
 }
 
-/// Create the temp sibling, stream the response body into it, and flush.
-/// Every error path removes the temp file — through the same handle, so cleanup
-/// cannot be redirected either.
-async fn stream_to_temp(
+/// Transport supplies bounded chunks directly to filesystem-owned staging.
+/// Only successful transfers flush; cancellation cannot flush buffered output.
+async fn stream_download(
     caller: &mut Caller<'_, StoreData>,
     req: &HttpRequest,
-    tmp: &ContentPath,
+    staging: &mut dyn Download,
     guest_path: &str,
-    disk_charge: QuotaCharge,
     progress: &DownloadProgress,
-) -> Result<Streamed, DownloadFailure> {
-    let file = tmp
-        .create()
-        .map_err(|err| DownloadFailure::Fs(temp_create_error(guest_path, &err)))?;
-    let mut writer = std::io::BufWriter::new(QuotaWriter {
-        file,
-        disk_charge,
-        refused: None,
-        progress,
-    });
+) -> Result<DownloadMeta, DownloadFailure> {
     let http_client = std::sync::Arc::clone(&caller.data().http_client);
     let result = http_client
-        .download_with_progress(req, &mut writer, progress)
+        .download_with_progress(req, staging, progress)
         .await;
-    // Flush explicitly; BufWriter swallows errors on drop. Every failure below removes
-    // the temp file, and dropping the writer's disk charge gives back what it held.
-    let inner = match writer.into_inner() {
-        Ok(inner) => inner,
-        Err(e) => {
-            let failure = e.error().to_string();
-            let inner = e.into_inner().into_parts().0;
-            let _ = tmp.remove_file();
-            return Err(match inner.refused {
-                Some(exceeded) => DownloadFailure::Full(exceeded, guest_path.to_string()),
-                None => DownloadFailure::Fs(wasmtime::Error::msg(format!(
-                    "http.download {guest_path}: flush tempfile: {failure}"
-                ))),
-            });
-        }
+    let flush = if result.is_ok() {
+        staging.flush()
+    } else {
+        Ok(())
     };
-    match result {
-        Ok(meta) => Ok(Streamed {
-            meta,
-            file: inner.file,
-            disk_charge: inner.disk_charge,
-        }),
-        Err(e) => {
-            let _ = tmp.remove_file();
-            if let Some(exceeded) = inner.refused {
-                return Err(DownloadFailure::Full(exceeded, guest_path.to_string()));
+    progress.written(staging.bytes_written());
+    if let Some(error) = staging.take_error() {
+        return Err(match error {
+            crate::runtime::filesystem::FilesystemError::Quota(exceeded) => {
+                DownloadFailure::Full(exceeded, guest_path.to_owned())
             }
-            let msg = format!("http.download: {e}");
-            Err(DownloadFailure::Transport(e, msg))
-        }
+            error => DownloadFailure::Fs(backend_error("http.download", guest_path, error)),
+        });
     }
-}
-
-/// A download's body, streamed into its temp file and not yet committed.
-struct Streamed {
-    meta: DownloadMeta,
-    file: cap_std::fs::File,
-    disk_charge: QuotaCharge,
-}
-
-/// The temp file a download streams into, reserving each chunk against the VFS's
-/// size limit before writing it, so a download stops at the limit rather than
-/// after it.
-struct QuotaWriter<'a> {
-    progress: &'a DownloadProgress,
-    file: cap_std::fs::File,
-    disk_charge: QuotaCharge,
-    refused: Option<QuotaExceeded>,
-}
-
-impl std::io::Write for QuotaWriter<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let asked = buf.len() as u64;
-        if let Err(exceeded) = self.disk_charge.reserve(asked) {
-            self.refused = Some(exceeded);
-            return Err(std::io::Error::other(exceeded.to_string()));
-        }
-        let written = self.file.write(buf);
-        // A short or failed write keeps less than it reserved; settle on what landed.
-        let kept = written.as_ref().map_or(0, |n| *n as u64);
-        self.disk_charge.unreserve(asked.saturating_sub(kept));
-        self.progress.written(kept);
-        written
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
-    }
-}
-
-/// Creating the temp sibling is where a missing parent and an escaping one both
-/// surface. Keeping them apart is what an LLM needs: one is fixable with `mkdir`, the
-/// other can never succeed.
-fn temp_create_error(guest_path: &str, err: &ContainError) -> wasmtime::Error {
-    match err {
-        ContainError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => wasmtime::Error::msg(
-            format!("http.download {guest_path}: parent directory does not exist"),
-        ),
-        _ => contain_trap("http.download", guest_path, err),
-    }
-}
-
-/// Fsync and atomically rename the streamed temp file into place; a crash
-/// leaves a `.tmp` sibling instead of a half-written final file. Any failure
-/// removes the temp file, and dropping `disk_charge` with it gives back what it
-/// held; a commit frees the file it replaced.
-///
-/// The rename goes through the handle the destination resolved against, so a link
-/// swapped over a parent component while the body streamed cannot redirect the commit.
-fn commit_temp(
-    file: cap_std::fs::File,
-    mut disk_charge: QuotaCharge,
-    tmp: &ContentPath,
-    resolved: &ContentPath,
-    guest_path: &str,
-) -> wasmtime::Result<()> {
-    let committed = (|| {
-        file.sync_all()
-            .map_err(|e| wasmtime::Error::msg(format!("http.download {guest_path}: fsync: {e}")))?;
-        drop(file);
-        disk_charge
-            .cover(resolved.regular_file())
-            .map_err(|exceeded| quota_refusal("http.download", guest_path, exceeded))?;
-        tmp.rename_to(resolved).map_err(|err| match err {
-            ContainError::Escape => contain_trap("http.download", guest_path, &err),
-            _ => wasmtime::Error::msg(format!("http.download {guest_path}: rename: {err}")),
-        })
-    })();
-    match committed {
-        Ok(()) => disk_charge.commit(),
-        Err(_) => {
-            let _ = tmp.remove_file();
-        }
-    }
-    committed
+    flush.map_err(|error| {
+        DownloadFailure::Fs(wasmtime::Error::msg(format!(
+            "http.download {guest_path}: flush tempfile: {error}"
+        )))
+    })?;
+    result.map_err(|error| {
+        let message = format!("http.download: {error}");
+        DownloadFailure::Transport(error, message)
+    })
 }
 
 /// Build the `$DownloadResultBacking` from the committed download's metadata.

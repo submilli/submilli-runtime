@@ -243,8 +243,14 @@ The native codec is version 4 and runtime compatibility marker is version 7;
 older internal recordings are refused after the outcome, budget and code-operation
 identity/representation changes.
 
-HTTP downloads retain metadata and the destination reference, never the downloaded
-file body. Large-object storage is a later optimization.
+HTTP downloads retain response metadata, never the downloaded body. Their
+[filesystem composition](../filesystem/downloads/README.md) persists overwrite
+admission as Checked before downloading. With missing history, retry downloads
+and atomically replaces again, even after a prior publication; responses can differ.
+There is no publication receipt or metadata capture before rename. File and directory
+sync precede effect completion. Committed history skips both network and filesystem
+work, preserving later workspace edits or deletion. Runtime compatibility is bumped
+to v10 because older interrupted downloads have no Checked admission.
 
 The internal path requires a matching runtime compatibility marker, saved limits,
 and unchanged package contents. Package pinning/retention is SUB-1881. Each attempt

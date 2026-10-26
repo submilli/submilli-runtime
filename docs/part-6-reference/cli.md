@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "31ddc238a2e1ce0646b7073f052b7c927e3aef680b9340ec00b8fdda58a4683a"
+  contentHash: "fe1591c5efa0f251823def657a4124d40b2f0a9035049aa23e308d13ea2e2418"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -1394,6 +1394,7 @@ Interact with a running submilli-server
 Usage: submilli server <COMMAND>
 
 Commands:
+  runs       Inspect executions and resume stuck runs
   apply      Apply blueprint YAML documents to a running submilli-server
   trust      Manage approved HTTPS server public keys
   docs       Read package declarations, including a blueprint's MCP tools
@@ -1409,6 +1410,73 @@ Commands:
 
 Options:
   -h, --help  Print help
+```
+
+### `submilli server runs`
+
+```text
+Inspect executions and resume stuck runs
+
+Usage: submilli server runs <COMMAND>
+
+Commands:
+  list    List runs, including stuck runs and their reasons
+  show    Inspect a run and its retained result
+  resume  Resume a stuck run with its original code, identity, and limits
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server runs list`
+
+```text
+List runs, including stuck runs and their reasons
+
+Usage: submilli server runs list [OPTIONS]
+
+Options:
+      --session <SESSION>  
+      --status <STATUS>    [possible values: queued, running, stuck, completed, cancelled, aborted, indeterminate, expired]
+      --json               
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server runs show`
+
+```text
+Inspect a run and its retained result
+
+Usage: submilli server runs show [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>  
+
+Options:
+      --json               
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server runs resume`
+
+```text
+Resume a stuck run with its original code, identity, and limits
+
+Usage: submilli server runs resume [OPTIONS] <RUN_ID>
+
+Arguments:
+  <RUN_ID>  
+
+Options:
+      --json               
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=] [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a server started with `--allow-unauthenticated` accepts. There is no flag taking the token itself, so it never lands in the process list. Env: `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
 ```
 
 ### `submilli server apply`

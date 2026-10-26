@@ -10,6 +10,7 @@ mod close_listing;
 mod close_reader;
 mod close_writer;
 mod create_directory;
+mod download;
 mod move_path;
 mod next_listing;
 mod next_reader;
@@ -218,6 +219,10 @@ impl DurableFilesystem {
 
 #[async_trait::async_trait]
 impl Filesystem for DurableFilesystem {
+    fn supports_download_replay(&self) -> bool {
+        true
+    }
+
     fn supports_update_replay(&self) -> bool {
         true
     }
@@ -236,6 +241,15 @@ impl Filesystem for DurableFilesystem {
         fuel::SCAN
             .cost(path.len() as u64)
             .saturating_add(fuel::SYSCALL.cost(path.split('/').count() as u64))
+    }
+    async fn begin_download(
+        &self,
+        effect: &EffectId,
+        path: &str,
+        options: interpreter::runtime::filesystem::DownloadOptions,
+        work: Arc<WorkBudget>,
+    ) -> Result<Box<dyn interpreter::runtime::filesystem::Download>, PortError> {
+        download::begin(self.clone(), effect.clone(), path.to_owned(), options, work).await
     }
     async fn placement(&self, path: &str) -> Result<Placement, PortError> {
         let vfs = self.files.vfs().clone();

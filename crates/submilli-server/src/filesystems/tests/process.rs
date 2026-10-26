@@ -40,8 +40,23 @@ async fn crash_child() {
     if kind.starts_with("quota-") {
         vfs = vfs.with_size_limit(if kind == "quota-append" { 131_073 } else { 8 });
     }
-    let filesystem = open(vfs, &RUN.into(), database, cipher).await.unwrap();
-    if let Some(operation) = kind.strip_prefix("quota-") {
+    let filesystem = open(vfs, &RUN.into(), database.clone(), cipher.clone())
+        .await
+        .unwrap();
+    if kind.starts_with("download") {
+        let attempt = super::downloads::seed_run(&database, &RUN.into()).await;
+        let units = crate::adapters::unit_of_work::durable::units(database, cipher);
+        super::downloads::execute(
+            filesystem,
+            units,
+            attempt,
+            &root,
+            kind == "download-overwrite",
+            super::downloads::HistoryFault::None,
+        )
+        .await
+        .unwrap();
+    } else if let Some(operation) = kind.strip_prefix("quota-") {
         retry_quota_operation(&filesystem, operation).await;
     } else if kind == "update" {
         let path = filesystem.vfs().root().join("file");
@@ -711,5 +726,105 @@ async fn file_update_process_restart_uses_the_captured_result() {
             .unwrap();
         assert_eq!(replay.bytes, output.bytes);
         assert_eq!(std::fs::read(&path).unwrap(), b"later");
+    }
+}
+
+#[tokio::test]
+async fn download_retries_after_process_death_until_history_commits() {
+    for overwrite in [false, true] {
+        for point in [
+            "download-checked",
+            "download-streamed",
+            "download-file-synced",
+            "download-published",
+            "download-synced",
+            "download-before-history",
+            "download-after-history",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join("workspace")).unwrap();
+            std::fs::write(root.path().join("response"), b"first").unwrap();
+            let kind = if overwrite {
+                "download-overwrite"
+            } else {
+                "download"
+            };
+            let child_root = root.path().to_owned();
+            tokio::task::spawn_blocking(move || kill_at_mode(&child_root, point, kind))
+                .await
+                .unwrap();
+            let (database, cipher) = open_database(root.path()).await;
+            let attempt = super::downloads::seed_run(&database, &RUN.into()).await;
+            let units =
+                crate::adapters::unit_of_work::durable::units(database.clone(), cipher.clone());
+            let filesystem = open(
+                Vfs::external(root.path().join("workspace")).unwrap(),
+                &RUN.into(),
+                database,
+                cipher,
+            )
+            .await
+            .unwrap();
+            std::fs::write(root.path().join("response"), b"second response").unwrap();
+            let file = root.path().join("workspace/file");
+            let committed = point == "download-after-history";
+            if committed {
+                std::fs::write(&file, b"later").unwrap();
+            }
+            let output = super::downloads::execute(
+                filesystem.clone(),
+                units.clone(),
+                attempt.clone(),
+                root.path(),
+                overwrite,
+                super::downloads::HistoryFault::None,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let meta: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(
+                meta["bytesWritten"],
+                if committed { 5 } else { 15 },
+                "{point}"
+            );
+            assert_eq!(
+                std::fs::read(&file).unwrap(),
+                if committed {
+                    b"later".as_slice()
+                } else {
+                    b"second response"
+                },
+                "{point}"
+            );
+            let count = std::fs::read_to_string(root.path().join("requests")).unwrap();
+            assert_eq!(
+                count,
+                if committed || point == "download-checked" {
+                    "1"
+                } else {
+                    "2"
+                },
+                "{point}"
+            );
+            std::fs::remove_file(&file).unwrap();
+            let replay = super::downloads::execute(
+                filesystem,
+                units,
+                attempt,
+                root.path(),
+                overwrite,
+                super::downloads::HistoryFault::None,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(replay, output);
+            assert!(!file.exists());
+            assert_eq!(
+                std::fs::read_to_string(root.path().join("requests")).unwrap(),
+                count
+            );
+        }
     }
 }

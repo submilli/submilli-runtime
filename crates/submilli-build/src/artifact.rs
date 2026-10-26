@@ -38,7 +38,7 @@ use crate::CapabilitySchema;
 // retained sources and does not execute it. The number still gates those file
 // shapes, so a reader that asks for a runnable artifact refuses a version it
 // does not understand instead of decoding it with the wrong types.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 12;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 13;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";

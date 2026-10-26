@@ -1,4 +1,5 @@
 //! Default filesystem implementation over the contained VFS.
+mod download;
 use super::durable::{EffectId, RunId};
 use super::filesystem::{
     DirectoryEntry, DirectoryHandle, DirectoryReader, FileReader, FileWriter, Filesystem,
@@ -70,6 +71,15 @@ impl Filesystem for DefaultFilesystem {
         let vfs = self.vfs.clone();
         let path = path.to_owned();
         directory_names(vfs, work, path, maximum_entries, limits).await
+    }
+    async fn begin_download(
+        &self,
+        _effect: &EffectId,
+        path: &str,
+        options: super::filesystem::DownloadOptions,
+        _work: Arc<WorkBudget>,
+    ) -> Result<Box<dyn super::filesystem::Download>, FilesystemError> {
+        download::begin(self.vfs.clone(), path.to_owned(), options).await
     }
     async fn begin_file_update(
         &self,

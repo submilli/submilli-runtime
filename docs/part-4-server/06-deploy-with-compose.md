@@ -3,8 +3,8 @@ title: "Deploy with Compose"
 description: "How to run the server as a container beside your application with the published compose file: a port only the host's loopback and your application's container can reach, state on a volume, the store key as a file, HTTPS, and upgrades by release."
 slug: server/deploy-with-compose
 # The Compose ps output is from the earlier documented run; its image pin
-# was updated for 0.4.3. It could not be recaptured during release preparation
-# because the 0.4.3 image is published only with the release.
+# was updated for 0.5.0. It could not be recaptured during release preparation
+# because the 0.5.0 image is published only with the release.
 # The published 0.4.1 deployment passed Linux amd64 Docker CI on 2026-10-14:
 # https://github.com/submilli/submilli-runtime/actions/runs/38588647497
 # The check extracts this page's YAML and verifies health, admin/user roles,
@@ -15,7 +15,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "f56c3483fb6dc58d86a31fff9ee6d641dc9fdbfa4722a4b79ad76ba6adb7c853"
+  contentHash: "3f429ad735b5405d165396590b881c19c3b9f4a4cdebd4c7704b3093cf597654"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -36,10 +36,10 @@ release, so download the file at the release's tag and pin the image to
 the same version in `.env`, beside the token. Into a new directory:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.4.3/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.5.0/compose.yaml
 ADMIN_TOKEN=$(openssl rand -hex 32)
 APP_TOKEN=$(openssl rand -hex 32)
-printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.4.3\nSUBMILLI_SERVER_TOKEN=%s\nSUBMILLI_APP_TOKEN=%s\n' "$ADMIN_TOKEN" "$APP_TOKEN" > .env
+printf 'SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.5.0\nSUBMILLI_SERVER_TOKEN=%s\nSUBMILLI_APP_TOKEN=%s\n' "$ADMIN_TOKEN" "$APP_TOKEN" > .env
 printf '%s\n' "$APP_TOKEN" > app-token
 chmod 600 .env
 chmod 0444 app-token
@@ -49,7 +49,7 @@ docker compose ps
 
 ```text
 NAME                   IMAGE                                     COMMAND                  SERVICE    CREATED          STATUS                    PORTS
-myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.4.3   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
+myproject-submilli-1   ghcr.io/submilli/submilli-runtime:0.5.0   "/usr/local/bin/subm…"   submilli   12 seconds ago   Up 12 seconds (healthy)   127.0.0.1:8128->8128/tcp
 ```
 
 Compose reads the admin token from `.env` and refuses to start without it.
@@ -310,10 +310,10 @@ carries the state across. Check the release's migration instructions before
 reusing it.
 
 ```sh
-# Starting with the published v0.4.2 stack, after backing up its state:
-curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.4.3/compose.yaml
+# Starting with the published v0.4.3 stack, after backing up its state:
+curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.5.0/compose.yaml
 # Keep SUBMILLI_SERVER_TOKEN and the store key. Set this line in .env:
-# SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.4.3
+# SUBMILLI_IMAGE=ghcr.io/submilli/submilli-runtime:0.5.0
 docker compose up -d --wait
 ```
 
