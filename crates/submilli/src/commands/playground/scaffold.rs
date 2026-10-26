@@ -255,7 +255,10 @@ The starter data has two charges for `pied_piper` and one for `hooli`.
 ```ts
 import { listCharges } from "@pied-piper/billing";
 
-const charges = listCharges("pied_piper");
+function main(): number {
+    const charges = listCharges("pied_piper");
+    return charges.length;
+}
 ```
 
 The operation declares the capability `pied-piper.example/charges.list` with a `customerId` field, so a
