@@ -2272,7 +2272,6 @@ Commands:
     watch                    Follow session events as JSON lines
 
   Connect a coding assistant:
-    claude-code              Connect Claude Code to this playground
     mcp                      Serve playground tools to a coding assistant
 
   Advanced inspection and testing:
@@ -2673,28 +2672,6 @@ Options:
 
       --json
           Accepted for symmetry; `watch` always prints JSON lines
-
-  -h, --help
-          Print help (see a summary with '-h')
-```
-
-### `submilli playground claude-code`
-
-```text
-Set Claude Code up in this project to try tasks through the playground on your Claude subscription:
-writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own
-`.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use
-those tools without asking, so your blueprint decides its calls. Run it again to check; it changes
-only what's missing.
-
-Usage: submilli playground claude-code [OPTIONS]
-
-Options:
-      --force
-          Replace a `submilli-standin` subagent file that differs from the playground's
-
-      --json
-          Print JSON
 
   -h, --help
           Print help (see a summary with '-h')

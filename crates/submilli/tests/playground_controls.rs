@@ -674,7 +674,7 @@ permissions:
         use std::collections::BTreeSet;
         use std::io::{BufRead, BufReader, Read, Write};
         use std::net::TcpListener;
-        use std::path::PathBuf;
+        use std::path::{Path, PathBuf};
         use std::process::{Child, Command, Output, Stdio};
         use std::sync::{Arc, Mutex};
         use std::time::{Duration, Instant};
@@ -1500,15 +1500,12 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     .any(|tool| tool["name"] == "submilli__typescript__execute"),
                 "{tools}"
             );
-            // The stand-in `claude-code` writes may use exactly the tools the bridge offers.
-            let set_up = playground
-                .command(&["claude-code", "--json"])
-                .output()
-                .unwrap();
-            assert!(set_up.status.success(), "{}", stderr(&set_up));
-            let agent =
-                std::fs::read_to_string(playground.root.join(".claude/agents/submilli-standin.md"))
-                    .unwrap();
+            // The stand-in `skill install` writes may use exactly the tools the bridge offers.
+            let agent = std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../skills/submilli/agents/submilli-standin.md"),
+            )
+            .unwrap();
             let mut granted: Vec<&str> = agent
                 .lines()
                 .find_map(|line| line.strip_prefix("tools: "))

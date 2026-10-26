@@ -27,8 +27,6 @@ mod bridge;
 #[cfg(unix)]
 mod chat;
 #[cfg(unix)]
-mod claude_code;
-#[cfg(unix)]
 mod client;
 #[cfg(unix)]
 mod control_auth;
@@ -201,14 +199,6 @@ pub enum PlaygroundCmd {
     /// after the run it is to follow has started, or pass `--follow`.
     #[command(about = "Follow session events as JSON lines", long_about)]
     Watch(WatchArgs),
-    /// Set Claude Code up in this project to try tasks through the playground on your
-    /// Claude subscription: writes the `submilli-standin` subagent, which has only the
-    /// playground's tools, and adds to your own `.claude/settings.local.json` the hooks
-    /// that show its chat on the page and a rule that lets it use those tools without
-    /// asking, so your blueprint decides its calls. Run it again to check; it changes
-    /// only what's missing.
-    #[command(about = "Connect Claude Code to this playground", long_about)]
-    ClaudeCode(ClaudeCodeArgs),
     /// Serve the running playground's tools over stdio, for a coding assistant's
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
@@ -575,16 +565,6 @@ pub struct McpArgs {
     max_calls: Option<usize>,
 }
 
-#[derive(ClapArgs, Clone, Copy)]
-pub struct ClaudeCodeArgs {
-    /// Replace a `submilli-standin` subagent file that differs from the playground's.
-    #[arg(long)]
-    force: bool,
-    /// Print JSON.
-    #[arg(long)]
-    json: bool,
-}
-
 #[derive(ClapArgs)]
 pub struct OpenArgs {
     /// A run to open the page at, or a decision as `<run>.<n>` (for example `12` or `12.3`).
@@ -690,7 +670,6 @@ impl Args {
             Some(PlaygroundCmd::Clear(_)) => "playground.clear",
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
-            Some(PlaygroundCmd::ClaudeCode(_)) => "playground.claude-code",
             Some(PlaygroundCmd::Mcp(_)) => "playground.mcp",
             Some(PlaygroundCmd::Chat(_)) => "playground.chat",
             Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
@@ -782,7 +761,6 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Watch(args) => {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
-        PlaygroundCmd::ClaudeCode(args) => unix::claude_code(&args),
         PlaygroundCmd::Mcp(args) => bridge::execute(args.join.map(|session| bridge::Join {
             session,
             root: args.root.unwrap_or_default(),
@@ -1570,109 +1548,6 @@ mod unix {
 
     /// The variable the starter's example runs under, and a customer in its data.
     const STARTER_VARIABLE: (&str, &str) = ("customerId", "pied_piper");
-
-    pub(super) fn claude_code(args: &super::ClaudeCodeArgs) -> Result<ExitCode> {
-        use super::claude_code::{Outcome, set_up};
-        let cwd = std::env::current_dir().context("reading the current directory")?;
-        let Some(root) = project::find_project_root(&cwd) else {
-            eprintln!(
-                "No Submilli project here; create one with `submilli playground init-demo`, \
-                 then set Claude Code up in it"
-            );
-            return Ok(ExitCode::from(EXIT_NO_PROJECT));
-        };
-        let setup = match set_up(&root, args.force) {
-            Ok(setup) => setup,
-            Err(error) => {
-                eprintln!("{error}");
-                return Ok(ExitCode::from(1));
-            }
-        };
-        let (agent, agent_outcome) = &setup.agent;
-        let (settings, settings_outcome) = &setup.settings;
-        // A stand-in that differs was kept: it isn't the playground's, so not ready.
-        let ready = *agent_outcome != Outcome::Kept;
-        if args.json {
-            println!(
-                "{}",
-                json!({
-                    "project": root,
-                    "agent": { "path": agent, "outcome": agent_outcome.word() },
-                    "hooks": { "path": settings, "outcome": settings_outcome.word() },
-                    "ready": ready,
-                })
-            );
-        } else {
-            print_claude_code_report(&setup, &root, &cwd);
-        }
-        Ok(ExitCode::from(if ready { 0 } else { 1 }))
-    }
-
-    /// What `claude-code` did, in sentences, with paths under the project root, and how
-    /// to start: in the project root, named when it isn't the folder the command ran in.
-    fn print_claude_code_report(
-        setup: &super::claude_code::Setup,
-        root: &std::path::Path,
-        cwd: &std::path::Path,
-    ) {
-        use super::claude_code::Outcome;
-        let relative = |path: &std::path::Path| {
-            path.strip_prefix(root)
-                .unwrap_or(path)
-                .display()
-                .to_string()
-        };
-        let (agent, agent_outcome) = (relative(&setup.agent.0), setup.agent.1);
-        let (settings, settings_outcome) = (relative(&setup.settings.0), setup.settings.1);
-        println!("Stand-in subagent: {}", agent_line(agent_outcome, &agent));
-        println!(
-            "Chat hooks, and permission for its playground tools: {}",
-            settings_line(settings_outcome, &settings)
-        );
-        if agent_outcome == Outcome::Kept {
-            return;
-        }
-        let folder = if cwd == root {
-            "in this folder".to_owned()
-        } else {
-            format!("in {}", root.display())
-        };
-        let changed = [agent_outcome, settings_outcome]
-            .iter()
-            .any(|outcome| matches!(outcome, Outcome::Written | Outcome::Updated));
-        let restart = if changed {
-            " If Claude Code is already running there, restart it first."
-        } else {
-            ""
-        };
-        println!(
-            "Start `claude` {folder}, signed in with your Claude subscription, and ask: \
-             \"Use the {} agent to <your task>.\" Its session shows on the playground page.\
-             {restart}",
-            super::chat::STAND_IN_AGENT
-        );
-    }
-
-    fn agent_line(outcome: super::claude_code::Outcome, agent: &str) -> String {
-        use super::claude_code::Outcome;
-        match outcome {
-            Outcome::Written => format!("wrote {agent}"),
-            Outcome::Updated => format!("replaced {agent}"),
-            Outcome::Unchanged => format!("{agent} is in place"),
-            Outcome::Kept => format!(
-                "{agent} is different from the playground's, so it was left alone; \
-                 --force replaces it"
-            ),
-        }
-    }
-
-    fn settings_line(outcome: super::claude_code::Outcome, settings: &str) -> String {
-        use super::claude_code::Outcome;
-        match outcome {
-            Outcome::Written | Outcome::Updated => format!("added to {settings}"),
-            Outcome::Unchanged | Outcome::Kept => format!("in place in {settings}"),
-        }
-    }
 
     pub(super) fn init(output: Output) -> Result<ExitCode> {
         let cwd = std::env::current_dir().context("reading the current directory")?;
