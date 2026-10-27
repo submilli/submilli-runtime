@@ -256,12 +256,6 @@ impl StdlibView {
         // Only the head segment is in question: `Temporel.Instant` misses because
         // of `Temporel`, and the tail only inflates the distance past threshold.
         let query = name.split('.').find(|s| !s.is_empty()).unwrap_or(name);
-        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
-        // query sits within reach of an unrelated name. Below that length there is no
-        // signal to match on.
-        if query.len() < 3 {
-            return None;
-        }
 
         if let Some((_, replacement)) = OMITTED_GLOBALS
             .iter()
@@ -273,11 +267,19 @@ impl StdlibView {
         // Never offer the query back to the caller: a name that resolved nowhere is
         // not its own repair, however it was spelled.
         let is_self = |c: &String| c.eq_ignore_ascii_case(name);
+        // An exact scheme-stripped tail is not an edit-distance guess. `fs` is
+        // `submilli:fs`; the length guard below must not drop it.
         if let Some(hit) = candidates
             .iter()
             .find(|c| !is_self(c) && name_tail(c).eq_ignore_ascii_case(query))
         {
             return Some(hit.clone());
+        }
+        // `closest_match` floors its threshold at 2 edits, so a one- or two-character
+        // query sits within reach of an unrelated name. Below that length there is no
+        // signal to match on.
+        if query.len() < 3 {
+            return None;
         }
         // Match full names and scheme-stripped tails in one pass, so the globally
         // closest key wins: `htp` should reach `submilli:http` (one edit from its
@@ -317,6 +319,79 @@ impl StdlibView {
         entries.truncate(CATALOG_LIMIT);
         Catalog { entries, remaining }
     }
+
+    /// A bare name against this view's module tails, plus any `extra` full names
+    /// the caller can also resolve (registry packages, `@mcp/<server>`).
+    ///
+    /// `fs` is not a package name; it is the tail of `submilli:fs`. An exact,
+    /// unique tail is that module. A tail shared with another visible name is
+    /// ambiguous — serving one would hide the other. A name that already has a
+    /// scheme or scope is a miss here: it was written as a package name, and a
+    /// typo of one is an edit-distance question, not a forgotten prefix.
+    pub fn match_bare_name(&self, name: &str, extra: &[String]) -> BareNameMatch {
+        if !is_bare_name(name) {
+            return BareNameMatch::Miss;
+        }
+        let has_tail = |candidate: &str| name_tail(candidate).eq_ignore_ascii_case(name);
+        let modules: Vec<String> = self
+            .names()
+            .filter(|module| has_tail(module))
+            .map(str::to_string)
+            .collect();
+        if modules.is_empty() {
+            // A tail shared only by non-stdlib packages is an ordinary
+            // suggestion question, not a forgotten scheme.
+            return BareNameMatch::Miss;
+        }
+        let mut names = modules.clone();
+        // The module already names a repeated module, so it must not turn a
+        // unique hit into an ambiguity. Package names are case-sensitive, so
+        // this comparison is case-insensitive but duplicate extras stay exact.
+        names.extend(
+            extra
+                .iter()
+                .filter(|candidate| {
+                    has_tail(candidate)
+                        && !modules
+                            .iter()
+                            .any(|module| module.eq_ignore_ascii_case(candidate))
+                })
+                .cloned(),
+        );
+        names.sort();
+        names.dedup();
+        match names.as_slice() {
+            [module] => self
+                .docs(module)
+                .map_or(BareNameMatch::Miss, BareNameMatch::Unique),
+            _ => BareNameMatch::Ambiguous(names),
+        }
+    }
+
+    /// Whether `name` is a bare name whose exact tail is a module in this view.
+    /// Lets a caller skip building other catalogs when it is not.
+    pub fn has_bare_tail(&self, name: &str) -> bool {
+        is_bare_name(name)
+            && self
+                .names()
+                .any(|module| name_tail(module).eq_ignore_ascii_case(name))
+    }
+}
+
+/// A bare name matched against standard-library module tails.
+pub enum BareNameMatch {
+    /// Not a bare name, or not the tail of a visible module.
+    Miss,
+    /// Exactly one visible module has this tail, and no other catalog name does.
+    Unique(ModuleDoc),
+    /// Several full names share the tail. Listed in sorted order.
+    Ambiguous(Vec<String>),
+}
+
+/// A package name with no scheme, scope, or member path: `fs`, not
+/// `submilli:fs`, `@org/fs`, or `fs.read`.
+fn is_bare_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains([':', '@', '/', '.', '\\', ' '])
 }
 
 /// The language built-ins always in scope without an `import`: headline prelude
@@ -917,6 +992,31 @@ pub fn unknown_member_message(path: &str, member: &str, members: &[String]) -> S
 /// be told not to write an `import`.
 pub fn builtin_no_import_note(name: &str) -> String {
     format!("`{name}` is a language built-in, always in scope — do not write an `import` for it.")
+}
+
+/// Prose for a standard-library module the caller named without its
+/// `submilli:` scheme. The asked name is wrong; `canonical` is the only name
+/// an import may use. Repeated so a model that copies one mention still copies
+/// the real package name.
+pub fn bare_name_note(requested: &str, canonical: &str) -> String {
+    format!(
+        "Wrong package name: `{requested}` does not exist. The package is `{canonical}`. \
+         Import `{canonical}` — write `import ... from \"{canonical}\"`. Do not import `{requested}`."
+    )
+}
+
+/// Several packages share the short name the caller asked for. Name every full
+/// name; a single guess would hide the rest.
+pub fn ambiguous_bare_name_message(requested: &str, names: &[String]) -> String {
+    let listed = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Wrong package name: `{requested}` does not exist. More than one package has that short name. \
+         Import one of these exact names, not `{requested}`: {listed}."
+    )
 }
 
 fn indent_block(body: &str, pad: &str) -> String {
@@ -2953,6 +3053,10 @@ mod tests {
         // A name written without its scheme is the likeliest package typo and
         // sits 9 edits from the full name, far outside any threshold.
         assert_eq!(suggest("http", &extra).as_deref(), Some("submilli:http"));
+        // Two characters is below the edit-distance guard, but an exact tail is
+        // not a guess: `fs` is `submilli:fs`.
+        assert_eq!(suggest("fs", &extra).as_deref(), Some("submilli:fs"));
+        assert_eq!(suggest("FS", &extra).as_deref(), Some("submilli:fs"));
         assert_eq!(suggest("htp", &extra).as_deref(), Some("submilli:http"));
         assert_eq!(suggest("linear", &extra).as_deref(), Some("@mcp/linear"));
         // A dotted miss is matched on its head alone.
@@ -2977,6 +3081,47 @@ mod tests {
         // distance alone sends the model to arithmetic.
         assert_eq!(suggest("Date", &[]).as_deref(), Some("Temporal"));
         assert_eq!(suggest("date", &[]).as_deref(), Some("Temporal"));
+    }
+
+    #[test]
+    fn a_bare_stdlib_name_is_that_module_and_says_the_asked_name_is_wrong() {
+        let view = Stdlib::core().view(&crate::docs_view::Unscoped);
+        let BareNameMatch::Unique(doc) = view.match_bare_name("fs", &[]) else {
+            panic!("fs is the tail of submilli:fs");
+        };
+        assert_eq!(doc.name, "submilli:fs");
+        let BareNameMatch::Unique(doc) = view.match_bare_name("FS", &[]) else {
+            panic!("the tail match is case-insensitive");
+        };
+        assert_eq!(doc.name, "submilli:fs");
+        // A name already written as a package name, or a member path, is not a
+        // forgotten prefix.
+        assert!(matches!(
+            view.match_bare_name("submilli:fs", &[]),
+            BareNameMatch::Miss
+        ));
+        assert!(matches!(
+            view.match_bare_name("fs.readText", &[]),
+            BareNameMatch::Miss
+        ));
+        assert!(matches!(
+            view.match_bare_name("nope", &[]),
+            BareNameMatch::Miss
+        ));
+        // A second package with the same tail must not be hidden behind the
+        // standard-library module.
+        let BareNameMatch::Ambiguous(names) = view.match_bare_name("fs", &["@acme/fs".to_string()])
+        else {
+            panic!("two packages share the tail");
+        };
+        assert_eq!(
+            names,
+            vec!["@acme/fs".to_string(), "submilli:fs".to_string()]
+        );
+        let note = bare_name_note("fs", "submilli:fs");
+        assert!(note.contains("submilli:fs"), "{note}");
+        assert!(note.contains("Do not import `fs`"), "{note}");
+        assert!(note.contains("does not exist"), "{note}");
     }
 
     #[test]

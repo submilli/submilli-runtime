@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "361e2038db1904b27dc6781c998e5846c09d7b0af69a2ea55bac15141f57642f"
+  contentHash: "d3f43ea3f88735ec18d862dff9260930fe595713a9a7b13de9377cfc1e474fee"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -420,7 +420,8 @@ submilli blueprint prompt
 …
 You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
-`submilli:url`, `submilli:crypto`, `submilli:uuid`, `submilli:session`. Submilli native
+`submilli:url`, `submilli:crypto`, `submilli:uuid`. Import those names exactly; the part after
+`submilli:` is not itself a package name. Submilli native
 packages and discovered `@mcp/<server>` packages may also be available;
 …
 ```

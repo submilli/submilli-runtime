@@ -26,6 +26,14 @@ pub(crate) enum DocLookup {
         description: String,
         declarations: String,
     },
+    /// A standard-library module the caller named without its `submilli:`
+    /// scheme. Served, but the response must say the asked name is wrong and
+    /// that `canonical` is the import name.
+    CorrectedHost {
+        canonical: String,
+        description: String,
+        declarations: String,
+    },
     /// A discovered `@mcp/<server>` package's typed surface.
     Mcp {
         description: String,
@@ -60,7 +68,7 @@ pub(crate) fn lookup(name: &str) -> DocLookup {
         return DocLookup::McpUnknown;
     }
     let scope = DocsScope::unscoped_shared();
-    host_lookup(name, scope).unwrap_or_else(|| builtin_fallback(name, &[], scope))
+    host_lookup(name, scope).unwrap_or_else(|| fallback_lookup(name, &[], scope))
 }
 
 /// Like [`lookup`], but resolves `@mcp/<server>` names against a blueprint's
@@ -83,7 +91,7 @@ pub(crate) fn lookup_with_catalog(name: &str, catalog: &McpCatalog) -> DocLookup
     }
     let scope = DocsScope::unscoped_shared();
     host_lookup(name, scope)
-        .unwrap_or_else(|| builtin_fallback(name, &catalog_names(catalog), scope))
+        .unwrap_or_else(|| fallback_lookup(name, &catalog_names(catalog), scope))
 }
 
 /// Like [`lookup_with_catalog`], but scoped to what the bound blueprint lets
@@ -110,7 +118,7 @@ pub(crate) fn lookup_with_blueprint(
             },
         };
     }
-    builtin_fallback(name, &union_candidates(catalog, scope), scope)
+    fallback_lookup(name, &union_candidates(catalog, scope), scope)
 }
 
 fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
@@ -120,11 +128,33 @@ fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
     })
 }
 
-/// A name no package source claims. Check the built-in catalog before erroring
-/// — a built-in needs no `import`, so serving it here costs the caller nothing
-/// — and carry a suggestion drawn from every catalog this call site can see.
-fn builtin_fallback(name: &str, extra: &[String], scope: &DocsScope) -> DocLookup {
+/// A bare standard-library tail (`fs` for `submilli:fs`) is that module: serve
+/// it, and say the asked name is wrong. A tail shared with another visible name
+/// is a miss that lists every full name. `None` when the name is not a tail.
+fn bare_stdlib_lookup(name: &str, extra: &[String], scope: &DocsScope) -> Option<DocLookup> {
+    use interpreter::packages::BareNameMatch;
+    match scope.stdlib().match_bare_name(name, extra) {
+        BareNameMatch::Unique(doc) => Some(DocLookup::CorrectedHost {
+            canonical: doc.name,
+            description: doc.description,
+            declarations: doc.declarations,
+        }),
+        BareNameMatch::Ambiguous(names) => Some(DocLookup::Unknown {
+            message: interpreter::packages::ambiguous_bare_name_message(name, &names),
+            suggestion: None,
+        }),
+        BareNameMatch::Miss => None,
+    }
+}
+
+/// A name no catalog claims as written: a bare standard-library tail is served
+/// with a correction, otherwise the built-in catalog answers, with a suggestion
+/// drawn from every catalog this call site can see.
+fn fallback_lookup(name: &str, extra: &[String], scope: &DocsScope) -> DocLookup {
     use interpreter::packages::BuiltinLookup;
+    if let Some(found) = bare_stdlib_lookup(name, extra, scope) {
+        return found;
+    }
     match interpreter::packages::builtin_lookup(name) {
         BuiltinLookup::Found(declarations) => DocLookup::Builtin { declarations },
         BuiltinLookup::UnknownMember {
@@ -165,6 +195,23 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "description": description,
             "declarations": declarations,
         }),
+        DocLookup::CorrectedHost {
+            canonical,
+            description,
+            declarations,
+        } => {
+            // `name` is the import string. The asked name stays in
+            // `requested_name` so a model cannot mistake it for the package.
+            let correction = interpreter::packages::bare_name_note(name, &canonical);
+            json!({
+                "name": canonical,
+                "requested_name": name,
+                "source": "host",
+                "correction": correction,
+                "description": format!("{correction}\n\n{description}"),
+                "declarations": declarations,
+            })
+        }
         DocLookup::Mcp {
             description,
             declarations,

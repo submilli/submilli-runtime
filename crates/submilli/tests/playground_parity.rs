@@ -762,6 +762,18 @@ function main(): string { try { session.registerFinalizer("k", "v"); } catch (er
                 json!({ "name": "@mcp/up" }),
             ),
         ));
+        // The bare-name redirect, including its correction fields, must not
+        // drift between the server and the playground's copied resolver.
+        seen.push((
+            "packages docs of a bare stdlib name".into(),
+            call(
+                host,
+                &session,
+                33,
+                "submilli__typescript__packages__docs",
+                json!({ "name": "fs" }),
+            ),
+        ));
         seen.push((
             "last_run after a refused run".into(),
             call(host, &session, 30, LAST_RUN, json!({})),

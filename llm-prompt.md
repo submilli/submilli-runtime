@@ -60,7 +60,8 @@ to fulfill the request.
 
 You do NOT have access to Node.js APIs, browser globals, or NPM
 packages. Submilli ships its own standard library — modules are:
-{stdlib_modules}. Submilli native
+{stdlib_modules}. Import those names exactly; the part after
+`submilli:` is not itself a package name. Submilli native
 packages and discovered `@mcp/<server>` packages may also be available;
 use the `{t_search}` and `{t_docs}` tools to discover them before importing.
 
