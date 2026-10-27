@@ -1,2 +1,2 @@
-# Python 3.10+
-openai-agents>=0.3
+# Python 3.11+
+openai-agents-submilli>=0.1
