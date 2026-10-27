@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0b2c0d39b9871dc5b42640735424708828c90ca095a4914440e825a1c8ac7c38"
+  contentHash: "dc7f59b387a84a68921d0dd40046fd7fe09d29a27cce49eb5002a80c06201f6a"
   confirmedAt: "2026-10-20T09:39:00Z"
 ---
 
@@ -18,7 +18,7 @@ authorship:
 | --- | --- | --- |
 | [Mastra](/docs/tutorials/connect-mastra) | TypeScript | MCP |
 | [LangChain Deep Agents](/docs/tutorials/connect-deepagents) | Python | Dedicated package: `langchain-submilli` |
-| [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | MCP |
+| [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | Dedicated package: `openai-agents-submilli` |
 | [Claude Agent SDK](/docs/tutorials/connect-claude-agent-sdk) | TypeScript | MCP |
 | [Vercel AI SDK](/docs/tutorials/use-the-http-api) | TypeScript | The HTTP API |
 
@@ -79,8 +79,9 @@ tool access.
 ## Using harness tools in Submilli
 
 A harness can optionally make its tools available to Submilli. The LangChain
-middleware accepts them through its `ptc` parameter. With the HTTP API, the
-harness includes the tool definitions when it creates a session.
+middleware and the OpenAI Agents toolkit accept them through their `ptc`
+parameters. With the HTTP API, the harness includes the tool definitions when
+it creates a session.
 
 Submilli exposes these tools as a virtual `@tools` Package that code generated
 by the agent can import and use. The tools still run in your application, with
@@ -102,5 +103,6 @@ Vercel AI SDK example uses HTTP, but does not implement this feature.
 
 See the [HTTP API reference](/docs/reference/http-api#application-tools) for the
 protocol, the [LangChain middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
+and the [OpenAI Agents toolkit reference](https://github.com/submilli/submilli-python/tree/main/packages/openai-agents-submilli#application-tools)
 for `ptc` and approvals, and the [Python SDK reference](https://github.com/submilli/submilli-python/tree/main/packages/submilli#your-tools-in-programs)
 for implementing the harness side.

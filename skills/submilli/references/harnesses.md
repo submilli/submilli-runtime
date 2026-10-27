@@ -9,7 +9,8 @@ Choose just the relevant guide:
 - [Vercel AI SDK](vercel.md)
 - [LangChain / LangGraph](langchain.md): `create_agent` takes the same middleware
 - [Mastra](mastra.md)
-- [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents)
+- [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents): in Python, the
+  `openai-agents-submilli` toolkit
 - [Claude Agent SDK](https://submilli.ai/docs/tutorials/connect-claude-agent-sdk)
 - [Custom model loop / REST](custom-loop.md)
 
@@ -17,7 +18,7 @@ For the OpenAI and Claude SDKs, fetch the linked chapter through
 https://submilli.ai/docs/llms.txt and inspect the project's installed SDK types
 before implementing. Preserve the shared authentication, binding, and cleanup
 rules below. If the chapter is unavailable, report that gap and use the
-installed SDK's documented MCP interface without inventing signatures.
+installed package's or SDK's documented interface without inventing signatures.
 
 The book's [harness tutorial](https://submilli.ai/docs/tutorials/connect-a-harness)
 uses a `research` blueprint, `userId`, external search credentials, and a

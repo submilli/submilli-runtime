@@ -9,7 +9,7 @@ chapter "Connecting to your harness".
 |:----------|:--------|:------------------------|
 | `mastra/` | Mastra (TypeScript) | MCP |
 | `deepagents/` | LangChain deepagents (Python 3.11+, server 0.4.1+) | The HTTP API, through `langchain-submilli` |
-| `openai-agents/` | OpenAI Agents SDK (Python) | MCP |
+| `openai-agents/` | OpenAI Agents SDK (Python 3.11+, server 0.4.1+) | The HTTP API, through `openai-agents-submilli` |
 | `claude-agent-sdk/` | Claude Agent SDK (TypeScript) | MCP |
 | `vercel-ai-sdk-http/` | Vercel AI SDK (TypeScript) | The HTTP API; `submilli.ts` builds the tools |
 
@@ -85,7 +85,10 @@ is one whose token the server does not know. The deepagents check runs
 the agent's middleware on a scripted graph of its own, and also asserts
 the tools the model is offered and the execute tool's description, that
 a thread keeps one session across turns, that a second user on that
-thread is refused, and that `aclose_thread` ends the session.
+thread is refused, and that `aclose_thread` ends the session. The OpenAI
+Agents check asserts the same of a conversation: the tools offered, the
+execute description, one session across turns, a second user refused, and
+`aclose_conversation` ending the session.
 
 ```sh
 npm run check       # the TypeScript examples
