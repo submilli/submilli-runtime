@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a51140e62289170803254cfceed7a0bba1510635f6c1f9935486f39de7cefa5f"
+  contentHash: "b16354be6ae3f8e32b78bb432cdd0a5a39068362681dc12a52c3dec804a2b5fa"
   confirmedAt: "2026-10-05T16:46:31.966Z"
 ---
 
@@ -30,7 +30,7 @@ told otherwise. The published Linux binaries require x86-64. For a
 service, put them where all users find them:
 
 ```sh
-curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.5.0 --install-dir /usr/local/bin
+curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.5.1 --install-dir /usr/local/bin
 ```
 
 Pin the tag to the release you approved. The installer verifies each binary
@@ -260,14 +260,14 @@ reference covers the block and its settings.
 ## Upgrade and back up
 
 To upgrade, choose a release after reading its migration instructions. Replace
-`v0.5.0` with that approved tag, run the installer, and restart the service:
+`v0.5.1` with that approved tag, run the installer, and restart the service:
 
 ```sh
 sudo systemctl stop submilli
-sudo tar czf /var/backups/submilli-pre-0.5.0.tgz -C /var/lib submilli
+sudo tar czf /var/backups/submilli-pre-0.5.1.tgz -C /var/lib submilli
 # Retain /etc/submilli's store key and tokens in your secrets manager.
 # The 0.5.0 SQLite migrations are forward-only. Rollback needs this backup.
-curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.5.0 --install-dir /usr/local/bin
+curl -fsSL https://submilli.ai/install.sh | sudo sh -s -- --version v0.5.1 --install-dir /usr/local/bin
 sudo systemctl restart submilli
 ```
 

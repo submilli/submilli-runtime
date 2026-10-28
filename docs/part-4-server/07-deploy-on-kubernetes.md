@@ -11,7 +11,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf3f12f9155fcdea23491507718346d6b7a8fb506fd2f40979ca6feddd0bf6e4"
+  contentHash: "cb5bb8ed782d721da50a29791c296395627da8f7c6e6d3a4301db40ca54c8950"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -29,13 +29,13 @@ Install a published chart version from GHCR. Neither the chart nor its
 default image needs a registry login:
 
 ```sh
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.5 -f values.yaml --wait
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.6 -f values.yaml --wait
 helm test submilli
 ```
 
 `values.yaml` holds your settings. The sections below build it up, and an
 empty file is a valid start. Create it before installing.
-Chart 0.4.5 deploys runtime 0.5.0. This gives you one server pod, a
+Chart 0.4.6 deploys runtime 0.5.1. This gives you one server pod, a
 Service called `submilli`, a persistent volume for its state, an
 encrypted secret store with its key in a Secret, and a network policy
 that lets nothing reach it yet.
@@ -146,7 +146,7 @@ tls:
 Apply the values:
 
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.5 -f values.yaml
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.6 -f values.yaml
 ```
 
 Clients now use `https://submilli.<namespace>.svc:8128`. The probes and
@@ -314,11 +314,11 @@ Leave it at 1 unless your application does that.
 
 ## Upgrade and back up
 
-Review the next chart version's migration instructions, then replace `0.4.5`
+Review the next chart version's migration instructions, then replace `0.4.6`
 with that published chart version:
 
 ```sh
-helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.5 -f values.yaml
+helm upgrade submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.6 -f values.yaml
 ```
 
 Each chart version deploys a matching server version unless you set

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "82c11efbe1e1191aa70eb4241074204032ad4df0baab71b473a20c04c1d1b686"
+  contentHash: "eb55e82dad2d85a8ad988efb6214e19f47d4c2c2e53207c3f29df07417b9e33b"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -428,79 +428,179 @@ Usage: submilli-server [OPTIONS]
 
 Options:
       --config <CONFIG>
-          YAML config file supplying values for the options below. Any flag passed on the command line overrides the corresponding file value. Env: `$SUBMILLI_CONFIG`
+          YAML config file supplying values for the options below. Any flag passed on the command
+          line overrides the corresponding file value. Env: `$SUBMILLI_CONFIG`
       --log-file <PATH>
-          Append server logs to this file instead of standard output. The parent directory must exist. On Unix, SIGHUP reopens it for external rotation. Env: `$SUBMILLI_LOG_FILE`, which outranks the config file
+          Append server logs to this file instead of standard output. The parent directory must
+          exist. On Unix, SIGHUP reopens it for external rotation. Env: `$SUBMILLI_LOG_FILE`, which
+          outranks the config file
       --bind <BIND>
-          Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so it's reachable on Render and similar hosts). [default: 127.0.0.1] Env: `$SUBMILLI_BIND`, which outranks the config file and `$HOST`
+          Address to bind. Falls back to the `$HOST` env var, or `0.0.0.0` when `$PORT` is set (so
+          it's reachable on Render and similar hosts). [default: 127.0.0.1] Env: `$SUBMILLI_BIND`,
+          which outranks the config file and `$HOST`
       --port <PORT>
-          TCP port to listen on. Falls back to the `$PORT` env var (set by Render and similar hosts), then 8128. [default: 8128] Env: `$SUBMILLI_PORT`, which outranks the config file and `$PORT`
+          TCP port to listen on. Falls back to the `$PORT` env var (set by Render and similar
+          hosts), then 8128. [default: 8128] Env: `$SUBMILLI_PORT`, which outranks the config file
+          and `$PORT`
       --tls-cert-file <PATH>
-          Certificate chain PEM file. HTTPS is enabled only when both TLS files are set. Env: `$SUBMILLI_TLS_CERT_FILE`
+          Certificate chain PEM file. HTTPS is enabled only when both TLS files are set. Env:
+          `$SUBMILLI_TLS_CERT_FILE`
       --tls-key-file <PATH>
-          Private key PEM file matching the certificate. Read at startup; restart to rotate. Env: `$SUBMILLI_TLS_KEY_FILE`
+          Private key PEM file matching the certificate. Read at startup; restart to rotate. Env:
+          `$SUBMILLI_TLS_KEY_FILE`
       --blueprint-dir <BLUEPRINT_DIR>
-          Source directory for the one-time blueprint import into SQLite. The directory moves to archive/blueprints/ beside its original location. [default: ~/.submilli/server/blueprints (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
+          Source directory for the one-time blueprint import into SQLite. The directory moves to
+          archive/blueprints/ beside its original location. [default: ~/.submilli/server/blueprints
+          (override the base with $SUBMILLI_HOME)] Env: `$SUBMILLI_BLUEPRINT_DIR`
       --session-store-dir <SESSION_STORE_DIR>
-          Source directory for session JSON import into SQLite; also holds the file-backed idempotency ledger. Mount on durable storage. [default: ~/.submilli/server/sessions] Env: `$SUBMILLI_SESSION_STORE_DIR`
+          Source directory for session JSON import into SQLite; also holds the file-backed
+          idempotency ledger. Mount on durable storage. [default: ~/.submilli/server/sessions] Env:
+          `$SUBMILLI_SESSION_STORE_DIR`
       --database-path <PATH>
-          Server SQLite database file. The parent directory is created at boot. [default: ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
+          Server SQLite database file. The parent directory is created at boot. [default:
+          ~/.submilli/server/db/submilli.db] Env: `$SUBMILLI_DATABASE_PATH`
       --volume-dir <VOLUME_DIR>
-          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session` workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on durable storage: named volumes and session files outlive restarts. A path set here must already exist. The server does not create it unless given `--create-volume-dir`, so a missing mount fails startup. [default: ~/.submilli/server/volumes, created at startup] Env: `$SUBMILLI_VOLUME_DIR`
+          Durable root for `managed-local` named volumes (`managed-local/<name>`), `per_session`
+          workspaces (`sessions/<session id>`) and `ephemeral` scratch (`ephemeral/`). Mount on
+          durable storage: named volumes and session files outlive restarts. A path set here must
+          already exist. The server does not create it unless given `--create-volume-dir`, so a
+          missing mount fails startup. [default: ~/.submilli/server/volumes, created at startup]
+          Env: `$SUBMILLI_VOLUME_DIR`
       --create-volume-dir
-          Create the volume directory (from `--volume-dir`, `$SUBMILLI_VOLUME_DIR` or `volume_dir`) when it is missing, instead of failing startup. For a host where nothing else can create the directory before the server starts. Only use it when the directory is on durable storage that is always mounted when the server starts: otherwise named volumes and session files go to a fresh empty directory in its place. Does nothing when no volume directory is set, since the server creates its default one anyway. No config-file key or environment variable
+          Create the volume directory (from `--volume-dir`, `$SUBMILLI_VOLUME_DIR` or `volume_dir`)
+          when it is missing, instead of failing startup. For a host where nothing else can create
+          the directory before the server starts. Only use it when the directory is on durable
+          storage that is always mounted when the server starts: otherwise named volumes and session
+          files go to a fresh empty directory in its place. Does nothing when no volume directory is
+          set, since the server creates its default one anyway. No config-file key or environment
+          variable
       --secret-store-dir <SECRET_STORE_DIR>
-          Directory of a secret store from before secrets and MCP OAuth grants were kept in the database (one sealed file per secret). When it exists, startup imports it with the secret-store key and moves it to `archive/secrets` beside it. Not the CLI's store at ~/.submilli/secrets, which `submilli secret put` and `mcp authenticate` fill and `submilli run` reads. [default: ~/.submilli/server/secrets] Env: `$SUBMILLI_SECRET_STORE_DIR`
+          Directory of a secret store from before secrets and MCP OAuth grants were kept in the
+          database (one sealed file per secret). When it exists, startup imports it with the
+          secret-store key and moves it to `archive/secrets` beside it. Not the CLI's store at
+          ~/.submilli/secrets, which `submilli secret put` and `mcp authenticate` fill and `submilli
+          run` reads. [default: ~/.submilli/server/secrets] Env: `$SUBMILLI_SECRET_STORE_DIR`
       --package-store-dir <PACKAGE_STORE_DIR>
-          Root of the package store that `submilli server packages install` writes to and the runtime loads packages from first. Created if absent. Packages published locally with `submilli build publish-local` or `submilli install` (~/.submilli/packages) are readable as a fallback and never written. [default: ~/.submilli/server/packages] Env: `$SUBMILLI_PACKAGE_STORE_DIR`
+          Root of the package store that `submilli server packages install` writes to and the
+          runtime loads packages from first. Created if absent. Packages published locally with
+          `submilli build publish-local` or `submilli install` (~/.submilli/packages) are readable
+          as a fallback and never written. [default: ~/.submilli/server/packages] Env:
+          `$SUBMILLI_PACKAGE_STORE_DIR`
       --secret-store-key-env <SECRET_STORE_KEY_ENV>
-          Name of the env var holding the base64-encoded 32-byte store key. The store enables itself when this var is set; it stays off when unset. The key itself is never passed on the command line. [default: SUBMILLI_SECRET_KEY] Env: `$SUBMILLI_SECRET_STORE_KEY_ENV`
+          Name of the env var holding the base64-encoded 32-byte store key. The store enables itself
+          when this var is set; it stays off when unset. The key itself is never passed on the
+          command line. [default: SUBMILLI_SECRET_KEY] Env: `$SUBMILLI_SECRET_STORE_KEY_ENV`
       --secret-store-key-file <SECRET_STORE_KEY_FILE>
-          Path to a file holding the base64-encoded 32-byte store key. Takes priority over `--secret-store-key-env` when both are given. Env: `$SUBMILLI_SECRET_STORE_KEY_FILE`
+          Path to a file holding the base64-encoded 32-byte store key. Takes priority over
+          `--secret-store-key-env` when both are given. Env: `$SUBMILLI_SECRET_STORE_KEY_FILE`
       --allow-localhost
-          Permit outbound HTTP to IPv4 + IPv6 loopback. Off by default to block SSRF against services on the server host. Additive with the config file: enabling on either side grants it. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), also additive
+          Permit outbound HTTP to IPv4 + IPv6 loopback. Off by default to block SSRF against
+          services on the server host. Additive with the config file: enabling on either side grants
+          it. Env: `$SUBMILLI_ALLOW_LOCALHOST` (`1`/`true`/`yes`/`on`), also additive
       --allow-private
-          Permit outbound HTTP to all RFC1918 / CGNAT / IPv6-ULA private ranges. Off by default to block SSRF against the internal network. Additive with the config file. Env: `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), also additive
+          Permit outbound HTTP to all RFC1918 / CGNAT / IPv6-ULA private ranges. Off by default to
+          block SSRF against the internal network. Additive with the config file. Env:
+          `$SUBMILLI_ALLOW_PRIVATE` (`1`/`true`/`yes`/`on`), also additive
       --allow-ip <IP|CIDR>
-          Permit outbound HTTP to a specific address or CIDR range, overriding the default block (repeatable). Accepts `1.2.3.4` or `10.0.0.0/24`. Env: `$SUBMILLI_ALLOW_IP` (comma-separated), additive with both
+          Permit outbound HTTP to a specific address or CIDR range, overriding the default block
+          (repeatable). Accepts `1.2.3.4` or `10.0.0.0/24`. Env: `$SUBMILLI_ALLOW_IP`
+          (comma-separated), additive with both
       --mcp-allowed-host <HOST>
-          Extra `Host` header the MCP endpoint accepts, on top of the loopback defaults (rmcp's DNS-rebinding guard); repeatable. Behind a reverse proxy or PaaS, set the host the client targets — e.g. `submilli-ai:10000` on Render or `your-app.onrender.com`. Also settable via the config file or `$SUBMILLI_MCP_ALLOWED_HOSTS` (comma-separated)
+          Extra `Host` header the MCP endpoint accepts, on top of the loopback defaults (rmcp's
+          DNS-rebinding guard); repeatable. Behind a reverse proxy or PaaS, set the host the client
+          targets — e.g. `submilli-ai:10000` on Render or `your-app.onrender.com`. Also settable via
+          the config file or `$SUBMILLI_MCP_ALLOWED_HOSTS` (comma-separated)
       --shutdown-grace <SECONDS>
-          How long in-flight requests may keep running after SIGTERM or SIGINT before their connections are dropped; a second signal skips the rest of the wait. Teardown adds up to ~1.3s on top, so keep the total under the container runtime's own grace period (Docker allows 10s) — overshoot and the drain is SIGKILLed halfway through instead. [default: 5] Env: `$SUBMILLI_SHUTDOWN_GRACE`, which outranks the config file
+          How long in-flight requests may keep running after SIGTERM or SIGINT before their
+          connections are dropped; a second signal skips the rest of the wait. Teardown adds up to
+          ~1.3s on top, so keep the total under the container runtime's own grace period (Docker
+          allows 10s) — overshoot and the drain is SIGKILLed halfway through instead. [default: 5]
+          Env: `$SUBMILLI_SHUTDOWN_GRACE`, which outranks the config file
       --max-execution-memory <MEGABYTES>
-          Memory one execution may hold live, in megabytes. An allocation that would pass it ends the run with `memory exhausted`, instead of growing until the host or the container's own limit stops it. This is what makes a container's `--memory` sizeable: budget roughly this times peak concurrency. Note that strings are UTF-16, so text costs two bytes per character — a 25 MB document needs ~50 MB here. [default: 50] Env: `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file
+          Memory one execution may hold live, in megabytes. An allocation that would pass it ends
+          the run with `memory exhausted`, instead of growing until the host or the container's own
+          limit stops it. This is what makes a container's `--memory` sizeable: budget roughly this
+          times peak concurrency. Note that strings are UTF-16, so text costs two bytes per
+          character — a 25 MB document needs ~50 MB here. [default: 50] Env:
+          `$SUBMILLI_MAX_EXECUTION_MEMORY`, which outranks the config file
       --max-execution-time <SECONDS>
-          Execution timeout in whole seconds; 0 disables it. [default: disabled] Starts at imported packages' top-level statements; epoch checks may interrupt up to one tick later. Pending host calls are not cancelled by this timeout. Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which outranks the config file
+          Execution timeout in whole seconds; 0 disables it. [default: disabled] Starts at imported
+          packages' top-level statements; epoch checks may interrupt up to one tick later. Pending
+          host calls are not cancelled by this timeout. Env: `$SUBMILLI_MAX_EXECUTION_TIME`, which
+          outranks the config file
       --max-execution-fuel <FUEL>
-          Fuel one execution may burn, roughly one unit per Wasm instruction; a program that runs out ends with `fuel exhausted`. The backstop for a runaway loop when no execution time is set. [default: 1000000000000] Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000
+          Fuel one execution may burn, roughly one unit per Wasm instruction; a program that runs
+          out ends with `fuel exhausted`. The backstop for a runaway loop when no execution time is
+          set. [default: 1000000000000] Env: `$SUBMILLI_MAX_EXECUTION_FUEL`, which outranks the
+          config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1T or 10_000
       --max-execution-stack <KIBIBYTES>
-          Wasm stack one execution may use, in kibibytes; deeper recursion ends with `call stack exhausted`. [default: 512] Env: `$SUBMILLI_MAX_EXECUTION_STACK`, which outranks the config file
+          Wasm stack one execution may use, in kibibytes; deeper recursion ends with `call stack
+          exhausted`. [default: 512] Env: `$SUBMILLI_MAX_EXECUTION_STACK`, which outranks the config
+          file
       --max-llm-tokens <TOKENS>
-          Tokens every live execution's `submilli:llm` calls may spend *in total*. This is the ceiling on what the server can spend against the operator's provider credential: reservations cover the prompt plus the reserved output before dispatch, so a call that would push the server past this is refused rather than billed. [default: 20000000] Env: `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 20M or 10_000
+          Tokens every live execution's `submilli:llm` calls may spend *in total*. This is the
+          ceiling on what the server can spend against the operator's provider credential:
+          reservations cover the prompt plus the reserved output before dispatch, so a call that
+          would push the server past this is refused rather than billed. [default: 20000000] Env:
+          `$SUBMILLI_MAX_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T
+          suffixes and digit separators, e.g. 20M or 10_000
       --max-execution-llm-tokens <TOKENS>
-          Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one run where `--max-llm-tokens` bounds the process, so one program cannot consume the whole server's budget. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000
+          Tokens a *single* execution's `submilli:llm` calls may spend. Bounds one run where
+          `--max-llm-tokens` bounds the process, so one program cannot consume the whole server's
+          budget. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the
+          config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000
       --max-llm-concurrency <PROMPTS>
-          Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
+          Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out
+          manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default:
+          4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
       --max-suspended-runs <RUNS>
-          Runs that may wait on the harness at once, server-wide: each suspended at an application tool call (`@tools`), holding its program in memory. [default: 256] Env: `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file
+          Runs that may wait on the harness at once, server-wide: each suspended at an application
+          tool call (`@tools`), holding its program in memory. [default: 256] Env:
+          `$SUBMILLI_MAX_SUSPENDED_RUNS`, which outranks the config file
       --max-last-run-size <MEGABYTES>
-          The largest last run a session keeps, in megabytes of its `{result, console, error}` JSON. A larger run keeps only its size, and `GET /v1/sessions/{id}/last-run` answers `413`. [default: 64] Env: `$SUBMILLI_MAX_LAST_RUN_SIZE`, which outranks the config file
+          The largest last run a session keeps, in megabytes of its `{result, console, error}` JSON.
+          A larger run keeps only its size, and `GET /v1/sessions/{id}/last-run` answers `413`.
+          [default: 64] Env: `$SUBMILLI_MAX_LAST_RUN_SIZE`, which outranks the config file
       --idempotency-retention <SECONDS>
-          Seconds a keyed execute's response is kept for replay after it completes. Past that, the key still refuses to run again, with `idempotency_response_expired`. `0` keeps only the newest `--idempotency-keep-last`. [default: 86400] Env: `$SUBMILLI_IDEMPOTENCY_RETENTION`, which outranks the config file
+          Seconds a keyed execute's response is kept for replay after it completes. Past that, the
+          key still refuses to run again, with `idempotency_response_expired`. `0` keeps only the
+          newest `--idempotency-keep-last`. [default: 86400] Env: `$SUBMILLI_IDEMPOTENCY_RETENTION`,
+          which outranks the config file
       --idempotency-keep-last <RESPONSES>
-          How many of a session's newest keyed-execute responses are kept for replay whatever their age. `0` keeps each only for `--idempotency-retention`. [default: 3] Env: `$SUBMILLI_IDEMPOTENCY_KEEP_LAST`, which outranks the config file
+          How many of a session's newest keyed-execute responses are kept for replay whatever their
+          age. `0` keeps each only for `--idempotency-retention`. [default: 3] Env:
+          `$SUBMILLI_IDEMPOTENCY_KEEP_LAST`, which outranks the config file
       --max-embedding-tokens <TOKENS>
-          Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend against different provider credentials and neither can starve the other. [default: 50000000] Env: `$SUBMILLI_MAX_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 50M or 10_000
+          Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate
+          from `--max-llm-tokens`: embedding and `llm.call` spend against different provider
+          credentials and neither can starve the other. [default: 50000000] Env:
+          `$SUBMILLI_MAX_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T
+          suffixes and digit separators, e.g. 50M or 10_000
       --max-execution-embedding-tokens <TOKENS>
-          Tokens a *single* execution's `submilli:embedding` calls may spend. [default: 2000000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 2M or 10_000
+          Tokens a *single* execution's `submilli:embedding` calls may spend. [default: 2000000]
+          Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS`, which outranks the config file. Accepts
+          decimal K/M/B/T suffixes and digit separators, e.g. 2M or 10_000
       --max-execution-embedding-requests <REQUESTS>
-          Outbound provider requests a *single* execution's `submilli:embedding` calls may send. [default: 1000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1K or 1_000
+          Outbound provider requests a *single* execution's `submilli:embedding` calls may send.
+          [default: 1000] Env: `$SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS`, which outranks the
+          config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1K or 1_000
       --max-embedding-concurrency <REQUESTS>
-          Provider requests one embedding call sends at once. [default: 4] Env: `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file
+          Provider requests one embedding call sends at once. [default: 4] Env:
+          `$SUBMILLI_MAX_EMBEDDING_CONCURRENCY`, which outranks the config file
       --allow-unauthenticated
-          Serve the API without authentication: every caller that can reach the port has full access. The server otherwise refuses to start until it has a token — `$SUBMILLI_SERVER_TOKEN`, which is an admin token, or entries under `api_tokens` in the config file. For a server whose network already admits only its own application, and for local experiments. Cannot be combined with either source of tokens. Env: `$SUBMILLI_ALLOW_UNAUTHENTICATED` (`1`/`true`/`yes`/`on`)
+          Serve the API without authentication: every caller that can reach the port has full
+          access. The server otherwise refuses to start until it has a token —
+          `$SUBMILLI_SERVER_TOKEN`, which is an admin token, or entries under `api_tokens` in the
+          config file. For a server whose network already admits only its own application, and for
+          local experiments. Cannot be combined with either source of tokens. Env:
+          `$SUBMILLI_ALLOW_UNAUTHENTICATED` (`1`/`true`/`yes`/`on`)
       --health-check
-          Probe a running server and exit 0 when it answers, non-zero otherwise — the container `HEALTHCHECK`, which has no shell or `curl` to call. The address is resolved from this process's own config file and environment, so the probe follows a non-default bind or port instead of drifting from it. It cannot see flags given only to the serving process, so a container should set the address via `$SUBMILLI_BIND`/`$SUBMILLI_PORT` or `--config` rather than `CMD` arguments
+          Probe a running server and exit 0 when it answers, non-zero otherwise — the container
+          `HEALTHCHECK`, which has no shell or `curl` to call. The address is resolved from this
+          process's own config file and environment, so the probe follows a non-default bind or port
+          instead of drifting from it. It cannot see flags given only to the serving process, so a
+          container should set the address via `$SUBMILLI_BIND`/`$SUBMILLI_PORT` or `--config`
+          rather than `CMD` arguments
   -h, --help
           Print help
   -V, --version
