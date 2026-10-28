@@ -1,0 +1,22 @@
+kind: blueprint
+name: attio-read-once-test
+packages:
+  - '@submilli/attio'
+default: deny
+permissions:
+  main:
+    - capability: attio.com/records.update
+      filter: object == "deals" and not (attributes contains "owner")
+      action: allow
+    - capability: attio.com/records.create
+      filter: object == "deals" and not (attributes contains "owner")
+      action: allow
+    - capability: attio.com/companies.upsert
+      filter: domain == "acme.com"
+      action: allow
+    - capability: attio.com/people.upsert
+      filter: email == "dana@acme.com"
+      action: allow
+  # Deliberate sentinel: an allowed call must reach secrets.get, which is
+  # denied here before a key can be read or a request can be sent.
+  '@submilli/attio': []

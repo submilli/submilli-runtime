@@ -1,0 +1,58 @@
+# Run by `attio_status_rules_hold_against_a_fake_attio` in crates/submilli/tests/package_policy.rs,
+# against a copy of the package whose API base points at a fake Attio on 127.0.0.1.
+kind: blueprint
+name: attio-status-rules-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/attio'
+secrets:
+  ATTIO_API_KEY:
+    store: policy-token
+default: deny
+permissions:
+  main:
+    - capability: attio.com/records.get
+      filter: object == "deals"
+      action: allow
+    - capability: attio.com/statuses.list
+      filter: object == "deals" or object == "companies" or object == "people"
+      action: allow
+    - capability: attio.com/records.update
+      filter: object == "deals"
+      action: allow
+    - capability: attio.com/records.create
+      filter: object == "deals"
+      action: allow
+    # Create-only companies, as in the readme: no status, and only these attributes.
+    - capability: attio.com/records.create
+      filter: >-
+        object == "companies" and statusAttribute == ""
+        and not (attributes.2 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "domains" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "domains" or attributes.1 == "name")
+      action: allow
+    - capability: attio.com/records.create
+      filter: >-
+        object == "people" and statusAttribute == ""
+        and not (attributes.4 glob "*")
+        and (not (attributes.0 glob "*") or attributes.0 == "company" or attributes.0 == "email_addresses" or attributes.0 == "job_title" or attributes.0 == "name")
+        and (not (attributes.1 glob "*") or attributes.1 == "company" or attributes.1 == "email_addresses" or attributes.1 == "job_title" or attributes.1 == "name")
+        and (not (attributes.2 glob "*") or attributes.2 == "company" or attributes.2 == "email_addresses" or attributes.2 == "job_title" or attributes.2 == "name")
+        and (not (attributes.3 glob "*") or attributes.3 == "company" or attributes.3 == "email_addresses" or attributes.3 == "job_title" or attributes.3 == "name")
+      action: allow
+    - capability: attio.com/records.setStatus
+      filter: object == "deals" and attribute == "stage"
+      action: allow
+  '@submilli/attio':
+    - capability: http.get
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.patch
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.post
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "ATTIO_API_KEY"
+      action: allow

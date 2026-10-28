@@ -9,6 +9,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 
 | Package | For |
 | --- | --- |
+| [`@submilli/attio`](attio/readme.md) | Attio CRM objects, records, people and company upserts, deal stages, and notes. |
 | [`@submilli/brave-search`](brave-search/readme.md) | Brave web search and extracted passages with source URLs. |
 | [`@submilli/exa`](exa/readme.md) | Exa web search with highlights and content extraction from known URLs. |
 | [`@submilli/firecrawl`](firecrawl/readme.md) | Web search, page scraping, site URL discovery, and batch scrape and crawl jobs. |
