@@ -13,7 +13,13 @@ use tower::ServiceExt;
 /// `GET` a discovery route of a blueprint that grants everything, so every
 /// stdlib module is visible. `route` is relative to the blueprint.
 async fn get(route: &str) -> (StatusCode, Value) {
-    let blueprint = submilli_blueprint::parse("name: open\ndefault: allow\n").expect("blueprint");
+    get_with("name: open\ndefault: allow\n", route).await
+}
+
+/// `GET` a discovery route of `blueprint`, whose name is the YAML's `name`.
+async fn get_with(blueprint: &str, route: &str) -> (StatusCode, Value) {
+    let blueprint = submilli_blueprint::parse(blueprint).expect("blueprint");
+    let name = blueprint.name.clone();
     let state = AppState::new(ServerConfig {
         blueprints: Some(std::sync::Arc::new(
             submilli_server::blueprint::InMemoryBlueprintStore::seed([blueprint])
@@ -23,7 +29,7 @@ async fn get(route: &str) -> (StatusCode, Value) {
     })
     .await
     .expect("AppState");
-    let uri = &format!("/v1/blueprints/open{route}");
+    let uri = &format!("/v1/blueprints/{name}{route}");
     let req = Request::builder()
         .method("GET")
         .uri(uri)
@@ -144,11 +150,66 @@ async fn docs_miss_in_both_catalogs_suggests_the_closest_name() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["did_you_mean"], "Temporal", "got: {body}");
 
-    // Dropping the scheme is the likeliest package typo and sits 9 edits from
-    // the full name — bare edit distance cannot reach it.
-    let (status, body) = get("/packages/docs?name=http").await;
+    // A typo still suggests; it is not served, because the guess could be wrong.
+    let (status, body) = get("/packages/docs?name=htp").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["did_you_mean"], "submilli:http", "got: {body}");
+}
+
+#[tokio::test]
+async fn docs_serves_a_bare_stdlib_name_and_says_it_was_wrong() {
+    // `fs` is two characters, below the edit-distance guard, and the name an
+    // agent writes when it means `submilli:fs`.
+    let (status, body) = get("/packages/docs?name=fs").await;
+    assert_eq!(status, StatusCode::OK, "got: {body}");
+    assert_eq!(body["name"], "submilli:fs", "got: {body}");
+    assert_eq!(body["requested_name"], "fs", "got: {body}");
+    assert_eq!(body["source"], "host");
+    assert!(body["error"].is_null(), "got: {body}");
+    let correction = body["correction"].as_str().unwrap_or("");
+    assert!(
+        correction.contains("submilli:fs") && correction.contains("Do not import `fs`"),
+        "got: {correction}"
+    );
+    assert!(
+        correction.contains("does not exist"),
+        "the asked name must be called wrong, got: {correction}"
+    );
+    let description = body["description"].as_str().unwrap_or("");
+    assert!(
+        description.starts_with("Wrong package name:"),
+        "the prose a model reads has to lead with the mistake, got: {description}"
+    );
+    assert!(
+        body["declarations"]
+            .as_str()
+            .unwrap_or("")
+            .contains("function "),
+        "got: {body}"
+    );
+
+    let (status, body) = get("/packages/docs?name=http").await;
+    assert_eq!(status, StatusCode::OK, "got: {body}");
+    assert_eq!(body["name"], "submilli:http", "got: {body}");
+    assert_eq!(body["requested_name"], "http");
+    assert!(
+        body["correction"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Do not import `http`"),
+        "got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn docs_does_not_reveal_a_hidden_module_by_its_bare_name() {
+    let (status, body) = get_with("name: closed\ndefault: deny\n", "/packages/docs?name=fs").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "got: {body}");
+    assert_eq!(body["error"], "unknown_package", "got: {body}");
+    assert!(
+        !body.to_string().contains("submilli:fs"),
+        "a hidden module must not be named, not even as a suggestion, got: {body}"
+    );
 }
 
 #[tokio::test]

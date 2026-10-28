@@ -177,6 +177,7 @@ pub async fn uninstall(
 fn docs_response(name: &str, lookup: DocLookup) -> axum::response::Response {
     let status = match &lookup {
         DocLookup::Host { .. }
+        | DocLookup::CorrectedHost { .. }
         | DocLookup::Mcp { .. }
         | DocLookup::Registry { .. }
         | DocLookup::Builtin { .. } => StatusCode::OK,

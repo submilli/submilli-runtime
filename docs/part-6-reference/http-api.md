@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cd9fb41491015b82ff8e8694b250c14e5f8520211c222955ab91f981f1f3302c"
+  contentHash: "dfa8c57b68d523d0768f42f20380a84b22b68309815d66d46dd5b224549a314c"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -521,7 +521,23 @@ A standard-library module answers `200` with JSON `name`, `source`,
 An installed Package and an `@mcp/<server>` Package answer `200` with its
 documentation followed by its declarations, as
 `Content-Type: text/markdown; charset=utf-8`. A built-in name answers JSON
-with `source` `builtin`. An unknown name answers `404`:
+with `source` `builtin`.
+
+A bare standard-library name, such as `fs` for `submilli:fs`, also answers
+`200` JSON. `name` is the real package name, not the name that was asked.
+`requested_name` is the name that was asked. `correction` says that name
+does not exist and gives the import to write. `description` starts with the
+same correction. Import `name`. Do not import `requested_name`.
+
+```json
+{"correction":"Wrong package name: `fs` does not exist. The package is `submilli:fs`. Import `submilli:fs` — write `import ... from \"submilli:fs\"`. Do not import `fs`.","declarations":"…","description":"Wrong package name: `fs` does not exist. The package is `submilli:fs`. Import `submilli:fs` — write `import ... from \"submilli:fs\"`. Do not import `fs`.\n\nSandbox filesystem: files and directories under the VFS root.","name":"submilli:fs","requested_name":"fs","source":"host"}
+```
+
+A bare standard-library name shared with another visible package answers
+`404` and lists those full names. A close typo, such as `htp`, is not served.
+It answers `404` with `did_you_mean`.
+
+An unknown name answers `404`:
 
 ```json
 {"did_you_mean":"submilli:code","error":"unknown_package","message":"unknown package: submilli:nope. Did you mean `submilli:code`?"}

@@ -50,6 +50,14 @@ pub(crate) enum DocLookup {
         description: String,
         declarations: String,
     },
+    /// A standard-library module the caller named without its `submilli:`
+    /// scheme. Served, but the response must say the asked name is wrong and
+    /// that `canonical` is the import name.
+    CorrectedHost {
+        canonical: String,
+        description: String,
+        declarations: String,
+    },
     /// A discovered `@mcp/<server>` package's typed surface.
     Mcp {
         description: String,
@@ -84,7 +92,7 @@ pub(crate) fn lookup(name: &str) -> DocLookup {
         return DocLookup::McpUnknown;
     }
     let scope = DocsScope::unscoped_shared();
-    host_lookup(name, scope).unwrap_or_else(|| builtin_fallback(name, &[], scope))
+    host_lookup(name, scope).unwrap_or_else(|| fallback_lookup(name, &[], scope))
 }
 
 /// Like [`lookup`], but resolves `@mcp/<server>` names against a blueprint's
@@ -107,7 +115,7 @@ pub(crate) fn lookup_with_catalog(name: &str, catalog: &McpCatalog) -> DocLookup
     }
     let scope = DocsScope::unscoped_shared();
     host_lookup(name, scope)
-        .unwrap_or_else(|| builtin_fallback(name, &catalog_names(catalog), scope))
+        .unwrap_or_else(|| fallback_lookup(name, &catalog_names(catalog), scope))
 }
 
 /// Like [`lookup_with_catalog`], but scoped to what the bound blueprint lets
@@ -162,7 +170,7 @@ pub(crate) fn lookup_for_session(
             },
         };
     }
-    builtin_fallback(name, &union_candidates(catalog, scope), scope)
+    fallback_lookup(name, &union_candidates(catalog, scope), scope)
 }
 
 fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
@@ -172,11 +180,33 @@ fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
     })
 }
 
-/// A name no package source claims. Check the built-in catalog before erroring
-/// — a built-in needs no `import`, so serving it here costs the caller nothing
-/// — and carry a suggestion drawn from every catalog this call site can see.
-fn builtin_fallback(name: &str, extra: &[String], scope: &DocsScope) -> DocLookup {
+/// A bare standard-library tail (`fs` for `submilli:fs`) is that module: serve
+/// it, and say the asked name is wrong. A tail shared with another visible name
+/// is a miss that lists every full name. `None` when the name is not a tail.
+fn bare_stdlib_lookup(name: &str, extra: &[String], scope: &DocsScope) -> Option<DocLookup> {
+    use interpreter::packages::BareNameMatch;
+    match scope.stdlib().match_bare_name(name, extra) {
+        BareNameMatch::Unique(doc) => Some(DocLookup::CorrectedHost {
+            canonical: doc.name,
+            description: doc.description,
+            declarations: doc.declarations,
+        }),
+        BareNameMatch::Ambiguous(names) => Some(DocLookup::Unknown {
+            message: interpreter::packages::ambiguous_bare_name_message(name, &names),
+            suggestion: None,
+        }),
+        BareNameMatch::Miss => None,
+    }
+}
+
+/// A name no catalog claims as written: a bare standard-library tail is served
+/// with a correction, otherwise the built-in catalog answers, with a suggestion
+/// drawn from every catalog this call site can see.
+fn fallback_lookup(name: &str, extra: &[String], scope: &DocsScope) -> DocLookup {
     use interpreter::packages::BuiltinLookup;
+    if let Some(found) = bare_stdlib_lookup(name, extra, scope) {
+        return found;
+    }
     match interpreter::packages::builtin_lookup(name) {
         BuiltinLookup::Found(declarations) => DocLookup::Builtin { declarations },
         BuiltinLookup::UnknownMember {
@@ -218,6 +248,23 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "description": description,
             "declarations": declarations,
         }),
+        DocLookup::CorrectedHost {
+            canonical,
+            description,
+            declarations,
+        } => {
+            // `name` is the import string. The asked name stays in
+            // `requested_name` so a model cannot mistake it for the package.
+            let correction = interpreter::packages::bare_name_note(name, &canonical);
+            json!({
+                "name": canonical,
+                "requested_name": name,
+                "source": "host",
+                "correction": correction,
+                "description": format!("{correction}\n\n{description}"),
+                "declarations": declarations,
+            })
+        }
         DocLookup::Mcp {
             description,
             declarations,
@@ -630,6 +677,13 @@ mod git_discovery_tests {
             ),
             DocLookup::Unknown { .. }
         ));
+        // A forgotten prefix must not reveal a module the blueprint hides.
+        let hidden = docs_json(
+            "git",
+            lookup_with_blueprint("git", &catalog, &DocsScope::for_blueprint(&blueprint, &[])),
+        );
+        assert_eq!(hidden["error"], "unknown_package", "{hidden}");
+        assert!(!hidden.to_string().contains("submilli:git"), "{hidden}");
         assert!(
             !docs_json(
                 "submilli:gi",
@@ -669,6 +723,19 @@ mod git_discovery_tests {
             ),
             DocLookup::Host { .. }
         ));
+        let bare = docs_json(
+            "git",
+            lookup_with_blueprint("git", &catalog, &DocsScope::for_blueprint(&blueprint, &[])),
+        );
+        assert_eq!(bare["name"], "submilli:git", "{bare}");
+        assert_eq!(bare["requested_name"], "git", "{bare}");
+        assert!(
+            bare["correction"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Do not import `git`"),
+            "{bare}"
+        );
         assert!(
             !search_json("", Fetch::Mcp)
                 .to_string()
@@ -680,6 +747,48 @@ mod git_discovery_tests {
 #[cfg(test)]
 mod policy_visibility_tests {
     use super::*;
+
+    #[test]
+    fn a_bare_name_follows_the_same_grant_as_the_full_name() {
+        let catalog = McpCatalog::empty();
+        let hidden = submilli_blueprint::parse("name: test\n").unwrap();
+        let denied = docs_json(
+            "fs",
+            lookup_with_blueprint("fs", &catalog, &DocsScope::for_blueprint(&hidden, &[])),
+        );
+        assert_eq!(denied["error"], "unknown_package", "{denied}");
+        assert!(!denied.to_string().contains("submilli:fs"), "{denied}");
+
+        let allowed = submilli_blueprint::parse(
+            "name: test\npermissions:\n  main:\n    - capability: fs.read\n      action: allow\n",
+        )
+        .unwrap();
+        let served = docs_json(
+            "fs",
+            lookup_with_blueprint("fs", &catalog, &DocsScope::for_blueprint(&allowed, &[])),
+        );
+        assert_eq!(served["name"], "submilli:fs", "{served}");
+        assert!(served["error"].is_null(), "{served}");
+    }
+
+    #[test]
+    fn a_bare_name_shared_with_another_package_is_ambiguous() {
+        let body = docs_json(
+            "fs",
+            fallback_lookup(
+                "fs",
+                &["@acme/fs".to_string()],
+                DocsScope::unscoped_shared(),
+            ),
+        );
+        assert_eq!(body["error"], "unknown_package", "{body}");
+        let message = body["message"].as_str().unwrap_or("");
+        assert!(
+            message.contains("@acme/fs") && message.contains("submilli:fs"),
+            "{body}"
+        );
+        assert!(body["did_you_mean"].is_null(), "{body}");
+    }
 
     #[test]
     fn discovery_respects_library_grants() {

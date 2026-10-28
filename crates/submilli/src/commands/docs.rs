@@ -53,6 +53,11 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         other => {
+            // `fs` is not a package name; it is `submilli:fs`. Serve that module
+            // and say so, before an installed package or a miss listing.
+            if let Some(code) = print_bare_stdlib(&args.name, &scope) {
+                return Ok(code);
+            }
             // Installed packages come after the stdlib and the built-ins: a
             // `submilli:*` or built-in name can never be shadowed by a store entry.
             let shown = scope
@@ -86,6 +91,24 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
             }
             println!("{}", package.declarations);
             Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// A bare standard-library name. `Some` when it resolved to one module or to
+/// several packages that share the tail; `None` when it is not that kind of name.
+fn print_bare_stdlib(name: &str, scope: &Scope) -> Option<ExitCode> {
+    match scope.match_bare_name(name) {
+        packages::BareNameMatch::Miss => None,
+        packages::BareNameMatch::Unique(doc) => {
+            println!("{}\n", packages::bare_name_note(name, &doc.name));
+            println!("{} — {}\n", doc.name, doc.description);
+            println!("{}", doc.declarations);
+            Some(ExitCode::SUCCESS)
+        }
+        packages::BareNameMatch::Ambiguous(names) => {
+            eprintln!("{}", packages::ambiguous_bare_name_message(name, &names));
+            Some(ExitCode::FAILURE)
         }
     }
 }

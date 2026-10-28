@@ -39,8 +39,12 @@ pub mod tools {
         @mcp/<server> package. Read these before importing a package: the signatures are the \
         contract. A name that is a language built-in rather than a package (e.g. \"Temporal\") \
         is served here too, tagged \"source\": \"builtin\" — use it directly, with no `import`. \
-        Unknown names return a structured { error }, carrying a did-you-mean candidate when a \
-        close one exists.";
+        A bare standard-library name (e.g. \"fs\") is not a package name. When the blueprint \
+        shows that module, it is served with `name` set to the real package (`submilli:fs`), \
+        `requested_name` to the name you passed, and `correction` saying that name is wrong. \
+        Import `name`, never `requested_name`. A standard-library short name shared by several \
+        packages, or a module the blueprint hides, is a structured { error }. Any other unknown \
+        name also returns a structured { error }, with `did_you_mean` when a close one exists.";
 
     pub const BUILTINS_LIST: &str = "List the language built-ins that are always in scope without \
         an `import`, returning { types, namespaces }. Use this to discover names before fetching \

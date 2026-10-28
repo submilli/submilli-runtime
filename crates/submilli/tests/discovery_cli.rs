@@ -11,6 +11,12 @@ mod in_memory_config;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
+use interpreter::{ModulePath, PackageSourceModule, compile_package};
+use submilli_build::{
+    ArtifactMetadata, ArtifactSource, derive_capability_schema,
+    write_package_artifact_with_docs_and_sources,
+};
+
 #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_docs_work_locally_and_through_a_registered_blueprint() {
@@ -164,15 +170,111 @@ fn docs_suggests_the_closest_name() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("Temporal"), "got: {}", stderr(&out));
 
-    // The same name produces the same candidate the server produces: both call
-    // one resolver, so there is nothing to drift.
-    let out = run(&["docs", "http"]);
+    // A typo still suggests rather than serving a guess.
+    let out = run(&["docs", "htp"]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("submilli:http"),
         "got: {}",
         stderr(&out)
     );
+}
+
+#[test]
+fn docs_serves_a_bare_stdlib_name_and_says_it_was_wrong() {
+    // An ambient installed package sharing the tail would make this ambiguous.
+    let home = tempfile::tempdir().unwrap();
+    let out = Command::new(submilli_bin())
+        .args(["docs", "fs"])
+        .env("SUBMILLI_HOME", home.path())
+        .output()
+        .expect("invoke submilli");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("Wrong package name:") && text.contains("submilli:fs"),
+        "got: {text}"
+    );
+    assert!(
+        text.contains("Do not import `fs`"),
+        "the asked name must be rejected, got: {text}"
+    );
+    assert!(text.contains("function "), "got: {text}");
+    // The canonical name is the heading, not the name the caller typed.
+    assert!(text.contains("submilli:fs —"), "got: {text}");
+}
+
+#[test]
+fn docs_bare_name_is_ambiguous_with_an_installed_package_of_the_same_tail() {
+    let home = tempfile::tempdir().unwrap();
+    let source = "export function read(): string { return \"x\"; }";
+    let package = compile_package(
+        "@acme/fs",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source,
+        }],
+        &[],
+    )
+    .expect("compile synthetic package");
+    write_package_artifact_with_docs_and_sources(
+        home.path().join("packages").join("@acme").join("fs"),
+        &package.wasm,
+        &package.type_info,
+        &derive_capability_schema(&package.declaration, &[], &package.required_capabilities),
+        &package.declaration,
+        &ArtifactMetadata::new("@acme/fs", "0.0.0-test", Vec::new()),
+        "",
+        &[ArtifactSource {
+            path: ModulePath::from("lib"),
+            text: source.to_string(),
+        }],
+    )
+    .expect("write package artifact");
+
+    let out = Command::new(submilli_bin())
+        .args(["docs", "fs"])
+        .current_dir(home.path())
+        .env("SUBMILLI_HOME", home.path())
+        .output()
+        .expect("invoke submilli");
+    assert!(!out.status.success());
+    let text = stderr(&out);
+    assert!(
+        text.contains("More than one package has that short name"),
+        "the ambiguity must be named, not treated as a miss, got: {text}"
+    );
+    assert!(
+        text.contains("@acme/fs") && text.contains("submilli:fs"),
+        "got: {text}"
+    );
+    assert!(
+        !text.contains("Did you mean"),
+        "a collision must not be answered with one suggestion, got: {text}"
+    );
+}
+
+#[test]
+fn docs_ignores_an_unreachable_mcp_server_for_a_bare_name() {
+    // The CLI resolves offline names only. A declared server it cannot discover
+    // is not an importable package, so it must not make `fs` look ambiguous.
+    let temporary = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temporary.path().join("blueprint.yaml"),
+        "name: fixture\ndefault: allow\nmcp:\n  fs:\n    url: http://127.0.0.1:1/mcp\n",
+    )
+    .unwrap();
+    let out = Command::new(submilli_bin())
+        .args(["docs", "fs", "--blueprint", "blueprint.yaml"])
+        .current_dir(temporary.path())
+        .env("SUBMILLI_HOME", temporary.path().join("home"))
+        .output()
+        .expect("invoke submilli");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("submilli:fs"), "got: {text}");
+    assert!(text.contains("Wrong package name:"), "got: {text}");
 }
 
 #[test]

@@ -96,6 +96,42 @@ impl Scope {
         self.stdlib().docs(name)
     }
 
+    /// A bare name (`fs`) against the modules this scope shows, plus the other
+    /// full names it can resolve, so a colliding package is not hidden.
+    pub(crate) fn match_bare_name(&self, name: &str) -> packages::BareNameMatch {
+        let stdlib = self.stdlib();
+        // A miss cannot become a hit by adding other catalogs' names, and the
+        // caller's miss path lists the installed packages itself.
+        if !stdlib.has_bare_tail(name) {
+            return packages::BareNameMatch::Miss;
+        }
+        let others = self.other_package_names();
+        stdlib.match_bare_name(name, &others)
+    }
+
+    /// The full names a bare name could also mean: the installed packages this
+    /// scope shows. MCP servers are discovered server-side, so a declared but
+    /// unreachable `@mcp/<server>` is not a name the CLI can resolve.
+    fn other_package_names(&self) -> Vec<String> {
+        match self {
+            Self::Library { .. } => {
+                let store = PackageStore::default();
+                // Names only: the catalog view needs rendered declarations, but
+                // a collision check does not. An `@mcp/*` artifact is not a
+                // package `docs` can resolve; those names route to discovery.
+                store
+                    .available_packages()
+                    .into_iter()
+                    .filter(|name| !name.starts_with("@mcp/") && store.load(name).is_ok())
+                    .collect()
+            }
+            Self::Blueprint { docs, .. } => docs
+                .usable_packages()
+                .map(|package| package.name.clone())
+                .collect(),
+        }
+    }
+
     /// Standard library modules matching `query`, within the scope.
     pub(crate) fn stdlib_search(&self, query: &str) -> Vec<ModuleSummary> {
         self.stdlib().search(query)
