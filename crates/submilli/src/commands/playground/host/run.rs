@@ -170,6 +170,8 @@ pub(crate) struct RunOutput {
     pub(crate) dispatched: bool,
     /// `None` when nothing reached the runner.
     pub(crate) last_run: Option<LastRun>,
+    /// The run's number, when it was recorded.
+    pub(crate) number: Option<u64>,
 }
 
 /// What the runner itself produced.
@@ -299,6 +301,12 @@ pub(crate) trait RunRecorder: Send + Sync {
 
 /// One recorded run.
 pub(crate) trait RecordedRun: Send + Sync {
+    /// The number the developer knows the run by, as the playground's page and CLI
+    /// show it.
+    fn number(&self) -> Option<u64> {
+        None
+    }
+
     /// Caps for this run's decision and call records.
     fn log_config(&self) -> DecisionLogConfig {
         DecisionLogConfig::default()
@@ -828,10 +836,11 @@ impl RunHost {
             }))
         });
         let (_registered, cancel_requested) = self.cancels.register(&execution_id);
-        let output = self
+        let mut output = self
             .prepare_and_run(&execution_id, request, recording.clone(), cancel_requested)
             .await;
         if let Some(recording) = &recording {
+            output.number = recording.shared.run.number();
             match (&output.response.error, output.dispatched) {
                 // The runner finishes a dispatched run itself; one that never got
                 // there is finished here.
@@ -870,6 +879,7 @@ impl RunHost {
             response: failure_response(execution_id, &session_id, kind, message),
             dispatched: false,
             last_run: None,
+            number: None,
         };
 
         let parsed = match parse(&code) {
@@ -1030,6 +1040,7 @@ impl RunHost {
             response,
             dispatched: true,
             last_run: Some(outcome.last_run()),
+            number: None,
         }
     }
 

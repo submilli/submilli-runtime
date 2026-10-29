@@ -140,9 +140,13 @@ struct BuiltinsDocsArgs {
     names: Vec<String>,
 }
 
-/// The `{ result, console, error }` shape of `execute`.
+/// The `{ run, result, console, error }` shape of `execute`.
 #[derive(Serialize)]
 struct ExecuteOutput {
+    /// The run's number, as the developer's page and CLI name it; absent when the run
+    /// wasn't recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<u64>,
     result: Option<String>,
     console: Vec<String>,
     error: Option<ExecuteError>,
@@ -322,6 +326,7 @@ impl SubmilliMcp {
             .await;
         let response = output.response;
         let execution_id = response.execution_id.clone();
+        let number = output.number;
         if !output.dispatched {
             // Nothing ran: a protocol-level failure, as it always was for MCP.
             let message = response
@@ -332,6 +337,7 @@ impl SubmilliMcp {
         }
         with_execution_id(
             structured_result(ExecuteOutput {
+                run: number,
                 result: response.result,
                 console: response.console,
                 error: response.error,

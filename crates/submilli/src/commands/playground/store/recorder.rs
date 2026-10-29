@@ -840,6 +840,10 @@ struct HostRunRecording {
 }
 
 impl host::RecordedRun for HostRunRecording {
+    fn number(&self) -> Option<u64> {
+        Some(self.core.id)
+    }
+
     fn log_config(&self) -> DecisionLogConfig {
         PLAYGROUND_LOG_CONFIG
     }
