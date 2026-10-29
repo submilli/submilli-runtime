@@ -529,3 +529,23 @@ fn a_model_is_taken_by_its_full_name_only() {
         assert!(!is_full_model_name(model), "{model}");
     }
 }
+
+#[test]
+fn who_is_billed_is_named_in_plain_words_with_its_address() {
+    let billing = |source: &str, base_url: Option<&str>| Billing {
+        source: source.to_owned(),
+        base_url: base_url.map(str::to_owned),
+    };
+    assert_eq!(billing("api_key", None).described(), "an Anthropic API key");
+    assert_eq!(
+        billing("claude.ai", Some("https://proxy.example")).described(),
+        "your Claude login, sending to https://proxy.example"
+    );
+    // A sign-in method Claude Code adds later is shown as it names it.
+    assert_eq!(billing("sso", None).described(), "sso");
+    let shown = Shown::from(&Availability::Available {
+        version: "2.1.310".to_owned(),
+        billing: billing("api_key", None),
+    });
+    assert_eq!(shown.billed.as_deref(), Some("an Anthropic API key"));
+}

@@ -326,7 +326,6 @@ impl SubmilliMcp {
             .await;
         let response = output.response;
         let execution_id = response.execution_id.clone();
-        let number = output.number;
         if !output.dispatched {
             // Nothing ran: a protocol-level failure, as it always was for MCP.
             let message = response
@@ -337,7 +336,7 @@ impl SubmilliMcp {
         }
         with_execution_id(
             structured_result(ExecuteOutput {
-                run: number,
+                run: output.run_number,
                 result: response.result,
                 console: response.console,
                 error: response.error,

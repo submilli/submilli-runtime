@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentSummary, billingLine, checkSetup, declaredVariables, effortHint, effortOptions, initialSetup, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
+import { agentSummary, billingLine, checkSetup, declaredVariables, effortHint, effortOptions, initialSetup, isFullModelName, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
 import type { ClaudeCodeStatus, SessionSummary } from "../api/types";
 import { chatSession } from "./testdata";
 import type { Status } from "../api/types";
@@ -219,6 +219,8 @@ describe("Claude Code as the agent", () => {
     expect(checkSetup(withCc(ready), cc({ model: "" })).modelInvalid.model).toBe("Choose a model, or type a full model name.");
     // A newer model than the page offers can be typed in.
     for (const model of ["claude-opus-5-5", "claude-fable-5-1", "claude-opus-6"]) expect(checkSetup(withCc(ready), cc({ model })).modelInvalid.model).toBeUndefined();
+    // The same names the playground refuses, so the page and the playground agree.
+    for (const model of ["-p", "claude-opus-6 --x", "opus[1m]", ".claude-1", "fable"]) expect(isFullModelName(model)).toBe(false);
     expect(effortOptions("claude-code", "xhigh").filter((o) => !o.disabled).map((o) => o.label)).toEqual(["Default", "Low", "Medium", "High", "Extra high", "Max"]);
     expect(checkSetup(withCc(ready), cc({ effort: "max" })).settings).toEqual({ effort: "max", max_budget_usd: 1 });
   });
@@ -245,10 +247,8 @@ describe("Claude Code as the agent", () => {
   it("says whom it bills", () => {
     expect(billingLine(withCc(undefined))).toBe("");
     expect(billingLine(withCc(ready))).toMatch(/^Bills your Claude subscription/);
-    expect(billingLine(withCc({ ...ready, source: "api_key", subscription: false }))).toBe("Bills an Anthropic API key, not your Claude subscription. The first message asks you to confirm.");
-    expect(billingLine(withCc({ ...ready, base_url: "https://proxy.example", subscription: false }))).toBe(
-      "Bills your Claude login, sending to https://proxy.example, not your Claude subscription. The first message asks you to confirm.",
-    );
+    // The playground names whom it bills; the page shows its words.
+    expect(billingLine(withCc({ ...ready, source: "api_key", billed: "an Anthropic API key", subscription: false }))).toBe("Bills an Anthropic API key, not your Claude subscription. The first message asks you to confirm.");
   });
 
   it("has its own effort note", () => {

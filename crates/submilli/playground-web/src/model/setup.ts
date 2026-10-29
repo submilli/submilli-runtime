@@ -362,15 +362,7 @@ export function billingLine(status: Status): string {
 
 /** What Claude Code bills other than the subscription, and where it sends, when an address is set. */
 export function billedName(cc: ClaudeCodeStatus): string {
-  const names: Record<string, string> = {
-    "claude.ai": "your Claude login",
-    api_key: "an Anthropic API key",
-    api_key_helper: "the key your apiKeyHelper gives",
-    oauth_token: "a Claude login token (CLAUDE_CODE_OAUTH_TOKEN)",
-    third_party: "a cloud provider account",
-  };
-  const name = names[cc.source ?? ""] ?? cc.source ?? "an unknown account";
-  return name + (cc.base_url ? ", sending to " + cc.base_url : "");
+  return cc.billed || "an unknown account";
 }
 
 export function modelHint(status: Status, provider: string): string {

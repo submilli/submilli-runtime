@@ -1823,7 +1823,7 @@ test("a Claude Code session that doesn't bill the subscription asks first, then 
   server.handle = (call) => {
     if (call.url === "/api/status") {
       const s = fixtureJson<Record<string, unknown>>("status.json");
-      s.claude_code = { state: "available", version: "2.1.310", source: "api_key", base_url: "https://proxy.example", subscription: false, confirmation };
+      s.claude_code = { state: "available", version: "2.1.310", source: "api_key", base_url: "https://proxy.example", billed: "an Anthropic API key, sending to https://proxy.example", subscription: false, confirmation };
       return json(s);
     }
     if (call.url !== "/api/agent") return undefined;
@@ -1886,6 +1886,36 @@ test("Claude Code that can't answer says why under the choice, with no key to ad
   await user.click(option);
   expect(screen.getByText("Claude Code is signed out; run `claude` once to sign in.")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /key$/ })).not.toBeInTheDocument();
+});
+
+test("a Claude Code model is picked from the offered ones, or typed in full, even one starting with an offered name", async () => {
+  const server = new FakeServer();
+  server.handle = (call) => {
+    if (call.url !== "/api/status") return undefined;
+    const s = fixtureJson<Record<string, unknown>>("status.json");
+    s.claude_code = { state: "available", version: "2.1.310", source: "claude.ai", billed: "your Claude login", subscription: true, confirmation: "claude.ai" };
+    return json(s);
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(within(screen.getByRole("group", { name: "Provider" })).getByRole("button", { name: "Claude Code" }));
+  const models = within(screen.getByRole("group", { name: "Model" }));
+  expect(models.getAllByRole("button").map((b) => b.textContent)).toEqual(["Sonnet 5.5", "Opus 5.5", "Fable 5.1", "Haiku 5.5"]);
+  const typed = screen.getByRole("textbox", { name: "Or another model" });
+  await user.type(typed, "claude-sonnet-5-5-20261001");
+  expect(typed).toHaveValue("claude-sonnet-5-5-20261001");
+  await user.click(models.getByRole("button", { name: "Fable 5.1" }));
+  expect(typed).toHaveValue("");
+  expect(models.getByRole("button", { name: "Fable 5.1" })).toHaveAttribute("aria-pressed", "true");
+  // Away from Claude Code, effort is an advanced option again; back on it, its default model shows on its button alone.
+  const provider = within(screen.getByRole("group", { name: "Provider" }));
+  await user.type(typed, "claude-opus-6");
+  await user.click(provider.getByRole("button", { name: "OpenAI" }));
+  expect(screen.queryByRole("group", { name: "Reasoning effort" })).not.toBeVisible();
+  await user.click(provider.getByRole("button", { name: "Claude Code" }));
+  expect(screen.getByRole("textbox", { name: "Or another model" })).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Sonnet 5.5" })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("an answer stopped at a limit says so, as stopped rather than failed, for any agent", async () => {

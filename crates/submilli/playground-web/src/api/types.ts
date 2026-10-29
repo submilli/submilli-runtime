@@ -32,6 +32,8 @@ export interface ClaudeCodeStatus {
   source?: string;
   /** Where it sends requests, when `ANTHROPIC_BASE_URL` sets an address. */
   base_url?: string;
+  /** Who it bills in plain words, with the address when one is set. */
+  billed?: string;
   /** It bills the developer's Claude subscription, so nothing needs confirming. */
   subscription: boolean;
   /** What a message confirms, with `confirm_billing`, to bill anything else. */

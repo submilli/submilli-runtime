@@ -50,6 +50,8 @@ export function Setup(props: {
   const [activeStep, setActiveStep] = useState<"model" | "variables" | null>("model");
   const [modelDone, setModelDone] = useState(false);
   const [variablesDone, setVariablesDone] = useState(false);
+  // What the developer last typed as a Claude Code model, so a name that starts with an offered one stays in the field.
+  const [typedModel, setTypedModel] = useState("");
   const providers = providerOptions(status, form.provider);
   // An effort carries over to another agent only when that agent takes it too.
   const keptEffort = (provider: string) => (effortOptions(provider, form.effort).some((o) => o.pressed && !o.disabled) ? form.effort : "");
@@ -238,8 +240,8 @@ export function Setup(props: {
                   <label className="pg-vfield">
                     <span className="pg-vname">Or another model</span>
                     <input
-                      value={CLAUDE_CODE_MODELS.some(([m]) => m === form.model) ? "" : form.model}
-                      onChange={(ev) => set({ model: ev.target.value }, "model")}
+                      value={typedModel === form.model || !CLAUDE_CODE_MODELS.some(([m]) => m === form.model) ? form.model : ""}
+                      onChange={(ev) => { setTypedModel(ev.target.value); set({ model: ev.target.value }, "model"); }}
                       placeholder="Full model name"
                       spellCheck={false}
                       {...bad("model")}

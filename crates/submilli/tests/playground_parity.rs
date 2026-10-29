@@ -136,6 +136,39 @@ fn missing_facts(server: &[Observation]) -> Vec<String> {
     missing
 }
 
+/// Takes the playground's own `run` number out of each `execute` result, both its
+/// structured content and the JSON text that repeats it, and counts the results that
+/// had one. Only the playground numbers runs for the developer, so an agent there can
+/// point at "run 12"; everything else must still match the server.
+fn without_run_numbers(observations: &mut [Observation]) -> usize {
+    let mut numbered = 0;
+    for (name, result) in observations.iter_mut() {
+        if !name.starts_with("execute") {
+            continue;
+        }
+        let Some(structured) = result
+            .get_mut("structuredContent")
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        if structured.remove("run").is_none() {
+            continue;
+        }
+        numbered += 1;
+        for item in result["content"].as_array_mut().into_iter().flatten() {
+            let Some(text) = item.get("text").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Ok(Value::Object(mut fields)) = serde_json::from_str::<Value>(text) {
+                fields.remove("run");
+                item["text"] = json!(Value::Object(fields).to_string());
+            }
+        }
+    }
+    numbered
+}
+
 /// Replace what legitimately varies between two runs: ids, session ids, timings,
 /// and the temporary directories each host lives in.
 fn normalize(value: &mut Value, dirs: &[String]) {
@@ -826,7 +859,9 @@ function main(): string { try { session.registerFinalizer("k", "v"); } catch (er
             missing.is_empty(),
             "the server did not show what the comparison relies on: {missing:?}"
         );
-        let from_playground = observations(&playground, &releases);
+        let mut from_playground = observations(&playground, &releases);
+        let numbered = super::without_run_numbers(&mut from_playground);
+        assert!(numbered > 0, "the playground's runs carry their numbers");
 
         if let Some(message) = compare(&from_playground, &from_server, KNOWN_DIFFERENCES) {
             panic!("{message}");

@@ -80,8 +80,8 @@ impl Billing {
         }
     }
 
-    /// Who is billed, in plain words, with the address when one is set. The page names
-    /// sources the same way.
+    /// Who is billed, in plain words, with the address when one is set. The page shows
+    /// it from the status, so the two say it the same way.
     pub(crate) fn described(&self) -> String {
         let name = match self.source.as_str() {
             "claude.ai" => "your Claude login",
@@ -147,6 +147,9 @@ pub(crate) struct Shown {
     pub(crate) source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) base_url: Option<String>,
+    /// Who it bills in plain words, as [`Billing::described`] says it, for the page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) billed: Option<String>,
     /// Whether it bills the developer's Claude subscription, needing no confirmation.
     pub(crate) subscription: bool,
     /// What a message confirms to bill anything else.
@@ -171,6 +174,7 @@ impl From<&Availability> for Shown {
             version: None,
             source: None,
             base_url: None,
+            billed: None,
             subscription: false,
             confirmation: None,
             reason: None,
@@ -180,6 +184,7 @@ impl From<&Availability> for Shown {
                 shown.version = Some(version.clone());
                 shown.source = Some(billing.source.clone());
                 shown.base_url.clone_from(&billing.base_url);
+                shown.billed = Some(billing.described());
                 shown.subscription = billing.is_subscription();
                 shown.confirmation = Some(billing.confirmation());
             }
