@@ -674,7 +674,7 @@ permissions:
         use std::collections::BTreeSet;
         use std::io::{BufRead, BufReader, Read, Write};
         use std::net::TcpListener;
-        use std::path::PathBuf;
+        use std::path::{Path, PathBuf};
         use std::process::{Child, Command, Output, Stdio};
         use std::sync::{Arc, Mutex};
         use std::time::{Duration, Instant};
@@ -738,6 +738,9 @@ permissions:
                     .arg("playground")
                     .args(args)
                     .current_dir(&self.root)
+                    // The developer's own Claude Code is never run: only a fake, put on
+                    // the PATH by the test that wants one.
+                    .env("PATH", path_without_claude())
                     .env("SUBMILLI_HOME", self.dir.path().join("home"))
                     .env("HOME", self.dir.path().join("home"))
                     .env_remove("SUBMILLI_TELEMETRY")
@@ -1344,6 +1347,10 @@ variables:\n  customerId:\n    required: true\n\
 secrets:\n  API_KEY:\n    harness:\n      required: true\n\
 permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
+        /// A blueprint that needs nothing bound.
+        const JOIN_BLUEPRINT: &str =
+            "name: demo\npermissions:\n  main:\n  - capability: http.get\n    action: allow\n";
+
         /// The stand-in's bridge as a coding assistant runs it: JSON-RPC lines in and out.
         struct Bridge {
             child: Child,
@@ -1353,8 +1360,22 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
 
         impl Bridge {
             fn start(playground: &Playground) -> Self {
+                Self::spawn(playground, &["mcp"])
+            }
+
+            /// A bridge joining MCP session `session`, as Claude Code chat starts one.
+            fn join(playground: &Playground, session: &str, max_calls: u32) -> Self {
+                let root = playground.root.to_str().unwrap();
+                let max_calls = max_calls.to_string();
+                let mut args = vec!["mcp", "--root", root, "--token", "chat"];
+                args.extend(["--blueprint", "demo", "--protocol", "2025-06-18"]);
+                args.extend(["--join", session, "--max-calls", &max_calls]);
+                Self::spawn(playground, &args)
+            }
+
+            fn spawn(playground: &Playground, args: &[&str]) -> Self {
                 let mut child = playground
-                    .command(&["mcp"])
+                    .command(args)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -1482,15 +1503,12 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
                     .any(|tool| tool["name"] == "submilli__typescript__execute"),
                 "{tools}"
             );
-            // The stand-in `claude-code` writes may use exactly the tools the bridge offers.
-            let set_up = playground
-                .command(&["claude-code", "--json"])
-                .output()
-                .unwrap();
-            assert!(set_up.status.success(), "{}", stderr(&set_up));
-            let agent =
-                std::fs::read_to_string(playground.root.join(".claude/agents/submilli-standin.md"))
-                    .unwrap();
+            // The stand-in `skill install` writes may use exactly the tools the bridge offers.
+            let agent = std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../skills/submilli/agents/submilli-standin.md"),
+            )
+            .unwrap();
             let mut granted: Vec<&str> = agent
                 .lines()
                 .find_map(|line| line.strip_prefix("tools: "))
@@ -2374,6 +2392,879 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             let (code, stderr) = bridge.finish();
             assert_eq!(code, 2);
             assert!(stderr.contains("bind --secret API_KEY"), "{stderr}");
+        }
+
+        #[test]
+        fn a_joining_bridge_carries_on_a_session_and_never_ends_it() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let output = playground.run(&["start", "--json", "--allow-localhost"]);
+            assert!(output.status.success(), "start: {}", stderr(&output));
+            let ready: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let server = ready["server_url"].as_str().unwrap().trim_end_matches('/');
+            let session = initialize(
+                &format!("{server}/mcp/demo"),
+                &playground.token("chat"),
+                json!({}),
+            );
+            let call = |id: u32| {
+                json!({
+                    "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                    "params": {
+                        "name": "submilli__typescript__execute",
+                        "arguments": { "code": "function main(): string { return \"joined\"; }" }
+                    }
+                })
+            };
+            let runs = || {
+                playground.expect(0, &["runs", "--session", &session])["runs"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+            };
+
+            // The handshake is the bridge's own: the session started long ago.
+            let mut bridge = Bridge::join(&playground, &session, 2);
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 0, "method": "server/discover" }));
+            assert_eq!(bridge.reply()["error"]["code"], -32601);
+            let initialized = bridge.initialize();
+            assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
+            assert_eq!(
+                initialized["result"]["serverInfo"]["name"], "submilli-playground",
+                "{initialized}"
+            );
+            bridge.send(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+            assert!(bridge.reply()["result"]["tools"].is_array());
+            bridge.send(call(3));
+            let called = bridge.reply();
+            assert!(called.to_string().contains("joined"), "{called}");
+            assert_eq!(runs(), 1);
+            bridge.send(call(4));
+            assert_eq!(bridge.reply()["id"], 4);
+            assert_eq!(runs(), 2);
+
+            // A call past the message's limit is refused without running.
+            bridge.send(call(5));
+            let refused = bridge.reply();
+            assert_eq!(refused["result"]["isError"], true, "{refused}");
+            assert!(refused.to_string().contains("limit"), "{refused}");
+            assert_eq!(runs(), 2);
+            assert_eq!(bridge.finish().0, 0);
+
+            // However it stops, the session stays open for the next message's bridge.
+            for signal in ["-INT", "-KILL"] {
+                let mut bridge = Bridge::join(&playground, &session, 16);
+                bridge.initialize();
+                bridge.send(json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
+                assert!(bridge.reply()["result"]["tools"].is_array());
+                let killed = Command::new("kill")
+                    .args([signal, &bridge.child.id().to_string()])
+                    .status()
+                    .unwrap();
+                assert!(killed.success());
+                bridge.exit();
+            }
+            let mut bridge = Bridge::join(&playground, &session, 16);
+            bridge.initialize();
+            bridge.send(call(2));
+            assert!(bridge.reply().to_string().contains("joined"));
+            assert_eq!(bridge.finish().0, 0);
+            assert_eq!(runs(), 3);
+
+            // An unknown or ended session fails before the handshake is answered.
+            playground.expect(0, &["session", "end", &session]);
+            for gone in [session.as_str(), "8a4ff0e6-6d0d-4c4e-9d1b-31c1ad6f3f0b"] {
+                let mut bridge = Bridge::join(&playground, gone, 16);
+                bridge.send(json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
+                }));
+                let (code, said) = bridge.exit();
+                assert_ne!(code, 0, "{said}");
+                assert!(said.contains("session"), "{said}");
+            }
+            playground.stop();
+        }
+
+        /// This process's PATH, without any directory holding a `claude`.
+        fn path_without_claude() -> String {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            let kept: Vec<PathBuf> = std::env::split_paths(&path)
+                .filter(|dir| !dir.join("claude").exists())
+                .collect();
+            std::env::join_paths(kept).unwrap().into_string().unwrap()
+        }
+
+        /// The developer's `claude`, faked: it answers `--version` and `auth status`, records
+        /// each message's arguments and input, and does what `behave.sh` says, with
+        /// `$SESSION`, `$CONFIG` (its MCP config), `$RESUMED` and `$D` (this directory) set.
+        struct FakeClaude {
+            dir: PathBuf,
+        }
+
+        /// Claude Code's start message for the conversation, with the playground connected.
+        const CLAUDE_INIT: &str = r#"printf '%s\n' "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$SESSION\",\"apiKeySource\":\"none\",\"mcp_servers\":[{\"name\":\"playground\",\"status\":\"connected\"}]}""#;
+        /// Waits to be interrupted, as Claude Code mid-answer, and notes that it was.
+        const CLAUDE_WAITS: &str = r#"trap 'touch "$D/interrupted"; exit 0' INT; touch "$D/waiting"; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done"#;
+
+        impl FakeClaude {
+            fn new(playground: &Playground) -> Self {
+                let dir = playground.dir.path().join("fake-claude");
+                std::fs::create_dir_all(&dir).unwrap();
+                let d = dir.display();
+                let script = format!(
+                    r#"#!/bin/sh
+D={d}
+case "$1" in
+  --version) cat "$D/version"; exit 0 ;;
+  auth) echo x >> "$D/auth-asked"; . "$D/auth.sh"; exit 0 ;;
+esac
+n=$(ls "$D" | grep -c '^argv-')
+printf '%s\n' "$@" > "$D/argv-$n"
+IFS= read -r prompt
+printf '%s\n' "$prompt" > "$D/stdin-$n"
+prev=""; RESUMED=""
+for arg in "$@"; do
+  case "$prev" in
+    --session-id) SESSION=$arg ;;
+    --resume) SESSION=$arg; RESUMED=1 ;;
+    --mcp-config) CONFIG=$arg ;;
+  esac
+  prev=$arg
+done
+. "$D/behave.sh"
+"#
+                );
+                let claude = dir.join("claude");
+                std::fs::write(&claude, script).unwrap();
+                std::os::unix::fs::PermissionsExt::set_mode(
+                    &mut std::fs::metadata(&claude).unwrap().permissions(),
+                    0o755,
+                );
+                let mut permissions = std::fs::metadata(&claude).unwrap().permissions();
+                std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+                std::fs::set_permissions(&claude, permissions).unwrap();
+                std::fs::write(dir.join("version"), "2.1.310 (Claude Code)\n").unwrap();
+                let fake = Self { dir };
+                fake.signed_in("claude.ai");
+                fake.answers("The answer is 42.");
+                fake
+            }
+
+            /// `auth status` says the login is `method`.
+            fn signed_in(&self, method: &str) {
+                let status = json!({ "loggedIn": method != "none", "authMethod": method });
+                std::fs::write(self.dir.join("auth.sh"), format!("echo '{status}'\n")).unwrap();
+            }
+
+            fn behave(&self, script: &str) {
+                std::fs::write(self.dir.join("behave.sh"), script).unwrap();
+            }
+
+            /// Each message is answered with `reply`.
+            fn answers(&self, reply: &str) {
+                self.behave(&format!(
+                    "{CLAUDE_INIT}\n{}\n{}\n",
+                    claude_line(&json!({ "type": "assistant", "message": { "role": "assistant", "content": [{ "type": "text", "text": reply }] } })),
+                    claude_line(&json!({ "type": "result", "subtype": "success", "is_error": false, "result": reply })),
+                ));
+            }
+
+            /// Message `n`'s arguments.
+            fn argv(&self, n: usize) -> Vec<String> {
+                std::fs::read_to_string(self.dir.join(format!("argv-{n}")))
+                    .unwrap()
+                    .lines()
+                    .map(str::to_owned)
+                    .collect()
+            }
+
+            fn messages(&self) -> usize {
+                (0..)
+                    .take_while(|n| self.dir.join(format!("argv-{n}")).exists())
+                    .count()
+            }
+
+            /// Starts `playground` with this `claude` the only one on its PATH, so the
+            /// developer's own is never run.
+            fn start(&self, playground: &Playground) {
+                self.start_with(playground, &[]);
+            }
+
+            fn start_with(&self, playground: &Playground, env: &[(&str, &str)]) {
+                let mut command = playground.command(&["start", "--json", "--allow-localhost"]);
+                command.env("PATH", format!("{}:/usr/bin:/bin", self.dir.display()));
+                for (name, value) in env {
+                    command.env(name, value);
+                }
+                let output = command.output().unwrap();
+                assert!(output.status.success(), "start: {}", stderr(&output));
+            }
+
+            /// The status's look at Claude Code, once it has one.
+            fn shown(playground: &Playground) -> Value {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let (status, code) = playground.json(&["status"]);
+                    assert_eq!(code, 0, "{status}");
+                    if !status["claude_code"].is_null() {
+                        return status["claude_code"].clone();
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "no look at Claude Code: {status}"
+                    );
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+
+            fn wait_for(&self, name: &str) {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !self.dir.join(name).exists() {
+                    assert!(Instant::now() < deadline, "the fake never wrote {name}");
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+
+        /// `printf` of one stream line, for a fake's script.
+        fn claude_line(line: &Value) -> String {
+            format!("printf '%s\\n' '{line}'")
+        }
+
+        /// A fake's script that calls the bridge from its MCP config with `codes`, each one
+        /// tool call, and says so on the stream as Claude Code would: once the bridge is
+        /// done, or at once while it runs in the `background`.
+        fn claude_calls(codes: &[&str], background: bool) -> String {
+            let mut calls = String::new();
+            let mut stream = String::new();
+            for (n, code) in codes.iter().enumerate() {
+                let call = json!({
+                    "jsonrpc": "2.0", "id": n + 2, "method": "tools/call",
+                    "params": { "name": "submilli__typescript__execute", "arguments": { "code": code } }
+                });
+                calls.push_str(&format!(" '{call}'"));
+                stream.push_str(&claude_line(&json!({ "type": "assistant", "message": { "role": "assistant", "content": [{
+                    "type": "tool_use", "id": format!("toolu_{n}"), "name": "mcp__playground__submilli__typescript__execute",
+                    "input": { "code": code },
+                }] } })));
+                stream.push('\n');
+            }
+            let initialize = json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "fake", "version": "0" } }
+            });
+            format!(
+                r#"command=$(sed -E 's/.*"command":"([^"]*)".*/\1/' "$CONFIG")
+args=$(sed -E 's/.*"args":\[([^]]*)\].*/\1/' "$CONFIG" | tr -d '"' | tr ',' ' ')
+printf '%s\n' '{initialize}' '{{"jsonrpc":"2.0","method":"notifications/initialized"}}'{calls} | $command $args > "$D/bridge-out"{}
+{stream}"#,
+                if background { " &" } else { "" }
+            )
+        }
+
+        /// A program the bridge runs.
+        const CLAUDE_PROGRAM: &str = "function main(): string { return \"ran\"; }";
+        /// One that runs until it is cancelled.
+        const CLAUDE_LOOP: &str = "function main(): number { let total = 0; for (let i = 0; i < 100000000000; i++) { total += i % 3; } return total; }";
+
+        /// Session `session`'s entries in the session log, by kind.
+        fn session_kinds(playground: &Playground, session: &str) -> Vec<String> {
+            std::fs::read_to_string(playground.state().join("store/sessions.jsonl"))
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|line| line["session_id"] == session)
+                .map(|line| line["kind"].as_str().unwrap().to_owned())
+                .collect()
+        }
+
+        /// Session `session`'s chat messages, in order.
+        fn chat_texts(playground: &Playground, session: &str) -> Vec<String> {
+            std::fs::read_to_string(
+                playground
+                    .state()
+                    .join(format!("store/events/{session}.jsonl")),
+            )
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|event| event["body"]["chat"]["text"].as_str().map(str::to_owned))
+            .collect()
+        }
+
+        fn claude_chat(playground: &Playground, args: &[&str]) -> Command {
+            let mut command = playground.command(&["chat"]);
+            command.args(args).arg("--json");
+            command
+        }
+
+        #[test]
+        fn a_claude_code_chat_answers_in_one_session_and_resumes_its_conversation() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.behave(&format!(
+                "{CLAUDE_INIT}\n{}{}\n{}\n",
+                claude_calls(&[CLAUDE_PROGRAM], false),
+                claude_line(&json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "toolu_0", "content": "ran" }] } })),
+                claude_line(&json!({ "type": "result", "subtype": "success", "is_error": false, "result": "It ran." })),
+            ));
+            claude.start(&playground);
+            let first = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "Run it.",
+                ],
+            );
+            assert_eq!(first["stopped"], "answered", "{first}");
+            assert_eq!(first["provider"], "claude-code");
+            assert_eq!(first["untrusted"]["reply"], "It ran.");
+            let session = first["session"].as_str().unwrap().to_owned();
+            let argv = claude.argv(0);
+            let after = |flag: &str| {
+                argv.iter()
+                    .position(|arg| arg == flag)
+                    .map(|n| argv[n + 1].clone())
+            };
+            assert_eq!(after("--session-id").as_deref(), Some(session.as_str()));
+            // With no spending limit given, a message gets the default one.
+            assert_eq!(after("--max-budget-usd").as_deref(), Some("1"));
+            assert_eq!(after("--model").as_deref(), Some("claude-sonnet-5-5"));
+            let input: Value =
+                serde_json::from_str(&std::fs::read_to_string(claude.dir.join("stdin-0")).unwrap())
+                    .unwrap();
+            assert_eq!(input["message"]["content"], "Run it.");
+            let runs = playground.expect(0, &["runs", "--session", &session]);
+            assert_eq!(runs["runs"].as_array().unwrap().len(), 1, "{runs}");
+            assert_eq!(runs["runs"][0]["source"], "chat", "{runs}");
+            assert_eq!(chat_texts(&playground, &session), ["Run it."]);
+            assert_eq!(
+                session_kinds(&playground, &session),
+                ["started", "claude-conversation"]
+            );
+
+            // A follow-up resumes the conversation in the same session.
+            claude.answers("Still 42.");
+            let sessions = playground.expect(0, &["sessions"])["sessions"]
+                .as_array()
+                .unwrap()
+                .len();
+            let second = playground.expect(0, &["chat", "--session", &session, "Again?"]);
+            assert_eq!(second["session"], session.as_str(), "{second}");
+            assert_eq!(second["continued"], true);
+            let argv = claude.argv(1);
+            let resumed = argv.iter().position(|arg| arg == "--resume").unwrap();
+            assert_eq!(argv[resumed + 1], session);
+            assert!(!argv.contains(&"--session-id".to_owned()));
+            assert_eq!(
+                playground.expect(0, &["sessions"])["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                sessions
+            );
+            assert_eq!(
+                chat_texts(&playground, &session),
+                ["Run it.", "Again?", "Still 42."]
+            );
+
+            // A conversation Claude Code no longer has is not started again.
+            claude.behave("echo \"No conversation found with session ID: $SESSION\" >&2\nexit 1\n");
+            let (missing, code) = playground.json(&["chat", "--session", &session, "And now?"]);
+            assert_eq!(code, 1, "{missing}");
+            assert_eq!(
+                missing["error"]["kind"], "conversation-missing",
+                "{missing}"
+            );
+            assert_eq!(claude.messages(), 3);
+            let token = playground.token("chat");
+            playground.stop();
+            // The chat's token stays in its own file: never in what Claude Code was given,
+            // nor anywhere else the playground keeps.
+            let mut files = 0;
+            for dir in [playground.state(), claude.dir.clone()] {
+                walk(&dir, &mut |path| {
+                    if path
+                        .parent()
+                        .is_some_and(|parent| parent.ends_with("tokens"))
+                    {
+                        return;
+                    }
+                    let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
+                    assert!(!text.contains(&token), "{} holds the token", path.display());
+                    files += 1;
+                });
+            }
+            assert!(files > 5);
+        }
+
+        #[test]
+        fn a_claude_code_chat_stops_at_its_limits_and_refuses_what_it_does_not_take() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.start(&playground);
+
+            claude.behave(&format!(
+                "{CLAUDE_INIT}\n{}\n",
+                claude_line(&json!({ "type": "result", "subtype": "error_max_budget_usd", "is_error": true, "errors": ["Reached maximum budget ($0.05)"] })),
+            ));
+            let spent = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:claude-haiku-5-5",
+                    "--max-budget-usd",
+                    "0.05",
+                    "Go.",
+                ],
+            );
+            assert_eq!(spent["stopped"], "spending-limit", "{spent}");
+            let argv = claude.argv(0);
+            let budget = argv
+                .iter()
+                .position(|arg| arg == "--max-budget-usd")
+                .unwrap();
+            assert_eq!(argv[budget + 1], "0.05");
+
+            // Past the message's tool-call limit, the call is refused without a run and the
+            // message stops.
+            claude.behave(&format!(
+                "{CLAUDE_INIT}\n{}{CLAUDE_WAITS}\n",
+                claude_calls(&[CLAUDE_PROGRAM, CLAUDE_PROGRAM], false),
+            ));
+            let capped = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--max-calls-per-answer",
+                    "1",
+                    "Twice.",
+                ],
+            );
+            assert_eq!(capped["stopped"], "call-limit", "{capped}");
+            let session = capped["session"].as_str().unwrap();
+            let refused = std::fs::read_to_string(claude.dir.join("bridge-out")).unwrap();
+            assert!(refused.contains("limit of 1 tool calls"), "{refused}");
+            assert_eq!(
+                playground.expect(0, &["runs", "--session", session])["runs"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+
+            // The tools didn't connect: the message fails, and is still in its session.
+            claude.behave(
+                r#"printf '%s\n' "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$SESSION\",\"apiKeySource\":\"none\",\"mcp_servers\":[{\"name\":\"playground\",\"status\":\"pending\"}]}"
+trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+"#,
+            );
+            let (failed, code) =
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hello?"]);
+            assert_eq!(code, 1, "{failed}");
+            assert!(
+                failed["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("did not connect"),
+                "{failed}"
+            );
+            let sessions = playground.expect(0, &["sessions"]);
+            let newest = sessions["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|listed| listed["session"].as_str().unwrap().to_owned())
+                .find(|listed| chat_texts(&playground, listed) == ["Hello?"]);
+            assert!(newest.is_some(), "{sessions}");
+
+            let messages = claude.messages();
+            for refused in [
+                vec!["--model", "claude-code:fable", "x"],
+                vec![
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--max-budget-usd",
+                    "0",
+                    "x",
+                ],
+                vec![
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--max-budget-usd",
+                    "101",
+                    "x",
+                ],
+                vec![
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--max-output",
+                    "100",
+                    "x",
+                ],
+                vec![
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--provider-settings",
+                    "{\"temperature\":0}",
+                    "x",
+                ],
+            ] {
+                let mut args = vec!["chat"];
+                args.extend(refused.iter().copied());
+                let (answer, code) = playground.json(&args);
+                assert_eq!(code, 2, "{refused:?}: {answer}");
+            }
+            assert_eq!(claude.messages(), messages);
+            // Claude Code being installed makes no default: with no key there is none.
+            let (none, code) = playground.json(&["chat", "x"]);
+            assert_eq!(code, 1, "{none}");
+            assert_eq!(none["error"]["kind"], "no-provider", "{none}");
+            playground.stop();
+        }
+
+        #[test]
+        fn a_claude_code_chat_takes_one_message_at_a_time_and_stops_when_its_caller_does() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.behave(&format!(
+                "{CLAUDE_INIT}\n{}{CLAUDE_WAITS}\n",
+                claude_calls(&[CLAUDE_LOOP], true),
+            ));
+            claude.start(&playground);
+            let chatting = claude_chat(
+                &playground,
+                &["--model", "claude-code:claude-sonnet-5-5", "Loop."],
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+            claude.wait_for("waiting");
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let (session, run) = loop {
+                let listed = playground.expect(0, &["runs"]);
+                if let Some(run) = listed["running"]
+                    .as_array()
+                    .and_then(|running| running.first())
+                {
+                    break (
+                        run["session"].as_str().unwrap().to_owned(),
+                        run["run"].as_u64().unwrap(),
+                    );
+                }
+                assert!(Instant::now() < deadline, "no run started: {listed}");
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            let (busy, code) = playground.json(&["chat", "--session", &session, "Are you done?"]);
+            assert_eq!(code, 1, "{busy}");
+            assert_eq!(busy["error"]["kind"], "session-busy", "{busy}");
+
+            // Ctrl-C on the CLI stops Claude Code and the session's run.
+            let killed = Command::new("kill")
+                .args(["-INT", &chatting.id().to_string()])
+                .status()
+                .unwrap();
+            assert!(killed.success());
+            let _ = wait(chatting);
+            // Sent straight after, the next message waits for Claude Code to exit.
+            claude.answers("Stopped.");
+            let next = playground.expect(0, &["chat", "--session", &session, "Stopped?"]);
+            assert_eq!(next["untrusted"]["reply"], "Stopped.", "{next}");
+            assert!(claude.dir.join("interrupted").exists());
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                let shown = playground.expect(0, &["show", &run.to_string()]);
+                if shown["outcome"]["kind"] == "cancelled" {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the run was not cancelled: {shown}"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            playground.stop();
+        }
+
+        #[test]
+        fn a_conversation_claude_code_already_holds_is_resumed_once_then_refused() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            // As when the playground stopped before it noted the conversation: starting it
+            // again is refused, and resuming it answers.
+            let in_use = r#"echo "Error: Session ID $SESSION is already in use." >&2; exit 1"#;
+            claude.behave(&format!(
+                "if [ -z \"$RESUMED\" ]; then {in_use}; fi\n{}",
+                claude_answers(CLAUDE_INIT, "Resumed.")
+            ));
+            claude.start(&playground);
+            let answered = playground.expect(
+                0,
+                &["chat", "--model", "claude-code:claude-sonnet-5-5", "Go on."],
+            );
+            assert_eq!(answered["untrusted"]["reply"], "Resumed.", "{answered}");
+            let session = answered["session"].as_str().unwrap();
+            assert!(claude.argv(0).iter().any(|arg| arg == "--session-id"));
+            let resumed = claude.argv(1);
+            let at = resumed.iter().position(|arg| arg == "--resume").unwrap();
+            assert_eq!(resumed[at + 1], session);
+
+            // In use both ways: refused with a plain reason, not tried again.
+            claude.behave(&format!("{in_use}\n"));
+            let (refused, code) =
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Again."]);
+            assert_eq!(code, 1, "{refused}");
+            assert!(
+                refused["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("already answering in this session"),
+                "{refused}"
+            );
+            assert!(!claude.dir.join("argv-4").exists());
+            playground.stop();
+        }
+
+        #[test]
+        fn a_claude_code_chat_still_answering_is_stopped_with_the_playground() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            // One that goes on after an interrupt, as Claude Code finishing a call does.
+            claude.behave(&format!(
+                r#"{CLAUDE_INIT}
+echo $$ > "$D/pid"; trap 'touch "$D/interrupted"' INT; touch "$D/waiting"
+i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
+"#
+            ));
+            claude.start(&playground);
+            let chatting = claude_chat(
+                &playground,
+                &["--model", "claude-code:claude-sonnet-5-5", "Wait."],
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+            claude.wait_for("waiting");
+            let pid = std::fs::read_to_string(claude.dir.join("pid")).unwrap();
+            playground.stop();
+            assert!(claude.dir.join("interrupted").exists());
+            // Gone with the playground, not left answering after it.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Command::new("kill")
+                .args(["-0", pid.trim()])
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "Claude Code outlived the playground"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let _ = wait(chatting);
+        }
+
+        /// Claude Code's start message, reporting `api_key_source`.
+        fn claude_init(api_key_source: &str) -> String {
+            CLAUDE_INIT.replace(
+                r#"\"apiKeySource\":\"none\""#,
+                &format!(r#"\"apiKeySource\":\"{api_key_source}\""#),
+            )
+        }
+
+        fn claude_answers(init: &str, reply: &str) -> String {
+            format!(
+                "{init}\n{}\n",
+                claude_line(
+                    &json!({ "type": "result", "subtype": "success", "is_error": false, "result": reply })
+                ),
+            )
+        }
+
+        #[test]
+        fn a_claude_code_chat_that_would_not_bill_the_subscription_waits_for_a_confirmation() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.signed_in("api_key");
+            claude.behave(&claude_answers(
+                &claude_init("ANTHROPIC_API_KEY"),
+                "Billed.",
+            ));
+            claude.start(&playground);
+            let (refused, code) =
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hi."]);
+            assert_eq!(code, 1, "{refused}");
+            assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
+            let said = refused["error"]["message"].as_str().unwrap();
+            assert!(
+                said.contains("would bill an Anthropic API key,")
+                    && said.contains("--confirm-billing \"api_key\"")
+                    && said.contains("restart the playground"),
+                "{said}"
+            );
+            assert_eq!(claude.messages(), 0);
+            assert!(
+                playground.expect(0, &["sessions"])["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+
+            let answered = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--confirm-billing",
+                    "api_key",
+                    "Hi.",
+                ],
+            );
+            assert_eq!(answered["untrusted"]["reply"], "Billed.", "{answered}");
+            let session = answered["session"].as_str().unwrap().to_owned();
+            assert_eq!(
+                session_kinds(&playground, &session),
+                ["started", "billing-confirmed", "claude-conversation"]
+            );
+            // The session's confirmation holds for its next message.
+            playground.expect(0, &["chat", "--session", &session, "Again."]);
+
+            // Signed in to the subscription now: not what the session confirmed.
+            claude.signed_in("claude.ai");
+            let (changed, code) = playground.json(&["chat", "--session", &session, "And now?"]);
+            assert_eq!(code, 1, "{changed}");
+            assert_eq!(changed["error"]["kind"], "billing-changed", "{changed}");
+            assert!(
+                changed["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("claude.ai")
+            );
+
+            // Claude Code's start message reporting other billing than `auth status` did
+            // stops the message.
+            claude.signed_in("api_key");
+            claude.behave(&format!("{}\n{CLAUDE_WAITS}\n", claude_init("none")));
+            let (stopped, code) = playground.json(&["chat", "--session", &session, "Last."]);
+            assert_eq!(code, 1, "{stopped}");
+            assert_eq!(stopped["error"]["kind"], "billing-changed", "{stopped}");
+            assert!(claude.dir.join("interrupted").exists());
+            playground.stop();
+        }
+
+        #[test]
+        fn a_claude_code_chat_names_and_confirms_an_address_requests_are_sent_to() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.behave(&claude_answers(CLAUDE_INIT, "Proxied."));
+            claude.start_with(
+                &playground,
+                &[("ANTHROPIC_BASE_URL", "https://proxy.example")],
+            );
+            let shown = FakeClaude::shown(&playground);
+            assert_eq!(shown["subscription"], false, "{shown}");
+            assert_eq!(
+                shown["confirmation"], "claude.ai via https://proxy.example",
+                "{shown}"
+            );
+            let (refused, code) =
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hi."]);
+            assert_eq!(code, 1, "{refused}");
+            assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
+            assert!(
+                refused["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("https://proxy.example")
+            );
+            let answered = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "--confirm-billing",
+                    "claude.ai via https://proxy.example",
+                    "Hi.",
+                ],
+            );
+            assert_eq!(answered["untrusted"]["reply"], "Proxied.", "{answered}");
+            playground.stop();
+        }
+
+        #[test]
+        fn claude_code_that_cannot_answer_is_shown_unavailable_with_what_to_do() {
+            let playground = Playground::with_blueprint(JOIN_BLUEPRINT);
+            let claude = FakeClaude::new(&playground);
+            claude.start(&playground);
+            let shown = FakeClaude::shown(&playground);
+            assert_eq!(shown["state"], "available", "{shown}");
+            assert_eq!(shown["subscription"], true, "{shown}");
+            // Polled again within the minute, the look is not taken again.
+            for _ in 0..3 {
+                FakeClaude::shown(&playground);
+            }
+            let asked = std::fs::read_to_string(claude.dir.join("auth-asked")).unwrap();
+            assert_eq!(asked.lines().count(), 1, "{asked}");
+            playground.stop();
+
+            let unavailable = |prepare: &dyn Fn(), state: &str, says: &str| {
+                prepare();
+                claude.start(&playground);
+                let shown = FakeClaude::shown(&playground);
+                assert_eq!(shown["state"], state, "{shown}");
+                assert!(shown["reason"].as_str().unwrap().contains(says), "{shown}");
+                let (refused, code) =
+                    playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hi."]);
+                assert_eq!(code, 1, "{refused}");
+                assert_eq!(
+                    refused["error"]["kind"], "claude-code-unavailable",
+                    "{refused}"
+                );
+                assert!(refused["error"]["message"].as_str().unwrap().contains(says));
+                playground.stop();
+            };
+            unavailable(
+                &|| std::fs::write(claude.dir.join("version"), "2.1.299 (Claude Code)\n").unwrap(),
+                "too-old",
+                "claude update",
+            );
+            std::fs::write(claude.dir.join("version"), "2.1.310 (Claude Code)\n").unwrap();
+            unavailable(&|| claude.signed_in("none"), "signed-out", "sign in");
+            // An `auth status` that never answers is given up on, not waited for.
+            unavailable(
+                &|| std::fs::write(claude.dir.join("auth.sh"), "sleep 30\n").unwrap(),
+                "failed",
+                "did not answer",
+            );
+
+            // No `claude` on the playground's PATH.
+            let output = playground
+                .command(&["start", "--json", "--allow-localhost"])
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "start: {}", stderr(&output));
+            let shown = FakeClaude::shown(&playground);
+            assert_eq!(shown["state"], "missing", "{shown}");
+            assert!(
+                shown["reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("isn't installed"),
+                "{shown}"
+            );
+            playground.stop();
         }
 
         #[test]
@@ -3590,70 +4481,74 @@ permissions:\n  main:\n  - capability: http.get\n    action: allow\n";
             playground.stop();
         }
 
+        /// One JSON-RPC message POSTed to the MCP endpoint: the status, the session id the
+        /// server gave, and the reply.
+        fn mcp_post(
+            url: &str,
+            token: &str,
+            session: Option<&str>,
+            body: Value,
+        ) -> (u16, Option<String>, Value) {
+            let agent: ureq::Agent = ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .timeout_global(Some(Duration::from_secs(60)))
+                .build()
+                .into();
+            let mut request = agent
+                .post(url)
+                .header("authorization", &format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream");
+            if let Some(session) = session {
+                request = request.header("mcp-session-id", session);
+            }
+            let mut response = request.send(body.to_string()).unwrap();
+            let status = response.status().as_u16();
+            let session = response
+                .headers()
+                .get("mcp-session-id")
+                .map(|value| value.to_str().unwrap().to_owned());
+            let text = response.body_mut().read_to_string().unwrap();
+            let data = text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .next_back()
+                .map_or(text.as_str(), str::trim);
+            let message = serde_json::from_str(data).unwrap_or(Value::String(text.clone()));
+            (status, session, message)
+        }
+        /// Starts an MCP session on `url` with `token`; its id.
+        fn initialize(url: &str, token: &str, variables: Value) -> String {
+            let (status, session, message) = mcp_post(
+                url,
+                token,
+                None,
+                json!({
+                    "jsonrpc":"2.0", "id":1, "method":"initialize",
+                    "params": {"protocolVersion":"2025-06-18", "capabilities":{},
+                        "clientInfo":{"name":"selected-blueprint-test","version":"0"},
+                        "_meta":{"variables":variables}}
+                }),
+            );
+            assert_eq!(status, 200, "initialize: {message}");
+            let session = session.expect("native MCP session id");
+            let (status, _, message) = mcp_post(
+                url,
+                token,
+                Some(&session),
+                json!({
+                    "jsonrpc":"2.0", "method":"notifications/initialized"
+                }),
+            );
+            assert!(status == 200 || status == 202, "initialized: {message}");
+            session
+        }
+
         #[cfg_attr(skip_http_tests, ignore = "HTTP tests disabled")]
         #[test]
         fn selected_project_blueprints_keep_sessions_packages_and_versions_distinct() {
             // Native MCP replaces the old server-backed /v1 package-discovery routes.
             // Keep a real transport session per Blueprint, with the same bound values.
-            fn mcp_post(
-                url: &str,
-                token: &str,
-                session: Option<&str>,
-                body: Value,
-            ) -> (u16, Option<String>, Value) {
-                let agent: ureq::Agent = ureq::Agent::config_builder()
-                    .http_status_as_error(false)
-                    .timeout_global(Some(Duration::from_secs(60)))
-                    .build()
-                    .into();
-                let mut request = agent
-                    .post(url)
-                    .header("authorization", &format!("Bearer {token}"))
-                    .header("content-type", "application/json")
-                    .header("accept", "application/json, text/event-stream");
-                if let Some(session) = session {
-                    request = request.header("mcp-session-id", session);
-                }
-                let mut response = request.send(body.to_string()).unwrap();
-                let status = response.status().as_u16();
-                let session = response
-                    .headers()
-                    .get("mcp-session-id")
-                    .map(|value| value.to_str().unwrap().to_owned());
-                let text = response.body_mut().read_to_string().unwrap();
-                let data = text
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("data:"))
-                    .next_back()
-                    .map_or(text.as_str(), str::trim);
-                let message = serde_json::from_str(data).unwrap_or(Value::String(text.clone()));
-                (status, session, message)
-            }
-            fn initialize(url: &str, token: &str, variables: Value) -> String {
-                let (status, session, message) = mcp_post(
-                    url,
-                    token,
-                    None,
-                    json!({
-                        "jsonrpc":"2.0", "id":1, "method":"initialize",
-                        "params": {"protocolVersion":"2025-06-18", "capabilities":{},
-                            "clientInfo":{"name":"selected-blueprint-test","version":"0"},
-                            "_meta":{"variables":variables}}
-                    }),
-                );
-                assert_eq!(status, 200, "initialize: {message}");
-                let session = session.expect("native MCP session id");
-                let (status, _, message) = mcp_post(
-                    url,
-                    token,
-                    Some(&session),
-                    json!({
-                        "jsonrpc":"2.0", "method":"notifications/initialized"
-                    }),
-                );
-                assert!(status == 200 || status == 202, "initialized: {message}");
-                session
-            }
             let playground = Playground::starter();
             let package = playground.root.join("submilli/packages/reports");
             std::fs::create_dir_all(package.join("src")).unwrap();

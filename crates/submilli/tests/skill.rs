@@ -701,3 +701,158 @@ fn build_init_suggests_the_skill_for_detected_assistants() {
     let stderr = init(installed.path(), home.path());
     assert!(!stderr.contains("skill install"), "{stderr}");
 }
+
+const CHAT_HOOK: &str = "submilli playground chat-hook";
+const TOOL_EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PostToolUseFailure"];
+
+fn read_json(path: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+/// The matchers of every `chat-hook` entry for `event`.
+fn chat_hook_matchers(settings: &serde_json::Value, event: &str) -> Vec<String> {
+    settings["hooks"][event]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["hooks"][0]["command"] == CHAT_HOOK)
+        .map(|entry| entry["matcher"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Only the stand-in's playground tools, and the stand-in's own stop, start `chat-hook`:
+/// a file the developer's own Claude Code reads (`Read`) matches none of them.
+fn assert_narrowed(settings: &serde_json::Value) {
+    for event in TOOL_EVENTS {
+        assert_eq!(
+            chat_hook_matchers(settings, event),
+            ["mcp__playground__.*"],
+            "{event}: {settings}"
+        );
+    }
+    assert_eq!(
+        chat_hook_matchers(settings, "SubagentStop"),
+        ["submilli-standin"],
+        "{settings}"
+    );
+}
+
+fn bundled_stand_in() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skills/submilli/agents/submilli-standin.md"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_project_install_sets_up_the_stand_in_and_a_second_install_changes_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    ok(run(root.path(), "install", "claude"));
+    let stand_in = root.path().join(".claude/agents/submilli-standin.md");
+    assert_eq!(fs::read_to_string(&stand_in).unwrap(), bundled_stand_in());
+    let settings_path = root.path().join(".claude/settings.local.json");
+    let settings = read_json(&settings_path);
+    assert_narrowed(&settings);
+    assert_eq!(
+        settings["permissions"]["allow"],
+        serde_json::json!(["mcp__playground__*"])
+    );
+
+    let before = fs::metadata(&settings_path).unwrap().modified().unwrap();
+    let text = fs::read(&settings_path).unwrap();
+    ok(run(root.path(), "install", "claude"));
+    ok(run(root.path(), "update", "claude"));
+    assert_eq!(fs::read(&settings_path).unwrap(), text);
+    assert_eq!(
+        fs::metadata(&settings_path).unwrap().modified().unwrap(),
+        before
+    );
+    assert_eq!(fs::read_to_string(&stand_in).unwrap(), bundled_stand_in());
+}
+
+#[test]
+fn a_user_install_writes_the_stand_in_but_no_hooks() {
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args(["skill", "install", "--agent", "claude"])
+        .env(
+            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            home.path(),
+        )
+        .env("SUBMILLI_TELEMETRY", "0")
+        .output()
+        .unwrap();
+    ok(output.clone());
+    assert_eq!(
+        fs::read_to_string(home.path().join(".claude/agents/submilli-standin.md")).unwrap(),
+        bundled_stand_in()
+    );
+    assert!(!home.path().join(".claude/settings.local.json").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--project"), "{stdout}");
+}
+
+#[test]
+fn update_preserves_an_edited_stand_in() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    ok(run(root.path(), "install", "claude"));
+    let stand_in = root.path().join(".claude/agents/submilli-standin.md");
+    // Make the skill look like an older release so update has work to do.
+    let path = root.path().join(".claude/skills/submilli");
+    let receipt_path = path.join(".submilli-skill.json");
+    let mut receipt = read_json(&receipt_path);
+    assert!(
+        receipt["companions"][".claude/agents/submilli-standin.md"].is_string(),
+        "{receipt}"
+    );
+    fs::write(path.join("SKILL.md"), "old release").unwrap();
+    receipt["files"]["SKILL.md"] = format!("{:x}", Sha256::digest(b"old release")).into();
+    fs::write(&receipt_path, serde_json::to_vec(&receipt).unwrap()).unwrap();
+    fs::write(&stand_in, "my own stand-in").unwrap();
+    let output = run(root.path(), "update", "claude");
+    ok(output.clone());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("not written"));
+    assert_eq!(fs::read_to_string(&stand_in).unwrap(), "my own stand-in");
+    ok(run(root.path(), "status", "claude"));
+}
+
+#[test]
+fn settings_that_cant_be_merged_stop_the_install_before_anything_is_written() {
+    let root = tempfile::tempdir().unwrap();
+    let settings_path = root.path().join(".claude/settings.local.json");
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(&settings_path, "{ not json").unwrap();
+    let output = run(root.path(), "install", "claude");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("wasn't changed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read_to_string(&settings_path).unwrap(), "{ not json");
+    assert!(
+        !root
+            .path()
+            .join(".claude/agents/submilli-standin.md")
+            .exists()
+    );
+    assert!(!root.path().join(".claude/skills/submilli").exists());
+}
+
+#[test]
+fn skill_install_replaces_the_playground_claude_code_command() {
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_submilli"))
+        .args(["playground", "claude-code"])
+        .current_dir(root.path())
+        .env("SUBMILLI_TELEMETRY", "0")
+        .env("SUBMILLI_HOME", root.path().join(".submilli"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unrecognized subcommand"), "{stderr}");
+    assert!(!root.path().join(".claude").exists());
+}

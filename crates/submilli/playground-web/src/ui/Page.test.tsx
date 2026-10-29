@@ -1092,7 +1092,7 @@ test("reasoning effort stays available for Claude and is omitted for Gemini", as
   await runsLoaded();
   await user.click(screen.getByRole("button", { name: "New session" }));
   const agent = within(screen.getByRole("group", { name: "Provider" }));
-  await user.click(agent.getByRole("button", { name: /^Claude/ }));
+  await user.click(agent.getByRole("button", { name: "Claude" }));
   await user.click(screen.getByText("Advanced model options"));
   expect(screen.getByRole("group", { name: "Reasoning effort" })).toBeInTheDocument();
   await user.click(agent.getByRole("button", { name: /^Gemini/ }));
@@ -1815,4 +1815,129 @@ test("Sessions keeps one contextual New session action within its active modal",
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "New session" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Configure model" })).toBeVisible();
+});
+
+test("a Claude Code session that doesn't bill the subscription asks first, then resends with the confirmation", async () => {
+  const server = new FakeServer();
+  const confirmation = "api_key via https://proxy.example";
+  server.handle = (call) => {
+    if (call.url === "/api/status") {
+      const s = fixtureJson<Record<string, unknown>>("status.json");
+      s.claude_code = { state: "available", version: "2.1.310", source: "api_key", base_url: "https://proxy.example", billed: "an Anthropic API key, sending to https://proxy.example", subscription: false, confirmation };
+      return json(s);
+    }
+    if (call.url !== "/api/agent") return undefined;
+    const body = call.body as Record<string, unknown>;
+    if (body.confirm_billing === confirmation) return new Response(fixture("agent-new.json"));
+    const message = `Claude Code would bill ${confirmation}, not your Claude subscription. Confirm it with \`--confirm-billing "${confirmation}"\`.`;
+    return json({ exit: 1, result: { error: { kind: "billing-unconfirmed", message } }, text: "" });
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(within(screen.getByRole("group", { name: "Provider" })).getByRole("button", { name: "Claude Code" }));
+  expect(screen.getByText(/^Bills an Anthropic API key, sending to https:\/\/proxy\.example, not your Claude subscription/)).toBeInTheDocument();
+  // No key to add for it.
+  expect(screen.queryByRole("button", { name: /key$/ })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Opus 5.5" }));
+  // Its effort is by the model, not behind the advanced options.
+  expect(within(screen.getByRole("group", { name: "Reasoning effort" })).getByRole("button", { name: "Extra high" })).toBeVisible();
+  await user.click(screen.getByText("Advanced model options"));
+  expect(screen.queryByRole("textbox", { name: /Max output/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("Provider settings")).not.toBeInTheDocument();
+  await user.type(screen.getByRole("textbox", { name: /Spending limit/ }), "2.5");
+  await completeSetup(user);
+  await user.click(screen.getByRole("button", { name: "Start session" }));
+  expect(within(screen.getByRole("region", { name: "Session" })).getByText("Agent Claude Code · claude-opus-5-5 · spending limit $2.50")).toBeInTheDocument();
+
+  await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Hello{Enter}");
+  const ask = await screen.findByRole("alert");
+  expect(ask.textContent).toContain("Claude Code would bill an Anthropic API key, sending to https://proxy.example, not your Claude subscription.");
+  // The message stays unsent, in the box.
+  expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue("Hello");
+  const sent = () => server.calls.filter((c) => c.url === "/api/agent").map((c) => c.body);
+  expect(sent()).toEqual([{ task: "Hello", blueprint: "billing", model: "claude-code:claude-opus-5-5", variables: { customerId: "pied_piper" }, max_budget_usd: 2.5 }]);
+
+  // Cancel says how to use the subscription instead, and sends nothing.
+  await user.click(within(ask).getByRole("button", { name: "Cancel" }));
+  expect(screen.getByText(/^Not sent; your message is still in the box\. To use your Claude subscription instead/)).toBeInTheDocument();
+  expect(sent()).toHaveLength(1);
+
+  // Sent again, it's asked again; Confirm resends it with the confirmation.
+  await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "{Enter}");
+  await user.click(within(await screen.findByRole("alert")).getByRole("button", { name: "Confirm and send" }));
+  await vi.waitFor(() => expect(sent()).toHaveLength(3));
+  expect(sent()[2]).toEqual({ task: "Hello", blueprint: "billing", model: "claude-code:claude-opus-5-5", variables: { customerId: "pied_piper" }, max_budget_usd: 2.5, confirm_billing: confirmation });
+});
+
+test("Claude Code that can't answer says why under the choice, with no key to add", async () => {
+  const server = new FakeServer();
+  server.handle = (call) => {
+    if (call.url !== "/api/status") return undefined;
+    const s = fixtureJson<Record<string, unknown>>("status.json");
+    s.claude_code = { state: "signed-out", subscription: false, reason: "Claude Code is signed out; run `claude` once to sign in" };
+    return json(s);
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  const option = within(screen.getByRole("group", { name: "Provider" })).getByRole("button", { name: /^Claude Code/ });
+  expect(option.textContent).toBe("Claude Code · signed out");
+  await user.click(option);
+  expect(screen.getByText("Claude Code is signed out; run `claude` once to sign in.")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /key$/ })).not.toBeInTheDocument();
+});
+
+test("a Claude Code model is picked from the offered ones, or typed in full, even one starting with an offered name", async () => {
+  const server = new FakeServer();
+  server.handle = (call) => {
+    if (call.url !== "/api/status") return undefined;
+    const s = fixtureJson<Record<string, unknown>>("status.json");
+    s.claude_code = { state: "available", version: "2.1.310", source: "claude.ai", billed: "your Claude login", subscription: true, confirmation: "claude.ai" };
+    return json(s);
+  };
+  const { user } = await openPage(server);
+  await runsLoaded();
+  await user.click(screen.getByRole("button", { name: "New session" }));
+  await user.click(within(screen.getByRole("group", { name: "Provider" })).getByRole("button", { name: "Claude Code" }));
+  const models = within(screen.getByRole("group", { name: "Model" }));
+  expect(models.getAllByRole("button").map((b) => b.textContent)).toEqual(["Sonnet 5.5", "Opus 5.5", "Fable 5.1", "Haiku 5.5"]);
+  const typed = screen.getByRole("textbox", { name: "Or another model" });
+  await user.type(typed, "claude-sonnet-5-5-20261001");
+  expect(typed).toHaveValue("claude-sonnet-5-5-20261001");
+  await user.click(models.getByRole("button", { name: "Fable 5.1" }));
+  expect(typed).toHaveValue("");
+  expect(models.getByRole("button", { name: "Fable 5.1" })).toHaveAttribute("aria-pressed", "true");
+  // Away from Claude Code, effort is an advanced option again; back on it, its default model shows on its button alone.
+  const provider = within(screen.getByRole("group", { name: "Provider" }));
+  await user.type(typed, "claude-opus-6");
+  await user.click(provider.getByRole("button", { name: "OpenAI" }));
+  expect(screen.queryByRole("group", { name: "Reasoning effort" })).not.toBeVisible();
+  await user.click(provider.getByRole("button", { name: "Claude Code" }));
+  expect(screen.getByRole("textbox", { name: "Or another model" })).toHaveValue("");
+  expect(screen.getByRole("button", { name: "Sonnet 5.5" })).toHaveAttribute("aria-pressed", "true");
+});
+
+test("an answer stopped at a limit says so, as stopped rather than failed, for any agent", async () => {
+  for (const [reason, said] of [
+    ["turn-limit", "The agent stopped at the most turns one message may take."],
+    ["spending-limit", "Claude Code reached this message’s spending limit."],
+    ["call-limit", "The agent made as many tool calls as one message allows."],
+    ["usage-limit", "Your Claude subscription has no usage left for now."],
+  ]) {
+    const server = new FakeServer();
+    server.handle = (call) => {
+      if (call.url !== "/api/agent") return undefined;
+      const answer = fixtureJson<{ result: Record<string, unknown> }>("agent-continue.json");
+      answer.result.stopped = reason;
+      return json(answer);
+    };
+    const { user } = await openPage(server);
+    await runsLoaded();
+    await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Go on{Enter}");
+    const line = await screen.findByText(said, { exact: false });
+    expect(line.closest(".pg-stopped")).not.toBeNull();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    cleanup();
+  }
 });

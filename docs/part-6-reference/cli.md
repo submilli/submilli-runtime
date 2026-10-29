@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1d6fcfd3993978c83d0b10084defe2e1a53ae0979736e43d77335978efd5df40"
+  contentHash: "69e3b8cb7d5dca7a5b5f4f0fdbaed51b6dc75da0f674f52f67f029b24e831058"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -2262,7 +2262,8 @@ Commands:
     stop                     Stop the playground and finish active runs
 
   Run from the terminal:
-    chat <MESSAGE>           Give an agent a task using your model key
+    chat <MESSAGE>           Give an agent a task using your model key or
+                             Claude Code
     exec <FILE|--example>    Run a program or the demo example
     bind                     Set variables and development secrets for new
                              runs
@@ -2272,7 +2273,6 @@ Commands:
     watch                    Follow session events as JSON lines
 
   Connect a coding assistant:
-    claude-code              Connect Claude Code to this playground
     mcp                      Serve playground tools to a coding assistant
 
   Advanced inspection and testing:
@@ -2461,12 +2461,13 @@ Options:
 ### `submilli playground chat`
 
 ```text
-Chat with an agent using your own model key, the way a production agent runs: it uses the
-playground's tools and prints its answer. Each chat starts a session; send the next message in it
-with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or
-`session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the
-playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model
-from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+Chat with an agent using your own model key or your own Claude Code, the way a production agent
+runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the
+next message in it with `--session`. The session stays open until it sits idle past the blueprint's
+idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or
+GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli
+secret put <NAME>`; Claude Code (`--model claude-code:<model>`) needs none. The model comes from
+`--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
 
 Usage: submilli playground chat [OPTIONS] <MESSAGE>
 
@@ -2481,13 +2482,26 @@ Options:
 
       --model <PROVIDER:MODEL>
           The model for a new session, as `<provider>:<model>`, from a provider whose key the
-          playground started with. Default: the playground's configured model. A session carried on
-          keeps its own
+          playground started with, or `claude-code:<model>` to answer with your own Claude Code,
+          where the model is a full name such as claude-sonnet-5-5, claude-opus-5-5,
+          claude-fable-5-1, or claude-haiku-5-5. Default: the playground's configured model. A
+          session carried on keeps its own
 
       --effort <LEVEL>
-          How hard a new session's model reasons. OpenAI models only, for now
+          How hard a new session's model reasons: OpenAI models take low, medium, or high; Claude
+          Code also takes xhigh and max
 
-          [possible values: low, medium, high]
+          [possible values: low, medium, high, xhigh, max]
+
+      --max-budget-usd <USD>
+          The most a new Claude Code session may spend on one message, in US dollars, above 0 and at
+          most 100. Default: 1.00. On a subscription it measures usage, not billing. Claude Code
+          checks it between steps, so a message's last step can go a little over
+
+      --confirm-billing <BILLING>
+          Let Claude Code bill what isn't your Claude subscription, such as an API key or an
+          `ANTHROPIC_BASE_URL` address, in this session: the value the refusal names, such as
+          `api_key` or `claude.ai via https://proxy.example`
 
       --max-output <TOKENS>
           The most tokens one answer of a new session's model may take. Default: 4096
@@ -2498,7 +2512,8 @@ Options:
           itself (the model, messages, tools, instructions) are refused
 
       --max-calls-per-answer <N>
-          The most tool calls run for one answer of the model; the rest are refused to it
+          The most tool calls run for one answer of the model; the rest are refused to it. Claude
+          Code counts them across the whole message, and stops at the limit
 
           [default: 16]
 
@@ -2673,28 +2688,6 @@ Options:
 
       --json
           Accepted for symmetry; `watch` always prints JSON lines
-
-  -h, --help
-          Print help (see a summary with '-h')
-```
-
-### `submilli playground claude-code`
-
-```text
-Set Claude Code up in this project to try tasks through the playground on your Claude subscription:
-writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own
-`.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use
-those tools without asking, so your blueprint decides its calls. Run it again to check; it changes
-only what's missing.
-
-Usage: submilli playground claude-code [OPTIONS]
-
-Options:
-      --force
-          Replace a `submilli-standin` subagent file that differs from the playground's
-
-      --json
-          Print JSON
 
   -h, --help
           Print help (see a summary with '-h')

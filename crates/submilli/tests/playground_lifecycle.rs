@@ -106,6 +106,7 @@ mod unix {
                 .arg("playground")
                 .args(args)
                 .current_dir(&self.root)
+                .env("PATH", super::path_without_claude())
                 .env("SUBMILLI_HOME", self.dir.path().join("home"))
                 .env("HOME", self.dir.path().join("home"))
                 .env_remove("SUBMILLI_TELEMETRY")
@@ -2301,4 +2302,15 @@ mod unix {
         assert!(!project.state().join("open.html").exists());
         assert!(project.stop().status.success());
     }
+}
+
+/// This process's PATH, without any directory holding a `claude`: the developer's own
+/// Claude Code is never run by a test.
+#[cfg(unix)]
+fn path_without_claude() -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let kept: Vec<std::path::PathBuf> = std::env::split_paths(&path)
+        .filter(|dir| !dir.join("claude").exists())
+        .collect();
+    std::env::join_paths(kept).unwrap().into_string().unwrap()
 }

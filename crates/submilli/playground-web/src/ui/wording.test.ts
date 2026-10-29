@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import type { Recheck } from "../api/types";
-import { chatFailed, feedStopped, newSessionNotice, recheckSaid } from "./wording";
+import { billingAsk, chatFailed, chatStopped, feedStopped, newSessionNotice, recheckSaid } from "./wording";
 
 describe("the page's own lines", () => {
   it("say a refused request won't pass by sending again, but a rate limit or timeout may", () => {
@@ -37,4 +37,27 @@ it("keeps uncertain execution distinct from provider rejection", () => {
   expect(chatFailed("The playground did not answer", false, "unreachable").note).toContain("execution may have started");
   expect(chatFailed("Denied (HTTP 401)", true).note).toContain("provider key");
   expect(chatFailed("insufficient_quota", true).note).toContain("quota or credit");
+});
+
+test("each limit an answer stops at has its line and a next step", () => {
+  for (const reason of ["turn-limit", "output-limit", "provider", "spending-limit", "call-limit", "usage-limit"]) {
+    const { text, note } = chatStopped(true, reason);
+    expect(text).not.toMatch(/^The agent stopped: /);
+    expect(note).not.toBe("");
+  }
+  expect(chatStopped(true, "spending-limit").note).toContain("New session with a higher one");
+  expect(chatStopped(true, "something-new")).toEqual({ text: "The agent stopped: something-new.", note: "Send another message to carry on." });
+  // Stopped by the reader, as before.
+  expect(chatStopped(true).text).toBe("You stopped the agent.");
+});
+
+test("Claude Code's refusals say what to do next", () => {
+  expect(chatFailed("No conversation found", true, "conversation-missing").note).toContain("Start a New session");
+  expect(chatFailed("busy", true, "session-busy").note).toContain("Wait for it, then Send again");
+  expect(chatFailed("Claude Code is signed out", false, "claude-code-unavailable").note).toContain("Send again");
+});
+
+test("the billing question names what would be billed, and what changed", () => {
+  expect(billingAsk("an Anthropic API key", false).text).toBe("Claude Code would bill an Anthropic API key, not your Claude subscription.");
+  expect(billingAsk("an Anthropic API key", true).text).toBe("Claude Code now bills an Anthropic API key, not what this session confirmed.");
 });

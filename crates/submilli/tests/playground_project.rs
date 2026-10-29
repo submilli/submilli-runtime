@@ -74,6 +74,7 @@ mod unix {
             command
                 .args(args)
                 .current_dir(cwd)
+                .env("PATH", super::path_without_claude())
                 .env("SUBMILLI_HOME", &self.home)
                 .env("HOME", &self.home)
                 .env_remove("SUBMILLI_TELEMETRY")
@@ -792,4 +793,15 @@ mod unix {
         assert!(!message.to_lowercase().contains("denied"), "{message}");
         assert!(!workspace.state().join("lock").exists());
     }
+}
+
+/// This process's PATH, without any directory holding a `claude`: the developer's own
+/// Claude Code is never run by a test.
+#[cfg(unix)]
+fn path_without_claude() -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let kept: Vec<std::path::PathBuf> = std::env::split_paths(&path)
+        .filter(|dir| !dir.join("claude").exists())
+        .collect();
+    std::env::join_paths(kept).unwrap().into_string().unwrap()
 }

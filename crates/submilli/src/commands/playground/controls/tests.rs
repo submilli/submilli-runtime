@@ -1614,17 +1614,28 @@ fn runs_lists_around_a_run_file_it_cannot_read_and_says_so() {
     assert!(text.contains(&listed.warnings[0]), "{text}");
 }
 
-#[test]
-fn a_session_answers_one_chat_message_at_a_time() {
+#[tokio::test]
+async fn a_session_answers_one_chat_message_at_a_time() {
+    use super::act::Answering;
+    use std::sync::atomic::{AtomicBool, Ordering};
     let chatting = std::sync::Arc::default();
-    let first = super::act::Answering::claim(&chatting, "s-1").unwrap();
-    let busy = super::act::Answering::claim(&chatting, "s-1")
+    let flag = || std::sync::Arc::new(AtomicBool::new(false));
+    let held = flag();
+    let first = Answering::claim(&chatting, "s-1", &held).await.unwrap();
+    let busy = Answering::claim(&chatting, "s-1", &flag())
+        .await
         .err()
         .unwrap();
     assert!(busy.message.contains("still answering"), "{}", busy.message);
-    let other = super::act::Answering::claim(&chatting, "s-2").unwrap();
-    drop(first);
-    let again = super::act::Answering::claim(&chatting, "s-1");
+    let other = Answering::claim(&chatting, "s-2", &flag()).await.unwrap();
+    // A cancelled message still stopping is waited for, then the next one goes on.
+    held.store(true, Ordering::Relaxed);
+    let released = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(first);
+    });
+    let again = Answering::claim(&chatting, "s-1", &flag()).await;
     assert!(again.is_ok());
+    released.join().unwrap();
     drop(other);
 }

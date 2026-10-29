@@ -145,7 +145,7 @@ export function plural(n: number, one: string, many: string): string {
   return n + " " + (n === 1 ? one : many);
 }
 
-const PROVIDERS: Record<string, string> = { anthropic: "Claude", openai: "OpenAI", google: "Gemini" };
+const PROVIDERS: Record<string, string> = { anthropic: "Claude", openai: "OpenAI", google: "Gemini", "claude-code": "Claude Code" };
 
 /** A provider's name as people say it. */
 export function providerName(provider: string): string {
@@ -159,6 +159,11 @@ export function agentLabel(named: string | undefined | null): string {
   return providerName(named.slice(0, i)) + " · " + named.slice(i + 1);
 }
 
+/** A spending limit as the page writes it: "$1.00". */
+export function dollars(amount: number): string {
+  return "$" + amount.toFixed(2);
+}
+
 /** Each provider setting of a session, by name, with its value as JSON. */
 export function providerSettings(set: ChatSettings | undefined | null): { name: string; value: string }[] {
   return Object.entries(set?.provider ?? {}).map(([name, value]) => ({ name, value: JSON.stringify(value) ?? "" }));
@@ -170,6 +175,7 @@ export function settingsLabel(set: ChatSettings | undefined | null): string {
   const parts: string[] = [];
   if (set.effort) parts.push("effort " + set.effort);
   if (set.max_output) parts.push("max output " + set.max_output);
+  if (set.max_budget_usd) parts.push("spending limit " + dollars(set.max_budget_usd));
   const names = set.provider ? Object.keys(set.provider) : [];
   if (set.provider && names.length) {
     const value = JSON.stringify(set.provider[names[0]]) ?? "";

@@ -5,7 +5,12 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ActionOutcome } from "../api/client";
 import type { SavedKey, Status } from "../api/types";
 import {
+  agentSummary,
+  billingLine,
   checkSetup,
+  CLAUDE_CODE,
+  CLAUDE_CODE_MODELS,
+  DEFAULT_BUDGET,
   declaredVariables,
   effortHint,
   effortOptions,
@@ -45,14 +50,40 @@ export function Setup(props: {
   const [activeStep, setActiveStep] = useState<"model" | "variables" | null>("model");
   const [modelDone, setModelDone] = useState(false);
   const [variablesDone, setVariablesDone] = useState(false);
+  // What the developer last typed as a Claude Code model, so a name that starts with an offered one stays in the field.
+  const [typedModel, setTypedModel] = useState("");
   const providers = providerOptions(status, form.provider);
+  // An effort carries over to another agent only when that agent takes it too.
+  const keptEffort = (provider: string) => (effortOptions(provider, form.effort).some((o) => o.pressed && !o.disabled) ? form.effort : "");
   // With no provider picked yet, one with a key is picked, else the first.
   useEffect(() => {
     if (form.provider || !providers.length) return;
-    const first = providers.find((o) => !o.needs) ?? providers[0];
-    onForm({ ...form, provider: first.provider, model: first.model, effort: first.provider === "openai" ? form.effort : "" });
+    const first = providers.find((o) => !o.needs && !o.unavailable) ?? providers[0];
+    onForm({ ...form, provider: first.provider, model: first.model, effort: keptEffort(first.provider) });
   }, [providers, form, onForm]);
   const picked = providers.find((o) => o.pressed);
+  const claudeCode = form.provider === CLAUDE_CODE;
+  // Claude Code's effort sits by its model; elsewhere it's an advanced option.
+  const effortField = (
+    <div className="pg-vfield" role="group" aria-label="Reasoning effort">
+      <span className="pg-vname">Reasoning effort</span>
+      <div className="pg-choices">
+        {effortOptions(form.provider, form.effort).map((o) => (
+          <Gated
+            key={o.effort}
+            reasonId="effort-help"
+            pressed={o.pressed}
+            className={cls("pg-btn", o.pressed && "pg-primary")}
+            blocked={o.disabled ? effortHint(form.provider) : null}
+            onClick={() => set({ effort: o.effort })}
+          >
+            {o.label}
+          </Gated>
+        ))}
+      </div>
+      <small id="effort-help">{effortHint(form.provider)}</small>
+    </div>
+  );
   // Set when a provider is picked by saving its key; its model follows once status names it.
   const fillModel = useRef(false);
   useEffect(() => {
@@ -112,7 +143,7 @@ export function Setup(props: {
     if (opensModel) {
       setTriedModel(true);
       setModelDone(false);
-      if (check.modelInvalid.max || check.modelInvalid.provider) setAdvancedOpen(true);
+      if (check.modelInvalid.max || check.modelInvalid.budget || check.modelInvalid.provider) setAdvancedOpen(true);
       if (check.modelInvalid.provider) setProviderSettingsOpen(true);
     } else {
       setTried(true);
@@ -142,7 +173,7 @@ export function Setup(props: {
     setTimeout(() => formRef.current?.querySelector<HTMLButtonElement>('[type="submit"]')?.focus(), 0);
   };
   const variableSummary = Object.entries(check.variables).map(([name, value]) => `${name}: ${value}`).join(" · ") || "No application variables";
-  const settingsLabel = [picked?.label, form.model.trim()].filter(Boolean).join(" · ") || "Choose an agent";
+  const settingsLabel = agentSummary(picked?.label, form, check.settings);
   return (
     <>
       <form ref={formRef} className="pg-setup" onSubmit={submit}>
@@ -177,20 +208,51 @@ export function Setup(props: {
                       key={o.provider}
                       aria-pressed={o.pressed}
                       className={cls("pg-btn", o.pressed && "pg-primary")}
-                      title={o.needs ?? undefined}
-                      onClick={() => set({ provider: o.provider, model: o.model, effort: o.provider === "openai" ? form.effort : "" })}
+                      title={o.needs ?? o.unavailable?.reason ?? undefined}
+                      onClick={() => set({ provider: o.provider, model: o.model, effort: keptEffort(o.provider) })}
                     >
                       {o.label}
+                      {o.unavailable && <span className="pg-choice-note"> · {o.unavailable.suffix}</span>}
                     </button>
                   ))}
                 </div>
-                <ProviderKeyStatus
-                  configured={!!picked && !picked.needs}
-                  providerLabel={picked?.label}
-                  onManage={() => setKeyFor(form.provider || providers[0]?.provider || "")}
-                />
+                {claudeCode ? (
+                  // Claude Code runs on the developer's own login: no key, but whom it bills.
+                  <small role="status">{picked?.unavailable ? picked.unavailable.reason : billingLine(status)}</small>
+                ) : (
+                  <ProviderKeyStatus
+                    configured={!!picked && !picked.needs}
+                    providerLabel={picked?.label}
+                    onManage={() => setKeyFor(form.provider || providers[0]?.provider || "")}
+                  />
+                )}
               </div>
-              {form.provider !== "" && (
+              {claudeCode && (
+                <div className="pg-vfield" role="group" aria-label="Model">
+                  <span className="pg-vname">Model</span>
+                  <div className="pg-choices">
+                    {CLAUDE_CODE_MODELS.map(([m, label]) => (
+                      <button type="button" key={m} aria-pressed={form.model === m} className={cls("pg-btn", form.model === m && "pg-primary")} onClick={() => set({ model: m }, "model")}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="pg-vfield">
+                    <span className="pg-vname">Or another model</span>
+                    <input
+                      value={typedModel === form.model || !CLAUDE_CODE_MODELS.some(([m]) => m === form.model) ? form.model : ""}
+                      onChange={(ev) => { setTypedModel(ev.target.value); set({ model: ev.target.value }, "model"); }}
+                      placeholder="Full model name"
+                      spellCheck={false}
+                      {...bad("model")}
+                    />
+                  </label>
+                  {why("model")}
+                  <small>A full model name with its version, for a model newer than these.</small>
+                </div>
+              )}
+              {claudeCode && effortField}
+              {form.provider !== "" && !claudeCode && (
                 <label className="pg-vfield">
                   <span className="pg-vname">Model</span>
                   <input value={form.model} onChange={(ev) => set({ model: ev.target.value }, "model")} spellCheck={false} {...bad("model")} />
@@ -203,34 +265,24 @@ export function Setup(props: {
               <details className="pg-advanced-details pg-model-advanced" open={advancedOpen} onToggle={(ev) => setAdvancedOpen(ev.currentTarget.open)}>
                 <summary>Advanced model options <em className="opt">optional</em></summary>
                 <div className="pg-model-options">
-                  {form.provider !== "google" && (
-                    <div className="pg-vfield" role="group" aria-label="Reasoning effort">
-                      <span className="pg-vname">Reasoning effort</span>
-                      <div className="pg-choices">
-                        {effortOptions(form.provider, form.effort).map((o) => (
-                          <Gated
-                            key={o.effort}
-                            reasonId="effort-help"
-                            pressed={o.pressed}
-                            className={cls("pg-btn", o.pressed && "pg-primary")}
-                            blocked={o.disabled ? effortHint(form.provider) : null}
-                            onClick={() => set({ effort: o.effort })}
-                          >
-                            {o.label}
-                          </Gated>
-                        ))}
-                      </div>
-                      <small id="effort-help">{effortHint(form.provider)}</small>
-                    </div>
-                  )}
+                  {form.provider !== "google" && !claudeCode && effortField}
+                  {claudeCode ? (
+                    <label className="pg-vfield">
+                      <span className="pg-vname">Spending limit <em className="opt">optional</em></span>
+                      <input value={form.budget} onChange={(ev) => set({ budget: ev.target.value }, "budget")} inputMode="decimal" placeholder={DEFAULT_BUDGET.toFixed(2)} {...bad("budget")} />
+                      {why("budget")}
+                      <small>The most one message may spend, in dollars. Claude Code checks it between steps, so the last step can go a little over.</small>
+                    </label>
+                  ) : (
                   <label className="pg-vfield">
                     <span className="pg-vname">Max output <em className="opt">optional</em></span>
                     <input value={form.max} onChange={(ev) => set({ max: ev.target.value }, "max")} inputMode="numeric" placeholder="4096" {...bad("max")} />
                     {why("max")}
                     <small>Maximum tokens in one answer.</small>
                   </label>
+                  )}
                 </div>
-                <details className="pg-advanced-details" open={providerSettingsOpen} onToggle={(ev) => setProviderSettingsOpen(ev.currentTarget.open)}>
+                {!claudeCode && <details className="pg-advanced-details" open={providerSettingsOpen} onToggle={(ev) => setProviderSettingsOpen(ev.currentTarget.open)}>
                   <summary>Provider settings <em className="opt">optional JSON</em></summary>
                   <div className="pg-vfield pg-provider-json">
                     <textarea
@@ -246,7 +298,7 @@ export function Setup(props: {
                     {why("provider")}
                     <small>Extra fields for the provider’s request. The playground controls the model, conversation, tools, and instructions.</small>
                   </div>
-                </details>
+                </details>}
               </details>
             )}
             {triedModel && check.problem && <p className="pg-field-err" role="alert">{check.problem}</p>}
@@ -338,7 +390,7 @@ export function Setup(props: {
             // A key just added is for the provider wanted: pick it, with its model once status says.
             if (!removed && provider !== form.provider) {
               fillModel.current = true;
-              onForm({ ...form, provider, model: "", effort: provider === "openai" ? form.effort : "" });
+              onForm({ ...form, provider, model: "", effort: keptEffort(provider) });
             }
           }}
           onClose={closeKey}

@@ -7,6 +7,7 @@ use std::{
     process::ExitCode,
 };
 
+mod claude_settings;
 mod remote;
 
 use anyhow::{Context, bail};
@@ -76,25 +77,49 @@ impl Agent {
             .find(|agent| agent.directory() == directory)
     }
 
-    /// The verifier subagent shipped beside the skill: where the assistant
-    /// discovers custom agents (Codex keeps them under `.codex`, not
-    /// `.agents`), and which bundled file it is.
-    fn verifier(self) -> (&'static str, &'static str) {
+    /// What the assistant gets beside the skill. Subagents go where it
+    /// discovers custom agents (Codex keeps them under `.codex`, not `.agents`).
+    fn companions(self, project: bool) -> Vec<Companion> {
         match self {
-            Self::Claude => (
-                ".claude/agents/submilli-verifier.md",
-                "agents/submilli-verifier.md",
-            ),
-            Self::Cursor => (
+            Self::Claude => {
+                let mut companions = vec![
+                    Companion::File(
+                        ".claude/agents/submilli-verifier.md",
+                        "agents/submilli-verifier.md",
+                    ),
+                    Companion::File(
+                        ".claude/agents/submilli-standin.md",
+                        "agents/submilli-standin.md",
+                    ),
+                ];
+                // Claude Code reads `settings.local.json` only as a project's, and
+                // user-wide hooks would start `chat-hook` in every project.
+                if project {
+                    companions.push(Companion::ClaudeSettings);
+                }
+                companions
+            }
+            Self::Cursor => vec![Companion::File(
                 ".cursor/agents/submilli-verifier.md",
                 "agents/submilli-verifier.md",
-            ),
-            Self::Codex => (
+            )],
+            Self::Codex => vec![Companion::File(
                 ".codex/agents/submilli-verifier.toml",
                 "agents/submilli-verifier.toml",
-            ),
+            )],
         }
     }
+}
+
+/// Something installed outside the skill directory.
+enum Companion {
+    /// A bundled file, tracked in the receipt so an edited copy is kept: where
+    /// it goes under the install root, and which bundled file it is.
+    File(&'static str, &'static str),
+    /// The stand-in's hooks and allow rule, merged into the project's Claude Code
+    /// settings on every run rather than tracked, since the developer's own
+    /// settings share the file.
+    ClaudeSettings,
 }
 
 #[derive(clap::Args)]
@@ -115,7 +140,7 @@ struct Receipt {
     #[serde(default)]
     skill_version: u32,
     files: BTreeMap<String, String>,
-    /// Files installed outside the skill directory (the verifier subagent),
+    /// Files installed outside the skill directory (the subagents),
     /// keyed by path relative to the install root, so an edited copy is
     /// recognized and preserved on update.
     #[serde(default)]
@@ -213,13 +238,19 @@ pub fn execute(cmd: SkillCmd) -> anyhow::Result<ExitCode> {
         }
         SkillCmd::Install(_) | SkillCmd::Update(_) => {
             let bundle = Bundle::bundled();
-            install(&path, matches!(cmd, SkillCmd::Update(_)), &bundle)?;
+            let project = target.project.is_some();
+            install(&path, matches!(cmd, SkillCmd::Update(_)), &bundle, project)?;
             println!(
                 "{}: skill v{} from {} is installed. Restart your assistant to reload it.",
                 path.display(),
                 bundle.version,
                 bundle.origin
             );
+            if !project && matches!(target.agent, Agent::Claude) {
+                println!(
+                    "The submilli-standin agent's chat hooks are written only for a project: run this with --project DIRECTORY to see its chat on the playground page."
+                );
+            }
             Ok(ExitCode::SUCCESS)
         }
         SkillCmd::Sync => unreachable!("handled before resolving a target"),
@@ -247,8 +278,13 @@ fn sync() -> anyhow::Result<ExitCode> {
             bundled
         }
     };
+    let home = user_home().and_then(|home| home.canonicalize().ok());
     for path in installs {
-        match sync_one(&path, &target) {
+        let root = install_root(&path)
+            .ok()
+            .and_then(|root| root.canonicalize().ok());
+        let project = root.is_some() && root != home;
+        match sync_one(&path, &target, project) {
             Ok(line) => println!("{}: {line}", path.display()),
             Err(error) => println!("{}: not synced: {error:#}", path.display()),
         }
@@ -266,13 +302,20 @@ fn network_allowed() -> bool {
     std::env::var_os("SUBMILLI_SKILL_AUTOUPDATE").is_none_or(|value| value != "0")
 }
 
-fn sync_one(path: &Path, target: &Bundle) -> anyhow::Result<String> {
+fn sync_one(path: &Path, target: &Bundle, project: bool) -> anyhow::Result<String> {
     let state = status(path, target)?;
-    if state != State::Outdated {
-        return Ok(state.to_string());
+    match state {
+        State::Current | State::Newer(_) => {
+            if let Some(merge) = plan_settings(path, project)? {
+                merge.apply()?;
+            }
+            return Ok(state.to_string());
+        }
+        State::Outdated => {}
+        _ => return Ok(state.to_string()),
     }
     let skill_md_before = fs::read(path.join("SKILL.md")).ok();
-    install(path, true, target)?;
+    install(path, true, target, project)?;
     let reread = if fs::read(path.join("SKILL.md")).ok() == skill_md_before {
         "read references from disk as usual"
     } else {
@@ -472,7 +515,7 @@ fn status(path: &Path, target: &Bundle) -> anyhow::Result<State> {
     })
 }
 
-fn install(path: &Path, update: bool, bundle: &Bundle) -> anyhow::Result<()> {
+fn install(path: &Path, update: bool, bundle: &Bundle, project: bool) -> anyhow::Result<()> {
     let parent = path.parent().context("skill target needs a parent")?;
     fs::create_dir_all(parent)?;
     // Serialize installers before inspecting the receipt. No automatic stale
@@ -489,9 +532,15 @@ fn install(path: &Path, update: bool, bundle: &Bundle) -> anyhow::Result<()> {
             path.display()
         );
     }
+    // Planned before anything is written, so settings that can't be merged
+    // stop the install; applied even when the skill is current.
+    let settings = plan_settings(path, project)?;
     if exists {
         let state = status(path, bundle)?;
         if matches!(state, State::Current | State::Newer(_)) {
+            if let Some(settings) = settings {
+                settings.apply()?;
+            }
             return Ok(());
         }
         if state == State::Modified {
@@ -523,9 +572,9 @@ fn install(path: &Path, update: bool, bundle: &Bundle) -> anyhow::Result<()> {
     } else {
         None
     };
-    let companion = Companion::plan(path, bundle, previous_receipt.as_ref())?;
+    let companions = CompanionFile::plan(path, bundle, previous_receipt.as_ref(), project)?;
     let mut receipt = bundle.receipt();
-    if let Some(companion) = &companion {
+    for companion in &companions {
         receipt.companions.insert(
             companion.relative.clone(),
             digest(companion.content.as_bytes()),
@@ -546,14 +595,47 @@ fn install(path: &Path, update: bool, bundle: &Bundle) -> anyhow::Result<()> {
         }
         return Err(error.into());
     }
-    if let Some(companion) = companion {
+    // Hooks without the stand-in do nothing, so they go first.
+    if let Some(settings) = settings {
+        settings.apply()?;
+    }
+    for companion in companions {
         companion.install()?;
     }
     Ok(())
 }
 
-/// The verifier subagent file for the installation's assistant.
-struct Companion {
+/// The install root: the project or home directory the skill path is under.
+fn install_root(skill_path: &Path) -> anyhow::Result<&Path> {
+    skill_path
+        .ancestors()
+        .nth(3)
+        .context("skill path is too shallow")
+}
+
+/// The settings merge for the installation's assistant, if it has one there.
+fn plan_settings(
+    skill_path: &Path,
+    project: bool,
+) -> anyhow::Result<Option<claude_settings::Merge>> {
+    let Some(agent) = Agent::from_skill_path(skill_path) else {
+        return Ok(None);
+    };
+    if !agent
+        .companions(project)
+        .iter()
+        .any(|companion| matches!(companion, Companion::ClaudeSettings))
+    {
+        return Ok(None);
+    }
+    let root = install_root(skill_path)?;
+    let settings = root.join(claude_settings::SETTINGS_FILE);
+    check_ancestors(root, settings.parent().context("settings need a parent")?)?;
+    claude_settings::plan(root).map(Some)
+}
+
+/// A bundled file the installation's assistant gets outside the skill directory.
+struct CompanionFile {
     relative: String,
     destination: PathBuf,
     content: String,
@@ -562,46 +644,51 @@ struct Companion {
     preserved: bool,
 }
 
-impl Companion {
+impl CompanionFile {
     fn plan(
         skill_path: &Path,
         bundle: &Bundle,
         previous: Option<&Receipt>,
-    ) -> anyhow::Result<Option<Self>> {
+        project: bool,
+    ) -> anyhow::Result<Vec<Self>> {
         let Some(agent) = Agent::from_skill_path(skill_path) else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
-        let (relative, source) = agent.verifier();
-        let Some(content) = bundle.files.get(source) else {
-            return Ok(None);
-        };
-        let root = skill_path
-            .ancestors()
-            .nth(3)
-            .context("skill path is too shallow")?;
-        let destination = root.join(relative);
-        let directory = destination.parent().context("companion needs a parent")?;
-        check_ancestors(root, directory)?;
-        let preserved = match fs::read(&destination) {
-            Ok(existing) => {
-                let recorded = previous.and_then(|receipt| receipt.companions.get(relative));
-                recorded != Some(&digest(&existing)) && existing != content.as_bytes()
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(error.into()),
-        };
-        Ok(Some(Self {
-            relative: relative.to_owned(),
-            destination,
-            content: content.clone(),
-            preserved,
-        }))
+        let root = install_root(skill_path)?;
+        let mut planned = Vec::new();
+        for companion in agent.companions(project) {
+            let Companion::File(relative, source) = companion else {
+                continue;
+            };
+            // A skill release from before a companion was bundled lacks it.
+            let Some(content) = bundle.files.get(source) else {
+                continue;
+            };
+            let destination = root.join(relative);
+            let directory = destination.parent().context("companion needs a parent")?;
+            check_ancestors(root, directory)?;
+            let preserved = match fs::read(&destination) {
+                Ok(existing) => {
+                    let recorded = previous.and_then(|receipt| receipt.companions.get(relative));
+                    recorded != Some(&digest(&existing)) && existing != content.as_bytes()
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(error.into()),
+            };
+            planned.push(Self {
+                relative: relative.to_owned(),
+                destination,
+                content: content.clone(),
+                preserved,
+            });
+        }
+        Ok(planned)
     }
 
     fn install(self) -> anyhow::Result<()> {
         if self.preserved {
             println!(
-                "{}: not written; an edited or unmanaged file is already there. Delete it to receive the bundled verifier.",
+                "{}: not written; an edited or unmanaged file is already there. Delete it to receive the bundled one.",
                 self.destination.display()
             );
             return Ok(());
