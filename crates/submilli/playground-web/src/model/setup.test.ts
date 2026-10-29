@@ -134,7 +134,7 @@ describe("the agent and its settings", () => {
       { provider: "openai", label: "OpenAI", model: "", pressed: false, needs: "No OpenAI key yet (OPENAI_API_KEY).", unavailable: null },
       { provider: "google", label: "Gemini", model: "", pressed: false, needs: "No Gemini key yet (GEMINI_API_KEY).", unavailable: null },
       // Claude Code needs no key; until the playground has looked for it, it says so.
-      { provider: "claude-code", label: "Claude Code", model: "sonnet", pressed: false, needs: null, unavailable: { suffix: "checking", reason: "Checking for Claude Code on this machine…" } },
+      { provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5-5", pressed: false, needs: null, unavailable: { suffix: "checking", reason: "Checking for Claude Code on this machine…" } },
     ]);
     expect(modelHint(status, "anthropic")).toBe(
       "Default for Claude: claude-sonnet-5-5. Any model name the provider knows works; an unknown one gets the provider’s own error.",
@@ -179,21 +179,21 @@ it("selects existing blueprint declarations without changing shared status or ac
 describe("Claude Code as the agent", () => {
   const ready: ClaudeCodeStatus = { state: "available", version: "2.1.310", source: "claude.ai", subscription: true };
   const withCc = (cc?: ClaudeCodeStatus): Status => ({ ...status, claude_code: cc });
-  const cc = (over: Partial<SetupForm> = {}): SetupForm => form({ provider: "claude-code", model: "sonnet", fields: { customerId: "cus_a" }, ...over });
+  const cc = (over: Partial<SetupForm> = {}): SetupForm => form({ provider: "claude-code", model: "claude-sonnet-5-5", fields: { customerId: "cus_a" }, ...over });
   const option = (s: Status) => providerOptions(s, "claude-code").find((o) => o.provider === "claude-code")!;
 
   it("is offered once Claude Code can answer, with no key needed", () => {
-    expect(option(withCc(ready))).toEqual({ provider: "claude-code", label: "Claude Code", model: "sonnet", pressed: true, needs: null, unavailable: null });
+    expect(option(withCc(ready))).toEqual({ provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5-5", pressed: true, needs: null, unavailable: null });
     const check = checkSetup(withCc(ready), cc());
     expect(check.cantStart).toBe(false);
-    expect(check.model).toBe("claude-code:sonnet");
+    expect(check.model).toBe("claude-code:claude-sonnet-5-5");
     // The limit is always set, so the session shows what it runs under.
     expect(check.settings).toEqual({ max_budget_usd: 1 });
   });
 
   it("names the spending limit once the agent step is done", () => {
-    expect(agentSummary("Claude Code", cc({ model: "haiku" }), checkSetup(withCc(ready), cc({ model: "haiku" })).settings)).toBe("Claude Code · haiku · spending limit $1.00");
-    expect(agentSummary("Claude Code", cc({ budget: "0.05" }), checkSetup(withCc(ready), cc({ budget: "0.05" })).settings)).toBe("Claude Code · sonnet · spending limit $0.05");
+    expect(agentSummary("Claude Code", cc({ model: "claude-haiku-5-5" }), checkSetup(withCc(ready), cc({ model: "claude-haiku-5-5" })).settings)).toBe("Claude Code · claude-haiku-5-5 · spending limit $1.00");
+    expect(agentSummary("Claude Code", cc({ budget: "0.05" }), checkSetup(withCc(ready), cc({ budget: "0.05" })).settings)).toBe("Claude Code · claude-sonnet-5-5 · spending limit $0.05");
     expect(agentSummary("OpenAI", form({ provider: "openai", model: "gpt-6-luna" }), { max_output: 100 })).toBe("OpenAI · gpt-6-luna");
   });
 
@@ -213,8 +213,10 @@ describe("Claude Code as the agent", () => {
     }
   });
 
-  it("takes Sonnet, Opus, or Haiku, and every Claude Code effort", () => {
-    expect(checkSetup(withCc(ready), cc({ model: "claude-sonnet-5-5" })).modelInvalid.model).toBe("Choose Sonnet, Opus, or Haiku.");
+  it("takes Sonnet, Opus, or Haiku by full name, and every Claude Code effort", () => {
+    // Claude Code's short names move to newer models, so they aren't taken.
+    expect(checkSetup(withCc(ready), cc({ model: "sonnet" })).modelInvalid.model).toBe("Choose Sonnet 5.5, Opus 5.5, or Haiku 5.5.");
+    expect(checkSetup(withCc(ready), cc({ model: "claude-opus-5-5" })).modelInvalid.model).toBeUndefined();
     expect(effortOptions("claude-code", "xhigh").filter((o) => !o.disabled).map((o) => o.label)).toEqual(["Default", "Low", "Medium", "High", "Extra high", "Max"]);
     expect(checkSetup(withCc(ready), cc({ effort: "max" })).settings).toEqual({ effort: "max", max_budget_usd: 1 });
   });
@@ -234,8 +236,8 @@ describe("Claude Code as the agent", () => {
   });
 
   it("carries the last session's model, effort, and limit into a new one", () => {
-    const last = { session: "s", started_at_micros: 1, model: "claude-code:opus", settings: { effort: "xhigh", max_budget_usd: 3 } } as SessionSummary;
-    expect(initialSetup(withCc(ready), [last])).toMatchObject({ provider: "claude-code", model: "opus", effort: "xhigh", budget: "3.00" });
+    const last = { session: "s", started_at_micros: 1, model: "claude-code:claude-opus-5-5", settings: { effort: "xhigh", max_budget_usd: 3 } } as SessionSummary;
+    expect(initialSetup(withCc(ready), [last])).toMatchObject({ provider: "claude-code", model: "claude-opus-5-5", effort: "xhigh", budget: "3.00" });
   });
 
   it("says whom it bills", () => {

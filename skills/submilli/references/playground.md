@@ -63,12 +63,12 @@ tool calls one answer may make.
 
 ### Claude Code
 
-`--model claude-code:sonnet` (or `opus`, `haiku`) answers with the developer's
-own Claude Code, and needs no key. It needs `claude` 2.1.310 or later, signed
-in, on the playground's PATH. Each message runs `claude` with only the
-playground's tools and the same agent instructions as a keyed agent. The
-developer's own Claude Code settings, hooks, plugins, and CLAUDE.md files
-don't apply. Each follow-up resumes the conversation.
+`--model claude-code:claude-sonnet-5-5` (or `claude-opus-5-5`,
+`claude-haiku-5-5`) answers with the developer's own Claude Code, and needs no
+key. It needs `claude` 2.1.310 or later, signed in, on the playground's PATH.
+Each message runs `claude` with only the playground's tools and the same agent
+instructions as a keyed agent. The developer's own Claude Code settings, hooks,
+plugins, and CLAUDE.md files don't apply. Each follow-up resumes the conversation.
 
 - `--max-budget-usd` sets the most one message may spend: more than 0, at most
   100, default 1.00. On a subscription it measures usage rather than billing.

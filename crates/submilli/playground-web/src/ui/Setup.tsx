@@ -61,6 +61,27 @@ export function Setup(props: {
   }, [providers, form, onForm]);
   const picked = providers.find((o) => o.pressed);
   const claudeCode = form.provider === CLAUDE_CODE;
+  // Claude Code's effort sits by its model; elsewhere it's an advanced option.
+  const effortField = (
+    <div className="pg-vfield" role="group" aria-label="Reasoning effort">
+      <span className="pg-vname">Reasoning effort</span>
+      <div className="pg-choices">
+        {effortOptions(form.provider, form.effort).map((o) => (
+          <Gated
+            key={o.effort}
+            reasonId="effort-help"
+            pressed={o.pressed}
+            className={cls("pg-btn", o.pressed && "pg-primary")}
+            blocked={o.disabled ? effortHint(form.provider) : null}
+            onClick={() => set({ effort: o.effort })}
+          >
+            {o.label}
+          </Gated>
+        ))}
+      </div>
+      <small id="effort-help">{effortHint(form.provider)}</small>
+    </div>
+  );
   // Set when a provider is picked by saving its key; its model follows once status names it.
   const fillModel = useRef(false);
   useEffect(() => {
@@ -217,6 +238,7 @@ export function Setup(props: {
                   {why("model")}
                 </div>
               )}
+              {claudeCode && effortField}
               {form.provider !== "" && !claudeCode && (
                 <label className="pg-vfield">
                   <span className="pg-vname">Model</span>
@@ -230,26 +252,7 @@ export function Setup(props: {
               <details className="pg-advanced-details pg-model-advanced" open={advancedOpen} onToggle={(ev) => setAdvancedOpen(ev.currentTarget.open)}>
                 <summary>Advanced model options <em className="opt">optional</em></summary>
                 <div className="pg-model-options">
-                  {form.provider !== "google" && (
-                    <div className="pg-vfield" role="group" aria-label="Reasoning effort">
-                      <span className="pg-vname">Reasoning effort</span>
-                      <div className="pg-choices">
-                        {effortOptions(form.provider, form.effort).map((o) => (
-                          <Gated
-                            key={o.effort}
-                            reasonId="effort-help"
-                            pressed={o.pressed}
-                            className={cls("pg-btn", o.pressed && "pg-primary")}
-                            blocked={o.disabled ? effortHint(form.provider) : null}
-                            onClick={() => set({ effort: o.effort })}
-                          >
-                            {o.label}
-                          </Gated>
-                        ))}
-                      </div>
-                      <small id="effort-help">{effortHint(form.provider)}</small>
-                    </div>
-                  )}
+                  {form.provider !== "google" && !claudeCode && effortField}
                   {claudeCode ? (
                     <label className="pg-vfield">
                       <span className="pg-vname">Spending limit <em className="opt">optional</em></span>

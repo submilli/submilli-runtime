@@ -30,8 +30,9 @@ use super::store::events::ChatRole;
 
 /// What the choice is named: `claude-code:<model>`.
 pub(crate) const PROVIDER: &str = "claude-code";
-/// Claude Code's own model names, the only ones taken.
-pub(crate) const MODELS: [&str; 3] = ["sonnet", "opus", "haiku"];
+/// The models taken, by full name, so a session names exactly which model answered.
+/// Claude Code's short names (`sonnet`) move to newer models as Claude Code updates.
+pub(crate) const MODELS: [&str; 3] = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];
 pub(crate) const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// The spending limit per message a session starts with when none is set, and the most
 /// one may set, in US dollars.

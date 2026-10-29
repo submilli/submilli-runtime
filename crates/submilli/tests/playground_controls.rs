@@ -2709,7 +2709,15 @@ printf '%s\n' '{initialize}' '{{"jsonrpc":"2.0","method":"notifications/initiali
                 claude_line(&json!({ "type": "result", "subtype": "success", "is_error": false, "result": "It ran." })),
             ));
             claude.start(&playground);
-            let first = playground.expect(0, &["chat", "--model", "claude-code:sonnet", "Run it."]);
+            let first = playground.expect(
+                0,
+                &[
+                    "chat",
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
+                    "Run it.",
+                ],
+            );
             assert_eq!(first["stopped"], "answered", "{first}");
             assert_eq!(first["provider"], "claude-code");
             assert_eq!(first["untrusted"]["reply"], "It ran.");
@@ -2723,7 +2731,7 @@ printf '%s\n' '{initialize}' '{{"jsonrpc":"2.0","method":"notifications/initiali
             assert_eq!(after("--session-id").as_deref(), Some(session.as_str()));
             // With no spending limit given, a message gets the default one.
             assert_eq!(after("--max-budget-usd").as_deref(), Some("1"));
-            assert_eq!(after("--model").as_deref(), Some("sonnet"));
+            assert_eq!(after("--model").as_deref(), Some("claude-sonnet-5-5"));
             let input: Value =
                 serde_json::from_str(&std::fs::read_to_string(claude.dir.join("stdin-0")).unwrap())
                     .unwrap();
@@ -2807,7 +2815,7 @@ printf '%s\n' '{initialize}' '{{"jsonrpc":"2.0","method":"notifications/initiali
                 &[
                     "chat",
                     "--model",
-                    "claude-code:haiku",
+                    "claude-code:claude-haiku-5-5",
                     "--max-budget-usd",
                     "0.05",
                     "Go.",
@@ -2832,7 +2840,7 @@ printf '%s\n' '{initialize}' '{{"jsonrpc":"2.0","method":"notifications/initiali
                 &[
                     "chat",
                     "--model",
-                    "claude-code:sonnet",
+                    "claude-code:claude-sonnet-5-5",
                     "--max-calls-per-answer",
                     "1",
                     "Twice.",
@@ -2857,7 +2865,7 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
 "#,
             );
             let (failed, code) =
-                playground.json(&["chat", "--model", "claude-code:sonnet", "Hello?"]);
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hello?"]);
             assert_eq!(code, 1, "{failed}");
             assert!(
                 failed["error"]["message"]
@@ -2880,22 +2888,28 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
                 vec!["--model", "claude-code:fable", "x"],
                 vec![
                     "--model",
-                    "claude-code:sonnet",
+                    "claude-code:claude-sonnet-5-5",
                     "--max-budget-usd",
                     "0",
                     "x",
                 ],
                 vec![
                     "--model",
-                    "claude-code:sonnet",
+                    "claude-code:claude-sonnet-5-5",
                     "--max-budget-usd",
                     "101",
                     "x",
                 ],
-                vec!["--model", "claude-code:sonnet", "--max-output", "100", "x"],
                 vec![
                     "--model",
-                    "claude-code:sonnet",
+                    "claude-code:claude-sonnet-5-5",
+                    "--max-output",
+                    "100",
+                    "x",
+                ],
+                vec![
+                    "--model",
+                    "claude-code:claude-sonnet-5-5",
                     "--provider-settings",
                     "{\"temperature\":0}",
                     "x",
@@ -2923,11 +2937,14 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
                 claude_calls(&[CLAUDE_LOOP], true),
             ));
             claude.start(&playground);
-            let chatting = claude_chat(&playground, &["--model", "claude-code:sonnet", "Loop."])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
+            let chatting = claude_chat(
+                &playground,
+                &["--model", "claude-code:claude-sonnet-5-5", "Loop."],
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
             claude.wait_for("waiting");
             let deadline = Instant::now() + Duration::from_secs(30);
             let (session, run) = loop {
@@ -2987,8 +3004,10 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
                 claude_answers(CLAUDE_INIT, "Resumed.")
             ));
             claude.start(&playground);
-            let answered =
-                playground.expect(0, &["chat", "--model", "claude-code:sonnet", "Go on."]);
+            let answered = playground.expect(
+                0,
+                &["chat", "--model", "claude-code:claude-sonnet-5-5", "Go on."],
+            );
             assert_eq!(answered["untrusted"]["reply"], "Resumed.", "{answered}");
             let session = answered["session"].as_str().unwrap();
             assert!(claude.argv(0).iter().any(|arg| arg == "--session-id"));
@@ -2999,7 +3018,7 @@ trap 'exit 0' INT; i=0; while [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
             // In use both ways: refused with a plain reason, not tried again.
             claude.behave(&format!("{in_use}\n"));
             let (refused, code) =
-                playground.json(&["chat", "--model", "claude-code:sonnet", "Again."]);
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Again."]);
             assert_eq!(code, 1, "{refused}");
             assert!(
                 refused["error"]["message"]
@@ -3024,11 +3043,14 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
 "#
             ));
             claude.start(&playground);
-            let chatting = claude_chat(&playground, &["--model", "claude-code:sonnet", "Wait."])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
+            let chatting = claude_chat(
+                &playground,
+                &["--model", "claude-code:claude-sonnet-5-5", "Wait."],
+            )
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
             claude.wait_for("waiting");
             let pid = std::fs::read_to_string(claude.dir.join("pid")).unwrap();
             playground.stop();
@@ -3079,7 +3101,7 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
             ));
             claude.start(&playground);
             let (refused, code) =
-                playground.json(&["chat", "--model", "claude-code:sonnet", "Hi."]);
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hi."]);
             assert_eq!(code, 1, "{refused}");
             assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
             let said = refused["error"]["message"].as_str().unwrap();
@@ -3102,7 +3124,7 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
                 &[
                     "chat",
                     "--model",
-                    "claude-code:sonnet",
+                    "claude-code:claude-sonnet-5-5",
                     "--confirm-billing",
                     "api_key",
                     "Hi.",
@@ -3156,7 +3178,7 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
                 "{shown}"
             );
             let (refused, code) =
-                playground.json(&["chat", "--model", "claude-code:sonnet", "Hi."]);
+                playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hi."]);
             assert_eq!(code, 1, "{refused}");
             assert_eq!(refused["error"]["kind"], "billing-unconfirmed", "{refused}");
             assert!(
@@ -3170,7 +3192,7 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
                 &[
                     "chat",
                     "--model",
-                    "claude-code:sonnet",
+                    "claude-code:claude-sonnet-5-5",
                     "--confirm-billing",
                     "claude.ai via https://proxy.example",
                     "Hi.",
@@ -3203,7 +3225,7 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
                 assert_eq!(shown["state"], state, "{shown}");
                 assert!(shown["reason"].as_str().unwrap().contains(says), "{shown}");
                 let (refused, code) =
-                    playground.json(&["chat", "--model", "claude-code:sonnet", "Hi."]);
+                    playground.json(&["chat", "--model", "claude-code:claude-sonnet-5-5", "Hi."]);
                 assert_eq!(code, 1, "{refused}");
                 assert_eq!(
                     refused["error"]["kind"], "claude-code-unavailable",

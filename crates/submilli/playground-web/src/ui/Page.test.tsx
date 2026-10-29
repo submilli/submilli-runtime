@@ -1839,14 +1839,16 @@ test("a Claude Code session that doesn't bill the subscription asks first, then 
   expect(screen.getByText(/^Bills an Anthropic API key, sending to https:\/\/proxy\.example, not your Claude subscription/)).toBeInTheDocument();
   // No key to add for it.
   expect(screen.queryByRole("button", { name: /key$/ })).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Opus" }));
+  await user.click(screen.getByRole("button", { name: "Opus 5.5" }));
+  // Its effort is by the model, not behind the advanced options.
+  expect(within(screen.getByRole("group", { name: "Reasoning effort" })).getByRole("button", { name: "Extra high" })).toBeVisible();
   await user.click(screen.getByText("Advanced model options"));
   expect(screen.queryByRole("textbox", { name: /Max output/ })).not.toBeInTheDocument();
   expect(screen.queryByText("Provider settings")).not.toBeInTheDocument();
   await user.type(screen.getByRole("textbox", { name: /Spending limit/ }), "2.5");
   await completeSetup(user);
   await user.click(screen.getByRole("button", { name: "Start session" }));
-  expect(within(screen.getByRole("region", { name: "Session" })).getByText("Agent Claude Code · opus · spending limit $2.50")).toBeInTheDocument();
+  expect(within(screen.getByRole("region", { name: "Session" })).getByText("Agent Claude Code · claude-opus-5-5 · spending limit $2.50")).toBeInTheDocument();
 
   await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "Hello{Enter}");
   const ask = await screen.findByRole("alert");
@@ -1854,7 +1856,7 @@ test("a Claude Code session that doesn't bill the subscription asks first, then 
   // The message stays unsent, in the box.
   expect(screen.getByRole("textbox", { name: "Message the agent" })).toHaveValue("Hello");
   const sent = () => server.calls.filter((c) => c.url === "/api/agent").map((c) => c.body);
-  expect(sent()).toEqual([{ task: "Hello", blueprint: "billing", model: "claude-code:opus", variables: { customerId: "pied_piper" }, max_budget_usd: 2.5 }]);
+  expect(sent()).toEqual([{ task: "Hello", blueprint: "billing", model: "claude-code:claude-opus-5-5", variables: { customerId: "pied_piper" }, max_budget_usd: 2.5 }]);
 
   // Cancel says how to use the subscription instead, and sends nothing.
   await user.click(within(ask).getByRole("button", { name: "Cancel" }));
@@ -1865,7 +1867,7 @@ test("a Claude Code session that doesn't bill the subscription asks first, then 
   await user.type(screen.getByRole("textbox", { name: "Message the agent" }), "{Enter}");
   await user.click(within(await screen.findByRole("alert")).getByRole("button", { name: "Confirm and send" }));
   await vi.waitFor(() => expect(sent()).toHaveLength(3));
-  expect(sent()[2]).toEqual({ task: "Hello", blueprint: "billing", model: "claude-code:opus", variables: { customerId: "pied_piper" }, max_budget_usd: 2.5, confirm_billing: confirmation });
+  expect(sent()[2]).toEqual({ task: "Hello", blueprint: "billing", model: "claude-code:claude-opus-5-5", variables: { customerId: "pied_piper" }, max_budget_usd: 2.5, confirm_billing: confirmation });
 });
 
 test("Claude Code that can't answer says why under the choice, with no key to add", async () => {

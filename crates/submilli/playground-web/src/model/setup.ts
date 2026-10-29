@@ -32,11 +32,11 @@ export const OWN_FIELDS: Record<string, string[]> = {
 /** The developer's own Claude Code, which needs no key: it runs on their login. */
 export const CLAUDE_CODE = "claude-code";
 
-/** The models Claude Code is asked for by name, the default first. */
+/** The models Claude Code is asked for, by full name so the session says which one answered, the default first. */
 export const CLAUDE_CODE_MODELS: [string, string][] = [
-  ["sonnet", "Sonnet"],
-  ["opus", "Opus"],
-  ["haiku", "Haiku"],
+  ["claude-sonnet-5-5", "Sonnet 5.5"],
+  ["claude-opus-5-5", "Opus 5.5"],
+  ["claude-haiku-5-5", "Haiku 5.5"],
 ];
 
 /** Claude Code's spending limit for each message unless one is set, and the most it may be, in dollars. */
@@ -167,7 +167,7 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
     // Claude Code runs on the developer's own login, so it needs no key, only to be ready.
     const cc = status.claude_code;
     if (cc?.state !== "available") problem = cc ? "Claude Code can’t answer: " + (cc.reason || "it isn’t ready") + "." : "Still checking for Claude Code. Try again in a moment.";
-    else if (!CLAUDE_CODE_MODELS.some(([m]) => m === model)) fail("model", "Choose Sonnet, Opus, or Haiku.");
+    else if (!CLAUDE_CODE_MODELS.some(([m]) => m === model)) fail("model", "Choose Sonnet 5.5, Opus 5.5, or Haiku 5.5.");
   }
   // Without a model key there's no agent to set up; the Agent field says how to add one.
   else if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add key under Provider.";

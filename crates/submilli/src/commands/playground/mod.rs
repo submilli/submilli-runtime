@@ -311,9 +311,9 @@ pub struct ChatArgs {
     #[arg(long, value_name = "ID")]
     session: Option<String>,
     /// The model for a new session, as `<provider>:<model>`, from a provider whose key the
-    /// playground started with, or `claude-code:<sonnet|opus|haiku>` to answer with your
-    /// own Claude Code. Default: the playground's configured model. A session carried on
-    /// keeps its own.
+    /// playground started with, or `claude-code:<model>` to answer with your own Claude
+    /// Code, where the model is claude-sonnet-5-5, claude-opus-5-5, or claude-haiku-5-5.
+    /// Default: the playground's configured model. A session carried on keeps its own.
     #[arg(long, value_name = "PROVIDER:MODEL", conflicts_with = "session")]
     model: Option<String>,
     /// How hard a new session's model reasons: OpenAI models take low, medium, or high;
@@ -1303,7 +1303,7 @@ fn print_description(description: &host::Description, packages_error: Option<&st
             }
             if !description.chat_models.is_empty() {
                 println!(
-                    "  chat:       {} (another: chat --model <provider>:<model>, or claude-code:sonnet)",
+                    "  chat:       {} (another: chat --model <provider>:<model>, or claude-code:claude-sonnet-5-5)",
                     description.chat_models.join(", ")
                 );
             }

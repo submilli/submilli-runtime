@@ -107,7 +107,7 @@ fn drive_fake(
         recorder: &world.recorder,
         session: Some(SESSION),
         agent: "chat",
-        model: "sonnet",
+        model: "claude-sonnet-5-5",
         earlier: 0,
     };
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -115,7 +115,7 @@ fn drive_fake(
     let note = || noted.store(true, Ordering::Relaxed);
     let root = world.dir.path().join("project");
     let setup = Setup {
-        model: "sonnet",
+        model: "claude-sonnet-5-5",
         effort: None,
         max_budget_usd: 1.0,
         max_calls: given.max_calls,
@@ -407,14 +407,14 @@ fn the_command_keeps_only_the_login_and_never_carries_the_token() {
         recorder: &world.recorder,
         session: Some(SESSION),
         agent: "chat",
-        model: "opus",
+        model: "claude-opus-5-5",
         earlier: 0,
     };
     let billing = subscription();
     let cancelled = AtomicBool::new(false);
     let root = world.dir.path().join("project");
     let setup = Setup {
-        model: "opus",
+        model: "claude-opus-5-5",
         effort: Some("high"),
         max_budget_usd: 0.5,
         max_calls: 16,
@@ -444,7 +444,7 @@ fn the_command_keeps_only_the_login_and_never_carries_the_token() {
         "--permission-mode dontAsk --allowedTools mcp__playground__*",
         "--setting-sources  --settings {\"disableAllHooks\":true,\"autoMemoryEnabled\":false}",
         "--disable-slash-commands",
-        "--model opus",
+        "--model claude-opus-5-5",
         "--max-budget-usd 0.5",
         "--max-turns 20",
         "--resume SESSION",
