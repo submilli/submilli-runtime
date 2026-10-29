@@ -235,7 +235,18 @@ export function Setup(props: {
                       </button>
                     ))}
                   </div>
+                  <label className="pg-vfield">
+                    <span className="pg-vname">Or another model</span>
+                    <input
+                      value={CLAUDE_CODE_MODELS.some(([m]) => m === form.model) ? "" : form.model}
+                      onChange={(ev) => set({ model: ev.target.value }, "model")}
+                      placeholder="Full model name"
+                      spellCheck={false}
+                      {...bad("model")}
+                    />
+                  </label>
                   {why("model")}
+                  <small>A full model name with its version, for a model newer than these.</small>
                 </div>
               )}
               {claudeCode && effortField}

@@ -30,9 +30,23 @@ use super::store::events::ChatRole;
 
 /// What the choice is named: `claude-code:<model>`.
 pub(crate) const PROVIDER: &str = "claude-code";
-/// The models taken, by full name, so a session names exactly which model answered.
+/// The models offered, by full name, so a session names exactly which model answered.
 /// Claude Code's short names (`sonnet`) move to newer models as Claude Code updates.
-pub(crate) const MODELS: [&str; 3] = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];
+pub(crate) const MODELS: [&str; 4] = [
+    "claude-sonnet-5-5",
+    "claude-opus-5-5",
+    "claude-fable-5-1",
+    "claude-haiku-5-5",
+];
+/// Whether `model` is a full model name, such as one of [`MODELS`] or a newer one: name
+/// characters, not starting with `-`, and a version, which Claude Code's short names lack.
+pub(crate) fn is_full_model_name(model: &str) -> bool {
+    model.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && model.contains(|c: char| c.is_ascii_digit())
+}
 pub(crate) const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// The spending limit per message a session starts with when none is set, and the most
 /// one may set, in US dollars.
@@ -374,7 +388,7 @@ fn isolated(dirs: &Dirs) -> Command {
 
 /// Where one message runs, and what it may spend.
 pub(crate) struct Setup<'a> {
-    /// One of [`MODELS`].
+    /// A full model name: see [`is_full_model_name`].
     pub(crate) model: &'a str,
     /// One of [`EFFORTS`].
     pub(crate) effort: Option<&'a str>,

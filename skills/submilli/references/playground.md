@@ -64,9 +64,10 @@ tool calls one answer may make.
 ### Claude Code
 
 `--model claude-code:claude-sonnet-5-5` (or `claude-opus-5-5`,
-`claude-haiku-5-5`) answers with the developer's own Claude Code, and needs no
-key. It needs `claude` 2.1.310 or later, signed in, on the playground's PATH.
-Each message runs `claude` with only the playground's tools and the same agent
+`claude-fable-5-1`, `claude-haiku-5-5`, or another full model name with its
+version) answers with the developer's own Claude Code, and needs no key. It
+needs `claude` 2.1.310 or later, signed in, on the playground's PATH. Each
+message runs `claude` with only the playground's tools and the same agent
 instructions as a keyed agent. The developer's own Claude Code settings, hooks,
 plugins, and CLAUDE.md files don't apply. Each follow-up resumes the conversation.
 

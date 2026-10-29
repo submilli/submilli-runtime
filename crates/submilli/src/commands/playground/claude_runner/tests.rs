@@ -507,3 +507,25 @@ fn billing_names_the_address_and_fits_only_its_own_key_source() {
     assert_eq!(parse_version("2.1.310 (Claude Code)\n"), Some((2, 1, 310)));
     assert!(parse_version("2.1.299 (Claude Code)").unwrap() < MIN_VERSION);
 }
+
+#[test]
+fn a_model_is_taken_by_its_full_name_only() {
+    for model in MODELS
+        .into_iter()
+        .chain(["claude-opus-6", "claude-sonnet-5-5-20261001"])
+    {
+        assert!(is_full_model_name(model), "{model}");
+    }
+    // Short names move to newer models; a name can't pass as an option or carry more.
+    for model in [
+        "sonnet",
+        "opus",
+        "fable",
+        "",
+        "-p",
+        "claude-opus-6 --x",
+        "opus[1m]",
+    ] {
+        assert!(!is_full_model_name(model), "{model}");
+    }
+}

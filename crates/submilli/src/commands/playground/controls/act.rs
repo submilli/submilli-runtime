@@ -2063,13 +2063,14 @@ fn claude_code_model(named: Option<&str>) -> Result<Option<String>, ActError> {
     }) else {
         return Ok(None);
     };
-    if !claude_runner::MODELS.contains(&model) {
+    if !claude_runner::is_full_model_name(model) {
         return Err(ActError::usage(
             "invalid-model",
             format!(
-                "Claude Code's models here are {}; `{}` is not one",
-                claude_runner::MODELS.join(", "),
-                clean(model)
+                "`{}` is not a full model name; give one with its version, such as {}. \
+                 Claude Code's short names move to newer models as it updates",
+                clean(model),
+                claude_runner::MODELS.join(", ")
             ),
         ));
     }

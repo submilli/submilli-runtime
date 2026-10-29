@@ -213,10 +213,12 @@ describe("Claude Code as the agent", () => {
     }
   });
 
-  it("takes Sonnet, Opus, or Haiku by full name, and every Claude Code effort", () => {
+  it("takes a model by its full name, and every Claude Code effort", () => {
     // Claude Code's short names move to newer models, so they aren't taken.
-    expect(checkSetup(withCc(ready), cc({ model: "sonnet" })).modelInvalid.model).toBe("Choose Sonnet 5.5, Opus 5.5, or Haiku 5.5.");
-    expect(checkSetup(withCc(ready), cc({ model: "claude-opus-5-5" })).modelInvalid.model).toBeUndefined();
+    expect(checkSetup(withCc(ready), cc({ model: "sonnet" })).modelInvalid.model).toBe("Give a full model name with its version, such as claude-opus-5-5: Claude Code’s short names move to newer models.");
+    expect(checkSetup(withCc(ready), cc({ model: "" })).modelInvalid.model).toBe("Choose a model, or type a full model name.");
+    // A newer model than the page offers can be typed in.
+    for (const model of ["claude-opus-5-5", "claude-fable-5-1", "claude-opus-6"]) expect(checkSetup(withCc(ready), cc({ model })).modelInvalid.model).toBeUndefined();
     expect(effortOptions("claude-code", "xhigh").filter((o) => !o.disabled).map((o) => o.label)).toEqual(["Default", "Low", "Medium", "High", "Extra high", "Max"]);
     expect(checkSetup(withCc(ready), cc({ effort: "max" })).settings).toEqual({ effort: "max", max_budget_usd: 1 });
   });

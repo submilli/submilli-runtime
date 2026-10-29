@@ -2483,8 +2483,9 @@ Options:
       --model <PROVIDER:MODEL>
           The model for a new session, as `<provider>:<model>`, from a provider whose key the
           playground started with, or `claude-code:<model>` to answer with your own Claude Code,
-          where the model is claude-sonnet-5-5, claude-opus-5-5, or claude-haiku-5-5. Default: the
-          playground's configured model. A session carried on keeps its own
+          where the model is a full name such as claude-sonnet-5-5, claude-opus-5-5,
+          claude-fable-5-1, or claude-haiku-5-5. Default: the playground's configured model. A
+          session carried on keeps its own
 
       --effort <LEVEL>
           How hard a new session's model reasons: OpenAI models take low, medium, or high; Claude

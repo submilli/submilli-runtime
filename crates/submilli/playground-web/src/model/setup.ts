@@ -36,8 +36,14 @@ export const CLAUDE_CODE = "claude-code";
 export const CLAUDE_CODE_MODELS: [string, string][] = [
   ["claude-sonnet-5-5", "Sonnet 5.5"],
   ["claude-opus-5-5", "Opus 5.5"],
+  ["claude-fable-5-1", "Fable 5.1"],
   ["claude-haiku-5-5", "Haiku 5.5"],
 ];
+
+/** Whether `model` is a full model name Claude Code takes, as the playground checks it: a version, which its short names lack. */
+export function isFullModelName(model: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(model) && /[0-9]/.test(model);
+}
 
 /** Claude Code's spending limit for each message unless one is set, and the most it may be, in dollars. */
 export const DEFAULT_BUDGET = 1;
@@ -167,7 +173,7 @@ export function checkSetup(status: Status, form: SetupForm): SetupCheck {
     // Claude Code runs on the developer's own login, so it needs no key, only to be ready.
     const cc = status.claude_code;
     if (cc?.state !== "available") problem = cc ? "Claude Code can’t answer: " + (cc.reason || "it isn’t ready") + "." : "Still checking for Claude Code. Try again in a moment.";
-    else if (!CLAUDE_CODE_MODELS.some(([m]) => m === model)) fail("model", "Choose Sonnet 5.5, Opus 5.5, or Haiku 5.5.");
+    else if (!isFullModelName(model)) fail("model", model ? "Give a full model name with its version, such as claude-opus-5-5: Claude Code’s short names move to newer models." : "Choose a model, or type a full model name.");
   }
   // Without a model key there's no agent to set up; the Agent field says how to add one.
   else if (form.provider && !hasKey(status, form.provider)) problem = providerName(form.provider) + " needs a key first: use Add key under Provider.";
