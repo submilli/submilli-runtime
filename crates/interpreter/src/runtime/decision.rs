@@ -28,14 +28,15 @@ use super::StoreData;
 use super::call_log::{self, CallOutcome, CallRecord, ModelUsage, Payload, Side};
 use super::security::{AuditDecision, CheckOutcome, SecurityCheck};
 
-/// What the policy decided. `AskHuman` is a denial today (the approval flow is deferred),
-/// kept distinct so a record can say "deferred".
+/// What the policy decided. A record of an asked call keeps `AskHuman` or `AskAdmin`,
+/// and its `allowed` says what the approver decided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DecisionAction {
     Allow,
     Deny,
     AskHuman,
+    AskAdmin,
 }
 
 /// A rule located by caller block and zero-based position.
@@ -851,18 +852,18 @@ impl DecisionRecorder for DecisionLog {
     }
 }
 
-/// The action the enforcement path took; the explanation only refines a denial into
-/// `AskHuman`, so a disagreeing explanation cannot change what is recorded as allowed.
+/// The action the enforcement path took. The explanation only refines it into an ask,
+/// so a disagreeing explanation cannot change what is recorded as allowed.
 fn enforced_action(allowed: bool, explained: Option<DecisionAction>) -> DecisionAction {
     match (allowed, explained) {
+        (_, Some(asked @ (DecisionAction::AskHuman | DecisionAction::AskAdmin))) => asked,
         (true, _) => DecisionAction::Allow,
-        (false, Some(DecisionAction::AskHuman)) => DecisionAction::AskHuman,
         (false, _) => DecisionAction::Deny,
     }
 }
 
 fn fallback_cause(decision: &AuditDecision<'_>) -> DecisionCause {
-    if decision.source == "policy" {
+    if matches!(decision.source, "policy" | "human" | "admin") {
         return DecisionCause::Unexplained;
     }
     DecisionCause::RuntimeInvariant {

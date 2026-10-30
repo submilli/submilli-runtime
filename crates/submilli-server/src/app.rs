@@ -111,6 +111,8 @@ struct AppStateInner {
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     history_objects: Option<Arc<crate::adapters::history::HistoryObjects>>,
     durable_execution: bool,
+    /// How long an `ask-admin` call waits under a Blueprint that sets none.
+    admin_approval_timeout: std::time::Duration,
     max_durable_runs: usize,
     recovery_wakeup: Arc<Notify>,
     secret_store: Option<Arc<dyn SecretStore>>,
@@ -466,6 +468,9 @@ impl AppState {
                 unit_of_work,
                 history_objects,
                 durable_execution: config.durable_execution,
+                admin_approval_timeout: config
+                    .admin_approval_timeout
+                    .unwrap_or(crate::runs::DEFAULT_ADMIN_APPROVAL_TIMEOUT),
                 max_durable_runs: config.max_durable_runs.unwrap_or(4),
                 recovery_wakeup: Arc::new(Notify::new()),
                 secret_store,
@@ -657,6 +662,16 @@ impl AppState {
 
     pub(crate) fn durable_execution(&self) -> bool {
         self.inner.durable_execution
+    }
+
+    /// How long a call an `ask-admin` rule matches waits under `blueprint`.
+    pub(crate) fn admin_approval_timeout(
+        &self,
+        blueprint: &submilli_blueprint::Blueprint,
+    ) -> std::time::Duration {
+        blueprint
+            .admin_approval_timeout
+            .unwrap_or(self.inner.admin_approval_timeout)
     }
     pub(crate) fn units(&self) -> Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory> {
         self.inner.unit_of_work.clone()
@@ -1441,6 +1456,16 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         )
         .route("/v1/runs/{run_id}", Access::User, get(runs::get))
         .route("/v1/runs/{run_id}/resume", Access::User, post(runs::resume))
+        .route(
+            "/v1/approvals",
+            Access::Admin,
+            get(crate::handlers::approvals::list),
+        )
+        .route(
+            "/v1/approvals/{call_id}",
+            Access::Admin,
+            get(crate::handlers::approvals::show).post(crate::handlers::approvals::decide),
+        )
         .route(
             "/v1/blueprints",
             Access::Admin,

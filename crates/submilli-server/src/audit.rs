@@ -74,6 +74,10 @@ impl AuditLog {
         let (allowed, rule, reason) = match outcome {
             CheckOutcome::Allow { rule } => (true, *rule, None),
             CheckOutcome::Deny { rule, reason } => (false, *rule, Some(reason.as_str())),
+            // A file tool cannot wait for an approver, so an ask is refused.
+            CheckOutcome::Ask { rule, reason, .. } => {
+                (false, Some(rule.index), Some(reason.as_str()))
+            }
             _ => return,
         };
         if allowed && self.config.allows == Allows::None {
@@ -474,6 +478,76 @@ impl ExecutionAudit {
         self.log.emit("execution", fields);
     }
 
+    /// An `approval` record of a call that now waits for its approver.
+    pub(crate) fn approval_requested(
+        &self,
+        call_id: &str,
+        request: &interpreter::runtime::ApprovalRequest,
+    ) {
+        if let Some(fields) = self.approval_fields("requested", call_id, request) {
+            self.log.emit("approval", fields);
+        }
+    }
+
+    /// An `approval` record of what became of a call that waited, and the token
+    /// that decided it when one did.
+    pub(crate) fn approval_concluded(
+        &self,
+        call_id: &str,
+        request: &interpreter::runtime::ApprovalRequest,
+        outcome: &interpreter::runtime::ApprovalOutcome,
+        decided_by: Option<&str>,
+    ) {
+        use interpreter::runtime::ApprovalOutcome;
+        let Some(mut fields) = self.approval_fields("concluded", call_id, request) else {
+            return;
+        };
+        let (decision, reason) = match outcome {
+            ApprovalOutcome::Approved { reason } => ("approved", reason.as_deref()),
+            ApprovalOutcome::Denied { reason } => ("denied", reason.as_deref()),
+            ApprovalOutcome::Expired => ("expired", None),
+            ApprovalOutcome::Unanswerable { message } => ("unanswerable", Some(message.as_str())),
+        };
+        fields.insert("decision".into(), json!(decision));
+        if let Some(decided_by) = decided_by {
+            fields.insert("decided_by".into(), json!(decided_by));
+        }
+        if let Some(reason) = reason {
+            fields.insert("reason".into(), json!(safe_text(reason)));
+        }
+        self.log.emit("approval", fields);
+    }
+
+    /// The fields every `approval` record has. The context stays in the call's
+    /// decision record.
+    fn approval_fields(
+        &self,
+        event: &str,
+        call_id: &str,
+        request: &interpreter::runtime::ApprovalRequest,
+    ) -> Option<Map<String, Value>> {
+        let Ok(state) = self.state.lock() else {
+            report("audit execution lock poisoned");
+            return None;
+        };
+        let mut fields = state.fields.clone();
+        drop(state);
+        fields.insert("event".into(), json!(event));
+        fields.insert("call_id".into(), json!(call_id));
+        fields.insert("approver".into(), json!(request.approver.as_str()));
+        fields.insert("caller".into(), json!(safe_text(&request.caller)));
+        fields.insert("capability".into(), json!(safe_text(&request.capability)));
+        fields.insert(
+            "rule".into(),
+            json!({
+                "caller": safe_text(&request.rule.caller),
+                "index": request.rule.index,
+                "name": request.rule.name.as_deref().map(safe_text),
+            }),
+        );
+        Some(fields)
+    }
+
     pub(crate) fn network_policy(
         self: &Arc<Self>,
         base: &Arc<interpreter::runtime::NetworkPolicy>,
@@ -571,7 +645,9 @@ impl ExecutionAudit {
         if decision.allowed {
             state.active_call = Some((safe_text(decision.caller), safe_text(decision.capability)));
         }
-        if decision.allowed && self.log.config.allows == Allows::None {
+        // What an approver approved is always recorded whole, with its context.
+        let policy_allow = decision.allowed && !matches!(decision.source, "human" | "admin");
+        if policy_allow && self.log.config.allows == Allows::None {
             return;
         }
         let mut fields = decision_fields(&state.fields, &decision);
@@ -579,7 +655,7 @@ impl ExecutionAudit {
             report("cannot encode server audit decision payload");
             return;
         };
-        if decision.allowed && self.log.config.allows == Allows::Summary {
+        if policy_allow && self.log.config.allows == Allows::Summary {
             let key = (
                 hash(decision.caller.as_bytes()),
                 hash(decision.capability.as_bytes()),
@@ -674,13 +750,15 @@ fn decision_fields(
         json!(if decision.allowed { "allow" } else { "deny" }),
     );
     fields.insert("source".into(), json!(decision.source));
-    if decision.source == "policy" {
+    // An approver decides under the rule that asked them.
+    if matches!(decision.source, "policy" | "human" | "admin") {
         fields.insert(
             "rule".into(),
             decision.rule.map_or(json!("default"), |r| json!(r)),
         );
     }
-    if decision.reason.is_some() {
+    // An approval's reason is the approver's own words; only a refusal names one.
+    if decision.reason.is_some() && !decision.allowed {
         // Reasons from embedders can contain arbitrary payloads. Keep a stable safe reason.
         fields.insert(
             "reason".into(),
@@ -690,6 +768,8 @@ fn decision_fields(
                 "quota" => "resource budget exceeded",
                 "egress_guard" => "outbound destination refused",
                 "harness" => "the application refused the call",
+                "human" => "the person asked did not approve the call",
+                "admin" => "an administrator did not approve the call",
                 _ => "caller invariant refused the capability",
             }),
         );
@@ -992,6 +1072,9 @@ fn mutation(method: &axum::http::Method, route: &str) -> Option<(&'static str, &
                 "package_installed"
             },
         ));
+    }
+    if route.starts_with("/v1/approvals/") {
+        return Some(("admin", "approval_decided"));
     }
     if route.starts_with("/v1/mcp/") {
         return Some((

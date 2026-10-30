@@ -150,7 +150,6 @@ fn lint_warns_on_default_allow() {
 fn lint_does_not_warn_on_safe_defaults() {
     for (label, yaml) in [
         ("deny", "name: x\ndefault: deny\n"),
-        ("ask-human", "name: x\ndefault: ask-human\n"),
         ("omitted", "name: x\n"),
     ] {
         let file = write_temp(&format!("submilli-lint-default-{label}.yaml"), yaml);
@@ -162,6 +161,27 @@ fn lint_does_not_warn_on_safe_defaults() {
             "unexpected default-allow warning for `{label}` in {err}"
         );
     }
+}
+
+#[test]
+fn lint_warns_on_the_deprecated_default_and_asks_that_cannot_wait() {
+    let file = write_temp(
+        "submilli-lint-asks.yaml",
+        "name: x\ndefault: ask-human\npermissions:\n  main:\n    - capability: git.commit\n      action: ask-admin\n    - capability: fs.write\n      action: ask-human\n    - capability: http.get\n      action: ask-human\n",
+    );
+    let out = run(&[os("blueprint"), os("lint"), file.as_os_str()]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("`default: ask-human` is deprecated"), "{err}");
+    assert!(
+        err.contains("`git.commit`, `ask-admin`) can never ask"),
+        "{err}"
+    );
+    assert!(
+        err.contains("`fs.write`, `ask-human`): the `submilli:code` library"),
+        "{err}"
+    );
+    assert!(!err.contains("`http.get`, `ask-human`"), "{err}");
 }
 
 #[test]
@@ -745,8 +765,8 @@ fn capability_list_unconfigured_reports_when_nothing_is_omitted() {
     );
 }
 
-/// `ask-human` is accepted but enforced as `deny`; rules other callers hold
-/// for an omitted name are not `main`'s and stay out of this view.
+/// `default: ask-human` is a deprecated spelling of `deny`; rules other callers
+/// hold for an omitted name are not `main`'s and stay out of this view.
 #[test]
 fn capability_list_unconfigured_under_ask_human_hides_other_callers_rules() {
     let home = tempfile::tempdir().expect("home tempdir");
@@ -762,7 +782,10 @@ fn capability_list_unconfigured_under_ask_human_hides_other_callers_rules() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let text = stdout(&out);
     assert!(text.contains("`default: ask-human`"), "got: {text}");
-    assert!(text.contains("currently denies"), "got: {text}");
+    assert!(
+        text.contains("deprecated spelling of `deny`"),
+        "got: {text}"
+    );
     assert!(text.contains("pied-piper.example/charge"), "got: {text}");
     assert!(!text.contains("rule["), "got: {text}");
 }
@@ -830,7 +853,7 @@ fn add_package_summary_names_the_blueprints_default() {
         ),
         (
             "name: x\ndefault: ask-human\n",
-            "1 provided capabilities not selected; `default: ask-human` applies to them",
+            "1 provided capabilities not selected; `default: ask-human`, a deprecated spelling of `deny`, denies calls to them",
         ),
     ] {
         let out = add_sdk_with_charge_selected(home.path(), blueprint);
@@ -2721,4 +2744,44 @@ fn oversized_diagnostic_and_warning_are_abbreviated_without_changing_exit_status
     assert!(stderr(&warning).contains("[diagnostic output truncated]"));
     fs::write(&path, "function main(): number { return 42; }").unwrap();
     assert!(run(&[os("check"), path.as_os_str()]).status.success());
+}
+
+#[test]
+fn run_without_a_terminal_denies_a_call_that_needs_approval() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let blueprint = dir.path().join("blueprint.yaml");
+    write_file(
+        &blueprint,
+        "name: refunds\npermissions:\n  main:\n    - capability: test.refund\n      action: ask-human\n",
+    );
+    let script = dir.path().join("main.ts");
+    write_file(
+        &script,
+        r#"import { check } from "submilli:security";
+function main(): string {
+    try {
+        check("test.refund", { amount: 250 });
+        return "refunded";
+    } catch (e) {
+        if (e instanceof PermissionDeniedError) { return e.reason; }
+        throw e;
+    }
+}
+"#,
+    );
+
+    // `output()` gives the child no terminal on either stdin or stderr.
+    let out = run(&[
+        os("run"),
+        os("--blueprint"),
+        blueprint.as_os_str(),
+        script.as_os_str(),
+    ]);
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let result = stdout(&out);
+    assert!(
+        result.contains("approval (ask-human)") && result.contains("approval can't be asked here"),
+        "got: {result}"
+    );
 }

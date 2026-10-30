@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use interpreter::runtime::{
-    CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation, FailureReasonRecord,
-    FailureRecord, NearMissRecord, RuleCitation, SecurityCheck,
+    Approver, AskRule, CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation,
+    FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation, SecurityCheck,
 };
 use interpreter::stdlib::capabilities;
 use interpreter::stdlib::{OptionalPackage, Stdlib};
@@ -23,8 +23,8 @@ use crate::rules::{
 /// Deny-by-default: a capability is allowed only when a rule says so, and under
 /// [`DefaultAction::Deny`](crate::DefaultAction::Deny) a rule set without rules
 /// denies every capability. An allow default inverts this to allow-by-default.
-/// `ask-human` is deferred (no suspend/resume yet), so it resolves to `Deny`
-/// with a reason that says so.
+/// `ask-human` and `ask-admin` answer [`CheckOutcome::Ask`], naming the rule;
+/// a call that cannot ask its approver is denied with the reason given there.
 ///
 /// Filesystem rules see absolute guest paths with `.` and `..` collapsed using
 /// the same lexical resolver as VFS I/O. This also applies to both endpoints of
@@ -110,14 +110,53 @@ impl<R: Rules + Send + Sync + ?Sized + 'static> SecurityCheck for PermissionChec
                     denial_target(capability, &context)
                 ),
             },
-            Action::AskHuman => CheckOutcome::Deny {
-                rule,
-                reason: format!(
-                    "policy requires human approval for {capability}{} (caller {caller}); \
-                     ask-human is deferred and treated as deny",
-                    denial_target(capability, &context)
-                ),
+            Action::AskHuman => self.ask(Approver::Human, caller, capability, &context, rule),
+            Action::AskAdmin => self.ask(Approver::Admin, caller, capability, &context, rule),
+        }
+    }
+}
+
+impl<R: Rules + ?Sized> PermissionCheck<R> {
+    /// The outcome of the rule at `rule` asking `approver`, with the reason a call
+    /// that can't ask them is refused with.
+    fn ask(
+        &self,
+        approver: Approver,
+        caller: &str,
+        capability: &str,
+        context: &serde_json::Value,
+        rule: Option<usize>,
+    ) -> CheckOutcome {
+        let reason = format!(
+            "policy requires {} approval ({}) for {capability}{} (caller {caller}), \
+             and approval can't be asked here",
+            match approver {
+                Approver::Human => "a person's",
+                Approver::Admin => "an administrator's",
             },
+            approver.action(),
+            denial_target(capability, context)
+        );
+        // An ask comes from a rule: the default never asks.
+        let Some(index) = rule else {
+            return CheckOutcome::Deny { rule, reason };
+        };
+        let asked = self
+            .rules
+            .permissions()
+            .get(caller)
+            .and_then(|rules| rules.get(index));
+        CheckOutcome::Ask {
+            approver,
+            rule: AskRule {
+                caller: caller.to_owned(),
+                index,
+                name: asked.and_then(|rule| rule.name.clone()),
+                filter: asked
+                    .and_then(|rule| rule.filter.as_ref())
+                    .map(ToString::to_string),
+            },
+            reason,
         }
     }
 }
@@ -128,6 +167,7 @@ fn explanation_of(resolution: Resolution) -> DecisionExplanation {
             Action::Allow => DecisionAction::Allow,
             Action::Deny => DecisionAction::Deny,
             Action::AskHuman => DecisionAction::AskHuman,
+            Action::AskAdmin => DecisionAction::AskAdmin,
         },
         cause: cause_of(resolution.cause),
         near_misses: resolution
@@ -454,19 +494,50 @@ permissions:
     }
 
     #[test]
-    fn ask_human_stays_distinct_in_the_explanation_while_enforcement_denies() {
+    fn an_ask_rule_asks_its_approver_and_names_the_rule() {
         let policy = explained_rules();
         let context = serde_json::json!({"path": "/a"});
         let explanation = policy.explain("main", "fs.write", &context, "/").unwrap();
         assert_eq!(explanation.action, DecisionAction::AskHuman);
         assert!(matches!(explanation.cause, DecisionCause::Rule(_)));
         match policy.check_with_cwd("main", "fs.write", &context, "/") {
-            CheckOutcome::Deny { reason, rule } => {
-                assert_eq!(rule, Some(1));
-                assert!(reason.contains("deferred"), "{reason}");
+            CheckOutcome::Ask {
+                approver,
+                rule,
+                reason,
+            } => {
+                assert_eq!(approver, Approver::Human);
+                assert_eq!(
+                    rule,
+                    AskRule {
+                        caller: "main".to_string(),
+                        index: 1,
+                        name: None,
+                        filter: None,
+                    }
+                );
+                assert!(reason.contains("can't be asked here"), "{reason}");
             }
-            _ => panic!("ask-human is enforced as a denial"),
+            _ => panic!("ask-human asks"),
         }
+        let admin = PermissionCheck::new(Arc::new(
+            parse(
+                "name: refunds\npermissions:\n  main:\n    - {capability: test.refund, name: large, filter: 'amount > 100', action: ask-admin}\n",
+            )
+            .unwrap(),
+        ));
+        match admin.check("main", "test.refund", &serde_json::json!({"amount": 250})) {
+            CheckOutcome::Ask { approver, rule, .. } => {
+                assert_eq!(approver, Approver::Admin);
+                assert_eq!(rule.name.as_deref(), Some("large"));
+                assert_eq!(rule.filter.as_deref(), Some("amount > 100"));
+            }
+            _ => panic!("ask-admin asks"),
+        }
+        assert!(matches!(
+            admin.check("main", "test.refund", &serde_json::json!({"amount": 50})),
+            CheckOutcome::Deny { .. }
+        ));
     }
 
     #[test]
@@ -659,7 +730,7 @@ permissions:
         let reason = |capability: &str, context: serde_json::Value| match policy
             .check("main", capability, &context)
         {
-            CheckOutcome::Deny { reason, .. } => reason,
+            CheckOutcome::Deny { reason, .. } | CheckOutcome::Ask { reason, .. } => reason,
             _ => panic!("{capability} not denied"),
         };
         assert_eq!(
@@ -671,8 +742,8 @@ permissions:
         );
         assert_eq!(
             reason("fs.write", serde_json::json!({"path": "notes/a.md"})),
-            "policy requires human approval for fs.write on /notes/a.md (caller main); \
-             ask-human is deferred and treated as deny"
+            "policy requires a person's approval (ask-human) for fs.write on /notes/a.md \
+             (caller main), and approval can't be asked here"
         );
         assert_eq!(
             reason("fs.move", serde_json::json!({"from": "a", "to": "/b/./c"})),

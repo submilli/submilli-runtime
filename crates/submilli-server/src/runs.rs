@@ -1,11 +1,13 @@
-//! Runs that can stop at an application tool call (`@tools`) and wait for the
-//! harness to answer, in memory.
+//! Runs that can stop at an application tool call (`@tools`), or at a call a
+//! rule asks an approver about (`ask-human`, `ask-admin`), and wait for the
+//! answer, in memory.
 //!
-//! A run that calls a tool **suspends**: its Wasm instance stays parked in its
-//! owner task, awaiting the answer, and whoever is listening (the execute
-//! request, a resume, a `GET`) sees the pending call. The harness answers with
-//! `POST /v1/runs/{id}/resume`, and the run carries on until it suspends again
-//! or finishes. Runs are keyed by their execution id.
+//! A run that calls a tool, or needs an approval, **suspends**: its Wasm
+//! instance stays parked in its owner task, awaiting the answer, and whoever is
+//! listening (the execute request, a resume, a `GET`) sees the pending call. The
+//! harness answers with `POST /v1/runs/{id}/resume`, an administrator also
+//! through `/v1/approvals`, and the run carries on until it suspends again or
+//! finishes. Runs are keyed by their execution id.
 //!
 //! State is published through a [`watch`] channel rather than a queue: several
 //! listeners may read it, and a listener that goes away loses nothing, since
@@ -23,25 +25,65 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use interpreter::runtime::{McpResponse, ToolCallError, ToolProvider};
-use serde::Serialize;
+use interpreter::runtime::{
+    ApprovalError, ApprovalOutcome, ApprovalProvider, ApprovalRequest, Approver, McpResponse,
+    ToolCallError, ToolProvider,
+};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{oneshot, watch};
 
 /// How many runs may wait on the harness at once, server-wide, by default. Each
 /// holds its Wasm instance in memory.
 pub const DEFAULT_MAX_SUSPENDED_RUNS: usize = 256;
 
+/// How long a call an `ask-admin` rule matches waits for an administrator, by
+/// default, under a Blueprint that sets no `admin_approval_timeout`.
+pub const DEFAULT_ADMIN_APPROVAL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// How long a finished run's result stays readable through `GET /v1/runs/{id}`.
 /// Only a run that suspended is kept: one that never did was answered whole by
 /// its execute request.
 const FINISHED_RETENTION: Duration = Duration::from_secs(10 * 60);
 
-/// One tool call waiting on the harness, as the harness sees it.
+/// One call waiting on the harness, as the harness sees it: an application tool
+/// call, or a call waiting for an approver's decision.
 #[derive(Clone, Debug, Serialize)]
-pub struct PendingCallView {
-    pub call_id: String,
-    pub tool: String,
-    pub args: serde_json::Value,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PendingCallView {
+    Tool {
+        call_id: String,
+        tool: String,
+        args: serde_json::Value,
+    },
+    Approval {
+        call_id: String,
+        approval: ApprovalView,
+    },
+}
+
+impl PendingCallView {
+    pub fn call_id(&self) -> &str {
+        match self {
+            Self::Tool { call_id, .. } | Self::Approval { call_id, .. } => call_id,
+        }
+    }
+
+    /// Who may answer an approval; `None` for a tool call.
+    pub fn approver(&self) -> Option<Approver> {
+        match self {
+            Self::Approval { approval, .. } => Some(approval.request.approver),
+            Self::Tool { .. } => None,
+        }
+    }
+}
+
+/// A call waiting for an approver, with the values the policy tested.
+#[derive(Clone, Debug, Serialize)]
+pub struct ApprovalView {
+    #[serde(flatten)]
+    pub request: ApprovalRequest,
+    pub requested_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
 }
 
 /// Where a run is.
@@ -63,11 +105,31 @@ struct RunView {
     state: RunState,
 }
 
-/// The harness's answer to one call.
+/// The answer to one call.
 #[derive(Debug)]
-pub struct ToolAnswer {
+pub struct CallAnswer {
     pub call_id: String,
-    pub answer: Result<McpResponse, ToolCallError>,
+    pub answer: Answer,
+}
+
+/// What a call was answered with: a tool's result, or an approver's decision.
+#[derive(Debug)]
+pub enum Answer {
+    Tool(Result<McpResponse, ToolCallError>),
+    Decision {
+        decision: Decision,
+        reason: Option<String>,
+        /// The token that decided, for the audit trail.
+        decided_by: String,
+    },
+}
+
+/// An approver's answer to an approval call.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Decision {
+    Approve,
+    Deny,
 }
 
 /// Why a resume was refused. Nothing was delivered.
@@ -77,7 +139,16 @@ pub enum ResumeRefusal {
     NotSuspended,
     /// The run is waiting, but not on this call.
     UnknownCall(String),
+    /// A decision answered a tool call.
+    NotAnApproval(String),
+    /// The call waits for an administrator, and the caller is not one.
+    RequiresAdmin(String),
 }
+
+/// What became of the harness's answer to an approval it took for a tool call:
+/// the call is refused, so an SDK that predates approvals cannot approve one.
+const ANSWERED_AS_TOOL: &str =
+    "the harness answered it as a tool call; update the SDK to one that handles approvals";
 
 /// Why a run could not suspend.
 #[derive(Debug)]
@@ -118,7 +189,75 @@ impl Slots {
 
 struct PendingCall {
     view: PendingCallView,
-    reply: oneshot::Sender<Result<McpResponse, ToolCallError>>,
+    reply: Reply,
+}
+
+/// Where a pending call's answer goes.
+enum Reply {
+    Tool(oneshot::Sender<Result<McpResponse, ToolCallError>>),
+    Approval(oneshot::Sender<Decided>),
+}
+
+/// What became of an approval call, and the token that decided it when one did.
+struct Decided {
+    outcome: ApprovalOutcome,
+    decided_by: Option<String>,
+}
+
+impl PendingCall {
+    /// Whether `answer` may answer this call, refusing a mismatch the batch
+    /// check catches before anything is delivered.
+    fn admits(&self, answer: &CallAnswer, admin: bool) -> Result<(), ResumeRefusal> {
+        match (&self.reply, &answer.answer) {
+            (Reply::Tool(_), Answer::Decision { .. }) => {
+                Err(ResumeRefusal::NotAnApproval(answer.call_id.clone()))
+            }
+            (Reply::Approval(_), _) if self.view.approver() == Some(Approver::Admin) && !admin => {
+                Err(ResumeRefusal::RequiresAdmin(answer.call_id.clone()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Hand `answer` to the waiting call. The run may have ended since; then
+    /// nobody is waiting for it.
+    fn deliver(self, answer: Answer) {
+        match (self.reply, answer) {
+            (Reply::Tool(reply), Answer::Tool(result)) => {
+                let _ = reply.send(result);
+            }
+            (
+                Reply::Approval(reply),
+                Answer::Decision {
+                    decision,
+                    reason,
+                    decided_by,
+                },
+            ) => {
+                let _ = reply.send(Decided {
+                    outcome: match decision {
+                        Decision::Approve => ApprovalOutcome::Approved { reason },
+                        Decision::Deny => ApprovalOutcome::Denied { reason },
+                    },
+                    decided_by: Some(decided_by),
+                });
+            }
+            (Reply::Approval(reply), Answer::Tool(_)) => {
+                let _ = reply.send(Decided {
+                    outcome: ApprovalOutcome::Unanswerable {
+                        message: ANSWERED_AS_TOOL.to_owned(),
+                    },
+                    decided_by: None,
+                });
+            }
+            // `admits` refuses a decision for a tool call before delivery.
+            (Reply::Tool(reply), Answer::Decision { .. }) => {
+                let _ = reply.send(Err(ToolCallError::Failed {
+                    message: "a decision cannot answer a tool call".to_owned(),
+                }));
+            }
+        }
+    }
 }
 
 /// What changes as the run goes, under the entry's lock. `ended` mirrors a
@@ -201,13 +340,23 @@ impl RunEntry {
         self.wait(self.state.subscribe(), generation).await
     }
 
-    /// Deliver the harness's answers, whose call ids are distinct. The batch is
-    /// checked whole before anything is delivered: an id already answered is a
-    /// no-op, the pending one is answered, anything else refuses the batch.
-    /// Returns the generation at which the run went back to work, or `None` when
-    /// every answer was a no-op.
-    pub fn resume(&self, answers: Vec<ToolAnswer>) -> Result<Option<u64>, ResumeRefusal> {
+    /// Deliver the answers, whose call ids are distinct. The batch is checked
+    /// whole before anything is delivered: an id already answered is a no-op, the
+    /// pending one is answered, anything else refuses the batch. `admin` is
+    /// whether the caller may decide an `ask-admin` call. Returns the generation
+    /// at which the run went back to work, or `None` when every answer was a no-op.
+    pub fn resume(
+        &self,
+        answers: Vec<CallAnswer>,
+        admin: bool,
+    ) -> Result<Option<u64>, ResumeRefusal> {
         let mut inner = self.lock();
+        if answers
+            .iter()
+            .any(|answer| inner.rejected.contains(&answer.call_id))
+        {
+            return Err(ResumeRefusal::NotSuspended);
+        }
         let mut fresh = answers
             .into_iter()
             .filter(|answer| !inner.answered.contains(&answer.call_id))
@@ -218,27 +367,31 @@ impl RunEntry {
         };
         let Some(pending) = inner
             .pending
-            .take_if(|call| call.view.call_id == answer.call_id)
+            .take_if(|call| call.view.call_id() == answer.call_id)
         else {
             return Err(match inner.pending {
                 Some(_) => ResumeRefusal::UnknownCall(answer.call_id),
                 None => ResumeRefusal::NotSuspended,
             });
         };
+        if let Err(refusal) = pending.admits(&answer, admin) {
+            inner.pending = Some(pending);
+            return Err(refusal);
+        }
         // Only one call is ever pending, so a second fresh id cannot be it.
         if let Some(other) = fresh.next() {
             inner.pending = Some(pending);
             return Err(ResumeRefusal::UnknownCall(other.call_id));
         }
+        let call_id = pending.view.call_id().to_owned();
         if self.durable {
-            inner.delivered = Some(pending.view.call_id);
+            inner.delivered = Some(call_id);
         } else {
-            inner.answered.insert(pending.view.call_id);
+            inner.answered.insert(call_id);
         }
         self.slots.give_back();
         let generation = self.publish(RunState::Running);
-        // The run may have ended since; then nobody is waiting for the answer.
-        let _ = pending.reply.send(answer.answer);
+        pending.deliver(answer.answer);
         Ok(Some(generation))
     }
 
@@ -288,12 +441,12 @@ impl RunEntry {
         self.lock().next_seq > 0
     }
 
+    /// Publish the call `view` builds from its id, with `reply` waiting for its answer.
     fn suspend(
         &self,
         effect_id: EffectId,
-        tool: &str,
-        args: serde_json::Value,
-        reply: oneshot::Sender<Result<McpResponse, ToolCallError>>,
+        view: impl FnOnce(String) -> PendingCallView,
+        reply: Reply,
     ) -> Result<String, SuspendRefusal> {
         let mut inner = self.lock();
         if inner.stopped() {
@@ -305,23 +458,20 @@ impl RunEntry {
             inner.unrecordable = true;
             return Err(SuspendRefusal::Ended);
         }
-        if inner.harness_gone {
+        // Only the harness answers tool calls; an approver may still decide.
+        if inner.harness_gone && matches!(reply, Reply::Tool(_)) {
             return Err(SuspendRefusal::HarnessGone);
         }
         if !self.slots.take() {
             return Err(SuspendRefusal::Full);
         }
         inner.next_seq += 1;
-        let view = PendingCallView {
-            call_id: if self.durable {
-                self.call_id(&effect_id)
-            } else {
-                format!("{}:{}", self.id, inner.next_seq)
-            },
-            tool: tool.to_owned(),
-            args,
+        let call_id = if self.durable {
+            self.call_id(&effect_id)
+        } else {
+            format!("{}:{}", self.id, inner.next_seq)
         };
-        let call_id = view.call_id.clone();
+        let view = view(call_id.clone());
         self.publish(RunState::Suspended(Arc::from([view.clone()])));
         inner.pending = Some(PendingCall { view, reply });
         Ok(call_id)
@@ -331,11 +481,28 @@ impl RunEntry {
     /// pending: if not, a resume took it first and its answer stands.
     fn time_out(&self, call_id: &str) -> bool {
         let mut inner = self.lock();
-        let timed_out = self.withdraw_locked(&mut inner, call_id);
+        let timed_out = self.expire_locked(&mut inner, call_id);
         if timed_out {
             inner.harness_gone = true;
         }
         timed_out
+    }
+
+    /// [`Self::time_out`] for an approval: the approver not deciding says nothing
+    /// about whether the harness is there.
+    fn expire(&self, call_id: &str) -> bool {
+        let mut inner = self.lock();
+        self.expire_locked(&mut inner, call_id)
+    }
+
+    /// Withdraws `call_id` as its time ran out. An answer to it from now on is
+    /// late: the run is not waiting on it.
+    fn expire_locked(&self, inner: &mut RunInner, call_id: &str) -> bool {
+        let expired = self.withdraw_locked(inner, call_id);
+        if expired {
+            inner.rejected.insert(call_id.to_owned());
+        }
+        expired
     }
 
     /// Take back `call_id` because the run stopped waiting for it.
@@ -348,7 +515,7 @@ impl RunEntry {
         let pending = inner
             .pending
             .as_ref()
-            .is_some_and(|call| call.view.call_id == call_id);
+            .is_some_and(|call| call.view.call_id() == call_id);
         if pending {
             self.abandon_pending(inner);
         }
@@ -530,6 +697,25 @@ impl RunRegistry {
         }
     }
 
+    /// Every call waiting for an approver now, with its run, oldest first.
+    pub fn pending_approvals(&self) -> Vec<PendingApproval> {
+        let entries: Vec<Arc<RunEntry>> = self.lock().values().cloned().collect();
+        let mut pending: Vec<_> = entries
+            .into_iter()
+            .flat_map(|entry| PendingApproval::of(&entry))
+            .collect();
+        pending.sort_by_key(|pending| pending.approval.requested_at_unix_ms);
+        pending
+    }
+
+    /// The call `call_id` names, when it waits for an approver now.
+    pub fn pending_approval(&self, call_id: &str) -> Option<PendingApproval> {
+        let (run_id, _) = call_id.rsplit_once(':')?;
+        PendingApproval::of(&self.get(run_id)?)
+            .into_iter()
+            .find(|pending| pending.call_id == call_id)
+    }
+
     /// How many runs are waiting on the harness now.
     pub fn suspended(&self) -> usize {
         self.slots.taken.load(Ordering::Acquire)
@@ -548,6 +734,33 @@ impl RunRegistry {
     /// Poisoning means a panic while the map was half updated, so it propagates.
     fn lock(&self) -> MutexGuard<'_, HashMap<RunId, Arc<RunEntry>>> {
         self.runs.lock().expect("run registry lock poisoned")
+    }
+}
+
+/// A call waiting for an approver, with its run.
+pub struct PendingApproval {
+    pub entry: Arc<RunEntry>,
+    pub call_id: String,
+    pub approval: ApprovalView,
+}
+
+impl PendingApproval {
+    /// The approval calls `entry` waits on now.
+    fn of(entry: &Arc<RunEntry>) -> Vec<Self> {
+        let RunState::Suspended(calls) = entry.current() else {
+            return Vec::new();
+        };
+        calls
+            .iter()
+            .filter_map(|call| match call {
+                PendingCallView::Approval { call_id, approval } => Some(Self {
+                    entry: Arc::clone(entry),
+                    call_id: call_id.clone(),
+                    approval: approval.clone(),
+                }),
+                PendingCallView::Tool { .. } => None,
+            })
+            .collect()
     }
 }
 
@@ -572,8 +785,13 @@ impl ToolProvider for SuspendingToolProvider {
     ) -> Pin<Box<dyn Future<Output = Result<McpResponse, ToolCallError>> + Send + 'a>> {
         Box::pin(async move {
             let args = serde_json::from_str(args_json).unwrap_or(serde_json::Value::Null);
-            let (reply, mut answer) = oneshot::channel();
-            let call_id = match self.entry.suspend(effect_id, tool, args, reply) {
+            let (reply, answer) = oneshot::channel();
+            let view = |call_id| PendingCallView::Tool {
+                call_id,
+                tool: tool.to_owned(),
+                args,
+            };
+            let call_id = match self.entry.suspend(effect_id, view, Reply::Tool(reply)) {
                 Ok(call_id) => call_id,
                 Err(SuspendRefusal::Full) if self.entry.durable => {
                     tracing::warn!(run = %self.entry.id, "durable tool wait interrupted: suspended-run capacity reached");
@@ -589,26 +807,152 @@ impl ToolProvider for SuspendingToolProvider {
                 Err(SuspendRefusal::HarnessGone) => return Err(ToolCallError::TimedOut),
                 Err(SuspendRefusal::Ended) => return Err(ToolCallError::Cancelled),
             };
-            // Withdraws the call if this future is dropped while it waits (the run
-            // was cancelled).
-            let mut pending = Withdraw {
-                entry: &self.entry,
-                call_id: &call_id,
-                armed: true,
-            };
-            // Only a call that waits is activity: a refused one returns at once,
-            // costing neither a store write nor paused time.
-            (self.touch)().await;
-            let answered = match tokio::time::timeout(self.timeout, &mut answer).await {
-                Ok(answered) => answered,
-                Err(_) if self.entry.time_out(&call_id) => Ok(Err(ToolCallError::TimedOut)),
-                // A resume took the call as the time ran out; its answer wins.
-                Err(_) => answer.await,
-            };
-            pending.armed = false;
-            answered.unwrap_or(Err(ToolCallError::Cancelled))
+            let waited = self
+                .entry
+                .wait_for(
+                    &call_id,
+                    answer,
+                    self.timeout,
+                    &self.touch,
+                    RunEntry::time_out,
+                )
+                .await;
+            match waited {
+                Waited::Answered(result) => result,
+                Waited::TimedOut => Err(ToolCallError::TimedOut),
+                Waited::Abandoned => Err(ToolCallError::Cancelled),
+            }
         })
     }
+}
+
+/// The server's approval provider for a run's asked calls: each suspends the run
+/// until the harness, or for `ask-admin` an administrator, decides, or its time
+/// runs out.
+pub struct SuspendingApprovalProvider {
+    pub entry: Arc<RunEntry>,
+    /// How long an `ask-human` call waits: the Blueprint's `tool_call_timeout`.
+    pub human_timeout: Duration,
+    /// How long an `ask-admin` call waits: the Blueprint's
+    /// `admin_approval_timeout`, else the server's.
+    pub admin_timeout: Duration,
+    /// Marks the session active as the run suspends, so its idle window starts over.
+    pub touch: Arc<dyn Fn() -> Touch + Send + Sync>,
+    /// Records each request and what became of it.
+    pub(crate) audit: Arc<crate::audit::ExecutionAudit>,
+}
+
+impl ApprovalProvider for SuspendingApprovalProvider {
+    fn request<'a>(
+        &'a self,
+        effect_id: EffectId,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ApprovalOutcome, ApprovalError>> + Send + 'a>> {
+        Box::pin(async move {
+            let timeout = match request.approver {
+                Approver::Human => self.human_timeout,
+                Approver::Admin => self.admin_timeout,
+            };
+            let requested_at_unix_ms = unix_ms();
+            let view = |call_id| PendingCallView::Approval {
+                call_id,
+                approval: ApprovalView {
+                    request: request.clone(),
+                    requested_at_unix_ms,
+                    expires_at_unix_ms: requested_at_unix_ms
+                        .saturating_add(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)),
+                },
+            };
+            let (reply, answer) = oneshot::channel();
+            let call_id = match self.entry.suspend(effect_id, view, Reply::Approval(reply)) {
+                Ok(call_id) => call_id,
+                Err(SuspendRefusal::Full) if self.entry.durable => {
+                    tracing::warn!(run = %self.entry.id, "durable approval wait interrupted: suspended-run capacity reached");
+                    return Err(ApprovalError::Cancelled);
+                }
+                Err(SuspendRefusal::Full) => {
+                    return Err(ApprovalError::QuotaExceeded {
+                        message:
+                            "the server is holding as many waiting runs as it can; retry later"
+                                .to_owned(),
+                    });
+                }
+                Err(SuspendRefusal::HarnessGone | SuspendRefusal::Ended) => {
+                    return Err(ApprovalError::Cancelled);
+                }
+            };
+            self.audit.approval_requested(&call_id, request);
+            let waited = self
+                .entry
+                .wait_for(&call_id, answer, timeout, &self.touch, RunEntry::expire)
+                .await;
+            let decided = match waited {
+                Waited::Answered(decided) => decided,
+                Waited::TimedOut => Decided {
+                    outcome: ApprovalOutcome::Expired,
+                    decided_by: None,
+                },
+                Waited::Abandoned => return Err(ApprovalError::Cancelled),
+            };
+            self.audit.approval_concluded(
+                &call_id,
+                request,
+                &decided.outcome,
+                decided.decided_by.as_deref(),
+            );
+            Ok(decided.outcome)
+        })
+    }
+}
+
+/// How a suspended call's wait ended.
+enum Waited<T> {
+    Answered(T),
+    TimedOut,
+    /// The run stopped waiting: its session ended, or it was cancelled.
+    Abandoned,
+}
+
+impl RunEntry {
+    /// Waits for the answer to `call_id`, which this run suspended at, for at most
+    /// `timeout`. `expire` takes the call back as the time runs out; when an
+    /// answer took it first, the answer wins. The call is withdrawn if this future
+    /// is dropped while it waits (the run was cancelled).
+    async fn wait_for<T>(
+        &self,
+        call_id: &str,
+        mut answer: oneshot::Receiver<T>,
+        timeout: Duration,
+        touch: &Arc<dyn Fn() -> Touch + Send + Sync>,
+        expire: fn(&Self, &str) -> bool,
+    ) -> Waited<T> {
+        let mut pending = Withdraw {
+            entry: self,
+            call_id,
+            armed: true,
+        };
+        // Only a call that waits is activity: a refused one returns at once,
+        // costing neither a store write nor paused time.
+        touch().await;
+        let answered = match tokio::time::timeout(timeout, &mut answer).await {
+            Ok(answered) => answered,
+            Err(_) if expire(self, call_id) => {
+                pending.armed = false;
+                return Waited::TimedOut;
+            }
+            Err(_) => answer.await,
+        };
+        pending.armed = false;
+        answered.map_or(Waited::Abandoned, Waited::Answered)
+    }
+}
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 struct Withdraw<'a> {
@@ -663,16 +1007,28 @@ mod tests {
             }
         });
         let pending = calls(provider.entry.settled().await);
-        assert_eq!(pending[0].call_id, "run:1");
-        assert_eq!(pending[0].tool, "lookup");
-        assert_eq!(pending[0].args, serde_json::json!({ "id": 1 }));
+        match &pending[0] {
+            PendingCallView::Tool {
+                call_id,
+                tool,
+                args,
+            } => {
+                assert_eq!(call_id, "run:1");
+                assert_eq!(tool, "lookup");
+                assert_eq!(args, &serde_json::json!({ "id": 1 }));
+            }
+            other => panic!("not a tool call: {other:?}"),
+        }
         assert_eq!(registry.suspended(), 1);
         provider
             .entry
-            .resume(vec![ToolAnswer {
-                call_id: "run:1".into(),
-                answer: value(serde_json::json!("found")),
-            }])
+            .resume(
+                vec![CallAnswer {
+                    call_id: "run:1".into(),
+                    answer: Answer::Tool(value(serde_json::json!("found"))),
+                }],
+                false,
+            )
             .unwrap();
         let answer = call.await.unwrap().unwrap();
         assert_eq!(answer.value(), &serde_json::json!("found"));
@@ -680,17 +1036,23 @@ mod tests {
         // Answering the same call again is a no-op.
         provider
             .entry
-            .resume(vec![ToolAnswer {
-                call_id: "run:1".into(),
-                answer: value(serde_json::json!("again")),
-            }])
+            .resume(
+                vec![CallAnswer {
+                    call_id: "run:1".into(),
+                    answer: Answer::Tool(value(serde_json::json!("again"))),
+                }],
+                false,
+            )
             .unwrap();
         // A call it never made, with nothing pending, is refused.
         assert_eq!(
-            provider.entry.resume(vec![ToolAnswer {
-                call_id: "run:9".into(),
-                answer: value(serde_json::Value::Null),
-            }],),
+            provider.entry.resume(
+                vec![CallAnswer {
+                    call_id: "run:9".into(),
+                    answer: Answer::Tool(value(serde_json::Value::Null)),
+                }],
+                false
+            ),
             Err(ResumeRefusal::NotSuspended)
         );
     }
@@ -704,10 +1066,13 @@ mod tests {
         assert_eq!(registry.suspended(), 0);
         assert!(matches!(provider.entry.current(), RunState::Running));
         assert_eq!(
-            provider.entry.resume(vec![ToolAnswer {
-                call_id: "run:1".into(),
-                answer: value(serde_json::Value::Null),
-            }],),
+            provider.entry.resume(
+                vec![CallAnswer {
+                    call_id: "run:1".into(),
+                    answer: Answer::Tool(value(serde_json::Value::Null)),
+                }],
+                false
+            ),
             Err(ResumeRefusal::NotSuspended)
         );
     }

@@ -35,8 +35,8 @@ use crate::stdlib::abi::{
     self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::shared::{
-    check_security_call, permitted_candidates, preflight_listing, running_package,
-    sanitize_description, truncated,
+    check_and_approve_call, check_candidate, permitted_candidates, preflight_listing,
+    running_package, sanitize_description, truncated,
 };
 
 pub use declaration::package_declaration;
@@ -121,7 +121,7 @@ async fn run(
     input: String,
     schema: Option<String>,
 ) -> wasmtime::Result<Val> {
-    let ticket = gate(caller, &agent)?;
+    let ticket = gate(caller, &agent).await?;
     let principal = running_package(caller).map_err(|error| error.into_denial(CAPABILITY))?;
     let sent = (input.len() + schema.as_deref().map_or(0, str::len)) as u64;
     record_payload(&*caller, ticket, Side::Request, || {
@@ -207,11 +207,15 @@ fn record_outcome(
 /// The capability check, run before anything reaches the harness. The context
 /// is the agent name only: a policy can choose which agents a caller reaches,
 /// not read the task.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     agent: &str,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(caller, CAPABILITY, serde_json::json!({ "agent": agent }))
+    check_and_approve_call(caller, CAPABILITY, gate_context(agent)).await
+}
+
+fn gate_context(agent: &str) -> serde_json::Value {
+    serde_json::json!({ "agent": agent })
 }
 
 /// `list()`: every agent the harness offers that the caller may run. A denied
@@ -233,7 +237,7 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
         caller,
         candidates,
         |agent| agent.name.as_str(),
-        |caller, name| gate(caller, name).map(|_| ()),
+        |caller, name| check_candidate(caller, CAPABILITY, gate_context(name)),
     )?;
     let mut built = Vec::with_capacity(visible.len());
     for agent in visible {

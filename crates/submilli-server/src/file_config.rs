@@ -142,6 +142,8 @@ pub struct FileConfig {
     pub idempotency_retention: Option<u64>,
     /// A session's newest keyed-execute responses kept whatever their age.
     pub idempotency_keep_last: Option<usize>,
+    /// Seconds an `ask-admin` call waits for an administrator, by default.
+    pub admin_approval_timeout: Option<u64>,
     /// Tokens every live execution's `submilli:embedding` calls may spend in
     /// total.
     #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
@@ -305,6 +307,7 @@ pub(crate) struct EnvConfig {
     max_last_run_size: Option<String>,
     idempotency_retention: Option<String>,
     idempotency_keep_last: Option<String>,
+    admin_approval_timeout: Option<String>,
     max_embedding_tokens: Option<String>,
     max_execution_embedding_tokens: Option<String>,
     max_execution_embedding_requests: Option<String>,
@@ -398,6 +401,7 @@ impl EnvConfig {
             max_last_run_size: var("SUBMILLI_MAX_LAST_RUN_SIZE"),
             idempotency_retention: var("SUBMILLI_IDEMPOTENCY_RETENTION"),
             idempotency_keep_last: var("SUBMILLI_IDEMPOTENCY_KEEP_LAST"),
+            admin_approval_timeout: var("SUBMILLI_ADMIN_APPROVAL_TIMEOUT"),
             max_embedding_tokens: var("SUBMILLI_MAX_EMBEDDING_TOKENS"),
             max_execution_embedding_tokens: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS"),
             max_execution_embedding_requests: var("SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS"),
@@ -538,6 +542,7 @@ fn preflight(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<()> {
     max_last_run_size(cli, file, env)?;
     idempotency_retention(cli, file, env)?;
     idempotency_keep_last(cli, file, env)?;
+    admin_approval_timeout(cli, file, env)?;
     max_embedding_tokens(cli, file, env)?;
     max_execution_embedding_tokens(cli, file, env)?;
     max_execution_embedding_requests(cli, file, env)?;
@@ -911,6 +916,31 @@ fn idempotency_retention(
     .map(Duration::from_secs))
 }
 
+/// How long an `ask-admin` call waits by default, in whole seconds, more than 0.
+fn admin_approval_timeout(
+    cli: &Cli,
+    file: &FileConfig,
+    env: &EnvConfig,
+) -> Result<Option<Duration>> {
+    let env_seconds = parse_env(
+        "SUBMILLI_ADMIN_APPROVAL_TIMEOUT",
+        "a whole number of seconds",
+        env.admin_approval_timeout.as_ref(),
+    )?;
+    let seconds = explicit(
+        cli.admin_approval_timeout,
+        env_seconds,
+        file.admin_approval_timeout,
+    );
+    if seconds == Some(0) {
+        anyhow::bail!(
+            "admin approval timeout must be at least 1 second, got 0: every asked call \
+             would be denied before an administrator could see it"
+        );
+    }
+    Ok(seconds.map(Duration::from_secs))
+}
+
 /// How many of a session's newest keyed-execute responses outlive the retention.
 fn idempotency_keep_last(cli: &Cli, file: &FileConfig, env: &EnvConfig) -> Result<Option<usize>> {
     let env_count = parse_env(
@@ -1057,6 +1087,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
     let max_last_run_size = max_last_run_size(&cli, &file, &env)?;
     let idempotency_retention = idempotency_retention(&cli, &file, &env)?;
     let idempotency_keep_last = idempotency_keep_last(&cli, &file, &env)?;
+    let admin_approval_timeout = admin_approval_timeout(&cli, &file, &env)?;
     // The other `LlmLimits` fields are embedder-only, the way `session_kv_limits`
     // is: the per-execution ceiling is the one an operator tunes alongside the
     // aggregate, so it is the only one that gets a rung on the ladder.
@@ -1135,6 +1166,7 @@ fn merge(cli: Cli, file: FileConfig, env: EnvConfig) -> Result<(SocketAddr, Serv
         max_last_run_size,
         idempotency_retention,
         idempotency_keep_last,
+        admin_approval_timeout,
         embedding_limits,
         max_embedding_tokens,
         max_embedding_concurrency,
@@ -1524,6 +1556,7 @@ mod tests {
             max_last_run_size: None,
             idempotency_retention: None,
             idempotency_keep_last: None,
+            admin_approval_timeout: None,
             max_embedding_tokens: None,
             max_execution_embedding_tokens: None,
             max_execution_embedding_requests: None,

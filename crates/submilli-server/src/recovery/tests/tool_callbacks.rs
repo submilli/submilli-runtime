@@ -452,3 +452,64 @@ async fn a_recovering_registry_entry_preserves_durable_get_metadata() {
 }
 
 mod lifecycle;
+
+#[tokio::test]
+async fn an_approval_survives_a_restart_and_is_not_asked_again() {
+    const REFUND: &str = r#"import { check } from "submilli:security";
+function main(): string { check("test.refund", { amount: 250 }); return "refunded"; }"#;
+    let blueprint = || {
+        submilli_blueprint::parse(
+            "name: approvals\ndefault: deny\nvfs: none\ntool_call_timeout: 30s\npermissions:\n  main:\n    - {capability: test.refund, action: ask-human}\n",
+        )
+        .unwrap()
+    };
+    let root = tempfile::tempdir().unwrap();
+    let first = app(root.path(), 10_000_000).await;
+    first.boot().await.unwrap();
+    first.blueprints().upsert(blueprint()).await.unwrap();
+    let router = crate::app(first.clone());
+    let (status, opened) = request(
+        &router,
+        "/v1/sessions",
+        json!({"blueprint": "approvals"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let session = opened["session_id"].as_str().unwrap().to_owned();
+    let suspended = execute(&router, &session, REFUND).await;
+    let run = suspended["execution_id"].as_str().unwrap().to_owned();
+    assert_eq!(suspended["calls"][0]["kind"], "approval", "{suspended}");
+    let asked = call(&suspended);
+    stop(&first).await;
+    first.database().unwrap().close().await.unwrap();
+    drop(router);
+    drop(first);
+
+    let second = app(root.path(), 10_000_000).await;
+    second.boot().await.unwrap();
+    let router = crate::app(second.clone());
+    // The same key answers the replayed wait: the same call, under the same id.
+    let replayed = execute(&router, &session, REFUND).await;
+    assert_eq!(call(&replayed), asked, "{replayed}");
+    let (status, done) = request(
+        &router,
+        &format!("/v1/runs/{run}/resume"),
+        json!({"results":[{"call_id": asked, "decision": "approve"}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["result"], "refunded", "{done}");
+    stop(&second).await;
+    second.database().unwrap().close().await.unwrap();
+    drop(router);
+    drop(second);
+
+    // A committed decision replays without asking: the retry is the result.
+    let third = app(root.path(), 10_000_000).await;
+    third.boot().await.unwrap();
+    let router = crate::app(third.clone());
+    assert_eq!(execute(&router, &session, REFUND).await, done);
+    stop(&third).await;
+}

@@ -13,7 +13,7 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::{StoreData, fuel};
-use crate::stdlib::shared::check_security;
+use crate::stdlib::shared::check_and_approve_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:variables";
@@ -79,7 +79,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     lookup.push_str(name);
                 }
                 let valid_name = name.is_some();
-                check_security(&mut *caller, "variables.get", context)?;
+                check_and_approve_call(&mut *caller, "variables.get", context).await?;
                 let name = valid_name.then_some(lookup);
                 let observation =
                     effects::execute(caller, "variables.get", name, |caller, _, name| {

@@ -144,6 +144,10 @@ pub struct ServerConfig {
     ///
     /// [`ResponseRetention::default`]: crate::domain::idempotent_request::ResponseRetention
     pub idempotency_keep_last: Option<usize>,
+    /// How long a call an `ask-admin` rule matches waits for an administrator,
+    /// under a Blueprint that sets no `admin_approval_timeout`. `None` uses
+    /// [`crate::runs::DEFAULT_ADMIN_APPROVAL_TIMEOUT`].
+    pub admin_approval_timeout: Option<std::time::Duration>,
     /// An override for the outbound model dispatch every `submilli:llm` call
     /// rides.
     ///

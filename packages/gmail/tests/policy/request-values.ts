@@ -3,8 +3,9 @@ import { EmailInput, sendEmail, createDraft } from "@submilli/gmail";
 
 // The reason of the blueprint's `ask-human` rule, which matches a request as small as the
 // message to the allowed list.
-const ALLOWED_MESSAGE = "@submilli/gmail: policy requires human approval for http.post (caller @submilli/gmail); "
-    + "ask-human is deferred and treated as deny";
+// Run without a terminal, the call cannot be put to a person, so it is refused with that reason.
+const ALLOWED_MESSAGE = "@submilli/gmail: policy requires a person's approval (ask-human) for http.post "
+    + "(caller @submilli/gmail), and approval can't be asked here";
 const LARGER_MESSAGE = "@submilli/gmail: policy denied http.post for @submilli/gmail";
 
 const ALLOWED: string[] = ["allowed@example.com"];

@@ -252,7 +252,7 @@ fn cite(text: &str, caller: &str, index: usize) -> Citation {
     submilli_blueprint::locate_rule(text, caller, index)
 }
 
-/// What a decision came to: allowed, held for a human, or denied.
+/// What a decision came to: allowed, held for an approver, or denied.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Verdict {
@@ -265,7 +265,7 @@ impl Verdict {
     fn of(record: &DecisionRecord) -> Self {
         match (record.allowed, record.action) {
             (true, _) => Self::Allow,
-            (false, DecisionAction::AskHuman) => Self::Ask,
+            (false, DecisionAction::AskHuman | DecisionAction::AskAdmin) => Self::Ask,
             (false, DecisionAction::Allow | DecisionAction::Deny) => Self::Deny,
         }
     }
@@ -283,7 +283,7 @@ impl Verdict {
     fn done(self) -> &'static str {
         match self {
             Self::Allow => "allowed",
-            Self::Ask => "held for a human",
+            Self::Ask => "held for approval",
             Self::Deny => "denied",
         }
     }

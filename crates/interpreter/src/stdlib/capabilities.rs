@@ -113,6 +113,13 @@ impl Capability {
         self.main_denial.is_none()
     }
 
+    /// Whether a call an `ask-human` or `ask-admin` rule matches can wait for its
+    /// approver. Git decides on a worker thread, after the program's stack is
+    /// gone, so an ask there is refused.
+    pub fn can_ask(&self) -> bool {
+        !self.name.starts_with("git.")
+    }
+
     /// The filter fields' names, for surfaces that don't show types.
     pub fn field_names(&self) -> impl Iterator<Item = &'static str> {
         self.filter_fields.iter().map(|f| f.name)

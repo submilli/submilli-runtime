@@ -5,12 +5,25 @@
 
 use std::sync::Arc;
 
+use super::approvals::{Approver, AskRule};
 use super::decision::{CallSite, DecisionExplanation, DecisionRecorder};
 
 #[non_exhaustive]
 pub enum CheckOutcome {
-    Allow { rule: Option<usize> },
-    Deny { reason: String, rule: Option<usize> },
+    Allow {
+        rule: Option<usize>,
+    },
+    Deny {
+        reason: String,
+        rule: Option<usize>,
+    },
+    /// The call may run once `approver` approves it. `reason` is the denial when
+    /// the call cannot be put to them.
+    Ask {
+        approver: Approver,
+        rule: AskRule,
+        reason: String,
+    },
 }
 
 /// A decision observation; recording must never change authorization semantics.

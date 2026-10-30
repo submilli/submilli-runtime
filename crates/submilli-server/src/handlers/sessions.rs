@@ -317,8 +317,8 @@ pub async fn execute(
         Ok(bound) => bound,
         Err(error) => return run_refusal_response(&session_id, error),
     };
-    // A session with application tools runs its programs detached from the
-    // request, so a run can wait on the harness across requests.
+    // A session with application tools, or whose blueprint asks approvers, runs
+    // its programs detached from the request, so a run can wait across requests.
     let tools = match session_tools(&state, &session_id, &bound).await {
         Ok(tools) => tools,
         Err(error) => return session_state_response(error),
@@ -350,7 +350,8 @@ pub async fn execute(
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key: key.as_deref(),
-            tools: None,
+            // Recovery gives each attempt its own suspension.
+            suspension: None,
         };
         return match crate::recovery::admit(&state, inputs).await {
             Ok(id) => match super::durable_runs::wait(&state, &id).await {
@@ -367,7 +368,7 @@ pub async fn execute(
             Reserved::Answered(response) => return response,
         },
     };
-    if let Some(tools) = tools {
+    if tools.is_some() || bound.blueprint.asks() {
         return run_detached(
             &state, session_id, bound, req.code, key, guard, tools, audit,
         )
@@ -573,8 +574,8 @@ async fn session_tools(
 }
 
 /// Runs `code` in its own task, so it can outlive this request while it waits on
-/// the harness, and answers with the run's first settled state: suspended at a
-/// tool call, or finished. Everything that follows a run (its audit record, its
+/// the harness or an approver, and answers with the run's first settled state:
+/// suspended at a call, or finished. Everything that follows a run (its audit record, its
 /// last-run, its idempotency outcome) happens in that task, exactly once,
 /// whoever is listening.
 #[allow(clippy::too_many_arguments)]
@@ -585,7 +586,7 @@ async fn run_detached(
     code: String,
     key: Option<String>,
     guard: Option<ReservationGuard>,
-    tools: SessionTools,
+    tools: Option<SessionTools>,
     audit: Arc<crate::audit::ExecutionAudit>,
 ) -> axum::response::Response {
     let shutdown = state.graceful_shutdown();
@@ -601,7 +602,19 @@ async fn run_detached(
     if let Some(guard) = &guard {
         guard.attach_run(&entry.id);
     }
-    let tools = run_tools(state, &entry, &session_id, &bound, &tools, cancelled);
+    let suspension = execute::RunSuspension {
+        tools: tools
+            .as_ref()
+            .map(|tools| run_tools(state, &entry, &session_id, &bound.blueprint, tools)),
+        approvals: Some(approval_provider(
+            state,
+            &entry,
+            &session_id,
+            &bound.blueprint,
+            &audit,
+        )),
+        cancel: Some(cancelled),
+    };
     // The record ends with the run, not with this request.
     audit.hand_off();
     let supervised = Supervised {
@@ -614,7 +627,7 @@ async fn run_detached(
         key,
         guard,
         audit,
-        tools,
+        suspension,
     };
     supervised.spawn(admitted, shutdown.draining());
     // A client going away does not end this handler (`graceful_shutdown::run`
@@ -637,7 +650,7 @@ struct Supervised {
     key: Option<String>,
     guard: Option<ReservationGuard>,
     audit: Arc<crate::audit::ExecutionAudit>,
-    tools: execute::RunTools,
+    suspension: execute::RunSuspension,
 }
 
 impl Supervised {
@@ -671,7 +684,7 @@ impl Supervised {
             &self.code,
             self.key.as_deref(),
             Arc::clone(&self.audit),
-            Some(self.tools),
+            Some(self.suspension),
         )
         .await;
         // A run that never reached the runner has no one else to end its record.
@@ -694,9 +707,8 @@ fn run_tools(
     state: &AppState,
     entry: &Arc<crate::runs::RunEntry>,
     session_id: &str,
-    bound: &BoundSession,
+    blueprint: &submilli_blueprint::Blueprint,
     tools: &SessionTools,
-    cancelled: tokio::sync::oneshot::Receiver<()>,
 ) -> execute::RunTools {
     let (declaration, warnings) = crate::app_tools::declaration(tools);
     execute::RunTools {
@@ -706,11 +718,28 @@ fn run_tools(
         }),
         provider: Arc::new(crate::runs::SuspendingToolProvider {
             entry: Arc::clone(entry),
-            timeout: bound.blueprint.tool_call_timeout,
+            timeout: blueprint.tool_call_timeout,
             touch: session_touch(state, session_id),
         }),
-        cancel: Some(cancelled),
     }
+}
+
+/// The approver of a run's asked calls: each suspends the run until it is
+/// decided, or its time under `blueprint` runs out.
+pub(crate) fn approval_provider(
+    state: &AppState,
+    entry: &Arc<crate::runs::RunEntry>,
+    session_id: &str,
+    blueprint: &submilli_blueprint::Blueprint,
+    audit: &Arc<crate::audit::ExecutionAudit>,
+) -> Arc<dyn interpreter::runtime::ApprovalProvider> {
+    Arc::new(crate::runs::SuspendingApprovalProvider {
+        entry: Arc::clone(entry),
+        human_timeout: blueprint.tool_call_timeout,
+        admin_timeout: state.admin_approval_timeout(blueprint),
+        touch: session_touch(state, session_id),
+        audit: Arc::clone(audit),
+    })
 }
 
 /// Marks `session_id` active, for a run that suspends in it.
@@ -861,7 +890,7 @@ pub(crate) async fn run(
     code: &str,
     idempotency_key: Option<&str>,
     audit: Arc<crate::audit::ExecutionAudit>,
-    tools: Option<execute::RunTools>,
+    suspension: Option<execute::RunSuspension>,
 ) -> execute::ExecuteOutcome {
     let BoundSession {
         blueprint_name,
@@ -882,7 +911,7 @@ pub(crate) async fn run(
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key,
-            tools,
+            suspension,
         },
     )
     .await

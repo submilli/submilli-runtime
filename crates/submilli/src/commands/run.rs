@@ -3,7 +3,9 @@
 use interpreter::runtime::durable::RunId;
 use std::collections::BTreeMap;
 use std::fs;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,6 +14,7 @@ use interpreter::runtime::limits::ExecutionUsage;
 
 use anyhow::{Context, anyhow};
 use interpreter::runtime::{
+    ApprovalError, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
     DEFAULT_MAX_EMBEDDING_REQUESTS, DEFAULT_MAX_EXECUTION_EMBEDDING_TOKENS,
     DEFAULT_MAX_EXECUTION_TOKENS, EmbeddingLimits, EmbeddingTokenBudget, ExecutionTokenBudget,
     HttpClient, LinkedPackageModule, LlmLimits, McpTransport, NetworkPolicy, ReqwestHttpClient,
@@ -54,7 +57,8 @@ pub struct Args {
     #[arg(long = "max-stack")]
     max_stack: Option<usize>,
 
-    /// Wall-clock deadline in milliseconds. Omit for no deadline.
+    /// Wall-clock deadline in milliseconds. Time spent waiting at an approval
+    /// prompt doesn't count. Omit for no deadline.
     #[arg(long)]
     timeout: Option<u64>,
 
@@ -70,6 +74,9 @@ pub struct Args {
     /// unrestricted (allow-all). `store:` secrets resolve from the local
     /// secret store, and authenticated
     /// `@mcp/<server>` servers are called in-process — no running server needed.
+    /// A call an `ask-human` or `ask-admin` rule matches is asked about on the
+    /// terminal: `y` approves, anything else denies. Without a terminal to ask on,
+    /// it is denied.
     #[arg(long)]
     blueprint: Option<PathBuf>,
 
@@ -505,6 +512,9 @@ fn execute_on_this_thread(
     if let Some(bp) = &blueprint {
         data.git = submilli_shared::resolve_git(bp, &variables)?;
         data.security_check = Arc::new(PolicyCheck::with_variables(bp.clone(), variables));
+        if TerminalApprovalProvider::can_ask() {
+            data.approval_provider = Some(Arc::new(TerminalApprovalProvider));
+        }
         data.auth_proxy = Arc::new(BlueprintAuthProxy::new(bp.clone(), secret_store.clone()));
         data.secret_provider = Arc::new(BlueprintSecretProvider::new(
             bp.clone(),
@@ -588,7 +598,7 @@ fn execute_on_this_thread(
         install_runtime_async(&mut linker, &mut store).await?;
         // Installing a package runs its top-level statements, so the deadline
         // covers them as it covers the program's.
-        let _watchdog = cfg.arm_timeout(&engine)?;
+        let _watchdog = arm_timeout_excluding_waits(&cfg, &engine, &mut store)?;
         install_package_modules_async(&mut linker, &mut store, &linked_packages).await?;
         let instance = instantiate_program_async(&linker, &mut store, &module).await?;
         dispatch_main_async(&mut store, &instance).await
@@ -762,6 +772,113 @@ fn prepare_llm_dispatch(
     match installed {
         Some(dispatch) => Ok(dispatch),
         None => build().context("initialize LLM provider"),
+    }
+}
+
+/// How often the epoch advances once a run has waited at an approval prompt.
+const WAITED_TICK: Duration = Duration::from_millis(10);
+
+/// Arms the configured timeout to count the program's work, not the time it waited
+/// at an approval prompt (`clock_paused`): waiting is not running. The one-shot
+/// watchdog decides while nothing has waited. Once something has, its firing
+/// re-derives the work done, and a ticking watchdog counts out what is left, as the
+/// server's `execution_timeout::arm` does.
+fn arm_timeout_excluding_waits(
+    cfg: &RuntimeConfig,
+    engine: &wasmtime::Engine,
+    store: &mut wasmtime::Store<StoreData>,
+) -> wasmtime::Result<Option<interpreter::runtime::watchdog::Watchdog>> {
+    let watchdog = cfg.arm_timeout(engine)?;
+    let Some(budget) = cfg.timeout else {
+        return Ok(watchdog);
+    };
+    let armed = Instant::now();
+    // Held by the callback, so it ticks until the store is dropped.
+    let mut ticker = None;
+    store.epoch_deadline_callback(move |store| {
+        let paused = store.data().clock_paused;
+        if paused.is_zero() {
+            return Ok(wasmtime::UpdateDeadline::Interrupt);
+        }
+        let worked = armed.elapsed().saturating_sub(paused);
+        let Some(left) = budget.checked_sub(worked).filter(|left| !left.is_zero()) else {
+            return Ok(wasmtime::UpdateDeadline::Interrupt);
+        };
+        if ticker.is_none() {
+            ticker = Some(interpreter::runtime::watchdog::tick(
+                store.engine(),
+                WAITED_TICK,
+            )?);
+        }
+        // One tick more, since the next can land as soon as this returns.
+        let ticks = left.as_nanos().div_ceil(WAITED_TICK.as_nanos());
+        Ok(wasmtime::UpdateDeadline::Continue(
+            u64::try_from(ticks).unwrap_or(u64::MAX).saturating_add(1),
+        ))
+    });
+    Ok(watchdog)
+}
+
+/// Asks on the terminal whether a call a rule marks `ask-human` or `ask-admin`
+/// may run: locally, whoever runs the program is both the person and the
+/// administrator.
+struct TerminalApprovalProvider;
+
+impl TerminalApprovalProvider {
+    /// Whether there is a terminal to ask on. Without one, no provider is
+    /// installed, and an asked call is refused as a policy denial.
+    fn can_ask() -> bool {
+        use std::io::IsTerminal;
+        std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+    }
+}
+
+impl ApprovalProvider for TerminalApprovalProvider {
+    fn request<'a>(
+        &'a self,
+        _effect_id: interpreter::runtime::durable::EffectId,
+        request: &'a ApprovalRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ApprovalOutcome, ApprovalError>> + Send + 'a>> {
+        Box::pin(async move {
+            let rule = &request.rule;
+            let question = format!(
+                "\n{} wants {} with {}\n(rule {} under `{}`{} is `{}`). Approve? [y/N] ",
+                request.caller,
+                request.capability,
+                request.context,
+                rule.index + 1,
+                rule.caller,
+                rule.name
+                    .as_deref()
+                    .map(|name| format!(" {name}"))
+                    .unwrap_or_default(),
+                request.approver.action(),
+            );
+            let answer = tokio::task::spawn_blocking(move || {
+                use std::io::Write;
+                let mut stderr = std::io::stderr().lock();
+                let _ = stderr.write_all(question.as_bytes());
+                let _ = stderr.flush();
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line).map(|_| line)
+            })
+            .await;
+            Ok(match answer {
+                Ok(Ok(line))
+                    if matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") =>
+                {
+                    ApprovalOutcome::Approved { reason: None }
+                }
+                Ok(Ok(line)) if !line.is_empty() => ApprovalOutcome::Denied { reason: None },
+                // End of input is no answer, not a no.
+                Ok(Ok(_)) => ApprovalOutcome::Unanswerable {
+                    message: "the terminal's input ended before an answer".to_owned(),
+                },
+                _ => ApprovalOutcome::Unanswerable {
+                    message: "the terminal could not be read".to_owned(),
+                },
+            })
+        })
     }
 }
 

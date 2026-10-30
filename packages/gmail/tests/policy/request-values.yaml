@@ -18,7 +18,8 @@ permissions:
     - capability: secrets.get
       filter: name == "GOOGLE_ACCESS_TOKEN"
       action: allow
-    # No request is sent: `ask-human` refuses like `deny`, with a reason of its own.
+    # No request is sent: without a terminal to ask on, `ask-human` refuses with a
+    # reason of its own.
     # A filter sees the size of a request body and not its content, so the limit
     # sits between the message to the allowed list and the longer one to the
     # blocked list. A request over it falls to the default and its reason.
