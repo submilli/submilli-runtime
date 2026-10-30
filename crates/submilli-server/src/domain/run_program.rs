@@ -7,6 +7,9 @@ pub struct RunProgram {
     pub source: String,
     /// Application-tool declarations fixed at admission.
     pub tools: Option<super::tools::SessionTools>,
+    /// Whether a call the blueprint asks about waits for its approver: true for
+    /// a run admitted through the HTTP session API, which can answer it.
+    pub approvals: bool,
     pub blueprint: Blueprint,
     pub variables: VarBindings,
     pub limits: RunLimits,

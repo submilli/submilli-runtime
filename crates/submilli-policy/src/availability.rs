@@ -56,6 +56,9 @@ fn notes(capability: &str, possible: &PossibleActions) -> Vec<String> {
             Action::AskHuman => vec![format!(
                 "Under this blueprint, `{capability}` needs a person's approval."
             )],
+            Action::AskAdmin => vec![format!(
+                "Under this blueprint, `{capability}` needs an administrator's approval."
+            )],
             Action::Allow | Action::Deny => Vec::new(),
         };
     }
@@ -75,6 +78,7 @@ fn outcome(action: Action) -> &'static str {
     match action {
         Action::Allow => "allowed",
         Action::AskHuman => "allowed after a person approves",
+        Action::AskAdmin => "allowed after an administrator approves",
         Action::Deny => "denied",
     }
 }

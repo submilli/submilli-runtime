@@ -21,7 +21,7 @@ use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::fuel;
 use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host_fn_async};
-use crate::stdlib::shared::check_security_call;
+use crate::stdlib::shared::check_and_approve_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 /// The single internal host module every MCP call dispatches through.
@@ -132,11 +132,12 @@ pub fn install_mcp_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<()>
                 // Deny before any network bytes leave. One capability per server
                 // (`mcp.<server>`, known when the blueprint is written); the tool is
                 // in the filter context so a policy can constrain by tool.
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     &format!("mcp.{server}"),
                     serde_json::json!({ "tool": tool, "transport": "streamable_http" }),
-                )?;
+                )
+                .await?;
                 record_payload(&*caller, ticket, Side::Request, || {
                     request_payload(&server, &tool, &args_json)
                 });

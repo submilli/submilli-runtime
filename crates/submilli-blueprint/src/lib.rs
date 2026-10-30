@@ -81,6 +81,18 @@ pub struct Blueprint {
         deserialize_with = "deserialize_tool_call_timeout"
     )]
     pub tool_call_timeout: Duration,
+    /// How long a run waits for an administrator to decide a call an
+    /// `ask-admin` rule matches before the call is denied. Unset, the server's
+    /// `admin_approval_timeout` applies. A call an `ask-human` rule matches waits
+    /// `tool_call_timeout`. Time spent waiting does not count against the run's
+    /// execution time.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_admin_approval_timeout",
+        deserialize_with = "deserialize_admin_approval_timeout"
+    )]
+    pub admin_approval_timeout: Option<Duration>,
     #[serde(default, skip_serializing_if = "VfsConfig::is_default")]
     pub vfs: VfsConfig,
     /// Declared secret names → where each value comes from. The allow-list that
@@ -161,6 +173,7 @@ impl Default for Blueprint {
             allow_insecure_http: false,
             idle_timeout: DEFAULT_IDLE_TIMEOUT,
             tool_call_timeout: DEFAULT_TOOL_CALL_TIMEOUT,
+            admin_approval_timeout: None,
             vfs: VfsConfig::default(),
             secrets: BTreeMap::new(),
             variables: BTreeMap::new(),
@@ -183,6 +196,15 @@ impl Blueprint {
     /// deny-by-default when no policy is declared.
     pub fn has_permission_policy(&self) -> bool {
         self.default_action.is_some() || !self.permissions.is_empty()
+    }
+
+    /// Whether any rule asks an approver (`ask-human` or `ask-admin`), so a run
+    /// may wait for a decision.
+    pub fn asks(&self) -> bool {
+        self.permissions
+            .values()
+            .flatten()
+            .any(|rule| rule.action.asks())
     }
 
     // Blueprint-named entry points for existing callers. They evaluate through
@@ -266,6 +288,36 @@ where
         )),
         Ok(timeout) => Ok(timeout),
         Err(message) => Err(de::Error::custom(format!("tool_call_timeout: {message}"))),
+    }
+}
+
+fn serialize_admin_approval_timeout<S>(
+    d: &Option<Duration>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match d {
+        Some(d) => serialize_idle_timeout(d, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_admin_approval_timeout<'de, D>(deserializer: D) -> Result<Option<Duration>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    match parse_duration(&raw) {
+        // Every asked call would be denied before an administrator could see it.
+        Ok(timeout) if timeout.is_zero() => Err(de::Error::custom(
+            "admin_approval_timeout: must be longer than 0s",
+        )),
+        Ok(timeout) => Ok(Some(timeout)),
+        Err(message) => Err(de::Error::custom(format!(
+            "admin_approval_timeout: {message}"
+        ))),
     }
 }
 
@@ -2148,6 +2200,53 @@ permissions:
                 "{value}"
             );
         }
+    }
+
+    #[test]
+    fn admin_approval_timeout_is_unset_by_default_and_round_trips() {
+        let defaulted = parse("name: x\n").unwrap();
+        assert_eq!(defaulted.admin_approval_timeout, None);
+        let set = parse("name: x\nadmin_approval_timeout: 2h\n").unwrap();
+        assert_eq!(
+            set.admin_approval_timeout,
+            Some(Duration::from_secs(2 * 3600))
+        );
+        assert_eq!(parse(&to_yaml(&set)).unwrap(), set);
+        for value in ["soon", "0s"] {
+            assert!(
+                parse(&format!("name: x\nadmin_approval_timeout: {value}\n"))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("admin_approval_timeout"),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn ask_actions_parse_and_default_ask_admin_is_refused() {
+        let blueprint = parse(
+            "name: x\npermissions:\n  main:\n    - {capability: http.get, action: ask-human}\n    - {capability: http.post, action: ask-admin}\n",
+        )
+        .unwrap();
+        let actions: Vec<_> = blueprint.permissions["main"]
+            .iter()
+            .map(|rule| rule.action)
+            .collect();
+        assert_eq!(actions, [Action::AskHuman, Action::AskAdmin]);
+        assert!(blueprint.asks());
+        assert!(!parse("name: x\n").unwrap().asks());
+
+        let deprecated = parse("name: x\ndefault: ask-human\n").unwrap();
+        assert_eq!(deprecated.default_action, Some(DefaultAction::AskHuman));
+        assert!(!deprecated.asks());
+        let refused = parse("name: x\ndefault: ask-admin\n")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("`default: ask-admin` is not accepted"),
+            "{refused}"
+        );
     }
 
     #[test]

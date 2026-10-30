@@ -75,7 +75,7 @@ pub(super) async fn accept_named_writer(
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key: None,
-            tools: None,
+            suspension: None,
         },
     )
     .await

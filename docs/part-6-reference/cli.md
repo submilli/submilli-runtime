@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1d6fcfd3993978c83d0b10084defe2e1a53ae0979736e43d77335978efd5df40"
+  contentHash: "0e83fae4d2daa205d3f721514acf648c60bb8dcfd1c73a4ff0c9e3a0012e5b35"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -402,7 +402,8 @@ Options:
           Maximum wasm stack in bytes
 
       --timeout <TIMEOUT>
-          Wall-clock deadline in milliseconds. Omit for no deadline
+          Wall-clock deadline in milliseconds. Time spent waiting at an approval prompt doesn't
+          count. Omit for no deadline
 
       --vfs <VFS>
           Directory to expose as the script's VFS root. The future `submilli:fs.*` host functions
@@ -413,7 +414,9 @@ Options:
           Apply a blueprint's policy (capability gating, deny-by-default) and `auth_proxy:` secret
           injection to this local run. Without it, the run is unrestricted (allow-all). `store:`
           secrets resolve from the local secret store, and authenticated `@mcp/<server>` servers are
-          called in-process — no running server needed
+          called in-process — no running server needed. A call an `ask-human` or `ask-admin` rule
+          matches is asked about on the terminal: `y` approves, anything else denies. Without a
+          terminal to ask on, it is denied
 
       --var <NAME=VALUE>
           Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the way an application
@@ -1191,7 +1194,7 @@ Arguments:
 Options:
       --action <ACTION>        The rule's action. Adding a capability under `default: deny` grants
                                it, so the default is `allow` [default: allow] [possible values:
-                               allow, deny, ask-human]
+                               allow, deny, ask-human, ask-admin]
       --filter <FILTER>        Filter expression constraining the rule, e.g. 'path glob "*.csv"'
       --caller <CALLER>        Caller id the rule applies to (`main` is the user script; a package
                                name gates that package's own calls) [default: main]
@@ -1492,6 +1495,7 @@ Usage: submilli server <COMMAND>
 
 Commands:
   runs       Inspect executions and resume stuck runs
+  approval   Decide calls waiting for approval (`ask-admin`, `ask-human`)
   apply      Apply blueprint YAML documents to a running submilli-server
   trust      Manage approved HTTPS server public keys
   docs       Read package declarations, including a blueprint's MCP tools
@@ -1581,6 +1585,113 @@ Arguments:
   <RUN_ID>
 
 Options:
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+### `submilli server approval`
+
+```text
+Decide calls waiting for approval (`ask-admin`, `ask-human`)
+
+Usage: submilli server approval <COMMAND>
+
+Commands:
+  list     List calls waiting for approval, oldest first
+  show     Show one call waiting for approval: what it does, the rule that asked, and its session
+  approve  Approve a waiting call: it runs, and the program carries on
+  deny     Deny a waiting call: the program's call throws `PermissionDeniedError`
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server approval list`
+
+```text
+List calls waiting for approval, oldest first
+
+Usage: submilli server approval list [OPTIONS]
+
+Options:
+      --approver <APPROVER>  Only calls waiting for this approver [possible values: human, admin]
+      --session <SESSION>    Only calls of this session
+      --json
+      --server <URL>         Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                             [default: http://127.0.0.1:8128]
+      --token-file <PATH>    File holding the API token to send. Without it the token is read from
+                             `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                             server started with `--allow-unauthenticated` accepts. There is no flag
+                             taking the token itself, so it never lands in the process list. Env:
+                             `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help                 Print help
+```
+
+#### `submilli server approval show`
+
+```text
+Show one call waiting for approval: what it does, the rule that asked, and its session
+
+Usage: submilli server approval show [OPTIONS] <CALL_ID>
+
+Arguments:
+  <CALL_ID>  The call's id, as `list` shows it
+
+Options:
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server approval approve`
+
+```text
+Approve a waiting call: it runs, and the program carries on
+
+Usage: submilli server approval approve [OPTIONS] <CALL_ID>
+
+Arguments:
+  <CALL_ID>  The call's id, as `list` shows it
+
+Options:
+      --reason <REASON>    Why. A denial's reason reaches the program
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server approval deny`
+
+```text
+Deny a waiting call: the program's call throws `PermissionDeniedError`
+
+Usage: submilli server approval deny [OPTIONS] <CALL_ID>
+
+Arguments:
+  <CALL_ID>  The call's id, as `list` shows it
+
+Options:
+      --reason <REASON>    Why. A denial's reason reaches the program
       --json
       --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
                            [default: http://127.0.0.1:8128]

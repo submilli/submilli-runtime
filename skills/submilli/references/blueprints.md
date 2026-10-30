@@ -55,7 +55,8 @@ Every top-level key, all optional except `name`:
 | `secrets` | Declared secret names and sources: `{ store: key }` or `{ harness: { required: true } }` for a value the trusted application binds per session. |
 | `allow_insecure_http` | Defaults to `false`: script HTTP (including packages/downloads) requires HTTPS. Does not govern MCP/LLM connections or inbound server HTTP |
 | `auth_proxy` | Host-keyed credential injection for direct HTTP: `host`, optional `allow_insecure_http: true` (also requires the blueprint flag), then `auth: { bearer: X }`, `auth: { basic: { username, password } }`, `headers`, or `query` |
-| `default` | Fall-through action: `deny` (the default and the norm), `allow`, or `ask-human` |
+| `default` | Fall-through action: `deny` (the default and the norm) or `allow`. `ask-human` is a deprecated spelling of `deny`, and `ask-admin` is refused |
+| `tool_call_timeout`, `admin_approval_timeout` | How long a call waits on the harness or an `ask-human` approval (default `10m`), and on an `ask-admin` approval (default the server's, `24h`) |
 | `permissions` | Per-caller rule lists; see below |
 | `mcp` | Outbound MCP servers keyed by local name: `url`, optional `transport` (`streamable_http`), `headers` with `${secrets.X}`, or `auth: { type: oauth2, ... }`. Imported as `@mcp/<name>`; gated by the `mcp.<name>` capability with a `tool` field; see MCP servers below |
 | `vfs` | The program's `/`: `none` (every `submilli:fs` call fails), `ephemeral` (default; a scratch directory deleted after the run), `per_session` (lasts as long as the session, like `submilli:session` state), or `named` (`{ mode: named, volume, access? }`: an operator-declared volume kept across sessions and restarts and shared with other blueprints naming it). `mounts` adds named volumes below an `ephemeral`, `per_session` or `named` root: `mounts: { /memory: { mode: named, volume: memory, access: read_only } }`. `access` can only narrow the server's; a write under a read-only volume throws `PermissionDeniedError`. Mounts may not nest, and mount points cannot be moved or removed. A named root or mount takes `subPath`, a directory inside the volume to expose instead of all of it, relative and normalized; a whole component may be `${vars.NAME}` (`subPath: users/${vars.userId}`), which is how one volume gives each user their own directory at the same path. A writable mount creates it. `cwd` (absolute, default `/`, may use `${vars.NAME}`) is where relative paths resolve for `fs`, packages, Git, and downloads; `fs.cwd()` returns it. It confines nothing: permissions still match absolute paths. A program run outside a session gets one that closes when it returns. `ephemeral` and `per_session` take `size_limit` (`100MB`, binary units: 104,857,600 bytes). Every write counts, packages' included: `fs` writes, appends, writers, copies, `http.download`, and Git; `fs.remove` and `fs.move` free space. One past it throws a catchable `QuotaExceededError`; under `per_session` the limit spans the session. It counts bytes, not entries. A named volume's limit is set in the server config and shared by everyone using it |
@@ -72,8 +73,9 @@ every stdlib capability as a deny rule with example filters.
 package name is the caller for that package's own stdlib calls. Rules are an
 ordered list; the first rule whose capability name matches exactly and whose
 filter matches the call decides. No wildcards in names. A rule is
-`capability`, optional `filter`, `action` (`allow`, `deny`, `ask-human`), and an
-optional `name` that decisions cite (unique within a caller's list).
+`capability`, optional `filter`, `action` (`allow`, `deny`, `ask-human`,
+`ask-admin`), and an optional `name` that decisions cite (unique within a
+caller's list).
 
 Two kinds of capability, two homes:
 
@@ -190,13 +192,19 @@ package puts in the context; if the field is missing, fix the package, never
 the prompt. A cancel of another customer's order or one above the limit falls
 through to `default: deny`.
 
-The runtime currently treats `ask-human` as a denial. It does not pause,
-dispatch an approval request, or resume the call after a human approves it.
-This example therefore cannot execute cancellations. If approval is required,
-the trusted application must collect it separately and execute the approved
-operation through a separately authorized path with appropriately scoped
-`allow` rules. Keep that path and its credentials outside the runtime agent's
-control. A draft operation is another option when the service supports one.
+`ask-human` pauses the matched call until the person in the conversation
+decides, and `ask-admin` until an administrator does. Over the HTTP session
+API the run answers `suspended` with a call of `kind: "approval"` carrying the
+capability, the checked context, and the rule. The harness asks the person and
+answers `POST /v1/runs/{id}/resume` with `{"call_id", "decision": "approve" |
+"deny", "reason"?}`. An `ask-admin` call takes an `admin` token
+(`submilli server approval approve <call_id>`, or `/v1/approvals`). Approved,
+the call runs once. Denied or expired, it throws `PermissionDeniedError` with
+`source` `human` or `admin`. The harness must put the question to the person,
+never to the model. Over MCP or `POST /v1/execute` an ask is denied with
+`source` `policy`, as are asks inside `git.*` and `submilli:code` file
+operations, so use ask rules only where the harness speaks the HTTP session
+API and handles approvals.
 
 ## Roles and tenants
 
@@ -428,7 +436,8 @@ Prove the boundary with deterministic calls, not a model ignoring bait:
 | Same binding, program passes `hooli` | `permission denied ... capability=pied-piper.example/...`, not a network error or empty list |
 | Omit the required variable | `invalid_request` naming the variable; program never runs |
 | Call an unlisted capability or a raw `http.get` from `main` | Denied |
-| A write under `ask-human` | `PermissionDeniedError`, no side effect, and no built-in approval or resume flow |
+| A write under `ask-human`, over the HTTP session API | The run suspends with a `kind: "approval"` call. `deny` throws `PermissionDeniedError` (`source: human`) with no side effect, and `approve` runs it once |
+| The same write over MCP or `POST /v1/execute` | `PermissionDeniedError` with `source: policy`, no side effect |
 | Denied write | No side effect at the service; note that earlier successful calls in the same program are not rolled back |
 
 Then run controls that prove the assertions are load-bearing, as the

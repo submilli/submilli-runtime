@@ -43,7 +43,7 @@ We plan Submilli Registry, a public registry for [Packages](https://submilli.ai/
 
 We want this to work within the runtime's permission system, with a record of what was requested and what the person decided.
 
-**Example:** A [Blueprint](https://submilli.ai/docs/blueprints) could allow small refunds automatically and require approval for larger ones. Approval should apply to the specific requested action, and a refusal should leave that action unexecuted. The existing `ask-human` policy action denies execution today; the approval and resume flow is planned.
+**Example:** A [Blueprint](https://submilli.ai/docs/blueprints) could allow small refunds automatically and require approval for larger ones. Approval should apply to the specific requested action, and a refusal should leave that action unexecuted. The `ask-human` and `ask-admin` rule actions now pause such a call until the person, or an administrator, approves it. Asking for missing information is still planned.
 
 ---
 

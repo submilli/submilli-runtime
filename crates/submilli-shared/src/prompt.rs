@@ -113,7 +113,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
     let http_access = if http_visible {
         format!(
             "Network (`submilli:http`): {}.",
-            http_access_phrase(blueprint, http_visible)
+            http_access_phrase(blueprint, http_visible, surface)
         )
     } else {
         String::new()
@@ -162,6 +162,15 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
                 ""
             },
         )
+        .replace(
+            "{approval_guidance}",
+            // Only a REST session can wait for an approver; MCP refuses the call.
+            if matches!(surface, PromptSurface::Rest) && blueprint.asks() {
+                APPROVAL_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{t_search}", search)
         .replace("{t_docs}", docs)
         .replace("{t_builtins_docs}", builtins)
@@ -180,6 +189,12 @@ Call `{t_search}` with `@tools` to see whether this session has them, and `{t_do
 signatures, then `import tools from \"@tools\"`. The application answers each call, which may \
 take a while: a call it refuses throws `PermissionDeniedError`, one it fails throws `Error`, \
 and one it does not answer in time throws `TimeoutError`.";
+
+const APPROVAL_GUIDANCE: &str = "\n\nSome calls under this blueprint need approval before \
+they run. In a session, the person you are working for, or an administrator, decides, and the \
+call waits until they do. Approved, it runs as usual. Declined, or not decided in time, it throws \
+`PermissionDeniedError`, and that answer is final like any denial. A one-off execute can't wait, \
+so there such a call throws `PermissionDeniedError` at once.";
 
 const GIT_GUIDANCE: &str = "\n\nGit is available as `submilli:git`. Read its package docs before use; \
     init, clone, fetch/pull, and commit require their respective Git capabilities. \
@@ -366,13 +381,14 @@ enum HostScope {
 
 /// Resolve the `{http_access}` placeholder: a terse summary of which hosts the
 /// `main` script may reach with each HTTP method, derived from the blueprint's
-/// `allow` rules. The server treats `ask-human` as deny and is deny-by-default,
-/// so only explicit `allow` rules grant access — and a policy-free blueprint
-/// reaches nothing. Under `default: allow` the posture inverts: every method
+/// `allow` rules. A request an `ask-human` or `ask-admin` rule matches waits for
+/// approval, and the server is deny-by-default, so only explicit `allow` rules
+/// grant access outright — and a policy-free blueprint reaches nothing. Under `default: allow` the posture inverts: every method
 /// reaches any host unless a `deny` rule carves it out, which is too varied to
 /// summarize per-method, so we state the posture instead.
-/// `http_visible` is whether the blueprint's programs see `submilli:http`.
-fn http_access_phrase(blueprint: &Blueprint, http_visible: bool) -> String {
+/// `http_visible` is whether the blueprint's programs see `submilli:http`. Only
+/// the REST surface can ask an approver.
+fn http_access_phrase(blueprint: &Blueprint, http_visible: bool, surface: PromptSurface) -> String {
     if blueprint.default_action == Some(DefaultAction::Allow) {
         return "any host, any method (allow-by-default; specific `deny` rules may \
                 carve out hosts or methods)"
@@ -395,7 +411,14 @@ fn http_access_phrase(blueprint: &Blueprint, http_visible: bool) -> String {
         }
     }
     if groups.is_empty() && http_visible {
-        return "subject to policy; approval rules do not authorize execution automatically".into();
+        return match surface {
+            PromptSurface::Rest => {
+                "only with approval: each request waits for its approver's decision".into()
+            }
+            PromptSurface::Mcp => {
+                "none: requests need approval, which can't be asked for over MCP".into()
+            }
+        };
     }
     if groups.is_empty() {
         return "none — `submilli:http` is blocked by policy".into();
@@ -529,7 +552,7 @@ mod tests {
 
     fn phrase(blueprint: &Blueprint) -> String {
         let http_visible = DocsScope::for_blueprint(blueprint, &[]).allows(HTTP_MODULE);
-        http_access_phrase(blueprint, http_visible)
+        http_access_phrase(blueprint, http_visible, PromptSurface::Rest)
     }
 
     #[test]
@@ -829,11 +852,15 @@ mod tests {
             phrase(&Blueprint::default()),
             "none — `submilli:http` is blocked by policy"
         );
-        // Approval keeps discovery visible without promising runtime authorization.
+        // Approval keeps discovery visible; a request runs once it is approved.
         let bp = blueprint_with("    - capability: http.get\n      action: ask-human\n");
         assert_eq!(
             phrase(&bp),
-            "subject to policy; approval rules do not authorize execution automatically"
+            "only with approval: each request waits for its approver's decision"
+        );
+        assert_eq!(
+            http_access_phrase(&bp, true, PromptSurface::Mcp),
+            "none: requests need approval, which can't be asked for over MCP"
         );
     }
 

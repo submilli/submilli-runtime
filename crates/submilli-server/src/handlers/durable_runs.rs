@@ -132,8 +132,9 @@ impl WaitResponse {
     }
 }
 
-/// Running tool programs with a local attempt wait for suspension or completion.
-/// All other runs, including queued tool runs, use a bounded observer.
+/// Running programs that may suspend (at a tool call, or for an approval) with a
+/// local attempt wait for suspension or completion. All other runs, including
+/// queued ones that may suspend, use a bounded observer.
 /// Its supervisor keeps running when this future or its transport disappears.
 pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, String> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(25);
@@ -172,7 +173,9 @@ pub(crate) async fn wait(state: &AppState, id: &RunId) -> Result<WaitResponse, S
                 .get_run_program(id)
                 .await
                 .map_err(|e| e.to_string())?
-                .is_some_and(|program| program.tools.is_some());
+                .is_some_and(|program| {
+                    program.tools.is_some() || (program.approvals && program.blueprint.asks())
+                });
             tools = Some(present);
             present
         };

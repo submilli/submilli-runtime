@@ -226,7 +226,7 @@ pub(crate) async fn one_shot(
             vfs_source: VfsSource::Rest,
             run_entry,
             idempotency_key: None,
-            tools: None,
+            suspension: None,
         },
         records_last_run,
     )
@@ -272,20 +272,31 @@ pub(crate) struct ExecuteInputs<'a> {
     pub run_entry: &'static str,
     /// The session API's `Idempotency-Key`; `None` for an unkeyed run.
     pub idempotency_key: Option<&'a str>,
-    /// The session's application tools, for a session run that may suspend at a
-    /// tool call. MCP and one-shot runs have none.
-    pub tools: Option<RunTools>,
+    /// What a session run that may suspend runs with: its application tools and
+    /// its approver. MCP and one-shot runs have none.
+    pub suspension: Option<RunSuspension>,
 }
 
-/// What a run that may suspend at an application tool call runs with.
+/// What a run that may suspend, at an application tool call or at a call its
+/// Blueprint asks about, runs with.
+pub(crate) struct RunSuspension {
+    /// The session's application tools, when it declared any.
+    pub tools: Option<RunTools>,
+    /// Decides a call an `ask-human` or `ask-admin` rule matches by suspending
+    /// the run until the harness, or an administrator, answers.
+    pub approvals: Option<Arc<dyn interpreter::runtime::ApprovalProvider>>,
+    /// Fires when the run's registry entry is cancelled. Taken by the core, which
+    /// cancels through it instead of registering the run with the app.
+    pub cancel: Option<tokio::sync::oneshot::Receiver<()>>,
+}
+
+/// The session's application tools, as a run that may suspend at a tool call
+/// runs with them.
 pub(crate) struct RunTools {
     /// The session's `@tools` package.
     pub package: Arc<runner::ToolsPackage>,
     /// Answers each call by suspending the run until the harness resumes it.
     pub provider: Arc<dyn interpreter::runtime::ToolProvider>,
-    /// Fires when the run's registry entry is cancelled. Taken by the core, which
-    /// cancels through it instead of registering the run with the app.
-    pub cancel: Option<tokio::sync::oneshot::Receiver<()>>,
 }
 
 /// Who opens a run's VFS, which also sets how the core audits a program that fails to
@@ -378,7 +389,10 @@ async fn execute_core_with(
         None
     };
     // A run that may suspend is cancelled through its own registry entry.
-    let cancel_requested = inputs.tools.as_mut().and_then(|tools| tools.cancel.take());
+    let cancel_requested = inputs
+        .suspension
+        .as_mut()
+        .and_then(|suspension| suspension.cancel.take());
     // An MCP request with no session has nowhere to keep a last run.
     let records_last_run = records_last_run && !inputs.session_id.is_empty();
     let outcome = prepare_and_run(state, inputs, cancel_requested).await;
@@ -487,8 +501,11 @@ pub(crate) async fn prepare_execution(
         vfs_source,
         run_entry: _,
         idempotency_key,
-        tools,
+        suspension,
     } = inputs;
+    let (tools, approval_provider) = suspension.map_or((None, None), |suspension| {
+        (suspension.tools, suspension.approvals)
+    });
     let audit = execution_audit.as_deref();
     let fail = |kind: ErrorKind, message: String| {
         Box::new(ExecuteOutcome::undispatched(failure_response(
@@ -635,6 +652,7 @@ pub(crate) async fn prepare_execution(
         http_client,
         mcp_transport,
         tool_provider: run_tools.as_ref().map(|tools| Arc::clone(&tools.provider)),
+        approval_provider,
         session_kv,
         session_finalizers: match manager.finalizer_provider(session_id, &packages) {
             Ok(provider) => Some(provider),

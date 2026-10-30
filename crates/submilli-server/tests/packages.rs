@@ -538,7 +538,8 @@ mod blueprint_scoped {
             ("", "allow", false),
             (config, "deny", false),
             (config, "allow", true),
-            (config, "ask-human", true),
+            // A deprecated spelling of `deny`.
+            (config, "ask-human", false),
         ] {
             let blueprint = submilli_blueprint::parse(&format!(
                 "name: scoped\ndefault: {default}\n{configuration}"
@@ -597,7 +598,8 @@ mod blueprint_scoped {
             ("", "allow", false),
             (config, "deny", false),
             (config, "allow", true),
-            (config, "ask-human", true),
+            // A deprecated spelling of `deny`.
+            (config, "ask-human", false),
         ] {
             let blueprint = submilli_blueprint::parse(&format!(
                 "name: scoped\ndefault: {default}\n{configuration}"

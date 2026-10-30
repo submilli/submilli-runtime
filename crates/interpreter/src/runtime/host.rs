@@ -1238,6 +1238,12 @@ pub enum DenialSource {
     ReadOnly,
     /// The harness, or a person it asked, refused an application tool call.
     Harness,
+    /// The person asked for approval (`ask-human`) declined, or did not decide
+    /// in time.
+    Human,
+    /// The administrator asked for approval (`ask-admin`) declined, or did not
+    /// decide in time.
+    Admin,
 }
 
 /// A denial the runtime threw that escaped the program, as the embedder sees it.
@@ -1255,6 +1261,8 @@ impl DenialSource {
             Self::Invariant => "invariant",
             Self::ReadOnly => "read_only",
             Self::Harness => "harness",
+            Self::Human => "human",
+            Self::Admin => "admin",
         }
     }
 }
@@ -1369,6 +1377,16 @@ impl std::fmt::Display for PermissionDenied {
                  (another tool, raw HTTP, or other arguments to reach the same thing); \
                  report it and stop."
             }
+            DenialSource::Human => {
+                " This call needed the person's approval and did not get it — do not \
+                 retry it or work around it (another package, raw HTTP, or other \
+                 arguments to reach the same thing); report it and stop."
+            }
+            DenialSource::Admin => {
+                " This call needed an administrator's approval and did not get it — do \
+                 not retry it or work around it (another package, raw HTTP, or other \
+                 arguments to reach the same thing); report it and stop."
+            }
         })
     }
 }
@@ -1411,6 +1429,16 @@ pub fn permission_denied_by_harness(
     reason: impl Into<String>,
 ) -> wasmtime::Error {
     denied(caller, capability, reason, DenialSource::Harness)
+}
+
+/// A denial from `source`, such as the approver of an asked call.
+pub fn permission_denied_by(
+    source: DenialSource,
+    caller: impl Into<String>,
+    capability: impl Into<String>,
+    reason: impl Into<String>,
+) -> wasmtime::Error {
+    denied(caller, capability, reason, source)
 }
 
 fn denied(

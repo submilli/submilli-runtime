@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dfa8c57b68d523d0768f42f20380a84b22b68309815d66d46dd5b224549a314c"
+  contentHash: "f6f6ed89d6687ce741ef692207dab517e7ae1407224d4f01b1ceb52b8ab3abf2"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -79,6 +79,9 @@ its own. A program that fails is not an HTTP error. `POST /v1/execute` and
 | `GET` | [`/v1/runs`](#get-v1runs) |
 | `POST` | [`/v1/runs/{run_id}/recover`](#post-v1runsrun_idrecover) |
 | `GET` | [`/v1/runs/{run_id}`](#get-v1runsrun_id) |
+| `GET` | [`/v1/approvals`](#get-v1approvals) |
+| `GET` | [`/v1/approvals/{call_id}`](#get-v1approvalscall_id) |
+| `POST` | [`/v1/approvals/{call_id}`](#post-v1approvalscall_id) |
 | `GET` | [`/v1/sessions/{session_id}/packages/search`](#get-v1sessionssession_idpackagessearch) |
 | `GET` | [`/v1/sessions/{session_id}/packages/docs`](#get-v1sessionssession_idpackagesdocs) |
 | `GET` | [`/v1/blueprints/{name}/prompt`](#get-v1blueprintsnameprompt) |
@@ -140,7 +143,8 @@ Role: `user`. Runs one program in the session.
 Answers `200` with the [execute result](#the-execute-result) and the session
 id in an `mcp-session-id` response header. In a session with
 [application tools](#application-tools), a run can also answer `suspended` at
-a tool call.
+a tool call, and under a Blueprint with an `ask-human` or `ask-admin` rule, at
+a call waiting for [approval](#approvals).
 
 | Status | Body |
 | --- | --- |
@@ -247,7 +251,7 @@ object.
 
 | Field | Type | Value |
 | --- | --- | --- |
-| `status` | string | Always `finished`. A run that waits on [application tools](#application-tools) can also be `suspended` or `running`, see [Run states](#run-states) |
+| `status` | string | Always `finished`. A run that waits on [application tools](#application-tools) or an [approval](#approvals) can also be `suspended` or `running`, see [Run states](#run-states) |
 | `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
 | `result` | string or null | What `main` returned: a string as is, other concrete values as JSON text (including `"null"` for a null return), `null` for an undefined return, no value, or failure |
@@ -255,7 +259,7 @@ object.
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |
 | `error.message` | string | Rendered message, with source excerpts for compile and runtime errors |
-| `error.caller`, `error.capability`, `error.source` | strings | Present on `permission_denied` only: the Package that was refused, the capability it asked for, and who refused: `policy` (the Blueprint), `invariant` (the runtime, ahead of any policy), `read_only` (a write to a read-only volume), or `harness` (the application refused a `@tools` call) |
+| `error.caller`, `error.capability`, `error.source` | strings | Present on `permission_denied` only: the Package that was refused, the capability it asked for, and who refused: `policy` (the Blueprint), `invariant` (the runtime, ahead of any policy), `read_only` (a write to a read-only volume), `harness` (the application refused a `@tools` call), `human` (the person asked for an `ask-human` approval refused it or did not decide in time), or `admin` (the same, for `ask-admin`) |
 | `error.diagnostics` | object[] | Present on compile errors only: `severity`, `line`, `column`, `message`, and `notes` (each `line`, `column`, `message`) when there are any |
 | `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` or `@tools` Package that were dropped or degraded at discovery |
 
@@ -292,6 +296,87 @@ Examples, from real runs:
 ```json
 {"status":"finished","execution_id":"704a5868-7459-4c1f-8f5a-8a6d09a6312f","session_id":"3a0f75d1-2d5e-4c3a-a5d8-3ecfbab7015c","result":null,"console":[],"error":{"kind":"compile_error","message":"error: expected `number`, got `string`\n --> <execute>:1:52\n  |\n1 | export function main(): number { const x: number = \"a\"; return x; }\n  |                                                    ^^^\n","diagnostics":[{"severity":"error","line":1,"column":52,"message":"expected `number`, got `string`"}]}}
 ```
+
+## Approvals
+
+Under a Blueprint rule with `ask-human` or `ask-admin`
+([Permissions](/docs/reference/permissions#approvals)), a session run stops at
+the call the rule matches, as it does at an application tool call, and waits
+for a decision. The session needs no application tools for this.
+
+```json
+{"status":"suspended","execution_id":"3f2b…","session_id":"9c41…","calls":[{"kind":"approval","call_id":"3f2b…:7d0e…","approval":{"approver":"human","caller":"main","capability":"pied-piper.example/credits.apply","context":{"customerId":"pied_piper","amount":250},"rule":{"caller":"main","index":1,"name":"large-credits","filter":"amount > 100"},"requested_at_unix_ms":1793000000000,"expires_at_unix_ms":1793000600000}}]}
+```
+
+| Field | Value |
+| --- | --- |
+| `approval.approver` | `human` for `ask-human`, `admin` for `ask-admin` |
+| `approval.caller` | Whose call it is: `main` or a Package |
+| `approval.capability` | The capability the rule decides |
+| `approval.context` | The values the rule's filter tested: the capability's filter fields, which aren't always all the operation sends. An `@tools` call shows the tool's name, not its arguments |
+| `approval.rule` | The rule that asked: `caller`, `index`, and `name` and `filter` when it has them |
+| `approval.requested_at_unix_ms`, `approval.expires_at_unix_ms` | When it was asked, and when it is denied without a decision |
+
+The harness answers with [`POST /v1/runs/{run_id}/resume`](#post-v1runsrun_idresume),
+in `results`:
+
+```json
+{"results":[{"call_id":"3f2b…:7d0e…","decision":"deny","reason":"Not this customer"}]}
+```
+
+- An `ask-human` call is decided by the harness, with a `user` or an
+  `admin` token. The server can't tell whether a person or a model answered:
+  the harness shows the request to the person and never lets the model
+  decide it.
+- An `ask-admin` call is decided only with an `admin` token, through resume
+  or the endpoints below. The harness sees the call, so it can tell the
+  person the action is waiting and notify an administrator.
+- An approval covers that call once. The program running the same operation
+  again asks again.
+- Waiting does not count against `max_execution_time` or fuel. An
+  `ask-human` call waits the Blueprint's `tool_call_timeout`. An `ask-admin`
+  call waits its `admin_approval_timeout`, else the server's, 24 hours by
+  default. A run waiting counts toward `max_suspended_runs`, and its session
+  is not idle.
+- Approvals are answered over this API only. A run over MCP, or through
+  `POST /v1/execute`, is denied a call an ask rule matches.
+
+### GET /v1/approvals
+
+Role: `admin`. Lists the calls waiting for approval, oldest first, as
+`{"approvals": [...]}`. Optional query parameters: `approver` (`human` or
+`admin`) and `session`.
+
+| Field | Value |
+| --- | --- |
+| `call_id` | The call, as resume and the endpoints below name it |
+| `execution_id`, `session_id` | Its run and session |
+| `approval` | As in the suspended run |
+| `variables` | The session's variables, or null when it is gone |
+
+A durable run that has not yet replayed to its call after a restart is listed
+once it has.
+
+### GET /v1/approvals/{call_id}
+
+Role: `admin`. One entry of the list, or `404` `unknown_approval`: the call
+was decided, expired, its run ended, or it never existed.
+
+### POST /v1/approvals/{call_id}
+
+Role: `admin`. Decides the call, as a resume with the same `decision` and
+`reason` would, and answers with the run's next state.
+
+```json
+{"decision":"approve","reason":"checked with finance"}
+```
+
+| Status | `error` |
+| --- | --- |
+| `200` | The run's state |
+| `400` | `invalid_request`: a malformed body |
+| `404` | `unknown_approval` |
+| `409` | `run_not_suspended` |
 
 ## Application tools
 
@@ -339,13 +424,13 @@ metadata described in [Run recovery](/docs/reference/run-recovery).
 
 | `status` | Body |
 | --- | --- |
-| `suspended` | `execution_id`, `session_id`, and `calls`: the calls waiting on the harness, each `call_id`, `tool`, and `args` |
+| `suspended` | `execution_id`, `session_id`, and `calls`: the calls waiting, each `call_id` and `kind`. A `tool` call carries `tool` and `args`. An `approval` carries `approval`, see [Approvals](#approvals) |
 | `finished` | The [execute result](#the-execute-result) |
 | `running` | The run is working or recovering. Durable runs include their lifecycle metadata. An ordinary tool run reports only `execution_id` and `session_id` through `GET` |
 | `queued`, `stuck`, `cancelled`, `expired` | Durable lifecycle metadata. A queued execute returns this view after the 25-second observation bound. A resume returns a stopped or expired run's view with HTTP `200` |
 
 ```json
-{"status":"suspended","execution_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11","session_id":"b6cc8dc3-631f-4bc2-8ac3-921053ad88c7","calls":[{"call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:49d962de-15ba-4fad-9cf7-71a27c1bf719","tool":"query_orders","args":{"customer":"c_42"}}]}
+{"status":"suspended","execution_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11","session_id":"b6cc8dc3-631f-4bc2-8ac3-921053ad88c7","calls":[{"kind":"tool","call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:49d962de-15ba-4fad-9cf7-71a27c1bf719","tool":"query_orders","args":{"customer":"c_42"}}]}
 ```
 
 A durable call id is `run_id:effect_id`, stable across replay and retries.
@@ -357,7 +442,7 @@ key answers with the run's current state.
 | Limit | Value |
 | --- | --- |
 | Time | `max_execution_time` and fuel count the program's work only, not the time it waits on the harness |
-| One wait | The Blueprint's `tool_call_timeout`, 10 minutes by default, per attempt. It restarts when recovery reconstructs an unresolved call. A committed timeout throws `TimeoutError`, as do later `@tools` calls of that run without waiting |
+| One wait | The Blueprint's `tool_call_timeout`, 10 minutes by default, per attempt. It restarts when recovery reconstructs an unresolved call. A committed timeout throws `TimeoutError`, as do later `@tools` calls of that run without waiting. An approval's wait is in [Approvals](#approvals) |
 | Waiting runs | At most `max_suspended_runs` server-wide, 256 by default. At capacity, a durable attempt is interrupted without recording a tool outcome and becomes `stuck`. An ordinary tool call throws `QuotaExceededError` |
 | Execution capacity | Suspended durable runs do not count toward `max_durable_runs`. They remain in memory and retain their session order and writable named volumes until the attempt exits |
 | Shutdown | Durable attempts stop for recovery. An open resume answers `503` `run_unavailable`. Ordinary suspended runs are cancelled and their keys stay indeterminate |
@@ -388,10 +473,14 @@ view with HTTP `200`, including when an answer committed before execution stoppe
 | --- | --- | --- | --- |
 | `results` | object[] | yes | One answer per call, at least one, each call once |
 | `results[].call_id` | string | yes | The call answered |
-| `results[].ok` | boolean | yes | Whether the tool returned a value |
+| `results[].ok` | boolean | for a `tool` call | Whether the tool returned a value |
 | `results[].value` | any | no | With `ok: true`: what the tool returned |
 | `results[].error.kind` | string | with `ok: false` | `failed` or `denied` |
 | `results[].error.message` | string | with `ok: false` | Shown to the program |
+| `results[].decision` | string | for an `approval` | `approve` or `deny` |
+| `results[].reason` | string | no | With a `decision`: why, at most 1024 bytes. A denial's reason reaches the program |
+
+Each result carries `ok` or `decision`, not both.
 
 ```json
 {"results":[{"call_id":"8d1c1b0e-6c0c-4a0f-9b5e-3f6f0f9b2a11:49d962de-15ba-4fad-9cf7-71a27c1bf719","ok":true,"value":{"count":3}}]}
@@ -402,6 +491,9 @@ view with HTTP `200`, including when an answer committed before execution stoppe
 | `ok: true` | The tool's return value, checked against its `output_schema`. A value that does not match throws `TypeError` |
 | `failed` | Throws `Error` with the message |
 | `denied` | Throws `PermissionDeniedError`. Uncaught, the run reports `permission_denied` with `source` `harness` |
+| `decision: approve` | The approved call runs |
+| `decision: deny` | Throws `PermissionDeniedError`. Uncaught, the run reports `permission_denied` with `source` `human` or `admin` |
+| `ok` for an `approval` | Throws `PermissionDeniedError`, with `source` `policy`. A harness that does not know approvals cannot approve one |
 
 An answer to a call already answered changes nothing, so a resume can be
 retried. A value may nest at most 128 levels deep, inside the 2 MiB limit on
@@ -410,8 +502,9 @@ request bodies.
 | Status | `error` |
 | --- | --- |
 | `200` | The run's state |
-| `400` | `invalid_request`: no answer, a call answered twice, a malformed answer, or a value over the limits. Nothing is delivered |
+| `400` | `invalid_request`: no answer, a call answered twice, a malformed answer, a `decision` for a `tool` call, or a value over the limits. Nothing is delivered |
 | `400` | `unknown_call`: the run waits on another call |
+| `403` | `approval_requires_admin`: the call waits for an `ask-admin` approval, and the token has the `user` role. Nothing is delivered |
 | `404` | `unknown_run` |
 | `409` | `run_not_suspended`: the call timed out, an interrupted attempt consumed this request's uncommitted answer, or an ordinary run no longer waits for a call |
 | `503` | `run_unavailable`: shutdown or unavailable run storage |

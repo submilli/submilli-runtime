@@ -2587,7 +2587,8 @@ async fn policy_hides_libraries_from_mcp_discovery() {
         ]);
         let session = h.handshake(EPH).await;
         let (_, _, tools) = h.post(EPH, tools_list(1), Some(&session)).await;
-        let visible = default != "deny";
+        // `default: ask-human` is a deprecated spelling of `deny`.
+        let visible = default == "allow";
         for name in [
             "submilli:http",
             "submilli:fs",

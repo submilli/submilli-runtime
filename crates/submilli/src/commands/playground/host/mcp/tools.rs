@@ -639,6 +639,8 @@ impl SubmilliMcp {
         let (allowed, rule, refusal) = match outcome {
             CheckOutcome::Allow { rule } => (true, rule, None),
             CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
+            // A file tool cannot wait for an approver, so an ask is refused.
+            CheckOutcome::Ask { rule, reason, .. } => (false, Some(rule.index), Some(reason)),
             _ => (false, None, Some("unrecognized policy outcome".to_string())),
         };
         if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {

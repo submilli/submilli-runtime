@@ -471,7 +471,7 @@ async fn entirely_readonly_filesystem_is_refused_before_admission() {
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key: None,
-            tools: None,
+            suspension: None,
         },
     )
     .await;
