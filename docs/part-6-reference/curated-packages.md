@@ -25,6 +25,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | --- | --- | --- | --- |
 | [`@submilli/attio`](#submilliattio) | Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes. | `ATTIO_API_KEY` | `api.attio.com` |
 | [`@submilli/brave-search`](#submillibrave-search) | Web search, one page of results at a time, and extracted passages grouped by source URL. | `BRAVE_SEARCH_API_KEY` | `api.search.brave.com` |
+| [`@submilli/browserbase`](#submillibrowserbase) | Browserbase Search, Fetch, and hosted Stagehand `act`, `extract`, and `observe`. | `BROWSERBASE_API_KEY` | `api.browserbase.com`, `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com` |
 | [`@submilli/exa`](#submilliexa) | Web search with highlights, and extraction of known URLs with a status for each URL. | `EXA_API_KEY` | `api.exa.ai` |
 | [`@submilli/firecrawl`](#submillifirecrawl) | Firecrawl v2 web search, page scraping, site URL discovery, and explicit Batch Scrape and Crawl jobs. | `FIRECRAWL_API_KEY` | `api.firecrawl.dev` |
 | [`@submilli/github`](#submilligithub) | GitHub.com repositories, file contents, commits, branches, issues, pull requests, teams, releases, and search. | `GITHUB_TOKEN` | `api.github.com` |
@@ -105,6 +106,33 @@ submilli blueprint add-package @submilli/brave-search --no-capabilities
 submilli blueprint capability list @submilli/brave-search
 submilli blueprint capability add brave.com/search
 ```
+
+## @submilli/browserbase
+
+Browserbase Search, Fetch, and hosted Stagehand `act`, `extract`, and `observe`.
+
+| | |
+| --- | --- |
+| Secret | `BROWSERBASE_API_KEY` |
+| Credential | A Browserbase API key. The key identifies the project; do not set a project id |
+| Without the secret | Throws `BrowserbaseError` with code `missing_credentials` |
+| HTTP | `api.browserbase.com`: DELETE, GET, POST, POST `/v1/agents`, POST `/v1/agents/runs`, POST `/v1/contexts`, POST `/v1/fetch`, POST `/v1/search`, POST `/v1/sessions`; `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com`: POST |
+| Filesystem | None |
+| Readme | [`packages/browserbase/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/browserbase/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/browserbase
+submilli blueprint add-package @submilli/browserbase --no-capabilities
+submilli blueprint capability list @submilli/browserbase
+submilli blueprint capability add browserbase.com/search
+```
+
+Stagehand navigation and a fetch that follows redirects also need
+`browserbase.com/delegatedFetch`. A host filter covers the submitted URL, not
+redirects. Proxies, Verified, and CAPTCHA solving are separate fields and
+default off. `StagehandSession.open` registers cleanup. `StagehandSession.current`
+stores the id in the runtime session under `stagehand`. Drive it with
+`session.goto` and `session.act`.
 
 ## @submilli/exa
 

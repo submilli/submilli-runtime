@@ -1,0 +1,191 @@
+namespace: submilli
+provides:
+- name: browserbase.com/agents.create
+  description: Create a reusable agent. Runs can also be ad-hoc; an agent is only needed to reuse a prompt.
+  fields: {}
+- name: browserbase.com/agents.delete
+  description: Delete an agent. Existing runs are unaffected. A missing agent is not an error.
+  fields:
+    agentId:
+      type: string
+- name: browserbase.com/agents.list
+  description: List agents, one page at a time. Pass `nextCursor` back as `cursor`.
+  fields:
+    limit:
+      type: number
+- name: browserbase.com/agents.read
+  description: Read an agent.
+  fields:
+    agentId:
+      type: string
+- name: browserbase.com/contexts.create
+  description: Create a context that can reuse cookies across later sessions and fetches.
+  fields: {}
+- name: browserbase.com/contexts.delete
+  description: Delete a context. A missing context is not an error.
+  fields:
+    contextId:
+      type: string
+- name: browserbase.com/contexts.read
+  description: Read a context.
+  fields:
+    contextId:
+      type: string
+- name: browserbase.com/delegatedFetch
+  description: Fetch one page without starting a browser. The host check covers the submitted URL. Redirects are a provider instruction; grant `browserbase.com/delegatedFetch` only when `allowRedirects` is true.
+  fields: {}
+- name: browserbase.com/fetch
+  description: Fetch one page without starting a browser. The host check covers the submitted URL. Redirects are a provider instruction; grant `browserbase.com/delegatedFetch` only when `allowRedirects` is true.
+  fields:
+    allowInsecureSsl:
+      type: boolean
+    allowRedirects:
+      type: boolean
+    contextId:
+      type: string
+    host:
+      type: string
+    proxies:
+      type: boolean
+- name: browserbase.com/runs.list
+  description: List runs, one page at a time.
+  fields:
+    limit:
+      type: number
+- name: browserbase.com/runs.read
+  description: Read one run, including its result when the run has finished.
+  fields:
+    runId:
+      type: string
+- name: browserbase.com/runs.resume
+  description: Resume a paused run with the reply to its pause. Resuming a run that is not paused returns a conflict.
+  fields:
+    runId:
+      type: string
+- name: browserbase.com/runs.start
+  description: Start a browser agent on a task. The run uses web search and a cloud browser. This does not poll. Agent runs can spend Model Gateway tokens. Proxies and Verified default off.
+  fields:
+    agentId:
+      type: string
+    contextId:
+      type: string
+    persistContext:
+      type: boolean
+    proxies:
+      type: boolean
+    verified:
+      type: boolean
+- name: browserbase.com/runs.stop
+  description: Ask a running agent to stop. Stopping a finished run returns a conflict.
+  fields:
+    runId:
+      type: string
+- name: browserbase.com/search
+  description: Search the web. Does not start a browser. Provider and mode are sent explicitly; the default is Parallel `advanced`.
+  fields:
+    mode:
+      type: string
+    numResults:
+      type: number
+    provider:
+      type: string
+- name: browserbase.com/sessions.list
+  description: List sessions. The API returns one array and documents no cursor; this does not page.
+  fields: {}
+- name: browserbase.com/sessions.read
+  description: Read one session.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/sessions.release
+  description: Ask Browserbase to end a session. Sending `REQUEST_RELEASE` avoids leaving a browser running.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.act
+  description: Perform one atomic action, such as "click the Sign in button". A false `success` flag is returned, not thrown. Use `replay` for an observed selector.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.current
+  description: Return the browser stored for this runtime session, or start one and store it. The first call needs `stagehand.start`. A later call needs `stagehand.current` when the stored browser is still pending or running. Closing the runtime session ends it.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.end
+  description: End this browser. A missing browser is not an error.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.extract
+  description: Extract structured data from the current page. Does not click or navigate.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.navigate
+  description: Open a URL. The host check covers the submitted URL. Redirects are a separate grant.
+  fields:
+    host:
+      type: string
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.observe
+  description: Plan actions on the current page without performing them.
+  fields:
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand.start
+  description: Start a browser and register cleanup. Prefer `current` when the next execution should reuse it. Registration needs a session store. A catchable refusal ends the browser and rethrows, so the caller does not receive a handle.
+  fields:
+    contextId:
+      type: string
+    keepAlive:
+      type: boolean
+    model:
+      type: string
+    persistContext:
+      type: boolean
+    proxies:
+      type: boolean
+    region:
+      type: string
+    solveCaptchas:
+      type: boolean
+    timeoutSeconds:
+      type: number
+    verified:
+      type: boolean
+requires:
+- capability: http.delete
+  filter: host == "api.browserbase.com"
+- capability: http.get
+  filter: host == "api.browserbase.com"
+- capability: http.post
+  filter: host == "api.apse1.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.browserbase.com"
+- capability: http.post
+  filter: host == "api.browserbase.com" and path == "/v1/agents"
+- capability: http.post
+  filter: host == "api.browserbase.com" and path == "/v1/agents/runs"
+- capability: http.post
+  filter: host == "api.browserbase.com" and path == "/v1/contexts"
+- capability: http.post
+  filter: host == "api.browserbase.com" and path == "/v1/fetch"
+- capability: http.post
+  filter: host == "api.browserbase.com" and path == "/v1/search"
+- capability: http.post
+  filter: host == "api.euc1.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.use1.stagehand.browserbase.com"
+- capability: secrets.get
+  filter: name == "BROWSERBASE_API_KEY"
+- capability: session.finalize
+- capability: session.read
+  filter: key == "stagehand"
+- capability: session.remove
+  filter: key == "stagehand"
+- capability: session.write
+  filter: key == "stagehand"

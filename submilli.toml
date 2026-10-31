@@ -104,6 +104,13 @@ keywords = ["scrapecreators", "research", "reddit", "youtube", "linkedin", "gith
 path = "packages/scrapecreators"
 
 [[package]]
+name = "@submilli/browserbase"
+version = "0.1.0"
+description = "Browserbase Search, Fetch, and hosted Stagehand act, extract, and observe. Connection secrets are never returned."
+keywords = ["browserbase", "stagehand", "browser", "search", "fetch", "act", "extract"]
+path = "packages/browserbase"
+
+[[package]]
 name = "@submilli/attio"
 version = "0.1.0"
 description = "Native Attio CRM client for object and status discovery, typed record queries, people and company upserts by email and domain, record writes, stage changes, and notes."
