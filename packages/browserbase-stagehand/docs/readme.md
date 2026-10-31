@@ -38,7 +38,7 @@ The returned `sessionId` is the Browserbase session id.
 
 <!-- submilli:endif -->
 
-<!-- submilli:if all="browserbase.com/stagehand browserbase.com/navigate" -->
+<!-- submilli:if all="browserbase.com/stagehand.start browserbase.com/stagehand browserbase.com/navigate" -->
 
 ```ts
 import { StagehandSession } from "@submilli/browserbase-stagehand";

@@ -15,6 +15,7 @@ submilli install submilli/submilli-runtime @submilli/browserbase-stagehand
 submilli blueprint add-package @submilli/browserbase-stagehand --no-capabilities
 submilli blueprint secret add BROWSERBASE_API_KEY --store browserbase_api_key
 submilli secret put browserbase_api_key
+submilli blueprint capability add browserbase.com/stagehand.start
 submilli blueprint capability add browserbase.com/stagehand
 submilli blueprint capability add browserbase.com/navigate
 ```
@@ -41,12 +42,15 @@ solving are separate grants and are not on the free plan.
 
 | Operation | Caller capability and truthful fields |
 | --- | --- |
-| `open`, `current`, `act`, `replay`, `observe`, `extract`, `end`, `liveView` | `browserbase.com/stagehand { sessionId }` |
-| `session.goto` | `browserbase.com/navigate { sessionId, host, path, protocol }` |
+| `StagehandSession.open` and `StagehandSession.current` | `browserbase.com/stagehand.start { model, proxies, verified, solveCaptchas, keepAlive, region, timeoutSeconds, contextId, persistContext }` |
+| `act`, `replay`, `observe`, `extract`, `end`, `liveView` | `browserbase.com/stagehand {}` |
+| `session.goto` | `browserbase.com/navigate { host, path, protocol }` |
 
-`open` checks `stagehand` with an empty `sessionId`, because the browser does
-not exist yet. Later calls check the id. A host and path grant covers the
-submitted URL, not redirects or subresources. The query is not in the check.
+The browser id is not a grant field. It is created at runtime and changes every
+browser. `current` checks `stagehand.start` even when it reuses a stored browser,
+using the options that would apply if a new one had to be started. A host and
+path grant covers the submitted URL, not redirects or subresources. The query
+is not in the check.
 Proxies, Verified, and `solveCaptchas` default to false and are sent explicitly,
 because the Browserbase session API would otherwise enable CAPTCHA solving.
 Custom proxy URLs and passwords are not accepted. Session timeout defaults to
@@ -55,7 +59,7 @@ Custom proxy URLs and passwords are not accepted. Session timeout defaults to
 `StagehandSession.open` and `StagehandSession.current` register cleanup.
 `current` stores the id and region in the runtime session under `stagehand` and
 reuses that browser while it is still pending or running. The first call also
-needs `stagehand`. A non-default region uses its own Stagehand host
+needs `stagehand.start`. A non-default region uses its own Stagehand host
 (`api.use1`, `api.euc1`, or `api.apse1`); `end` and session close use that same
 host. `session.liveView` returns the watch link. The CDP URL is dropped because
 it embeds a signing key.

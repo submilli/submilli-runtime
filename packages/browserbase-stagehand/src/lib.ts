@@ -113,7 +113,7 @@ export class StagehandSession {
      * the browser and rethrows, so the caller does not receive a handle.
      * @param options Optional model, region, timeout, proxy, Verified, captcha, and context controls.
      * @returns The new browser. Connection URLs are not included.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand.start { model: string, proxies: boolean, verified: boolean, solveCaptchas: boolean, keepAlive: boolean, region: string, timeoutSeconds: number, contextId: string, persistContext: boolean }
      */
     static open(options: StagehandOptions = {}): StagehandSession {
         const { model, selfHeal, domSettleTimeoutMs, region, timeoutSeconds, keepAlive, proxies, verified, solveCaptchas, contextId, persistContext, viewport } = options;
@@ -137,8 +137,18 @@ export class StagehandSession {
             persistContext: persistContext,
             viewport: ownedViewport,
         });
+        check("browserbase.com/stagehand.start", {
+            model: request.model,
+            proxies: request.proxies,
+            verified: request.verified,
+            solveCaptchas: request.solveCaptchas,
+            keepAlive: request.keepAlive,
+            region: request.region,
+            timeoutSeconds: request.timeoutSeconds,
+            contextId: request.contextId,
+            persistContext: request.persistContext,
+        });
         const body = buildStartBody(request);
-        check("browserbase.com/stagehand", { sessionId: "" });
         const regionName = request.region;
         const sessionId = resourceId(normalizeStartJson(requireOk(stagehandPost(regionName, "sessions/start", body))), "sessionId");
         const cleanup: BrowserCleanup = { id: sessionId, region: regionName };
@@ -153,28 +163,85 @@ export class StagehandSession {
 
     /**
      * Return the browser stored for this runtime session, or start one and store it.
-     * The first call needs `stagehand`. A later call needs it again for the stored id
-     * when that browser is still pending or running. Closing the runtime session ends it.
-     * @param options Options used only when a new browser is started.
+     * Needs `stagehand.start`, including when a stored browser is reused. A new browser
+     * is started only when nothing reusable is stored. Closing the runtime session ends it.
+     * @param options Options used only when a new browser is started. The start grant still sees them.
      * @returns The current browser.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand.start { model: string, proxies: boolean, verified: boolean, solveCaptchas: boolean, keepAlive: boolean, region: string, timeoutSeconds: number, contextId: string, persistContext: boolean }
      */
     static current(options: StagehandOptions = {}): StagehandSession {
+        const { model, selfHeal, domSettleTimeoutMs, region, timeoutSeconds, keepAlive, proxies, verified, solveCaptchas, contextId, persistContext, viewport } = options;
+        let ownedViewport: Viewport | undefined = undefined;
+        if (viewport !== undefined) {
+            const width = viewport.width;
+            const height = viewport.height;
+            ownedViewport = { width: width, height: height };
+        }
+        const request = stagehandStart({
+            model: model,
+            selfHeal: selfHeal,
+            domSettleTimeoutMs: domSettleTimeoutMs,
+            region: region,
+            timeoutSeconds: timeoutSeconds,
+            keepAlive: keepAlive,
+            proxies: proxies,
+            verified: verified,
+            solveCaptchas: solveCaptchas,
+            contextId: contextId,
+            persistContext: persistContext,
+            viewport: ownedViewport,
+        });
+        check("browserbase.com/stagehand.start", {
+            model: request.model,
+            proxies: request.proxies,
+            verified: request.verified,
+            solveCaptchas: request.solveCaptchas,
+            keepAlive: request.keepAlive,
+            region: request.region,
+            timeoutSeconds: request.timeoutSeconds,
+            contextId: request.contextId,
+            persistContext: request.persistContext,
+        });
         const stored = kv.get<CurrentStagehand>("stagehand");
         if (stored !== undefined) {
             const sessionId = stored.sessionId;
             const regionName = stored.region;
             if (storedIdIsReusable(sessionId) && stagehandRegion(regionName) !== undefined) {
-                check("browserbase.com/stagehand", { sessionId: sessionId });
                 if (stagehandAlive(sessionId)) return new StagehandSession(sessionId, regionName);
-                const created = StagehandSession.open(options);
+                const created = StagehandSession.open({
+                    model: request.model,
+                    selfHeal: request.selfHeal,
+                    domSettleTimeoutMs: request.domSettleTimeoutMs,
+                    region: request.region,
+                    timeoutSeconds: request.timeoutSeconds,
+                    keepAlive: request.keepAlive,
+                    proxies: request.proxies,
+                    verified: request.verified,
+                    solveCaptchas: request.solveCaptchas,
+                    contextId: request.contextId,
+                    persistContext: request.persistContext,
+                    viewport: ownedViewport,
+                });
                 kv.unregisterFinalizer(sessionId);
                 kv.set("stagehand", { sessionId: created.sessionId, region: created.region });
                 return created;
             }
             kv.remove("stagehand");
         }
-        const created = StagehandSession.open(options);
+        const created = StagehandSession.open({
+            model: request.model,
+            selfHeal: request.selfHeal,
+            domSettleTimeoutMs: request.domSettleTimeoutMs,
+            region: request.region,
+            timeoutSeconds: request.timeoutSeconds,
+            keepAlive: request.keepAlive,
+            proxies: request.proxies,
+            verified: request.verified,
+            solveCaptchas: request.solveCaptchas,
+            contextId: request.contextId,
+            persistContext: request.persistContext,
+            viewport: ownedViewport,
+        });
         kv.set("stagehand", { sessionId: created.sessionId, region: created.region });
         return created;
     }
@@ -183,21 +250,20 @@ export class StagehandSession {
      * Open a URL. The check covers the submitted host, path, and protocol, not redirects.
      * @param url Absolute HTTP or HTTPS URL, without credentials.
      * @param options Optional wait condition and timeout. Omit it to wait for `domcontentloaded`.
-     * @capability browserbase.com/navigate { sessionId: string, host: string, path: string, protocol: string }
+     * @capability browserbase.com/navigate { host: string, path: string, protocol: string }
      */
     goto(url: string, options: GotoOptions = {}): void {
-        const sessionId = resourceId(this.sessionId, "sessionId");
-        const regionName = this.region;
-        const { waitUntil, timeoutMs } = options;
         const target = pageTarget(url);
-        const settle = waitUntil ?? "domcontentloaded";
-        const body = buildGotoBody(url, settle, timeoutMs);
         check("browserbase.com/navigate", {
-            sessionId: sessionId,
             host: target.host,
             path: target.path,
             protocol: target.protocol,
         });
+        const sessionId = resourceId(this.sessionId, "sessionId");
+        const regionName = this.region;
+        const { waitUntil, timeoutMs } = options;
+        const settle = waitUntil ?? "domcontentloaded";
+        const body = buildGotoBody(url, settle, timeoutMs);
         normalizeNavigateJson(requireOk(stagehandPost(regionName, "sessions/" + encodeComponent(sessionId) + "/navigate", body)));
     }
 
@@ -207,9 +273,10 @@ export class StagehandSession {
      * @param instruction One action, 1–2000 characters.
      * @param options Optional placeholders and timeout.
      * @returns What Stagehand did.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand {}
      */
     act(instruction: string, options: ActOptions = {}): ActResult {
+        check("browserbase.com/stagehand", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const regionName = this.region;
         const { variables, timeoutMs } = options;
@@ -227,7 +294,6 @@ export class StagehandSession {
             ownedVariables = copyVariables(copied);
         }
         const body = buildActBody(instruction, ownedVariables, timeoutMs);
-        check("browserbase.com/stagehand", { sessionId: sessionId });
         return normalizeActJson(requireOk(stagehandPost(regionName, "sessions/" + encodeComponent(sessionId) + "/act", body)));
     }
 
@@ -236,9 +302,10 @@ export class StagehandSession {
      * @param action Action previously returned by `observe`.
      * @param timeoutMs Optional timeout in milliseconds, 1–120000.
      * @returns What Stagehand did.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand {}
      */
     replay(action: ObservedAction, timeoutMs?: number): ActResult {
+        check("browserbase.com/stagehand", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const regionName = this.region;
         const selector = action.selector;
@@ -250,7 +317,6 @@ export class StagehandSession {
         for (const argument of args) copiedArgs.push(argument);
         const owned = copyAction({ selector: selector, description: description, method: method, arguments: copiedArgs, backendNodeId: backendNodeId });
         const body = buildReplayBody(owned, timeoutMs);
-        check("browserbase.com/stagehand", { sessionId: sessionId });
         return normalizeActJson(requireOk(stagehandPost(regionName, "sessions/" + encodeComponent(sessionId) + "/act", body)));
     }
 
@@ -259,9 +325,10 @@ export class StagehandSession {
      * @param instruction What to look for. Omit it to observe the page generally.
      * @param options Optional scope selectors and timeout.
      * @returns Planned actions. Empty when nothing matched.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand {}
      */
     observe(instruction?: string, options: ObserveOptions = {}): ObservedAction[] {
+        check("browserbase.com/stagehand", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const regionName = this.region;
         const { selector, ignoreSelectors, timeoutMs } = options;
@@ -272,7 +339,6 @@ export class StagehandSession {
             for (const item of ignoreSelectors) ignored.push(item);
         }
         const body = buildObserveBody(instruction, scope, ignored, timeoutMs);
-        check("browserbase.com/stagehand", { sessionId: sessionId });
         return normalizeObserveJson(requireOk(stagehandPost(regionName, "sessions/" + encodeComponent(sessionId) + "/observe", body)));
     }
 
@@ -282,9 +348,10 @@ export class StagehandSession {
      * @param schema JSON Schema text. Pass `JSON.stringify(schema)` so this method does not re-read a caller object. Omit it for an untyped result.
      * @param options Optional scope selectors, screenshot, and timeout.
      * @returns Extracted data and the provider action id.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand {}
      */
     extract(instruction?: string, schema?: string, options: ExtractOptions = {}): ExtractResult {
+        check("browserbase.com/stagehand", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const regionName = this.region;
         const { selector, ignoreSelectors, screenshot, timeoutMs } = options;
@@ -295,18 +362,17 @@ export class StagehandSession {
             for (const item of ignoreSelectors) ignored.push(item);
         }
         const body = buildExtractBody(instruction, schema, scope, ignored, screenshot ?? false, timeoutMs);
-        check("browserbase.com/stagehand", { sessionId: sessionId });
         return normalizeExtractJson(requireOk(stagehandPost(regionName, "sessions/" + encodeComponent(sessionId) + "/extract", body)));
     }
 
     /**
      * End this browser. A missing browser is not an error.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand {}
      */
     end(): void {
+        check("browserbase.com/stagehand", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const regionName = this.region;
-        check("browserbase.com/stagehand", { sessionId: sessionId });
         endStagehandRemote(sessionId, regionName);
         kv.unregisterFinalizer(sessionId);
         forgetCurrent(sessionId);
@@ -316,12 +382,12 @@ export class StagehandSession {
      * Live view links for this browser. Open `debuggerFullscreenUrl` to watch it.
      * @param expiresIn Optional URL lifetime in seconds, 60–21600.
      * @returns Debugger links and open pages. The CDP websocket URL is not returned.
-     * @capability browserbase.com/stagehand { sessionId: string }
+     * @capability browserbase.com/stagehand {}
      */
     liveView(expiresIn?: number): LiveView {
+        check("browserbase.com/stagehand", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const query = expiresIn === undefined ? "" : liveQuery(expiresIn);
-        check("browserbase.com/stagehand", { sessionId: sessionId });
         return normalizeLiveViewJson(requireOk(get(BASE + "/v1/sessions/" + encodeComponent(sessionId) + "/debug" + query, authHeaders())));
     }
 }

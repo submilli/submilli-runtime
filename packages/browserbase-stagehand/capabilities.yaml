@@ -9,13 +9,30 @@ provides:
       type: string
     protocol:
       type: string
-    sessionId:
-      type: string
 - name: browserbase.com/stagehand
-  description: Return the browser stored for this runtime session, or start one and store it. The first call needs `stagehand`. A later call needs it again for the stored id when that browser is still pending or running. Closing the runtime session ends it.
+  description: Perform one atomic action, such as "click the Sign in button". A false `success` flag is returned, not thrown. Use `replay` for an observed selector.
+  fields: {}
+- name: browserbase.com/stagehand.start
+  description: Return the browser stored for this runtime session, or start one and store it. Needs `stagehand.start`, including when a stored browser is reused. A new browser is started only when nothing reusable is stored. Closing the runtime session ends it.
   fields:
-    sessionId:
+    contextId:
       type: string
+    keepAlive:
+      type: boolean
+    model:
+      type: string
+    persistContext:
+      type: boolean
+    proxies:
+      type: boolean
+    region:
+      type: string
+    solveCaptchas:
+      type: boolean
+    timeoutSeconds:
+      type: number
+    verified:
+      type: boolean
 requires:
 - capability: http.get
   filter: host == "api.browserbase.com"

@@ -19,6 +19,8 @@ function main(): string {
         deniedAt("browserbase.com/navigate", "main", () => { new StagehandSession("sess_1").goto(url); });
     }
     deniedAt("browserbase.com/navigate", "main", () => { new StagehandSession("sess_1").goto("https://example.com/secret"); });
+    deniedAt("browserbase.com/stagehand.start", "main", () => { StagehandSession.open({ proxies: true }); });
+    deniedAt("browserbase.com/stagehand.start", "main", () => { StagehandSession.current({ proxies: true }); });
     reachesCredentialBoundary(() => { StagehandSession.open(); });
     reachesCredentialBoundary(() => { new StagehandSession("sess_1").goto("https://example.com./"); });
     return "gated capability checks passed";

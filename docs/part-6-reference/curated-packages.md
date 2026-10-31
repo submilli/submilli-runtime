@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3d32cfe2a2285e90b54e2a754201d3764f5eba724ffe1a50bbf0bc8ba62230da"
+  contentHash: "75f67e3dcce4f0118a23da646a679c005af114ed6d4c30929fceefc009770164"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -124,13 +124,15 @@ Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser.
 submilli install submilli/submilli-runtime @submilli/browserbase-stagehand
 submilli blueprint add-package @submilli/browserbase-stagehand --no-capabilities
 submilli blueprint capability list @submilli/browserbase-stagehand
+submilli blueprint capability add browserbase.com/stagehand.start
 submilli blueprint capability add browserbase.com/stagehand
 submilli blueprint capability add browserbase.com/navigate
 ```
 
-`browserbase.com/stagehand` covers create, reuse, act, extract, observe, end,
-and live view. `session.goto` needs `browserbase.com/navigate`. That check
-carries the submitted host, path, and protocol, not the query and not redirects.
+`browserbase.com/stagehand.start` covers `open` and `current`. Act, extract,
+observe, end, and live view need `browserbase.com/stagehand`. `session.goto`
+needs `browserbase.com/navigate`, which carries the submitted host, path, and
+protocol, not the query and not redirects. The browser id is not a grant field.
 Proxies, Verified, and CAPTCHA solving default off. `StagehandSession.open`
 registers cleanup. `StagehandSession.current` stores the id in the runtime
 session under `stagehand`. Drive it with `session.goto` and `session.act`.
