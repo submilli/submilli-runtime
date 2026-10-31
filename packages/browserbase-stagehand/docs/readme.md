@@ -21,8 +21,8 @@ or starts one and stores it. The next execution reuses that browser. Closing the
 runtime session ends it. `session.end()` ends it sooner.
 The saved login context, if any, is bound by the application. Do not ask for a
 context id or pass one in options. `persistContext: true` saves browser changes
-back to that configured context when the browser closes; it requires a bound
-context and defaults to false.
+back to that configured context when the browser closes and defaults to false.
+Without a configured context, the browser starts fresh and `persistContext` is ignored.
 Call methods on that object:
 
 - `goto(url)` opens a URL directly.

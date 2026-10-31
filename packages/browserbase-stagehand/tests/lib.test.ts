@@ -80,7 +80,9 @@ function main(): void {
     assert(!startBody.includes('"context":'), "unbound browser has no saved context");
     expectCode("invalid_argument", () => { stagehandStart({}, ""); });
     expectCode("invalid_argument", () => { stagehandStart({}, "../other"); });
-    expectCode("invalid_argument", () => { stagehandStart({ persistContext: true }); });
+    const unbound = stagehandStart({ persistContext: true });
+    assert(unbound.contextId === "" && !unbound.persistContext, "missing context disables persistence");
+    assert(!buildStartBody(unbound).includes('"context":'), "missing context is omitted even when persistence was requested");
     expectCode("invalid_response", () => { normalizeStartJson('{"success":true,"data":{"sessionId":"wss://connect.browserbase.com?apiKey=bb_live_secret","available":true}}'); });
     expectCode("invalid_response", () => { normalizeStartJson('{"success":true,"data":{"sessionId":"..","available":true}}'); });
     expectCode("invalid_response", () => { normalizeStartJson('{"success":true,"data":{"sessionId":"../admin","available":true}}'); });

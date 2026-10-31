@@ -39,7 +39,7 @@ export interface StagehandOptions {
     verified?: boolean;
     /** Automatic CAPTCHA solving. Not on the free plan. Default false. */
     solveCaptchas?: boolean;
-    /** Write cookies back to the blueprint-bound context. Requires BROWSERBASE_CONTEXT_ID. */
+    /** Write cookies back to the blueprint-bound context. Ignored when BROWSERBASE_CONTEXT_ID is absent. */
     persistContext?: boolean;
     /** Optional viewport. */
     viewport?: Viewport;
@@ -158,8 +158,7 @@ export function stagehandStart(options: StagehandOptions, contextId: string | un
     const domSettleTimeoutMs = options.domSettleTimeoutMs ?? 5000;
     integerRange(domSettleTimeoutMs, 0, 30000, "domSettleTimeoutMs");
     if (contextId !== undefined) resourceId(contextId, "BROWSERBASE_CONTEXT_ID");
-    const persistContext = options.persistContext ?? false;
-    if (persistContext && contextId === undefined) throw invalidArgument("persistContext requires the BROWSERBASE_CONTEXT_ID blueprint variable");
+    const persistContext = contextId !== undefined && (options.persistContext ?? false);
     const viewport = options.viewport;
     if (viewport !== undefined) {
         integerRange(viewport.width, 1, 8192, "viewport.width");

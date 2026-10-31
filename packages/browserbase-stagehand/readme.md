@@ -61,7 +61,8 @@ variables:
 
 The package needs `variables.get` filtered to
 `name == "BROWSERBASE_CONTEXT_ID"`; `add-package` supplies that derived grant.
-If the variable is absent, a new browser starts without a saved context. An
+If the variable is absent, a new browser starts without a saved context and
+`persistContext` is ignored. An
 empty or malformed value is rejected, and a denied variable read is not treated
 as absent. To save login changes when the browser closes, call
 `StagehandSession.open({ persistContext: true })` with the variable bound.
