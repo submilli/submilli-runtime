@@ -1,0 +1,60 @@
+namespace: submilli
+provides:
+- name: browserbase.com/liveView
+  description: Live view links for this browser. Open `debuggerFullscreenUrl` to watch it.
+  fields: {}
+- name: browserbase.com/navigate
+  description: Open a URL. The check covers the submitted host, path, and protocol, not redirects.
+  fields:
+    host:
+      type: string
+    path:
+      type: string
+    protocol:
+      type: string
+- name: browserbase.com/stagehand
+  description: Use the model to perform one browser action described in natural language, such as "click the Sign in button". The instruction is not code or a CSS selector. A false `success` flag is returned, not thrown. Use `replay` for an observed selector.
+  fields: {}
+- name: browserbase.com/stagehand.start
+  description: Return the browser stored for this runtime session, or start one and store it. Needs `stagehand.start`, including when a stored browser is reused. A new browser is started only when nothing reusable is stored. Closing the runtime session ends it.
+  fields:
+    contextId:
+      type: string
+    keepAlive:
+      type: boolean
+    model:
+      type: string
+    persistContext:
+      type: boolean
+    proxies:
+      type: boolean
+    region:
+      type: string
+    solveCaptchas:
+      type: boolean
+    timeoutSeconds:
+      type: number
+    verified:
+      type: boolean
+requires:
+- capability: http.get
+  filter: host == "api.browserbase.com"
+- capability: http.post
+  filter: host == "api.apse1.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.euc1.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.use1.stagehand.browserbase.com"
+- capability: secrets.get
+  filter: name == "BROWSERBASE_API_KEY"
+- capability: session.finalize
+- capability: session.read
+  filter: key == "stagehand"
+- capability: session.remove
+  filter: key == "stagehand"
+- capability: session.write
+  filter: key == "stagehand"
+- capability: variables.get
+  filter: name == "BROWSERBASE_CONTEXT_ID"

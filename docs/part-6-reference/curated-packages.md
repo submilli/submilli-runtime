@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "88e01d084370eb0c848b69c19a409de482e47170cffd27f86c975762df02bedf"
+  contentHash: "cf433d888bb1853a3206091bd115f1fa1ddeb8873b4cce5c1a1d8b710f6ff5bd"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -25,6 +25,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | --- | --- | --- | --- |
 | [`@submilli/attio`](#submilliattio) | Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes. | `ATTIO_API_KEY` | `api.attio.com` |
 | [`@submilli/brave-search`](#submillibrave-search) | Web search, one page of results at a time, and extracted passages grouped by source URL. | `BRAVE_SEARCH_API_KEY` | `api.search.brave.com` |
+| [`@submilli/browserbase-stagehand`](#submillibrowserbase-stagehand) | Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser. | `BROWSERBASE_API_KEY` | `api.browserbase.com`, `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com` |
 | [`@submilli/exa`](#submilliexa) | Web search with highlights, and extraction of known URLs with a status for each URL. | `EXA_API_KEY` | `api.exa.ai` |
 | [`@submilli/firecrawl`](#submillifirecrawl) | Firecrawl v2 web search, page scraping, site URL discovery, and explicit Batch Scrape and Crawl jobs. | `FIRECRAWL_API_KEY` | `api.firecrawl.dev` |
 | [`@submilli/github`](#submilligithub) | GitHub.com repositories, file contents, commits, branches, issues, pull requests, teams, releases, and search. | `GITHUB_TOKEN` | `api.github.com` |
@@ -105,6 +106,38 @@ submilli blueprint add-package @submilli/brave-search --no-capabilities
 submilli blueprint capability list @submilli/brave-search
 submilli blueprint capability add brave.com/search
 ```
+
+## @submilli/browserbase-stagehand
+
+Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser.
+
+| | |
+| --- | --- |
+| Secret | `BROWSERBASE_API_KEY` |
+| Credential | A Browserbase API key. The key identifies the project; do not set a project id |
+| Without the secret | Throws `BrowserbaseError` with code `missing_credentials` |
+| HTTP | `api.browserbase.com`: GET; `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com`: POST |
+| Filesystem | None |
+| Readme | [`packages/browserbase-stagehand/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/browserbase-stagehand/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/browserbase-stagehand
+submilli blueprint add-package @submilli/browserbase-stagehand --no-capabilities
+submilli blueprint capability list @submilli/browserbase-stagehand
+submilli blueprint capability add browserbase.com/stagehand.start
+submilli blueprint capability add browserbase.com/stagehand
+submilli blueprint capability add browserbase.com/navigate
+submilli blueprint capability add browserbase.com/liveView
+```
+
+`browserbase.com/stagehand.start` covers `open` and `current`. Act, extract,
+observe, and end need `browserbase.com/stagehand`. `session.goto` needs
+`browserbase.com/navigate`, which carries the submitted host, path, and
+protocol, not the query and not redirects. `session.liveView` needs
+`browserbase.com/liveView`. The browser id is not a grant field.
+Proxies, Verified, and CAPTCHA solving default off. `StagehandSession.open`
+registers cleanup. `StagehandSession.current` stores the id in the runtime
+session under `stagehand`. Drive it with `session.goto` and `session.act`.
 
 ## @submilli/exa
 
