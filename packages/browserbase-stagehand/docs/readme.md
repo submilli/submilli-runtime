@@ -18,8 +18,7 @@ credential is invalid.
 
 `StagehandSession.current()` returns the browser stored for this runtime session,
 or starts one and stores it. The next execution reuses that browser. Closing the
-runtime session ends it. `session.end()` ends it sooner. Starting a browser
-registers cleanup, so both `current` and `open` need a session store.
+runtime session ends it. `session.end()` ends it sooner.
 The saved login context, if any, is bound by the application. Do not ask for a
 context id or pass one in options. `persistContext: true` saves browser changes
 back to that configured context when the browser closes; it requires a bound
@@ -46,10 +45,31 @@ Call methods on that object:
 
 Nothing here polls.
 
-Keep `act` instructions atomic. Put dynamic or sensitive values in `variables`
-as `%name%` placeholders. Those values are sent to Stagehand and are not logged
-by this package. No separate model key is sent, so inference uses Model Gateway.
-The default model is `google/gemini-2.5-flash`.
+Give `act` one step at a time: first fill a field, then click a button in a
+separate call. Do not pass a whole task such as "sign in and download the report".
+
+To enter a value, put `%name%` in the instruction and supply the matching
+`{ name, value }` entry in the second argument's `variables` array. For example:
+
+```ts
+import { StagehandSession } from "@submilli/browserbase-stagehand";
+
+function main(): void {
+    const session = StagehandSession.current();
+    const email = "person@example.com"; // Replace with the authorized value for this task.
+    const filled = session.act("type %email% into the Email field", {
+        variables: [{ name: "email", value: email }],
+    });
+    if (!filled.success) throw new Error(filled.message);
+
+    const submitted = session.act("click the Continue button");
+    if (!submitted.success) throw new Error(submitted.message);
+}
+```
+
+Here `%email%` refers to the entry named `email`. Supply only values you are
+authorized to enter on that site. Placeholders are not secret storage: their
+values are sent to Stagehand and entered into the page.
 
 The returned `sessionId` is the Browserbase session id.
 
