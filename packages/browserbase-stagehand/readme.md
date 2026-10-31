@@ -46,6 +46,27 @@ is not accepted by this package. The free plan includes a limited allowance of
 browser time, plus $5 of Model Gateway tokens. Proxies, Verified, and CAPTCHA
 solving are separate grants and are not on the free plan.
 
+## Saved login context
+
+Choose the saved Browserbase Context in the blueprint/session configuration,
+not in generated code. The package reads `BROWSERBASE_CONTEXT_ID` through
+`submilli:variables`; `open` and `current` do not accept a `contextId` option.
+Create the Context separately in Browserbase, declare this optional variable,
+and bind its value when opening the runtime session:
+
+```yaml
+variables:
+  BROWSERBASE_CONTEXT_ID: {}
+```
+
+The package needs `variables.get` filtered to
+`name == "BROWSERBASE_CONTEXT_ID"`; `add-package` supplies that derived grant.
+If the variable is absent, a new browser starts without a saved context. An
+empty or malformed value is rejected, and a denied variable read is not treated
+as absent. To save login changes when the browser closes, call
+`StagehandSession.open({ persistContext: true })` with the variable bound.
+Persistence defaults to false, so loading a context does not overwrite it.
+
 ## Authority
 
 | Operation | Caller capability and truthful fields |

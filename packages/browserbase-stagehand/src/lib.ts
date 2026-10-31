@@ -6,6 +6,7 @@ import { get, post, Response } from "submilli:http";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 import * as kv from "submilli:session";
+import { get as getVariable } from "submilli:variables";
 import { encodeComponent } from "submilli:url";
 import {
     ActOptions,
@@ -116,7 +117,7 @@ export class StagehandSession {
      * @capability browserbase.com/stagehand.start { model: string, proxies: boolean, verified: boolean, solveCaptchas: boolean, keepAlive: boolean, region: string, timeoutSeconds: number, contextId: string, persistContext: boolean }
      */
     static open(options: StagehandOptions = {}): StagehandSession {
-        const { model, selfHeal, domSettleTimeoutMs, region, timeoutSeconds, keepAlive, proxies, verified, solveCaptchas, contextId, persistContext, viewport } = options;
+        const { model, selfHeal, domSettleTimeoutMs, region, timeoutSeconds, keepAlive, proxies, verified, solveCaptchas, persistContext, viewport } = options;
         let ownedViewport: Viewport | undefined = undefined;
         if (viewport !== undefined) {
             const width = viewport.width;
@@ -133,10 +134,9 @@ export class StagehandSession {
             proxies: proxies,
             verified: verified,
             solveCaptchas: solveCaptchas,
-            contextId: contextId,
             persistContext: persistContext,
             viewport: ownedViewport,
-        });
+        }, getVariable("BROWSERBASE_CONTEXT_ID"));
         check("browserbase.com/stagehand.start", {
             model: request.model,
             proxies: request.proxies,
@@ -170,7 +170,7 @@ export class StagehandSession {
      * @capability browserbase.com/stagehand.start { model: string, proxies: boolean, verified: boolean, solveCaptchas: boolean, keepAlive: boolean, region: string, timeoutSeconds: number, contextId: string, persistContext: boolean }
      */
     static current(options: StagehandOptions = {}): StagehandSession {
-        const { model, selfHeal, domSettleTimeoutMs, region, timeoutSeconds, keepAlive, proxies, verified, solveCaptchas, contextId, persistContext, viewport } = options;
+        const { model, selfHeal, domSettleTimeoutMs, region, timeoutSeconds, keepAlive, proxies, verified, solveCaptchas, persistContext, viewport } = options;
         let ownedViewport: Viewport | undefined = undefined;
         if (viewport !== undefined) {
             const width = viewport.width;
@@ -187,10 +187,9 @@ export class StagehandSession {
             proxies: proxies,
             verified: verified,
             solveCaptchas: solveCaptchas,
-            contextId: contextId,
             persistContext: persistContext,
             viewport: ownedViewport,
-        });
+        }, getVariable("BROWSERBASE_CONTEXT_ID"));
         check("browserbase.com/stagehand.start", {
             model: request.model,
             proxies: request.proxies,
@@ -218,7 +217,6 @@ export class StagehandSession {
                     proxies: request.proxies,
                     verified: request.verified,
                     solveCaptchas: request.solveCaptchas,
-                    contextId: request.contextId,
                     persistContext: request.persistContext,
                     viewport: ownedViewport,
                 });
@@ -238,7 +236,6 @@ export class StagehandSession {
             proxies: request.proxies,
             verified: request.verified,
             solveCaptchas: request.solveCaptchas,
-            contextId: request.contextId,
             persistContext: request.persistContext,
             viewport: ownedViewport,
         });

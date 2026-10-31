@@ -73,6 +73,14 @@ function main(): void {
     const started = normalizeStartJson('{"success":true,"data":{"sessionId":"c4dbf3a9-9a58-4b22-8a1c-9f20f9f9e123","cdpUrl":"wss://connect.browserbase.com/?signingKey=abc123","available":true}}');
     assert(started === "c4dbf3a9-9a58-4b22-8a1c-9f20f9f9e123", "CDP URL dropped");
     expectCode("invalid_argument", () => { stagehandStart({ model: "not a model" }); });
+    label("browser context comes from blueprint configuration, not caller options");
+    const configured = stagehandStart({ persistContext: true }, "context_linkedin");
+    const configuredBody = buildStartBody(configured);
+    assert(configuredBody.includes('"context":{"id":"context_linkedin","persist":true}'), "bound context is persisted");
+    assert(!startBody.includes('"context":'), "unbound browser has no saved context");
+    expectCode("invalid_argument", () => { stagehandStart({}, ""); });
+    expectCode("invalid_argument", () => { stagehandStart({}, "../other"); });
+    expectCode("invalid_argument", () => { stagehandStart({ persistContext: true }); });
     expectCode("invalid_response", () => { normalizeStartJson('{"success":true,"data":{"sessionId":"wss://connect.browserbase.com?apiKey=bb_live_secret","available":true}}'); });
     expectCode("invalid_response", () => { normalizeStartJson('{"success":true,"data":{"sessionId":"..","available":true}}'); });
     expectCode("invalid_response", () => { normalizeStartJson('{"success":true,"data":{"sessionId":"../admin","available":true}}'); });

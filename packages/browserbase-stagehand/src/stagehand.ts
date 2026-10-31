@@ -39,9 +39,7 @@ export interface StagehandOptions {
     verified?: boolean;
     /** Automatic CAPTCHA solving. Not on the free plan. Default false. */
     solveCaptchas?: boolean;
-    /** Context to load. */
-    contextId?: string;
-    /** Write cookies back to that context. Requires `contextId`. */
+    /** Write cookies back to the blueprint-bound context. Requires BROWSERBASE_CONTEXT_ID. */
     persistContext?: boolean;
     /** Optional viewport. */
     viewport?: Viewport;
@@ -143,9 +141,10 @@ export interface ExtractResult {
 /**
  * Normalize start options. Model Gateway is used; a provider API key cannot be supplied here.
  * @param options Caller options, already destructured.
+ * @param contextId Blueprint-bound BROWSERBASE_CONTEXT_ID, or undefined for a fresh browser.
  * @returns Values the start request will send.
  */
-export function stagehandStart(options: StagehandOptions): StagehandStart {
+export function stagehandStart(options: StagehandOptions, contextId: string | undefined = undefined): StagehandStart {
     const model = options.model ?? DEFAULT_MODEL;
     if (!/^[a-z0-9][a-z0-9._-]{0,40}\/[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(model)) {
         throw invalidArgument("model must be a Model Gateway id such as google/gemini-2.5-flash");
@@ -158,10 +157,9 @@ export function stagehandStart(options: StagehandOptions): StagehandStart {
     integerRange(timeoutSeconds, 60, 21600, "timeoutSeconds");
     const domSettleTimeoutMs = options.domSettleTimeoutMs ?? 5000;
     integerRange(domSettleTimeoutMs, 0, 30000, "domSettleTimeoutMs");
-    const contextId = options.contextId ?? "";
-    if (contextId !== "") resourceId(contextId, "contextId");
+    if (contextId !== undefined) resourceId(contextId, "BROWSERBASE_CONTEXT_ID");
     const persistContext = options.persistContext ?? false;
-    if (persistContext && contextId === "") throw invalidArgument("persistContext requires contextId");
+    if (persistContext && contextId === undefined) throw invalidArgument("persistContext requires the BROWSERBASE_CONTEXT_ID blueprint variable");
     const viewport = options.viewport;
     if (viewport !== undefined) {
         integerRange(viewport.width, 1, 8192, "viewport.width");
@@ -177,7 +175,7 @@ export function stagehandStart(options: StagehandOptions): StagehandStart {
         proxies: options.proxies ?? false,
         verified: options.verified ?? false,
         solveCaptchas: options.solveCaptchas ?? false,
-        contextId: contextId,
+        contextId: contextId ?? "",
         persistContext: persistContext,
         viewport: viewport,
     };

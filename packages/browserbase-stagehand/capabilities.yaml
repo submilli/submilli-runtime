@@ -56,3 +56,5 @@ requires:
   filter: key == "stagehand"
 - capability: session.write
   filter: key == "stagehand"
+- capability: variables.get
+  filter: name == "BROWSERBASE_CONTEXT_ID"
