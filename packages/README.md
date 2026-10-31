@@ -11,7 +11,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | --- | --- |
 | [`@submilli/attio`](attio/readme.md) | Attio CRM objects, records, people and company upserts, deal stages, and notes. |
 | [`@submilli/brave-search`](brave-search/readme.md) | Brave web search and extracted passages with source URLs. |
-| [`@submilli/browserbase`](browserbase/readme.md) | Browserbase Search, Fetch, and hosted Stagehand `act`, `extract`, and `observe`. |
+| [`@submilli/browserbase-stagehand`](browserbase-stagehand/readme.md) | Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser. |
 | [`@submilli/exa`](exa/readme.md) | Exa web search with highlights and content extraction from known URLs. |
 | [`@submilli/firecrawl`](firecrawl/readme.md) | Web search, page scraping, site URL discovery, and batch scrape and crawl jobs. |
 | [`@submilli/github`](github/readme.md) | GitHub repositories, files, commits, branches, issues, pull requests, teams, releases, and search. |

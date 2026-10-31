@@ -20,7 +20,7 @@ use std::time::Duration;
 /// Packages that ship policy scripts under `tests/policy/`.
 const PACKAGES: &[&str] = &[
     "attio",
-    "browserbase",
+    "browserbase-stagehand",
     "firecrawl",
     "github",
     "gmail",

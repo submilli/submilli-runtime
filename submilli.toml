@@ -104,11 +104,11 @@ keywords = ["scrapecreators", "research", "reddit", "youtube", "linkedin", "gith
 path = "packages/scrapecreators"
 
 [[package]]
-name = "@submilli/browserbase"
+name = "@submilli/browserbase-stagehand"
 version = "0.1.0"
-description = "Browserbase Search, Fetch, and hosted Stagehand act, extract, and observe. Connection secrets are never returned."
-keywords = ["browserbase", "stagehand", "browser", "search", "fetch", "act", "extract"]
-path = "packages/browserbase"
+description = "Hosted Stagehand act, extract, and observe on a cloud browser. Connection secrets are never returned."
+keywords = ["browserbase", "stagehand", "browser", "act", "extract", "observe"]
+path = "packages/browserbase-stagehand"
 
 [[package]]
 name = "@submilli/attio"

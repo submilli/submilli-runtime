@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2017f85ac5cec16338692b318cd54d70e0f793c3709c8ef54acec12a75013819"
+  contentHash: "3d32cfe2a2285e90b54e2a754201d3764f5eba724ffe1a50bbf0bc8ba62230da"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -25,7 +25,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | --- | --- | --- | --- |
 | [`@submilli/attio`](#submilliattio) | Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes. | `ATTIO_API_KEY` | `api.attio.com` |
 | [`@submilli/brave-search`](#submillibrave-search) | Web search, one page of results at a time, and extracted passages grouped by source URL. | `BRAVE_SEARCH_API_KEY` | `api.search.brave.com` |
-| [`@submilli/browserbase`](#submillibrowserbase) | Browserbase Search, Fetch, and hosted Stagehand `act`, `extract`, and `observe`. | `BROWSERBASE_API_KEY` | `api.browserbase.com`, `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com` |
+| [`@submilli/browserbase-stagehand`](#submillibrowserbase-stagehand) | Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser. | `BROWSERBASE_API_KEY` | `api.browserbase.com`, `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com` |
 | [`@submilli/exa`](#submilliexa) | Web search with highlights, and extraction of known URLs with a status for each URL. | `EXA_API_KEY` | `api.exa.ai` |
 | [`@submilli/firecrawl`](#submillifirecrawl) | Firecrawl v2 web search, page scraping, site URL discovery, and explicit Batch Scrape and Crawl jobs. | `FIRECRAWL_API_KEY` | `api.firecrawl.dev` |
 | [`@submilli/github`](#submilligithub) | GitHub.com repositories, file contents, commits, branches, issues, pull requests, teams, releases, and search. | `GITHUB_TOKEN` | `api.github.com` |
@@ -107,32 +107,33 @@ submilli blueprint capability list @submilli/brave-search
 submilli blueprint capability add brave.com/search
 ```
 
-## @submilli/browserbase
+## @submilli/browserbase-stagehand
 
-Browserbase Search, Fetch, and hosted Stagehand `act`, `extract`, and `observe`.
+Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser.
 
 | | |
 | --- | --- |
 | Secret | `BROWSERBASE_API_KEY` |
 | Credential | A Browserbase API key. The key identifies the project; do not set a project id |
 | Without the secret | Throws `BrowserbaseError` with code `missing_credentials` |
-| HTTP | `api.browserbase.com`: DELETE, GET, POST, POST `/v1/agents`, POST `/v1/agents/runs`, POST `/v1/contexts`, POST `/v1/fetch`, POST `/v1/search`, POST `/v1/sessions`; `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com`: POST |
+| HTTP | `api.browserbase.com`: GET; `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com`: POST |
 | Filesystem | None |
-| Readme | [`packages/browserbase/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/browserbase/readme.md) |
+| Readme | [`packages/browserbase-stagehand/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/browserbase-stagehand/readme.md) |
 
 ```sh
-submilli install submilli/submilli-runtime @submilli/browserbase
-submilli blueprint add-package @submilli/browserbase --no-capabilities
-submilli blueprint capability list @submilli/browserbase
-submilli blueprint capability add browserbase.com/search
+submilli install submilli/submilli-runtime @submilli/browserbase-stagehand
+submilli blueprint add-package @submilli/browserbase-stagehand --no-capabilities
+submilli blueprint capability list @submilli/browserbase-stagehand
+submilli blueprint capability add browserbase.com/stagehand
+submilli blueprint capability add browserbase.com/navigate
 ```
 
-Stagehand navigation and a fetch that follows redirects also need
-`browserbase.com/delegatedFetch`. A host filter covers the submitted URL, not
-redirects. Proxies, Verified, and CAPTCHA solving are separate fields and
-default off. `StagehandSession.open` registers cleanup. `StagehandSession.current`
-stores the id in the runtime session under `stagehand`. Drive it with
-`session.goto` and `session.act`.
+`browserbase.com/stagehand` covers create, reuse, act, extract, observe, end,
+and live view. `session.goto` needs `browserbase.com/navigate`. That check
+carries the submitted host, path, and protocol, not the query and not redirects.
+Proxies, Verified, and CAPTCHA solving default off. `StagehandSession.open`
+registers cleanup. `StagehandSession.current` stores the id in the runtime
+session under `stagehand`. Drive it with `session.goto` and `session.act`.
 
 ## @submilli/exa
 

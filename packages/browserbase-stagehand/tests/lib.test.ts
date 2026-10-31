@@ -1,15 +1,10 @@
 import { label } from "submilli:test";
-import { BrowserbaseError } from "@submilli/browserbase";
+import { BrowserbaseError } from "@submilli/browserbase-stagehand";
 import {
     browserbaseHttpError,
-    buildContextBody,
-    buildFetchBody,
-    buildSearchBody,
     fetchHost,
-    normalizeFetchJson,
+    pageTarget,
     normalizeLiveViewJson,
-    normalizeMessagesJson,
-    normalizeSearchJson,
     normalizeSessionJson,
 } from "../src/internal";
 import {
@@ -38,18 +33,7 @@ function expectCode(code: string, action: () => void): void {
 }
 
 function main(): void {
-    label("search sends an explicit provider and mode and rejects a project id");
-    const search = buildSearchBody("browserbase", { numResults: 10, provider: "parallel", mode: "advanced" });
-    assert(search.includes('"query":"browserbase"') && search.includes('"provider":"parallel"') && search.includes('"mode":"advanced"'), "default search shape");
-    assert(!search.includes("projectId"), "search has no project id");
-    expectCode("invalid_argument", () => { buildSearchBody(" ", { numResults: 10, provider: "parallel", mode: "advanced" }); });
-    expectCode("invalid_argument", () => { buildSearchBody("q", { numResults: 26, provider: "parallel", mode: "advanced" }); });
-    expectCode("invalid_argument", () => { buildSearchBody("q", { numResults: 1, provider: "parallel", mode: "deep" }); });
-    expectCode("invalid_argument", () => { buildSearchBody("q", { numResults: 1, provider: "exa", mode: "advanced" }); });
-    const deep = buildSearchBody("q", { numResults: 1, provider: "exa", mode: "deep" });
-    assert(deep.includes('"provider":"exa"') && deep.includes('"mode":"deep"'), "exa deep is explicit");
-
-    label("fetch host is normalized and credentials are rejected");
+    label("goto host is normalized and credentials are rejected");
     assert(fetchHost("https://EXAMPLE.com./docs") === "example.com", "trailing dot is not part of the host");
     expectCode("invalid_argument", () => { fetchHost("https://user:secret@example.com/"); });
     expectCode("invalid_argument", () => { fetchHost("https:user:secret@example.com/"); });
@@ -58,16 +42,11 @@ function main(): void {
     expectCode("invalid_argument", () => { fetchHost("https:/\t/user:secret@example.com/"); });
     expectCode("invalid_argument", () => { fetchHost("\u0001https://user:secret@example.com/"); });
     assert(fetchHost("https://example.com/foo@bar") === "example.com", "an at sign in the path is not userinfo");
+    const docs = pageTarget("https://EXAMPLE.com./docs/a");
+    assert(docs.host === "example.com" && docs.path === "/docs/a" && docs.protocol === "https", "navigation grant fields");
     assert(fetchHost("https://example.com/?q=@") === "example.com", "an at sign in the query is not userinfo");
     expectCode("invalid_argument", () => { fetchHost("file:///etc/passwd"); });
     expectCode("invalid_argument", () => { fetchHost("https://example.com/ "); });
-    const fetchBody = buildFetchBody("https://example.com", {
-        allowRedirects: false, allowInsecureSsl: false, proxies: false, format: "markdown", contextId: "",
-    });
-    assert(fetchBody.includes('"proxies":false') && fetchBody.includes('"format":"markdown"') && !fetchBody.includes("contextId"), "safe fetch defaults");
-    expectCode("invalid_argument", () => { buildFetchBody("https://example.com", {
-        allowRedirects: false, allowInsecureSsl: false, proxies: false, format: "markdown", contextId: "../admin",
-    }); });
 
     label("connection secrets are dropped from session and live view payloads");
     const cleaned = normalizeSessionJson('{"id":"sess_1","createdAt":"t","updatedAt":"t","startedAt":"t","expiresAt":"t","status":"RUNNING","proxyBytes":0,"keepAlive":false,"region":"us-west-2","connectUrl":"wss://connect.browserbase.com?apiKey=bb_live_secret","signingKey":"secret","seleniumRemoteUrl":"https://connect.browserbase.com?apiKey=bb_live_secret"}');
@@ -129,22 +108,6 @@ function main(): void {
     expectCode("invalid_response", () => { normalizeNavigateJson('{"success":false,"data":{}}'); });
     expectCode("invalid_response", () => { normalizeActJson('{"success":false,"data":{}}'); });
     expectCode("invalid_argument", () => { copyAction({ selector: "", description: "x", method: null, arguments: [], backendNodeId: null }); });
-
-    label("context create trims the name and never sends a project id");
-    assert(buildContextBody(undefined) === "{}", "unnamed context");
-    assert(buildContextBody("  Login  ") === '{"name":"Login"}', "trimmed context name");
-    expectCode("invalid_argument", () => { buildContextBody("   "); });
-
-    label("a pause question is kept and other tool inputs are dropped");
-    const paused = normalizeMessagesJson('{"data":[{"id":"m1","createdAt":"t","message":{"role":"assistant","content":[{"type":"tool-call","toolName":"pause","toolCallId":"c1","input":{"message":"Enter the 2FA code","secret":"hidden"}},{"type":"tool-call","toolName":"click","input":{"selector":"#x"}}]}}],"nextSince":"m1"}');
-    assert(paused.messages[0].text === "Enter the 2FA code" && !paused.messages[0].text.includes("hidden") && !paused.messages[0].text.includes("#x"), "pause question only");
-
-    label("search and fetch responses keep source URLs and reject a non-text fetch");
-    const found = normalizeSearchJson('{"requestId":"r1","query":"browserbase","results":[{"id":"1","url":"https://example.com","title":"Example","author":null}]}');
-    assert(found.results[0].url === "https://example.com" && found.results[0].image === null, "search hit");
-    const page = normalizeFetchJson('{"id":"f1","statusCode":200,"headers":{"content-type":"text/html"},"content":"# Example","contentType":"text/html","encoding":"utf-8"}');
-    assert(page.content === "# Example" && page.headers[0].name === "content-type" && page.statusCode === 200, "fetch page");
-    expectCode("invalid_response", () => { normalizeFetchJson('{"id":"f1","statusCode":200,"headers":{},"content":{"title":"no"},"contentType":"application/json","encoding":"utf-8"}'); });
 
     label("http errors name quota without calling the key invalid");
     const quota = browserbaseHttpError(402, null);

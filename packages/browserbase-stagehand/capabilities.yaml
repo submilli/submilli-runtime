@@ -1,0 +1,38 @@
+namespace: submilli
+provides:
+- name: browserbase.com/navigate
+  description: Open a URL. The check covers the submitted host, path, and protocol, not redirects.
+  fields:
+    host:
+      type: string
+    path:
+      type: string
+    protocol:
+      type: string
+    sessionId:
+      type: string
+- name: browserbase.com/stagehand
+  description: Return the browser stored for this runtime session, or start one and store it. The first call needs `stagehand`. A later call needs it again for the stored id when that browser is still pending or running. Closing the runtime session ends it.
+  fields:
+    sessionId:
+      type: string
+requires:
+- capability: http.get
+  filter: host == "api.browserbase.com"
+- capability: http.post
+  filter: host == "api.apse1.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.euc1.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.stagehand.browserbase.com"
+- capability: http.post
+  filter: host == "api.use1.stagehand.browserbase.com"
+- capability: secrets.get
+  filter: name == "BROWSERBASE_API_KEY"
+- capability: session.finalize
+- capability: session.read
+  filter: key == "stagehand"
+- capability: session.remove
+  filter: key == "stagehand"
+- capability: session.write
+  filter: key == "stagehand"
