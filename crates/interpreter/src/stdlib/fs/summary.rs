@@ -17,7 +17,7 @@ use wasmtime::{Caller, ExternRef};
 use super::{ChargedDirIter, close_handle, effects, next_entry, stat_path};
 use crate::runtime::StoreData;
 use crate::runtime::filesystem::DirectoryEntry;
-use crate::stdlib::shared::check_security_call;
+use crate::stdlib::shared::check_and_approve_call;
 
 /// Entries `summary` names one per line; the rest are only counted, so a huge
 /// directory cannot flood the model's context.
@@ -29,7 +29,7 @@ pub(super) async fn summarize(
     caller: &mut Caller<'_, StoreData>,
     path: &str,
 ) -> wasmtime::Result<String> {
-    check_list(caller, path)?;
+    check_list(caller, path).await?;
     let Some(stat) = stat_path(caller, path, true).await? else {
         return Ok(format!("{path}: does not exist"));
     };
@@ -85,7 +85,7 @@ pub(super) async fn is_empty(
     caller: &mut Caller<'_, StoreData>,
     path: &str,
 ) -> wasmtime::Result<bool> {
-    check_list(caller, path)?;
+    check_list(caller, path).await?;
     let Some(stat) = stat_path(caller, path, true).await? else {
         wasmtime::bail!("fs.isEmpty {path}: no such file or directory");
     };
@@ -100,12 +100,13 @@ pub(super) async fn is_empty(
 }
 
 /// The one capability both functions require.
-fn check_list(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<()> {
-    check_security_call(
+async fn check_list(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<()> {
+    check_and_approve_call(
         &mut *caller,
         "fs.list",
         serde_json::json!({ "path": path, "recursive": false }),
-    )?;
+    )
+    .await?;
     Ok(())
 }
 

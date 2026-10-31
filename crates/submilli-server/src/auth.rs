@@ -207,12 +207,20 @@ impl Guard {
     }
 }
 
+/// Whether the request's caller holds the `admin` role, for a handler whose
+/// answer depends on it: deciding an `ask-admin` call.
+#[derive(Clone, Copy, Debug)]
+pub struct AdminCaller(pub bool);
+
 pub(crate) async fn require(
     State(guard): State<Guard>,
     mut request: Request,
     next: Next,
 ) -> Response {
     let auth = &guard.auth;
+    // An unauthenticated server serves every caller as an administrator, as it
+    // lets every caller reach the admin routes.
+    let mut admin = true;
     let principal = match auth.as_ref() {
         AuthConfig::Disabled => "unauthenticated".to_owned(),
         AuthConfig::Tokens(tokens) => {
@@ -233,6 +241,7 @@ pub(crate) async fn require(
                 auth_refusal(&guard.audit, &request, "admin_required");
                 return forbidden(token.role);
             }
+            admin = token.role == Role::Admin;
             token.name.clone()
         }
     };
@@ -240,6 +249,7 @@ pub(crate) async fn require(
     request
         .extensions_mut()
         .insert(crate::audit::Principal(principal.clone()));
+    request.extensions_mut().insert(AdminCaller(admin));
     crate::audit::request(&guard.audit, principal, request, next).await
 }
 

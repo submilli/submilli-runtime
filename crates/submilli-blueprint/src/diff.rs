@@ -183,12 +183,15 @@ fn plain(classification: Classification, what: String) -> Change {
     }
 }
 
-/// How permissive an action is: deny, then ask-human, then allow.
+/// How permissive an action is: deny, then ask-admin, ask-human, and allow. An
+/// administrator's approval is the harder one to get: the person in the
+/// conversation can't give it.
 fn rank(action: Action) -> u8 {
     match action {
         Action::Deny => 0,
-        Action::AskHuman => 1,
-        Action::Allow => 2,
+        Action::AskAdmin => 1,
+        Action::AskHuman => 2,
+        Action::Allow => 3,
     }
 }
 
@@ -205,6 +208,7 @@ fn action_word(action: Action) -> &'static str {
         Action::Allow => "allow",
         Action::Deny => "deny",
         Action::AskHuman => "ask-human",
+        Action::AskAdmin => "ask-admin",
     }
 }
 
@@ -317,13 +321,17 @@ fn diff_insecure_http(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
 /// Sections whose changes are not classified: each one that changed is listed
 /// as unknown.
 fn diff_unclassified(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
-    let sections: [(&str, bool); 10] = [
+    let sections: [(&str, bool); 11] = [
         ("kind", old.kind != new.kind),
         ("name", old.name != new.name),
         ("idle_timeout", old.idle_timeout != new.idle_timeout),
         (
             "tool_call_timeout",
             old.tool_call_timeout != new.tool_call_timeout,
+        ),
+        (
+            "admin_approval_timeout",
+            old.admin_approval_timeout != new.admin_approval_timeout,
         ),
         ("vfs", old.vfs != new.vfs),
         ("secrets", old.secrets != new.secrets),
@@ -518,13 +526,13 @@ fn rule_change(
 }
 
 /// Adding an allow rule can only let through calls that later rules or the
-/// default decided; adding a deny rule can only stop them. An ask-human rule can
-/// do either.
+/// default decided; adding a deny rule can only stop them. An ask rule can do
+/// either.
 fn rule_added(caller: &str, index: usize, rule: &PermissionRule) -> Change {
     let classification = match rule.action {
         Action::Allow => Classification::Widening,
         Action::Deny => Classification::Narrowing,
-        Action::AskHuman => Classification::Unknown,
+        Action::AskHuman | Action::AskAdmin => Classification::Unknown,
     };
     rule_change(
         classification,
@@ -539,7 +547,7 @@ fn rule_removed(caller: &str, index: usize, rule: &PermissionRule) -> Change {
     let classification = match rule.action {
         Action::Allow => Classification::Narrowing,
         Action::Deny => Classification::Widening,
-        Action::AskHuman => Classification::Unknown,
+        Action::AskHuman | Action::AskAdmin => Classification::Unknown,
     };
     rule_change(
         classification,
@@ -553,7 +561,7 @@ fn rule_removed(caller: &str, index: usize, rule: &PermissionRule) -> Change {
 fn moved_between_callers(from: &LooseRule, to: &LooseRule) -> Change {
     let rule = &from.rule;
     let classification = match rule.action {
-        Action::AskHuman => Classification::Unknown,
+        Action::AskHuman | Action::AskAdmin => Classification::Unknown,
         _ => Classification::Mixed,
     };
     let (from_caller, to_caller) = (&from.caller, &to.caller);
@@ -576,6 +584,7 @@ fn action_article(action: Action) -> &'static str {
         Action::Allow => "an allow",
         Action::Deny => "a deny",
         Action::AskHuman => "an ask-human",
+        Action::AskAdmin => "an ask-admin",
     }
 }
 
@@ -1006,7 +1015,9 @@ fn classify_edit(
     }
     let relation = filter_change(before.filter.as_ref(), after.filter.as_ref());
     let classification = match (after.action, relation) {
-        (_, FilterChange::Unknown) | (Action::AskHuman, _) => Classification::Unknown,
+        (_, FilterChange::Unknown) | (Action::AskHuman | Action::AskAdmin, _) => {
+            Classification::Unknown
+        }
         (Action::Allow, FilterChange::Looser) | (Action::Deny, FilterChange::Tighter) => {
             Classification::Widening
         }
@@ -1016,7 +1027,7 @@ fn classify_edit(
     };
     let pin = match after.action {
         Action::Allow => pin_change(before.filter.as_ref(), after.filter.as_ref(), relation),
-        Action::Deny | Action::AskHuman => None,
+        Action::Deny | Action::AskHuman | Action::AskAdmin => None,
     };
     let what = match &pin {
         Some(PinChange::Removed { field, variable }) => format!(
@@ -1780,7 +1791,7 @@ mod tests {
         }
 
         fn randomize(&mut self, rng: &mut Rng) {
-            self.action = ["allow", "deny", "ask-human"][rng.below(3)];
+            self.action = ["allow", "deny", "ask-human", "ask-admin"][rng.below(4)];
             // Each atom joined to the previous by `and` (false) or `or` (true).
             self.filter = (0..rng.below(3))
                 .map(|_| (rng.below(ATOMS.len()), rng.below(2) == 0))
@@ -1851,7 +1862,7 @@ mod tests {
             }
             3 if len >= 1 => {
                 let at = rng.below(len);
-                rules[at].action = ["allow", "deny", "ask-human"][rng.below(3)];
+                rules[at].action = ["allow", "deny", "ask-human", "ask-admin"][rng.below(4)];
             }
             5 if len >= 2 => {
                 // Two rules swap and both change, as when one edit reorders a block.

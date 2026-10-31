@@ -10,7 +10,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf0d3fb040a9552d2ad7ee224c8238be8638b4621386669ff317453b15dd7f05"
+  contentHash: "6dcf34c0055e61aa8e18d5690d4ff825fa304f871cb56440ca73528f06e48293"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -33,7 +33,7 @@ ts=2026-10-03T20:02:39.647Z level=info stream=audit target=submilli_server::audi
 | `stream` | `audit`, which tells a record from a log line |
 | `target` | `submilli_server::audit` |
 | `msg` | The record's type, as in `type` |
-| `type` | `decision`, `execution`, `session`, `admin`, `auth`, or `server` |
+| `type` | `decision`, `execution`, `approval`, `session`, `admin`, `auth`, or `server` |
 | `event` | What happened, for every type except `decision` |
 | `event_id` | A UUID unique to this record |
 | `schema` | `submilli.audit/1`. A field added keeps the version; a field renamed or removed changes it |
@@ -64,8 +64,8 @@ ts=2026-10-04T05:44:32.121Z level=info stream=audit target=submilli_server::audi
 | `capability` | The operation, such as `fs.write` or `pied-piper.example/credits.apply` |
 | `context.*` | The operation's fields, as below, including `payload_json` |
 | `decision` | `allow` or `deny` |
-| `source` | What decided: `policy`, the Blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget |
-| `rule` | The rule that decided, by its position in the caller's list from `0`, or `default` |
+| `source` | What decided: `policy`, the Blueprint's rules; `invariant`, a refusal no rule can change, such as `secrets.get` from `main`; `read_only`, a write into a read-only volume; `egress_guard`, the block on private addresses; `quota`, a model-token or session-state budget; `harness`, the application refusing a `@tools` call; `human` or `admin`, the approver of a call an `ask-human` or `ask-admin` rule matches |
+| `rule` | The rule that decided, by its position in the caller's list from `0`, or `default`. For an approver, the rule that asked them |
 | `reason` | Why it was refused, on refusals only |
 
 `context.payload_json` is the complete JSON context passed to the policy
@@ -141,6 +141,38 @@ ts=2026-10-03T20:02:39.695Z level=info stream=audit target=submilli_server::audi
 A request repeated with the same `Idempotency-Key` returns the first
 run's result and `execution_id`, and writes no new records.
 
+## `approval`
+
+Two for each call an `ask-human` or `ask-admin` rule matches and a run waits
+on: one when it is asked, and one when it is decided, expires, or can't be put
+to its approver. The call's `decision` record follows the second, with
+`source` `human` or `admin`, or `policy` for a call that couldn't be put to its
+approver. An approved call's record is written whole, with its context, even
+where `allows` leaves other allowed operations out or sums them up. A wait that
+ends with its session writes no second record. A durable run that waits again
+after a restart writes another `requested` record.
+
+```text
+ts=2026-10-30T08:23:23.303Z level=info stream=audit target=submilli_server::audit msg=approval approver=human blueprint=refunds blueprint_hash=129f5b15d944723e33f956314836ca8dffd9790014c0c61838674114a395b6e1 call_id=ef3c7c45-599c-4a24-a281-d02fb4a8b2e8:1 caller=main capability=test.refund decided_by=unauthenticated decision=denied entry_point=session event=concluded event_id=177def19-7b5c-4c2b-9969-2a01c3bbd7f1 execution_id=ef3c7c45-599c-4a24-a281-d02fb4a8b2e8 principal=unauthenticated reason="Not this customer" rule.caller=main rule.index=0 rule.name=large-refunds schema=submilli.audit/1 session_id=a06e6d87-1c10-4d43-a348-bc16fd4f6b7e source_hash=82e8ce1a9b560b3b6783ba9ae7c152855fc2c28299c10bc54e9cfa25f670e74d source_size=299 type=approval
+```
+
+Every `approval` record carries the run's `execution` fields, and:
+
+| Field | Value |
+| --- | --- |
+| `event` | `requested` when the run starts waiting, `concluded` when it stops |
+| `call_id` | The call, as the HTTP API names it |
+| `approver` | `human` or `admin` |
+| `caller`, `capability` | Whose call it is, and the operation |
+| `rule.caller`, `rule.index`, `rule.name` | The rule that asked |
+| `decision` | On `concluded`: `approved`, `denied`, `expired`, or `unanswerable`, for an answer given like a tool call |
+| `decided_by` | On `concluded`, the name of the token that approved or denied the call |
+| `reason` | On `concluded`: the approver's reason when they gave one, or, for `unanswerable`, why the call couldn't be put to them |
+
+The operation's fields are in the `decision` record, not here. `principal`
+is the token that started the run. A decision through
+`POST /v1/approvals/{call_id}` also writes an `admin` record.
+
 ## `session`
 
 ```text
@@ -191,6 +223,7 @@ Every `admin` record has:
 | `oauth_refresh_token_set` | `POST /v1/mcp/{blueprint}/{server}/refresh-token` | `blueprint`, `server` |
 | `oauth_refresh_token_deleted` | `DELETE /v1/mcp/{blueprint}/{server}/refresh-token` | `blueprint`, `server` |
 | `oauth_code_exchanged` | `POST /v1/mcp/{blueprint}/{server}/oauth/exchange` | `blueprint`, `server` |
+| `approval_decided` | `POST /v1/approvals/{call_id}` | |
 | `shutdown_requested` | `POST /v1/shutdown` | |
 
 `new_hash` and `old_hash` are SHA-256s of the Blueprint. `old_hash` is

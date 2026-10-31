@@ -23,13 +23,46 @@ pub type Permissions = BTreeMap<String, Vec<PermissionRule>>;
 /// `allow` flips the posture to allow-by-default — every capability is
 /// permitted unless a rule denies it — for trusted deployments that prefer a
 /// blocklist over an allowlist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// `ask-human` is a deprecated spelling of `deny`, kept so a rule set that
+/// used it still loads and lint can point at it: asking on every unmatched
+/// call, reads included, is never what a rule set wants. `ask-admin` is
+/// refused as a default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DefaultAction {
     #[default]
     Deny,
     Allow,
+    /// Deprecated: denies, as `Deny` does.
     AskHuman,
+}
+
+/// Why `default: ask-admin` is refused, with what to write instead.
+pub const ASK_ADMIN_DEFAULT_REFUSED: &str = "`default: ask-admin` is not accepted: an \
+     administrator would be asked about every call no rule matches. Write `default: deny` \
+     and an `ask-admin` rule for each capability that needs approval";
+
+impl<'de> Deserialize<'de> for DefaultAction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct DefaultActionVisitor;
+        impl serde::de::Visitor<'_> for DefaultActionVisitor {
+            type Value = DefaultAction;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("`deny` or `allow`")
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<DefaultAction, E> {
+                match value {
+                    "deny" => Ok(DefaultAction::Deny),
+                    "allow" => Ok(DefaultAction::Allow),
+                    "ask-human" => Ok(DefaultAction::AskHuman),
+                    "ask-admin" => Err(E::custom(ASK_ADMIN_DEFAULT_REFUSED)),
+                    other => Err(E::unknown_variant(other, &["deny", "allow"])),
+                }
+            }
+        }
+        deserializer.deserialize_str(DefaultActionVisitor)
+    }
 }
 
 /// The action a matched rule (or the fall-through default) resolves to.
@@ -38,17 +71,24 @@ pub enum DefaultAction {
 pub enum Action {
     Allow,
     Deny,
-    /// Needs a person's approval. `PermissionCheck` (the `engine` feature)
-    /// treats it as a denial until calls can suspend for approval.
+    /// Runs once the person in the conversation approves the call.
     AskHuman,
+    /// Runs once an administrator approves the call.
+    AskAdmin,
+}
+
+impl Action {
+    /// Whether the call waits for an approver.
+    pub fn asks(self) -> bool {
+        matches!(self, Action::AskHuman | Action::AskAdmin)
+    }
 }
 
 impl From<DefaultAction> for Action {
     fn from(d: DefaultAction) -> Self {
         match d {
-            DefaultAction::Deny => Action::Deny,
+            DefaultAction::Deny | DefaultAction::AskHuman => Action::Deny,
             DefaultAction::Allow => Action::Allow,
-            DefaultAction::AskHuman => Action::AskHuman,
         }
     }
 }
@@ -370,7 +410,7 @@ pub struct PossibleActions {
 }
 
 impl PossibleActions {
-    /// Some call could proceed, possibly after a person approves it.
+    /// Some call could proceed, possibly after an approver approves it.
     pub fn is_possible(&self) -> bool {
         self.decided != Action::Deny
             || self
@@ -513,7 +553,8 @@ mod tests {
                 &json!({}),
                 &VarBindings::new()
             ),
-            Action::AskHuman
+            Action::Deny,
+            "`default: ask-human` is a deprecated spelling of `deny`"
         );
         assert_eq!(
             resolve(
@@ -773,7 +814,7 @@ mod tests {
         assert_eq!(
             rules.resolve("main", "a", &json!({}), &VarBindings::new()),
             Decision {
-                action: Action::AskHuman,
+                action: Action::Deny,
                 rule: None,
             }
         );
@@ -795,9 +836,35 @@ mod tests {
         let allowed = possible(Vec::new(), DefaultAction::Allow, json!({}));
         assert_eq!(allowed.decided, Action::Allow);
         assert!(allowed.conditions.is_empty());
-        let asked = possible(Vec::new(), DefaultAction::AskHuman, json!({}));
-        assert_eq!(asked.decided, Action::AskHuman);
+        let deprecated = possible(Vec::new(), DefaultAction::AskHuman, json!({}));
+        assert_eq!(deprecated.decided, Action::Deny);
+        assert!(!deprecated.is_possible());
+    }
+
+    #[test]
+    fn an_ask_admin_rule_is_possible() {
+        let asked = possible(
+            vec![rule(None, "http.request", None, Action::AskAdmin)],
+            DefaultAction::Deny,
+            json!({}),
+        );
+        assert_eq!(asked.decided, Action::AskAdmin);
         assert!(asked.is_possible());
+    }
+
+    #[test]
+    fn default_takes_deny_allow_and_the_deprecated_ask_human() {
+        let parse = |value: &str| serde_yml::from_str::<DefaultAction>(value);
+        assert_eq!(parse("deny").unwrap(), DefaultAction::Deny);
+        assert_eq!(parse("allow").unwrap(), DefaultAction::Allow);
+        assert_eq!(parse("ask-human").unwrap(), DefaultAction::AskHuman);
+        let refused = parse("ask-admin").unwrap_err().to_string();
+        assert!(refused.contains(ASK_ADMIN_DEFAULT_REFUSED), "{refused}");
+        let unknown = parse("block").unwrap_err().to_string();
+        assert!(
+            unknown.contains("unknown variant `block`, expected `deny` or `allow`"),
+            "{unknown}"
+        );
     }
 
     #[test]

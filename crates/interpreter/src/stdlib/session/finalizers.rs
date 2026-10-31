@@ -4,7 +4,7 @@ use crate::runtime::effects;
 use crate::runtime::host::{abi_arg, fatal_host_error, register_host_fn_async};
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::{StoreData, fuel};
-use crate::stdlib::shared::{check_security, running_package};
+use crate::stdlib::shared::{check_and_approve_call, running_package};
 use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 
 #[derive(serde::Serialize)]
@@ -35,11 +35,12 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     let package =
                         running_package(&*caller).map_err(|e| e.into_denial("session.finalize"))?;
                     let key = read_key(caller, abi_arg(params, 0)?, name)?;
-                    check_security(
+                    check_and_approve_call(
                         &mut *caller,
                         "session.finalize",
                         serde_json::json!({"key": String::from_utf16_lossy(&key)}),
-                    )?;
+                    )
+                    .await?;
                     if caller.data().finalizing {
                         return Err(fatal_host_error(
                             "finalizers cannot change finalizer registrations",

@@ -796,7 +796,8 @@ mod policy_visibility_tests {
         for (policy, expected) in [
             ("", [false, false, false, false, false]),
             ("default: allow", [true, true, true, false, true]),
-            ("default: ask-human", [true, true, true, false, true]),
+            // A deprecated spelling of `deny`: it shows nothing.
+            ("default: ask-human", [false, false, false, false, false]),
             (
                 "permissions:\n  main:\n    - capability: http.get\n      action: ask-human",
                 [true, false, false, false, false],

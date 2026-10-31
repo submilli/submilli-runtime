@@ -39,6 +39,22 @@ pub fn arm(engine: &Engine, timeout: Duration) -> std::io::Result<Watchdog> {
     })
 }
 
+/// A watchdog that advances the epoch every `every` until it is dropped, for a store
+/// whose deadline callback counts its deadline out in ticks.
+pub fn tick(engine: &Engine, every: Duration) -> std::io::Result<Watchdog> {
+    let (tx, rx) = mpsc::channel::<()>();
+    let engine = engine.clone();
+    let handle = thread::Builder::new().spawn(move || {
+        while let Err(RecvTimeoutError::Timeout) = rx.recv_timeout(every) {
+            engine.increment_epoch();
+        }
+    })?;
+    Ok(Watchdog {
+        cancel: tx,
+        handle: Some(handle),
+    })
+}
+
 #[cfg(test)]
 thread_local! {
     static FAIL_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

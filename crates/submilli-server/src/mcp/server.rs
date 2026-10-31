@@ -370,7 +370,7 @@ impl SubmilliMcp {
                     vfs_source: VfsSource::Rest,
                     run_entry: "mcp",
                     idempotency_key: None,
-                    tools: None,
+                    suspension: None,
                 },
             )
             .await
@@ -411,7 +411,7 @@ impl SubmilliMcp {
                 run_entry: "mcp",
                 idempotency_key: None,
                 // MCP's `tools/call` cannot suspend: no application tools here.
-                tools: None,
+                suspension: None,
             },
         )
         .await;
@@ -750,7 +750,9 @@ impl SubmilliMcp {
         );
         match outcome {
             CheckOutcome::Allow { .. } => Ok(()),
-            CheckOutcome::Deny { reason, .. } => Err(FileToolError::denied(capability, &reason)),
+            CheckOutcome::Deny { reason, .. } | CheckOutcome::Ask { reason, .. } => {
+                Err(FileToolError::denied(capability, &reason))
+            }
             _ => Err(FileToolError::denied(
                 capability,
                 "unrecognized policy outcome",

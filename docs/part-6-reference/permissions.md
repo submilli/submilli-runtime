@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7c24b237c9d538062ef6d23d0567acee54e118b802a13ec20ffd9f72b7b2d7a9"
+  contentHash: "bd25a48620eeb5d376838d5db86386cfb29bc772baa5550ae4bad62d37af7700"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -51,7 +51,7 @@ capability.
 | `name` | non-empty string | No | A label for the rule, unique within the caller's list (`blueprint lint` errors on a repeat). Names the rule instead of its position |
 | `capability` | string | Yes | The operation's name, such as `fs.write`, `pied-piper.example/credits.apply`, or `mcp.linear` |
 | `filter` | string | No | A condition on the operation's fields, in the [filter language](/docs/reference/filter-language) |
-| `action` | `allow` or `deny` | Yes | What happens when the rule matches |
+| `action` | `allow`, `deny`, `ask-human`, or `ask-admin` | Yes | What happens when the rule matches |
 
 ## Actions and the default
 
@@ -59,10 +59,48 @@ capability.
 | --- | --- |
 | `allow` | The operation proceeds |
 | `deny` | The operation throws `PermissionDeniedError` |
+| `ask-human` | The operation waits for the person in the conversation to approve it, through the harness. See [Approvals](#approvals) |
+| `ask-admin` | The operation waits for an administrator to approve it, with an `admin` token. See [Approvals](#approvals) |
 
-`default` takes the same values and is `deny` when the Blueprint doesn't set
-it. Under `default: allow`, every operation no rule matches is permitted,
-including ones a Package added later provides.
+`default` takes `allow` or `deny`, and is `deny` when the Blueprint doesn't
+set it. Under `default: allow`, every operation no rule matches is permitted,
+including ones a Package added later provides. `default: ask-human` is a
+deprecated spelling of `deny`, and `blueprint lint` warns about it.
+`default: ask-admin` is refused.
+
+## Approvals
+
+A rule with `ask-human` or `ask-admin` lets the operation run once its
+approver approves it. The run stops at the call, and the HTTP API shows the
+call as `kind: "approval"`, with the values the filter tested
+([Application tools and approvals](/docs/reference/http-api#approvals)).
+
+| | `ask-human` | `ask-admin` |
+| --- | --- | --- |
+| Who decides | The harness, with a `user` or an `admin` token, after asking the person | Only an `admin` token: `submilli server approval`, `/v1/approvals`, or `POST /v1/runs/{run_id}/resume` |
+| How long it waits | The Blueprint's `tool_call_timeout`, 10 minutes by default | The Blueprint's `admin_approval_timeout`, else the server's, 24 hours by default |
+| A refusal or no decision in time | `PermissionDeniedError`, `source` `human` | `PermissionDeniedError`, `source` `admin` |
+
+An approval covers the call it was asked for, once. The same operation run
+again asks again. After a restart, a durable run waits on the same call
+under the same id, and a decision already made is not asked again. Without
+`durable_execution`, a restart ends the waiting run, as it ends any run.
+
+Some calls can't wait for an approver. A call one of these makes, and an
+ask rule matches, is denied with `source` `policy`:
+
+- A run over MCP, or through `POST /v1/execute`.
+- A `git.*` operation. `blueprint lint` warns about an ask rule for one.
+- The file reads and writes of the `submilli:code` library. `blueprint lint`
+  warns about an ask rule for an `fs.*` capability.
+- A redirect an HTTP request follows.
+- The server's file tools, and session finalizers.
+- `submilli run` with no terminal to ask on. At a terminal, it asks there.
+
+A listing keeps an item whose use needs approval, such as a model in
+`llm.models()`, when the run can ask, because using it asks. Where it
+can't, the listing leaves the item out, as it leaves out a denied one. A library an ask rule names is
+visible to the program, as for any rule that isn't `deny`.
 
 ## Callers
 
@@ -244,7 +282,9 @@ read checks the requested alias name and grants no access to its target name.
 | Mistake | Error |
 | --- | --- |
 | A filter that doesn't parse, or names an undeclared variable | See [Filter language](/docs/reference/filter-language#errors) |
-| An action or `default` other than `allow` or `deny` | ``unknown variant `maybe`, expected one of …`` |
+| An action other than `allow`, `deny`, `ask-human`, or `ask-admin` | ``unknown variant `maybe`, expected one of `allow`, `deny`, `ask-human`, `ask-admin` `` |
+| A `default` other than `deny` or `allow` | ``unknown variant `block`, expected `deny` or `allow` `` |
+| `default: ask-admin` | `` `default: ask-admin` is not accepted: an administrator would be asked about every call no rule matches. … `` |
 | A key in a rule other than `capability`, `filter`, `action` | ``unknown field `extra`, expected one of `capability`, `filter`, `action` `` |
 | An MCP capability with the tool in its name | `permission rule 'mcp.linear/save_issue': use capability 'mcp.linear' with a filter such as 'tool == "name"' instead of '/tool'` |
 | A rule for an undeclared MCP server, `llm` model, or embedding alias | `permission rule 'mcp.x' references undeclared mcp server 'x'` |
@@ -254,6 +294,8 @@ read checks the requested alias name and grants no access to its target name.
 `submilli blueprint lint` also warns, without stopping, about:
 
 - `default: allow`
+- `default: ask-human`, a deprecated spelling of `deny`
+- an ask rule for an operation that can't wait for its approver
 - a rule for `secrets.get` or `variables.get` under `main`
 - a rule that an earlier unfiltered rule always decides first
 - a capability name nothing provides, with a suggestion
@@ -281,6 +323,10 @@ that refused.
 | Reason | Cause |
 | --- | --- |
 | `policy denied <capability><target> for <caller>` | A `deny` rule, or the default |
+| `policy requires a person's approval (ask-human) for <capability><target> (caller <caller>), and approval can't be asked here` | An ask rule, for a call that can't wait for its approver. An `ask-admin` rule says `an administrator's`. A harness that answered the approval like a tool call adds why |
+| `the person asked declined the call (ask-human)` | The person refused it, followed by `: <reason>` when they gave one. `source` is `human` |
+| `an administrator declined the call (ask-admin)` | An administrator refused it, followed by `: <reason>` when they gave one. `source` is `admin` |
+| `the person asked did not decide in time (ask-human)`, `an administrator did not decide in time (ask-admin)` | No decision before the timeout |
 | `secret values are never available to main-module code, …` | `secrets.get` from `main` |
 | `<path> is in the volume mounted read-only at <mount>` | A write to a read-only volume |
 

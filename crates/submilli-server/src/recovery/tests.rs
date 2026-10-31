@@ -77,7 +77,7 @@ async fn accept_with_blueprint(
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key: key,
-            tools: None,
+            suspension: None,
         },
     )
     .await

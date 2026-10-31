@@ -5,11 +5,14 @@
 //! (the dispatch may run guest code for user classes), then handed to the
 //! embedder's policy engine.
 
-use crate::runtime::effects;
+use std::sync::{Arc, OnceLock};
+
 use crate::runtime::host::{
     abi_arg, permission_denied, permission_denied_invariant, read_string_arg,
     register_host_fn_async,
 };
+use crate::runtime::{approvals, effects};
+use crate::stdlib::shared::Checked;
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -112,7 +115,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )?;
 
-                effects::execute(
+                // The check's own effect records whether the policy asks; the approval,
+                // when it does, is the next effect, since effects do not nest. The
+                // decision continues the recorder call the check began, which a replayed
+                // check never begins.
+                let asked_ticket = Arc::new(OnceLock::new());
+                let check_ticket = Arc::clone(&asked_ticket);
+                let ask = effects::execute(
                     caller,
                     "security.check",
                     Check {
@@ -134,19 +143,31 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                                 &capability,
                             );
                             let site = CallSite::new(ticket, EntryPath::PackageCheck);
-                            crate::stdlib::shared::check_and_audit(
+                            match crate::stdlib::shared::check_or_ask(
                                 policy.as_ref(),
                                 &who,
                                 &capability,
                                 &context,
                                 &cwd,
                                 site,
-                            )
-                            .map_err(|reason| permission_denied(who, capability, reason))
+                            ) {
+                                Ok(Checked::Allowed) => Ok(None),
+                                Ok(Checked::Ask(ask)) => {
+                                    if let Some(ticket) = ticket {
+                                        let _ = check_ticket.set(ticket);
+                                    }
+                                    Ok(Some(ask))
+                                }
+                                Err(reason) => Err(permission_denied(&who, &capability, reason)),
+                            }
                         })
                     },
                 )
                 .await?;
+                if let Some(ask) = ask {
+                    let site = CallSite::new(asked_ticket.get().copied(), EntryPath::PackageCheck);
+                    approvals::ask(caller, ask, site).await?;
+                }
                 Ok(())
             })
         },

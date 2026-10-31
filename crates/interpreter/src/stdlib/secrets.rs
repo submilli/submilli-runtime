@@ -13,7 +13,7 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::stdlib::shared::check_security;
+use crate::stdlib::shared::check_and_approve_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const MODULE_NAME: &str = "submilli:secrets";
@@ -57,11 +57,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let name =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "secrets.get (secret)")?;
-                check_security(
+                check_and_approve_call(
                     &mut *caller,
                     "secrets.get",
                     serde_json::json!({ "name": name }),
-                )?;
+                )
+                .await?;
 
                 let observation = resolve_secret(caller, name).await?;
                 let Some(value) = &observation else {

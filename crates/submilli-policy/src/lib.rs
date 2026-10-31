@@ -20,7 +20,7 @@ pub use filter::{
 };
 pub use package_name::validate_scoped_name;
 pub use rules::{
-    Action, ActionCondition, Decision, DefaultAction, NearMiss, PermissionRule, Permissions,
-    PossibleActions, Resolution, ResolutionCause, RuleError, RuleRef, RuleSet, Rules,
-    validate_rules,
+    ASK_ADMIN_DEFAULT_REFUSED, Action, ActionCondition, Decision, DefaultAction, NearMiss,
+    PermissionRule, Permissions, PossibleActions, Resolution, ResolutionCause, RuleError, RuleRef,
+    RuleSet, Rules, validate_rules,
 };

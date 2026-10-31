@@ -43,7 +43,7 @@ use crate::runtime::prelude::iterator::{
 };
 use crate::stdlib::abi::{self, backing_struct, externref_field, f64_field, string_field};
 use crate::stdlib::shared::{
-    check_security_call, quota_refusal, require_writable, write_target_trap,
+    check_and_approve_call, quota_refusal, require_writable, write_target_trap,
 };
 use handles::{BackendFileWriter, BackendReader, ChargedDirIter, kind_of};
 
@@ -270,11 +270,12 @@ async fn write(
     content: Vec<u8>,
 ) -> wasmtime::Result<()> {
     let bytes = content;
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "fs.write",
         serde_json::json!({"path": &path, "length": bytes.len()}),
-    )?;
+    )
+    .await?;
     let filesystem = caller.data().filesystem.clone();
     runtime_effects::execute(
         caller,
@@ -307,11 +308,12 @@ async fn write_text(
     content: String,
 ) -> wasmtime::Result<()> {
     let bytes = content.into_bytes();
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "fs.write",
         serde_json::json!({"path": &path, "length": bytes.len()}),
-    )?;
+    )
+    .await?;
     let filesystem = caller.data().filesystem.clone();
     runtime_effects::execute(
         caller,
@@ -344,11 +346,12 @@ async fn append(
     content: Vec<u8>,
 ) -> wasmtime::Result<()> {
     let bytes = content;
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "fs.write",
         serde_json::json!({"path": &path, "length": bytes.len()}),
-    )?;
+    )
+    .await?;
     let filesystem = caller.data().filesystem.clone();
     runtime_effects::execute(
         caller,
@@ -381,11 +384,12 @@ async fn append_text(
     content: String,
 ) -> wasmtime::Result<()> {
     let bytes = content.into_bytes();
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "fs.write",
         serde_json::json!({"path": &path, "length": bytes.len()}),
-    )?;
+    )
+    .await?;
     let filesystem = caller.data().filesystem.clone();
     runtime_effects::execute(
         caller,
@@ -570,7 +574,9 @@ async fn read_whole_capped(
     op: &'static str,
 ) -> wasmtime::Result<Option<runtime_effects::OutcomeBytes>> {
     let ctx = format!("fs.{op}");
-    let ticket = check_security_call(&mut *caller, "fs.read", serde_json::json!({ "path": path }))?;
+    let ticket =
+        check_and_approve_call(&mut *caller, "fs.read", serde_json::json!({ "path": path }))
+            .await?;
     let label = if op == "read" {
         "fs.read"
     } else {

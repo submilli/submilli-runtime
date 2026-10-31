@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d281b55ddd833f4ee25f911cba4f5dd458d6630c448ea986e66b3084b215750a"
+  contentHash: "c8d85de8ac45cdd4cbc7c962cf676a06d29f4b996a52a9ab540af6276380293a"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -24,6 +24,7 @@ errors that refuse a file when it is linted or registered.
 | [`allow_insecure_http`](#allow_insecure_http) | boolean | no | `false` |
 | [`idle_timeout`](#idle_timeout) | duration | no | `24h` |
 | [`tool_call_timeout`](#tool_call_timeout) | duration | no | `10m` |
+| [`admin_approval_timeout`](#admin_approval_timeout) | duration | no | the server's `admin_approval_timeout`, `24h` by default |
 | [`vfs`](#vfs) | mode name or map | no | `ephemeral` |
 | [`secrets`](#secrets) | map | no | empty |
 | [`variables`](#variables) | map | no | empty |
@@ -45,7 +46,7 @@ refused. The same rule applies to MCP and auth-proxy header maps,
 auth-proxy query maps, and paths in `vfs.mounts`.
 
 ```text
-error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `tool_call_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
+error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `tool_call_timeout`, `admin_approval_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
 ```
 
 ```text
@@ -219,11 +220,28 @@ tool, `@tools`, before the call throws `TimeoutError` in the program. Later
 calls of that run then throw `TimeoutError` without waiting. The time a run
 waits does not count against `max_execution_time`.
 
+It is also how long a call an `ask-human` rule matches waits for the person's
+decision. With none in time, that call throws `PermissionDeniedError`, and
+later tool calls still wait.
+
 For a durable run, this bound applies per attempt. Recovery after a server
 restart starts a fresh timeout when it reconstructs an unresolved call. A
 committed timeout replays as `TimeoutError` and later calls still fail without
 waiting. See
 [Application tools](/docs/reference/http-api#application-tools).
+
+## admin_approval_timeout
+
+| | |
+| --- | --- |
+| Type | duration, a whole number followed by `s`, `m` or `h`, longer than `0s` |
+| Default | the server's [`admin_approval_timeout`](/docs/reference/server-settings), `24h` by default |
+
+How long a call an `ask-admin` rule matches waits for an administrator's
+decision. With none in time, the call throws `PermissionDeniedError` with
+`source` `admin`. The time a run waits does not count against
+`max_execution_time`. As with `tool_call_timeout`, the bound applies per
+attempt of a durable run. See [Approvals](/docs/reference/permissions#approvals).
 
 ## vfs
 
@@ -596,10 +614,11 @@ error: case.yaml: invalid git config: must be nonempty and contain no control ch
 | Default | `deny` |
 
 The action for a capability check that no [`permissions`](#permissions)
-rule matches.
+rule matches. `ask-human` is accepted as a deprecated spelling of `deny`,
+and `blueprint lint` warns about it. `ask-admin` is refused.
 
 ```text
-error: case.yaml: blueprint parse error: default: unknown variant `block`, expected one of … at line 2 column 10
+error: case.yaml: blueprint parse error: default: unknown variant `block`, expected `deny` or `allow` at line 2 column 10
 ```
 
 ## permissions
@@ -612,7 +631,7 @@ program, or a Package name for that Package's own calls.
 | `name` | string, non-empty | no |
 | `capability` | string, non-empty | yes |
 | `filter` | filter expression | no |
-| `action` | `allow`, `deny` | yes |
+| `action` | `allow`, `deny`, `ask-human`, `ask-admin` | yes |
 
 `name` is an optional label for the rule. It must be unique within a caller's
 list (`blueprint lint` reports a repeat as an error). It gives the rule a

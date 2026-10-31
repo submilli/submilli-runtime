@@ -111,6 +111,7 @@ enum ActionArg {
     Allow,
     Deny,
     AskHuman,
+    AskAdmin,
 }
 
 impl From<ActionArg> for Action {
@@ -119,6 +120,7 @@ impl From<ActionArg> for Action {
             ActionArg::Allow => Action::Allow,
             ActionArg::Deny => Action::Deny,
             ActionArg::AskHuman => Action::AskHuman,
+            ActionArg::AskAdmin => Action::AskAdmin,
         }
     }
 }
@@ -128,6 +130,7 @@ pub(super) fn action_label(action: Action) -> &'static str {
         Action::Allow => "allow",
         Action::Deny => "deny",
         Action::AskHuman => "ask-human",
+        Action::AskAdmin => "ask-admin",
     }
 }
 
@@ -279,7 +282,7 @@ pub(super) fn unruled_call_outcome(default: Option<DefaultAction>) -> &'static s
         Some(DefaultAction::Deny) => "`default: deny` denies calls to them",
         Some(DefaultAction::Allow) => "`default: allow` allows calls to them",
         Some(DefaultAction::AskHuman) => {
-            "`default: ask-human` applies to them, which currently denies calls"
+            "`default: ask-human`, a deprecated spelling of `deny`, denies calls to them"
         }
     }
 }

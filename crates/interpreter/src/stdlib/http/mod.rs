@@ -39,7 +39,7 @@ use crate::stdlib::abi::{
 };
 use crate::stdlib::dot_segments::refuse_dot_segments;
 use crate::stdlib::fs::backend_error;
-use crate::stdlib::shared::{check_security_call, require_writable};
+use crate::stdlib::shared::{check_and_approve_call, require_writable};
 use redirect_guard::{
     CapabilityGuard, DownloadTarget, GuardedRequest, RequestForm, host_and_path, request_check,
 };
@@ -392,7 +392,7 @@ async fn perform_request(
         body.len() as u64,
         DEFAULT_TIMEOUT_MS,
     );
-    let ticket = check_security_call(&mut *caller, &capability, context)?;
+    let ticket = check_and_approve_call(&mut *caller, &capability, context).await?;
     // The program's own request, before the auth proxy adds credentials.
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(method, url, &headers, &body)
@@ -689,19 +689,21 @@ async fn perform_download(
         decompress: options.decompress,
     };
     // http-side check first; remote-only policies can deny without path-context cost.
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "http.download",
         target.context(&host_str, &url_path_str),
-    )?;
-    let write_ticket = check_security_call(
+    )
+    .await?;
+    let write_ticket = check_and_approve_call(
         &mut *caller,
         "fs.write",
         serde_json::json!({
             "path": guest_path,
             "max_bytes": options.max_bytes,
         }),
-    )?;
+    )
+    .await?;
 
     let request = DownloadRequest {
         url,

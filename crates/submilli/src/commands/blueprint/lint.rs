@@ -126,6 +126,8 @@ fn inspect_blueprint(blueprint: &Blueprint) -> LintFindings {
     errors.extend(duplicate_rule_name_errors(blueprint));
 
     let mut warnings = Vec::from_iter(default_allow_warning(blueprint));
+    warnings.extend(deprecated_default_warning(blueprint));
+    warnings.extend(ask_rule_warnings(blueprint));
     warnings.extend(unreachable_main_rule_warnings(blueprint));
     warnings.extend(shadowed_rule_warnings(blueprint));
     warnings.extend(uppercase_field_warnings(blueprint));
@@ -281,10 +283,52 @@ fn parse_filter(filter: &str) -> Result<FilterExpr, serde_yml::Error> {
 fn default_allow_warning(blueprint: &Blueprint) -> Option<String> {
     (blueprint.default_action == Some(DefaultAction::Allow)).then(|| {
         "`default: allow` makes every capability allowed unless explicitly denied; \
-         prefer `default: deny` (or `ask-human`) with explicit `allow` rules for the \
-         capabilities the script actually needs"
+         prefer `default: deny` with explicit `allow` rules for the capabilities the \
+         script actually needs"
             .to_string()
     })
+}
+
+/// `default: ask-human` once meant deny and still does; asking on every call no
+/// rule matches is never what a blueprint wants.
+fn deprecated_default_warning(blueprint: &Blueprint) -> Option<String> {
+    (blueprint.default_action == Some(DefaultAction::AskHuman)).then(|| {
+        "`default: ask-human` is deprecated and denies every call no rule matches; write \
+         `default: deny`, with an `ask-human` rule for each capability that needs approval"
+            .to_string()
+    })
+}
+
+/// Ask rules where a call cannot wait for its approver, so a matching call is
+/// denied instead.
+fn ask_rule_warnings(blueprint: &Blueprint) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (caller, rules) in &blueprint.permissions {
+        for (position, rule) in (1..).zip(rules) {
+            if !rule.action.asks() {
+                continue;
+            }
+            let action = action_label(rule.action);
+            let label = format!(
+                "rule {position} under `{caller}` (`{}`, `{action}`)",
+                rule.capability
+            );
+            let entry = interpreter::stdlib::capabilities::find(&rule.capability);
+            if entry.is_some_and(|entry| !entry.can_ask()) {
+                warnings.push(format!(
+                    "{label} can never ask: a `{}` call cannot wait for approval, so a call it \
+                     matches is denied",
+                    rule.capability
+                ));
+            } else if rule.capability.starts_with("fs.") {
+                warnings.push(format!(
+                    "{label}: the `submilli:code` library reads and writes files without \
+                     waiting for approval, so its calls this rule matches are denied"
+                ));
+            }
+        }
+    }
+    warnings
 }
 
 /// Rules under `main:` for a capability the runtime refuses to `main` outright.

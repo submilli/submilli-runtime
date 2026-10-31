@@ -80,6 +80,8 @@ struct ProgramRecord {
     source: String,
     #[serde(default, with = "recorded_tools")]
     tools: Option<crate::domain::tools::SessionTools>,
+    #[serde(default)]
+    approvals: bool,
     #[serde(with = "recorded_blueprint")]
     blueprint: submilli_blueprint::Blueprint,
     variables: submilli_blueprint::VarBindings,
@@ -266,6 +268,7 @@ mod tests {
         RunProgram {
             source: "function main(): void {}".into(),
             tools: None,
+            approvals: false,
             blueprint: submilli_blueprint::parse("name: test\ndefault: allow\n").unwrap(),
             variables: Default::default(),
             compatibility: "test-v1".into(),

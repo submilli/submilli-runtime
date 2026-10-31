@@ -87,7 +87,7 @@ past the filter. Stop and report the denial. Most denials are the
 operator's policy; a few are runtime rules no policy can change, and
 the message says which. Likewise an HTTP 401/403 or "authentication
 required" response means credentials are not configured for that host:
-do not hunt for tokens or build auth headers — stop and report it.
+do not hunt for tokens or build auth headers — stop and report it.{approval_guidance}
 
 You never handle secret values. `submilli:secrets` is not available to
 you: calling `secrets.get` is refused whatever the policy says. When a
@@ -193,12 +193,14 @@ resolved values.
 | `{llm_guidance}` | model-call guidance only when at least one model is declared and `main` has potential `llm.call` permission | policy `llm.models`, default, and `permissions:` rules |
 | `{embedding_guidance}` | embedding guidance only when at least one embedding alias is declared and `main` has potential `embedding.embed` permission | policy `embedding.models`, default, and `permissions:` rules |
 | `{tools_package}` | empty unless `main` has potential `tools.call` permission and the caller is REST; otherwise a note on the session's `@tools` package | policy default and `permissions:` rules |
+| `{approval_guidance}` | empty unless a rule is `ask-human` or `ask-admin` and the caller is REST; otherwise a note that such calls wait for approval and a refusal is final | `permissions:` rules |
 | `{git_package}` | empty unless Git is configured; otherwise a pointer to its package docs | policy `git:` block |
 
 HTTP, FS, and Code are advertised when the default action is not `deny`, or
 `main` has a relevant capability rule whose action is not `deny`. An absent
 default means `deny`. Filters and rule shadowing do not affect discovery;
-`ask-human` keeps a library visible without authorizing execution. Code shares
+an `ask-human` or `ask-admin` rule keeps a library visible, and its calls run
+once approved. Code shares
 `fs.read`, `fs.write`, `fs.stat`, and `fs.list` with FS. Other callers' grants
 do not advertise these libraries to `main`. LLM additionally requires at least
 one declared model and uses the same non-deny rule for `llm.call`. A provider

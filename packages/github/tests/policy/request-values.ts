@@ -2,8 +2,9 @@
 import { RepositoryRef, getPullRequest, getRepository, listBranches, readFile } from "@submilli/github";
 
 // The reason of the blueprint's `ask-human` rule, which matches a request for allowed-org/repo.js only.
-const APPROVED_REQUEST = "@submilli/github: policy requires human approval for http.get (caller @submilli/github); "
-    + "ask-human is deferred and treated as deny";
+// Run without a terminal, the call cannot be put to a person, so it is refused with that reason.
+const APPROVED_REQUEST = "@submilli/github: policy requires a person's approval (ask-human) for http.get "
+    + "(caller @submilli/github), and approval can't be asked here";
 
 // `owner` answers "allowed-org" to its first read and "victim-org" to every later
 // one. The package here holds a token, so it builds the whole request, and the
