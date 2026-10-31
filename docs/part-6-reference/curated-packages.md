@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "75f67e3dcce4f0118a23da646a679c005af114ed6d4c30929fceefc009770164"
+  contentHash: "cf433d888bb1853a3206091bd115f1fa1ddeb8873b4cce5c1a1d8b710f6ff5bd"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -127,12 +127,14 @@ submilli blueprint capability list @submilli/browserbase-stagehand
 submilli blueprint capability add browserbase.com/stagehand.start
 submilli blueprint capability add browserbase.com/stagehand
 submilli blueprint capability add browserbase.com/navigate
+submilli blueprint capability add browserbase.com/liveView
 ```
 
 `browserbase.com/stagehand.start` covers `open` and `current`. Act, extract,
-observe, end, and live view need `browserbase.com/stagehand`. `session.goto`
-needs `browserbase.com/navigate`, which carries the submitted host, path, and
-protocol, not the query and not redirects. The browser id is not a grant field.
+observe, and end need `browserbase.com/stagehand`. `session.goto` needs
+`browserbase.com/navigate`, which carries the submitted host, path, and
+protocol, not the query and not redirects. `session.liveView` needs
+`browserbase.com/liveView`. The browser id is not a grant field.
 Proxies, Verified, and CAPTCHA solving default off. `StagehandSession.open`
 registers cleanup. `StagehandSession.current` stores the id in the runtime
 session under `stagehand`. Drive it with `session.goto` and `session.act`.

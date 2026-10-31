@@ -1,5 +1,8 @@
 namespace: submilli
 provides:
+- name: browserbase.com/liveView
+  description: Live view links for this browser. Open `debuggerFullscreenUrl` to watch it.
+  fields: {}
 - name: browserbase.com/navigate
   description: Open a URL. The check covers the submitted host, path, and protocol, not redirects.
   fields:

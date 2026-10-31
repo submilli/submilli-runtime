@@ -382,10 +382,10 @@ export class StagehandSession {
      * Live view links for this browser. Open `debuggerFullscreenUrl` to watch it.
      * @param expiresIn Optional URL lifetime in seconds, 60–21600.
      * @returns Debugger links and open pages. The CDP websocket URL is not returned.
-     * @capability browserbase.com/stagehand {}
+     * @capability browserbase.com/liveView {}
      */
     liveView(expiresIn?: number): LiveView {
-        check("browserbase.com/stagehand", {});
+        check("browserbase.com/liveView", {});
         const sessionId = resourceId(this.sessionId, "sessionId");
         const query = expiresIn === undefined ? "" : liveQuery(expiresIn);
         return normalizeLiveViewJson(requireOk(get(BASE + "/v1/sessions/" + encodeComponent(sessionId) + "/debug" + query, authHeaders())));

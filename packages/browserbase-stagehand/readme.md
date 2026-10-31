@@ -43,7 +43,8 @@ solving are separate grants and are not on the free plan.
 | Operation | Caller capability and truthful fields |
 | --- | --- |
 | `StagehandSession.open` and `StagehandSession.current` | `browserbase.com/stagehand.start { model, proxies, verified, solveCaptchas, keepAlive, region, timeoutSeconds, contextId, persistContext }` |
-| `act`, `replay`, `observe`, `extract`, `end`, `liveView` | `browserbase.com/stagehand {}` |
+| `act`, `replay`, `observe`, `extract`, `end` | `browserbase.com/stagehand {}` |
+| `session.liveView` | `browserbase.com/liveView {}` |
 | `session.goto` | `browserbase.com/navigate { host, path, protocol }` |
 
 The browser id is not a grant field. It is created at runtime and changes every
@@ -61,8 +62,8 @@ Custom proxy URLs and passwords are not accepted. Session timeout defaults to
 reuses that browser while it is still pending or running. The first call also
 needs `stagehand.start`. A non-default region uses its own Stagehand host
 (`api.use1`, `api.euc1`, or `api.apse1`); `end` and session close use that same
-host. `session.liveView` returns the watch link. The CDP URL is dropped because
-it embeds a signing key.
+host. `session.liveView` needs `browserbase.com/liveView` and returns the watch
+link. The CDP URL is dropped because it embeds a signing key.
 
 ## Development
 

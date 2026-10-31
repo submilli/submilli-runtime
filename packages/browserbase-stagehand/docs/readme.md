@@ -32,9 +32,9 @@ The default model is `google/gemini-2.5-flash`.
 
 The returned `sessionId` is the Browserbase session id.
 
-<!-- submilli:if capability="browserbase.com/stagehand" -->
+<!-- submilli:if capability="browserbase.com/liveView" -->
 
-`session.liveView()` returns the watch links. Open `debuggerFullscreenUrl`.
+`session.liveView()` returns the watch links. Open `debuggerFullscreenUrl`. That URL can be used outside these grants, so it is a separate capability.
 
 <!-- submilli:endif -->
 
