@@ -6,6 +6,14 @@ the Stagehand session API. Connection URLs and signing keys are never returned.
 The API key identifies the project; this package never sends or asks for a
 project id.
 
+`act` and `extract` use a model to interpret natural-language instructions.
+`session.act("click the Sign in button")` performs one action on the current
+page. `session.extract("extract each product's name and price", schema)` reads
+data without clicking or navigating. The optional schema is JSON Schema text
+that specifies the result's shape; the extracted value is returned in `data`.
+Instructions are ordinary text, not JavaScript or CSS selectors. `observe`
+also takes natural language, but returns possible actions without running them.
+
 ## Install and bind the key
 
 In an existing blueprint directory:

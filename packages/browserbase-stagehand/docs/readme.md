@@ -20,10 +20,27 @@ credential is invalid.
 or starts one and stores it. The next execution reuses that browser. Closing the
 runtime session ends it. `session.end()` ends it sooner. Starting a browser
 registers cleanup, so both `current` and `open` need a session store.
-Call `session.goto`, `session.act`, `session.observe`, `session.extract`, and
-`session.end` on that object. `act` performs one step, such as "click the Sign in
-button". Pass an action from `observe` to `replay` to run that selector with no
-model call. Nothing here polls.
+Call methods on that object:
+
+- `goto(url)` opens a URL directly.
+- `act(instruction)` sends a natural-language instruction to the model, which
+  identifies the target on the current page and performs one browser action.
+  For example, `session.act("click the Sign in button")`. The instruction is
+  ordinary text, not JavaScript or a CSS selector. Split multi-step tasks into
+  separate calls. Check the returned `success` flag: a failed action can return
+  `success: false` without throwing.
+- `extract(instruction, schema?)` sends a natural-language description of the
+  data to read, such as "extract each product's name and price". The model reads
+  the current page and returns the extracted value in `result.data`; it does
+  not click or navigate. The optional schema is JSON Schema text describing
+  the result's structure, not another instruction. Pass `JSON.stringify(schema)`.
+  With a schema, the instruction can be omitted.
+- `observe(instruction?)` takes natural language too, such as "find the checkout
+  button", but only returns possible actions. It does not perform them. Pass an
+  action from `observe` to `replay` to run that selector with no model call.
+- `end()` closes the browser.
+
+Nothing here polls.
 
 Keep `act` instructions atomic. Put dynamic or sensitive values in `variables`
 as `%name%` placeholders. Those values are sent to Stagehand and are not logged

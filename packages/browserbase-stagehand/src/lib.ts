@@ -268,9 +268,10 @@ export class StagehandSession {
     }
 
     /**
-     * Perform one atomic action, such as "click the Sign in button".
+     * Use the model to perform one browser action described in natural language,
+     * such as "click the Sign in button". The instruction is not code or a CSS selector.
      * A false `success` flag is returned, not thrown. Use `replay` for an observed selector.
-     * @param instruction One action, 1–2000 characters.
+     * @param instruction Natural-language description of one action, 1–2000 characters. Split multi-step tasks into separate calls.
      * @param options Optional placeholders and timeout.
      * @returns What Stagehand did.
      * @capability browserbase.com/stagehand {}
@@ -321,8 +322,8 @@ export class StagehandSession {
     }
 
     /**
-     * Plan actions on the current page without performing them.
-     * @param instruction What to look for. Omit it to observe the page generally.
+     * Use the model to find possible actions on the current page without performing them.
+     * @param instruction Natural-language description of what to look for, such as "find the checkout button". Omit it to observe the page generally.
      * @param options Optional scope selectors and timeout.
      * @returns Planned actions. Empty when nothing matched.
      * @capability browserbase.com/stagehand {}
@@ -343,8 +344,8 @@ export class StagehandSession {
     }
 
     /**
-     * Extract structured data from the current page. Does not click or navigate.
-     * @param instruction What to extract. Omit it to extract against `schema` alone.
+     * Use the model to read structured data from the current page. Does not click or navigate.
+     * @param instruction Natural-language description of the data to read, such as "extract each product's name and price". Omit it to extract against `schema` alone.
      * @param schema JSON Schema text. Pass `JSON.stringify(schema)` so this method does not re-read a caller object. Omit it for an untyped result.
      * @param options Optional scope selectors, screenshot, and timeout.
      * @returns Extracted data and the provider action id.

@@ -13,7 +13,7 @@ provides:
     protocol:
       type: string
 - name: browserbase.com/stagehand
-  description: Perform one atomic action, such as "click the Sign in button". A false `success` flag is returned, not thrown. Use `replay` for an observed selector.
+  description: Use the model to perform one browser action described in natural language, such as "click the Sign in button". The instruction is not code or a CSS selector. A false `success` flag is returned, not thrown. Use `replay` for an observed selector.
   fields: {}
 - name: browserbase.com/stagehand.start
   description: Return the browser stored for this runtime session, or start one and store it. Needs `stagehand.start`, including when a stored browser is reused. A new browser is started only when nothing reusable is stored. Closing the runtime session ends it.
