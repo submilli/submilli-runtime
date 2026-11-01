@@ -151,7 +151,7 @@ export default defineConfig({
                 { label: "Mastra", slug: "tutorials/connect-mastra" },
                 { label: "OpenAI Agents", slug: "tutorials/connect-openai-agents" },
                 { label: "Claude Agent SDK", slug: "tutorials/connect-claude-agent-sdk" },
-                { label: "Vercel AI SDK", slug: "tutorials/use-the-http-api" },
+                { label: "Vercel AI SDK", slug: "tutorials/connect-vercel-ai-sdk" },
               ],
             },
           ],

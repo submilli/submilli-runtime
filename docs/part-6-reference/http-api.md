@@ -7,16 +7,16 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dfa8c57b68d523d0768f42f20380a84b22b68309815d66d46dd5b224549a314c"
+  contentHash: "c61910eaeb3f810b989de7a2825ee788ce0205c63fda1f8a53b13b9932304fdc"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
 This page describes the endpoints of `submilli-server` a harness calls to run
 an agent's programs over HTTP: sessions, the execute result, the
 descriptions a harness builds its tools from, and one-off runs.
-[Use the HTTP API](/docs/tutorials/use-the-http-api) walks through them. A
-harness that speaks MCP connects to `/mcp/<blueprint>` instead, as
-[Connect a harness](/docs/tutorials/connect-a-harness) shows. The server's
+The dedicated harness packages are built on them; a harness that speaks MCP
+connects to `/mcp/<blueprint>` instead.
+[Connect a harness](/docs/tutorials/connect-a-harness) covers both. The server's
 other endpoints serve the `submilli server` commands. For the settings named
 here, see [Server settings](/docs/reference/server-settings).
 

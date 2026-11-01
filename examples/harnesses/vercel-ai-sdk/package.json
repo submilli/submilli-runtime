@@ -1,5 +1,5 @@
 {
-  "name": "submilli-example-vercel-ai-sdk-http",
+  "name": "submilli-example-vercel-ai-sdk",
   "private": true,
   "type": "module",
   "scripts": {
@@ -7,9 +7,9 @@
     "check": "tsx check.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.127",
-    "ai": "^7.0.0",
-    "zod": "^4.1.8"
+    "@ai-sdk/anthropic": "^4.0.89",
+    "@submilli/ai-sdk": "^0.1.0",
+    "ai": "^7.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
