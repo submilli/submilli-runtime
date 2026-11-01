@@ -7,11 +7,11 @@ chapter "Connecting to your harness".
 
 | Directory | Harness | Reaches the server over |
 |:----------|:--------|:------------------------|
-| `mastra/` | Mastra (TypeScript) | MCP |
+| `mastra/` | Mastra (TypeScript) | The HTTP API, through `@submilli/mastra` |
 | `deepagents/` | LangChain deepagents (Python 3.11+, server 0.4.1+) | The HTTP API, through `langchain-submilli` |
 | `openai-agents/` | OpenAI Agents SDK (Python 3.11+, server 0.4.1+) | The HTTP API, through `openai-agents-submilli` |
 | `claude-agent-sdk/` | Claude Agent SDK (TypeScript) | MCP |
-| `vercel-ai-sdk-http/` | Vercel AI SDK (TypeScript) | The HTTP API; `submilli.ts` builds the tools |
+| `vercel-ai-sdk/` | Vercel AI SDK (TypeScript) | The HTTP API, through `@submilli/ai-sdk` |
 
 `blueprint.yaml` is the policy they all run under: the `@submilli/jina`
 package for search and reading, and a named `notes` volume of which each
@@ -71,7 +71,7 @@ ANTHROPIC_API_KEY=... npm run agent
 ```
 
 ```sh
-cd vercel-ai-sdk-http && npm install
+cd vercel-ai-sdk && npm install
 ANTHROPIC_API_KEY=... npm run agent
 ```
 
@@ -88,7 +88,9 @@ a thread keeps one session across turns, that a second user on that
 thread is refused, and that `aclose_thread` ends the session. The OpenAI
 Agents check asserts the same of a conversation: the tools offered, the
 execute description, one session across turns, a second user refused, and
-`aclose_conversation` ending the session.
+`aclose_conversation` ending the session. The Mastra and Vercel AI SDK checks
+assert the same of a memory thread and a conversation, and the Vercel AI SDK
+check also calls each of Submilli's tools directly.
 
 ```sh
 npm run check       # the TypeScript examples
