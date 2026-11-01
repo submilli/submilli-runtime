@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bf4109995a4852742915f1b5d91a82e4c7737d3f3d592d9bbca95e7f3f6c7f4a"
+  contentHash: "f6b33f11ec2f73ad356740bfa379794bd5de62a7312555f9eea36dc438ed517c"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -26,8 +26,7 @@ for that value or its local configuration source. Do not invent values,
 expose secrets, create a Blueprint, or change the server. Ask for missing
 provider credentials without printing them. Install only the
 missing dependencies shown in this guide. Preserve its tool restrictions and
-session cleanup. Run the file with --check to verify the connection without
-a model request.
+session cleanup. Prepare the file without running it or making a model request.
 Leave the files ready for the exact Try it out command.
 ```
 
@@ -82,8 +81,6 @@ pip install openai-agents-submilli
 Create `agent.py` in the project directory and paste the code below:
 
 ```python title="agent.py"
-"""An OpenAI Agents SDK application backed by Submilli."""
-
 import asyncio
 import os
 import sys
@@ -91,26 +88,20 @@ import uuid
 
 from agents import Agent, Runner
 from openai_agents_submilli import SubmilliTools
+from submilli import AsyncSubmilli
 
-args = sys.argv[1:]
-checking = args == ["--check"]
-prompt = " ".join(args)
-if not checking and not prompt.strip():
-    raise SystemExit("Usage: python agent.py '<message>' (or --check)")
-
-BLUEPRINT = os.environ["SUBMILLI_BLUEPRINT"]
+prompt = " ".join(sys.argv[1:])
+if not prompt.strip():
+    raise SystemExit("Usage: python agent.py '<message>'")
 
 
 async def main() -> None:
-    submilli = SubmilliTools(blueprint=BLUEPRINT)
-    try:
-        if checking:
-            await submilli.client.blueprints.prompt(BLUEPRINT)
-            print("Connected to Submilli.")
-            return
+    async with AsyncSubmilli() as client:
+        submilli = SubmilliTools(
+            blueprint=os.environ["SUBMILLI_BLUEPRINT"], client=client,
+        )
         agent = Agent(
             name="submilli-agent",
-            # Change this model ID to use another OpenAI model.
             model="gpt-5-mini",
             instructions="Use Submilli to run the requested TypeScript code.",
             tools=submilli.tools,
@@ -118,10 +109,8 @@ async def main() -> None:
         conversation_id = str(uuid.uuid4())
         try:
             result = await Runner.run(
-                agent,
-                prompt,
-                context={"conversation_id": conversation_id},
-                max_turns=20,
+                agent, prompt,
+                context={"conversation_id": conversation_id}, max_turns=20,
             )
             for item in result.new_items:
                 if item.type == "tool_call_output_item":
@@ -129,24 +118,22 @@ async def main() -> None:
             print(result.final_output)
         finally:
             await submilli.aclose_conversation(conversation_id)
-    finally:
-        await submilli.aclose()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-`SubmilliTools` reads the server address from `SUBMILLI_SERVER` or uses
+`AsyncSubmilli` reads the server address from `SUBMILLI_SERVER` or uses
 `http://127.0.0.1:8128`, and reads the token from `SUBMILLI_SERVER_TOKEN`.
-Before the first model call, it fetches the tool descriptions for the
-Blueprint from the server.
+Before the first model call, `SubmilliTools` fetches the tool descriptions for
+the Blueprint from the server.
 
 The `context` you pass to `Runner.run` is for your code, not for the model.
 The toolkit reads `conversation_id` from it: programs in one conversation
 share a server session, and later turns that pass the same id reuse it.
-`aclose_conversation` closes that session in the `finally` block, and
-`aclose` closes the HTTP client. To keep sessions across restarts of your
+`aclose_conversation` closes that session in the `finally` block. The async
+context closes the HTTP client. To keep sessions across restarts of your
 application, give the toolkit a `store`, as the
 [sessions reference](https://github.com/submilli/submilli-python/tree/main/packages/openai-agents-submilli#sessions-retries-and-results)
 describes.
@@ -155,17 +142,6 @@ describes.
 tools out of `Agent.tools` if their calls must pass through Blueprint
 permissions: tools added there are called directly by the agent and bypass
 Submilli. `max_turns` bounds the model's agent loop.
-
-### Check the connection
-
-With the setup environment active, run this without a model request:
-
-```sh
-python agent.py --check
-```
-
-Look for `Connected to Submilli.`. This checks the server, the token, and the
-registered Blueprint; the model runs only when you supply a message.
 
 ## Try it out
 
