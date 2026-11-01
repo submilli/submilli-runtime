@@ -1,5 +1,27 @@
 # Mastra harness smoke test
 
+## The `@submilli/mastra` package
+
+`verify-package.ts` uses Mastra, its memory, and the real package against the
+local `support-read` fixture; only the model is `MockLanguageModelV4` from
+`ai/test`. Run `skills/evals/harnesses/serve_fixture.py` first, then from a
+temporary directory:
+
+```sh
+npm init -y && npm pkg set type=module
+npm install @submilli/mastra @mastra/core @mastra/memory ai tsx
+cp /path/to/submilli-runtime/skills/evals/harnesses/mastra/verify-package.ts .
+export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_SERVER_TOKEN=...   # the line the fixture prints
+SUBMILLI_SERVER=$SUBMILLI_SERVER_URL npx tsx verify-package.ts
+```
+
+It asserts the matrix in `references/mastra.md` ("Deterministic verification
+with a scripted model") and ends with
+`mastra package + mock model validation passed`. Verified on 2026-11-01 with
+`@submilli/mastra 0.1.0`, `@mastra/core 1.81.0` and `@mastra/memory 1.40.0`.
+
+## MCP with `@mastra/mcp`
+
 This maintainer check uses the real `@mastra/mcp` adapter and the local
 Submilli `support-read` fixture. It does not call a model or a business
 service. The scripted program is the model boundary: the MCP client, tool
