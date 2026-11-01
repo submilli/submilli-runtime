@@ -31,7 +31,9 @@ api_tokens:
 
 
 def first_block(path, language):
-    return path.read_text().split(f"```{language}\n", 1)[1].split("\n```", 1)[0]
+    """The first `language` block of the reference's "The smallest slice" section."""
+    section = path.read_text().split("\n## The smallest slice\n", 1)[1]
+    return section.split(f"```{language}\n", 1)[1].split("\n```", 1)[0]
 
 
 def call(url, token=None, payload=None):
