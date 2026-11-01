@@ -6,10 +6,11 @@ and provider. Do not introduce Submilli's own agent-server as a harness.
 Choose just the relevant guide:
 
 - [Deep Agents](deepagents.md): in Python, the `langchain-submilli` middleware
-- [Vercel AI SDK](vercel.md)
+- [Vercel AI SDK](vercel.md): the `@submilli/ai-sdk` package
 - [LangChain / LangGraph](langchain.md): `create_agent` takes the same middleware
-- [Mastra](mastra.md)
-- [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents)
+- [Mastra](mastra.md): the `@submilli/mastra` package
+- [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents): in Python, the
+  `openai-agents-submilli` toolkit
 - [Claude Agent SDK](https://submilli.ai/docs/tutorials/connect-claude-agent-sdk)
 - [Custom model loop / REST](custom-loop.md)
 
@@ -17,7 +18,7 @@ For the OpenAI and Claude SDKs, fetch the linked chapter through
 https://submilli.ai/docs/llms.txt and inspect the project's installed SDK types
 before implementing. Preserve the shared authentication, binding, and cleanup
 rules below. If the chapter is unavailable, report that gap and use the
-installed SDK's documented MCP interface without inventing signatures.
+installed package's or SDK's documented interface without inventing signatures.
 
 The book's [harness tutorial](https://submilli.ai/docs/tutorials/connect-a-harness)
 uses a `research` blueprint, `userId`, external search credentials, and a
@@ -79,11 +80,13 @@ to match an example. Install only the missing integration dependencies using
 the project's package manager. Include imports, configuration, a runnable
 entrypoint, error handling, and a bounded loop when implementing an agent.
 
-A Python LangChain v1 or Deep Agents agent connects with `langchain-submilli`
-instead of MCP. It builds the same tools on the HTTP API, binds variables from the
-run's context, and keeps one session per thread, so the endpoint, header and
-session rules below are handled for it. The identity, audit and test rules
-still apply. See [Deep Agents](deepagents.md).
+A harness with a dedicated package connects through it instead of MCP:
+`langchain-submilli` for Python LangChain v1 and Deep Agents, `openai-agents-submilli`
+for the OpenAI Agents SDK, `@submilli/ai-sdk` for the Vercel AI SDK, and
+`@submilli/mastra` for Mastra. Each builds the same tools on the HTTP API, binds
+variables from trusted application state, and keeps one session per conversation
+or thread, so the endpoint, header and session rules below are handled for it.
+The identity, audit and test rules still apply. See the harness's guide above.
 
 The MCP endpoint is `http://127.0.0.1:8128/mcp/<blueprint-name>` using Streamable
 HTTP. Load tools from that endpoint; preserve their names, schemas, and full

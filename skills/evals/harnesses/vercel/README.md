@@ -1,5 +1,26 @@
 # Vercel AI SDK harness smoke test
 
+## The `@submilli/ai-sdk` package
+
+`validate-package.ts` uses the real package and `generateText` loop against the
+local `support-read` fixture; only the model is `MockLanguageModelV4`. Run
+`skills/evals/harnesses/serve_fixture.py` first, then from a temporary directory:
+
+```sh
+npm init -y && npm pkg set type=module
+npm install @submilli/ai-sdk ai tsx
+cp /path/to/submilli-runtime/skills/evals/harnesses/vercel/validate-package.ts .
+export SUBMILLI_SERVER_URL=http://127.0.0.1:18128 SUBMILLI_SERVER_TOKEN=...   # the line the fixture prints
+SUBMILLI_SERVER=$SUBMILLI_SERVER_URL npx tsx validate-package.ts
+```
+
+It asserts the matrix in `references/vercel.md` ("Deterministic verification
+with a scripted model") and ends with
+`vercel package + mock model validation passed`. Verified on 2026-11-01 with
+`@submilli/ai-sdk 0.1.0` and `ai 7.0.159`.
+
+## MCP with `@ai-sdk/mcp`
+
 Uses the real `@ai-sdk/mcp` HTTP transport and `generateText` loop against the
 local `support-read` fixture; only the model is `MockLanguageModelV3`. Run
 `skills/evals/harnesses/serve_fixture.py` first, then from a temporary directory:

@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "0b2c0d39b9871dc5b42640735424708828c90ca095a4914440e825a1c8ac7c38"
+  contentHash: "71693b91100460145debca21cdc2bf45af7cfc34abb9892c4ed909cc761b928e"
   confirmedAt: "2026-10-20T09:39:00Z"
 ---
 
@@ -16,11 +16,11 @@ authorship:
 
 | Harness | Language | Integration |
 | --- | --- | --- |
-| [Mastra](/docs/tutorials/connect-mastra) | TypeScript | MCP |
+| [Mastra](/docs/tutorials/connect-mastra) | TypeScript | Dedicated package: `@submilli/mastra` |
 | [LangChain Deep Agents](/docs/tutorials/connect-deepagents) | Python | Dedicated package: `langchain-submilli` |
-| [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | MCP |
+| [OpenAI Agents SDK](/docs/tutorials/connect-openai-agents) | Python | Dedicated package: `openai-agents-submilli` |
 | [Claude Agent SDK](/docs/tutorials/connect-claude-agent-sdk) | TypeScript | MCP |
-| [Vercel AI SDK](/docs/tutorials/use-the-http-api) | TypeScript | The HTTP API |
+| [Vercel AI SDK](/docs/tutorials/connect-vercel-ai-sdk) | TypeScript | Dedicated package: `@submilli/ai-sdk` |
 
 <div id="what-every-harness-does"></div>
 
@@ -78,9 +78,9 @@ tool access.
 
 ## Using harness tools in Submilli
 
-A harness can optionally make its tools available to Submilli. The LangChain
-middleware accepts them through its `ptc` parameter. With the HTTP API, the
-harness includes the tool definitions when it creates a session.
+A harness can optionally make its tools available to Submilli. The dedicated
+packages accept them through a `ptc` option. With the HTTP API, the harness
+includes the tool definitions when it creates a session.
 
 Submilli exposes these tools as a virtual `@tools` Package that code generated
 by the agent can import and use. The tools still run in your application, with
@@ -97,10 +97,14 @@ must enforce that limit. If you need Blueprint rules to check argument values,
 use the [Submilli skill](/docs/install#the-skill) to create a Package that
 exposes those fields to Blueprint rules.
 
-Submilli’s MCP connections do not support tools passed in by the harness. The
-Vercel AI SDK example uses HTTP, but does not implement this feature.
+Submilli’s MCP connections do not support tools passed in by the harness.
 
 See the [HTTP API reference](/docs/reference/http-api#application-tools) for the
-protocol, the [LangChain middleware reference](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools)
-for `ptc` and approvals, and the [Python SDK reference](https://github.com/submilli/submilli-python/tree/main/packages/submilli#your-tools-in-programs)
-for implementing the harness side.
+protocol. For `ptc` and approvals, see the references for the
+[LangChain middleware](https://github.com/submilli/submilli-python/tree/main/packages/langchain-submilli#application-tools),
+the [OpenAI Agents toolkit](https://github.com/submilli/submilli-python/tree/main/packages/openai-agents-submilli#application-tools),
+the [Vercel AI SDK integration](https://github.com/submilli/submilli-typescript/tree/main/packages/ai-sdk#your-tools-in-programs),
+and the [Mastra integration](https://github.com/submilli/submilli-typescript/tree/main/packages/mastra#your-tools-in-programs).
+To implement the harness side yourself, see the
+[Python SDK](https://github.com/submilli/submilli-python/tree/main/packages/submilli#your-tools-in-programs)
+and [TypeScript SDK](https://github.com/submilli/submilli-typescript/tree/main/packages/sdk#your-tools-in-programs) references.

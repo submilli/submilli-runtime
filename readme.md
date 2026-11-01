@@ -103,7 +103,7 @@ or HTTP. There are tutorials for
 [Mastra](https://submilli.ai/docs/tutorials/connect-mastra),
 the [OpenAI Agents SDK](https://submilli.ai/docs/tutorials/connect-openai-agents),
 the [Claude Agent SDK](https://submilli.ai/docs/tutorials/connect-claude-agent-sdk),
-and [plain HTTP](https://submilli.ai/docs/tutorials/use-the-http-api).
+and the [Vercel AI SDK](https://submilli.ai/docs/tutorials/connect-vercel-ai-sdk).
 
 ## Features
 

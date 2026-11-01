@@ -18,6 +18,7 @@ export const legacyDocsRoutes = {
 	"/standard-library": "/docs/reference/standard-library/",
 	"/testing-packages": "/docs/packages/write-tests/",
 	"/the-language": "/docs/reference/language/",
+	"/tutorials/use-the-http-api": "/docs/tutorials/connect-vercel-ai-sdk/",
 };
 
 // Retired pages whose destinations are anchors, so they have no Markdown alias.

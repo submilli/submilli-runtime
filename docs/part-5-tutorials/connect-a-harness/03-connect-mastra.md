@@ -1,6 +1,6 @@
 ---
 title: "Connect Mastra"
-description: "Give a Mastra agent Submilli's MCP tools and run its TypeScript programs under a registered Blueprint."
+description: "Connect a Mastra agent to a registered Submilli Blueprint with @submilli/mastra."
 slug: tutorials/connect-mastra
 docType: how-to
 sidebar:
@@ -8,7 +8,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "42a2f968ad669748ec2a781931acb0f365efba017c3bc0d353291b1f7462afa2"
+  contentHash: "c0cb4b851d38032c4b8e74d576991da5fb70f1bd64b2f84f271075fc426b563d"
   confirmedAt: "2026-10-20T09:28:54Z"
 ---
 
@@ -26,8 +26,7 @@ for that value or its local configuration source. Do not invent values,
 expose secrets, create a Blueprint, or change the server. Ask for missing
 provider credentials without printing them. Install only the
 missing dependencies shown in this guide. Preserve its tool restrictions and
-session cleanup. Run the file with --check to verify the connection without
-a model request.
+session cleanup. Prepare the file without running it or making a model request.
 Leave the files ready for the exact Try it out command.
 ```
 
@@ -46,153 +45,107 @@ export SUBMILLI_BLUEPRINT='your-registered-blueprint'
 export OPENAI_API_KEY='your-openai-api-key'
 ```
 
-This guide connects a Mastra agent to Submilli over MCP. The agent keeps its
-model and loop in Mastra, while its TypeScript programs run on
-`submilli-server` under a Blueprint your application selects.
+Connect a Mastra agent to Submilli, run a small arithmetic program, and close
+the server session when the memory thread ends. You need Node.js 22 or later,
+`@mastra/core` 1.79 or later, `submilli-server` 0.4.1 or later, a
+model-provider key, and a Blueprint already registered on your server. For
+this example, use a Blueprint with no required variables. The calculation
+does not need Package or tool permissions.
 
-Before you start:
+Start the [server](/docs/server/run-the-server), [create a Blueprint with no
+grants](/docs/blueprints/start-a-blueprint#start-from-nothing-allowed), and
+[register it](/docs/server/register-a-blueprint#register-it) before running this
+example. Keep `SUBMILLI_SERVER_TOKEN` exported in the shell where you run this
+example.
+If your Blueprint requires variables or harness secrets, pass them as
+`createSubmilliTools`' `variables` and `secrets` options: fixed values, or
+functions of each agent run's resource, thread, and request context. The values
+are bound when the session opens; the model cannot set them. The
+[`@submilli/mastra` reference](https://github.com/submilli/submilli-typescript/tree/main/packages/mastra#reference)
+describes the binding options.
 
-- [Run `submilli-server`](/docs/server/run-the-server) and keep
-  `SUBMILLI_SERVER_TOKEN` exported.
-- [Register a Blueprint](/docs/server/register-a-blueprint), then set
-  `SUBMILLI_BLUEPRINT` to its registered name. The calculation below assumes
-  the Blueprint has no required variables. The sample calls no external tools.
-- Install Node.js 22.13 or later and set the API key for your model provider.
+### Install the integration
 
-### Start the project
+Create a project and install Mastra, its memory, and the Submilli integration:
 
 ```sh
-mkdir mastra-submilli && cd mastra-submilli
+mkdir mastra && cd mastra
 npm init -y
 npm pkg set type=module
-npm install @mastra/core @mastra/mcp
+npm install @submilli/mastra @mastra/core @mastra/memory
 npm install --save-dev tsx typescript @types/node
 ```
 
-### Connect the agent
+### Write the agent
 
 Create `agent.ts` in the project directory and paste the code below:
 
 ```typescript title="agent.ts"
+import { Mastra } from "@mastra/core";
 import { Agent } from "@mastra/core/agent";
-import { MCPClient } from "@mastra/mcp";
+import { InMemoryStore } from "@mastra/core/storage";
+import { Memory } from "@mastra/memory";
+import { createSubmilliTools } from "@submilli/mastra";
 
-const args = process.argv.slice(2);
-const checking = args.length === 1 && args[0] === "--check";
-const prompt = args.join(" ");
-if (!checking && !prompt.trim()) {
-  throw new Error("Usage: npx tsx agent.ts '<message>' (or --check)");
-}
+const prompt = process.argv.slice(2).join(" ");
+if (!prompt.trim()) throw new Error("Usage: npx tsx agent.ts '<message>'");
+const blueprint = process.env.SUBMILLI_BLUEPRINT;
+if (!blueprint) throw new Error("SUBMILLI_BLUEPRINT is not set");
 
-const server = process.env.SUBMILLI_SERVER ?? "http://127.0.0.1:8128";
-const blueprint = required("SUBMILLI_BLUEPRINT");
-
-type Model = ConstructorParameters<typeof Agent>[0]["model"];
-
-export async function answer(
-  question: string,
-  // Change this model ID to use another provider-supported model.
-  model: Model = "openai/gpt-5-mini",
-): Promise<string> {
-  const url = new URL(`${server}/mcp/${encodeURIComponent(blueprint)}`);
-  const headers = { Authorization: `Bearer ${required("SUBMILLI_SERVER_TOKEN")}` };
-  let sessionId: string | null = null;
-  const submilli = new MCPClient({
-    id: "submilli",
-    servers: {
-      submilli: {
-        url,
-        requestInit: { headers },
-        fetch: async (input, init) => {
-          const response = await fetch(input, init);
-          sessionId = response.headers.get("mcp-session-id") ?? sessionId;
-          return response;
-        },
-      },
-    },
-  });
-
-  try {
-    const toolsets = await submilli.listToolsets();
-    if (toolsets.submilli === undefined) {
-      throw new Error("submilli-server refused the connection");
-    }
-
-    if (checking) return "Connected to Submilli.";
-
-    const agent = new Agent({
+const submilli = createSubmilliTools({ blueprint });
+const memory = new Memory();
+const mastra = new Mastra({
+  agents: {
+    calculator: new Agent({
       id: "calculator",
       name: "Calculator",
-      instructions: "Use Submilli to do calculations in TypeScript. Return the execution result.",
-      model,
-    });
+      instructions: "Use Submilli to run the requested TypeScript code.",
+      model: "openai/gpt-5-mini",
+      memory,
+      tools: () => submilli.tools(),
+    }),
+  },
+  storage: new InMemoryStore(),
+  logger: false,
+});
 
-    const result = await agent.generate(question, {
-      toolsets,
-      maxSteps: 10,
-      onStepFinish({ toolCalls, toolResults }) {
-        if (toolCalls.length > 0) console.dir({ toolCalls, toolResults }, { depth: null });
-      },
-    });
-    return result.text;
-  } finally {
-    try {
-      // disconnect() closes the transport, not the server's session.
-      if (sessionId) {
-        const response = await fetch(url, {
-          method: "DELETE", headers: { ...headers, "Mcp-Session-Id": sessionId },
-        });
-        if (!response.ok && response.status !== 404) {
-          throw new Error(`Could not close Submilli session: HTTP ${response.status}`);
-        }
-      }
-    } finally {
-      await submilli.disconnect();
+const threadId = "submilli-example";
+try {
+  const result = await mastra.getAgent("calculator").generate(prompt, {
+    memory: { thread: threadId, resource: "submilli-example-user" },
+    maxSteps: 10,
+  });
+  for (const { payload } of result.toolResults) {
+    if (payload.toolName === "submilli__typescript__execute") {
+      console.error("Submilli execute result:", JSON.stringify(payload.result));
     }
   }
+  console.log(result.text);
+} finally {
+  await submilli.close({ threadId, memory });
 }
-
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`${name} is not set`);
-  return value;
-}
-
-console.log(await answer(prompt));
 ```
 
-Mastra receives Submilli's tools in `toolsets`. Pass them to `generate` for
-this request rather than putting a session-bound toolset on a shared agent.
-Checking `toolsets.submilli` prevents the model from continuing without
-Submilli if the MCP connection fails. The `finally` block deletes the server session, then closes the client
-transport.
+`createSubmilliTools` reads the server address from `SUBMILLI_SERVER` or uses
+`http://127.0.0.1:8128`, and reads the token from `SUBMILLI_SERVER_TOKEN`.
+Create it once per process. Before the first model call, it fetches the tool
+descriptions for the Blueprint from the server.
 
-This configuration gives the model the tools returned by the one `submilli`
-MCP server. It does not add Mastra tools or agents to the request. Mastra tools
-can still be added directly when the application needs them, but those calls
-bypass Submilli and keep Mastra's own authorization and approval path. Current Submilli MCP connections do not support application-tool
-callbacks. To let a TypeScript program call an application tool through
-Submilli, use an HTTP session with the `tools` field on `POST /v1/sessions`,
-grant `tools.call` in the Blueprint, and answer each suspended run through
-`POST /v1/runs/{run_id}/resume`. See the [HTTP API reference](/docs/reference/http-api#application-tools).
+Each memory thread has one server session, kept in the thread's metadata, so
+later agent runs on the thread reuse it. `close` ends the thread's session in
+the `finally` block; in an application, call it when the thread is deleted or
+archived, not after every run. This example keeps memory in `InMemoryStore`;
+with persistent storage, such as `LibSQLStore`, threads keep their sessions
+across restarts.
 
-If the selected Blueprint declares required variables, add a
-`submilli-variables` header whose values come from trusted application state,
-as described in [Your application](/docs/application#three-decisions-the-model-has-no-part-in).
-Never take those values from the conversation.
-
-### Check the connection
-
-With the setup environment active, run this without a model request:
-
-```sh
-npx tsx agent.ts --check
-```
-
-Look for `Connected to Submilli.`. This checks the server and registered
-Blueprint; the model runs only when you supply a message.
+`tools: () => submilli.tools()` gives the model only Submilli's tools. Keep
+application tools out of the agent's `tools` if their calls must pass through
+Blueprint permissions: tools added there are called directly by the agent and
+bypass Submilli.
 
 ## Try it out
+
+Run this from the project directory with the setup environment active:
 
 ```sh
 npx tsx agent.ts \
@@ -200,13 +153,36 @@ npx tsx agent.ts \
 export function main(): number { return 2 + 2; }'
 ```
 
-The step callback prints Mastra's tool calls and results. Confirm a call to
-Submilli's execute tool and a result containing `4`; the final answer
-alone does not verify where the calculation ran.
-This sample requires model-provider access for the Mastra conversation. The
-TypeScript program itself only computes a value; it does not call a Package,
-application tool, or external service.
+The agent should make a `submilli__typescript__execute` tool call and print
+its tool result on standard error. The final answer should contain:
 
-For the division of responsibilities between Mastra, Submilli, and the
-Blueprint, see [How Submilli works with
-harnesses](/docs/tutorials/connect-a-harness).
+```text
+4
+```
+
+The model passed the supplied program to Submilli, which compiled and ran it in the
+registered Blueprint's session. Check the printed execute-tool result as well
+as the final answer to confirm that the connection completed.
+
+You now have a Mastra agent whose program execution is governed by an already
+registered Blueprint and whose memory thread closes its server session. For the
+same connection through another harness, see the [Vercel AI
+SDK](/docs/tutorials/connect-vercel-ai-sdk) tutorial.
+
+## Use application tools
+
+<a id="your-tools-in-programs"></a>
+
+To reuse application tools under Blueprint permissions, pass your Mastra tools
+to `createSubmilliTools`' `ptc` option. They become callable from Submilli
+programs; the integration does not expose them directly to the model. Keep them
+out of the agent's `tools`: adding the same tools there creates a direct path
+that bypasses Submilli.
+
+Mark calls that need a person's approval the way Mastra does, with
+`requireApproval` on the tool or with the `requireToolApproval` option. The
+agent run suspends while the program waits, and `resumeGenerate` carries it on
+with the person's decision. The
+[harness tools overview](/docs/tutorials/connect-a-harness#call-harness-tools-from-programs)
+describes the shared lifecycle; the [`@submilli/mastra` reference](https://github.com/submilli/submilli-typescript/tree/main/packages/mastra#your-tools-in-programs)
+covers the integration contract.

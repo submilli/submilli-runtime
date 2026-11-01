@@ -4,7 +4,196 @@ Read [harnesses](harnesses.md) first. Keep the application's existing Mastra
 agent, model, memory, and workflow. Submilli is the policy and execution
 boundary; Mastra remains the model loop.
 
-## Safe integration shape
+Connect with `@submilli/mastra`: `createSubmilliTools()` gives a Mastra agent
+Submilli's tools and runs every program on submilli-server over the HTTP API,
+with one server session per memory thread. Use the MCP route ("Alternative:
+MCP with @mastra/mcp", below) only for an application that already loads
+Submilli through `@mastra/mcp`.
+
+## Before writing the harness
+
+For a new project, follow [setup](setup.md), then [packages](packages.md),
+then [blueprints](blueprints.md); the "Submilli setup" section below lists what
+the `support-read` fixture needs. The package needs Node.js 22 or later,
+`@mastra/core` 1.79 or later, and submilli-server 0.4.1 or later. Inspect the
+installed versions first (`npm ls @mastra/core @mastra/memory @submilli/mastra`).
+These examples were verified on 2026-11-01 with `@submilli/mastra 0.1.0`,
+`@mastra/core 1.81.0`, `@mastra/memory 1.40.0`, and submilli-server 0.5.1; if
+an export or signature differs, the installed declarations win over this text.
+The package README is the API reference:
+[@submilli/mastra](https://github.com/submilli/submilli-typescript/tree/main/packages/mastra#readme).
+
+## Complete minimal project
+
+```sh
+npm install @submilli/mastra @mastra/core @mastra/memory
+npm install -D typescript tsx @types/node
+export OPENAI_API_KEY='...'
+export SUBMILLI_SERVER='http://127.0.0.1:8128'
+# SUBMILLI_SERVER_TOKEN must already hold the token the server was started with.
+```
+
+The package reads `SUBMILLI_SERVER`, not the `SUBMILLI_SERVER_URL` the MCP
+recipe and the fixture's export line use; set it to the fixture's URL when
+testing against it.
+
+```ts
+// src/mastra.ts
+import { Mastra } from '@mastra/core';
+import { Agent } from '@mastra/core/agent';
+import { InMemoryStore } from '@mastra/core/storage';
+import { Memory } from '@mastra/memory';
+import { createSubmilliTools } from '@submilli/mastra';
+
+// Once per process. Server and token come from SUBMILLI_SERVER and
+// SUBMILLI_SERVER_TOKEN. The customer is the memory resource of each agent
+// run, which the application sets from its authenticated session.
+export const submilli = createSubmilliTools({
+  blueprint: process.env.SUBMILLI_BLUEPRINT ?? 'support-read',
+  variables: ({ resourceId }) => {
+    // Replace this with the application's canonical customer-id validator.
+    if (!resourceId || !/^[A-Za-z0-9_-]+$/.test(resourceId)) {
+      throw new Error('run the agent with an authenticated memory resource');
+    }
+    return { customerId: resourceId };
+  },
+});
+
+export const memory = new Memory();
+
+export const mastra = new Mastra({
+  agents: {
+    assistant: new Agent({
+      id: 'support-assistant',
+      name: 'Support assistant',
+      instructions: 'Use the Submilli tools for business data; never bypass them with shell, HTTP, or SDK calls.',
+      // Configure the host provider here. Example: OPENAI_API_KEY plus this model.
+      model: process.env.MASTRA_MODEL ?? 'openai/gpt-5.5',
+      memory,
+      tools: () => submilli.tools(),
+    }),
+  },
+  // A real deployment uses persistent storage (LibSQLStore, PostgresStore), so
+  // threads, and the Submilli session each one keeps, survive restarts.
+  storage: new InMemoryStore(),
+});
+```
+
+```ts
+// src/main.ts
+import { mastra, memory, submilli } from './mastra.ts';
+
+const customerId = 'pied_piper'; // demo only: take it from the signed-in session
+const threadId = `customer:${customerId}`;
+
+try {
+  const result = await mastra.getAgent('assistant').generate(
+    `Read the balance for customer ${customerId} and report the amount.`,
+    { memory: { thread: threadId, resource: customerId }, maxSteps: 4 },
+  );
+  for (const { payload } of result.toolResults) {
+    const executionId = (payload.result as { execution_id?: string } | undefined)?.execution_id;
+    if (executionId) console.error('program run:', executionId);
+  }
+  console.log(result.text);
+} finally {
+  // When the thread is deleted or archived, not after every run.
+  await submilli.close({ threadId, memory });
+}
+```
+
+Run it with `npx tsx src/main.ts`. The model should call
+`submilli__typescript__execute` with a program that imports
+`@pied-piper/billing`, and report `6150`. That is evidence of a live model run
+only when a provider key is configured; a scripted model proves wiring only.
+
+What the package does, and the rules that follow from it:
+
+- **Identity comes from the agent run.** `variables` (and `secrets` for
+  `harness` secrets) are fixed values or functions of the run's
+  `{ resourceId, threadId, requestContext }`, set by the application, never by
+  the model. Build the tools and the agent once and share them; do not build
+  one per user or put the identity in a header.
+- **One session per memory thread.** The first program on a thread opens a
+  server session and keeps it in the thread's metadata, so later runs, other
+  instances on the same storage, and restarts find it. Bind variables to
+  something the thread belongs to, such as its resource: Mastra already refuses
+  a run on a thread owned by another resource, and a run whose variables differ
+  from the thread's session gets `SubmilliSessionMismatchError` as the tool's
+  error, and nothing runs. End the session with
+  `submilli.close({ threadId, memory })` when the thread is deleted or archived,
+  or the Blueprint's `idle_timeout` ends it. A run without a memory thread gets
+  a session that no later run can find.
+- **Six tools.** The model gets `submilli__typescript__execute`, `__last_run`,
+  `__packages__search`, `__packages__docs`, `__builtins__list` and
+  `__builtins__docs`, with the descriptions the server writes for the Blueprint.
+  Mastra tools added to the same agent are called directly and bypass Submilli.
+- **Retries are safe.** Each execute sends an `Idempotency-Key` derived from
+  Mastra's `toolCallId`. The output carries `execution_id` and `session_id` for
+  the audit trail; the model is not shown them.
+- **Policy denials are results.** A denied capability returns `denied: true`
+  and `error.kind` `permission_denied`, naming the capability. A wrong token,
+  an unknown Blueprint, invalid variables, and an unreachable server throw, and
+  Mastra reports them to the model as tool errors.
+- **Application tools.** `ptc: { ... }` lets programs call the application's
+  own Mastra tools as the `@tools` Package; the Blueprint must grant
+  `tools.call`. A call that needs approval (`requireApproval` on the tool, or
+  `requireToolApproval`) suspends the agent run, and `resumeGenerate` carries
+  it on; `onApprovalRequired` decides in code instead. See the README's "Your
+  tools in programs" and "Approvals".
+
+For `stream()`, pass the same `memory` option. There is no client to
+disconnect per request: the session belongs to the thread, so never close it
+while a stream is still running. Use an abort signal and a small `maxSteps`
+bound for request limits.
+
+## Deterministic verification with a scripted model
+
+Before a live run, keep Mastra, its memory, `@submilli/mastra` and the local
+server real, and script only the model with `MockLanguageModelV4` from
+`ai/test` (pass it as the agent's `model`): one `submilli__typescript__execute`
+call, then a final text step that quotes the tool result. Use a fresh thread per
+case and `close()` each thread at the end. Assert:
+
+1. On a thread whose resource is `pied_piper`, a program reading `pied_piper`
+   returns `result` `"6150"`. The offered execute tool's input schema has only
+   `code`; no Blueprint or identity argument reaches the model.
+2. The same thread reading `hooli` returns a tool result with `"denied":true`
+   and `pied-piper.example/balance.read`; nothing throws. The thread still has
+   one session (`submilli.session({ threadId, memory })`).
+3. Two concurrent runs on threads of different customers each get their own
+   result.
+4. Tools built without `variables` make the first execute a tool error naming
+   `customerId`. Tools built with a `token` the server does not know reject
+   `tools()` with `AuthenticationError` (HTTP 401).
+5. `close({ threadId, memory })` returns `true` for each thread that ran a
+   program.
+
+`skills/evals/harnesses/mastra/verify-package.ts` runs this matrix against the
+fixture. A scripted run is adapter and policy evidence, not a live model result.
+
+## Submilli setup
+
+Follow [installation and projects](setup.md), [packages](packages.md), and
+[blueprints](blueprints.md) in order. The [shared harness setup](harnesses.md)
+contains the tested package, blueprint, and server commands;
+reuse it when validating this recipe rather than copying a partial scaffold.
+The blueprint must declare required `customerId`, allow
+`pied-piper.example/balance.read` only when `customerId == ${vars.customerId}`, and use
+`default: deny`. Over MCP, the URL is
+`http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
+`Authorization: Bearer …` and bind the trusted value with
+`submilli-variables: customerId=pied_piper`.
+Variables constrain generated code; they are not authentication. Put the
+server behind trusted ingress before exposing it outside the host application.
+
+## Alternative: MCP with @mastra/mcp
+
+An application that already loads Submilli through `@mastra/mcp` can keep
+doing so; the package's session, idempotency, and binding rules then become the
+application's job.
+
+### MCP integration shape
 
 For fixed, shared MCP identity, `await client.listTools()` can be supplied as
 `tools` when constructing an agent. For an authenticated request or tenant,
@@ -61,7 +250,7 @@ cancellation. Use an abort signal and a small `maxSteps` bound for request
 limits. Mastra tool approval can add an approval UX, but it does not replace
 Submilli package checks or blueprint filters.
 
-## Complete minimal project
+### Complete minimal MCP project
 
 This host-side skeleton uses no business SDK: the only remote tool server is
 Submilli. Use the application's existing `@mastra/core` and `@mastra/mcp`,
@@ -164,22 +353,7 @@ the model boundary. Expected output from the support-read fixture is `6150`
 (or a short model response containing that value). A model response is not a
 policy test; inspect the executed tool and run the deterministic matrix below.
 
-## Submilli setup
-
-Follow [installation and projects](setup.md), [packages](packages.md), and
-[blueprints](blueprints.md) in order. The [shared harness setup](harnesses.md)
-contains the tested package, blueprint, server, and MCP discovery commands;
-reuse it when validating this recipe rather than copying a partial scaffold.
-The blueprint must declare required `customerId`, allow
-`pied-piper.example/balance.read` only when `customerId == ${vars.customerId}`, and use
-`default: deny`. The MCP URL is
-`http://127.0.0.1:8128/mcp/support-read`; send `SUBMILLI_SERVER_TOKEN` as
-`Authorization: Bearer …` and bind the trusted value with
-`submilli-variables: customerId=pied_piper`.
-Variables constrain generated code; they are not authentication. Put the
-server behind trusted ingress before exposing it outside the host application.
-
-## Identity, cleanup, and failure checks
+### MCP identity, cleanup, and failure checks
 
 The demo identity is a fixture value supplied by an environment variable.
 Production code must derive the ID after authentication and authorization,
@@ -208,6 +382,7 @@ missing required variable, applying the blueprint to a different server, and
 closing the client before a stream finishes. Current `@mastra/mcp` also has
 `listToolsetsWithErrors()` for discovery diagnostics.
 
-Official references: [Mastra MCP integration](https://mastra.ai/docs/connections/mcp),
+Official references: [@submilli/mastra README](https://github.com/submilli/submilli-typescript/tree/main/packages/mastra#readme),
+[Mastra MCP integration](https://mastra.ai/docs/connections/mcp),
 [`MCPClient` API](https://mastra.ai/reference/tools/mcp-client), and
 [Submilli quickstart](https://submilli.ai/docs/quickstart).
