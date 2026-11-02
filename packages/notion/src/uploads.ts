@@ -1,5 +1,5 @@
 import { post } from "submilli:http";
-import { readBytes, stat } from "submilli:fs";
+import { exists, readBytes, stat } from "submilli:fs";
 import {
     FileUpload,
     FileUploadOptions,
@@ -43,7 +43,7 @@ export {
  */
 export function uploadFile(sourcePath: string, options: FileUploadOptions): FileUpload {
     validateUploadOptions(options);
-    const source = stat(sourcePath);
+    const source = exists(sourcePath) ? stat(sourcePath) : undefined;
     if (source === undefined || source.kind !== "file") {
         throw validationError("source_not_found", "upload source is not a VFS file");
     }

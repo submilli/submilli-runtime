@@ -9,7 +9,7 @@ import {
     DownloadResult,
     Response,
 } from "submilli:http";
-import { readBytes, stat } from "submilli:fs";
+import { exists, readBytes, stat } from "submilli:fs";
 import { encodeComponent, encodeQuery, parse } from "submilli:url";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
@@ -403,7 +403,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
     const parentId = destinationFolderId(requestedParentId);
     const destinationDrive = uploadDestinationDrive(parentId, driveId);
     check("submilli/google-drive.uploadFile", { path: sourcePath, parentId: parentId, driveId: destinationDrive });
-    const source = stat(sourcePath);
+    const source = exists(sourcePath) ? stat(sourcePath) : undefined;
     if (source === undefined || source.kind !== "file") throw new DriveError("source_not_found", "upload source is not a VFS file", 0);
     const sourceSize = source.size;
     const metadata: FileUploadMetadata = { name: name };

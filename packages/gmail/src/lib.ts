@@ -1,6 +1,6 @@
 import { get, post, delete, Response } from "submilli:http";
 import { decodeComponent, encodeComponent, encodeQuery } from "submilli:url";
-import { read, stat, write } from "submilli:fs";
+import { exists, read, stat, write } from "submilli:fs";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 
@@ -903,17 +903,25 @@ function composeEmail(input: ComposeInput, attachments: OutgoingAttachment[] = [
         const mimeType = attachment.mimeType ?? "application/octet-stream";
         validateFilename(filename);
         validateHeader(mimeType);
-        const metadata = stat(path);
+        const metadata = exists(path) ? stat(path) : undefined;
         if (metadata === undefined || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + path, 0);
         total += metadata.size;
         if (total > MAX_ATTACHMENT_BYTES) throw new GmailError("attachments_too_large", "combined attachment contents exceed 10 MiB", 0);
-        const bytes = read(path);
-        if (bytes === undefined) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
+        const bytes = readAttachment(path);
         mime += "--" + boundary + "\r\nContent-Type: " + mimeType + "; name=\"" + filename + "\"\r\n";
         mime += "Content-Disposition: attachment; filename=\"" + filename + "\"\r\nContent-Transfer-Encoding: base64\r\n\r\n";
         mime += bytes.toBase64() + "\r\n";
     }
     return encodeRawMessage(mime + "--" + boundary + "--\r\n");
+}
+
+function readAttachment(path: string): Uint8Array {
+    try {
+        return read(path);
+    } catch (error) {
+        if (error instanceof RangeError) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
+        throw error;
+    }
 }
 
 // Refuses rather than repairs: the caller's check has already read these addresses.
