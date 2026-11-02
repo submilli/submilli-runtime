@@ -115,7 +115,7 @@ ENTRYPOINT ["/usr/local/bin/submilli-server"]
 #
 # Everything else repeats `runtime`, so keep the two in step: same uid, state
 # directory, environment, port, health check and entrypoint.
-FROM debian:12-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS render
+FROM debian:13-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4 AS render
 
 ARG VERSION=0.0.0-dev
 ARG REVISION=unknown
