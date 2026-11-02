@@ -21,6 +21,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/jina`](jina/readme.md) | Jina Reader and Search for web pages and search results as Markdown or structured data. |
 | [`@submilli/linear`](linear/readme.md) | Linear issues, comments, teams, projects, users, and agent sessions. |
 | [`@submilli/notion`](notion/readme.md) | Notion search, pages, Markdown, databases, data sources, views, comments, blocks, and file uploads. |
+| [`@submilli/posthog`](posthog/readme.md) | PostHog event reads in bounded windows, event and property schema, cohort state, and event capture. |
 | [`@submilli/sentry`](sentry/readme.md) | Sentry Cloud organizations, projects, issues, events, and issue triage. |
 | [`@submilli/slack-bot`](slack-bot/readme.md) | Slack messages, conversations, users, and reactions as the app's bot. |
 | [`@submilli/slack-user`](slack-user/readme.md) | Slack search, messages, channels, users, files, and reactions as the authenticated user. |

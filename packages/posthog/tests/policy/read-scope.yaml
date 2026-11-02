@@ -1,0 +1,19 @@
+kind: blueprint
+name: posthog-read-scope-test
+packages:
+  - '@submilli/posthog'
+default: deny
+permissions:
+  main:
+    # One project, and never the email property, whether selected or filtered.
+    - capability: posthog.com/events.list
+      filter: >-
+        projectId == 602724 and not (properties contains "email")
+        and not (personProperties contains "email")
+      action: allow
+    - capability: posthog.com/cohorts.get
+      filter: projectId == 602724 and cohortId == 561927
+      action: allow
+  # Deliberate sentinel: an allowed call must reach secrets.get, which is
+  # denied here before a key can be read or a request can be sent.
+  '@submilli/posthog': []

@@ -1,0 +1,41 @@
+namespace: submilli
+provides:
+- name: posthog.com/cohorts.get
+  description: Read a cohort's name, member count, and calculation state.
+  fields:
+    cohortId:
+      type: number
+    projectId:
+      type: number
+- name: posthog.com/events.capture
+  description: Send one event to the project the project API key belongs to.
+  fields:
+    event:
+      type: string
+- name: posthog.com/events.list
+  description: Read one page of events in a fixed time window, oldest first. The query reads only the named events and properties; page with `nextCursor` until `isComplete` before treating the window as fully read.
+  fields:
+    events:
+      type: string[]
+    personProperties:
+      type: string[]
+    projectId:
+      type: number
+    properties:
+      type: string[]
+- name: posthog.com/schema.read
+  description: List the event names PostHog has seen in a project.
+  fields:
+    projectId:
+      type: number
+requires:
+- capability: http.get
+  filter: host == "us.posthog.com"
+- capability: http.post
+  filter: host == "us.i.posthog.com" and path == "/i/v0/e/"
+- capability: http.post
+  filter: host == "us.posthog.com"
+- capability: secrets.get
+  filter: name == "POSTHOG_PERSONAL_API_KEY"
+- capability: secrets.get
+  filter: name == "POSTHOG_PROJECT_API_KEY"
