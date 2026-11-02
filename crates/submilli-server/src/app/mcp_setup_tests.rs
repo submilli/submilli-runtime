@@ -267,7 +267,7 @@ async fn mcp_setup_failure_is_internal_before_vfs_and_allows_follow_up() {
         ),
         (
             "submilli__typescript__packages__docs",
-            json!({"name": "@mcp/test"}),
+            json!({"names": ["@mcp/test"]}),
         ),
         (
             "submilli__typescript__builtins__docs",
