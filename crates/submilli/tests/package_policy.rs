@@ -26,6 +26,7 @@ const PACKAGES: &[&str] = &[
     "gmail",
     "google-calendar",
     "google-drive",
+    "hacker-news",
     "jina",
     "notion",
     "posthog",

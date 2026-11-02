@@ -1,0 +1,13 @@
+namespace: submilli
+provides:
+- name: news.ycombinator.com/items.get
+  description: Read an item and every reply under it, as one flat list with the root first. Pass a story id for the whole discussion.
+  fields:
+    itemId:
+      type: number
+- name: news.ycombinator.com/search
+  description: Search stories and comments. Newest first by default, with exact word matching. Page with `page` while `page + 1 < pageCount`.
+  fields: {}
+requires:
+- capability: http.get
+  filter: host == "hn.algolia.com"

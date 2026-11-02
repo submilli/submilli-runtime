@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf433d888bb1853a3206091bd115f1fa1ddeb8873b4cce5c1a1d8b710f6ff5bd"
+  contentHash: "364b9b3a56ca5a0247ee1d977e22537593b8de2006044b952abcb569b5b5534b"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -32,6 +32,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/gmail`](#submilligmail) | Gmail profiles, thread search and triage, messages, drafts, sending and replying, labels, and attachment downloads. | `GOOGLE_ACCESS_TOKEN` | `gmail.googleapis.com` |
 | [`@submilli/google-calendar`](#submilligoogle-calendar) | Google Calendar calendars, events, agendas, free/busy queries, and bounded free-time searches. | `GOOGLE_ACCESS_TOKEN` | `www.googleapis.com` |
 | [`@submilli/google-drive`](#submilligoogle-drive) | Google Drive files and folders in My Drive and Shared Drives: search, read, download, upload, organize, and share. | `GOOGLE_ACCESS_TOKEN` | `www.googleapis.com` |
+| [`@submilli/hacker-news`](#submillihacker-news) | Read-only Hacker News search of stories and comments, and whole item threads, through the public HN Search API. | None | `hn.algolia.com` |
 | [`@submilli/jina`](#submillijina) | Web pages and search results as Markdown or structured data, through Jina Reader and Search. | `JINA_API_KEY` | `r.jina.ai`, `s.jina.ai` |
 | [`@submilli/linear`](#submillilinear) | Linear issues, comments, teams, projects, users, and agent sessions, through Linear's GraphQL API. | `LINEAR_API_KEY` | `api.linear.app` |
 | [`@submilli/notion`](#submillinotion) | Notion search, pages as enhanced Markdown, databases, data sources, views, comments, users, blocks, and file uploads. | `NOTION_ACCESS_TOKEN` | `api.notion.com` |
@@ -268,6 +269,26 @@ submilli install submilli/submilli-runtime @submilli/google-drive
 submilli blueprint add-package @submilli/google-drive --no-capabilities
 submilli blueprint capability list @submilli/google-drive
 submilli blueprint capability add submilli/google-drive.searchFiles
+```
+
+## @submilli/hacker-news
+
+Read-only Hacker News search of stories and comments, and whole item threads, through the public HN Search API.
+
+| | |
+| --- | --- |
+| Secret | None |
+| Credential | None; the HN Search API is public |
+| Without the secret | Not applicable |
+| HTTP | `hn.algolia.com`: GET |
+| Filesystem | None |
+| Readme | [`packages/hacker-news/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/hacker-news/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/hacker-news
+submilli blueprint add-package @submilli/hacker-news --no-capabilities
+submilli blueprint capability list @submilli/hacker-news
+submilli blueprint capability add news.ycombinator.com/search
 ```
 
 ## @submilli/jina

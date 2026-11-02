@@ -1,0 +1,13 @@
+kind: blueprint
+name: hacker-news-scope-test
+packages:
+  - '@submilli/hacker-news'
+default: deny
+permissions:
+  main:
+    - capability: news.ycombinator.com/items.get
+      filter: itemId == 49980140
+      action: allow
+  # Deliberate sentinel: an allowed call must reach http.get, which is denied
+  # here, so the script never touches the network.
+  '@submilli/hacker-news': []

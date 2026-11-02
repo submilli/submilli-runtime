@@ -123,3 +123,10 @@ version = "0.1.0"
 description = "PostHog Cloud (US) client for bounded event queries with keyset pages, event and property schema, cohort state, and event capture."
 keywords = ["posthog", "analytics", "events", "hogql", "cohorts", "capture"]
 path = "packages/posthog"
+
+[[package]]
+name = "@submilli/hacker-news"
+version = "0.1.0"
+description = "Read-only Hacker News search of stories and comments, and whole item threads, through the public HN Search API."
+keywords = ["hacker-news", "hn", "search", "comments", "threads"]
+path = "packages/hacker-news"
