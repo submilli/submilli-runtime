@@ -1427,7 +1427,7 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         .route(
             "/v1/sessions/{session_id}/packages/docs",
             Access::User,
-            get(packages::session_docs).post(packages::session_docs_batch),
+            get(packages::session_docs),
         )
         .route(
             "/v1/runs",
@@ -1488,7 +1488,7 @@ fn routes(auth: Arc<AuthConfig>, audit: crate::audit::AuditLog) -> Routes {
         .route(
             "/v1/blueprints/{name}/packages/docs",
             Access::User,
-            get(packages::blueprint_docs).post(packages::blueprint_docs_batch),
+            get(packages::blueprint_docs),
         )
         .route(
             "/v1/blueprints/{name}/builtins",

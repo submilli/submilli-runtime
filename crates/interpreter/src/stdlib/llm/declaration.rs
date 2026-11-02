@@ -1,15 +1,31 @@
 //! Type surface of `submilli:llm`.
 //!
-//! Typed calls supply a compiler-generated JSON schema and decoder closure.
-//! The decoder parses and structurally validates each response against `T`;
-//! the host invokes it and assembles the public return value. The declaration
-//! and the interception selected by [`is_checked_call`] are a matched pair.
+//! `call` and `batch` are declared **generic**, and that generic is only sound
+//! because the typechecker intercepts it. The typed forms are not a second
+//! signature: they are a rewrite. A generic `call<T>` reaching the ordinary
+//! generic-call lowering would set `return_cast`, which codegen emits as a Wasm
+//! representation cast rather than a structural check, so a response that
+//! ignored the schema would arrive statically typed and never validated. So the
+//! typechecker matches the symbol by mangled name and rewrites the call into a
+//! checked `Cast` instead — the contract `submilli:session`'s `get` carries.
+//! The declaration and that interception are a matched pair, and a generic
+//! declaration without the interception is the unsound half on its own, which
+//! is why the generics landed together with
+//! [`checked_llm_call`](crate::typechecker) rather than ahead of it.
+//! [`is_checked_call`] is the hook that interception matches on.
 //!
-//! Without type arguments, `call` and `batch` keep their Completion envelopes.
-//! `call<T>` returns a checked T; `batch<T>` returns ordered success/value or
-//! failure/reason entries. T is never inferred from arguments. The trailing
-//! `schema` and `decode` parameters are compiler-owned and default to undefined;
-//! programs cannot supply them directly.
+//! `T` defaults to `Completion` (or `Completion[]` for `batch`) rather than to
+//! `unknown`: the untyped call keeps its envelope, carrying `ok`/`text`/
+//! `reason`, while the typed form trades that envelope for the checked value —
+//! the same trade `session.get<T>` makes. That is why `T` appears only in the
+//! return type here and is never inferable from an argument.
+//!
+//! The trailing `schema` parameter is likewise not surface a program writes. It
+//! defaults to `undefined`, and the typed lowering fills it with the JSON Schema
+//! emitted from `T` at compile time — the way `VirtualCall` passes its target and
+//! `tool` as constants. Passing it by hand changes only what the provider is
+//! asked for; the structural check lives in the synthetic `Cast`, not in the
+//! host fn, so a hand-passed schema buys no verification.
 
 use std::collections::BTreeMap;
 
@@ -34,7 +50,10 @@ fn call_type_var() -> Type {
     Type::TypeVar(CALL_TYPE_PARAM.to_string())
 }
 
-/// Whether this symbol needs per-element validation and the batch return shape.
+/// Whether `mangled` is the single-prompt checked read, as opposed to the
+/// batch. The two lower the same way but differ in what a bare call returns —
+/// `Completion` against `Completion[]` — so the interception needs to tell
+/// them apart to pick the untyped default.
 pub fn is_checked_batch(mangled: &crate::MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
 }
@@ -75,7 +94,6 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("model", Type::String),
             Param::new("prompt", Type::String),
             schema_param(),
-            decoder_param(),
         ],
         call_type_var(),
         "/**\n * Send one prompt to `model` and return its completion.\n *\n * With a \
@@ -115,9 +133,8 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("model", Type::String),
             Param::new("prompts", Type::Array(Box::new(Type::String))),
             schema_param(),
-            decoder_param(),
         ],
-        batch_result_type(call_type_var()),
+        call_type_var(),
         "/**\n * Send every prompt to `model` and return one completion each, \
          positionally: `result[i]` is the outcome of `prompts[i]`, including when \
          that element failed.\n *\n * Fan-out happens host-side at a bounded \
@@ -127,10 +144,12 @@ pub fn package_declaration() -> PackageDeclaration {
          *\n * The whole slice is checked against the prompt-count and prompt-size \
          bounds, and its tokens reserved, before any bytes leave the process — so an \
          oversized batch is refused without partially dispatching.\n *\n * A type \
-         argument names one element: `batch<Severity>(model, prompts)`. Each \
-         element is checked independently and returns `{ ok: true, value, inputTokens, outputTokens }` \
-         or `{ ok: false, reason }`. Unknown usage remains undefined. Failed JSON \
-         or type checks do not discard successful siblings.\n * @param model Model name. \
+         argument names the shape of the *whole result*, not of one element, so the \
+         typed form is `batch<Severity[]>(model, prompts)`. Every element is then \
+         checked structurally, and one non-conforming response throws for the batch \
+         rather than yielding a wrongly-typed element — which is why the untyped form, \
+         whose per-element `ok` survives a partial failure, is the right one when some \
+         prompts are expected to fail.\n * @param model Model name. \
          Call `models()` for the ones this runtime serves.\n * @param prompts The \
          prompts, in the order the results come back. Bounded in count, and each in \
          bytes.\n * @capability llm.call { model: $model, \
@@ -168,49 +187,6 @@ fn schema_param() -> Param {
         Type::union(vec![Type::String, Type::Undefined]),
         crate::DefaultValue::Undefined,
     )
-}
-
-fn decoder_param() -> Param {
-    Param::with_default(
-        "decode",
-        Type::union(vec![decoder_type(call_type_var()), Type::Undefined]),
-        crate::DefaultValue::Undefined,
-    )
-}
-
-pub(crate) fn decoder_type(value: Type) -> Type {
-    Type::Function {
-        params: vec![Type::String],
-        ret: Box::new(decoder_result_type(value)),
-        predicate: None,
-        has_rest: false,
-        optional: 0,
-    }
-}
-
-pub(crate) fn decoder_result_type(value: Type) -> Type {
-    let object = |fields: Vec<(&str, Type)>| Type::Object {
-        index: None,
-        fields: fields
-            .into_iter()
-            .map(|(name, ty)| (name.to_string(), crate::ObjectField::required(ty)))
-            .collect(),
-    };
-    Type::union(vec![
-        object(vec![("ok", Type::BooleanLiteral(true)), ("value", value)]),
-        object(vec![
-            ("ok", Type::BooleanLiteral(false)),
-            ("reason", Type::String),
-            (
-                "kind",
-                Type::union(vec![
-                    Type::StringLiteral("SyntaxError".into()),
-                    Type::StringLiteral("TypeError".into()),
-                    Type::StringLiteral("RangeError".into()),
-                ]),
-            ),
-        ]),
-    ])
 }
 
 fn completion_type() -> Type {
@@ -400,28 +376,4 @@ fn insert_generic_fn(
             },
         },
     );
-}
-
-/// Each typed response carries its own success discriminant. Usage is unknown
-/// when the provider omitted it, and is never represented as zero in that case.
-pub(crate) fn batch_result_type(value: Type) -> Type {
-    let object = |fields: Vec<(&str, Type)>| Type::Object {
-        index: None,
-        fields: fields
-            .into_iter()
-            .map(|(name, ty)| (name.to_string(), crate::ObjectField::required(ty)))
-            .collect(),
-    };
-    Type::Array(Box::new(Type::union(vec![
-        object(vec![
-            ("ok", Type::BooleanLiteral(true)),
-            ("value", value),
-            ("inputTokens", optional_number()),
-            ("outputTokens", optional_number()),
-        ]),
-        object(vec![
-            ("ok", Type::BooleanLiteral(false)),
-            ("reason", Type::String),
-        ]),
-    ])))
 }

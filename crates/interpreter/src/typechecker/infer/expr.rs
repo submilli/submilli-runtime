@@ -16954,55 +16954,34 @@ function main(): void { if (result < 10) { } }
         run_with_packages(source, &[&llm])
     }
 
-    /// Each typed LLM call supplies a closure whose success value is checked.
-    fn llm_decoder_shapes(ta: &TypedAst) -> Vec<bool> {
+    /// Every `llm.call`/`llm.batch` in `ta` that was wrapped in a `Cast`, as
+    /// (has a structural `check`, the inner call's `return_cast`). Mirrors
+    /// `session_get_shapes`.
+    fn llm_call_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            let TypedExprKind::GenericCall { mangled, args, .. } = &expr.kind else {
+            let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
                 continue;
             };
-            if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
-                continue;
-            }
-            let decoder = &ta.try_expr(args[3].expr).unwrap().kind;
-            let TypedExprKind::Closure {
-                body: crate::ClosureBody::Block(body),
+            let TypedExprKind::GenericCall {
+                mangled,
+                return_cast,
                 ..
-            } = decoder
+            } = &ta.try_expr(*value).unwrap().kind
             else {
-                assert!(matches!(decoder, TypedExprKind::Undefined));
                 continue;
             };
-            let TypedStmtKind::Try { body, catches, .. } = &ta.try_stmt(*body).unwrap().kind else {
-                panic!("decoder must limit caught errors");
-            };
-            assert_eq!(catches.len(), 3);
-            let TypedStmtKind::Block(stmts) = &ta.try_stmt(*body).unwrap().kind else {
-                panic!("decoder try body");
-            };
-            let TypedStmtKind::Return(Some(value)) = &ta.try_stmt(stmts[0]).unwrap().kind else {
-                panic!("decoder success return");
-            };
-            let TypedExprKind::ObjectLiteral { fields, .. } = &ta.try_expr(*value).unwrap().kind
-            else {
-                panic!("decoder success object");
-            };
-            let value = fields.iter().find(|f| f.name.name == "value").unwrap();
-            let crate::TypedObjectFieldSource::Literal(value) = value.source else {
-                panic!("decoder success value");
-            };
-            out.push(matches!(
-                &ta.try_expr(value).unwrap().kind,
-                TypedExprKind::Cast { check: Some(_), .. }
-            ));
+            if crate::stdlib::llm::declaration::is_checked_call(mangled) {
+                out.push((check.is_some(), return_cast.clone()));
+            }
         }
         out
     }
 
     /// Every schema string that reached an `llm.call`/`llm.batch` argument
-    /// list, in call order. The schema is the third argument; the untyped
-    /// form leaves it as the `undefined` default.
+    /// list, in call order. The schema rides in the trailing `schema` slot,
+    /// which the untyped form leaves as the `null` default.
     fn llm_schemas(ta: &TypedAst) -> Vec<Option<String>> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
@@ -17014,7 +16993,7 @@ function main(): void { if (result < 10) { } }
                 continue;
             }
             let schema = args
-                .get(2)
+                .last()
                 .and_then(|a| match &ta.try_expr(a.expr).unwrap().kind {
                     TypedExprKind::String(s) => Some(s.clone()),
                     _ => None,
@@ -17037,9 +17016,9 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = llm_decoder_shapes(&ta);
-        assert_eq!(shapes.len(), 1, "expected one decoder, got {shapes:?}");
-        assert!(shapes[0], "call<Severity> lost its structural check");
+        let shapes = llm_call_shapes(&ta);
+        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
+        assert!(shapes[0].0, "call<Severity> lost its structural check");
 
         let schemas = llm_schemas(&ta);
         assert_eq!(schemas.len(), 1, "expected one call, got {schemas:?}");
@@ -17088,13 +17067,18 @@ function main(): void { if (result < 10) { } }
 
         // And the check walks the same nested shape rather than stopping at the
         // outer object.
-        let shapes = llm_decoder_shapes(&ta);
-        assert_eq!(shapes, vec![true], "shapes: {shapes:?}");
+        let shapes = llm_call_shapes(&ta);
+        assert_eq!(shapes, vec![(true, None)], "shapes: {shapes:?}");
     }
 
-    /// The host may return a typed value only after invoking the checked decoder.
+    /// The soundness invariant, and the one most at risk of silently
+    /// regressing: a `call<T>` must lower to a `Cast` carrying a structural
+    /// check, and the call it wraps must NOT carry a `return_cast` — that is a
+    /// `ref.cast`, a representation-only narrow that verifies nothing and traps
+    /// uncatchably on a null response. A shape mismatch throws either way, so
+    /// only this assertion distinguishes them.
     #[test]
-    fn typed_llm_call_supplies_a_checked_decoder() {
+    fn typed_llm_call_is_a_checked_cast_and_never_a_return_cast() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
@@ -17102,9 +17086,13 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = llm_decoder_shapes(&ta);
-        assert_eq!(shapes.len(), 1, "expected one decoder, got {shapes:?}");
-        assert!(shapes[0], "call<Severity> lost its structural check");
+        let shapes = llm_call_shapes(&ta);
+        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
+        assert!(shapes[0].0, "call<Severity> lost its structural check");
+        assert_eq!(
+            shapes[0].1, None,
+            "call<Severity> kept an unsound return_cast: {shapes:?}",
+        );
     }
 
     /// The same invariant across every import form. Interception matches the
@@ -17112,7 +17100,7 @@ function main(): void { if (result < 10) { } }
     /// namespace import must all land on the checked path identically —
     /// mirroring `fixtures/imports/session_*`.
     #[test]
-    fn every_import_form_of_llm_call_supplies_a_checked_decoder() {
+    fn no_import_form_of_llm_call_keeps_a_return_cast() {
         let src = format!(
             "import llm from \"submilli:llm\"; \
              import ai from \"submilli:llm\"; \
@@ -17127,10 +17115,25 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(
-            llm_decoder_shapes(&ta),
-            vec![true; 4],
-            "every import form must supply a checked decoder",
+            llm_call_shapes(&ta),
+            vec![(true, None), (true, None), (true, None), (true, None)],
+            "every import form must produce a checked, uncast call",
         );
+
+        // And no raw `GenericCall` on the symbol survives with a `return_cast`,
+        // whichever form produced it.
+        for i in 0..ta.exprs_len() {
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
+            if let TypedExprKind::GenericCall {
+                mangled,
+                return_cast,
+                ..
+            } = &expr.kind
+                && crate::stdlib::llm::declaration::is_checked_call(mangled)
+            {
+                assert_eq!(*return_cast, None, "an llm call kept a return_cast");
+            }
+        }
     }
 
     /// Every import form also emits the same schema — the interception is not
@@ -17164,16 +17167,17 @@ function main(): void { if (result < 10) { } }
         }
     }
 
-    /// `batch<T[]>` supplies a decoder and schema for each array-valued completion.
+    /// `batch<T[]>` takes the same path: a checked cast, no `return_cast`, and
+    /// a schema for the whole result.
     #[test]
-    fn typed_llm_batch_supplies_a_checked_decoder() {
+    fn typed_llm_batch_is_a_checked_cast_too() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.batch<Severity[]>(\"m\", [\"p\"]); }}"
         );
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert_eq!(llm_decoder_shapes(&ta), vec![true]);
+        assert_eq!(llm_call_shapes(&ta), vec![(true, None)]);
 
         let schema = llm_schemas(&ta)[0].clone().expect("schema emitted");
         let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
@@ -17192,8 +17196,8 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert!(
-            llm_decoder_shapes(&ta).is_empty(),
-            "an untyped call must not receive a decoder",
+            llm_call_shapes(&ta).is_empty(),
+            "an untyped call must not be wrapped in a checked cast",
         );
         assert_eq!(
             llm_schemas(&ta),

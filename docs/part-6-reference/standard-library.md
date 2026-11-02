@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "7c6b17585f3ba293ef03992aa4a7de635259ba6a38660792c8c6dcb98d392c5f"
+  contentHash: "88c44d6617e5eadccdb42fa183190c689d91745b9c0bfdfe2b6452dcfd022522"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -135,17 +135,14 @@ An operation that passes a limit throws and leaves the repository as it was.
 | `call(model, prompt)` | One `Completion` |
 | `call<T>(model, prompt)` | A `T`, checked field by field against the response |
 | `batch(model, prompts)` | A `Completion[]`, `result[i]` for `prompts[i]` |
-| `batch<T>(model, prompts)` | One result per prompt: `{ ok: true, value: T, inputTokens, outputTokens }` or `{ ok: false, reason }` |
+| `batch<T[]>(model, prompts)` | A `T[]`. One non-conforming element throws for the whole batch |
 | `models()` | The `Model`s this caller may call |
 
 
 - A `Completion` has `ok`, `true` when the model stopped naturally, and
   `text`. A truncated completion is `ok: false` with a `reason`.
-- Typed calls send a JSON Schema for `T` and check each response against it.
-  `call<T>` throws `TypeError` when a response does not match. `batch<T>`
-  records invalid JSON, a shape mismatch, or a provider failure in that item's
-  `reason` and preserves the other results in prompt order. Usage fields can be
-  `undefined`. Cancellation and execution limits still stop the run.
+- The typed form sends a JSON Schema for `T` with the request and checks the
+  response against it. A response that doesn't match throws `TypeError`.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
@@ -589,8 +586,8 @@ Gated model calls: call/batch, and models() to discover them.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[]): ({ inputTokens: number \| undefined; ok: true; outputTokens: number \| undefined; value: T } \| { ok: false; reason: string })[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
-| `call<T>(model: string, prompt: string): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
+| `batch<T>(model: string, prompts: string[], schema?: string): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `call<T>(model: string, prompt: string, schema?: string): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 
 ### `Completion`

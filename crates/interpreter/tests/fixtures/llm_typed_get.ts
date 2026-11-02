@@ -45,13 +45,10 @@ function main(): void {
   assert(untyped.ok, "the untyped form still returns the envelope");
   assert(untyped.text !== undefined, "carrying the raw text for a caller that wants it");
 
-  const many = llm.batch<Severity>("claude-haiku-4-5", ["one", "two"]);
-  assert(many.length === 2, "a typed batch returns one result per prompt");
-  const first = many[0];
-  const second = many[1];
-  assert(first.ok && second.ok);
-  if (first.ok && second.ok) {
-    assert(first.value.level === "critical");
-    assert(second.value.detail.restarts === 3);
-  }
+  // `batch<T>` names the shape of the *whole result*, not of one element, so
+  // the type argument is an array type.
+  const many = llm.batch<Severity[]>("claude-haiku-4-5", ["one", "two"]);
+  assert(many.length === 2, "a typed batch returns one checked value per prompt");
+  assert(many[0].level === "critical", "each element is checked against the element type");
+  assert(many[1].detail.restarts === 3, "including its nested fields");
 }

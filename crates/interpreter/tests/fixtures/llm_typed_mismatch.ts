@@ -43,13 +43,20 @@ function main(): void {
   // model output, which is exactly what must not leak into an error string.
   assert(message.indexOf("malformed on purpose") < 0, "the message never echoes the completion");
 
-  const batch = llm.batch<Severity>("claude-haiku-4-5", ["CONFIDENTIAL-PROMPT-TEXT"]);
-  const failed = batch[0];
-  assert(!failed.ok, "a non-conforming element is a failed result");
-  if (!failed.ok) {
-    assert(!failed.reason.includes("CONFIDENTIAL-PROMPT-TEXT"));
-    assert(!failed.reason.includes("malformed on purpose"));
+  // The same rejection reaches `batch<T>`: one non-conforming element throws
+  // for the batch rather than yielding a wrongly-typed element.
+  let batchThrew = false;
+  let batchMessage = "";
+  try {
+    llm.batch<Severity[]>("claude-haiku-4-5", ["CONFIDENTIAL-PROMPT-TEXT"]);
+    assert(false, "a non-conforming batch element must not pass the check");
+  } catch (e: TypeError) {
+    batchThrew = true;
+    batchMessage = e.message;
   }
+  assert(batchThrew, "a typed batch throws on a non-conforming element");
+  assert(batchMessage.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "and never echoes the prompt either");
+  assert(batchMessage.indexOf("malformed on purpose") < 0, "nor the completion");
 
   // The untyped form is the documented alternative when responses may not
   // conform: it returns the envelope instead of throwing, so the caller can

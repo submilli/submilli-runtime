@@ -873,14 +873,22 @@ async fn batch_docs_preserve_order_and_report_missing_names() {
         ("open", serde_json::json!([]), StatusCode::OK),
         ("missing", serde_json::json!([]), StatusCode::NOT_FOUND),
     ] {
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(
+                names
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|name| ("names[]", name.as_str().unwrap())),
+            )
+            .finish();
         let response = router
             .clone()
             .oneshot(
                 Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/blueprints/{name}/packages/docs"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(serde_json::json!({"names": names}).to_string()))
+                    .method("GET")
+                    .uri(format!("/v1/blueprints/{name}/packages/docs?{query}"))
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
@@ -902,4 +910,42 @@ async fn batch_docs_preserve_order_and_report_missing_names() {
             assert_eq!(results[0], results[2]);
         }
     }
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/blueprints/open/packages/docs")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"names":["Map"]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn docs_query_rejects_ambiguous_names_and_preserves_decoded_names() {
+    for query in [
+        "name=Map&names%5B%5D=Array",
+        "name=Map&name=Array",
+        "names=Map",
+    ] {
+        let (status, _) = get(&format!("/packages/docs?{query}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+    let names = ["submilli:fs", "@scope/a+b & c/δ", "Map", "submilli:fs"];
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(names.iter().map(|name| ("names[]", *name)))
+        .finish();
+    let (status, body) = get(&format!("/packages/docs?{query}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let actual: Vec<_> = body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(actual, names);
+    assert_eq!(body["results"][1]["found"], false);
 }
