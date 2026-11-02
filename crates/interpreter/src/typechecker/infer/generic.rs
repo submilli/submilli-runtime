@@ -2588,7 +2588,17 @@ impl Inferer<'_> {
         }
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
-        let result_ty = self.instantiate(&sub, &ret, span)?;
+        let checked_batch = crate::stdlib::llm::declaration::is_checked_batch(&mangled);
+        let result_ty = if checked_batch && !type_args_written {
+            crate::stdlib::llm::declaration::untyped_result_type(&mangled)
+        } else {
+            self.instantiate(&sub, &ret, span)?
+        };
+        let schema_ty = if checked_batch && type_args_written {
+            self.instantiate(&sub, &Type::TypeVar("T".to_string()), span)?
+        } else {
+            result_ty.clone()
+        };
 
         // A typed `llm.call<T>` is rewritten before the argument list is frozen,
         // because the schema emitted from `T` has to replace the trailing
@@ -2632,7 +2642,7 @@ impl Inferer<'_> {
 
         let mut emitted_schema = None;
         if let Some(checked) = &schema_checked {
-            match self.schema_checked_call_schema(checked, &result_ty, type_args_written, span) {
+            match self.schema_checked_call_schema(checked, &schema_ty, type_args_written, span) {
                 Ok(schema) => emitted_schema = schema,
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }

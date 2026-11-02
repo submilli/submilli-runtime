@@ -71,12 +71,15 @@ impl Inferer<'_> {
             .span;
         match self.syntactic_nullishness(target)? {
             ALWAYS => self.error(span, "this expression is always nullish".to_string()),
-            NEVER => self.error_with_help(
+            NEVER => self.diagnostics.push(crate::Diagnostic {
+                severity: crate::Severity::Warning,
                 span,
-                "right operand of `??` is unreachable because the left operand is never nullish"
-                    .to_string(),
-                vec!["remove the `??` and its right operand".to_string()],
-            ),
+                message:
+                    "right operand of `??` is unreachable because the left operand is never nullish"
+                        .to_string(),
+                help: vec!["remove the `??` and its right operand".to_string()],
+                notes: Vec::new(),
+            }),
             _ => return Ok(false),
         }
         Ok(true)

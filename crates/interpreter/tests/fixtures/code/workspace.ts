@@ -1,7 +1,7 @@
 import { writeText, readText, mkdir } from "submilli:fs";
 import { read, search, glob, tree, edit, insertAt, diffText, diffFiles, applyPatch } from "submilli:code";
 export function main(): void {
-    mkdir("src", false);
+    mkdir("src", { recursive: false });
     writeText("src/a.ts", "first\nsecond\nfirst\n");
     writeText("src/b.ts", "first\nchanged\nfirst\n");
     const window = read("src/a.ts", 2, 1);

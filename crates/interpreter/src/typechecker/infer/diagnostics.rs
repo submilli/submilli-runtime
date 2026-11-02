@@ -347,6 +347,32 @@ impl<'a> Inferer<'a> {
         culprit: Option<ExprId>,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let mut notes = Vec::new();
+        if let Some(id) = culprit {
+            let expr = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            let source = self.rewritable_snippet(expr.span);
+            if matches!(&expr.kind, crate::TypedExprKind::MethodCall { iface, name, .. }
+                | crate::TypedExprKind::GenericMethodCall { iface, name, .. }
+                if *iface == crate::mangle::prelude("Map") && name.name == "get")
+            {
+                help.push("`Map.get` returns undefined for a missing key".to_string());
+            }
+            let non_null = super::narrow_scopes::non_null_form(expr.ty.clone());
+            if matches!(
+                non_null.as_ref().map(Type::peel),
+                Some(Type::Number | Type::NumberLiteral(_))
+            ) {
+                help.push(format!(
+                    "may be undefined: use `({source} ?? 0)` or check it first"
+                ));
+            } else {
+                help.push(format!(
+                    "may be null or undefined: check `{source}` before using it"
+                ));
+            }
+        }
         if let Some((extra_help, extra_notes)) = culprit
             .map(|e| self.narrowing_invalidation_hint(e))
             .transpose()?
@@ -814,9 +840,18 @@ impl<'a> Inferer<'a> {
         name: &str,
         exports_help: Vec<String>,
     ) -> Vec<String> {
-        node_fs_equivalent(package, name)
-            .map(|equivalent| format!("did you mean `{equivalent}`?"))
+        let namespace_hint = package
+            .strip_prefix("submilli:")
+            .filter(|module| *module == name)
+            .map(|_| {
+                format!("import the module namespace with `import {name} from \"{package}\";`")
+            });
+        namespace_hint
             .into_iter()
+            .chain(
+                node_fs_equivalent(package, name)
+                    .map(|equivalent| format!("did you mean `{equivalent}`?")),
+            )
             .chain(exports_help)
             .collect()
     }

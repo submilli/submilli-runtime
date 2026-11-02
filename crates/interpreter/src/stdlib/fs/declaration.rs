@@ -14,9 +14,8 @@ pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
 
     let path_param = Param::new("path", Type::String);
-    let bytes_or_undefined = Type::union(vec![Type::Uint8Array, Type::Undefined]);
-    let string_or_undefined = Type::union(vec![Type::String, Type::Undefined]);
 
+    insert_recursive_options(&mut defs);
     insert_stat_interface(&mut defs);
     insert_peek_interface(&mut defs);
     insert_file_writer_interface(&mut defs);
@@ -36,7 +35,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "maxReadSize",
         Vec::new(),
         Type::Number,
-        "/**\n * Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.\n */",
+        "/**\n * Maximum number of bytes `read` / `readText` will load whole; past this they throw. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.\n */",
     );
     insert_fn(
         &mut defs,
@@ -62,7 +61,7 @@ pub fn package_declaration() -> PackageDeclaration {
         "summary",
         vec![path_param.clone()],
         Type::String,
-        "/**\n * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path, false)` to visit all of them.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive }\n */",
+        "/**\n * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path)` to visit all of them.\n * @param path File or directory path under the VFS root.\n * @capability fs.list { path, recursive }\n */",
     );
     insert_fn(
         &mut defs,
@@ -82,16 +81,13 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut defs,
         "stat",
         vec![path_param.clone()],
-        Type::Union(vec![
-            Type::InterfaceRef {
-                mangled: crate::mangle::package_symbol(MODULE_NAME, "Stat"),
-                package: crate::Package(MODULE_NAME.to_string()),
-                name: "Stat".to_string(),
-                args: Vec::new(),
-            },
-            Type::Undefined,
-        ]),
-        "/**\n * Metadata about an entry under the VFS root. Returns `undefined` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
+        Type::InterfaceRef {
+            mangled: crate::mangle::package_symbol(MODULE_NAME, "Stat"),
+            package: crate::Package(MODULE_NAME.to_string()),
+            name: "Stat".to_string(),
+            args: Vec::new(),
+        },
+        "/**\n * Metadata about an entry under the VFS root. Throws when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.\n * @param path File path under the VFS root.\n * @capability fs.stat { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -109,15 +105,15 @@ pub fn package_declaration() -> PackageDeclaration {
         &mut defs,
         "read",
         vec![path_param.clone()],
-        bytes_or_undefined.clone(),
-        "/**\n * Read the whole file as a `Uint8Array`. Returns `undefined` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
+        Type::Uint8Array,
+        "/**\n * Read the whole file as a `Uint8Array`. Throws when the file is larger than `maxReadSize()`. Traps on missing paths or directories.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
         "readText",
         vec![path_param.clone()],
-        string_or_undefined.clone(),
-        "/**\n * Read the whole file as a UTF-8 string. Returns `undefined` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
+        Type::String,
+        "/**\n * Read the whole file as a UTF-8 string. Throws when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.\n * @param path File path under the VFS root.\n * @capability fs.read { path }\n */",
     );
     insert_fn(
         &mut defs,
@@ -161,16 +157,16 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_fn(
         &mut defs,
         "mkdir",
-        vec![path_param.clone(), Param::new("recursive", Type::Boolean)],
+        vec![path_param.clone(), recursive_options_param()],
         Type::Void,
-        "/**\n * Create the directory at `path`. `recursive=true` creates intermediate directories (like `mkdir -p`); `recursive=false` throws when the parent is missing or the target already exists. Until options objects land, the flag is positional.\n * @param path Directory path under the VFS root.\n * @param recursive Whether to create missing parents.\n * @capability fs.mkdir { path, recursive }\n */",
+        "/**\n * Create the directory at `path`. `options.recursive=true` creates intermediate directories (like `mkdir -p`); `options.recursive=false` throws when the parent is missing or the target already exists. Pass `{ recursive: true }` to recurse; omitted options default to false.\n * @param path Directory path under the VFS root.\n * @param options Whether to create missing parents.\n * @capability fs.mkdir { path, recursive }\n */",
     );
     insert_fn(
         &mut defs,
         "remove",
-        vec![path_param.clone(), Param::new("recursive", Type::Boolean)],
+        vec![path_param.clone(), recursive_options_param()],
         Type::Void,
-        "/**\n * Remove the entry at `path`. Files unconditionally; directories require `recursive=true` (matches `rm -rf`). Without the flag, a non-empty directory throws.\n * @param path File or directory path under the VFS root.\n * @param recursive Whether to remove directories recursively.\n * @capability fs.remove { path, recursive }\n */",
+        "/**\n * Remove the entry at `path`. Files unconditionally; directories require `options.recursive=true` (matches `rm -rf`). Without the flag, a non-empty directory throws.\n * @param path File or directory path under the VFS root.\n * @param options Whether to remove directories recursively.\n * @capability fs.remove { path, recursive }\n */",
     );
     insert_fn(
         &mut defs,
@@ -232,7 +228,7 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_fn(
         &mut defs,
         "list",
-        vec![path_param.clone(), Param::new("recursive", Type::Boolean)],
+        vec![path_param.clone(), recursive_options_param()],
         Type::InterfaceRef {
             mangled: crate::mangle::prelude("Iterator"),
             package: crate::Package::prelude(),
@@ -244,7 +240,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 args: Vec::new(),
             }],
         },
-        "/**\n * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `recursive=true` walks descendants as well; `recursive=false` yields only direct children.\n *\n * Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted.\n *\n * Symlinks surface as `kind=\"symlink\"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.\n * @param path Directory path under the VFS root.\n * @param recursive Whether to walk descendants recursively.\n * @capability fs.list { path, recursive }\n */",
+        "/**\n * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `options.recursive=true` walks descendants as well; `options.recursive=false` yields only direct children.\n *\n * Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted.\n *\n * Symlinks surface as `kind=\"symlink\"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.\n * @param path Directory path under the VFS root.\n * @param options Whether to walk descendants recursively.\n * @capability fs.list { path, recursive }\n */",
     );
 
     defs
@@ -263,6 +259,57 @@ fn insert_fn(defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret:
                 ret,
                 type_predicate: None,
                 doc: crate::doc(crate::FileId::FS, doc),
+            },
+        },
+    );
+}
+
+fn recursive_options_param() -> Param {
+    Param::with_default(
+        "options",
+        Type::union(vec![
+            Type::InterfaceRef {
+                mangled: crate::mangle::package_symbol(MODULE_NAME, "RecursiveOptions"),
+                package: crate::Package(MODULE_NAME.to_string()),
+                name: "RecursiveOptions".to_string(),
+                args: Vec::new(),
+            },
+            Type::Undefined,
+        ]),
+        crate::DefaultValue::Undefined,
+    )
+}
+
+fn insert_recursive_options(defs: &mut PackageDeclaration) {
+    let properties = BTreeMap::from([(
+        "recursive".to_string(),
+        PropertySig {
+            ty: Type::Boolean,
+            readonly: false,
+            intrinsic: false,
+            optional: true,
+            doc: crate::doc(
+                crate::FileId::FS,
+                "/** Include descendants or create missing parents. Defaults to false. */",
+            ),
+        },
+    )]);
+    defs.types.insert(
+        "RecursiveOptions".to_string(),
+        TypeSymbol {
+            name: "RecursiveOptions".to_string(),
+            mangled_name: crate::mangle::package_symbol(MODULE_NAME, "RecursiveOptions"),
+            declaration_span: Span::at(crate::FileId::FS),
+            kind: TypeKind::Interface {
+                index: None,
+                generics: Vec::new(),
+                methods: BTreeMap::new(),
+                properties,
+                dispatch: Dispatch::VTable,
+                doc: crate::doc(
+                    crate::FileId::FS,
+                    "/** Options for mkdir, remove and list. */",
+                ),
             },
         },
     );
@@ -390,7 +437,7 @@ fn insert_dir_entry_interface(defs: &mut PackageDeclaration) {
                 properties,
                 dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::FS,
-                    "/** Directory entry yielded by `list(path, recursive)`. Properties: `kind` / `name` / `path` / `size`. Constructed only by the iterator. */",
+                    "/** Directory entry yielded by `list(path, options)`. Properties: `kind` / `name` / `path` / `size`. Constructed only by the iterator. */",
                 ),
             },
         },

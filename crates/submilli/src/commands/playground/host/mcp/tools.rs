@@ -20,8 +20,8 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, ErrorCode, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResult, ErrorCode, ListToolsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
@@ -53,8 +53,8 @@ struct ExecuteArgs {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct PackageDocsArgs {
-    /// Package name, e.g. `submilli:crypto`.
-    name: String,
+    /// Package or built-in names to read before writing the program.
+    names: Vec<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -383,25 +383,31 @@ impl SubmilliMcp {
         &self,
         Parameters(args): Parameters<PackageDocsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let lookup = match self.shared.blueprint(&self.blueprint_name).await {
-            Some(applied) => {
+        let mut results = Vec::new();
+        if let Some(applied) = self.shared.blueprint(&self.blueprint_name).await {
+            for name in &args.names {
                 self.shared
                     .run
-                    .refresh_package_discovery(&applied.blueprint, Some(&args.name))
+                    .refresh_package_discovery(&applied.blueprint, Some(name))
                     .await
                     .map_err(|message| ErrorData::internal_error(message, None))?;
-                let catalog = self.catalog(&applied.blueprint).await?;
-                let scope = self.docs_scope(&applied.blueprint);
-                packages::lookup_with_blueprint(&args.name, &catalog, &scope)
             }
-            None => packages::lookup(&args.name),
-        };
-        if let Some(markdown) = packages::docs_markdown(&lookup) {
-            Ok(CallToolResult::success(vec![Content::text(markdown)]))
+            let catalog = self.catalog(&applied.blueprint).await?;
+            let scope = self.docs_scope(&applied.blueprint);
+            for name in &args.names {
+                results.push(packages::batch_docs_entry(
+                    name,
+                    packages::lookup_with_blueprint(name, &catalog, &scope),
+                ));
+            }
         } else {
-            let value = packages::docs_json(&args.name, lookup);
-            Ok(CallToolResult::structured(value))
+            for name in &args.names {
+                results.push(packages::batch_docs_entry(name, packages::lookup(name)));
+            }
         }
+        Ok(CallToolResult::structured(
+            serde_json::json!({ "results": results }),
+        ))
     }
 
     // Description is served from `submilli_shared::prompt::tools` via `list_tools`.

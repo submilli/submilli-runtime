@@ -14,11 +14,10 @@
 //! [`checked_llm_call`](crate::typechecker) rather than ahead of it.
 //! [`is_checked_call`] is the hook that interception matches on.
 //!
-//! `T` defaults to `Completion` (or `Completion[]` for `batch`) rather than to
-//! `unknown`: the untyped call keeps its envelope, carrying `ok`/`text`/
-//! `reason`, while the typed form trades that envelope for the checked value —
-//! the same trade `session.get<T>` makes. That is why `T` appears only in the
-//! return type here and is never inferable from an argument.
+//! Without type arguments, `call` and `batch` keep their Completion envelopes.
+//! `call<T>` returns a checked T; `batch<T>` checks each completion against T
+//! and returns ordered success/value or failure/reason entries. T appears only
+//! in the return type and is never inferred from arguments.
 //!
 //! The trailing `schema` parameter is likewise not surface a program writes. It
 //! defaults to `undefined`, and the typed lowering fills it with the JSON Schema
@@ -50,10 +49,7 @@ fn call_type_var() -> Type {
     Type::TypeVar(CALL_TYPE_PARAM.to_string())
 }
 
-/// Whether `mangled` is the single-prompt checked read, as opposed to the
-/// batch. The two lower the same way but differ in what a bare call returns —
-/// `Completion` against `Completion[]` — so the interception needs to tell
-/// them apart to pick the untyped default.
+/// Whether this symbol needs per-element validation and the batch return shape.
 pub fn is_checked_batch(mangled: &crate::MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
 }
@@ -134,7 +130,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("prompts", Type::Array(Box::new(Type::String))),
             schema_param(),
         ],
-        call_type_var(),
+        batch_result_type(call_type_var()),
         "/**\n * Send every prompt to `model` and return one completion each, \
          positionally: `result[i]` is the outcome of `prompts[i]`, including when \
          that element failed.\n *\n * Fan-out happens host-side at a bounded \
@@ -144,12 +140,10 @@ pub fn package_declaration() -> PackageDeclaration {
          *\n * The whole slice is checked against the prompt-count and prompt-size \
          bounds, and its tokens reserved, before any bytes leave the process — so an \
          oversized batch is refused without partially dispatching.\n *\n * A type \
-         argument names the shape of the *whole result*, not of one element, so the \
-         typed form is `batch<Severity[]>(model, prompts)`. Every element is then \
-         checked structurally, and one non-conforming response throws for the batch \
-         rather than yielding a wrongly-typed element — which is why the untyped form, \
-         whose per-element `ok` survives a partial failure, is the right one when some \
-         prompts are expected to fail.\n * @param model Model name. \
+         argument names one element: `batch<Severity>(model, prompts)`. Each \
+         element is checked independently and returns `{ ok: true, value, inputTokens, outputTokens }` \
+         or `{ ok: false, reason }`. Unknown usage remains undefined. Failed JSON \
+         or type checks do not discard successful siblings.\n * @param model Model name. \
          Call `models()` for the ones this runtime serves.\n * @param prompts The \
          prompts, in the order the results come back. Bounded in count, and each in \
          bytes.\n * @capability llm.call { model: $model, \
@@ -376,4 +370,28 @@ fn insert_generic_fn(
             },
         },
     );
+}
+
+/// Each typed response carries its own success discriminant. Usage is unknown
+/// when the provider omitted it, and is never represented as zero in that case.
+pub(crate) fn batch_result_type(value: Type) -> Type {
+    let object = |fields: Vec<(&str, Type)>| Type::Object {
+        index: None,
+        fields: fields
+            .into_iter()
+            .map(|(name, ty)| (name.to_string(), crate::ObjectField::required(ty)))
+            .collect(),
+    };
+    Type::Array(Box::new(Type::union(vec![
+        object(vec![
+            ("ok", Type::BooleanLiteral(true)),
+            ("value", value),
+            ("inputTokens", optional_number()),
+            ("outputTokens", optional_number()),
+        ]),
+        object(vec![
+            ("ok", Type::BooleanLiteral(false)),
+            ("reason", Type::String),
+        ]),
+    ])))
 }

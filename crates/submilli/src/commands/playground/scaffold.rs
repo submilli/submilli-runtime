@@ -272,7 +272,7 @@ import { listCharges } from "@pied-piper/billing";
 
 function main(): void {
     // The playground mounts the project's `billing` volume here; a test writes its own.
-    mkdir("/billing", true);
+    mkdir("/billing", { recursive: true });
     writeText(
         "/billing/charges.json",
         '[{"customerId":"pied_piper","id":"ch_a1","amount":4900},' +

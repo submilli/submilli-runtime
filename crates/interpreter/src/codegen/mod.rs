@@ -7,6 +7,7 @@
 
 pub mod analysis;
 mod argument_defaults;
+mod batch_check;
 pub mod bigint_pool;
 pub mod bounds;
 pub mod box_types;
@@ -4377,16 +4378,16 @@ function main(): number { return counter + max_iterations; }"#,
                    assert(ni.epochMilliseconds > 0 && ntz.length > 0 && nz.timeZoneId === \"UTC\"); \
                    const re: RegExp = new RegExp(\"a\", \"g\"); \
                    assert(re.test(\"a\") && re.global && re.source === \"a\" && re.flags === \"g\" && re.lastIndex >= 0); \
-                   const rmatch: RegExpMatch | null = re.exec(\"a\"); \
+                   const rmatch: RegExpExecArray | null = re.exec(\"a\"); \
                    assert(rmatch !== null); \
-                   if (rmatch !== null) { const gg = rmatch.groups; const ng = rmatch.namedGroups; \
-                     assert(rmatch.match === \"a\" && rmatch.index === 0 && rmatch.input === \"a\" && gg.length >= 0 && ng.size >= 0); } \
-                   const sm: RegExpMatch | null = \"a\".match(re); \
+                   if (rmatch !== null) { const gg = rmatch.groups; \
+                     assert(rmatch[0] === \"a\" && rmatch.index === 0 && rmatch.input === \"a\" && gg === undefined && rmatch.length >= 1); } \
+                   const sm: RegExpMatchArray | null = \"a\".match(re); \
                    const marr = \"aa\".matchAll(re); \
                    const rep: string = \"a\".replace(\"a\", \"b\"); \
                    const repall: string = \"aa\".replaceAll(\"a\", \"b\"); \
                    const sp = \"a,b\".split(\",\"); \
-                   assert(sm === sm && \"a\".search(re) >= -1 && marr.length >= 0 && rep.length >= 0 && repall.length >= 0 && sp.length === 2); \
+                   assert(sm === sm && \"a\".search(re) >= -1 && marr.next().done === false && rep.length >= 0 && repall.length >= 0 && sp.length === 2); \
                    assert(isNaN(NaN) && !isFinite(Infinity)); \
                    const oo = { a: 1 }; \
                    assert(Object.keys(oo).length === 1 && Object.values(oo).length === 1); \
@@ -4437,12 +4438,9 @@ function main(): number { return counter + max_iterations; }"#,
             ("RegExp", "flags"),
             ("RegExp", "lastIndex"),
             ("RegExp", "global"),
-            // RegExpMatch accessors, including the Array/Map-building ones.
-            ("RegExpMatch", "match"),
-            ("RegExpMatch", "index"),
-            ("RegExpMatch", "input"),
-            ("RegExpMatch", "groups"),
-            ("RegExpMatch", "namedGroups"),
+            ("RegExpExecArray", "index"),
+            ("RegExpExecArray", "input"),
+            ("RegExpExecArray", "groups"),
             // String regex-arm methods (subsumes the SUB-605 string arm).
             ("String", "match"),
             ("String", "search"),

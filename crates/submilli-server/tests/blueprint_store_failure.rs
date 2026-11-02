@@ -416,7 +416,7 @@ async fn mcp_methods_propagate_store_failures_instead_of_using_fallbacks() {
     for (index, message) in [
         json!({"method":"tools/list"}),
         json!({"method":"tools/call", "params":{"name":"submilli__typescript__packages__search", "arguments":{"query":""}}}),
-        json!({"method":"tools/call", "params":{"name":"submilli__typescript__packages__docs", "arguments":{"name":"submilli:fs"}}}),
+        json!({"method":"tools/call", "params":{"name":"submilli__typescript__packages__docs", "arguments":{"names":["submilli:fs"]}}}),
         json!({"method":"tools/call", "params":{"name":"submilli__typescript__builtins__docs", "arguments":{"names":["Array"]}}}),
         json!({"method":"tools/call", "params":{"name":"submilli__typescript__execute", "arguments":{"code":"function main(): number { return 42; }"}}}),
     ].into_iter().enumerate() {

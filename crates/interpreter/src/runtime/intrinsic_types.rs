@@ -520,7 +520,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 StorageType::ValType(ValType::Ref(RefType::new(false, vtable.clone().into()))),
             ),
             FieldType::new(imm, StorageType::ValType(ValType::EXTERNREF)),
-            FieldType::new(mutv, StorageType::ValType(ValType::I32)),
+            FieldType::new(mutv, StorageType::ValType(ValType::F64)),
             FieldType::new(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
@@ -536,16 +536,17 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
     let regex_match_box = singleton_struct(
         engine,
         NonFinal,
-        Some(object.clone()),
+        Some(array.clone()),
         vec![
             FieldType::new(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, vtable.clone().into()))),
             ),
             FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(false, raw_array.clone().into()))),
             ),
+            FieldType::new(mutv, StorageType::ValType(ValType::I32)),
             FieldType::new(imm, StorageType::ValType(ValType::I32)),
             FieldType::new(
                 imm,
@@ -553,19 +554,8 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             ),
             FieldType::new(
                 imm,
-                StorageType::ValType(ValType::Ref(RefType::new(
-                    false,
-                    regex_capture_array.clone().into(),
-                ))),
+                StorageType::ValType(ValType::Ref(RefType::new(true, object.clone().into()))),
             ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(
-                    false,
-                    regex_capture_array.clone().into(),
-                ))),
-            ),
-            FieldType::new(mutv, StorageType::ValType(ValType::I64)),
         ],
     )?;
 

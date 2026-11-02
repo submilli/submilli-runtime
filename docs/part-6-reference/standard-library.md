@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "791453e031d5797335eb0a5cfd0ab406bb785c6fe009ba7bef4b935779c84368"
+  contentHash: "d60f4ca4fe9652ddc80421d0350296605e14d4ddac128aff537ed941b2b74998"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -135,14 +135,17 @@ An operation that passes a limit throws and leaves the repository as it was.
 | `call(model, prompt)` | One `Completion` |
 | `call<T>(model, prompt)` | A `T`, checked field by field against the response |
 | `batch(model, prompts)` | A `Completion[]`, `result[i]` for `prompts[i]` |
-| `batch<T[]>(model, prompts)` | A `T[]`. One non-conforming element throws for the whole batch |
+| `batch<T>(model, prompts)` | One result per prompt: `{ ok: true, value: T, inputTokens, outputTokens }` or `{ ok: false, reason }` |
 | `models()` | The `Model`s this caller may call |
 
 
 - A `Completion` has `ok`, `true` when the model stopped naturally, and
   `text`. A truncated completion is `ok: false` with a `reason`.
-- The typed form sends a JSON Schema for `T` with the request and checks the
-  response against it. A response that doesn't match throws `TypeError`.
+- Typed calls send a JSON Schema for `T` and check each response against it.
+  `call<T>` throws `TypeError` when a response does not match. `batch<T>`
+  records invalid JSON, a shape mismatch, or a provider failure in that item's
+  `reason` and preserves the other results in prompt order. Usage fields can be
+  `undefined`. Cancellation and execution limits still stop the run.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
@@ -395,17 +398,17 @@ Sandbox filesystem: files and directories under the VFS root.
 | `info(): Info` |  | The active VFS configuration: the root's `mode` (`"none"` / `"ephemeral"` / `"per_session"` / `"named"`), `access`, `volume` and `sizeLimit` (the cap on the bytes its files may hold, or `-1` when none applies), plus `mounts`, the named volumes grafted below the root. |
 | `isEmpty(path: string): boolean` | `fs.list { path, recursive }` | Returns `true` when the directory at `path` has no entries, or the file at `path` has zero bytes. |
 | `lines(path: string): Iterator<string>` | `fs.read { path }` | Stream the file at `path` as a constant-memory line iterator. |
-| `list(path: string, recursive: boolean): Iterator<DirEntry>` | `fs.list { path, recursive }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
-| `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. |
-| `mkdir(path: string, recursive: boolean): void` | `fs.mkdir { path, recursive }` | Create the directory at `path`. |
+| `list(path: string, options?: RecursiveOptions): Iterator<DirEntry>` | `fs.list { path, recursive }` | List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. |
+| `maxReadSize(): number` |  | Maximum number of bytes `read` / `readText` will load whole; past this they throw. |
+| `mkdir(path: string, options?: RecursiveOptions): void` | `fs.mkdir { path, recursive }` | Create the directory at `path`. |
 | `move(from: string, to: string): void` | `fs.move { from, to }` | Move / rename. |
 | `peek(path: string): Peek` | `fs.stat { path }` | Quick file-only inspection: preview (first ~256 bytes decoded UTF-8 lossy), detected `encoding` (`utf-8` / `utf-16le` / `utf-16be` / `latin1`), `lineEnding` (`lf` / `crlf`), and total `size`. |
-| `read(path: string): Uint8Array \| undefined` | `fs.read { path }` | Read the whole file as a `Uint8Array`. |
+| `read(path: string): Uint8Array` | `fs.read { path }` | Read the whole file as a `Uint8Array`. |
 | `readBytes(path: string, offset: number, length: number): Uint8Array` | `fs.read { path, length }` | Random-access byte-range read. |
-| `readText(path: string): string \| undefined` | `fs.read { path }` | Read the whole file as a UTF-8 string. |
-| `remove(path: string, recursive: boolean): void` | `fs.remove { path, recursive }` | Remove the entry at `path`. |
+| `readText(path: string): string` | `fs.read { path }` | Read the whole file as a UTF-8 string. |
+| `remove(path: string, options?: RecursiveOptions): void` | `fs.remove { path, recursive }` | Remove the entry at `path`. |
 | `size(path: string): number` | `fs.stat { path }` | File size in bytes. |
-| `stat(path: string): Stat \| undefined` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
+| `stat(path: string): Stat` | `fs.stat { path }` | Metadata about an entry under the VFS root. |
 | `summary(path: string): string` | `fs.list { path, recursive }` | Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. |
 | `write(path: string, content: Uint8Array): void` | `fs.write { path, length: number }` | Write `content` to `path` atomically (temp-file + rename). |
 | `writeText(path: string, content: string): void` | `fs.write { path, length: number }` | UTF-8 atomic write. |
@@ -413,7 +416,7 @@ Sandbox filesystem: files and directories under the VFS root.
 
 ### `DirEntry`
 
-Directory entry yielded by `list(path, recursive)`.
+Directory entry yielded by `list(path, options)`.
 
 | Member | Description |
 | --- | --- |
@@ -466,6 +469,14 @@ Lightweight file-only inspection — preview + transport metadata.
 | `readonly lineEnding: string` | `"crlf"` if a CRLF sequence appears in the preview; `"lf"` otherwise (including files with no line terminators yet). |
 | `readonly preview: string` | First ~256 bytes of the file decoded as UTF-8 lossy. |
 | `readonly size: number` | Total file size in bytes — same value as `size(path)`. |
+
+### `RecursiveOptions`
+
+Options for mkdir, remove and list.
+
+| Member | Description |
+| --- | --- |
+| `recursive?: boolean` | Include descendants or create missing parents. |
 
 ### `Stat`
 
@@ -578,7 +589,7 @@ Gated model calls: call/batch, and models() to discover them.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[], schema?: string): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `batch<T>(model: string, prompts: string[], schema?: string): ({ inputTokens: number \| undefined; ok: true; outputTokens: number \| undefined; value: T } \| { ok: false; reason: string })[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
 | `call<T>(model: string, prompt: string, schema?: string): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 

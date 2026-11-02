@@ -125,6 +125,9 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        if recv_ty.is_regexp_match_array() {
+            return self.find_method(&Type::Array(Box::new(Type::regexp_element())), name);
+        }
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
         let (mangled, _package, interface_name, args) = recv_ty.interface_routing()?;
@@ -245,6 +248,10 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        if recv_ty.is_regexp_match_array() && name == "length" {
+            return self
+                .lookup_interface_property(&Type::Array(Box::new(Type::regexp_element())), name);
+        }
         let original_recv_ty = recv_ty;
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);

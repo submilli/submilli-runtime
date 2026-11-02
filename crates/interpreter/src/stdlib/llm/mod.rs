@@ -133,12 +133,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         FuncType::new(
             &engine,
             [string.clone(), array.clone(), nullable_object.clone()],
-            // `batch` is declared generic (`T`, defaulting to `Completion[]`),
-            // so codegen types the guest import from the erased `TypeVar` slot
-            // — the universal `(ref null $Object)` — exactly as it does for
-            // `session.get`. The array this builds is still an `$Array`; only
-            // the declared slot it travels in is wider.
-            [nullable_object.clone()],
+            // Typed and untyped batches both return an ordered Array.
+            [array.clone()],
         ),
         |caller, params| {
             Box::pin(async move {
@@ -149,15 +145,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
                 let typed = schema.is_some();
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                let mut built = Vec::with_capacity(outcomes.len());
-                for outcome in outcomes {
-                    built.push(if typed {
-                        structured_value(caller, "llm.batch", outcome)?
-                    } else {
-                        build_completion(caller, outcome)?
-                    });
-                }
-                build_array(caller, built)
+                // Requests have completed: marshalling must not lose their outcomes to fuel exhaustion.
+                fuel::settle_result(caller, |caller| {
+                    let mut built = Vec::new();
+                    built
+                        .try_reserve_exact(outcomes.len())
+                        .map_err(crate::runtime::host::fatal_host_error)?;
+                    for outcome in outcomes {
+                        built.push(if typed {
+                            build_typed_batch_result(caller, outcome)?
+                        } else {
+                            build_completion(caller, outcome)?
+                        });
+                    }
+                    build_array(caller, built)
+                })
             })
         },
     )?;
@@ -830,6 +832,49 @@ fn structured_value(
         caller,
         text,
         &format!("{op}: the model's response is not JSON"),
+    )
+}
+
+/// The compiler validates each value and may replace its envelope on mismatch.
+/// The canonical slots are inputTokens, ok, outputTokens, reason, value.
+fn build_typed_batch_result(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    outcome: LlmOutcome,
+) -> wasmtime::Result<Val> {
+    use crate::runtime::{json::JsonUnknownAllocator, json_text};
+    let mut reason = outcome
+        .failure
+        .as_ref()
+        .map(|failure| failure.reason.to_string());
+    let mut value = crate::runtime::prelude::undefined::value(caller)?;
+    if reason.is_none() {
+        if let Some(text) = &outcome.text {
+            fuel::charge(&mut *caller, fuel::PARSE, text.len() as u64)?;
+            match json_text::parse(&text.encode_utf16().collect::<Vec<_>>()) {
+                Ok(parsed) => {
+                    value =
+                        JsonUnknownAllocator::new(&mut *caller)?.allocate(&mut *caller, &parsed)?;
+                }
+                Err(error) => reason = Some(format!("invalid JSON: {}", error.message())),
+            }
+        } else {
+            reason = Some("model returned no text".to_string());
+        }
+    }
+    let ok = JsonUnknownAllocator::new(&mut *caller)?
+        .allocate(&mut *caller, &json_text::JsonValue::Bool(reason.is_none()))?;
+    let reason = optional_string(caller, reason.as_deref())?;
+    let input = optional_number(caller, outcome.input_tokens.map(|n| n as f64))?;
+    let output = optional_number(caller, outcome.output_tokens.map(|n| n as f64))?;
+    abi::new_object(
+        caller,
+        std::collections::BTreeMap::from([
+            ("inputTokens".to_string(), input),
+            ("ok".to_string(), ok),
+            ("outputTokens".to_string(), output),
+            ("reason".to_string(), reason),
+            ("value".to_string(), value),
+        ]),
     )
 }
 
@@ -2042,37 +2087,102 @@ mod tests {
         );
     }
 
-    /// The typed `batch` checks every element, so one bad element throws for
-    /// the batch rather than yielding a wrongly-typed element.
     #[tokio::test]
     async fn a_typed_batch_checks_every_element() {
         let (provider, recorder) = MockProvider::new(
             vec![
-                LlmOutcome::success(r#"{"level":"high","score":1}"#.to_string()),
+                LlmOutcome::success(r#"{"level":"high","score":1}"#.to_string())
+                    .with_usage(Some(3), Some(4)),
                 LlmOutcome::success(r#"{"level":"low","score":"two"}"#.to_string()),
+                LlmOutcome::success("not JSON".to_string()),
+                LlmOutcome::success(r#"{"level":"last","score":5}"#.to_string()),
+                LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::Truncated, "truncated"),
+                    None::<String>,
+                ),
             ],
             Vec::new(),
         );
-        let err = Harness::new()
+        let value = Harness::new()
             .provider(provider)
             .run(
-                r#"import llm from "submilli:llm";
-                   interface Severity { level: string; score: number; }
-                   function main(): string {
-                     const s = llm.batch<Severity[]>("m", ["a", "b"]);
-                     return s[0].level;
-                   }"#,
+                r#"
+            import llm from "submilli:llm";
+            interface Severity { level: string; score: number; }
+            function main(): string {
+                const results = llm.batch<Severity>("m", ["a", "b", "c", "d", "e"]);
+                const first = results[0];
+                assert(first.ok);
+                if (first.ok) { assert(first.inputTokens === 3); assert(first.value.score === 1); }
+                const wrong = results[1];
+                assert(!wrong.ok);
+                if (!wrong.ok) { assert(wrong.reason.includes("type mismatch")); }
+                const malformed = results[2];
+                assert(!malformed.ok);
+                if (!malformed.ok) { assert(malformed.reason.includes("invalid JSON")); }
+                const failed = results[4];
+                assert(!failed.ok);
+                if (!failed.ok) { assert(failed.reason.includes("truncated")); }
+                const last = results[3];
+                assert(last.ok);
+                if (last.ok) { assert(last.inputTokens === undefined); return last.value.level; }
+                return "failed";
+            }
+        "#,
             )
             .await
-            .expect_err("a wrong-shaped element must throw");
-        assert!(
-            format!("{err}").contains("TypeError"),
-            "must be a TypeError, got: {err}",
+            .expect("per-element failures must preserve siblings");
+        assert_eq!(value, "last");
+        let schema: serde_json::Value = serde_json::from_str(
+            recorder.dispatches()[0]
+                .schema
+                .as_deref()
+                .expect("element schema"),
+        )
+        .expect("JSON schema");
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"]["score"]["type"], "number");
+    }
+
+    #[tokio::test]
+    async fn typed_batch_array_elements_and_empty_batches() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success("[1,2]"), LlmOutcome::success("[3]")],
+            Vec::new(),
         );
-        assert!(
-            recorder.dispatches()[0].schema.is_some(),
-            "a typed batch must send a schema",
-        );
+        Harness::new()
+            .provider(provider)
+            .run(
+                r#"
+            import llm from "submilli:llm";
+            function main(): void {
+                const empty = llm.batch<number[]>("m", []);
+                assert(empty.length === 0);
+                const results = llm.batch<number[]>("m", ["a", "b"]);
+                assert(results.length === 2);
+                const first = results[0];
+                assert(first.ok);
+                if (first.ok) { assert(first.value.length === 2); assert(first.value[1] === 2); }
+                const second = results[1];
+                assert(second.ok);
+                if (second.ok) { assert(second.value[0] === 3); }
+            }
+        "#,
+            )
+            .await
+            .expect("T describes one response, even when T is an array");
+        let dispatches = recorder.dispatches();
+        let schema: serde_json::Value = serde_json::from_str(
+            dispatches
+                .last()
+                .expect("dispatch")
+                .schema
+                .as_deref()
+                .expect("schema"),
+        )
+        .expect("JSON schema");
+        assert_eq!(schema["type"], "array");
+        assert_eq!(schema["items"]["type"], "number");
     }
 
     /// A `batch` of three prompts is one dispatch. The embedder sees their usage

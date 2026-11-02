@@ -285,6 +285,51 @@ pub async fn blueprint_docs(
     Ok(docs_response(&params.name, lookup))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchDocsParams {
+    names: Vec<String>,
+}
+
+pub async fn blueprint_docs_batch(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(params): Json<BatchDocsParams>,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let (catalog, scope) = registered_blueprint(&state, &name).await?;
+    let results: Vec<_> = params
+        .names
+        .iter()
+        .map(|name| {
+            let lookup = packages::lookup_with_blueprint(name, &catalog, &scope);
+            packages::batch_docs_entry(name, lookup)
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "results": results })))
+}
+
+pub async fn session_docs_batch(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Json(params): Json<BatchDocsParams>,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let session = registered_session(&state, &session_id).await?;
+    let results: Vec<_> = params
+        .names
+        .iter()
+        .map(|name| {
+            let lookup = packages::lookup_for_session(
+                name,
+                &session.catalog,
+                &session.scope,
+                session.tools.as_ref(),
+            );
+            packages::batch_docs_entry(name, lookup)
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "results": results })))
+}
+
 /// What a session's discovery routes answer from: its blueprint, the blueprint's
 /// MCP catalog and documentation, and the session's `@tools` package when
 /// programs may call it.

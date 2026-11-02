@@ -1,4 +1,4 @@
-// A RegExpMatch holds the input's code units, so a lone surrogate in the match
+// A RegExpExecArray holds the input's code units, so a lone surrogate in the match
 // or a capture survives.
 function hex(s: string): string {
   const out: string[] = [];
@@ -15,7 +15,7 @@ function main(): void {
   if (found === null) {
     return;
   }
-  assert(hex(found.match) === "61 d800 62", "the match keeps it");
-  const capture = found.groups[0];
+  assert(hex(found[0]!) === "61 d800 62", "the match keeps it");
+  const capture = found[1];
   assert(capture !== undefined && hex(capture) === "d800", "the capture keeps it");
 }

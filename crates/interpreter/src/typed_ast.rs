@@ -1292,6 +1292,7 @@ pub enum InterfaceCarrier {
     Set(Type),
     RegExp,
     RegExpMatch,
+    RegExpMatchArray,
     TemporalInstant,
     TemporalDuration,
     TemporalZonedDateTime,

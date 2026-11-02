@@ -393,6 +393,7 @@ pub(crate) enum IteratorSource {
     Set,
     String,
     Bytes,
+    Regex,
 }
 
 pub(crate) fn shared_next(
@@ -411,13 +412,18 @@ pub(crate) fn shared_next(
         IteratorSource::Set => 6,
         IteratorSource::String => 9,
         IteratorSource::Bytes => 10,
+        IteratorSource::Regex => 13,
     };
     let kind = match kind {
         IterKind::Keys => 0,
         IterKind::Values => 1,
         IterKind::Entries => 2,
     };
-    let index = if offset == 9 { 9 } else { offset + kind };
+    let index = if matches!(offset, 9 | 13) {
+        offset
+    } else {
+        offset + kind
+    };
     if let Some(function) = caller
         .data()
         .iterator_functions

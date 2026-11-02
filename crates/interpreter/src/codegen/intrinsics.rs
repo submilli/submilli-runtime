@@ -527,7 +527,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         mutable: false,
                     },
                     FieldType {
-                        element_type: StorageType::Val(ValType::I32),
+                        element_type: StorageType::Val(ValType::F64),
                         mutable: true,
                     },
                     FieldType {
@@ -555,37 +555,30 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         },
     });
 
-    // $RegExpMatchBox: fields 1=match, 2=index, 3=input, 4=numbered captures, 5=alternating name/value array.
+    // Match arrays extend Array with index, input and named groups metadata.
     types.ty().subtype(&SubType {
         is_final: false,
-        supertype_idx: Some(object),
+        supertype_idx: Some(array),
         composite_type: CompositeType {
             inner: CompositeInnerType::Struct(StructType {
                 fields: vec![
                     fieldtype_ref(vtable),
                     FieldType {
-                        element_type: StorageType::Val(ref_to(string)),
-                        mutable: false,
+                        element_type: StorageType::Val(ref_to(raw_array)),
+                        mutable: true,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I32),
+                        mutable: true,
                     },
                     FieldType {
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
                     },
+                    fieldtype_ref(string),
                     FieldType {
-                        element_type: StorageType::Val(ref_to(string)),
+                        element_type: StorageType::Val(ref_null(object)),
                         mutable: false,
-                    },
-                    FieldType {
-                        element_type: StorageType::Val(ref_to(regex_capture_array)),
-                        mutable: false,
-                    },
-                    FieldType {
-                        element_type: StorageType::Val(ref_to(regex_capture_array)),
-                        mutable: false,
-                    },
-                    FieldType {
-                        element_type: StorageType::Val(ValType::I64),
-                        mutable: true,
                     },
                 ]
                 .into_boxed_slice(),
@@ -1099,7 +1092,7 @@ pub(crate) fn intrinsic_supertypes(
         (indices.error, indices.object_shape),
         (indices.bigint, indices.object),
         (indices.regex, indices.object),
-        (indices.regex_match_box, indices.object),
+        (indices.regex_match_box, indices.array),
         (indices.temporal_instant, indices.object),
         (indices.temporal_duration, indices.object),
         (indices.temporal_zdt, indices.object),

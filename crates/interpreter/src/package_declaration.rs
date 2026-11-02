@@ -474,6 +474,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                     | crate::InterfaceCarrier::SetAny
                     | crate::InterfaceCarrier::RegExp
                     | crate::InterfaceCarrier::RegExpMatch
+                    | crate::InterfaceCarrier::RegExpMatchArray
                     | crate::InterfaceCarrier::TemporalInstant
                     | crate::InterfaceCarrier::TemporalDuration
                     | crate::InterfaceCarrier::TemporalZonedDateTime

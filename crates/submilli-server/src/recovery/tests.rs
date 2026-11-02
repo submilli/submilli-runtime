@@ -551,7 +551,7 @@ async fn retirement_does_not_recreate_a_deleted_working_directory() {
         )
         .unwrap(),
     );
-    let source = r#"import { remove } from "submilli:fs"; function main(): void { remove("/work", false); }"#;
+    let source = r#"import { remove } from "submilli:fs"; function main(): void { remove("/work", { recursive: false }); }"#;
     let id = accept_with_blueprint(&state, "s", source, None, blueprint).await;
     state.boot().await.unwrap();
     let result = until(&state, &id, "completed").await;

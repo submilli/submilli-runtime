@@ -2067,7 +2067,10 @@ impl<'a> Inferer<'a> {
                 "RegExp" => {
                     carriers.insert(crate::InterfaceCarrier::RegExp);
                 }
-                "RegExpMatch" => {
+                "RegExpMatchArray" => {
+                    carriers.insert(crate::InterfaceCarrier::RegExpMatchArray);
+                }
+                "RegExpExecArray" => {
                     carriers.insert(crate::InterfaceCarrier::RegExpMatch);
                 }
                 "Temporal.Instant" => {

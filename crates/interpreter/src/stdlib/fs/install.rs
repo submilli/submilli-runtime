@@ -223,7 +223,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("read"),
-        FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
+        FuncType::new(&engine, [string.clone()], [uint8.clone()]),
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.read")?;
@@ -233,7 +233,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
                         Ok(Val::AnyRef(Some(arr.to_anyref())))
                     }
-                    None => crate::runtime::prelude::undefined::value(caller),
+                    None => Err(crate::runtime::host::range_error(
+                        "file exceeds fs.maxReadSize()",
+                    )),
                 }
             })
         },
@@ -243,7 +245,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("readText"),
-        FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
+        FuncType::new(&engine, [string.clone()], [string.clone()]),
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readText")?;
@@ -258,7 +260,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         let st = write_submilli_string_struct(caller, &text)?;
                         Ok(Val::AnyRef(Some(st.to_anyref())))
                     }
-                    None => crate::runtime::prelude::undefined::value(caller),
+                    None => Err(crate::runtime::host::range_error(
+                        "file exceeds fs.maxReadSize()",
+                    )),
                 }
             })
         },
@@ -356,11 +360,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("mkdir"),
-        FuncType::new(&engine, [string.clone(), ValType::I32], []),
+        FuncType::new(&engine, [string.clone(), nullable_object.clone()], []),
         |caller, params, _results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.mkdir")?;
-                let recursive = i32_flag(abi_arg(params, 1)?, "fs.mkdir (recursive)")?;
+                let recursive = recursive_option(caller, abi_arg(params, 1)?).await?;
                 let ticket = check_security_call(
                     &mut *caller,
                     "fs.mkdir",
@@ -407,11 +411,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("remove"),
-        FuncType::new(&engine, [string.clone(), ValType::I32], []),
+        FuncType::new(&engine, [string.clone(), nullable_object.clone()], []),
         |caller, params, _results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.remove")?;
-                let recursive = i32_flag(abi_arg(params, 1)?, "fs.remove (recursive)")?;
+                let recursive = recursive_option(caller, abi_arg(params, 1)?).await?;
                 let ticket = check_security_call(
                     &mut *caller,
                     "fs.remove",
@@ -655,13 +659,13 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         fs_fn("list"),
         FuncType::new(
             &engine,
-            [string.clone(), ValType::I32],
+            [string.clone(), nullable_object.clone()],
             [nullable_object.clone()],
         ),
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.list (path)")?;
-                let recursive = i32_flag(abi_arg(params, 1)?, "fs.list (recursive)")?;
+                let recursive = recursive_option(caller, abi_arg(params, 1)?).await?;
                 check_security_call(
                     &mut *caller,
                     "fs.list",
@@ -929,4 +933,20 @@ fn install_file_writer_methods(
     )?;
 
     Ok(())
+}
+
+async fn recursive_option(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    options: &Val,
+) -> wasmtime::Result<bool> {
+    use crate::runtime::prelude::{collection, undefined};
+    if undefined::is_undefined(caller, options)? {
+        return Ok(false);
+    }
+    let value =
+        crate::runtime::prelude::object::read_property(caller, options, "recursive").await?;
+    if undefined::is_undefined(caller, &value)? {
+        return Ok(false);
+    }
+    collection::unbox_bool(caller, &value)
 }

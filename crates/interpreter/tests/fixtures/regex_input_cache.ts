@@ -5,7 +5,7 @@ function main(): number {
     for (let i = 0; i < a.length; i++) {
         const hit = r.exec(a);
         if (hit === null) { throw new Error("missing match"); }
-        if (hit.index !== i || hit.input !== a || hit.match !== "x") {
+        if (hit.index !== i || hit.input !== a || hit[0] !== "x") {
             throw new Error("cached input changed result");
         }
     }

@@ -15,7 +15,7 @@ function chain(branch: string): string {
 }
 
 function build(branch: string): void {
-  mkdir(chain(branch), true);
+  mkdir(chain(branch), { recursive: true });
   let path: string = "/" + branch;
   writeText(path + "/f.txt", "x");
   for (let i = 1; i <= DEPTH; i = i + 1) {
@@ -30,7 +30,7 @@ function main(): void {
 
   const paths: string[] = [];
   const kinds: string[] = [];
-  for (const entry of list("/", true)) {
+  for (const entry of list("/", { recursive: true })) {
     paths.push(entry.path);
     kinds.push(entry.kind);
   }

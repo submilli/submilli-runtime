@@ -13,7 +13,7 @@ function main(): void {
   assert(!re.test("xyz"), "no match");
   assert(re.lastIndex === 0, "no-match also leaves 0");
 
-  const m: RegExpMatch | null = re.exec("foofoo");
+  const m: RegExpExecArray | null = re.exec("foofoo");
   assert(m !== null, "exec match");
   assert(re.lastIndex === 0, "exec leaves lastIndex alone");
 }

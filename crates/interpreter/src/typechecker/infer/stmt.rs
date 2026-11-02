@@ -3835,6 +3835,9 @@ impl Inferer<'_> {
         iter_ty: &Type,
     ) -> Option<(Type, crate::ForOfKind)> {
         match iter_ty.peel() {
+            ty if ty.is_regexp_match_array() => {
+                Some((Type::regexp_element(), crate::ForOfKind::Array))
+            }
             Type::Array(elem) => Some(((**elem).clone(), crate::ForOfKind::Array)),
             // Tuples are `$Array` at runtime, so the array desugar reads them
             // directly; the positions' union is what each element can be.

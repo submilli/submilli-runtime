@@ -851,3 +851,55 @@ mod blueprint_scoped {
         assert!(body.contains("function ping("), "got: {body}");
     }
 }
+
+#[tokio::test]
+async fn batch_docs_preserve_order_and_report_missing_names() {
+    let blueprint = submilli_blueprint::parse("name: open\ndefault: allow\n").unwrap();
+    let state = AppState::new(ServerConfig {
+        blueprints: Some(std::sync::Arc::new(
+            submilli_server::blueprint::InMemoryBlueprintStore::seed([blueprint]).unwrap(),
+        )),
+        ..in_memory_config::config()
+    })
+    .await
+    .unwrap();
+    let router = app(state);
+    for (name, names, expected) in [
+        (
+            "open",
+            serde_json::json!(["fs", "nope", "fs"]),
+            StatusCode::OK,
+        ),
+        ("open", serde_json::json!([]), StatusCode::OK),
+        ("missing", serde_json::json!([]), StatusCode::NOT_FOUND),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/blueprints/{name}/packages/docs"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::json!({"names": names}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        if expected != StatusCode::OK {
+            continue;
+        }
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), names.as_array().unwrap().len());
+        for (entry, requested) in results.iter().zip(names.as_array().unwrap()) {
+            assert_eq!(&entry["name"], requested);
+            assert_eq!(entry["found"], requested != "nope");
+            assert!(!entry["text"].as_str().unwrap().is_empty());
+        }
+        if !results.is_empty() {
+            assert_eq!(results[0], results[2]);
+        }
+    }
+}

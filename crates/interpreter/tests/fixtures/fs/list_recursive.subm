@@ -1,13 +1,13 @@
 import { mkdir, writeText, list, DirEntry } from "submilli:fs";
 
 function main(): void {
-  mkdir("/tree/sub", true);
+  mkdir("/tree/sub", { recursive: true });
   writeText("/tree/a.txt", "alpha");
   writeText("/tree/sub/b.txt", "bravo");
 
   let fileCount: number = 0;
   let dirCount: number = 0;
-  for (const entry of list("/tree", true)) {
+  for (const entry of list("/tree", { recursive: true })) {
     if (entry.kind === "file") {
       fileCount = fileCount + 1;
     } else if (entry.kind === "directory") {

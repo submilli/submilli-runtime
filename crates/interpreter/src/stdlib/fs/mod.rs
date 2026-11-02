@@ -412,11 +412,13 @@ async fn append_text(
     .await
 }
 
-/// `stat(path)`: a `$StatBacking`, or `undefined` when the path does not exist.
+/// `stat(path)`: metadata, or a guest error when the path does not exist.
 async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
     let observation = stat_path(caller, path, false).await?;
     let Some(stat) = &observation else {
-        return crate::runtime::prelude::undefined::value(caller);
+        return Err(wasmtime::Error::msg(format!(
+            "fs.stat {path}: path does not exist"
+        )));
     };
     let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
     let ty = stat_backing_struct(caller.engine())?;
@@ -439,7 +441,7 @@ async fn stat_path(
     path: &str,
     follow: bool,
 ) -> wasmtime::Result<Option<effects::FileStat>> {
-    // `stat` is declared `Stat | undefined` so a program can probe for absence. Resolution now
+    // Internal probes preserve absence for exists; the public stat wrapper throws. Resolution
     // opens the parent, so a missing *ancestor* fails here rather than at the metadata call
     // below — and answering that with a trap would break the contract every caller branches
     // on. Escapes still trap: unreachable-because-outside is not the same as absent.
@@ -563,7 +565,7 @@ fn detect_encoding(buf: &[u8]) -> (&'static str, usize) {
 
 /// The shared `read`/`readText` path: gate, resolve, refuse directories, and
 /// load the whole file — or `None` when it exceeds `fs.maxReadSize` (the
-/// caller surfaces that as a guest `null`).
+/// public wrapper throws a RangeError).
 async fn read_whole_capped(
     caller: &mut Caller<'_, StoreData>,
     path: &str,
@@ -607,10 +609,15 @@ async fn read_whole_capped(
                         Some(work.clone()),
                         &path,
                         0,
-                        caller.data().fs_max_read_size,
+                        caller.data().fs_max_read_size.saturating_add(1),
                     )
                     .await
                     .map_err(|e| backend_error(&ctx, &path, e))?;
+                // Detect growth since metadata instead of returning a truncated whole file.
+                if bytes.len() as u64 > caller.data().fs_max_read_size {
+                    work.settle(&mut *caller)?;
+                    return Ok(None);
+                }
                 record_payload(&*caller, ticket, Side::Response, || {
                     Payload::meta(serde_json::Value::Null).with_body(&bytes)
                 });
@@ -1005,7 +1012,22 @@ pub(crate) fn backend_error(op: &str, path: &str, error: PortError) -> wasmtime:
     match error {
         PortError::Execution(error) => error,
         PortError::Exhausted(_) => wasmtime::Trap::OutOfFuel.into(),
-        PortError::Containment(error) => write_target_trap(op, path, &error),
+        PortError::Containment(error) => {
+            if matches!(
+                op,
+                "fs.write" | "fs.writeText" | "fs.append" | "fs.appendText" | "fs.mkdir"
+            ) {
+                write_target_trap(op, path, &error)
+            } else if matches!(&error, ContainError::Io(e) if e.kind() == std::io::ErrorKind::NotFound)
+            {
+                wasmtime::Error::msg(format!("{op} {path}: file does not exist"))
+            } else {
+                crate::stdlib::shared::contain_trap(op, path, &error)
+            }
+        }
+        PortError::Io(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            wasmtime::Error::msg(format!("{op} {path}: file does not exist"))
+        }
         PortError::Quota(error) => quota_refusal(op, path, error),
         PortError::Backend(error) => crate::runtime::host::fatal_host_error(error),
         other => wasmtime::Error::msg(format!("{op} {path}: {other}")),
@@ -1117,11 +1139,11 @@ mod tests {
                 assert(fails(() => copy("a", "/alias/a", false)), "self-copy refused");
                 move("a", "/all/b");
                 assert(readText("/all/b") === "12345678", "same-volume move at quota");
-                assert(fails(() => remove("/all/users", true)), "aliased mount ancestor protected");
-                mkdir("tree", true);
+                assert(fails(() => remove("/all/users", { recursive: true })), "aliased mount ancestor protected");
+                mkdir("tree", { recursive: true });
                 assert(fails(() => copy("tree", "/alias/tree/child", true)), "descendant copy refused");
                 let found = false;
-                for (const entry of list(".", false)) { if (entry.name === "tree") found = entry.path === "/personal/tree"; }
+                for (const entry of list(".", { recursive: false })) { if (entry.name === "tree") found = entry.path === "/personal/tree"; }
                 assert(found, "listing uses cwd");
             }
         "#;
@@ -1146,7 +1168,7 @@ mod tests {
             r#"
             import { mkdir, writeText, readText, copy } from "submilli:fs";
             function main(): void {
-                mkdir("/tree", true);
+                mkdir("/tree", { recursive: true });
                 writeText("/tree/a", "hello");
                 copy("/tree", "/notes", true);
                 assert(readText("/notes/a") === "hello", "copy merges into mount root");
@@ -1171,6 +1193,32 @@ mod tests {
                 let text = "";
                 for (const line of lines("/short")) { text += line; }
                 assert(text === "ok", "a later reader still works");
+            }
+        "#;
+        let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
+        data.fs_max_read_size = 4;
+        run_with(source, data).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn whole_file_reads_throw_at_the_cap_and_missing_paths() {
+        let source = r#"
+            import fs from "submilli:fs";
+            function main(): void {
+                fs.writeText("/large", "12345");
+                fs.writeText("/exact", "1234");
+                let caught = 0;
+                try { fs.read("/large"); } catch (e: RangeError) { caught++; }
+                try { fs.readText("/large"); } catch (e: RangeError) { caught++; }
+                assert(caught === 2);
+                assert(fs.read("/exact").length === 4);
+                assert(fs.readText("/exact") === "1234");
+                assert(!fs.exists("/missing/file"));
+                let missing = 0;
+                try { fs.stat("/missing/file"); } catch (e) { missing++; }
+                try { fs.readText("/missing/file"); }
+                catch (e) { assert(e.message.includes("file does not exist")); assert(!e.message.includes("mkdir")); missing++; }
+                assert(missing === 2);
             }
         "#;
         let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
@@ -1223,7 +1271,7 @@ function main(): void {
  s.reset(info()); rejects(() => { const v = s.value; });
  const p = new PeekField(); p.reset(peek("/input.txt")); assert(p.value!.size === 4, "Peek");
  const e = new EntryField();
- for (const entry of list("/", false)) { if (entry.name === "input.txt") e.reset(entry); }
+ for (const entry of list("/", { recursive: false })) { if (entry.name === "input.txt") e.reset(entry); }
  assert(e.value!.name === "input.txt", "DirEntry");
  p.reset(e.value); rejects(() => { const v = p.value; });
  e.reset(peek("/input.txt")); rejects(() => { const v = e.value; });
@@ -1308,12 +1356,12 @@ function main(): void {
         let source = r#"
             import { mkdir, writeText, list, DirEntry } from "submilli:fs";
             function main(): void {
-                mkdir("/d", false);
+                mkdir("/d", { recursive: false });
                 writeText("/d/a.txt", "a");
                 writeText("/d/b.txt", "b");
                 writeText("/d/c.txt", "c");
                 let count: number = 0;
-                for (const entry of list("/d", false)) {
+                for (const entry of list("/d", { recursive: false })) {
                     count = count + 1;
                     if (count === 1) {
                         break;
@@ -1607,7 +1655,7 @@ function main(): void {
         let vfs = Vfs::external(root.path().to_path_buf()).unwrap();
         let result = run_with_fuel(
             r#"import { remove, exists } from "submilli:fs";
-            function main(): void { remove("/tree", true); assert(!exists("/tree")); }"#,
+            function main(): void { remove("/tree", { recursive: true }); assert(!exists("/tree")); }"#,
             StoreData::with_vfs("test-run".into(), vfs.clone()),
             Some(9000),
         )
@@ -1765,7 +1813,7 @@ function main(): void {
         assert!(lines[100].starts_with("  f098  (file"), "{output}");
         assert_eq!(
             lines[101],
-            "  … 6 more not shown; iterate `list(\"/we \\\"quote\\\"\", false)` for every entry"
+            "  … 6 more not shown; iterate `list(\"/we \\\"quote\\\"\", { recursive: false })` for every entry"
         );
     }
 
@@ -1901,7 +1949,7 @@ function main(): void {
             }
             function main(): void {
                 writeText("/a.txt", "x".repeat(60));
-                remove("/a.txt", false);
+                remove("/a.txt", { recursive: false });
                 writeText("/b.txt", "y".repeat(60));
                 writeText("/c.txt", "z".repeat(30));
                 move("/c.txt", "/b.txt");
@@ -1969,7 +2017,7 @@ function main(): void {
             function main(): void {
                 writeText("/big.txt", "");
                 writeText("/big.txt", "x".repeat(10));
-                remove("/big.txt", false);
+                remove("/big.txt", { recursive: false });
                 writeText("/after.txt", "y".repeat(100));
             }
         "#;
@@ -1986,7 +2034,7 @@ function main(): void {
                 const w = writer("/w.bin");
                 w.writeBytes(new Uint8Array(60));
                 let temp = "";
-                for (const e of list("/", false)) { if (e.name.startsWith("w.bin.")) { temp = e.path; } }
+                for (const e of list("/", { recursive: false })) { if (e.name.startsWith("w.bin.")) { temp = e.path; } }
                 move(temp, "/kept.bin");
                 let failed = false;
                 try { w.close(); } catch (e) { failed = true; }
@@ -2012,8 +2060,8 @@ function main(): void {
                 const w = writer("/w.bin");
                 w.writeBytes(new Uint8Array(40000));
                 let temp = "";
-                for (const e of list("/", false)) { if (e.name.startsWith("w.bin.")) { temp = e.path; } }
-                remove(temp, false);
+                for (const e of list("/", { recursive: false })) { if (e.name.startsWith("w.bin.")) { temp = e.path; } }
+                remove(temp, { recursive: false });
                 writeText(temp, "");
                 let failed = false;
                 try { w.close(); } catch (e) { failed = true; }
@@ -2036,7 +2084,7 @@ function main(): void {
             import { writeText, remove } from "submilli:fs";
             function main(): string {
                 writeText("/empty.txt", "");
-                remove("/empty.txt", false);
+                remove("/empty.txt", { recursive: false });
                 try { writeText("/a.txt", "x"); return "allowed"; }
                 catch (e) { return (e instanceof QuotaExceededError && e instanceof Error && !((e as unknown) instanceof RangeError) ? "true " : "false ") + (e as Error).message; }
             }
@@ -2054,10 +2102,10 @@ function main(): void {
         let source = r#"
             import { mkdir, writeText, remove } from "submilli:fs";
             function main(): void {
-                mkdir("/d/e", true);
+                mkdir("/d/e", { recursive: true });
                 writeText("/d/e/a.txt", "x".repeat(60));
                 writeText("/d/b.txt", "y".repeat(30));
-                remove("/d", true);
+                remove("/d", { recursive: true });
                 writeText("/c.txt", "z".repeat(100));
             }
         "#;
@@ -2076,7 +2124,7 @@ function main(): void {
             function main(): void {
                 writeText("/f.bin", "x".repeat(90));
                 for (const chunk of bytes("/f.bin", 1)) {
-                    remove("/f.bin", false);
+                    remove("/f.bin", { recursive: false });
                     assert(refused(() => writeText("/g.txt", "y".repeat(20))), "the open file's bytes still count");
                     break;
                 }
@@ -2099,7 +2147,7 @@ function main(): void {
                 const w = writer("/a.bin");
                 w.writeBytes(new Uint8Array(40000));
                 let temp = "";
-                for (const e of list("/", false)) { if (e.name.startsWith("a.bin.")) { temp = e.path; } }
+                for (const e of list("/", { recursive: false })) { if (e.name.startsWith("a.bin.")) { temp = e.path; } }
                 writeText(temp, "x".repeat(40000));
                 let failed = false;
                 try { w.close(); } catch (e) { failed = true; }
@@ -2193,11 +2241,11 @@ function main(): void {
                 const w = writer("/a.bin");
                 w.writeBytes(new Uint8Array(40000));
                 let temp = "";
-                for (const e of list("/", false)) {
+                for (const e of list("/", { recursive: false })) {
                     if (e.name.startsWith("a.bin.")) { temp = e.path; }
                 }
                 copy("/empty", temp, false);
-                mkdir("/a.bin", false);
+                mkdir("/a.bin", { recursive: false });
                 writeText("/a.bin/x", "1");
                 let closed = true;
                 try { w.close(); } catch (e) { closed = false; }
@@ -2253,10 +2301,10 @@ function main(): void {
                 assert(!exists("/data/memoryx/new.txt"), "a sibling prefix is not the mount");
                 assert(stat("/data/memory")!.kind === "directory", "the mount point is a directory");
                 const names: string[] = [];
-                for (const entry of list("/data", false)) { names.push(entry.name); }
+                for (const entry of list("/data", { recursive: false })) { names.push(entry.name); }
                 assert(names.length === 1 && names[0] === "memory", "the parent lists the mount point");
                 const paths: string[] = [];
-                for (const entry of list("/", true)) { paths.push(entry.path); }
+                for (const entry of list("/", { recursive: true })) { paths.push(entry.path); }
                 assert(paths.includes("/data/memory/kept.txt"), "a recursive walk descends into the volume");
                 assert(paths.includes("/data/memory/new.txt"), "and sees new files");
                 const fs = info();
@@ -2305,14 +2353,14 @@ function main(): void {
                 writeText("/local.txt", "l");
                 assert(readText("/handbook/dir/a.txt") === "a", "reads work");
                 let count = 0;
-                for (const entry of list("/handbook", true)) { count++; }
+                for (const entry of list("/handbook", { recursive: true })) { count++; }
                 assert(count === 2, "listing works");
                 assert(denied(() => writeText("/handbook/b.txt", "b")) === "fs.write", "write");
                 assert(denied(() => append("/handbook/dir/a.txt", new Uint8Array(1))) === "fs.write", "append");
                 assert(denied(() => writer("/handbook/c.txt")) === "fs.write", "writer");
-                assert(denied(() => mkdir("/handbook/new", false)) === "fs.mkdir", "mkdir");
-                mkdir("/handbook/dir", true);
-                assert(denied(() => remove("/handbook/dir/a.txt", false)) === "fs.remove", "remove");
+                assert(denied(() => mkdir("/handbook/new", { recursive: false })) === "fs.mkdir", "mkdir");
+                mkdir("/handbook/dir", { recursive: true });
+                assert(denied(() => remove("/handbook/dir/a.txt", { recursive: false })) === "fs.remove", "remove");
                 assert(denied(() => move("/handbook/dir/a.txt", "/moved.txt")) === "fs.move", "move out");
                 assert(denied(() => move("/local.txt", "/handbook/l.txt")) === "fs.move", "move in");
                 assert(denied(() => copy("/local.txt", "/handbook/l.txt", false)) === "fs.copy", "copy in");
@@ -2420,16 +2468,16 @@ function main(): void {
             }
             function main(): void {
                 writeText("/a/sibling.txt", "s");
-                mkdir("/a", true);
-                assert(fails(() => remove("/a/m", true)), "remove the mount point");
-                assert(fails(() => remove("/a", true)), "remove an ancestor");
+                mkdir("/a", { recursive: true });
+                assert(fails(() => remove("/a/m", { recursive: true })), "remove the mount point");
+                assert(fails(() => remove("/a", { recursive: true })), "remove an ancestor");
                 assert(fails(() => move("/a/m", "/b")), "move the mount point");
                 assert(fails(() => move("/a", "/b")), "move an ancestor");
                 assert(fails(() => move("/a/sibling.txt", "/a/m")), "replace the mount point");
                 assert(fails(() => copy("/a", "/b", true)), "copy an ancestor");
                 assert(fails(() => copy("/", "/a/m/all", true)), "copy the root into a mount");
                 assert(exists("/a/m/v.txt"), "the volume is intact");
-                remove("/a/sibling.txt", false);
+                remove("/a/sibling.txt", { recursive: false });
             }
         "#;
         run_with(source, StoreData::with_vfs("test-run".into(), vfs))
@@ -2493,7 +2541,7 @@ function main(): void {
             import { writeText, readText, move, mkdir, exists } from "submilli:fs";
             function main(): void {
                 writeText("/a.txt", "x".repeat(10));
-                mkdir("/tree/sub", true);
+                mkdir("/tree/sub", { recursive: true });
                 writeText("/tree/sub/b.txt", "y".repeat(20));
                 move("/a.txt", "/memory/a.txt");
                 move("/tree", "/memory/tree");
@@ -2546,15 +2594,15 @@ function main(): void {
                 try { op(); return false; } catch (e) { return String(e).includes("mount point"); }
             }
             function main(): void {
-                assert(refused(() => remove("/lnk/m", false)), "remove the placeholder through a link");
-                assert(refused(() => remove("/lnk/m", true)), "recursive remove through a link");
+                assert(refused(() => remove("/lnk/m", { recursive: false })), "remove the placeholder through a link");
+                assert(refused(() => remove("/lnk/m", { recursive: true })), "recursive remove through a link");
                 assert(refused(() => writeText("/lnk/m", "x")), "replace the placeholder through a link");
                 assert(refused(() => writeText("/lnk/m/x.txt", "x")), "write inside the placeholder");
                 assert(refused(() => move("/r/up/a", "/z")), "move an ancestor through a link");
-                assert(refused(() => remove("/r/up/a", true)), "remove an ancestor through a link");
+                assert(refused(() => remove("/r/up/a", { recursive: true })), "remove an ancestor through a link");
                 assert(refused(() => copy("/r/up/a", "/copy", true)), "copy an ancestor through a link");
                 copy("/lnk", "/linkcopy", false);
-                assert(refused(() => mkdir("/lnk/m/new", false)), "mkdir inside the placeholder");
+                assert(refused(() => mkdir("/lnk/m/new", { recursive: false })), "mkdir inside the placeholder");
                 assert(refused(() => append("/dangling", new Uint8Array(1))), "append through a dangling link");
                 writeText("/plain.txt", "p");
                 assert(refused(() => copy("/plain.txt", "/dangling", false)), "copy through a dangling link");
@@ -2603,7 +2651,7 @@ function main(): void {
             import { mkdir, writeText, move, exists } from "submilli:fs";
             function main(): void {
                 const deep = "/deep" + "/d".repeat(70);
-                mkdir(deep, true);
+                mkdir(deep, { recursive: true });
                 writeText(deep + "/f.txt", "x");
                 let failed = false;
                 try { move("/deep", "/memory/deep"); } catch (e) { failed = true; }
@@ -2666,10 +2714,10 @@ function main(): void {
                 writeText("/new.txt", "n".repeat(10));
                 move("/new.txt", "/memory/old.txt");
                 assert(readText("/memory/old.txt")!.length === 10, "the file is replaced");
-                mkdir("/dir", false);
+                mkdir("/dir", { recursive: false });
                 writeText("/file.txt", "f");
                 assert(failure(() => move("/file.txt", "/memory")).includes("mount point"), "onto the mount point");
-                mkdir("/memory/full", false);
+                mkdir("/memory/full", { recursive: false });
                 writeText("/memory/full/x.txt", "x");
                 assert(failure(() => move("/dir", "/memory/full")).includes("not empty"), "onto a non-empty directory");
                 assert(failure(() => move("/file.txt", "/memory/full")).includes("onto a directory"), "a file onto a directory");
@@ -2714,7 +2762,7 @@ function main(): void {
             }
             function main(): void {
                 assert(refused(() => writeText("/ſkills/x.txt", "x")), "write through the alias");
-                assert(refused(() => remove("/ſkills", true)), "remove the mount point by its alias");
+                assert(refused(() => remove("/ſkills", { recursive: true })), "remove the mount point by its alias");
                 assert(refused(() => move("/ſkills", "/elsewhere")), "move the mount point by its alias");
             }
         "#;
@@ -2753,7 +2801,7 @@ function main(): void {
             function main(): void {
                 assert(refused(() => writeText("/\u017Fets/\u017Fkills/x.txt", "x")), "both components aliased");
                 assert(refused(() => writeText("/Sets/\u017Fkills/x.txt", "x")), "case and Unicode aliases");
-                assert(refused(() => remove("/\u017Fets", true)), "remove an aliased ancestor");
+                assert(refused(() => remove("/\u017Fets", { recursive: true })), "remove an aliased ancestor");
                 assert(refused(() => move("/\u017Fets", "/elsewhere")), "move an aliased ancestor");
                 writeText("/\u017Fets/beside.txt", "beside");
             }

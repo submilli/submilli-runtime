@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dfa8c57b68d523d0768f42f20380a84b22b68309815d66d46dd5b224549a314c"
+  contentHash: "9c98d63bc3d7c0fbdeb3018f0d3cda019a1a622902a44f9d689dc4eb90846e5c"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -81,9 +81,11 @@ its own. A program that fails is not an HTTP error. `POST /v1/execute` and
 | `GET` | [`/v1/runs/{run_id}`](#get-v1runsrun_id) |
 | `GET` | [`/v1/sessions/{session_id}/packages/search`](#get-v1sessionssession_idpackagessearch) |
 | `GET` | [`/v1/sessions/{session_id}/packages/docs`](#get-v1sessionssession_idpackagesdocs) |
+| `POST` | [`/v1/sessions/{session_id}/packages/docs`](#post-v1sessionssession_idpackagesdocs) |
 | `GET` | [`/v1/blueprints/{name}/prompt`](#get-v1blueprintsnameprompt) |
 | `GET` | [`/v1/blueprints/{name}/packages/search`](#get-v1blueprintsnamepackagessearch) |
 | `GET` | [`/v1/blueprints/{name}/packages/docs`](#get-v1blueprintsnamepackagesdocs) |
+| `POST` | [`/v1/blueprints/{name}/packages/docs`](#post-v1blueprintsnamepackagesdocs) |
 | `GET` | [`/v1/blueprints/{name}/builtins`](#get-v1blueprintsnamebuiltins) |
 | `GET` | [`/v1/blueprints/{name}/builtins/docs`](#get-v1blueprintsnamebuiltinsdocs) |
 | `POST` | [`/v1/execute`](#post-v1execute) |
@@ -548,6 +550,21 @@ An unknown name answers `404`:
 Package whose documentation has malformed directives answers `422` with
 `error` `invalid_documentation`.
 
+### POST /v1/blueprints/{name}/packages/docs
+
+Role: `user`. Fetches several package or built-in descriptions in one request.
+The body is `{ "names": ["submilli:fs", "Map", "missing"] }`.
+
+Answers `200` with `{ "results": [...] }`. Each entry has the requested
+`name`, a `found` boolean, and `text` containing the documentation or an
+explanation of why the name was not found. Results preserve request order and
+duplicates. An empty `names` array returns an empty `results` array. Unknown
+names do not fail the batch. An unknown Blueprint returns `404`.
+
+The single-name `GET` endpoint remains available for existing clients. Batch
+methods in the SDKs require a server with this `POST` endpoint. The MCP
+`packages__docs` tool uses the same `names` array and `results` envelope.
+
 ### GET /v1/blueprints/{name}/builtins
 
 Role: `user`. Lists the built-ins in scope without an `import`:
@@ -580,6 +597,13 @@ Blueprint does. An unknown session answers `404`.
 Role: `user`. The [docs](#get-v1blueprintsnamepackagesdocs) of the session's
 Blueprint, plus `@tools`, which answers as an `@mcp/<server>` Package does.
 `@tools` answers `404` in a session without application tools.
+
+### POST /v1/sessions/{session_id}/packages/docs
+
+Role: `user`. The [batch docs](#post-v1blueprintsnamepackagesdocs) of the
+session's Blueprint, including its application tools under `@tools`. An
+unknown session returns `404`; unknown names within a valid session return
+entries with `found: false`.
 
 ## One-off runs
 

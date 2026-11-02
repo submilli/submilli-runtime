@@ -14,7 +14,7 @@ use submilli_shared::mcp::McpCatalog;
 
 /// The call that fetches a package's docs, for a correcting message.
 fn package_docs_call(name: &str) -> String {
-    format!("Fetch it with submilli__typescript__packages__docs(\"{name}\")")
+    format!("Fetch it with submilli__typescript__packages__docs({{\"names\":[\"{name}\"]}})")
 }
 
 fn builtins_pointer() -> String {
@@ -184,6 +184,15 @@ fn union_candidates(catalog: &McpCatalog, scope: &DocsScope) -> Vec<String> {
 }
 
 /// `packages.docs` body.
+pub(crate) fn batch_docs_entry(name: &str, lookup: DocLookup) -> Value {
+    let found = !matches!(
+        &lookup,
+        DocLookup::McpUnknown | DocLookup::Unknown { .. } | DocLookup::InvalidDocumentation { .. }
+    );
+    let text = docs_markdown(&lookup).unwrap_or_else(|| docs_json(name, lookup).to_string());
+    serde_json::json!({ "name": name, "found": found, "text": text })
+}
+
 pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
     match lookup {
         DocLookup::Host {

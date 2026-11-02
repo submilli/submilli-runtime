@@ -1589,13 +1589,13 @@ fn operations_charge_for_the_input_they_process() {
     }
 
     for (name, operation, calls_per_entry) in [
-        ("remove", "remove(\"/tree\", true);", 4),
+        ("remove", "remove(\"/tree\", { recursive: true });", 4),
         ("move", "move(\"/tree\", \"/renamed\");", 2),
     ] {
         let mut empty_cost = 0;
         for n in [0_u64, 128, 256] {
             let input = format!(
-                "mkdir(\"/tree\", true); for (let i = 0; i < {n}; i++) {{ writeText(\"/tree/file\" + String(i), \"x\"); }}"
+                "mkdir(\"/tree\", {{ recursive: true }}); for (let i = 0; i < {n}; i++) {{ writeText(\"/tree/file\" + String(i), \"x\"); }}"
             );
             let import = "import { mkdir, writeText, remove, move } from \"submilli:fs\";";
             let baseline = host_fuel(
@@ -1699,7 +1699,7 @@ fn operations_charge_for_the_input_they_process() {
         let source = |operation: &str| {
             format!(
                 "import {{mkdir, writeText, copy}} from \"submilli:fs\";
-             function main(): number {{ mkdir(\"/input\", false);
+             function main(): number {{ mkdir(\"/input\", {{ recursive: false }});
              for (let i = 0; i < {n}; i++) {{ writeText(\"/input/\" + i.toString(), \"\"); }}
              {operation} return 0; }}"
             )
