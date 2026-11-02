@@ -72,6 +72,7 @@ function main(): string {
                 .arg("playground")
                 .args(args)
                 .current_dir(&self.root)
+                .env("PATH", super::path_without_claude())
                 .env("SUBMILLI_HOME", self.dir.path().join("home"))
                 .env("HOME", self.dir.path().join("home"))
                 .env_remove("SUBMILLI_TELEMETRY")
@@ -381,4 +382,15 @@ function main(): string {
         assert_eq!(ran["blueprint_version"], "2", "{ran}");
         assert_eq!(project.versions().len(), 2);
     }
+}
+
+/// This process's PATH, without any directory holding a `claude`: the developer's own
+/// Claude Code is never run by a test.
+#[cfg(unix)]
+fn path_without_claude() -> String {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let kept: Vec<std::path::PathBuf> = std::env::split_paths(&path)
+        .filter(|dir| !dir.join("claude").exists())
+        .collect();
+    std::env::join_paths(kept).unwrap().into_string().unwrap()
 }

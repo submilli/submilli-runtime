@@ -326,6 +326,25 @@ test("a reply goes to the shown session", async () => {
   });
 });
 
+test("a billing refusal comes back as its kind, and a resend carries the confirmation", async () => {
+  const server = new FakeServer();
+  signedIn(server);
+  server.handle = (call) =>
+    call.url === "/api/agent" && !(call.body as Record<string, unknown>).confirm_billing
+      ? Response.json({ exit: 1, result: { error: { kind: "billing-changed", message: "Claude Code now bills api_key" } }, text: "" })
+      : undefined;
+  const { store, started } = start(server, "");
+  await started;
+  const refused = await store.chat("And the largest?");
+  expect(refused.outcome).toEqual({ ok: false, kind: "billing-changed", message: "Claude Code now bills api_key" });
+  const { outcome } = await store.chat("And the largest?", undefined, "api_key");
+  expect(outcome.ok).toBe(true);
+  expect(server.calls.filter((c) => c.url === "/api/agent").map((c) => c.body)).toEqual([
+    { task: "And the largest?", session: SESSION(4) },
+    { task: "And the largest?", confirm_billing: "api_key", session: SESSION(4) },
+  ]);
+});
+
 test("a refused cancel is shown as a refusal with its message", async () => {
   const server = new FakeServer();
   signedIn(server);

@@ -4,6 +4,10 @@
 //! development secrets, and writes each reply back as a line. Its runs are labeled
 //! `stand-in`.
 //!
+//! Chat on Claude Code starts it joined to the MCP session the playground started for the
+//! conversation instead ([`Join`]): it answers the handshake itself, relays at most the
+//! message's tool calls, and leaves the session open for the next message.
+//!
 //! Stdout is the protocol channel: everything else goes to stderr. When the bridge cannot
 //! connect (no playground, or a required value unbound), it says why on stderr and
 //! answers every request with that reason, so the assistant sees it instead of hanging.
@@ -11,13 +15,14 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Write as _};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::controls::act::{Answer, connect_as};
+use super::controls::act::{Answer, connect_as, connect_at};
 use super::controls::render::{EXIT_FAILURE, EXIT_SUCCESS};
 use super::mcp_http::{Failure, McpHttp};
 use super::state::STAND_IN_TOKEN;
@@ -26,43 +31,174 @@ use super::state::STAND_IN_TOKEN;
 const SERVER_ERROR: i64 = -32000;
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
+const METHOD_NOT_FOUND: i64 = -32601;
 
-pub(crate) fn execute() -> Result<ExitCode> {
+/// An MCP session the bridge joins rather than starts.
+pub(crate) struct Join {
+    pub(crate) session: String,
+    /// The project, since Claude Code runs the bridge from a directory of its own.
+    pub(crate) root: PathBuf,
+    /// The token the session was started with.
+    pub(crate) token: String,
+    pub(crate) blueprint: String,
+    /// The protocol version the session was started under.
+    pub(crate) protocol: String,
+    /// How many tool calls the message may make.
+    pub(crate) max_calls: usize,
+}
+
+pub(crate) fn execute(join: Option<Join>) -> Result<ExitCode> {
+    if let Some(join) = join {
+        return Ok(execute_joined(&join));
+    }
     let (connection, binding) = match open() {
         Ok(opened) => opened,
         Err((exit, reason)) => return Ok(refuse(&reason, exit)),
     };
     let connection = Arc::new(connection);
-    stop_on_signal(&connection);
+    stop_on_signal(Some(&connection));
     let out = Output::default();
     let variables = binding.variables;
-    let mut in_flight = Vec::new();
+    let mut relays = Relays::new(&connection, &out);
     for mut message in messages(std::io::stdin().lock(), &out) {
         if message["method"] == "initialize" {
             with_variables(&mut message, &variables);
             relay_initialize(&connection, &out, &message);
             continue;
         }
-        // A request may wait on a run, so it is relayed on its own thread: a cancellation
-        // or another request is not held up behind it. A notification goes in order.
-        if message.get("id").is_none() {
-            relay(&connection, &out, &message);
-        } else {
-            let connection = Arc::clone(&connection);
-            let out = out.clone();
-            in_flight.push(std::thread::spawn(move || {
-                relay(&connection, &out, &message);
-            }));
-            in_flight.retain(|request: &std::thread::JoinHandle<()>| !request.is_finished());
-        }
+        relays.relay(message);
     }
-    // The client may close stdin right after its last request: answer what it asked
-    // before ending the session. A signal still ends it at once.
-    for request in in_flight {
-        let _ = request.join();
-    }
+    relays.finish();
     connection.close();
     Ok(ExitCode::SUCCESS)
+}
+
+/// Serves the joined session until stdin closes, and never ends it: the next message's
+/// bridge carries it on.
+fn execute_joined(join: &Join) -> ExitCode {
+    let connection = match open_joined(join) {
+        Ok(connection) => Arc::new(connection),
+        Err((exit, reason)) => {
+            // Before any answer, so the client reports the server as failed.
+            eprintln!("submilli playground mcp: {reason}");
+            return ExitCode::from(exit);
+        }
+    };
+    stop_on_signal(None);
+    let out = Output::default();
+    let mut relays = Relays::new(&connection, &out);
+    let mut calls = 0;
+    for message in messages(std::io::stdin().lock(), &out) {
+        let id = message
+            .get("id")
+            .filter(|_| message.get("method").is_some());
+        match (message["method"].as_str(), id) {
+            // The session was initialized when it started; another `initialize` on it
+            // would start over.
+            (Some("initialize"), Some(id)) => out.write(&json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {
+                    "protocolVersion": join.protocol,
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "submilli-playground", "version": env!("CARGO_PKG_VERSION") },
+                },
+            })),
+            (Some("notifications/initialized"), None) => {}
+            // A newer client asks this first; without it, it falls back to `initialize`.
+            (Some("server/discover"), Some(id)) => {
+                out.write(&error_reply(id, METHOD_NOT_FOUND, "Method not found"));
+            }
+            (Some("tools/call"), Some(id)) if calls == join.max_calls => {
+                out.write(&json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "result": {
+                        "isError": true,
+                        "content": [{ "type": "text", "text": format!(
+                            "this message reached its limit of {} tool calls", join.max_calls
+                        ) }],
+                    },
+                }));
+            }
+            (method, _) => {
+                calls += usize::from(method == Some("tools/call"));
+                relays.relay(message);
+            }
+        }
+    }
+    relays.finish();
+    ExitCode::SUCCESS
+}
+
+/// A connection carrying on `join`'s session, once the server confirms it still has it.
+fn open_joined(join: &Join) -> Result<McpHttp, (u8, String)> {
+    let failed = |error: anyhow::Error| (EXIT_FAILURE, format!("{error:#}"));
+    let running = match connect_at(&join.root, &join.token).map_err(failed)? {
+        Ok(running) => running,
+        Err(answer) => return Err(refusal(&answer)),
+    };
+    let connection = McpHttp::new(
+        running.record.server_port,
+        &join.blueprint,
+        running.token(),
+        &BTreeMap::new(),
+    );
+    connection.resume(&join.session, &join.protocol);
+    let check = json!({ "jsonrpc": "2.0", "id": 0, "method": "tools/list" });
+    let mut listed = false;
+    let sent = connection.send(&check, |reply| {
+        listed |= reply["result"]["tools"].is_array();
+    });
+    match sent {
+        Ok(()) if listed => Ok(connection),
+        Err(failure @ Failure::SessionGone) => Err((EXIT_FAILURE, failure.to_string())),
+        Err(failure) => Err((
+            EXIT_FAILURE,
+            format!("the session could not be joined: {failure}"),
+        )),
+        Ok(()) => Err((
+            EXIT_FAILURE,
+            "the session could not be joined: the playground did not list its tools".to_owned(),
+        )),
+    }
+}
+
+/// Each request relayed on its own thread, since it may wait on a run: a cancellation or
+/// another request is not held up behind it. A notification goes in order.
+struct Relays {
+    connection: Arc<McpHttp>,
+    out: Output,
+    in_flight: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl Relays {
+    fn new(connection: &Arc<McpHttp>, out: &Output) -> Self {
+        Self {
+            connection: Arc::clone(connection),
+            out: out.clone(),
+            in_flight: Vec::new(),
+        }
+    }
+
+    fn relay(&mut self, message: Value) {
+        if message.get("id").is_none() {
+            relay(&self.connection, &self.out, &message);
+            return;
+        }
+        let connection = Arc::clone(&self.connection);
+        let out = self.out.clone();
+        self.in_flight.push(std::thread::spawn(move || {
+            relay(&connection, &out, &message);
+        }));
+        self.in_flight.retain(|request| !request.is_finished());
+    }
+
+    /// The client may close stdin right after its last request: what it asked is
+    /// answered before the bridge goes on. A signal still ends it at once.
+    fn finish(self) {
+        for request in self.in_flight {
+            let _ = request.join();
+        }
+    }
 }
 
 /// What the bridge connects with, as the playground gives it.
@@ -308,9 +444,9 @@ impl Output {
 }
 
 /// On SIGTERM or SIGINT (an assistant stops its MCP servers with a signal), ends the
-/// server's session and exits.
-fn stop_on_signal(connection: &Arc<McpHttp>) {
-    let connection = Arc::clone(connection);
+/// server's session, if it is the bridge's own, and exits.
+fn stop_on_signal(connection: Option<&Arc<McpHttp>>) {
+    let connection = connection.map(Arc::clone);
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_io()
@@ -330,7 +466,9 @@ fn stop_on_signal(connection: &Arc<McpHttp>) {
                 _ = term.recv() => {}
                 _ = interrupt.recv() => {}
             }
-            connection.close();
+            if let Some(connection) = connection {
+                connection.close();
+            }
             std::process::exit(0);
         });
     });

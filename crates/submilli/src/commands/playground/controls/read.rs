@@ -2205,6 +2205,8 @@ pub(crate) fn sessions_with(
                     session.settings = settings;
                 }
                 SessionEntry::Ended { .. } => session.open = Some(false),
+                SessionEntry::ClaudeConversation { .. } | SessionEntry::BillingConfirmed { .. } => {
+                }
                 SessionEntry::Chatted {
                     variables, label, ..
                 } => {

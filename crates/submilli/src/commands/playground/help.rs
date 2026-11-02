@@ -13,7 +13,7 @@ const COMMAND_GROUPS: &[(&str, &[&str])] = &[
             "chat", "exec", "bind", "session", "sessions", "cancel", "watch",
         ],
     ),
-    ("Connect a coding assistant", &["claude-code", "mcp"]),
+    ("Connect a coding assistant", &["mcp"]),
     (
         "Advanced inspection and testing",
         &[

@@ -280,6 +280,9 @@ function main(): string {{
         assert_eq!(run["entry"], "mcp");
         assert_eq!(run["recording"]["variables"]["customerId"], "pied_piper");
         assert_eq!(run["recording"]["execution_id"], response["execution_id"]);
+        // The caller learns the number the page and CLI name the run by.
+        assert_eq!(response["run"], 1, "{response}");
+        assert_eq!(run["id"], 1, "{run}");
         assert!(
             run["console"]
                 .as_str()

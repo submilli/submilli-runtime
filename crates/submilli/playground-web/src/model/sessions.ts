@@ -1,6 +1,6 @@
 // The session bar, the sessions dialog, the footer, and what stepping back turns off.
 import type { ChatSettings, SessionSummary } from "../api/types";
-import { agentLabel, capitalize, differing, plural, providerSettings, settingsLabel, short, when, type ValuesNote } from "./format";
+import { agentLabel, capitalize, differing, dollars, plural, providerSettings, settingsLabel, short, when, type ValuesNote } from "./format";
 import { sessionRef } from "./refs";
 import type { Frame } from "./steps";
 
@@ -192,6 +192,7 @@ function agentSettings(set: ChatSettings | undefined | null): { name: string; va
   return [
     ...(set?.effort ? [{ name: "effort", value: set.effort }] : []),
     ...(set?.max_output ? [{ name: "max output", value: String(set.max_output) }] : []),
+    ...(set?.max_budget_usd ? [{ name: "spending limit", value: dollars(set.max_budget_usd) }] : []),
     ...providerSettings(set).map((p) => ({ name: "provider: " + p.name, value: p.value })),
   ];
 }

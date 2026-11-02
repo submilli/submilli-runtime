@@ -172,6 +172,7 @@ body {
 .pg-vname em.req { color: var(--warn); }
 .pg-vname em.opt { color: var(--text-muted); }
 .pg-choices { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pg-choice-note { font-weight: 400; opacity: 0.75; }
 .pg-json {
   width: 100%; margin: 6px 0 4px; resize: vertical; background: var(--surface-canvas); border: 1px solid var(--border-strong);
   border-radius: var(--radius-xs); padding: 7px 9px; font: 12px/1.5 var(--font-mono); color: var(--text-primary);
@@ -277,6 +278,10 @@ body {
 .pg-reason.pg-ask-reason { display: block; margin: -6px 12px 10px; }
 .pg-chat-failed { align-self: stretch; border-left: 3px solid var(--danger); padding: 4px 0 4px 10px; font-size: 13px; overflow-wrap: anywhere; }
 .pg-chat-failed small { display: block; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.pg-ask-confirm { margin: 0 12px 8px; border-left: 3px solid var(--warn); padding: 4px 0 4px 10px; font-size: 13px; overflow-wrap: anywhere; }
+.pg-ask-confirm p { margin: 0; }
+.pg-ask-confirm small { display: block; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.pg-ask-confirm .pg-setup-row { margin-top: 6px; }
 
 /* code */
 .pg-code { flex: 1; min-height: 0; overflow: auto; background: var(--ink-900); font: 12.5px/1.8 var(--font-mono); padding: 14px 0; }

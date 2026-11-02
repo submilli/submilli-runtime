@@ -496,6 +496,10 @@ struct TapRecorder {
 }
 
 impl run::RecordedRun for TapRecorder {
+    fn number(&self) -> Option<u64> {
+        self.inner.number()
+    }
+
     fn log_config(&self) -> DecisionLogConfig {
         self.inner.log_config()
     }

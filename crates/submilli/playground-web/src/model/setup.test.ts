@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkSetup, declaredVariables, effortHint, effortOptions, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
+import { agentSummary, billingLine, checkSetup, declaredVariables, effortHint, effortOptions, initialSetup, isFullModelName, modelHint, parseVars, providerOptions, INITIAL_SETUP, type SetupForm } from "./setup";
+import type { ClaudeCodeStatus, SessionSummary } from "../api/types";
 import { chatSession } from "./testdata";
 import type { Status } from "../api/types";
 
@@ -128,10 +129,12 @@ describe("the agent and its settings", () => {
 
   it("offer one provider per model the playground started with, and its default model", () => {
     expect(providerOptions(status, "anthropic")).toEqual([
-      { provider: "anthropic", label: "Claude", model: "claude-sonnet-5-5", pressed: true, needs: null },
+      { provider: "anthropic", label: "Claude", model: "claude-sonnet-5-5", pressed: true, needs: null, unavailable: null },
       // Every provider chat works with can be picked; one without a key says so.
-      { provider: "openai", label: "OpenAI", model: "", pressed: false, needs: "No OpenAI key yet (OPENAI_API_KEY)." },
-      { provider: "google", label: "Gemini", model: "", pressed: false, needs: "No Gemini key yet (GEMINI_API_KEY)." },
+      { provider: "openai", label: "OpenAI", model: "", pressed: false, needs: "No OpenAI key yet (OPENAI_API_KEY).", unavailable: null },
+      { provider: "google", label: "Gemini", model: "", pressed: false, needs: "No Gemini key yet (GEMINI_API_KEY).", unavailable: null },
+      // Claude Code needs no key; until the playground has looked for it, it says so.
+      { provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5-5", pressed: false, needs: null, unavailable: { suffix: "checking", reason: "Checking for Claude Code on this machine…" } },
     ]);
     expect(modelHint(status, "anthropic")).toBe(
       "Default for Claude: claude-sonnet-5-5. Any model name the provider knows works; an unknown one gets the provider’s own error.",
@@ -171,4 +174,84 @@ it("selects existing blueprint declarations without changing shared status or ac
   expect(ready.variables).toEqual({ region: "eu" });
   expect(reports.blueprint.name).toBe(status.blueprint.name);
   expect(checkSetup(reports, form({ blueprint: "../other.yaml", fields: { customerId: "cus_northwind" } })).cantStart).toBe(true);
+});
+
+describe("Claude Code as the agent", () => {
+  const ready: ClaudeCodeStatus = { state: "available", version: "2.1.310", source: "claude.ai", subscription: true };
+  const withCc = (cc?: ClaudeCodeStatus): Status => ({ ...status, claude_code: cc });
+  const cc = (over: Partial<SetupForm> = {}): SetupForm => form({ provider: "claude-code", model: "claude-sonnet-5-5", fields: { customerId: "cus_a" }, ...over });
+  const option = (s: Status) => providerOptions(s, "claude-code").find((o) => o.provider === "claude-code")!;
+
+  it("is offered once Claude Code can answer, with no key needed", () => {
+    expect(option(withCc(ready))).toEqual({ provider: "claude-code", label: "Claude Code", model: "claude-sonnet-5-5", pressed: true, needs: null, unavailable: null });
+    const check = checkSetup(withCc(ready), cc());
+    expect(check.cantStart).toBe(false);
+    expect(check.model).toBe("claude-code:claude-sonnet-5-5");
+    // The limit is always set, so the session shows what it runs under.
+    expect(check.settings).toEqual({ max_budget_usd: 1 });
+  });
+
+  it("names the spending limit once the agent step is done", () => {
+    expect(agentSummary("Claude Code", cc({ model: "claude-haiku-5-5" }), checkSetup(withCc(ready), cc({ model: "claude-haiku-5-5" })).settings)).toBe("Claude Code · claude-haiku-5-5 · spending limit $1.00");
+    expect(agentSummary("Claude Code", cc({ budget: "0.05" }), checkSetup(withCc(ready), cc({ budget: "0.05" })).settings)).toBe("Claude Code · claude-sonnet-5-5 · spending limit $0.05");
+    expect(agentSummary("OpenAI", form({ provider: "openai", model: "gpt-6-luna" }), { max_output: 100 })).toBe("OpenAI · gpt-6-luna");
+  });
+
+  it("says it's still being checked before the first status names it", () => {
+    expect(option(withCc(undefined)).unavailable?.suffix).toBe("checking");
+    expect(checkSetup(withCc(undefined), cc()).problem).toBe("Still checking for Claude Code. Try again in a moment.");
+  });
+
+  it("is marked unavailable with each reason in view, and no key problem", () => {
+    for (const [state, suffix] of [["missing", "not installed"], ["too-old", "too old"], ["signed-out", "signed out"], ["failed", "not checked"]] as const) {
+      const s = withCc({ state, subscription: false, reason: "Claude Code is signed out; run `claude` once to sign in" });
+      expect(option(s).unavailable).toEqual({ suffix, reason: "Claude Code is signed out; run `claude` once to sign in." });
+      const check = checkSetup(s, cc());
+      expect(check.cantStart).toBe(true);
+      expect(check.problem).toBe("Claude Code can’t answer: Claude Code is signed out; run `claude` once to sign in.");
+      expect(check.problem).not.toMatch(/key/);
+    }
+  });
+
+  it("takes a model by its full name, and every Claude Code effort", () => {
+    // Claude Code's short names move to newer models, so they aren't taken.
+    expect(checkSetup(withCc(ready), cc({ model: "sonnet" })).modelInvalid.model).toBe("Give a full model name with its version, such as claude-opus-5-5: Claude Code’s short names move to newer models.");
+    expect(checkSetup(withCc(ready), cc({ model: "" })).modelInvalid.model).toBe("Choose a model, or type a full model name.");
+    // A newer model than the page offers can be typed in.
+    for (const model of ["claude-opus-5-5", "claude-fable-5-1", "claude-opus-6"]) expect(checkSetup(withCc(ready), cc({ model })).modelInvalid.model).toBeUndefined();
+    // The same names the playground refuses, so the page and the playground agree.
+    for (const model of ["-p", "claude-opus-6 --x", "opus[1m]", ".claude-1", "fable"]) expect(isFullModelName(model)).toBe(false);
+    expect(effortOptions("claude-code", "xhigh").filter((o) => !o.disabled).map((o) => o.label)).toEqual(["Default", "Low", "Medium", "High", "Extra high", "Max"]);
+    expect(checkSetup(withCc(ready), cc({ effort: "max" })).settings).toEqual({ effort: "max", max_budget_usd: 1 });
+  });
+
+  it("leaves out max output and provider settings carried in the form", () => {
+    expect(checkSetup(withCc(ready), cc({ max: "abc", providerJson: "{nope" })).settings).toEqual({ max_budget_usd: 1 });
+  });
+
+  it("checks the spending limit: more than 0, at most 100 dollars", () => {
+    const limit = (budget: string) => checkSetup(withCc(ready), cc({ budget }));
+    expect(limit("2.50").settings).toEqual({ max_budget_usd: 2.5 });
+    expect(limit("100").settings).toEqual({ max_budget_usd: 100 });
+    expect(limit("0").modelInvalid.budget).toBe("The spending limit is an amount in dollars, more than 0.");
+    expect(limit("-1").modelInvalid.budget).toBe("The spending limit is an amount in dollars, more than 0.");
+    expect(limit("$5").modelInvalid.budget).toBe("The spending limit is an amount in dollars, more than 0.");
+    expect(limit("100.01").modelInvalid.budget).toBe("The spending limit is at most $100.00.");
+  });
+
+  it("carries the last session's model, effort, and limit into a new one", () => {
+    const last = { session: "s", started_at_micros: 1, model: "claude-code:claude-opus-5-5", settings: { effort: "xhigh", max_budget_usd: 3 } } as SessionSummary;
+    expect(initialSetup(withCc(ready), [last])).toMatchObject({ provider: "claude-code", model: "claude-opus-5-5", effort: "xhigh", budget: "3.00" });
+  });
+
+  it("says whom it bills", () => {
+    expect(billingLine(withCc(undefined))).toBe("");
+    expect(billingLine(withCc(ready))).toMatch(/^Bills your Claude subscription/);
+    // The playground names whom it bills; the page shows its words.
+    expect(billingLine(withCc({ ...ready, source: "api_key", billed: "an Anthropic API key", subscription: false }))).toBe("Bills an Anthropic API key, not your Claude subscription. The first message asks you to confirm.");
+  });
+
+  it("has its own effort note", () => {
+    expect(effortHint("claude-code")).toBe("How hard Claude Code thinks before it answers. Default leaves it to Claude Code.");
+  });
 });
