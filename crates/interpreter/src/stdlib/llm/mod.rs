@@ -28,6 +28,7 @@ use crate::runtime::host::{
     type_error, write_submilli_string_struct,
 };
 pub mod declaration;
+mod decoding;
 
 use std::sync::Arc;
 
@@ -86,7 +87,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         false,
         HeapType::ConcreteStruct(intr.string.clone()),
     ));
-    // `Completion`, `Model`, `Completion[]`, and the optional `schema` argument
+    // `Completion`, `Model`, `Completion[]`, and the optional schema/decoder
     // all cross the boundary as the universal `(ref null $Object)` lowering.
     let nullable_object = ValType::Ref(RefType::new(
         true,
@@ -104,7 +105,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         crate::mangle::package_symbol(MODULE_NAME, "call"),
         FuncType::new(
             &engine,
-            [string.clone(), string.clone(), nullable_object.clone()],
+            [
+                string.clone(),
+                string.clone(),
+                nullable_object.clone(),
+                nullable_object.clone(),
+            ],
             [nullable_object.clone()],
         ),
         |caller, params| {
@@ -114,13 +120,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
                 let schema =
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
-                let typed = schema.is_some();
+                let decoder =
+                    decoding::read_decoder(caller, abi_arg(params, 3)?, schema.is_some())?;
                 let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
                 let outcome = first_outcome(&model, outcomes)?;
-                if typed {
-                    structured_value(caller, "llm.call", outcome)
+                if let Some(decoder) = decoder {
+                    structured_value(caller, "llm.call", outcome, &decoder).await
                 } else {
-                    build_completion(caller, outcome)
+                    fuel::settle_result(caller, |caller| build_completion(caller, outcome))
                 }
             })
         },
@@ -132,7 +139,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         crate::mangle::package_symbol(MODULE_NAME, "batch"),
         FuncType::new(
             &engine,
-            [string.clone(), array.clone(), nullable_object.clone()],
+            [
+                string.clone(),
+                array.clone(),
+                nullable_object.clone(),
+                nullable_object.clone(),
+            ],
             // Typed and untyped batches both return an ordered Array.
             [array.clone()],
         ),
@@ -143,23 +155,22 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let prompts = read_prompts(caller, abi_arg(params, 1)?)?;
                 let schema =
                     read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
-                let typed = schema.is_some();
+                let decoder =
+                    decoding::read_decoder(caller, abi_arg(params, 3)?, schema.is_some())?;
                 let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                // Requests have completed: marshalling must not lose their outcomes to fuel exhaustion.
-                fuel::settle_result(caller, |caller| {
-                    let mut built = Vec::new();
-                    built
-                        .try_reserve_exact(outcomes.len())
-                        .map_err(crate::runtime::host::fatal_host_error)?;
-                    for outcome in outcomes {
-                        built.push(if typed {
-                            build_typed_batch_result(caller, outcome)?
-                        } else {
-                            build_completion(caller, outcome)?
-                        });
-                    }
-                    build_array(caller, built)
-                })
+                let mut built = Vec::new();
+                built
+                    .try_reserve_exact(outcomes.len())
+                    .map_err(crate::runtime::host::fatal_host_error)?;
+                for outcome in outcomes {
+                    let value = if let Some(decoder) = &decoder {
+                        build_typed_batch_result(caller, outcome, decoder).await?
+                    } else {
+                        fuel::settle_result(caller, |caller| build_completion(caller, outcome))?
+                    };
+                    built.push(value);
+                }
+                fuel::settle_result(caller, |caller| build_array(caller, built))
             })
         },
     )?;
@@ -796,20 +807,12 @@ fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructTyp
     )
 }
 
-/// The value a *typed* `call<T>`/`batch<T>` hands back: the completion text
-/// parsed as JSON, not the `Completion` envelope.
-///
-/// The typed form trades the envelope for the checked value, so the envelope's
-/// fields have no place to go — which is also why a failed element cannot be
-/// represented here and throws instead. The structural check the typechecker
-/// wrapped around this call then verifies the parsed value really is a `T`; a
-/// provider that ignored the schema and answered in prose fails at the parse
-/// below, and one that answered with well-formed JSON of the wrong shape fails
-/// at that check. Both are catchable, and neither coerces.
-fn structured_value(
+/// A single typed call reports provider and decoding failures as exceptions.
+async fn structured_value(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     op: &str,
     outcome: LlmOutcome,
+    decoder: &crate::runtime::prelude::closure::Closure,
 ) -> wasmtime::Result<Val> {
     // A truncated or filtered completion has no complete JSON value to check,
     // and the typed form has no `ok` for the program to branch on — so it is an
@@ -828,54 +831,52 @@ fn structured_value(
             "{op}: the model returned no text to check against the requested type",
         )));
     };
-    crate::runtime::json::parse_json_as_unknown(
-        caller,
-        text,
-        &format!("{op}: the model's response is not JSON"),
-    )
+    decoding::decode(caller, decoder, text)
+        .await?
+        .map_err(decoding::DecodeFailure::into_error)
 }
 
-/// The compiler validates each value and may replace its envelope on mismatch.
-/// The canonical slots are inputTokens, ok, outputTokens, reason, value.
-fn build_typed_batch_result(
+/// Assemble a final public result only after the compiler-supplied decoder ran.
+async fn build_typed_batch_result(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     outcome: LlmOutcome,
+    decoder: &crate::runtime::prelude::closure::Closure,
 ) -> wasmtime::Result<Val> {
-    use crate::runtime::{json::JsonUnknownAllocator, json_text};
-    let mut reason = outcome
-        .failure
-        .as_ref()
-        .map(|failure| failure.reason.to_string());
-    let mut value = crate::runtime::prelude::undefined::value(caller)?;
-    if reason.is_none() {
-        if let Some(text) = &outcome.text {
-            fuel::charge(&mut *caller, fuel::PARSE, text.len() as u64)?;
-            match json_text::parse(&text.encode_utf16().collect::<Vec<_>>()) {
-                Ok(parsed) => {
-                    value =
-                        JsonUnknownAllocator::new(&mut *caller)?.allocate(&mut *caller, &parsed)?;
-                }
-                Err(error) => reason = Some(format!("invalid JSON: {}", error.message())),
+    let decoded = if let Some(failure) = &outcome.failure {
+        Err(failure.reason.to_string())
+    } else if let Some(text) = &outcome.text {
+        decoding::decode(caller, decoder, text)
+            .await?
+            .map_err(|failure| failure.reason)
+    } else {
+        Err("model returned no text".to_string())
+    };
+    // Guest decoding pays its own fuel. Only final host marshalling settles
+    // after the model request's effects; it never runs a guest callback.
+    fuel::settle_result(caller, |caller| {
+        let ok = crate::runtime::json::JsonUnknownAllocator::new(&mut *caller)?.allocate(
+            &mut *caller,
+            &crate::runtime::json_text::JsonValue::Bool(decoded.is_ok()),
+        )?;
+        let mut fields = std::collections::BTreeMap::from([("ok".to_string(), ok)]);
+        match decoded {
+            Ok(value) => {
+                fields.insert("value".into(), value);
+                fields.insert(
+                    "inputTokens".into(),
+                    optional_number(caller, outcome.input_tokens.map(|n| n as f64))?,
+                );
+                fields.insert(
+                    "outputTokens".into(),
+                    optional_number(caller, outcome.output_tokens.map(|n| n as f64))?,
+                );
             }
-        } else {
-            reason = Some("model returned no text".to_string());
+            Err(reason) => {
+                fields.insert("reason".into(), optional_string(caller, Some(&reason))?);
+            }
         }
-    }
-    let ok = JsonUnknownAllocator::new(&mut *caller)?
-        .allocate(&mut *caller, &json_text::JsonValue::Bool(reason.is_none()))?;
-    let reason = optional_string(caller, reason.as_deref())?;
-    let input = optional_number(caller, outcome.input_tokens.map(|n| n as f64))?;
-    let output = optional_number(caller, outcome.output_tokens.map(|n| n as f64))?;
-    abi::new_object(
-        caller,
-        std::collections::BTreeMap::from([
-            ("inputTokens".to_string(), input),
-            ("ok".to_string(), ok),
-            ("outputTokens".to_string(), output),
-            ("reason".to_string(), reason),
-            ("value".to_string(), value),
-        ]),
-    )
+        abi::new_object(caller, fields)
+    })
 }
 
 fn build_completion(
@@ -1129,6 +1130,7 @@ mod tests {
         budget: Option<Arc<ExecutionTokenBudget>>,
         policy: Option<Arc<dyn SecurityCheck>>,
         effects: Option<Arc<dyn crate::runtime::effects::EffectHistory>>,
+        fuel: Option<u64>,
     }
 
     struct Observed {
@@ -1143,7 +1145,13 @@ mod tests {
                 budget: None,
                 policy: None,
                 effects: None,
+                fuel: None,
             }
+        }
+
+        fn fuel(mut self, fuel: u64) -> Self {
+            self.fuel = Some(fuel);
+            self
         }
 
         fn provider(mut self, provider: Arc<dyn LlmProvider>) -> Self {
@@ -1178,7 +1186,10 @@ mod tests {
         async fn observe(self, source: &str) -> Observed {
             let compiled = crate::compile_script(source, "test.ts", crate::FileId(0), &[], &[])
                 .expect("compile clean");
-            let cfg = RuntimeConfig::default();
+            let mut cfg = RuntimeConfig::default();
+            if let Some(fuel) = self.fuel {
+                cfg.fuel = fuel;
+            }
             let engine = cfg.engine().expect("engine");
             let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
             data.install_type_info(compiled.type_info.clone());
@@ -2183,6 +2194,128 @@ mod tests {
         .expect("JSON schema");
         assert_eq!(schema["type"], "array");
         assert_eq!(schema["items"]["type"], "number");
+    }
+
+    #[tokio::test]
+    async fn typed_decoders_preserve_primitives_null_and_public_result_fields() {
+        for (ty, text) in [
+            ("number", "7"),
+            ("boolean", "false"),
+            ("string", r#""hello""#),
+            ("number | null", "null"),
+        ] {
+            let provider = QueuedProvider::new(vec![
+                vec![LlmOutcome::success(text)],
+                vec![LlmOutcome::success(text), LlmOutcome::success("{}")],
+            ]);
+            let source = format!(
+                r#"
+                import llm from "submilli:llm";
+                function main(): string {{
+                    const single = llm.call<{ty}>("m", "a");
+                    const batch = llm.batch<{ty}>("m", ["b", "c"]);
+                    const success = batch[0];
+                    assert(success.ok);
+                    if (success.ok) {{ assert(success.value === single); }}
+                    assert(!batch[1].ok);
+                    return JSON.stringify(batch) ?? "missing";
+                }}
+            "#
+            );
+            let value = Harness::new()
+                .provider(provider)
+                .run(&source)
+                .await
+                .expect("decoded result");
+            let value: serde_json::Value = serde_json::from_str(&value).expect("JSON result");
+            let expected: serde_json::Value = serde_json::from_str(text).expect("JSON input");
+            assert_eq!(value[0], serde_json::json!({"ok": true, "value": expected}));
+            let failure = value[1].as_object().expect("failed item");
+            assert_eq!(failure.len(), 2, "only ok and reason belong on a failure");
+            assert_eq!(failure["ok"], false);
+            assert!(
+                failure["reason"]
+                    .as_str()
+                    .expect("reason")
+                    .contains("type mismatch")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn decoder_numeric_range_errors_preserve_batch_siblings_and_call_error_class() {
+        let provider = QueuedProvider::new(vec![
+            vec![
+                LlmOutcome::success("1"),
+                LlmOutcome::success("1e400"),
+                LlmOutcome::success("3"),
+            ],
+            vec![LlmOutcome::success("1e400")],
+        ]);
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"
+            import llm from "submilli:llm";
+            function main(): string {
+                const results = llm.batch<number>("m", ["a", "b", "c"]);
+                assert(results[0].ok);
+                const failed = results[1];
+                assert(!failed.ok);
+                if (!failed.ok) { assert(failed.reason.includes("out of range")); }
+                const last = results[2];
+                assert(last.ok);
+                if (last.ok) { assert(last.value === 3); }
+                try { llm.call<number>("m", "d"); }
+                catch (e: RangeError) { return "range"; }
+                return "missing";
+            }
+        "#,
+            )
+            .await
+            .expect("ordinary decode failures remain per-item");
+        assert_eq!(out, "range");
+    }
+
+    #[tokio::test]
+    async fn decoder_fuel_exhaustion_propagates_and_replay_keeps_the_model_effect() {
+        let text = format!("[{}]", vec!["1"; 20_000].join(","));
+        let provider = QueuedProvider::new(vec![vec![
+            LlmOutcome::success(text).with_usage(Some(3), Some(4)),
+        ]]);
+        let history = Arc::new(MemoryHistory::new());
+        let source = r#"import llm from "submilli:llm";
+            function main(): string {
+                try {
+                    const result = llm.batch<number[]>("m", ["a"])[0];
+                    if (!result.ok) { return "item failure"; }
+                    return String(result.value.length);
+                } catch (e: Error) { return "caught"; }
+            }"#;
+        let first = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(Arc::clone(&history) as Arc<dyn EffectHistory>)
+            .fuel(20_000)
+            .observe(source)
+            .await;
+        let error = first
+            .result
+            .expect_err("fuel exhaustion must escape item results and guest catches");
+        assert!(format!("{error:?}").contains("fuel"), "{error:?}");
+        assert_eq!(first.model_calls, vec![llm_call("m", Some(3), Some(4))]);
+        history.replay();
+        let replay = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(history)
+            .observe(source)
+            .await;
+        assert_eq!(replay.result.expect("replay with sufficient fuel"), "20000");
+        assert!(replay.model_calls.is_empty());
+        assert_eq!(
+            provider.invoked(),
+            1,
+            "replay must not repeat a completed request"
+        );
     }
 
     /// A `batch` of three prompts is one dispatch. The embedder sees their usage

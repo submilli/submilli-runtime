@@ -7,7 +7,6 @@
 
 pub mod analysis;
 mod argument_defaults;
-mod batch_check;
 pub mod bigint_pool;
 pub mod bounds;
 pub mod box_types;

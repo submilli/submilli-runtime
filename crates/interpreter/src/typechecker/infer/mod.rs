@@ -24,6 +24,7 @@ mod import_graph;
 mod imports;
 mod inference_sources;
 mod instantiated_literals;
+mod json_decoder;
 mod likely_mistakes;
 mod literal_freshness;
 mod literal_prebinding;

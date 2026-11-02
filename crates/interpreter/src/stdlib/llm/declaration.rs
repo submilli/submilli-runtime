@@ -1,30 +1,15 @@
 //! Type surface of `submilli:llm`.
 //!
-//! `call` and `batch` are declared **generic**, and that generic is only sound
-//! because the typechecker intercepts it. The typed forms are not a second
-//! signature: they are a rewrite. A generic `call<T>` reaching the ordinary
-//! generic-call lowering would set `return_cast`, which codegen emits as a Wasm
-//! representation cast rather than a structural check, so a response that
-//! ignored the schema would arrive statically typed and never validated. So the
-//! typechecker matches the symbol by mangled name and rewrites the call into a
-//! checked `Cast` instead — the contract `submilli:session`'s `get` carries.
-//! The declaration and that interception are a matched pair, and a generic
-//! declaration without the interception is the unsound half on its own, which
-//! is why the generics landed together with
-//! [`checked_llm_call`](crate::typechecker) rather than ahead of it.
-//! [`is_checked_call`] is the hook that interception matches on.
+//! Typed calls supply a compiler-generated JSON schema and decoder closure.
+//! The decoder parses and structurally validates each response against `T`;
+//! the host invokes it and assembles the public return value. The declaration
+//! and the interception selected by [`is_checked_call`] are a matched pair.
 //!
 //! Without type arguments, `call` and `batch` keep their Completion envelopes.
-//! `call<T>` returns a checked T; `batch<T>` checks each completion against T
-//! and returns ordered success/value or failure/reason entries. T appears only
-//! in the return type and is never inferred from arguments.
-//!
-//! The trailing `schema` parameter is likewise not surface a program writes. It
-//! defaults to `undefined`, and the typed lowering fills it with the JSON Schema
-//! emitted from `T` at compile time — the way `VirtualCall` passes its target and
-//! `tool` as constants. Passing it by hand changes only what the provider is
-//! asked for; the structural check lives in the synthetic `Cast`, not in the
-//! host fn, so a hand-passed schema buys no verification.
+//! `call<T>` returns a checked T; `batch<T>` returns ordered success/value or
+//! failure/reason entries. T is never inferred from arguments. The trailing
+//! `schema` and `decode` parameters are compiler-owned and default to undefined;
+//! programs cannot supply them directly.
 
 use std::collections::BTreeMap;
 
@@ -90,6 +75,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("model", Type::String),
             Param::new("prompt", Type::String),
             schema_param(),
+            decoder_param(),
         ],
         call_type_var(),
         "/**\n * Send one prompt to `model` and return its completion.\n *\n * With a \
@@ -129,6 +115,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("model", Type::String),
             Param::new("prompts", Type::Array(Box::new(Type::String))),
             schema_param(),
+            decoder_param(),
         ],
         batch_result_type(call_type_var()),
         "/**\n * Send every prompt to `model` and return one completion each, \
@@ -181,6 +168,49 @@ fn schema_param() -> Param {
         Type::union(vec![Type::String, Type::Undefined]),
         crate::DefaultValue::Undefined,
     )
+}
+
+fn decoder_param() -> Param {
+    Param::with_default(
+        "decode",
+        Type::union(vec![decoder_type(call_type_var()), Type::Undefined]),
+        crate::DefaultValue::Undefined,
+    )
+}
+
+pub(crate) fn decoder_type(value: Type) -> Type {
+    Type::Function {
+        params: vec![Type::String],
+        ret: Box::new(decoder_result_type(value)),
+        predicate: None,
+        has_rest: false,
+        optional: 0,
+    }
+}
+
+pub(crate) fn decoder_result_type(value: Type) -> Type {
+    let object = |fields: Vec<(&str, Type)>| Type::Object {
+        index: None,
+        fields: fields
+            .into_iter()
+            .map(|(name, ty)| (name.to_string(), crate::ObjectField::required(ty)))
+            .collect(),
+    };
+    Type::union(vec![
+        object(vec![("ok", Type::BooleanLiteral(true)), ("value", value)]),
+        object(vec![
+            ("ok", Type::BooleanLiteral(false)),
+            ("reason", Type::String),
+            (
+                "kind",
+                Type::union(vec![
+                    Type::StringLiteral("SyntaxError".into()),
+                    Type::StringLiteral("TypeError".into()),
+                    Type::StringLiteral("RangeError".into()),
+                ]),
+            ),
+        ]),
+    ])
 }
 
 fn completion_type() -> Type {

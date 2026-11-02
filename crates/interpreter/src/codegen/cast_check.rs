@@ -107,17 +107,7 @@ pub fn emit_cast(
     emitter.end_single_evaluations(mark)?;
     let enclosing = map_cast_span(emitter, cast_span);
     cast::emit_box(emitter, ctx, &source_ty)?;
-    // Only schema_checked_cast gives this synthetic call an unknown source type.
-    // An explicit cast of an untyped batch must use the ordinary cast checker.
-    let batch = matches!(source_ty, Type::Unknown)
-        && matches!(&ctx.ta.try_expr(value).map_err(crate::codegen::arena_failure)?.kind,
-        crate::TypedExprKind::GenericCall { mangled, .. }
-            if crate::stdlib::llm::declaration::is_checked_batch(mangled));
-    if batch {
-        super::batch_check::emit(emitter, ctx, check_shape)?;
-    } else {
-        emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape, key)?;
-    }
+    emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape, key)?;
     restore_span(emitter, enclosing);
     Ok(())
 }

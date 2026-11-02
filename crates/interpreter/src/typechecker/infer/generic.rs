@@ -2427,11 +2427,8 @@ impl Inferer<'_> {
         // ordinary generic call; the two sites below are the two halves of that
         // one decision, so it is read once here.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        // Schema-checked calls (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`)
-        // lower the same way and for the same reason. They differ from
-        // `session.get` only in what a bare call means — a typed default such as
-        // the `Completion` envelope rather than an unchecked `unknown` — and in
-        // carrying a compile-time schema into the trailing argument.
+        // These calls send a schema for T. LLM calls also receive a checked
+        // decoder; agents.run still validates the returned value with a cast.
         let schema_checked = crate::stdlib::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
@@ -2588,6 +2585,7 @@ impl Inferer<'_> {
         }
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
+        let decoded_llm = crate::stdlib::llm::declaration::is_checked_call(&mangled);
         let checked_batch = crate::stdlib::llm::declaration::is_checked_batch(&mangled);
         let result_ty = if checked_batch && !type_args_written {
             crate::stdlib::llm::declaration::untyped_result_type(&mangled)
@@ -2600,26 +2598,9 @@ impl Inferer<'_> {
             result_ty.clone()
         };
 
-        // A typed `llm.call<T>` is rewritten before the argument list is frozen,
-        // because the schema emitted from `T` has to replace the trailing
-        // `schema` argument the default filled with `null`. The rewrite can also
-        // fail (an unschemable or unverifiable `T`), in which case the whole
-        // call is already an error and no node is built.
-        // The `schema` slot is compiler-filled, never program-written. Rejecting
-        // a written one is a soundness requirement, not tidiness: the host keys
-        // "this call is typed" off that argument being non-null
-        // (`stdlib/llm/mod.rs`), while the structural check rides on the cast
-        // emitted here. A hand-written schema sets the first without the second,
-        // so raw parsed JSON reaches the guest wearing the `Completion`
-        // interface type — reading `ok` off a JSON object yields a fabricated
-        // `true`, and reading `text` traps outside the error taxonomy. It also
-        // hands guest-controlled bytes to the provider as the schema.
-        //
-        // This rejects rather than ignoring the argument, because silently
-        // discarding what a program wrote is its own trap. Typed calls are
-        // unaffected in behavior — `substitute_schema_argument` overwrites the
-        // slot — but a written argument there is equally meaningless, so both
-        // forms are refused and no working program changes.
+        // Only the compiler may supply the schema and decoder: their presence
+        // selects the typed host result. Allowing source arguments here could
+        // make that result disagree with the statically declared return type.
         if let Some(checked) = &schema_checked
             && args.len() > checked.written_param_count
         {
@@ -2649,6 +2630,17 @@ impl Inferer<'_> {
         }
         if let Some(schema) = &emitted_schema {
             self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
+            if decoded_llm {
+                let decoder = self.json_decoder(&schema_ty, span)?;
+                let slot = params
+                    .iter()
+                    .position(|param| param.name == "decode")
+                    .and_then(|index| typed_args.get_mut(index))
+                    .ok_or_else(|| {
+                        super::inference_failure("LLM call declares its decoder argument")
+                    })?;
+                *slot = decoder;
+            }
         }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
 
@@ -2672,13 +2664,9 @@ impl Inferer<'_> {
             })),
             None => None,
         };
-        // A checked read must not keep `return_cast`: it is a representation
-        // cast that tests nothing, and on a stored or missing `null` its
-        // `ref.cast` traps uncatchably before any structural check could run.
-        // The call node is left producing `unknown` and the checked `Cast`
-        // wrapped around it does the verifying. Intercepting here rather than
-        // at a callsite is what covers every import form, since all four
-        // callers thread the package-export mangled name through unchanged.
+        // Reads checked after the host call must stay unknown until that check.
+        // LLM hosts already invoke the decoder before returning a typed value,
+        // so their result can use the ordinary representation cast.
         let runtime_args: Vec<_> = generics
             .iter()
             .map(|name| self.instantiate(&sub, &Type::TypeVar(name.clone()), span))
@@ -2690,7 +2678,7 @@ impl Inferer<'_> {
             mangled,
             type_args: runtime_args,
             args: generic_args,
-            return_cast: if checked_get || schema_checked.is_some() {
+            return_cast: if checked_get || (schema_checked.is_some() && !decoded_llm) {
                 None
             } else {
                 return_cast
@@ -2702,7 +2690,7 @@ impl Inferer<'_> {
         }
         // An untyped schema-checked call emitted no schema and needs no check: it
         // returns the default the declaration already typed.
-        if schema_checked.is_some() && emitted_schema.is_some() {
+        if schema_checked.is_some() && emitted_schema.is_some() && !decoded_llm {
             return self.schema_checked_cast(call, &result_ty, span);
         }
         Ok((call, result_ty))

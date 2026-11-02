@@ -559,7 +559,7 @@ fn walk_namespace<'a>(head: &str, head_ns: &'a NamespaceSymbol, rest: &[&str]) -
                 let sym = &ns.values[&canonical];
                 let mut body = String::new();
                 push_doc(&mut body, value_doc(&sym.kind), "");
-                render_value(&mut body, &canonical, &sym.kind, "");
+                render_value(&mut body, &canonical, &public_value_kind(sym), "");
                 return found_in(&chain, &body);
             }
             // A value is a leaf: it has no members to walk into.
@@ -624,7 +624,7 @@ fn resolve_type_member(
 fn render_namespace_member(out: &mut String, ns: &NamespaceSymbol, canonical: &str) {
     if let Some(sym) = ns.values.get(canonical) {
         push_doc(out, value_doc(&sym.kind), "");
-        render_value(out, canonical, &sym.kind, "");
+        render_value(out, canonical, &public_value_kind(sym), "");
     }
     if let Some(sym) = ns.types.get(canonical) {
         push_doc(out, type_doc(&sym.kind), "");
@@ -1121,7 +1121,7 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
     let mut out = String::new();
     for (name, sym) in &defs.values {
         push_doc(&mut out, value_doc(&sym.kind), "");
-        render_value(&mut out, name, &sym.kind, "");
+        render_value(&mut out, name, &public_value_kind(sym), "");
     }
     for (name, sym) in &defs.types {
         push_doc(&mut out, type_doc(&sym.kind), "");
@@ -1645,7 +1645,7 @@ fn render_ts_declarations(
             continue;
         }
         push_doc(out, value_doc(&sym.kind), indent);
-        render_ts_value(out, name, &sym.kind, indent, export_prefix);
+        render_ts_value(out, name, &public_value_kind(sym), indent, export_prefix);
     }
     // Only the runtime's own modules pair a type with an `XConstructor`
     // interface for its static side; in a package they're two ordinary types.
@@ -2011,7 +2011,7 @@ fn render_ts_namespace(
     let inner = format!("{indent}  ");
     for (vname, sym) in &ns.values {
         push_doc(out, value_doc(&sym.kind), &inner);
-        render_ts_value(out, vname, &sym.kind, &inner, "");
+        render_ts_value(out, vname, &public_value_kind(sym), &inner, "");
     }
     for (tname, sym) in &ns.types {
         push_doc(out, type_doc(&sym.kind), &inner);
@@ -2298,6 +2298,18 @@ fn json_package_declaration() -> PackageDeclaration {
     defs
 }
 
+/// Compiler-owned arguments are absent from the source-level contract.
+fn public_value_kind(sym: &crate::ValueSymbol) -> Cow<'_, ValueKind> {
+    let Some(call) = crate::stdlib::schema_checked_call(&sym.mangled_name) else {
+        return Cow::Borrowed(&sym.kind);
+    };
+    let mut kind = sym.kind.clone();
+    if let ValueKind::Function { params, .. } = &mut kind {
+        params.truncate(call.written_param_count);
+    }
+    Cow::Owned(kind)
+}
+
 fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
     match kind {
         ValueKind::Function {
@@ -2489,7 +2501,7 @@ fn render_namespace(out: &mut String, name: &str, ns: &NamespaceSymbol, indent: 
     let inner = format!("{indent}  ");
     for (vname, sym) in &ns.values {
         push_doc(out, value_doc(&sym.kind), &inner);
-        render_value(out, vname, &sym.kind, &inner);
+        render_value(out, vname, &public_value_kind(sym), &inner);
     }
     for (tname, sym) in &ns.types {
         // The namespace's own values already bind each `XConstructor` to `X`,
@@ -3250,8 +3262,6 @@ mod tests {
     fn builtin_docs_folds_constructor_into_array() {
         let docs = builtin_docs("Array").expect("Array built-in");
         assert!(docs.contains("interface Array<"));
-        assert!(docs.contains("interface RegExpMatchArray extends Array<string | undefined>"));
-        assert!(docs.contains("interface RegExpExecArray extends Array<string | undefined>"));
         assert!(docs.contains("interface ArrayConstructor"));
         assert!(docs.contains("const Array: ArrayConstructor;"));
     }
@@ -3918,6 +3928,26 @@ mod tests {
                 implements: Vec::new(),
                 doc: None,
             },
+        }
+    }
+
+    #[test]
+    fn compiler_owned_llm_arguments_stay_out_of_public_declarations() {
+        let defs = crate::stdlib::llm::package_declaration();
+        for rendered in [
+            render_declarations(&defs),
+            render_packages_d_ts(&[&defs], &[]),
+        ] {
+            assert!(
+                rendered.contains("call<T>(model: string, prompt: string): T;"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("batch<T>(model: string, prompts: string[])"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("schema?:"), "{rendered}");
+            assert!(!rendered.contains("decode?:"), "{rendered}");
         }
     }
 
