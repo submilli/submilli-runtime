@@ -555,7 +555,7 @@ async fn code_tools_use_durable_updates_and_transient_observations() {
 async fn durable_backend_refuses_unprepared_recursive_mutations() {
     let fixture = Fixture::new().await;
     let source = r#"import { mkdir } from "submilli:fs";
-        function main(): void { mkdir("/unprepared/child", true); }"#;
+        function main(): void { mkdir("/unprepared/child", { recursive: true }); }"#;
     assert!(run_backend(&fixture, source).await.is_err());
     assert!(std::fs::read(fixture.filesystem.vfs().root().join("unprepared/child")).is_err());
     let mut unit = fixture.units()().await.unwrap();
@@ -625,7 +625,7 @@ async fn durable_refusals_remain_catchable_in_guest_code() {
     let source = r#"import { mkdir } from "submilli:fs";
         function main(): void {
             let caught = false;
-            try { mkdir("/existing", false); } catch (error: Error) { caught = true; }
+            try { mkdir("/existing", { recursive: false }); } catch (error: Error) { caught = true; }
             assert(caught, "a recorded preflight refusal is catchable");
         }"#;
     run_backend(&fixture, source).await.unwrap();
@@ -643,7 +643,7 @@ async fn durable_listing_keeps_native_sizes_and_consecutive_subtrees() {
     let source = r#"import { list } from "submilli:fs";
         function main(): void {
             let sequence = "";
-            for (const entry of list("/", true)) {
+            for (const entry of list("/", { recursive: true })) {
                 if (entry.kind !== "file") { assert(entry.size === 0, "non-file size"); }
                 sequence += entry.name + ",";
             }
@@ -692,7 +692,7 @@ async fn durable_append_and_eager_listing_admit_their_own_fuel() {
         std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
     }
     let listing = r#"import { list } from "submilli:fs";
-        function main(): void { list("/", false); }"#;
+        function main(): void { list("/", { recursive: false }); }"#;
     let error = run_backend_fueled(&fixture, listing, Some(10_000))
         .await
         .unwrap_err();
@@ -707,7 +707,7 @@ async fn durable_mutations_do_not_scan_unrelated_files_for_quota() {
         std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
     }
     let source = r#"import { mkdir } from "submilli:fs";
-        function main(): void { mkdir("/created", false); }"#;
+        function main(): void { mkdir("/created", { recursive: false }); }"#;
     run_backend_fueled(&fixture, source, Some(10_000))
         .await
         .unwrap();

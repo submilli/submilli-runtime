@@ -1,10 +1,10 @@
 function main(): void {
   const re: RegExp = new RegExp("[0-9]+", "");
 
-  const m: RegExpMatch | null = "abc42def".match(re);
+  const m: RegExpMatchArray | null = "abc42def".match(re);
   assert(m !== null, "match returns a match");
   if (m !== null) {
-    assert(m.match === "42", "match text");
+    assert(m[0] === "42", "match text");
     assert(m.index === 3, "match index");
     assert(m.input === "abc42def", "input round-trip");
   }

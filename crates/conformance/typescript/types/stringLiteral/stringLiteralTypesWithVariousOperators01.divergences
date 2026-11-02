@@ -1,8 +1,6 @@
-types: 73 of 96 tsc entries compared, 0 differ
+types: 77 of 96 tsc entries compared, 0 differ
 
 errors:
-line 15: ours: `+` not defined for `boolean` and `"ABC"` (tsc accepts)
-line 16: ours: `+` not defined for `"ABC"` and `boolean` (tsc accepts)
 line 20: ours: unary `-` not defined for `"ABC" | "XYZ"` (tsc accepts)
 line 21: ours: `+` not defined for `number | "ABC" | "XYZ"` and `string` (tsc accepts)
 line 22: ours: `+` not defined for `string` and `number | "ABC" | "XYZ"` (tsc accepts)

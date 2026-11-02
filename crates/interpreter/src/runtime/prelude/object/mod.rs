@@ -258,6 +258,13 @@ fn indexed_entries(
         let name = write_submilli_string_struct(caller, &index.to_string())?;
         entries.push((Val::AnyRef(Some(name.to_anyref())), value));
     }
+    if is_a(caller, obj, &intr.regex_match_box)? {
+        for property in ["index", "input", "groups"] {
+            let name = write_submilli_string_struct(caller, property)?;
+            let value = super::regex::match_metadata(caller, &[*obj], property)?;
+            entries.push((Val::AnyRef(Some(name.to_anyref())), value));
+        }
+    }
     Ok(Some(entries))
 }
 
@@ -638,6 +645,14 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
         ));
     }
     let target = read_string_units(caller, key, FIELD_NAME)?;
+    let regex_match = intrinsic_types(&mut *caller)?.regex_match_box.clone();
+    if is_a(caller, obj, &regex_match)?
+        && ["index", "input", "groups"]
+            .iter()
+            .any(|name| name.encode_utf16().eq(target.iter().copied()))
+    {
+        return Ok(true);
+    }
     if let Some(len) = indexed_len(caller, obj)? {
         let length: Vec<u16> = "length".encode_utf16().collect();
         return Ok(target == length || array_index(&target).is_some_and(|index| index < len));

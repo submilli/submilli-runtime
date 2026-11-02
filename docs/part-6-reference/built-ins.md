@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2806850b7331d9063fc7d4e038779cf89e89c5dbdb815f2630e8b671301437ea"
+  contentHash: "6c723670e4ed4aa0644c968c04464d8e3259a82fff248a83007b5d48f534fe9a"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -486,7 +486,7 @@ Compiled regular expression.
 | `readonly source: string` | The original JS-source pattern (without the leading/trailing `/`). |
 | `readonly sticky: boolean` | `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). |
 | `readonly unicode: boolean` | `true` if the regex was constructed with the `u` flag. |
-| `exec(s: string): RegExpMatch \| null` | Find the next match in `s`. |
+| `exec(s: string): RegExpExecArray \| null` | Find the next match in `s`. |
 | `test(s: string): boolean` | Returns `true` if the pattern matches anywhere in `s`. |
 
 | Constant | Description |
@@ -558,8 +558,8 @@ The UTF-16 string type.
 | `iterator(): Iterator<string>` | Returns an `Iterator<string>` of CODE POINTS — surrogate pairs arrive as one two-unit string. |
 | `lastIndexOf(search: string, fromIndex?: number): number` | Returns the index of the last occurrence of `search` at or before `fromIndex`, or `-1` if none. |
 | `localeCompare(other: string): number` | Compares this string with `other` in UTF-16 code-unit order. |
-| `match(re: string \| RegExp): RegExpMatch \| null` | Find the next match of `re` in this string. |
-| `matchAll(re: RegExp): RegExpMatch[]` | Find every non-overlapping match of `re` in this string. |
+| `match(re: string \| RegExp): RegExpMatchArray \| null` | Find the next match of `re` in this string. |
+| `matchAll(re: string \| RegExp): Iterator<RegExpExecArray>` | Find every non-overlapping match of `re` in this string. |
 | `normalize(form?: string): string` | Returns a new string in the specified Unicode normalization form. |
 | `padEnd(targetLength: number, padString?: string): string` | Pads this string with `padString` on the right until the result reaches `targetLength` code units. |
 | `padStart(targetLength: number, padString?: string): string` | Pads this string with `padString` on the left until the result reaches `targetLength` code units. |

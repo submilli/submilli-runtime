@@ -432,8 +432,21 @@ impl Type {
         Self::Tuple(elements.into())
     }
 
+    pub fn is_regexp_match_array(&self) -> bool {
+        matches!(self.peel(), Self::InterfaceRef { mangled, .. }
+            if *mangled == crate::mangle::prelude("RegExpMatchArray")
+                || *mangled == crate::mangle::prelude("RegExpExecArray"))
+    }
+
+    pub fn regexp_element() -> Type {
+        Type::union(vec![Type::String, Type::Undefined])
+    }
+
     /// A receiver whose computed string keys use the object property carrier.
     pub fn is_structural_object(&self) -> bool {
+        if self.is_regexp_match_array() {
+            return false;
+        }
         match self.peel() {
             Self::Object { .. } | Self::InterfaceRef { .. } => true,
             Self::Union(members) => members.iter().all(Self::is_structural_object),

@@ -285,12 +285,12 @@ fn writes_through_an_escaping_link_refuse_and_write_nothing_outside() {
         (
             "mkdir",
             r#"import { mkdir } from "submilli:fs";
-                     function main(): void { mkdir("/esc_rel/pwned", false); }"#,
+                     function main(): void { mkdir("/esc_rel/pwned", { recursive: false }); }"#,
         ),
         (
             "list",
             r#"import { list } from "submilli:fs";
-                    function main(): void { for (const e of list("/esc_rel", false)) { } }"#,
+                    function main(): void { for (const e of list("/esc_rel", { recursive: false })) { } }"#,
         ),
         (
             "writer",
@@ -492,10 +492,10 @@ fn stat_and_remove_work_on_an_escaping_link_without_traversing_it() {
         &s,
         r#"import { remove } from "submilli:fs";
            function main(): void {
-             remove("/esc_rel", false);
-             remove("/esc_file", false);
-             remove("/dangling_dir", false);
-             remove("/dangling_file", false);
+             remove("/esc_rel", { recursive: false });
+             remove("/esc_file", { recursive: false });
+             remove("/dangling_dir", { recursive: false });
+             remove("/dangling_file", { recursive: false });
            }"#,
         "remove of an escaping link",
     );
@@ -598,7 +598,7 @@ fn a_checkout_shaped_tree_lists_and_reads_normally() {
            function main(): void {
              let files: number = 0;
              let links: number = 0;
-             for (const e of list("/pkgs", true)) {
+             for (const e of list("/pkgs", { recursive: true })) {
                if (e.kind === "file") { files = files + 1; }
                if (e.kind === "symlink") { links = links + 1; }
              }
@@ -617,7 +617,7 @@ fn a_recursive_listing_does_not_descend_through_an_escaping_link() {
         &s,
         r#"import { list, DirEntry } from "submilli:fs";
            function main(): void {
-             for (const e of list("/", true)) {
+             for (const e of list("/", { recursive: true })) {
                assert(e.path.indexOf("secret.txt") === -1, "the walk must not reach outside the root");
              }
            }"#,

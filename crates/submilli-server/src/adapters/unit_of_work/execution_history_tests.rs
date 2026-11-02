@@ -465,7 +465,7 @@ async fn execution_history_rejects_process_local_resources_with_run_ids() {
     };
     for (operation, resource) in [
         ("bytes(\"/input\", 3)", "reader"),
-        ("list(\"/\", false)", "listing"),
+        ("list(\"/\", { recursive: false })", "listing"),
         ("writer(\"/output\")", "writer"),
     ] {
         let directory = tempfile::tempdir().unwrap();
@@ -615,7 +615,7 @@ async fn execution_history_resumes_id_only_resources_after_each_uncommitted_resu
             output.writeLine(count.toString());
             output.close();
             let entries = 0;
-            for (const entry of list("/", false)) { entries++; }
+            for (const entry of list("/", { recursive: false })) { entries++; }
             return (readText("/output") ?? "") + "|" + entries.toString();
         }
     "#;

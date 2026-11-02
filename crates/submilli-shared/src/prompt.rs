@@ -33,18 +33,14 @@ pub mod tools {
         available package. A query matching nothing returns the available-package catalog and a \
         pointer to the built-ins tool rather than an empty list.";
 
-    pub const PACKAGES_DOCS: &str = "Return the type declarations (a TypeScript `.d.ts`-style \
-        listing of every exported function and type) plus a one-line description for a package — \
-        an importable stdlib module (e.g. \"submilli:crypto\"), a registry package, or an \
-        @mcp/<server> package. Read these before importing a package: the signatures are the \
-        contract. A name that is a language built-in rather than a package (e.g. \"Temporal\") \
-        is served here too, tagged \"source\": \"builtin\" — use it directly, with no `import`. \
-        A bare standard-library name (e.g. \"fs\") is not a package name. When the blueprint \
-        shows that module, it is served with `name` set to the real package (`submilli:fs`), \
-        `requested_name` to the name you passed, and `correction` saying that name is wrong. \
-        Import `name`, never `requested_name`. A standard-library short name shared by several \
-        packages, or a module the blueprint hides, is a structured { error }. Any other unknown \
-        name also returns a structured { error }, with `did_you_mean` when a close one exists.";
+    pub const PACKAGES_DOCS: &str = "Read documentation and TypeScript declarations for `names: string[]` \
+        in one call. Before your first program, fetch every module or package you will import; \
+        use the returned signatures rather than guessing Node or TypeScript APIs. Returns \
+        { results: [{ name, found, text }] } in request order, retaining duplicates. Unknown \
+        names have found=false and an explanation in text; other entries still succeed. \
+        Accepts stdlib names (e.g. submilli:fs), registry packages, @mcp/<server>, and built-ins \
+        (e.g. Temporal, used without an import). A bare stdlib name such as fs resolves when \
+        visible and its text identifies the canonical import name submilli:fs.";
 
     pub const BUILTINS_LIST: &str = "List the language built-ins that are always in scope without \
         an `import`, returning { types, namespaces }. Use this to discover names before fetching \

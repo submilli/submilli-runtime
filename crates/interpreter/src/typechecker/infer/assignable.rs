@@ -806,6 +806,15 @@ fn assignable_rec(
     }
     let actual = actual.peel();
     let expected = expected.peel();
+    if actual.is_regexp_match_array() && matches!(expected, Type::Array(_)) {
+        return assignable_rec(
+            &Type::Array(Box::new(Type::regexp_element())),
+            expected,
+            types,
+            seen,
+        );
+    }
+
     if matches!(actual, Type::Error) || matches!(expected, Type::Error) {
         return true;
     }

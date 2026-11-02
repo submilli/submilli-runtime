@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "dfa8c57b68d523d0768f42f20380a84b22b68309815d66d46dd5b224549a314c"
+  contentHash: "4ec14cac15d5a80eeda39d7bf24706b5ffaf991b01ea67482333d8d66063482e"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -548,6 +548,23 @@ An unknown name answers `404`:
 Package whose documentation has malformed directives answers `422` with
 `error` `invalid_documentation`.
 
+#### Batch documentation
+
+Role: `user`. Fetches several package or built-in descriptions in one request.
+Use `GET /v1/blueprints/{name}/packages/docs?names[]=submilli:fs&names[]=Map&names[]=missing`.
+Repeat `names[]` once per name; URL-encoded brackets (`names%5B%5D`) are equivalent.
+
+Answers `200` with `{ "results": [...] }`. Each entry has the requested
+`name`, a `found` boolean, and `text` containing the documentation or an
+explanation of why the name was not found. Results preserve request order and
+duplicates. Omitting both `name` and `names[]` returns an empty `results` array. Unknown
+names do not fail the batch. An unknown Blueprint returns `404`.
+
+The existing `?name=...` form keeps its single-document response and status codes.
+Mixing `name` and `names[]`, repeating `name`, or using bare `names` returns `400`.
+Batch methods in the SDKs require a server supporting the `names[]` query form. The MCP
+`packages__docs` tool uses the same `names` array and `results` envelope.
+
 ### GET /v1/blueprints/{name}/builtins
 
 Role: `user`. Lists the built-ins in scope without an `import`:
@@ -580,6 +597,11 @@ Blueprint does. An unknown session answers `404`.
 Role: `user`. The [docs](#get-v1blueprintsnamepackagesdocs) of the session's
 Blueprint, plus `@tools`, which answers as an `@mcp/<server>` Package does.
 `@tools` answers `404` in a session without application tools.
+
+The same endpoint accepts repeated `names[]` parameters for
+[batch documentation](#batch-documentation), including application tools under
+`@tools`. An unknown session returns `404`; unknown names within a valid
+session return entries with `found: false`.
 
 ## One-off runs
 

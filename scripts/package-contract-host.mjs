@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 
 export async function loadPackage(sourceUrl, host) {
-    const bindings = 'get, post, put, patch, delete: remove, download, read, readBytes, stat, write, encodeComponent, decodeComponent, encodeQuery, parse, secrets, check';
+    const bindings = 'get, post, put, patch, delete: remove, download, exists, read, readBytes, stat, write, encodeComponent, decodeComponent, encodeQuery, parse, secrets, check';
     const source = (await readFile(sourceUrl, 'utf8'))
         .replace(/import\s+[\s\S]*?from "submilli:[^"]+";\n/g, '')
         .replace(/\bdelete\(/g, 'remove(');
@@ -52,6 +52,7 @@ export function contractHost() {
             checks.push({ capability, context });
             if (deny(capability, context)) throw new Error('Capability denied');
         },
+        exists: () => true,
         stat: () => ({ kind: 'file', size: 0 }),
         parse: (url) => {
             const value = new URL(url);

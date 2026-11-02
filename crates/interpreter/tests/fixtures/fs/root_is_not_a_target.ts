@@ -1,16 +1,16 @@
 // The VFS root is a mount point, not an entry. Naming it as the target of a destructive
-// or write operation is a mistake the diagnostic has to name — `remove("/", true)` in
+// or write operation is a mistake the diagnostic has to name — `remove("/", { recursive: true })` in
 // particular would otherwise drain the root and then fail on the self-unlink, destroying
 // a volume and reporting the destruction as a failed call.
 import { mkdir, writeText, remove, exists, list, DirEntry } from "submilli:fs";
 
 function main(): void {
   writeText("/keep.txt", "x");
-  mkdir("/sub", false);
+  mkdir("/sub", { recursive: false });
 
   let removeMessage: string = "";
   try {
-    remove("/", true);
+    remove("/", { recursive: true });
   } catch (error: Error) {
     removeMessage = error.message;
   }
@@ -27,7 +27,7 @@ function main(): void {
   assert(writeMessage.includes("VFS root"), "write names the root: " + writeMessage);
 
   let strays: number = 0;
-  for (const entry of list("/", false)) {
+  for (const entry of list("/", { recursive: false })) {
     if (entry.name !== "keep.txt" && entry.name !== "sub") {
       strays = strays + 1;
     }

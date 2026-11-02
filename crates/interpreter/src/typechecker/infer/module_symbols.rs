@@ -178,6 +178,43 @@ impl<'a> NamespaceMembers<'a> {
         }
     }
 
+    pub(in crate::typechecker) fn missing_value_help(&self, missing: &str) -> Vec<String> {
+        let values = match self {
+            Self::Package(package) => &package.values,
+            Self::Module { values, .. } => values,
+        };
+        let mut help = self.exports_help();
+        let closest =
+            crate::did_you_mean::closest_match(missing, values.keys().map(String::as_str));
+        if let Some(name) = closest {
+            help.push(format!("did you mean `{name}`?"));
+        }
+        let mut selected = PackageDeclaration {
+            package_name: self.package_name().into(),
+            ..Default::default()
+        };
+        for (name, value) in values
+            .iter()
+            .take(6)
+            .chain(closest.and_then(|name| values.get_key_value(name)))
+        {
+            selected.values.insert(name.clone(), value.clone());
+        }
+        let declarations = crate::packages::render_declarations(&selected);
+        let signatures: Vec<_> = declarations
+            .lines()
+            .filter(|line| {
+                line.starts_with("function ")
+                    || line.starts_with("const ")
+                    || line.starts_with("let ")
+            })
+            .collect();
+        if !signatures.is_empty() {
+            help.push(format!("module declarations:\n{}", signatures.join("\n")));
+        }
+        help
+    }
+
     pub(in crate::typechecker) fn exports_help(&self) -> Vec<String> {
         let mut names: Vec<&str> = match self {
             Self::Package(package) => package

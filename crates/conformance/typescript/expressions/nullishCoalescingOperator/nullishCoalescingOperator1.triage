@@ -1,0 +1,1 @@
+line 63 missed: by-design spec §1.6 (SUB-2074) permits redundant ?? with a warning so defensive agent code can run; TypeScript reports TS2869

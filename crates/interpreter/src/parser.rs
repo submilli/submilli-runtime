@@ -65,6 +65,7 @@ pub fn parse_checked(
     let mut p = Parser {
         source,
         tokens,
+        split_type_tokens: Vec::new(),
         file,
         pos: 0,
         ast: Ast::new(),
@@ -148,6 +149,7 @@ fn validate_token_stream(source: &str, tokens: &[Token], file: FileId) -> Result
 pub(crate) struct Parser<'a> {
     source: &'a str,
     tokens: Vec<Token>,
+    split_type_tokens: Vec<(usize, Token)>,
     file: FileId,
     pos: usize,
     ast: Ast,
@@ -2142,9 +2144,40 @@ impl<'a> Parser<'a> {
         )
     }
 
+    /// The lexer already emits shifts as separate `>` tokens. Only `>=`
+    /// needs splitting in a type context; keep `=` at the cursor for the caller.
+    fn consume_type_close(&mut self) -> Option<Token> {
+        if matches!(self.peek().kind, TokenKind::GreaterThan) {
+            return Some(self.advance());
+        }
+        let original = self.peek().clone();
+        if !matches!(original.kind, TokenKind::GreaterEquals) {
+            return self.invariant_failure("type closing token must start with `>`");
+        }
+        let middle = original.span.start + 1;
+        let close = Token::new(
+            TokenKind::GreaterThan,
+            self.span(original.span.start, middle),
+        );
+        let remaining = Token::new(TokenKind::Equals, self.span(middle, original.span.end));
+        self.split_type_tokens.push((self.pos, original));
+        *self.tokens.get_mut(self.pos)? = remaining;
+        Some(close)
+    }
+
+    fn restore_type_tokens(&mut self, checkpoint: usize) {
+        for (index, original) in self.split_type_tokens.drain(checkpoint..).rev() {
+            // Splitting replaces tokens in place; the token vector never shrinks.
+            self.tokens[index] = original;
+        }
+    }
+
     fn parse_type_argument_list(&mut self) -> Option<(Vec<TypeAnnotation>, u32)> {
         let lt = self.advance();
-        if matches!(self.peek().kind, TokenKind::GreaterThan) {
+        if matches!(
+            self.peek().kind,
+            TokenKind::GreaterThan | TokenKind::GreaterEquals
+        ) {
             self.error_at(lt.span, "empty generic argument list `<>` is not allowed");
             return None;
         }
@@ -2154,13 +2187,16 @@ impl<'a> Parser<'a> {
             match self.peek().kind {
                 TokenKind::Comma => {
                     self.advance();
-                    if matches!(self.peek().kind, TokenKind::GreaterThan) {
-                        let gt = self.advance();
+                    if matches!(
+                        self.peek().kind,
+                        TokenKind::GreaterThan | TokenKind::GreaterEquals
+                    ) {
+                        let gt = self.consume_type_close()?;
                         return Some((args, gt.span.end));
                     }
                 }
-                TokenKind::GreaterThan => {
-                    let gt = self.advance();
+                TokenKind::GreaterThan | TokenKind::GreaterEquals => {
+                    let gt = self.consume_type_close()?;
                     return Some((args, gt.span.end));
                 }
                 _ => {
@@ -2195,7 +2231,10 @@ impl<'a> Parser<'a> {
 
     fn parse_generic_param_list(&mut self) -> Option<Vec<Ident>> {
         let lt = self.advance();
-        if matches!(self.peek().kind, TokenKind::GreaterThan) {
+        if matches!(
+            self.peek().kind,
+            TokenKind::GreaterThan | TokenKind::GreaterEquals
+        ) {
             self.error_at(lt.span, "empty generic parameter list `<>` is not allowed");
             return None;
         }
@@ -2218,13 +2257,16 @@ impl<'a> Parser<'a> {
             match self.peek().kind {
                 TokenKind::Comma => {
                     self.advance();
-                    if matches!(self.peek().kind, TokenKind::GreaterThan) {
-                        self.advance();
+                    if matches!(
+                        self.peek().kind,
+                        TokenKind::GreaterThan | TokenKind::GreaterEquals
+                    ) {
+                        self.consume_type_close()?;
                         return Some(generics);
                     }
                 }
-                TokenKind::GreaterThan => {
-                    self.advance();
+                TokenKind::GreaterThan | TokenKind::GreaterEquals => {
+                    self.consume_type_close()?;
                     return Some(generics);
                 }
                 _ => {
@@ -5324,10 +5366,12 @@ impl<'a> Parser<'a> {
             }
             let type_args = if matches!(self.peek().kind, TokenKind::LessThan) {
                 let saved_pos = self.pos;
+                let saved_splits = self.split_type_tokens.len();
                 let saved_diag_len = self.diagnostics.len();
                 if let Some(args) = self.try_parse_type_args_only() {
                     Some(args)
                 } else {
+                    self.restore_type_tokens(saved_splits);
                     self.pos = saved_pos;
                     self.diagnostics.truncate(saved_diag_len);
                     None
@@ -5461,10 +5505,12 @@ impl<'a> Parser<'a> {
                         break;
                     }
                     let saved_pos = self.pos;
+                    let saved_splits = self.split_type_tokens.len();
                     let saved_diag_len = self.diagnostics.len();
                     if let Some(call_id) = self.try_parse_generic_call_tail(expr) {
                         expr = call_id;
                     } else {
+                        self.restore_type_tokens(saved_splits);
                         self.pos = saved_pos;
                         self.diagnostics.truncate(saved_diag_len);
                         break;
@@ -5676,7 +5722,10 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
-        if matches!(self.peek().kind, TokenKind::GreaterThan) {
+        if matches!(
+            self.peek().kind,
+            TokenKind::GreaterThan | TokenKind::GreaterEquals
+        ) {
             return None;
         }
 
@@ -5687,13 +5736,16 @@ impl<'a> Parser<'a> {
             match self.peek().kind {
                 TokenKind::Comma => {
                     self.advance();
-                    if matches!(self.peek().kind, TokenKind::GreaterThan) {
-                        self.advance();
+                    if matches!(
+                        self.peek().kind,
+                        TokenKind::GreaterThan | TokenKind::GreaterEquals
+                    ) {
+                        self.consume_type_close()?;
                         break;
                     }
                 }
-                TokenKind::GreaterThan => {
-                    self.advance();
+                TokenKind::GreaterThan | TokenKind::GreaterEquals => {
+                    self.consume_type_close()?;
                     break;
                 }
                 _ => return None,
@@ -7184,6 +7236,7 @@ mod tests {
         Parser {
             source,
             tokens: tokens_of(source),
+            split_type_tokens: Vec::new(),
             file: F,
             pos: 0,
             ast: Ast::new(),
@@ -13333,7 +13386,7 @@ class Dog extends Animal {
     fn for_await_names_the_rewrite_once() {
         assert_eq!(
             crate::typechecker::rules::test_util::compile_messages(
-                "import * as fs from \"submilli:fs\";\nfunction main(): string {\n  for await (const e of fs.list(\".\", false)) { }\n  return \"x\";\n}\n"
+                "import * as fs from \"submilli:fs\";\nfunction main(): string {\n  for await (const e of fs.list(\".\", { recursive: false })) { }\n  return \"x\";\n}\n"
             ),
             ["`for await` is not supported"]
         );

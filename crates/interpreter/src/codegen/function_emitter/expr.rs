@@ -1854,6 +1854,8 @@ fn emit_literal_chunk(
     // A source `runtime_values` widened may no longer hold the array its
     // narrowed type said; `emit_receiver` checks it as a field read's receiver.
     emit_receiver(emitter, ctx, element.expr_id())?;
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array)));
+
     let raw_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
@@ -2647,6 +2649,7 @@ fn inline_length_struct_idx(
 /// Receiver (concrete `$string`/`$Array`) on stack → its element count as f64.
 fn emit_inline_length(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, struct_idx: u32) {
     let is_array = ctx.symbols.array_type_idx() == Some(struct_idx);
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: struct_idx,
         field_index: if is_array { 2 } else { 1 },
@@ -5507,6 +5510,9 @@ fn emit_method_call_with_receiver_on_stack(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let concrete_receiver = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
     crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver)?;
+    if recv_ty.is_regexp_match_array() && *iface == crate::mangle::prelude("Array") {
+        cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::regexp_element())))?;
+    }
     let direct_key = crate::mangle::extend(iface, method);
     if let Some(func_idx) = ctx.symbols.func_idx(&direct_key) {
         if matches!(recv_ty.primitive_behavior(), Type::Number)

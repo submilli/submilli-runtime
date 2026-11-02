@@ -1,1 +1,0 @@
-line 3 type: by-design spec §1.7 `exec`/`match` return a `RegExpMatch` record, not tsc's match array

@@ -792,7 +792,7 @@ function main(): string { try { session.registerFinalizer("k", "v"); } catch (er
                 &session,
                 29,
                 "submilli__typescript__packages__docs",
-                json!({ "name": "@mcp/up" }),
+                json!({ "names": ["@mcp/up"] }),
             ),
         ));
         // The bare-name redirect, including its correction fields, must not
@@ -804,7 +804,7 @@ function main(): string { try { session.registerFinalizer("k", "v"); } catch (er
                 &session,
                 33,
                 "submilli__typescript__packages__docs",
-                json!({ "name": "fs" }),
+                json!({ "names": ["fs"] }),
             ),
         ));
         seen.push((

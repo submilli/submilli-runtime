@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c19aab9ca3585de1916c09f270f9422e4e79dd718c5d95748e06cc72c3b17ba9"
+  contentHash: "5ad8f7baeab615d8dec8108b47d0b300541ca609cfc7fb75483a910c2b765615"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -125,7 +125,7 @@ lookaround. A pattern with either throws `SyntaxError`.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Returns `undefined` |
+| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Throws `RangeError` |
 | `fs.readBytes` length | `fs.maxReadSize()` | `RangeError` |
 | Entries a recursive `fs.remove` scans | 10,000 | `Error` |
 | Directory depth `fs.list` walks in depth-first order | 32 | Deeper directories follow the rest of their parent's entries |

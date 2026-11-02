@@ -413,7 +413,8 @@ const JSON_BUILTIN: &str = "JSON";
 const SUPPORTING_TYPES: &[&str] = &[
     "Console",
     "Base64Options",
-    "RegExpMatch",
+    "RegExpMatchArray",
+    "RegExpExecArray",
     "Iterator",
     "Iterable",
     "IteratorResult",
@@ -627,12 +628,12 @@ fn render_namespace_member(out: &mut String, ns: &NamespaceSymbol, canonical: &s
     }
     if let Some(sym) = ns.types.get(canonical) {
         push_doc(out, type_doc(&sym.kind), "");
-        render_type(out, canonical, &sym.kind, "");
+        render_type(out, canonical, sym, "");
     }
     let ctor = format!("{canonical}Constructor");
     if let Some(sym) = ns.types.get(&ctor) {
         push_doc(out, type_doc(&sym.kind), "");
-        render_type(out, &ctor, &sym.kind, "");
+        render_type(out, &ctor, sym, "");
     }
 }
 
@@ -1124,7 +1125,7 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
     }
     for (name, sym) in &defs.types {
         push_doc(&mut out, type_doc(&sym.kind), "");
-        render_type(&mut out, name, &sym.kind, "");
+        render_type(&mut out, name, sym, "");
     }
     out.trim_end().to_string()
 }
@@ -1680,7 +1681,7 @@ fn render_ts_declarations(
                 &sym.kind,
                 indent,
                 export_prefix,
-                parent.as_deref(),
+                parent.as_deref().or_else(|| intrinsic_array_parent(sym)),
             );
         }
     }
@@ -1758,7 +1759,13 @@ fn render_ts_value(
     out.push('\n');
 }
 
-/// `parent` is the rendered `extends` target of a class, if it has one.
+fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
+    (sym.mangled_name == crate::mangle::prelude("RegExpMatchArray")
+        || sym.mangled_name == crate::mangle::prelude("RegExpExecArray"))
+    .then_some("Array<string | undefined>")
+}
+
+/// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
     name: &str,
@@ -1778,8 +1785,11 @@ fn render_ts_type(
         } => {
             let _ = writeln!(
                 out,
-                "{indent}{export_prefix}interface {name}{} {{",
-                ts_interface_generics(name, generics, export_prefix)
+                "{indent}{export_prefix}interface {name}{}{} {{",
+                ts_interface_generics(name, generics, export_prefix),
+                parent
+                    .map(|parent| format!(" extends {parent}"))
+                    .unwrap_or_default()
             );
             if let Some(index) = index {
                 let ro = if index.readonly { "readonly " } else { "" };
@@ -2312,16 +2322,23 @@ fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
     }
 }
 
-fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
+fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
     let inner = format!("{indent}  ");
-    match kind {
+    let parent = intrinsic_array_parent(sym)
+        .map(|parent| format!(" extends {parent}"))
+        .unwrap_or_default();
+    match &sym.kind {
         TypeKind::Interface {
             generics,
             methods,
             properties,
             ..
         } => {
-            let _ = writeln!(out, "{indent}interface {name}{} {{", generics_str(generics));
+            let _ = writeln!(
+                out,
+                "{indent}interface {name}{}{parent} {{",
+                generics_str(generics)
+            );
             for (pname, prop) in properties {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
@@ -2457,12 +2474,12 @@ fn render_type_with_ctor(
 ) {
     if let Some(sym) = types.get(name) {
         push_doc(out, type_doc(&sym.kind), indent);
-        render_type(out, name, &sym.kind, indent);
+        render_type(out, name, sym, indent);
     }
     let ctor = format!("{name}Constructor");
     if let Some(sym) = types.get(&ctor) {
         push_doc(out, type_doc(&sym.kind), indent);
-        render_type(out, &ctor, &sym.kind, indent);
+        render_type(out, &ctor, sym, indent);
         let _ = writeln!(out, "{indent}const {name}: {ctor};\n");
     }
 }
@@ -2478,7 +2495,7 @@ fn render_namespace(out: &mut String, name: &str, ns: &NamespaceSymbol, indent: 
         // The namespace's own values already bind each `XConstructor` to `X`,
         // so render every type (constructors included) plainly — no merge.
         push_doc(out, type_doc(&sym.kind), &inner);
-        render_type(out, tname, &sym.kind, &inner);
+        render_type(out, tname, sym, &inner);
     }
     for (nname, sub) in &ns.namespaces {
         render_namespace(out, nname, sub, &inner);
@@ -3839,6 +3856,8 @@ mod tests {
     fn lib_submilli_d_ts_renders_ambient_builtins() {
         let docs = render_lib_submilli_d_ts();
         assert!(docs.contains("interface Array<"));
+        assert!(docs.contains("interface RegExpMatchArray extends Array<string | undefined>"));
+        assert!(docs.contains("interface RegExpExecArray extends Array<string | undefined>"));
         assert!(docs.contains("interface ArrayConstructor"));
         assert!(docs.contains("declare const Array: ArrayConstructor;"));
         assert_eq!(

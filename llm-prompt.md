@@ -35,6 +35,8 @@ metric — improving this prompt is a primary lever.
 
 ## The prompt
 
+Before your first program, call the package docs tool with all module and package names you will import. Read the built-in declarations you will use too. Signatures differ from Node and TypeScript in places; use these declarations rather than guessing APIs.
+
 Run a submilli program — strict TypeScript subset compiled to
 WebAssembly.
 

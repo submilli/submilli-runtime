@@ -1961,12 +1961,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 ]),
                             )],
                             ret: Type::Union(vec![
-                                Type::prelude_interface("RegExpMatch".to_string(), Vec::new()),
+                                Type::prelude_interface("RegExpMatchArray".to_string(), Vec::new()),
                                 Type::Null,
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Find the next match of `re` in this string. Equivalent to `re.exec(this)` (v1; the `g`-flag array shape is a follow-up).\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
+                                "/**\n * Find the next match of `re` in this string. Global patterns return full-match strings; other patterns return the full match and captures.\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
                             ),
                         },
                     ),
@@ -2072,9 +2072,9 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "re",
-                                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                Type::Union(vec![Type::String, Type::prelude_interface("RegExp".to_string(), Vec::new())]),
                             )],
-                            ret: Type::Array(Box::new(Type::prelude_interface("RegExpMatch".to_string(), Vec::new()))),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::prelude_interface("RegExpExecArray".to_string(), Vec::new())]),
                             predicate: None,
                             doc: doc(
                                 "/**\n * Find every non-overlapping match of `re` in this string. Zero-length matches advance by one to avoid infinite loops, per ECMA-262.\n * @param re The pattern to match.\n */",

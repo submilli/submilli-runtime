@@ -112,7 +112,6 @@ fn install_prelude(
         bigint_vtable: vtables.bigint,
         closure_vtable: vtables.closure,
         regex_vtable: vtables.regex,
-        regex_match_box_vtable: vtables.regex_match_box,
         opaque_vtable: vtables.opaque,
         temporal,
         map_tombstone,
@@ -783,7 +782,6 @@ pub struct HostAbi {
     pub(crate) bigint_vtable: Global,
     pub(crate) closure_vtable: Global,
     pub(crate) regex_vtable: Global,
-    pub(crate) regex_match_box_vtable: Global,
     /// Identity vtable for host-only backing structs (stdlib `URL`, `Response`,
     /// fs `Stat`, …) — opaque `toString`/`toJson`, reference equality.
     pub(crate) opaque_vtable: Global,
@@ -922,12 +920,6 @@ pub(crate) fn host_regex_vtable(
     ctx: &mut impl AsContextMut<Data = StoreData>,
 ) -> wasmtime::Result<Val> {
     host_vtable(ctx, |abi| abi.regex_vtable)
-}
-
-pub(crate) fn host_regex_match_box_vtable(
-    ctx: &mut impl AsContextMut<Data = StoreData>,
-) -> wasmtime::Result<Val> {
-    host_vtable(ctx, |abi| abi.regex_match_box_vtable)
 }
 
 pub(crate) fn host_opaque_vtable(

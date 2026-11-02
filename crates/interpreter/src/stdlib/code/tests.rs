@@ -799,7 +799,7 @@ async fn code_tools_resolve_relative_paths_and_patterns_from_cwd() {
             assert(search("hello").matches.length === 1, "default search root");
             assert(tree(".").entries.length === 1, "relative tree");
             assert(edit("a.ts", "hello", "updated").changed, "relative edit");
-            mkdir("src", true);
+            mkdir("src", { recursive: true });
             writeText("src/b.ts", "nested");
             assert(glob("src/*.ts").entries[0].depth === 2, "prefix from cwd depth");
         }

@@ -518,6 +518,7 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 /// arrays and tuples as any member's element: both are arrays at runtime.
 pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
+        ty if ty.is_regexp_match_array() => Some(Type::regexp_element()),
         Type::Array(elem) => Some((**elem).clone()),
         Type::Tuple(elements) => Some(Type::union(elements.to_vec())),
         Type::Union(_) => peeled_source.array_like_union_element(),
@@ -1459,7 +1460,7 @@ impl Inferer<'_> {
     }
 
     /// Which operand a string concatenation converts: a number or an `Error`
-    /// beside a string. Other types stay rejected (booleans, bigints, nullish
+    /// beside a string. Other types stay rejected (bigints, nullish
     /// values and plain objects), as the help on their error explains.
     fn concatenation_converts(&self, lt: &Type, rt: &Type) -> Option<ConcatOperand> {
         let is_error = |ty: &Type| match ty.peel() {
@@ -1469,7 +1470,7 @@ impl Inferer<'_> {
             _ => false,
         };
         let converts = |ty: &Type| match ty.primitive_behavior() {
-            Type::Number | Type::NumberLiteral(_) => true,
+            Type::Number | Type::NumberLiteral(_) | Type::Boolean | Type::BooleanLiteral(_) => true,
             Type::Union(members) => members.iter().all(is_error),
             other => is_error(other),
         };
@@ -1689,7 +1690,7 @@ impl Inferer<'_> {
         Some((
             span,
             format!(
-                "`+` converts only a number or an `Error` onto a string; {rewrite} to concatenate"
+                "`+` converts a number, boolean or an `Error` onto a string; {rewrite} to concatenate"
             ),
         ))
     }
@@ -2668,8 +2669,11 @@ impl Inferer<'_> {
                     span,
                 );
             }
-            let help =
-                Self::missing_export_help(&package_name, &name.name, ns.members.exports_help());
+            let help = Self::missing_export_help(
+                &package_name,
+                &name.name,
+                ns.members.missing_value_help(&name.name),
+            );
             self.error_with_help(
                 name.span,
                 format!("package `{package_name}` does not export `{}`", name.name),
@@ -9138,6 +9142,7 @@ impl Inferer<'_> {
         let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
         let elem_ty = match receiver_ty.peel() {
             _ if receiver_ty.is_string_shaped() => Type::String,
+            _ if receiver_ty.is_regexp_match_array() => Type::regexp_element(),
             Type::Array(elem) => (**elem).clone(),
             Type::Uint8Array => Type::Number,
             // A tuple has no element at a key that names no slot, as tsc
@@ -9215,6 +9220,7 @@ impl Inferer<'_> {
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
         let elem_ty = match receiver_ty.peel() {
+            ty if ty.is_regexp_match_array() => Type::regexp_element(),
             Type::Array(elem) => (**elem).clone(),
             // tuple indexing must be a non-negative integer
             // literal that's in range. Out-of-range or non-literal
@@ -10752,6 +10758,19 @@ impl Inferer<'_> {
         Ok(declared_holds_more.then_some(path))
     }
 
+    fn report_invalid_update(&mut self, span: Span, operator: &str, ty: &Type) {
+        let help = if ty.spells_null() || ty.spells_undefined() {
+            vec!["the value may be null or undefined: for an optional number use `value = value ?? 0`, or check the value before updating".to_string()]
+        } else {
+            Vec::new()
+        };
+        self.error_with_help(
+            span,
+            format!("postfix `{operator}` expects `number` or `bigint`, found `{ty}`"),
+            help,
+        );
+    }
+
     /// Whether `++`/`--` may write its result back to a slot of `target`. A
     /// `never` slot takes it, as in tsc: it holds no value unless an alias
     /// filled a `never[]`, and then the result is the number it would be.
@@ -10780,12 +10799,7 @@ impl Inferer<'_> {
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
             self.record_postfix_operand(&target, &operand_ty);
             if !takes_postfix(&operand_ty) {
-                self.error(
-                    target.span,
-                    format!(
-                        "postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",
-                    ),
-                );
+                self.report_invalid_update(target.span, op_symbol, &operand_ty);
             }
             // the increment writes back a value of the same
             // numeric kind as the operand — `BigInt` for bigint
@@ -11020,10 +11034,7 @@ impl Inferer<'_> {
             Type::Error
         };
         if !takes_postfix(&target_ty) {
-            self.error(
-                name.span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{target_ty}`",),
-            );
+            self.report_invalid_update(name.span, op_symbol, &target_ty);
         }
         let result_ty = postfix_result_ty(&target_ty);
         if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
@@ -11084,12 +11095,7 @@ impl Inferer<'_> {
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
         self.record_postfix_operand(&name, &operand_ty);
         if !takes_postfix(&operand_ty) {
-            self.error(
-                    name.span,
-                    format!(
-                        "postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",
-                    ),
-                );
+            self.report_invalid_update(name.span, op_symbol, &operand_ty);
         }
         let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
@@ -11188,10 +11194,7 @@ impl Inferer<'_> {
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
         if !takes_postfix(&read_ty) {
-            self.error(
-                span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{read_ty}`",),
-            );
+            self.report_invalid_update(span, op_symbol, &read_ty);
         }
         let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
@@ -11826,6 +11829,7 @@ impl Inferer<'_> {
                     );
                 }
                 let elem_ty = match receiver_ty.peel() {
+                    ty if ty.is_regexp_match_array() => Type::regexp_element(),
                     Type::Array(elem) => *elem.clone(),
                     Type::Uint8Array => Type::Number,
                     Type::Tuple(elements) => {
@@ -13304,7 +13308,9 @@ impl Inferer<'_> {
                 args,
             } => {
                 let data_shape = if seen.iter().any(|n| n == name)
-                    || (cast_target && assignable::is_host_backed_interface(interface))
+                    || (cast_target
+                        && (assignable::is_host_backed_interface(interface)
+                            || interface.is_regexp_match_array()))
                 {
                     None
                 } else {
@@ -13669,7 +13675,9 @@ fn unsupported_cast_target_reason(
             .iter()
             .find_map(|m| unsupported_cast_target_reason(m, types, seen)),
         Type::InterfaceRef { mangled, name, .. } => {
-            if assignable::is_host_backed_interface(peeled) {
+            if peeled.is_regexp_match_array() {
+                None
+            } else if assignable::is_host_backed_interface(peeled) {
                 Some(HOST_BACKED_TARGET)
             } else if types.interface_has_methods(mangled, name) {
                 Some(
@@ -15378,42 +15386,13 @@ mod tests {
     }
 
     #[test]
-    fn string_plus_boolean_points_at_the_boolean_in_a_chain() {
-        let source = r#"
-            interface Entry { path: string; dir: boolean; }
-            function line(e: Entry): string { return e.path + " " + e.dir; }
-        "#;
-        let (_, diags) = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            diags[0].message,
-            "`+` not defined for `string` and `boolean`"
-        );
-        let span = diags[0].span;
-        assert_eq!(&source[span.start as usize..span.end as usize], "e.dir");
-        assert_eq!(
-            diags[0].help,
-            vec![
-                "`+` converts only a number or an `Error` onto a string; write `String(e.dir)` to concatenate"
-            ]
-        );
-    }
-
-    #[test]
-    fn string_plus_assign_boolean_names_the_fix() {
-        let (_, diags) =
-            run(r#"function f(s: string, flag: boolean): string { s += flag; return s; }"#);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            diags[0].message,
-            "`+=` not defined for `string` and `boolean`"
-        );
-        assert_eq!(
-            diags[0].help,
-            vec![
-                "`+` converts only a number or an `Error` onto a string; write `String(flag)` to concatenate"
-            ]
-        );
+    fn string_plus_boolean_and_compound_assignment() {
+        let (_, diags) = run(r#"function f(flag: boolean): string {
+            let s = "seen: " + flag;
+            s += flag;
+            return flag + s;
+        }"#);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]

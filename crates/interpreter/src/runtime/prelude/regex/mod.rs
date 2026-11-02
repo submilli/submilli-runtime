@@ -1,43 +1,30 @@
-//! The Rust port of the prelude's hand-written Wasm `RegExp` / `RegExpMatch` /
-//! `RegExpConstructor` glue (`codegen/prelude/regex.rs`).
+//! RegExp construction, matching and String regex methods over the regex engine.
 //!
-//! Matching itself stays in [`crate::runtime::regex`] (the `regex` crate); this
-//! module re-homes the *object* surface: `$regex` construction, `test`/`exec`
-//! with the JS-faithful `lastIndex` read/writeback, the property getters, the
-//! `$RegExpMatchBox` accessors, and the `String` regex-arm methods. The two
-//! object-identity vtables (`regex_vtable`, `regex_match_box_vtable`) stay
-//! Wasm-built and are read from the prelude instance via [`prelude_global`]; a
-//! host-built `$regex`/`$RegExpMatchBox` shares them, so it hashes and serializes
-//! identically to a guest-built one.
-//!
-//! `$regex` (a `$Object` subtype): `[0] $VTable, [1] (ref extern) ChargedRegex,
-//! [2] (mut i32) lastIndex, [3] (ref $string) source, [4] (ref $string) flags,
-//! [5] i32 flag-bitset (`g=1,i=2,m=4,s=8,u=16,y=32`)`.
-//!
-//! `$RegExpMatchBox`: `[0] $VTable, [1] (ref $string) match, [2] i32 index,
-//! [3] (ref $string) input, [4] $regexCaptureArray numbered, [5]
-//! $regexCaptureArray named (alternating name/value, value null when unmatched)`.
+//! `$regex` fields: vtable, ChargedRegex externref, mutable lastIndex, source,
+//! flags and flag bits. Match arrays extend `$Array` with index, input and groups
+//! at fields 3, 4 and 5. Captures live in the ordinary mutable array backing;
+//! their array vtable provides the usual methods and serialization.
 
 use crate::runtime::host::abi_arg;
 pub(crate) mod engine;
 pub(crate) mod input;
 mod install;
+mod match_all;
 mod output;
 mod replace_callback;
 
 pub use install::{declare, install};
 pub(crate) use install::{declare_types, replacement_type};
 
-use wasmtime::{ArrayRef, ArrayRefPre, Caller, ExternRef, Rooted, StructRef, StructRefPre, Val};
+use wasmtime::{Caller, ExternRef, Rooted, StructRef, StructRefPre, Val};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{
-    host_regex_match_box_vtable, host_regex_vtable, host_string_vtable, read_string_arg,
-    write_code_units, write_submilli_array_struct, write_submilli_string,
+    host_array_vtable, host_regex_vtable, read_string_arg, write_submilli_array_struct,
     write_submilli_string_struct_units,
 };
-use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
+use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::vtable::read_string_units;
 use engine::{ChargedRegex, ExecSnapshot, FlagSet, compile_charged, exec_snapshot};
 
@@ -79,8 +66,8 @@ fn last_index(
     st: &Rooted<StructRef>,
 ) -> wasmtime::Result<usize> {
     match st.field(&mut *caller, 2)? {
-        Val::I32(v) => Ok(v.max(0) as usize),
-        other => wasmtime::bail!("RegExp: lastIndex is {other:?}, not i32"),
+        Val::F64(bits) => Ok(f64::from_bits(bits).clamp(0.0, 9_007_199_254_740_991.0) as usize),
+        other => wasmtime::bail!("RegExp: lastIndex is {other:?}, not f64"),
     }
 }
 
@@ -178,9 +165,7 @@ fn write_last_index(
         st.set_field(
             &mut *caller,
             2,
-            Val::I32(
-                i32::try_from(next.unwrap_or(0)).map_err(crate::runtime::host::fatal_host_error)?,
-            ),
+            Val::F64((next.unwrap_or(0) as f64).to_bits()),
         )?;
     }
     Ok(())
@@ -250,7 +235,7 @@ pub(super) fn construct(
         &[
             vtable,
             Val::ExternRef(Some(extern_ref)),
-            Val::I32(0),
+            Val::F64(0.0_f64.to_bits()),
             *source,
             *flags,
             Val::I32(bits),
@@ -272,54 +257,49 @@ fn build_match_box(
     let matched = input_units(caller, input, snapshot.match_start..snapshot.match_end)?;
     let match_str = write_submilli_string_struct_units(caller, &matched)?;
 
-    let mut numbered: Vec<Val> = Vec::new();
-    numbered
-        .try_reserve_exact(snapshot.numbered.len())
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    for slot in &snapshot.numbered {
-        numbered.push(capture_slot(caller, input, *slot)?);
-    }
-    let numbered_arr = capture_array(caller, &intr, &numbered)?;
-
-    let mut named: Vec<Val> = Vec::new();
-    let named_slots =
-        snapshot.named.len().checked_mul(2).ok_or_else(|| {
-            crate::runtime::host::fatal_host_error("RegExp: capture count overflow")
-        })?;
-    named
-        .try_reserve_exact(named_slots)
-        .map_err(crate::runtime::host::fatal_host_error)?;
+    let mut named = std::collections::BTreeMap::new();
     for (name, slot) in &snapshot.named {
-        let raw = write_submilli_string(&mut *caller, name)?;
-        named.push(Val::AnyRef(Some(raw.to_anyref())));
-        named.push(capture_slot(caller, input, *slot)?);
+        let value = capture_value(caller, input, *slot)?;
+        named.insert(name.clone(), value);
     }
-    let named_arr = capture_array(caller, &intr, &named)?;
-
-    let vtable = host_regex_match_box_vtable(caller)?;
+    let named = if named.is_empty() {
+        super::undefined::value(caller)?
+    } else {
+        crate::stdlib::abi::new_object(caller, named)?
+    };
+    let mut elements = Vec::new();
+    elements
+        .try_reserve_exact(snapshot.numbered.len().saturating_add(1))
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    elements.push(Val::AnyRef(Some(match_str.to_anyref())));
+    for slot in &snapshot.numbered {
+        elements.push(capture_value(caller, input, *slot)?);
+    }
+    let array = write_submilli_array_struct(caller, &elements)?;
+    let backing = array.field(&mut *caller, 1)?;
+    let length = array.field(&mut *caller, 2)?;
+    let vtable = host_array_vtable(caller)?;
     let pre = StructRefPre::new(&mut *caller, intr.regex_match_box.clone());
     let st = StructRef::new(
         &mut *caller,
         &pre,
         &[
             vtable,
-            Val::AnyRef(Some(match_str.to_anyref())),
+            backing,
+            length,
             Val::I32(
                 i32::try_from(input.byte_to_unit(snapshot.match_start)?)
                     .map_err(|_| wasmtime::Error::msg("RegExp: match index exceeds i32"))?,
             ),
             *input_value,
-            Val::AnyRef(Some(numbered_arr.to_anyref())),
-            Val::AnyRef(Some(named_arr.to_anyref())),
-            Val::I64(0),
+            named,
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// One capture-array slot: a raw `$rawString` for a participating group, `null`
-/// for a group that didn't match.
-fn capture_slot(
+/// A participating capture as a string, or undefined for an unmatched group.
+fn capture_value(
     caller: &mut Caller<'_, StoreData>,
     input: &input::DecodedInput,
     slot: Option<(usize, usize)>,
@@ -327,10 +307,10 @@ fn capture_slot(
     match slot {
         Some((s, e)) => {
             let capture = input_units(caller, input, s..e)?;
-            let raw = write_code_units(&mut *caller, &capture)?;
+            let raw = write_submilli_string_struct_units(caller, &capture)?;
             Ok(Val::AnyRef(Some(raw.to_anyref())))
         }
-        None => Ok(Val::null_any_ref()),
+        None => super::undefined::value(caller),
     }
 }
 
@@ -343,51 +323,6 @@ fn input_units(
 ) -> wasmtime::Result<Vec<u16>> {
     fuel::charge(&mut *caller, fuel::SCAN, bytes.len() as u64)?;
     input.units(bytes)
-}
-
-fn capture_array(
-    caller: &mut Caller<'_, StoreData>,
-    intr: &IntrinsicTypes,
-    elements: &[Val],
-) -> wasmtime::Result<Rooted<ArrayRef>> {
-    fuel::charge(&mut *caller, fuel::ELEM, elements.len() as u64)?;
-    let pre = ArrayRefPre::new(&mut *caller, intr.regex_capture_array.clone());
-    ArrayRef::new_fixed(&mut *caller, &pre, elements)
-}
-
-/// Wrap a raw `$rawString` payload (a capture-array element) in a `$string`
-/// object, reusing the shared string vtable.
-fn wrap_raw_string(
-    caller: &mut Caller<'_, StoreData>,
-    raw: wasmtime::Rooted<wasmtime::AnyRef>,
-) -> wasmtime::Result<Val> {
-    let string_ty = intrinsic_types(&mut *caller)?.string.clone();
-    let vtable = host_string_vtable(caller)?;
-    let pre = StructRefPre::new(&mut *caller, string_ty);
-    let st = StructRef::new(
-        &mut *caller,
-        &pre,
-        &[vtable, Val::AnyRef(Some(raw)), Val::I64(0)],
-    )?;
-    Ok(Val::AnyRef(Some(st.to_anyref())))
-}
-
-/// Read a `$RegExpMatchBox` capture-array field into its elements.
-fn read_capture_array(
-    caller: &mut Caller<'_, StoreData>,
-    st: &Rooted<StructRef>,
-    field: usize,
-) -> wasmtime::Result<Vec<Val>> {
-    let arr = match st.field(&mut *caller, field)? {
-        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
-        other => wasmtime::bail!("RegExpMatch: capture array is {other:?}"),
-    };
-    let len = arr.len(&mut *caller)?;
-    let mut out = Vec::with_capacity(len as usize);
-    for i in 0..len {
-        out.push(arr.get(&mut *caller, i)?);
-    }
-    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -455,15 +390,12 @@ pub(super) fn last_index_getter(
 ) -> wasmtime::Result<f64> {
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExp#lastIndex")?;
     match st.field(&mut *caller, 2)? {
-        Val::I32(v) => Ok(f64::from(v)),
-        other => wasmtime::bail!("RegExp: lastIndex is {other:?}, not i32"),
+        Val::F64(bits) => Ok(f64::from_bits(bits)),
+        other => wasmtime::bail!("RegExp: lastIndex is {other:?}, not f64"),
     }
 }
 
-/// `re.lastIndex = value`. The slot holds an integer: the value is truncated
-/// toward zero (NaN is 0) and saturates at the `i32` range, which only
-/// changes what a fractional or out-of-range write reads back; matching
-/// clamps a negative index to 0 and fails past the end either way.
+/// Store the assigned number unchanged; matching applies ToLength when reading it.
 pub(super) fn last_index_setter(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
@@ -482,8 +414,7 @@ pub(crate) fn set_last_index(
     value: f64,
 ) -> wasmtime::Result<()> {
     let st = as_struct(caller, receiver, "RegExp#lastIndex")?;
-    // `as` truncates toward zero, saturates, and maps NaN to 0.
-    st.set_field(&mut *caller, 2, Val::I32(value as i32))
+    st.set_field(&mut *caller, 2, Val::F64(value.to_bits()))
 }
 
 /// `RegExp.escape(s)` (ES2025): `s` with every character that has a meaning
@@ -564,85 +495,35 @@ pub(super) fn flag(
 // RegExpMatch accessors
 // ---------------------------------------------------------------------------
 
-/// A direct `$RegExpMatchBox` field (`match` = 1, `input` = 3).
-pub(super) fn match_field(
+/// Metadata exists only on non-global matches; a global match is a plain Array.
+pub(super) fn match_metadata(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
-    field: usize,
+    name: &str,
 ) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch property")?;
-    st.field(&mut *caller, field)
-}
-
-pub(super) fn match_index(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-) -> wasmtime::Result<f64> {
-    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#index")?;
-    match st.field(&mut *caller, 2)? {
-        Val::I32(v) => Ok(f64::from(v)),
-        other => wasmtime::bail!("RegExpMatch#index is {other:?}, not i32"),
+    let st = as_struct(caller, abi_arg(params, 0)?, "RegExp match array")?;
+    let intr = intrinsic_types(&mut *caller)?;
+    if !st.matches_ty(&*caller, &intr.regex_match_box)? {
+        return super::undefined::value(caller);
     }
-}
-
-/// `RegExpMatch#groups` — a fresh `(string | undefined)[]` wrapping each numbered
-/// capture.
-pub(super) fn groups(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#groups")?;
-    let raw = read_capture_array(caller, &st, 4)?;
-    let mut elements = Vec::new();
-    elements
-        .try_reserve_exact(raw.len())
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    for elem in raw {
-        elements.push(match elem {
-            Val::AnyRef(Some(any)) => wrap_raw_string(caller, any)?,
-            Val::AnyRef(None) => super::undefined::value(caller)?,
-            _ => {
+    match name {
+        "index" => {
+            let Val::I32(index) = st.field(&mut *caller, 3)? else {
                 return Err(crate::runtime::host::fatal_host_error(
-                    "invalid capture value",
+                    "invalid regex match index",
                 ));
-            }
-        });
+            };
+            crate::runtime::json::JsonUnknownAllocator::new(&mut *caller)?.allocate(
+                &mut *caller,
+                &crate::runtime::json_text::JsonValue::Number(f64::from(index)),
+            )
+        }
+        "input" => st.field(&mut *caller, 4),
+        "groups" => st.field(&mut *caller, 5),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "unknown regex metadata property",
+        )),
     }
-    let arr = write_submilli_array_struct(caller, &elements)?;
-    Ok(Val::AnyRef(Some(arr.to_anyref())))
-}
-
-/// `RegExpMatch#namedGroups` includes every named capture, with `undefined`
-/// for groups that did not participate.
-pub(super) async fn named_groups(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-) -> wasmtime::Result<Val> {
-    let st = as_struct(caller, abi_arg(params, 0)?, "RegExpMatch#namedGroups")?;
-    let raw = read_capture_array(caller, &st, 5)?;
-    let map = super::map::construct(caller, &Val::null_any_ref()).await?;
-    let (pairs, remainder) = raw.as_chunks::<2>();
-    if !remainder.is_empty() {
-        return Err(crate::runtime::host::fatal_host_error(
-            "invalid named capture array length",
-        ));
-    }
-    for [name, value] in pairs {
-        let Val::AnyRef(Some(name)) = name else {
-            return Err(crate::runtime::host::fatal_host_error(
-                "invalid named capture name",
-            ));
-        };
-        let key = wrap_raw_string(caller, *name)?;
-        let value = match value {
-            Val::AnyRef(Some(value)) => wrap_raw_string(caller, *value)?,
-            Val::AnyRef(None) => super::undefined::value(caller)?,
-            _ => {
-                return Err(crate::runtime::host::fatal_host_error(
-                    "invalid capture value",
-                ));
-            }
-        };
-        super::map::set(caller, &map, &key, &value).await?;
-    }
-    Ok(map)
 }
 
 // ---------------------------------------------------------------------------
@@ -662,21 +543,39 @@ fn arg_is_string(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Res
     }
 }
 
-/// `String#match(re)` — no `g` semantics; equivalent to `re.exec(self)` with
-/// `lastIndex` pinned at 0.
+/// Global matching collects full matches; non-global matching follows exec,
+/// including the sticky expression's lastIndex.
 pub(super) fn string_match(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    let params: &[Val; 2] = params
-        .try_into()
-        .map_err(|_| wasmtime::Error::msg("string_match: invalid argument count"))?;
-    let input = input::read(caller, abi_arg(params, 0)?)?;
+    let input_value = *abi_arg(params, 0)?;
     let st = pattern_arg(caller, abi_arg(params, 1)?, "String#match(regex)")?;
-    match exec_at(caller, &st, &input, 0)? {
-        Some(s) => build_match_box(caller, &input, abi_arg(params, 0)?, &s),
-        None => Ok(Val::null_any_ref()),
+    let bits = flag_bits(caller, &st)?;
+    if bits & FlagSet::G.bits() as i32 == 0 {
+        return exec(caller, &[Val::AnyRef(Some(st.to_anyref())), input_value]);
     }
+    st.set_field(&mut *caller, 2, Val::F64(0.0_f64.to_bits()))?;
+    let input = input::read(caller, &input_value)?;
+    let mut matches = output::Buffer::<Val>::new();
+    let mut position = 0;
+    while let Some(found) = exec_at(caller, &st, &input, position)? {
+        let units = input_units(caller, &input, found.match_start..found.match_end)?;
+        let value = write_submilli_string_struct_units(caller, &units)?;
+        matches.push(caller, Val::AnyRef(Some(value.to_anyref())))?;
+        let end = input.byte_to_unit(found.next_last_index)?;
+        position = if found.match_start == found.match_end {
+            input.advance(end, bits & FlagSet::U.bits() as i32 != 0)?
+        } else {
+            end
+        };
+    }
+    if matches.values().is_empty() {
+        return Ok(Val::null_any_ref());
+    }
+    let array =
+        crate::runtime::host::write_submilli_array_struct_precharged(caller, matches.values())?;
+    Ok(Val::AnyRef(Some(array.to_anyref())))
 }
 
 /// The regex `match` or `search` runs: a string argument is compiled as a
@@ -709,33 +608,11 @@ pub(super) fn string_search(
     })
 }
 
-/// `String#matchAll(re)` — every match as a `RegExpMatch[]`. A zero-length match
-/// advances by a UTF-16 unit, or a surrogate pair under `u` (ECMA-262).
 pub(super) fn string_match_all(
     caller: &mut Caller<'_, StoreData>,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
-    let params: &[Val; 2] = params
-        .try_into()
-        .map_err(|_| wasmtime::Error::msg("string_match_all: invalid argument count"))?;
-    let input = input::read(caller, abi_arg(params, 0)?)?;
-    let st = as_struct(caller, abi_arg(params, 1)?, "String#matchAll(regex)")?;
-    let unicode = flag_bits(caller, &st)? & FlagSet::U.bits() as i32 != 0;
-    let mut boxes = output::Buffer::<Val>::new();
-    let mut pos = 0usize;
-    while let Some(s) = exec_at(caller, &st, &input, pos)? {
-        let end = input.byte_to_unit(s.next_last_index)?;
-        let next = if s.match_start == s.match_end {
-            input.advance(end, unicode)?
-        } else {
-            end
-        };
-        let value = build_match_box(caller, &input, abi_arg(params, 0)?, &s)?;
-        boxes.push(caller, value)?;
-        pos = next;
-    }
-    let arr = crate::runtime::host::write_submilli_array_struct_precharged(caller, boxes.values())?;
-    Ok(Val::AnyRef(Some(arr.to_anyref())))
+    match_all::create(caller, params)
 }
 
 /// `String#replace(search, replacement)` — literal arm applies JS replacement

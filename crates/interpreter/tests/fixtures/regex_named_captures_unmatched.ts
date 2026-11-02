@@ -4,25 +4,27 @@
 function main(): void {
   const re: RegExp = new RegExp("(?<a>x)|(?<b>y)", "");
 
-  const m: RegExpMatch | null = re.exec("y");
+  const m: RegExpExecArray | null = re.exec("y");
   assert(m !== null, "matched the second alternative");
   if (m !== null) {
-    assert(m.match === "y", "matched text is y");
-    const groups: Map<string, string | undefined> = m.namedGroups;
-    assert(groups.has("b"), "matched named capture b is present");
-    assert(groups.get("b") === "y", "b captured y");
-    assert(groups.has("a"), "unmatched named capture a is present");
-    assert(groups.get("a") === undefined, "unmatched named capture a is undefined");
-    assert(groups.size === 2, "both names are in the map");
+    assert(m[0] === "y", "matched text is y");
+    const groups = m.groups;
+    if (groups === undefined) { throw new Error("missing named groups"); }
+    assert(Object.keys(groups).includes("b"), "matched named capture b is present");
+    assert(groups["b"] === "y", "b captured y");
+    assert(Object.keys(groups).includes("a"), "unmatched named capture a is present");
+    assert(groups["a"] === undefined, "unmatched named capture a is undefined");
+    assert(Object.keys(groups).length === 2, "both names are in the map");
   }
 
-  const m2: RegExpMatch | null = re.exec("x");
+  const m2: RegExpExecArray | null = re.exec("x");
   assert(m2 !== null, "matched the first alternative");
   if (m2 !== null) {
-    const groups2: Map<string, string | undefined> = m2.namedGroups;
-    assert(groups2.has("a"), "matched named capture a is present");
-    assert(groups2.get("a") === "x", "a captured x");
-    assert(groups2.has("b"), "unmatched named capture b is present");
-    assert(groups2.get("b") === undefined, "unmatched named capture b is undefined");
+    const groups2 = m2.groups;
+    if (groups2 === undefined) { throw new Error("missing named groups"); }
+    assert(Object.keys(groups2).includes("a"), "matched named capture a is present");
+    assert(groups2["a"] === "x", "a captured x");
+    assert(Object.keys(groups2).includes("b"), "unmatched named capture b is present");
+    assert(groups2["b"] === undefined, "unmatched named capture b is undefined");
   }
 }

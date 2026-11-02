@@ -72,7 +72,7 @@ pub(super) async fn summarize(
     }
     if counts.entries > shown.len() {
         text.push_str(&format!(
-            "\n  … {} more not shown; iterate `list({}, false)` for every entry",
+            "\n  … {} more not shown; iterate `list({}, {{ recursive: false }})` for every entry",
             counts.entries - shown.len(),
             serde_json::Value::String(path.to_owned())
         ));

@@ -1388,7 +1388,12 @@ fn emit_non_shape_interface_test(
             }
             InterfaceCarrier::RegExp => emit_ref_test(emitter, value_local, intr.regex),
             InterfaceCarrier::RegExpMatch => {
+                emit_regexp_array_test(emitter, ctx, value_local, test, validator_state)?;
                 emit_ref_test(emitter, value_local, intr.regex_match_box);
+                emitter.instruction(Instruction::I32And);
+            }
+            InterfaceCarrier::RegExpMatchArray => {
+                emit_regexp_array_test(emitter, ctx, value_local, test, validator_state)?;
             }
             InterfaceCarrier::TemporalInstant => {
                 emit_ref_test(emitter, value_local, intr.temporal_instant);
@@ -1444,6 +1449,58 @@ fn emit_non_shape_interface_test(
         emitter.instruction(Instruction::LocalSet(matches_any));
     }
     emitter.instruction(Instruction::LocalGet(matches_any));
+    Ok(())
+}
+
+/// Captures and named groups remain mutable through widened aliases, so a
+/// checked cast must validate their current contents even on a branded result.
+fn emit_regexp_array_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value_local: u32,
+    test: &crate::InterfaceNarrowingTest,
+    validator_state: Option<ValidatorState>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_structural_test_inner(
+        emitter,
+        ctx,
+        value_local,
+        &Type::Array(Box::new(Type::regexp_element())),
+        &mut std::collections::BTreeSet::new(),
+        validator_state,
+    )?;
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    emit_ref_test(emitter, value_local, intr.regex_match_box);
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    let groups_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intr.regex_match_box,
+    )));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intr.regex_match_box,
+        field_index: 5,
+    });
+    emitter.instruction(Instruction::LocalSet(groups_local));
+    let groups = test
+        .members
+        .get("groups")
+        .ok_or_else(|| crate::codegen::internal_failure("regex array declares groups"))?;
+    emit_structural_test_inner(
+        emitter,
+        ctx,
+        groups_local,
+        &groups.ty,
+        &mut std::collections::BTreeSet::new(),
+        validator_state,
+    )?;
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.emit_end();
+    emitter.instruction(Instruction::I32And);
     Ok(())
 }
 

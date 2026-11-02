@@ -6,7 +6,7 @@
 //! * `GET /v1/blueprints/{blueprint}/packages/search?q=<query>` — matching
 //!   packages (empty query = all)
 //! * `GET /v1/blueprints/{blueprint}/packages/docs?name=<name>` — declarations
-//!   + description for one
+//!   + description for one; repeat `names[]` instead for an ordered batch
 //! * `GET /v1/blueprints/{blueprint}/builtins` — the built-in catalog
 //!   (`{ types, namespaces }`)
 //! * `GET /v1/blueprints/{blueprint}/builtins/docs?name=<name>[&name=<name>…]`
@@ -268,21 +268,70 @@ pub async fn blueprint_search(
     )))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct BlueprintDocsParams {
-    name: String,
-}
-
-/// `GET /v1/blueprints/{blueprint}/packages/docs` — what the blueprint's MCP
-/// `packages__docs` tool answers.
+/// GET accepts either a legacy `name` or repeated `names[]` batch parameters.
 pub async fn blueprint_docs(
     State(state): State<AppState>,
     Path(name): Path<String>,
-    Query(params): Query<BlueprintDocsParams>,
+    RawQuery(query): RawQuery,
 ) -> Result<axum::response::Response, BlueprintMiss> {
+    let request = docs_query(query.as_deref())?;
     let (catalog, scope) = registered_blueprint(&state, &name).await?;
-    let lookup = packages::lookup_with_blueprint(&params.name, &catalog, &scope);
-    Ok(docs_response(&params.name, lookup))
+    Ok(requested_docs_response(request, |name| {
+        packages::lookup_with_blueprint(name, &catalog, &scope)
+    }))
+}
+
+enum DocsRequest {
+    Single(String),
+    Batch(Vec<String>),
+}
+
+fn docs_query(query: Option<&str>) -> Result<DocsRequest, BlueprintMiss> {
+    let invalid = || {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_query",
+                "message": "Use one name parameter or repeated names[] parameters, not both",
+            })),
+        )
+    };
+    let mut single = None;
+    let mut names = Vec::new();
+    for (key, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        match key.as_ref() {
+            "name" => {
+                if single.is_some() {
+                    return Err(invalid());
+                }
+                single = Some(value.into_owned());
+            }
+            "names[]" => names.push(value.into_owned()),
+            "names" => return Err(invalid()),
+            _ => {}
+        }
+    }
+    match single {
+        Some(name) if names.is_empty() => Ok(DocsRequest::Single(name)),
+        Some(_) => Err(invalid()),
+        None => Ok(DocsRequest::Batch(names)),
+    }
+}
+
+fn requested_docs_response(
+    request: DocsRequest,
+    mut lookup: impl FnMut(&str) -> DocLookup,
+) -> axum::response::Response {
+    match request {
+        DocsRequest::Single(name) => docs_response(&name, lookup(&name)),
+        DocsRequest::Batch(names) => {
+            let results: Vec<_> = names
+                .iter()
+                .map(|name| packages::batch_docs_entry(name, lookup(name)))
+                .collect();
+            Json(serde_json::json!({"results": results})).into_response()
+        }
+    }
 }
 
 /// What a session's discovery routes answer from: its blueprint, the blueprint's
@@ -352,16 +401,18 @@ pub async fn session_search(
 pub async fn session_docs(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
-    Query(params): Query<BlueprintDocsParams>,
+    RawQuery(query): RawQuery,
 ) -> Result<axum::response::Response, BlueprintMiss> {
+    let request = docs_query(query.as_deref())?;
     let session = registered_session(&state, &session_id).await?;
-    let lookup = packages::lookup_for_session(
-        &params.name,
-        &session.catalog,
-        &session.scope,
-        session.tools.as_ref(),
-    );
-    Ok(docs_response(&params.name, lookup))
+    Ok(requested_docs_response(request, |name| {
+        packages::lookup_for_session(
+            name,
+            &session.catalog,
+            &session.scope,
+            session.tools.as_ref(),
+        )
+    }))
 }
 
 /// `GET /v1/blueprints/{blueprint}/builtins` — the built-in catalog. It is the

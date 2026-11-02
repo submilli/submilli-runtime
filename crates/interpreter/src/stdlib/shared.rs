@@ -462,7 +462,7 @@ pub fn write_target_trap(op: &str, guest_path: &str, err: &ContainError) -> wasm
         ContainError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
             wasmtime::Error::msg(format!(
                 "{op} {guest_path}: parent directory does not exist \
-                 (create it with mkdir(path, true))"
+                 (create it with mkdir(path, {{ recursive: true }}))"
             ))
         }
         _ => contain_trap(op, guest_path, err),

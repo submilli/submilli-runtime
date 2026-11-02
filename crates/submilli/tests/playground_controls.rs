@@ -4724,15 +4724,23 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
             };
             let docs_tool = "submilli__typescript__packages__docs";
             let search_tool = "submilli__typescript__packages__search";
-            let (http_status, _, docs) =
-                tool(&b_url, &b_mcp, docs_tool, json!({"name":"@acme/reports"}));
+            let (http_status, _, docs) = tool(
+                &b_url,
+                &b_mcp,
+                docs_tool,
+                json!({"names":["@acme/reports"]}),
+            );
             assert_eq!(http_status, 200, "{docs}");
             assert!(docs.to_string().contains("reportLabel"), "{docs}");
-            let (http_status, _, docs) =
-                tool(&a_url, &a_mcp, docs_tool, json!({"name":"@acme/reports"}));
+            let (http_status, _, docs) = tool(
+                &a_url,
+                &a_mcp,
+                docs_tool,
+                json!({"names":["@acme/reports"]}),
+            );
             assert_eq!(http_status, 200, "{docs}");
             assert_eq!(
-                docs["result"]["structuredContent"]["error"], "unknown_package",
+                docs["result"]["structuredContent"]["results"][0]["found"], false,
                 "{docs}"
             );
             assert!(!docs.to_string().contains("reportLabel"), "{docs}");
@@ -4748,8 +4756,12 @@ i=0; while [ $i -lt 600 ]; do sleep 0.1; i=$((i + 1)); done
                 "{discovery}"
             );
             // An existing reports transport session cannot be used on billing's endpoint.
-            let (http_status, _, refused) =
-                tool(&a_url, &b_mcp, docs_tool, json!({"name":"@acme/reports"}));
+            let (http_status, _, refused) = tool(
+                &a_url,
+                &b_mcp,
+                docs_tool,
+                json!({"names":["@acme/reports"]}),
+            );
             assert_ne!(http_status, 200, "{refused}");
             // A valid B update gets its own new tag; an existing A session stays A.
             let mut yaml = std::fs::read_to_string(&other).unwrap();

@@ -181,3 +181,45 @@ pub(crate) fn backing_receiver(
 ) -> wasmtime::Result<Rooted<StructRef>> {
     as_struct(caller, val, "stdlib property receiver")
 }
+
+/// Build a structural object with canonical field ordering. Values are already boxed.
+pub(crate) fn new_object(
+    caller: &mut Caller<'_, StoreData>,
+    fields: std::collections::BTreeMap<String, Val>,
+) -> wasmtime::Result<Val> {
+    use crate::runtime::{fuel, host};
+    use wasmtime::{ArrayRef, ArrayRefPre};
+    let intr = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::ELEM, fields.len() as u64)?;
+    let mut names = Vec::new();
+    let mut values = Vec::new();
+    names
+        .try_reserve_exact(fields.len())
+        .map_err(host::fatal_host_error)?;
+    values
+        .try_reserve_exact(fields.len())
+        .map_err(host::fatal_host_error)?;
+    for (name, value) in fields {
+        names.push(Val::AnyRef(Some(
+            host::write_submilli_string_struct(caller, &name)?.to_anyref(),
+        )));
+        values.push(value);
+    }
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names)?;
+    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values)?;
+    let vtable = host::host_object_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
+    let object = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[
+            vtable,
+            Val::AnyRef(Some(names.to_anyref())),
+            Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
+        ],
+    )?;
+    Ok(Val::AnyRef(Some(object.to_anyref())))
+}

@@ -1,7 +1,7 @@
 import { mkdir, writeText, exists } from "submilli:fs";
 
 function main(): void {
-  mkdir("/a/b/c", true);
+  mkdir("/a/b/c", { recursive: true });
   assert(exists("/a"), "intermediate /a created");
   assert(exists("/a/b"), "intermediate /a/b created");
   assert(exists("/a/b/c"), "leaf /a/b/c created");

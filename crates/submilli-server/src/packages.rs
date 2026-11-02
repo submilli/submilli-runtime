@@ -25,7 +25,9 @@ impl Fetch<'_> {
     fn package_docs(self, name: &str) -> String {
         match self {
             Fetch::Mcp => {
-                format!("Fetch it with submilli__typescript__packages__docs(\"{name}\")")
+                format!(
+                    "Fetch it with submilli__typescript__packages__docs({{\"names\":[\"{name}\"]}})"
+                )
             }
             Fetch::Rest(blueprint) => {
                 format!("Fetch it from `GET /v1/blueprints/{blueprint}/packages/docs?name={name}`")
@@ -237,6 +239,15 @@ fn union_candidates(catalog: &McpCatalog, scope: &DocsScope) -> Vec<String> {
 
 /// `packages.docs` body — the same shape over MCP and REST (REST adds a status
 /// code; see `handlers::packages`).
+pub(crate) fn batch_docs_entry(name: &str, lookup: DocLookup) -> Value {
+    let found = !matches!(
+        &lookup,
+        DocLookup::McpUnknown | DocLookup::Unknown { .. } | DocLookup::InvalidDocumentation { .. }
+    );
+    let text = docs_markdown(&lookup).unwrap_or_else(|| docs_json(name, lookup).to_string());
+    serde_json::json!({ "name": name, "found": found, "text": text })
+}
+
 pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
     match lookup {
         DocLookup::Host {

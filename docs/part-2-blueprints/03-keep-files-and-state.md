@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3a2df78cbfac325fac9f213985a94a4cfacb84423df5313e09ca14f9a80223ad"
+  contentHash: "1c36f2650a3e6430de1ae5693fd49baacbca5ddbb64b97174489955c09dca1a6"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -75,11 +75,11 @@ submilli:fs — Sandbox filesystem: files and directories under the VFS root.
 …
 function appendText(path: string, content: string): void;
 function exists(path: string): boolean;
-function list(path: string, recursive: boolean): Iterator<DirEntry>;
-function mkdir(path: string, recursive: boolean): void;
-function readText(path: string): string | undefined;
-function remove(path: string, recursive: boolean): void;
-function stat(path: string): Stat | undefined;
+function list(path: string, options?: RecursiveOptions): Iterator<DirEntry>;
+function mkdir(path: string, options?: RecursiveOptions): void;
+function readText(path: string): string;
+function remove(path: string, options?: RecursiveOptions): void;
+function stat(path: string): Stat;
 function writeText(path: string, content: string): void;
 …
 ```
@@ -162,10 +162,10 @@ import * as fs from "submilli:fs";
 
 function main(): string {
     if (!fs.exists("/notes")) {
-        fs.mkdir("/notes", false);
+        fs.mkdir("/notes");
     }
     fs.appendText("/notes/today.md", "- call Pied Piper about the credit\n");
-    return fs.readText("/notes/today.md") ?? "";
+    return fs.readText("/notes/today.md");
 }
 ```
 
