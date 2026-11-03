@@ -1,6 +1,5 @@
 // test262: test/built-ins/RegExp/prototype/exec/S15.10.6.2_A1_T2.js
-// `new String("123")` receiver replaced by the plain string; RegExpExecArray
-// shape adapted to RegExpMatch (unmatched captures are undefined).
+// `new String("123")` receiver replaced by the plain string.
 
 function main(): void {
   const m = /((1)|(12))((3)|(23))/.exec("123");
@@ -8,16 +7,16 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
   const input = m.input;
-  const captures = m.groups.length;
-  const g1 = m.groups[0];
-  const g2 = m.groups[1];
-  const g3 = m.groups[2];
-  const g4 = m.groups[3];
-  const g5 = m.groups[4];
-  const g6 = m.groups[5];
+  const captures = m.length - 1;
+  const g1 = m[1];
+  const g2 = m[2];
+  const g3 = m[3];
+  const g4 = m[4];
+  const g5 = m[5];
+  const g6 = m[6];
   assertSameValue(matched, "123", "full match");
   assertSameValue(index, 0, "match offset");
   assertSameValue(input, "123", "input round-trips");

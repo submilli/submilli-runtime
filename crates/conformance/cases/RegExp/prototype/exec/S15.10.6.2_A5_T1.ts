@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/prototype/exec/S15.10.6.2_A5_T1.js
-// RegExpExecArray shape adapted to RegExpMatch (.match/.index/.input/.groups).
 
 function main(): void {
   const re = /(?:ab|cd)\d?/g;
@@ -8,7 +7,7 @@ function main(): void {
   if (first === null) {
     return;
   }
-  const matched = first.match;
+  const matched = first[0];
   const index = first.index;
   assertSameValue(matched, "ab4", "g exec finds the only ab/cd match");
   assertSameValue(index, 21, "match offset");
@@ -23,6 +22,6 @@ function main(): void {
   if (third === null) {
     return;
   }
-  const matched3 = third.match;
+  const matched3 = third[0];
   assertSameValue(matched3, "cd2", "match after reset");
 }

@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/S15.10.2.3_A1_T16.js
-// RegExpExecArray shape adapted to RegExpMatch (.match/.index/.input/.groups).
 
 function main(): void {
   const m = /()|/.exec("");
@@ -7,11 +6,11 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
   const input = m.input;
-  const captures = m.groups.length;
-  const g1 = m.groups[0];
+  const captures = m.length - 1;
+  const g1 = m[1];
   assertSameValue(matched, "", "empty alternative matches empty");
   assertSameValue(index, 0, "match offset");
   assertSameValue(input, "", "input round-trips");
