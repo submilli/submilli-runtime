@@ -5509,6 +5509,11 @@ fn emit_method_call_with_receiver_on_stack(
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let concrete_receiver = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
+    if concrete_receiver.primitive_union_members().is_some() {
+        cast::emit_box(emitter, ctx, recv_ty)?;
+        emit_live_member_on_stack(emitter, ctx, iface, method, Some(args))?;
+        return cast::emit_cast_to(emitter, ctx, call_ret_ty);
+    }
     crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver)?;
     if recv_ty.is_regexp_match_array() && *iface == crate::mangle::prelude("Array") {
         cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::regexp_element())))?;

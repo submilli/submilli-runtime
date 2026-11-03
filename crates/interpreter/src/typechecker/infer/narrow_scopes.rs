@@ -250,6 +250,7 @@ impl<'a> Inferer<'a> {
                 .kind
             {
                 crate::TypedExprKind::FieldAccess { receiver, .. }
+                | crate::TypedExprKind::InterfacePropertyAccess { receiver, .. }
                 | crate::TypedExprKind::IndexAccess { receiver, .. } => id = *receiver,
                 crate::TypedExprKind::LocalNarrowRef { binding, .. } => {
                     return Ok(Some(binding.name.clone()));
@@ -1498,7 +1499,7 @@ impl<'a> Inferer<'a> {
     /// One unnarrowed read of a path element on `receiver`, typed `receiver_ty`:
     /// the read and its declared type. None when the declared types can't
     /// rebuild it.
-    fn synthesize_path_step(
+    pub(super) fn synthesize_path_step(
         &mut self,
         receiver: ExprId,
         receiver_ty: &Type,
@@ -1507,6 +1508,29 @@ impl<'a> Inferer<'a> {
     ) -> Result<Option<(crate::TypedExprKind, Type)>, crate::compiler_error::CompilerFailure> {
         let (index_kind, key_ty) = match elem {
             narrowing::PathElem::Field(field_name) => {
+                // Host properties must keep their getter dispatch when a narrowed
+                // path is rebuilt; their values need not use an object-shape carrier.
+                if let Some((property, bindings, iface, crate::Dispatch::Direct)) =
+                    self.lookup_interface_property(receiver_ty, field_name)
+                {
+                    let ty = super::generic::substitute_typevars(
+                        &property.ty,
+                        &bindings,
+                        &self.type_limits,
+                    )
+                    .map_err(super::type_limit_at(span))?;
+                    return Ok(Some((
+                        crate::TypedExprKind::InterfacePropertyAccess {
+                            receiver,
+                            iface,
+                            name: crate::Ident {
+                                name: field_name.clone(),
+                                span,
+                            },
+                        },
+                        ty,
+                    )));
+                }
                 let Some(field_ty) = self.narrow_source_field_ty(receiver_ty, field_name) else {
                     return Ok(None);
                 };

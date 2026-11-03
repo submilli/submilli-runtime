@@ -37,6 +37,7 @@ pub mod uint8array;
 pub(crate) mod undefined;
 pub(crate) mod uri;
 pub(crate) mod value;
+mod value_of;
 pub(crate) mod vtable;
 
 use wasmtime::{Linker, Store};
@@ -72,6 +73,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     closure::install(linker)?;
     regex::install(linker)?;
     value::install(linker)?;
+    value_of::install(linker)?;
     member::install(linker)
 }
 
@@ -115,6 +117,7 @@ pub fn package_declaration() -> PackageDeclaration {
     closure::declare(&mut defs);
     regex::declare(&mut defs);
     value::declare(&mut defs);
+    value_of::declare(&mut defs);
     member::declare(&mut defs);
     defs
 }

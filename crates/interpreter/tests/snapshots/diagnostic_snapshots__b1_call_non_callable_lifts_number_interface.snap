@@ -35,5 +35,7 @@ interface Number {
    * @param radix Base 2–36 (out of range throws a `RangeError`). Defaults to `10`.
    */
   toString(radix: number = 10): string;
+  /** Returns this primitive value unchanged. */
+  valueOf(): number;
 }
 ---

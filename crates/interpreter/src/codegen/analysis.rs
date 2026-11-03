@@ -1268,6 +1268,8 @@ impl CodegenAnalysis {
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.string_pool.intern_text(iface.as_str());
+        self.string_pool.intern_text(&name.name);
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
         self.string_pool.intern_text("Value is not callable");
@@ -1295,6 +1297,15 @@ impl CodegenAnalysis {
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if crate::typechecker::infer::narrowing::strip_nullish(receiver_ty)
+            .primitive_union_members()
+            .is_some()
+        {
+            for helper in ["__value_member", "__value_invoke"] {
+                self.dependency_usage
+                    .note_value(crate::mangle::prelude(helper));
+            }
+        }
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");

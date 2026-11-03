@@ -81,7 +81,8 @@ impl<'a> Inferer<'a> {
                 path: narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone())),
                 contains_getter: false,
             }),
-            TypedExprKind::FieldAccess { receiver, name } => {
+            TypedExprKind::FieldAccess { receiver, name }
+            | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => {
                 let receiver_expr = self
                     .typed_ast
                     .try_expr(*receiver)
@@ -2937,35 +2938,28 @@ impl<'a> Inferer<'a> {
         let Some(receiver_ty) = self.derive_type_for_reference_path(&receiver_path) else {
             return Ok(None);
         };
-        // Bail when the field can't be resolved on the receiver's shape: without
-        // a source we can reconstruct from declared types, the view would fall
-        // back to an already-narrowed expression whose shadow is scoped to an
-        // inner region.
-        match self.narrow_source_field_ty(&receiver_ty, &field_name) {
-            Some(value) => value,
-            None => return Ok(None),
-        };
         let receiver_id = self
             .typed_ast
             .try_push_expr(TypedExpr {
                 kind: receiver_kind,
                 span: path_span,
-                ty: receiver_ty,
+                ty: receiver_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        Ok(Some(crate::TypedExprKind::FieldAccess {
-            receiver: receiver_id,
-            name: Ident {
-                name: field_name,
-                span: path_span,
-            },
-        }))
+        Ok(self
+            .synthesize_path_step(
+                receiver_id,
+                &receiver_ty,
+                &narrowing::PathElem::Field(field_name),
+                path_span,
+            )?
+            .map(|(kind, _)| kind))
     }
 
     /// Receiver type for a synthesized narrow source, rebuilt from declared
     /// types. Each hop drops `null`: the guard has already proved every prefix
-    /// non-null wherever this source runs, and the type is stamped onto a
-    /// `FieldAccess` that codegen lowers by receiver shape.
+    /// non-null wherever this source runs. Rebuilt reads retain the receiver's
+    /// structural field access or direct host-property dispatch.
     fn derive_type_for_reference_path(&self, path: &narrowing::ReferencePath) -> Option<Type> {
         let root_ty = match &path.root {
             narrowing::BindingId::Local { name, .. } => self.scopes.get(name)?.ty.clone(),
