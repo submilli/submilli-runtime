@@ -14,6 +14,6 @@ function main(): void {
   if (uff === null) {
     return;
   }
-  const matched = uff.match;
+  const matched = uff[0];
   assertSameValue(matched, "\u00FF", "match text round-trips");
 }

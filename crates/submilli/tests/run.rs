@@ -1074,10 +1074,11 @@ fn operations_charge_for_the_input_they_process() {
         // constant time. Old decoding ran on every call, giving this exact cost.
         let per_call = CALL + REGEX.cost(3) + SCAN.cost(1) + COPY.cost(1);
         let old = count * (COPY.cost(2 * count) + SCAN.cost(2 * count) + per_call);
+        // Each result array includes the full match, even without captures.
         let expected = COPY.cost(2 * count)
             + SCAN.cost(2 * count)
             + ELEM.cost(5 * count + 2)
-            + count * per_call;
+            + count * (per_call + ELEM.cost(1));
         assert_eq!(actual, expected);
         assert!(actual < old / 2, "unicode exec: {actual} versus old {old}");
         unicode_exec.push(actual);
@@ -1307,7 +1308,7 @@ fn operations_charge_for_the_input_they_process() {
     let mut glob_fuel = Vec::new();
     for (index, count) in [128, 256].into_iter().enumerate() {
         let setup = format!(
-            "mkdir('/wanted/nested',true); mkdir('/unrelated',true); writeText('/wanted/nested/file.ts','x'); for(let i=0;i<{count};i++){{writeText('/unrelated/'+i.toString()+'.ts','x');}}"
+            "mkdir('/wanted/nested',{{ recursive: true }}); mkdir('/unrelated',{{ recursive: true }}); writeText('/wanted/nested/file.ts','x'); for(let i=0;i<{count};i++){{writeText('/unrelated/'+i.toString()+'.ts','x');}}"
         );
         let prefix =
             "import { mkdir, writeText } from 'submilli:fs'; import { glob } from 'submilli:code';";
@@ -1399,7 +1400,10 @@ fn operations_charge_for_the_input_they_process() {
 
     for n in [128_u64, 256] {
         for (method, per_call) in [
-            ("exec", CALL + REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1)),
+            (
+                "exec",
+                CALL + REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1) + ELEM.cost(1),
+            ),
             ("test", CALL + REGEX.cost(1)),
         ] {
             let input = format!("const s = \"x\".repeat({n}); const r = /x/g;");
@@ -1420,28 +1424,38 @@ fn operations_charge_for_the_input_they_process() {
         }
         for (pattern, slots) in [("/x/g", 0_u64), ("/x|()()()()()()()()/g", 8)] {
             let input = format!("const s = \"x\".repeat({n}); const r = {pattern};");
+            let creation_baseline = host_fuel(
+                &format!("usage-matchall-create-{slots}-{n}-base"),
+                &format!("function main(): number {{ {input} \"\".matchAll(r); return 0; }}"),
+            );
+            let creation = host_fuel(
+                &format!("usage-matchall-create-{slots}-{n}"),
+                &format!("function main(): number {{ {input} s.matchAll(r); return 0; }}"),
+            ) - creation_baseline;
+            // Creation decodes the input but does not search or build matches.
+            assert_eq!(creation, COPY.cost(n) + SCAN.cost(n));
+
+            // Equal next-call counts cancel iterator dispatch overhead. The
+            // empty alternative's final match also occurs on the empty input,
+            // so only the n one-character matches remain in the difference.
+            let steps = n + if slots == 0 { 1 } else { 2 };
             let baseline = host_fuel(
                 &format!("usage-matchall-{slots}-{n}-base"),
-                &format!("function main(): number {{ {input} return 0; }}"),
+                &format!(
+                    "function main(): number {{ {input} const matches = \"\".matchAll(r); for (let i=0; i<{steps}; i++) {{ matches.next(); }} return 0; }}"
+                ),
             );
             let actual = host_fuel(
                 &format!("usage-matchall-{slots}-{n}"),
-                &format!("function main(): number {{ {input} s.matchAll(r); return 0; }}"),
+                &format!(
+                    "function main(): number {{ {input} const matches = s.matchAll(r); for (let i=0; i<{steps}; i++) {{ matches.next(); }} return 0; }}"
+                ),
             ) - baseline;
-            // The empty alternative also matches once at the end of the input.
-            let end_match = if slots == 0 {
-                0
-            } else {
-                ELEM.cost(slots) + ELEM.cost(1)
-            };
-            // Input was already shared; only capture-array slots were missing.
             assert_eq!(
                 actual,
-                CALL + COPY.cost(n)
+                COPY.cost(n)
                     + SCAN.cost(n)
-                    + n * (REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1) + ELEM.cost(slots))
-                    + ELEM.cost(n)
-                    + end_match
+                    + n * (REGEX.cost(1) + SCAN.cost(1) + COPY.cost(1) + ELEM.cost(slots + 1))
             );
         }
     }

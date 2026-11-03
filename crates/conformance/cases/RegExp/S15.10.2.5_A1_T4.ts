@@ -1,6 +1,5 @@
 // test262: test/built-ins/RegExp/S15.10.2.5_A1_T4.js
 // expect-fail: a capture inside a quantified group should be cleared on iterations where it does not participate (ECMA-262 RepeatMatcher), so capture 4 should be undefined; the engine keeps "bbb" from an earlier iteration
-// RegExpExecArray shape adapted to RegExpMatch (unmatched captures are undefined).
 
 function main(): void {
   const m = /(z)((a+)?(b+)?(c))*/.exec("zaacbbbcac");
@@ -8,13 +7,13 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
-  const g1 = m.groups[0];
-  const g2 = m.groups[1];
-  const g3 = m.groups[2];
-  const g4 = m.groups[3];
-  const g5 = m.groups[4];
+  const g1 = m[1];
+  const g2 = m[2];
+  const g3 = m[3];
+  const g4 = m[4];
+  const g5 = m[5];
   assertSameValue(matched, "zaacbbbcac", "full match");
   assertSameValue(index, 0, "match offset");
   assertSameValue(g1, "z", "capture 1");

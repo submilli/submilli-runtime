@@ -7,7 +7,7 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
   assertSameValue(matched, "a\t", "[^] matches any character");
   assertSameValue(index, 3, "match offset");

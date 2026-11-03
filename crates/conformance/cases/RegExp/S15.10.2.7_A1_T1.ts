@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/S15.10.2.7_A1_T1.js
-// RegExpExecArray shape adapted to RegExpMatch (.match/.index/.input/.groups).
 
 function main(): void {
   const m = /\d{2,4}/.exec("the answer is 42");
@@ -7,7 +6,7 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
   const input = m.input;
   assertSameValue(matched, "42", "{2,4} matches the two digits");

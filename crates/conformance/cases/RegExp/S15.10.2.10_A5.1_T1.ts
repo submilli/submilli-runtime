@@ -10,7 +10,7 @@ function main(): void {
     if (arr === null) {
       return;
     }
-    const matched = arr.match;
+    const matched = arr[0];
     assertSameValue(matched, c, "identity escape matches the literal character " + c);
   }
 }

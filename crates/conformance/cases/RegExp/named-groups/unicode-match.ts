@@ -1,5 +1,5 @@
 // test262: test/built-ins/RegExp/named-groups/unicode-match.js
-// match() result adapted to RegExpMatch with .namedGroups; the `$`-named-group
+// The `$`-named-group
 // rows (engine-rejected, pinned by non-unicode-match) and the \k backreference
 // rows (rejected by design, docs/regex.md) are dropped.
 
@@ -9,10 +9,14 @@ function main(): void {
   if (m1 === null) {
     return;
   }
-  const m1t = m1.match;
-  const m1g = m1.groups[0];
-  const m1ng = m1.namedGroups;
-  const m1n = m1ng.get("a");
+  const m1t = m1[0];
+  const m1g = m1[1];
+  const m1ng = m1.groups;
+  assert(m1ng !== undefined, "named groups must exist");
+  if (m1ng === undefined) {
+    return;
+  }
+  const m1n = m1ng["a"];
   assertSameValue(m1t, "a", "match text");
   assertSameValue(m1g, "a", "capture 1");
   assertSameValue(m1n, "a", "named capture a");
@@ -22,10 +26,14 @@ function main(): void {
   if (m2 === null) {
     return;
   }
-  const m2t = m2.match;
-  const m2ng = m2.namedGroups;
-  const m2a = m2ng.get("a");
-  const m2b = m2ng.get("b");
+  const m2t = m2[0];
+  const m2ng = m2.groups;
+  assert(m2ng !== undefined, "named groups must exist");
+  if (m2ng === undefined) {
+    return;
+  }
+  const m2a = m2ng["a"];
+  const m2b = m2ng["b"];
   assertSameValue(m2t, "bab", "match text");
   assertSameValue(m2a, "a", "named capture a");
   assertSameValue(m2b, "b", "named capture b");
@@ -35,9 +43,13 @@ function main(): void {
   if (m3 === null) {
     return;
   }
-  const m3t = m3.match;
-  const m3ng = m3.namedGroups;
-  const m3a = m3ng.get("a");
+  const m3t = m3[0];
+  const m3ng = m3.groups;
+  assert(m3ng !== undefined, "named groups must exist");
+  if (m3ng === undefined) {
+    return;
+  }
+  const m3a = m3ng["a"];
   assertSameValue(m3t, "bab", "match text");
   assertSameValue(m3a, "ab", "named capture a");
 
@@ -46,9 +58,13 @@ function main(): void {
   if (m4 === null) {
     return;
   }
-  const m4ng = m4.namedGroups;
-  const m4a = m4ng.get("a");
-  const m4b = m4ng.get("b");
+  const m4ng = m4.groups;
+  assert(m4ng !== undefined, "named groups must exist");
+  if (m4ng === undefined) {
+    return;
+  }
+  const m4a = m4ng["a"];
+  const m4b = m4ng["b"];
   assertSameValue(m4a, "ba", "named capture a");
   assertSameValue(m4b, "b", "named capture b");
 
@@ -57,8 +73,12 @@ function main(): void {
   if (lt === null) {
     return;
   }
-  const ltng = lt.namedGroups;
-  const ltg = ltng.get("lt");
+  const ltng = lt.groups;
+  assert(ltng !== undefined, "named groups must exist");
+  if (ltng === undefined) {
+    return;
+  }
+  const ltg = ltng["lt"];
   assertSameValue(ltg, "<", "named capture lt");
 
   const gt = ">a".match(/(?<gt>>)a/u);
@@ -66,7 +86,11 @@ function main(): void {
   if (gt === null) {
     return;
   }
-  const gtng = gt.namedGroups;
-  const gtg = gtng.get("gt");
+  const gtng = gt.groups;
+  assert(gtng !== undefined, "named groups must exist");
+  if (gtng === undefined) {
+    return;
+  }
+  const gtg = gtng["gt"];
   assertSameValue(gtg, ">", "named capture gt");
 }

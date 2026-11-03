@@ -6,7 +6,7 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
   assertSameValue(matched, "c\bd", "\\b inside a class is backspace U+0008");
   assertSameValue(index, 2, "match offset");
