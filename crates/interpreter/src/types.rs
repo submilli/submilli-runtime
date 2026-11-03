@@ -1164,6 +1164,25 @@ impl Type {
         }
     }
 
+    /// The distinct primitive receiver types of a union, if every member is
+    /// primitive. Literal members share their base type's methods.
+    pub(crate) fn primitive_union_members(&self) -> Option<Vec<Type>> {
+        let Type::Union(members) = self.peel() else {
+            return None;
+        };
+        let mut primitives = std::collections::BTreeSet::new();
+        for member in members {
+            primitives.insert(match member.primitive_behavior() {
+                Type::Number | Type::NumberLiteral(_) => Type::Number,
+                Type::String | Type::StringLiteral(_) => Type::String,
+                Type::Boolean => Type::Boolean,
+                Type::BigInt => Type::BigInt,
+                _ => return None,
+            });
+        }
+        (!primitives.is_empty()).then(|| primitives.into_iter().collect())
+    }
+
     /// For method dispatch. Erased generics route to `Object`. Aliases peel. Returns `None`
     /// for function, void, null, and error. The first tuple element is the owning package
     /// for diagnostics; the mangled name is the structural lookup key. Built-in

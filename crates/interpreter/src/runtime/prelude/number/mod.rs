@@ -481,6 +481,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
+                    ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Number)),
                     (
                         "toString".to_string(),
                         MethodSig {
