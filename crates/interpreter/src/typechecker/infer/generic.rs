@@ -2413,7 +2413,7 @@ impl Inferer<'_> {
         generics: Vec<String>,
         params: Vec<Param>,
         ret: Type,
-        mangled: crate::MangledName,
+        mut mangled: crate::MangledName,
         predicate: Option<crate::TypePredicate>,
         type_args: Option<Vec<crate::TypeAnnotation>>,
         args: Vec<ExprId>,
@@ -2585,53 +2585,20 @@ impl Inferer<'_> {
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
-        // A typed `llm.call<T>` is rewritten before the argument list is frozen,
-        // because the schema emitted from `T` has to replace the trailing
-        // `schema` argument the default filled with `undefined`. The rewrite can
-        // also fail (an unschemable or unverifiable `T`), in which case the whole
-        // call is already an error and no node is built. The checked type is the
-        // type argument itself: `agents.run<T>` returns it, `llm.call<T>` returns
-        // an envelope holding it.
-        // The `schema` and `check` slots are compiler-filled, never
-        // program-written. Rejecting a written one is a soundness requirement,
-        // not tidiness: the host keys "this call is typed" off the schema being
-        // present and trusts the check to be the compiler's `value as T`
-        // (`stdlib/llm/mod.rs`), while `agents.run`'s structural check rides on
-        // the cast emitted here. A hand-written schema or check would let raw
-        // parsed JSON reach the guest wearing the declared type, and would hand
-        // guest-controlled bytes to the provider as the schema.
-        //
-        // This rejects rather than ignoring the argument, because silently
-        // discarding what a program wrote is its own trap. Typed calls are
-        // unaffected in behavior — `substitute_argument` overwrites the slot —
-        // but a written argument there is equally meaningless, so both forms
-        // are refused and no working program changes.
-        if let Some(checked) = &schema_checked
-            && args.len() > checked.written_param_count
-        {
-            let name = &callee_ident.name;
-            let written = checked.written_params;
-            let filled = checked.compiler_filled();
-            let extra = checked.schema_argument_ordinal();
-            self.error_with_help(
-                span,
-                format!(
-                    "`{name}` takes {written}; {filled} filled by the compiler from the \
-                     type argument"
-                ),
-                vec![format!(
-                    "drop the {extra} argument and any after it — write `{name}<T>(...)` to \
-                     send a schema for `T`, or `{name}(...)` for an untyped call"
-                )],
-            );
-            return Ok((TypedExprKind::Null, Type::Error));
-        }
-
+        // A typed `llm.call<T>` is rewritten before the argument list is frozen:
+        // the call is retargeted to the compiler-only `#call`, with the schema
+        // emitted from `T` — and, for an envelope call, the `value as T` check —
+        // appended after the written arguments. Those two are never parameters
+        // of the declared `call`, so a program that writes a third argument
+        // gets the ordinary arity error. The rewrite can also fail (an
+        // unschemable or unverifiable `T`), in which case the whole call is
+        // already an error and no node is built. The checked type is the type
+        // argument itself: `agents.run<T>` returns it, `llm.call<T>` returns an
+        // envelope holding it.
         if let Some(checked) = &schema_checked {
             // A schema-checked call declares exactly one type parameter: the
-            // checked `T`, which `agents.run<T>` returns and `llm.call<T>` wraps
-            // in its envelope. It is bound by now, by the program or by the
-            // untyped default above.
+            // checked `T`. It is bound by now, by the program or by the untyped
+            // default above.
             let Some(type_param) = generics.first() else {
                 return Err(super::inference_failure(
                     "a schema-checked call declares its type parameter",
@@ -2649,11 +2616,11 @@ impl Inferer<'_> {
                             ty: Type::String,
                         })
                         .map_err(crate::typechecker::arena_failure)?;
-                    substitute_argument(&params, &mut typed_args, checked.schema_param, schema);
-                    if let crate::stdlib::CheckedResult::Envelope { check_param } = checked.result {
-                        let check = self.envelope_check_closure(&checked_ty, span)?;
-                        substitute_argument(&params, &mut typed_args, check_param, check);
+                    typed_args.push(schema);
+                    if let crate::stdlib::CheckedResult::Envelope = checked.result {
+                        typed_args.push(self.envelope_check_closure(&checked_ty, span)?);
                     }
+                    mangled = checked.typed_symbol.clone();
                 }
                 Ok(None) => {}
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
@@ -2661,12 +2628,16 @@ impl Inferer<'_> {
         }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
 
+        // The appended schema and check have no declared parameter here; they
+        // are concrete, and the compiler-only target declares their types.
         let generic_args: Vec<crate::GenericArgument> = typed_args
             .into_iter()
-            .zip(params.iter())
-            .map(|(expr, p)| crate::GenericArgument {
+            .enumerate()
+            .map(|(i, expr)| crate::GenericArgument {
                 expr,
-                is_generic: matches!(p.ty, Type::TypeVar(_)),
+                is_generic: params
+                    .get(i)
+                    .is_some_and(|p| matches!(p.ty, Type::TypeVar(_))),
             })
             .collect();
         let return_cast = if return_erases_to_object_slot(&ret) {
@@ -2721,29 +2692,6 @@ impl Inferer<'_> {
             return self.cast_after_schema_gate(call, &result_ty, span);
         }
         Ok((call, result_ty))
-    }
-}
-
-/// Replace the trailing argument named `param` — which the declaration's
-/// `undefined` default just filled — with a compiler-built expression: the
-/// schema string, or the check closure, the way `VirtualCall` carries its
-/// target and `tool` as constants.
-///
-/// The slot is found by name rather than by index so the declaration can grow
-/// a parameter without silently overwriting the wrong argument; a program that
-/// passed one by hand has it replaced, which is why the parameters are
-/// documented as not being surface a program writes.
-fn substitute_argument(
-    params: &[crate::Param],
-    typed_args: &mut [ExprId],
-    param: &str,
-    value: ExprId,
-) {
-    let Some(slot) = params.iter().position(|p| p.name == param) else {
-        return;
-    };
-    if let Some(arg) = typed_args.get_mut(slot) {
-        *arg = value;
     }
 }
 

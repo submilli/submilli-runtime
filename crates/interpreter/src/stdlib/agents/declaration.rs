@@ -19,8 +19,15 @@ use super::MODULE_NAME;
 const RUN: &str = "run";
 const RUN_TYPE_PARAM: &str = "T";
 
-/// The trailing slot the typechecker fills with the JSON Schema for `T`.
-pub const SCHEMA_PARAM: &str = "schema";
+/// The compiler-only form of [`RUN`]: the written arguments followed by the
+/// JSON Schema for `T`. The `#` keeps it out of every program, as the prelude's
+/// `#getField` is.
+const TYPED_RUN: &str = "#run";
+
+/// The compiler-only function a typed `run` lowers to.
+pub fn typed_symbol(mangled: &crate::MangledName) -> Option<crate::MangledName> {
+    is_checked_run(mangled).then(|| crate::mangle::package_symbol(MODULE_NAME, TYPED_RUN))
+}
 
 /// Whether `mangled` is the typed `run`, so the typechecker's interception
 /// matches however the symbol was imported.
@@ -38,11 +45,6 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("agent", Type::String),
             Param::new("input", Type::String),
-            Param::with_default(
-                SCHEMA_PARAM,
-                Type::union(vec![Type::String, Type::Undefined]),
-                crate::DefaultValue::Undefined,
-            ),
         ],
         Type::TypeVar(RUN_TYPE_PARAM.to_string()),
         "/**\n * Hand `input` to the sub-agent `agent` and return its final answer.\n *\n \
@@ -58,6 +60,18 @@ pub fn package_declaration() -> PackageDeclaration {
          agent provider.\n * @param agent Agent name. Call `list()` for the agents you \
          may use.\n * @param input The task, as text.\n * @capability agent.run { agent: \
          $agent }\n */",
+    );
+    insert_fn(
+        &mut defs,
+        TYPED_RUN,
+        vec![RUN_TYPE_PARAM.to_string()],
+        vec![
+            Param::new("agent", Type::String),
+            Param::new("input", Type::String),
+            Param::new("schema", Type::String),
+        ],
+        Type::TypeVar(RUN_TYPE_PARAM.to_string()),
+        "/** Compiler-only: `run<T>` with the JSON Schema for `T` appended. */",
     );
     insert_fn(
         &mut defs,

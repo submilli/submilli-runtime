@@ -2,30 +2,33 @@
 //!
 //! `call` and `batch` are declared **generic**, and that generic is only sound
 //! because the typechecker intercepts it. With a type argument —
-//! `call<Verdict>(model, prompt)` — the typechecker fills two trailing slots a
-//! program never writes: `schema`, the JSON Schema emitted from `T`, and
-//! `check`, a closure that is exactly `value as T`. The host sends the schema
-//! to the provider, parses each response as JSON, and runs the check on the
-//! parsed value; a value the check rejects becomes an `ok: false` entry with
+//! `call<Verdict>(model, prompt)` — the typechecker retargets the call to the
+//! compiler-only `#call`, the same call with two arguments appended that no
+//! program can write: `schema`, the JSON Schema emitted from `T`, and `check`,
+//! a closure that is exactly `value as T`. The host sends the schema to the
+//! provider, parses each response as JSON, and runs the check on the parsed
+//! value; a value the check rejects becomes an `ok: false` entry with
 //! `reason: "invalid-output"` and the cast's message. So the `value` field of
 //! a `Success<T>` holds only what the check returned, which is what lets the
 //! declared return type `Completion<T>` be trusted without a cast around the
 //! call. The declaration and that interception are a matched pair; a generic
 //! declaration without the interception would type a `value` nothing verified.
-//! [`is_checked_call`] is the hook the interception matches on.
+//! [`is_checked_call`] is the hook the interception matches on, and
+//! [`typed_symbol`] names what it retargets to.
 //!
 //! `T` defaults to `string`: an untyped call sends no schema and `value` is the
 //! completion text. Any type argument, `string` included, asks for JSON.
 //!
-//! The trailing `schema` and `check` parameters default to `undefined` and are
-//! filled together; the host refuses one without the other. A program that
-//! writes either by hand is rejected at compile time.
+//! The `#` names are the compiler's own, as the prelude's `#getField` is: the
+//! lexer has no `#` identifiers, so a program cannot call them, and the docs
+//! do not list them. The public API is `call(model, prompt)` and
+//! `batch(model, prompts)`, nothing more.
 
 use std::collections::BTreeMap;
 
 use crate::{
-    Dispatch, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind, TypeSymbol, ValueKind,
-    ValueSymbol,
+    Dispatch, MangledName, PackageDeclaration, Param, PropertySig, Span, Type, TypeKind,
+    TypeSymbol, ValueKind, ValueSymbol,
 };
 
 use super::MODULE_NAME;
@@ -36,16 +39,15 @@ use super::MODULE_NAME;
 const LLM_CALL: &str = "call";
 const LLM_BATCH: &str = "batch";
 
+/// The compiler-only forms of [`LLM_CALL`] and [`LLM_BATCH`]: the written
+/// arguments followed by the schema and the check.
+const TYPED_CALL: &str = "#call";
+const TYPED_BATCH: &str = "#batch";
+
 /// The type parameter of [`LLM_CALL`] and [`LLM_BATCH`].
 const CALL_TYPE_PARAM: &str = "T";
 
-/// The trailing slot the typechecker fills with the JSON Schema for `T`.
-pub const SCHEMA_PARAM: &str = "schema";
-
-/// The trailing slot the typechecker fills with the `value as T` closure.
-pub const CHECK_PARAM: &str = "check";
-
-/// The parameter of that closure. The `#` keeps it out of any program's
+/// The parameter of the check closure. The `#` keeps it out of any program's
 /// namespace, and codegen recognizes it to keep a model-authored record key
 /// out of the cast's failure message.
 pub const CHECK_VALUE_PARAM: &str = "#check_value";
@@ -61,9 +63,25 @@ fn call_type_var() -> Type {
 /// `llm.call`, `models.call` under an aliased namespace import, and a
 /// named-import `call` all carry this name, while a user's own `llm` binding
 /// never can.
-pub fn is_checked_call(mangled: &crate::MangledName) -> bool {
-    *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_CALL)
-        || *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
+pub fn is_checked_call(mangled: &MangledName) -> bool {
+    typed_symbol(mangled).is_some()
+}
+
+/// The compiler-only function a typed `call` or `batch` lowers to.
+pub fn typed_symbol(mangled: &MangledName) -> Option<MangledName> {
+    if *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_CALL) {
+        Some(crate::mangle::package_symbol(MODULE_NAME, TYPED_CALL))
+    } else if *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH) {
+        Some(crate::mangle::package_symbol(MODULE_NAME, TYPED_BATCH))
+    } else {
+        None
+    }
+}
+
+/// Whether `mangled` is one of the compiler-only typed forms.
+pub fn is_typed_symbol(mangled: &MangledName) -> bool {
+    *mangled == crate::mangle::package_symbol(MODULE_NAME, TYPED_CALL)
+        || *mangled == crate::mangle::package_symbol(MODULE_NAME, TYPED_BATCH)
 }
 
 /// The type of the compiler-supplied check closure: it takes the parsed
@@ -91,8 +109,6 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("model", Type::String),
             Param::new("prompt", Type::String),
-            schema_param(),
-            check_param(),
         ],
         completion_type(call_type_var()),
         "/**\n * Send one prompt to `model` and return its completion as a `Completion`: \
@@ -127,8 +143,6 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("model", Type::String),
             Param::new("prompts", Type::Array(Box::new(Type::String))),
-            schema_param(),
-            check_param(),
         ],
         Type::Array(Box::new(completion_type(call_type_var()))),
         "/**\n * Send every prompt to `model` and return one `Completion` each, \
@@ -149,6 +163,32 @@ pub fn package_declaration() -> PackageDeclaration {
          serves.\n * @param prompts The prompts, in the order the results come back. \
          Bounded in count, and each in bytes.\n * @capability llm.call { model: \
          $model, prompt_count: $prompts.length }\n */",
+    );
+    insert_generic_fn(
+        &mut defs,
+        TYPED_CALL,
+        vec![CALL_TYPE_PARAM.to_string()],
+        vec![
+            Param::new("model", Type::String),
+            Param::new("prompt", Type::String),
+            Param::new("schema", Type::String),
+            Param::new("check", Type::Unknown),
+        ],
+        completion_type(call_type_var()),
+        "/** Compiler-only: `call<T>` with the JSON Schema for `T` and the `value as T` check appended. */",
+    );
+    insert_generic_fn(
+        &mut defs,
+        TYPED_BATCH,
+        vec![CALL_TYPE_PARAM.to_string()],
+        vec![
+            Param::new("model", Type::String),
+            Param::new("prompts", Type::Array(Box::new(Type::String))),
+            Param::new("schema", Type::String),
+            Param::new("check", Type::Unknown),
+        ],
+        Type::Array(Box::new(completion_type(call_type_var()))),
+        "/** Compiler-only: `batch<T>` with the JSON Schema for `T` and the `value as T` check appended. */",
     );
     insert_fn(
         &mut defs,
@@ -171,26 +211,6 @@ pub fn package_declaration() -> PackageDeclaration {
          @capability llm.call { prompt_count: 0 }\n */",
     );
     defs
-}
-
-/// The compile-time schema slot. `undefined` on the untyped path; the typed
-/// lowering substitutes the JSON Schema emitted from `T`. Declared with a
-/// default so the arity a program writes stays two.
-fn schema_param() -> Param {
-    Param::with_default(
-        SCHEMA_PARAM,
-        Type::union(vec![Type::String, Type::Undefined]),
-        crate::DefaultValue::Undefined,
-    )
-}
-
-/// The compile-time check slot, filled together with [`schema_param`].
-fn check_param() -> Param {
-    Param::with_default(
-        CHECK_PARAM,
-        Type::union(vec![check_function_type(), Type::Undefined]),
-        crate::DefaultValue::Undefined,
-    )
 }
 
 fn package() -> crate::Package {

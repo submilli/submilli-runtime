@@ -1120,6 +1120,9 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
     let defs = defs.as_ref();
     let mut out = String::new();
     for (name, sym) in &defs.values {
+        if crate::mangle::is_compiler_only(name) {
+            continue;
+        }
         push_doc(&mut out, value_doc(&sym.kind), "");
         render_value(&mut out, name, &sym.kind, "");
     }
@@ -1641,7 +1644,9 @@ fn render_ts_declarations(
     class_parent: &dyn Fn(&ClassExtends) -> Option<String>,
 ) {
     for (name, sym) in &defs.values {
-        if is_hidden_prelude_value(&defs.package_name, name) {
+        if crate::mangle::is_compiler_only(name)
+            || is_hidden_prelude_value(&defs.package_name, name)
+        {
             continue;
         }
         push_doc(out, value_doc(&sym.kind), indent);

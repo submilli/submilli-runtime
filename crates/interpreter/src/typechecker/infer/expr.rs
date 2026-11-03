@@ -4014,7 +4014,7 @@ impl Inferer<'_> {
     /// gate would reach a provider as a schema that constrained nothing.
     ///
     /// Both gates run here rather than at the wrap, because the emitted schema
-    /// has to replace the trailing `schema` argument before the call node's
+    /// has to be appended to the call's arguments before the call node's
     /// argument list is frozen. `Ok(None)` is the untyped form, which sends no
     /// schema and gets no check; `Ok(Some(schema))` means both gates passed and
     /// the caller verifies the result as the call's [`crate::stdlib::CheckedResult`]
@@ -4171,8 +4171,8 @@ impl Inferer<'_> {
         }
     }
 
-    /// The closure an envelope call carries in its `check` slot:
-    /// `(#check_value: unknown): unknown => #check_value as T`. The host runs
+    /// The check an envelope call carries as the last argument of its
+    /// compiler-only form: `(#check_value: unknown): unknown => #check_value as T`. The host runs
     /// it on each parsed response; the cast's `TypeError` is what the host turns
     /// into an `invalid-output` entry, and its boxed result is what becomes
     /// `value`. Built from the same checked cast `as` uses, so the two agree on
@@ -16987,11 +16987,11 @@ function main(): void { if (result < 10) { } }
             else {
                 continue;
             };
-            if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
+            if !is_llm_call(mangled) {
                 continue;
             }
-            // The check rides in the trailing `check` slot as a closure whose
-            // whole body is the checked cast.
+            // A typed call was retargeted to the compiler-only form, whose last
+            // argument is a closure whose whole body is the checked cast.
             let checked = args.last().is_some_and(|arg| {
                 let TypedExprKind::Closure {
                     body: crate::ClosureBody::Expr(body),
@@ -17022,12 +17022,19 @@ function main(): void { if (result < 10) { } }
                 continue;
             };
             if let TypedExprKind::GenericCall { mangled, .. } = &ta.try_expr(*value).unwrap().kind
-                && crate::stdlib::llm::declaration::is_checked_call(mangled)
+                && is_llm_call(mangled)
             {
                 count += 1;
             }
         }
         count
+    }
+
+    /// An llm call in either form: the declared `call`/`batch` of an untyped
+    /// call, or the compiler-only `#call`/`#batch` a typed call lowers to.
+    fn is_llm_call(mangled: &crate::MangledName) -> bool {
+        crate::stdlib::llm::declaration::is_checked_call(mangled)
+            || crate::stdlib::llm::declaration::is_typed_symbol(mangled)
     }
 
     /// Every schema string that reached an `llm.call`/`llm.batch` argument
@@ -17041,7 +17048,7 @@ function main(): void { if (result < 10) { } }
             let TypedExprKind::GenericCall { mangled, args, .. } = &expr.kind else {
                 continue;
             };
-            if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
+            if !is_llm_call(mangled) {
                 continue;
             }
             let schema = args
@@ -17186,7 +17193,7 @@ function main(): void { if (result < 10) { } }
                 return_cast,
                 ..
             } = &expr.kind
-                && crate::stdlib::llm::declaration::is_checked_call(mangled)
+                && is_llm_call(mangled)
             {
                 assert_eq!(*return_cast, None, "an llm call kept a return_cast");
             }

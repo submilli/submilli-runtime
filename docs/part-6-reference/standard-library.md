@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b18588b598d0758275d09df09c09468702d5fe642391a305bed2db1e0fd27459"
+  contentHash: "07f8d5aa0072fd5589e20a47174ffbaf82488e577fc82d3fd8cfced3bc2e80ff"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -588,8 +588,8 @@ Gated model calls: call/batch, and models() to discover them.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[], schema?: string, check?: (arg0: unknown) => unknown): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
-| `call<T>(model: string, prompt: string, schema?: string, check?: (arg0: unknown) => unknown): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion as a `Completion`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
+| `batch<T>(model: string, prompts: string[]): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `call<T>(model: string, prompt: string): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion as a `Completion`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 
 ### `Completion`

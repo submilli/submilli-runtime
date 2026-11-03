@@ -34,6 +34,14 @@ impl AsRef<str> for MangledName {
     }
 }
 
+/// Whether the compiler made `name` up: `#call`, which a typed `llm.call<T>`
+/// lowers to, or the prelude's `#getField`. The lexer has no `#` identifiers,
+/// so no program can name such a value; the docs and the namespace member
+/// lookup treat it as absent.
+pub fn is_compiler_only(name: &str) -> bool {
+    name.starts_with('#')
+}
+
 /// Canonical public package symbol.
 pub fn package_symbol(package: &str, symbol: &str) -> MangledName {
     MangledName(format!("{package}{SEP}{symbol}"))

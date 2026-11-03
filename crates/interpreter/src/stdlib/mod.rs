@@ -100,17 +100,20 @@ pub(crate) enum CheckedResult {
     /// a checked `Cast` to `T`, which throws on a mismatch (`agents.run`).
     Cast,
     /// The host returns an envelope whose `value` is a `T` only if the check
-    /// passed: the typechecker fills the named trailing parameter with a
-    /// `value as T` closure, the host runs it per response and turns its
-    /// `TypeError` into a failure entry (`llm.call`, `llm.batch`). The call's
-    /// declared return type is trusted as is.
-    Envelope { check_param: &'static str },
+    /// passed: the typechecker appends a `value as T` closure to the call, the
+    /// host runs it per response and turns its `TypeError` into a failure
+    /// entry (`llm.call`, `llm.batch`). The call's declared return type is
+    /// trusted as is.
+    Envelope,
 }
 
-/// A host call the typechecker types from its type argument: the compiler emits
-/// a JSON Schema for `T` into the call's trailing `schema` parameter and
-/// verifies the result against `T` the way [`CheckedResult`] says. What differs
-/// between such calls is what a bare call returns and how diagnostics name it.
+/// A host call the typechecker types from its type argument: a typed call is
+/// retargeted to a compiler-only function (`#call` for `call`) with the JSON
+/// Schema for `T` appended, and its result is verified against `T` the way
+/// [`CheckedResult`] says. The written declaration is the whole public API;
+/// the schema and the check are never parameters a program can see or pass.
+/// What differs between such calls is what a bare call returns and how
+/// diagnostics name it.
 pub(crate) struct SchemaCheckedCall {
     /// The call as diagnostics name it, e.g. `llm.call`.
     pub callee: &'static str,
@@ -120,70 +123,39 @@ pub(crate) struct SchemaCheckedCall {
     pub checks: &'static str,
     /// Who the schema is sent to.
     pub answerer: &'static str,
-    /// The parameters a program writes, in prose; the schema parameter follows.
-    pub written_params: &'static str,
-    pub written_param_count: usize,
     /// Ends the "cannot be verified" diagnostics: what to do instead of a type
     /// argument the runtime cannot test.
     pub untyped_hint: &'static str,
     /// Ends the "has no JSON Schema" diagnostic.
     pub untyped_hint_for_no_schema: &'static str,
-    /// The trailing parameter the compiler fills with the JSON Schema for `T`.
-    pub schema_param: &'static str,
+    /// The compiler-only function a typed call lowers to.
+    pub typed_symbol: MangledName,
     pub result: CheckedResult,
-}
-
-impl SchemaCheckedCall {
-    /// The compiler-filled arguments, as the rejection of a hand-written one
-    /// names them.
-    pub fn compiler_filled(&self) -> &'static str {
-        match self.result {
-            CheckedResult::Cast => "the schema argument is",
-            CheckedResult::Envelope { .. } => "the schema and check arguments are",
-        }
-    }
-
-    /// The schema parameter's position, as an ordinal word.
-    pub fn schema_argument_ordinal(&self) -> &'static str {
-        match self.written_param_count {
-            0 => "first",
-            1 => "second",
-            2 => "third",
-            3 => "fourth",
-            _ => "last",
-        }
-    }
 }
 
 /// The schema-checked call `mangled` names, if it is one.
 pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaCheckedCall> {
-    if llm::declaration::is_checked_call(mangled) {
+    if let Some(typed_symbol) = llm::declaration::typed_symbol(mangled) {
         return Some(SchemaCheckedCall {
             callee: "llm.call",
             example: "llm.call<Severity>(model, prompt)",
             checks: "the model's response",
             answerer: "the model",
-            written_params: "the model and the prompt",
-            written_param_count: 2,
             untyped_hint: "read the completion text from `value` yourself",
             untyped_hint_for_no_schema: "parse the completion text in `value` yourself",
-            schema_param: llm::declaration::SCHEMA_PARAM,
-            result: CheckedResult::Envelope {
-                check_param: llm::declaration::CHECK_PARAM,
-            },
+            typed_symbol,
+            result: CheckedResult::Envelope,
         });
     }
-    if agents::declaration::is_checked_run(mangled) {
+    if let Some(typed_symbol) = agents::declaration::typed_symbol(mangled) {
         return Some(SchemaCheckedCall {
             callee: "agents.run",
             example: "agents.run<Report>(agent, input)",
             checks: "the agent's result",
             answerer: "the agent",
-            written_params: "the agent and the input",
-            written_param_count: 2,
             untyped_hint: "read the returned text yourself",
             untyped_hint_for_no_schema: "parse the returned text yourself",
-            schema_param: agents::declaration::SCHEMA_PARAM,
+            typed_symbol,
             result: CheckedResult::Cast,
         });
     }

@@ -76,13 +76,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
+    // The public `run` takes exactly what a program writes; its compiler-only
+    // form `#run` — which no program can name — takes the JSON Schema for
+    // `T` after them.
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "run"),
         FuncType::new(
             &engine,
-            [string.clone(), string.clone(), nullable_object.clone()],
+            [string.clone(), string.clone()],
             // `run` is generic, so its result travels in the erased `T` slot.
             [nullable_object.clone()],
         ),
@@ -92,8 +95,28 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
-                let schema = read_optional_string(caller, abi_arg(params, 2)?)?;
-                run(caller, agent, input, schema).await
+                run(caller, agent, input, None).await
+            })
+        },
+    )?;
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "#run"),
+        FuncType::new(
+            &engine,
+            [string.clone(), string.clone(), string.clone()],
+            [nullable_object.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let agent =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
+                let input =
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
+                let schema =
+                    read_string_arg(&mut *caller, abi_arg(params, 2)?, "agents.run (schema)")?;
+                run(caller, agent, input, Some(schema)).await
             })
         },
     )?;
@@ -277,17 +300,6 @@ fn call_error_record(error: &AgentCallError) -> serde_json::Value {
             serde_json::json!({ "kind": "cancelled", "agent": agent })
         }
     }
-}
-
-/// Read the compiler-filled `schema` argument. Undefined means an untyped call.
-fn read_optional_string(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    val: &Val,
-) -> wasmtime::Result<Option<String>> {
-    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
-        return Ok(None);
-    }
-    read_string_arg(caller, val, "agents.run (schema)").map(Some)
 }
 
 fn agent_info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {

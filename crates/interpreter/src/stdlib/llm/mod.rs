@@ -71,8 +71,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.string.clone()),
     ));
     // `Completion<T>` is a union of two object shapes and crosses the boundary
-    // as the universal `(ref null $Object)` lowering; so do the optional
-    // `schema` and `check` arguments.
+    // as the universal `(ref null $Object)` lowering; so does the check
+    // closure of a typed call.
     let nullable_object = ValType::Ref(RefType::new(
         true,
         HeapType::ConcreteStruct(intr.object.clone()),
@@ -84,16 +84,37 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
+    // The public `call` and `batch` take exactly what a program writes. Their
+    // compiler-only forms `#call` and `#batch` — which no program can name —
+    // take the JSON Schema for `T` and the `value as T` check after them.
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "call"),
         FuncType::new(
             &engine,
+            [string.clone(), string.clone()],
+            [nullable_object.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
+                let prompt =
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
+                call(caller, model, prompt, None).await
+            })
+        },
+    )?;
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "#call"),
+        FuncType::new(
+            &engine,
             [
                 string.clone(),
                 string.clone(),
-                nullable_object.clone(),
+                string.clone(),
                 nullable_object.clone(),
             ],
             [nullable_object.clone()],
@@ -103,12 +124,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
                 let prompt =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
-                let schema =
-                    read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
-                let check = read_check(caller, abi_arg(params, 3)?, schema.is_some())?;
-                let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
-                let outcome = first_outcome(&model, outcomes)?;
-                envelope(caller, outcome, check.as_ref()).await
+                let typed = read_typed(caller, abi_arg(params, 2)?, abi_arg(params, 3)?)?;
+                call(caller, model, prompt, Some(typed)).await
             })
         },
     )?;
@@ -117,12 +134,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "batch"),
+        FuncType::new(&engine, [string.clone(), array.clone()], [array.clone()]),
+        |caller, params| {
+            Box::pin(async move {
+                let model =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
+                let prompts = read_prompts(caller, abi_arg(params, 1)?)?;
+                batch(caller, model, prompts, None).await
+            })
+        },
+    )?;
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "#batch"),
         FuncType::new(
             &engine,
             [
                 string.clone(),
                 array.clone(),
-                nullable_object.clone(),
+                string.clone(),
                 nullable_object.clone(),
             ],
             [array.clone()],
@@ -132,15 +163,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
                 let prompts = read_prompts(caller, abi_arg(params, 1)?)?;
-                let schema =
-                    read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
-                let check = read_check(caller, abi_arg(params, 3)?, schema.is_some())?;
-                let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                let mut built = Vec::with_capacity(outcomes.len());
-                for outcome in outcomes {
-                    built.push(envelope(caller, outcome, check.as_ref()).await?);
-                }
-                build_array(caller, built)
+                let typed = read_typed(caller, abi_arg(params, 2)?, abi_arg(params, 3)?)?;
+                batch(caller, model, prompts, Some(typed)).await
             })
         },
     )?;
@@ -675,18 +699,6 @@ fn throw(op: &str, error: LlmCallError) -> wasmtime::Error {
     }
 }
 
-/// Read the optional `schema` argument. Undefined means no schema was emitted.
-fn read_optional_string(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    val: &Val,
-    name: &str,
-) -> wasmtime::Result<Option<String>> {
-    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
-        return Ok(None);
-    }
-    read_string_arg(caller, val, name).map(Some)
-}
-
 fn read_prompts(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
@@ -699,25 +711,61 @@ fn read_prompts(
     Ok(prompts)
 }
 
-/// The check closure the typechecker filled beside `schema`: present exactly
-/// when the schema is, since both come from the same type argument.
-fn read_check(
+/// What the compiler appended to a typed call: the JSON Schema for `T`, sent
+/// to the provider, and the `value as T` check, run on each parsed response.
+struct Typed {
+    schema: String,
+    check: Closure,
+}
+
+/// The two compiler-filled arguments of `#call`/`#batch`. A compiler-only
+/// function has no caller but the compiler, so a malformed one is fatal.
+fn read_typed(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    val: &Val,
-    schema_present: bool,
-) -> wasmtime::Result<Option<Closure>> {
-    let present = !crate::runtime::prelude::undefined::is_undefined(caller, val)?;
-    if present != schema_present {
-        return Err(crate::runtime::host::fatal_host_error(
-            "llm: the schema and the check must be supplied together",
-        ));
+    schema: &Val,
+    check: &Val,
+) -> wasmtime::Result<Typed> {
+    let schema = read_string_arg(caller, schema, "llm (schema)")
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    let check = crate::runtime::prelude::closure::read(caller, check, "llm check")
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    Ok(Typed { schema, check })
+}
+
+/// One prompt: dispatch, then build its envelope.
+async fn call(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: String,
+    prompt: String,
+    typed: Option<Typed>,
+) -> wasmtime::Result<Val> {
+    let (schema, check) = split_typed(typed);
+    let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
+    let outcome = first_outcome(&model, outcomes)?;
+    envelope(caller, outcome, check.as_ref()).await
+}
+
+/// Many prompts: one dispatch, then one envelope per outcome, in order.
+async fn batch(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: String,
+    prompts: Vec<String>,
+    typed: Option<Typed>,
+) -> wasmtime::Result<Val> {
+    let (schema, check) = split_typed(typed);
+    let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
+    let mut built = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        built.push(envelope(caller, outcome, check.as_ref()).await?);
     }
-    if !present {
-        return Ok(None);
+    build_array(caller, built)
+}
+
+fn split_typed(typed: Option<Typed>) -> (Option<String>, Option<Closure>) {
+    match typed {
+        Some(Typed { schema, check }) => (Some(schema), Some(check)),
+        None => (None, None),
     }
-    crate::runtime::prelude::closure::read(caller, val, "llm check")
-        .map(Some)
-        .map_err(crate::runtime::host::fatal_host_error)
 }
 
 /// The token counts an outcome reports, carried onto both arms.

@@ -103,7 +103,7 @@ pub(super) fn parameter_shown(param: &TypedParam, position: usize) -> String {
 
 /// Whether the compiler made the name up, which no source name can start as.
 pub(super) fn is_synthetic(name: &str) -> bool {
-    name.starts_with('#')
+    crate::mangle::is_compiler_only(name)
 }
 
 /// The name a symbol has in the source: the last segment of its mangled name.

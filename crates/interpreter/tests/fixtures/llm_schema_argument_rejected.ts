@@ -1,19 +1,18 @@
-// The `schema` and `check` slots are compiler-filled, and writing either by
-// hand is a compile error rather than a call that quietly does something else.
+// `call` takes a model and a prompt, `batch` a model and prompts: nothing
+// else. The JSON Schema a typed call sends and the check it runs are the
+// compiler's own, passed to a host function no program can name, so a program
+// that writes a third argument hits the ordinary arity error — it is not
+// surface, and there is no slot for it to land in.
 //
 // This is a soundness boundary, not a style rule. The host decides a call is
-// typed by looking at whether the schema argument is not undefined, and it
-// trusts the `check` closure to be the compiler's `value as T`. A hand-written
-// schema or check would let raw parsed JSON reach the guest wearing the type
-// the call declared, and would hand guest-written bytes to the provider as the
-// schema for the request.
-//
-// Both entry points are refused, and so is the typed form — the argument is
-// meaningless there too, since the compiler overwrites the slot.
-// expect-error: the schema and check arguments are filled by the compiler
-// expect-error: the schema and check arguments are filled by the compiler
-// expect-error: the schema and check arguments are filled by the compiler
-// expect-error: the schema and check arguments are filled by the compiler
+// typed by which function the compiler called, and trusts the check to be the
+// compiler's `value as T`; a hand-written schema or check would let raw parsed
+// JSON reach the guest wearing the declared type, and would hand
+// guest-written bytes to the provider as the schema for the request.
+// expect-error: `llm.call` expects 2 argument(s), got 3
+// expect-error: `llm.batch` expects 2 argument(s), got 3
+// expect-error: `llm.call` expects 2 argument(s), got 3
+// expect-error: `llm.call` expects 2 argument(s), got 4
 import llm from "submilli:llm";
 
 interface Severity {
@@ -22,16 +21,14 @@ interface Severity {
 }
 
 function main(): void {
-  // Untyped with a hand-written schema: the case that produced a fabricated
-  // `ok` before this was rejected.
+  // Untyped with a hand-written schema.
   const handWritten = llm.call("m", "classify this", "{}");
 
-  // The same hole through `batch`.
+  // The same through `batch`.
   const batched = llm.batch("m", ["classify this"], "{}");
 
-  // Typed with a hand-written schema. Behaviorally this one was already safe —
-  // the compiler overwrites the slot — but accepting an argument that is
-  // silently discarded is its own trap, so it is refused too.
+  // Typed with a hand-written schema: the compiler emits its own, so the
+  // argument is meaningless, and it is refused like any extra argument.
   const typed = llm.call<Severity>("m", "classify this", "{}");
 
   // A hand-written check is refused for the same reason.
