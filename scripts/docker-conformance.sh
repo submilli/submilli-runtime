@@ -79,8 +79,18 @@ wait_for_health() {
     return 1
 }
 
+# A program that fails to compile or traps is still HTTP 200, with `"result":
+# null` and the diagnostic in `error`. Printing only the field turns that null
+# into Python's None and hides the body — the failure then reads
+# "returned 'None'" with nothing to act on.
 json_field() {
-    python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"
+    local body value
+    body=$(cat)
+    value=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1")
+    if [[ "$value" == "None" || -z "$value" ]]; then
+        printf '%s\n' "$body" >&2
+    fi
+    printf '%s\n' "$value"
 }
 
 put_blueprint() {

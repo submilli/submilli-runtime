@@ -50,7 +50,7 @@ function checkSandboxFilesystem(): void {
   const info = fs.info();
   assert(info.mode === "per_session", `VFS mode was ${info.mode}`);
 
-  fs.mkdir("/conformance", false);
+  fs.mkdir("/conformance", { recursive: false });
   fs.writeText("/conformance/note.txt", "durable");
   assert(fs.readText("/conformance/note.txt") === "durable", "readText did not round-trip");
 
@@ -67,7 +67,7 @@ function checkSandboxFilesystem(): void {
   assert(fs.stat("/conformance/bulk.txt")!.size === 65536, "64 KiB write did not land intact");
 
   let listed = false;
-  for (const entry of fs.list("/conformance", false)) {
+  for (const entry of fs.list("/conformance", { recursive: false })) {
     if (entry.name === "note.txt") {
       listed = true;
     }
