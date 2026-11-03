@@ -18,7 +18,6 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/gmail`](gmail/readme.md) | Gmail search, threads, messages, drafts, labels, attachments, and sending mail. |
 | [`@submilli/google-calendar`](google-calendar/readme.md) | Google Calendar calendars, events, agendas, free/busy queries, and free-time searches. |
 | [`@submilli/google-drive`](google-drive/readme.md) | Google Drive files, folders, Shared Drives, uploads, downloads, and sharing. |
-| [`@submilli/hacker-news`](hacker-news/readme.md) | Read-only Hacker News search of stories and comments, and whole item threads. |
 | [`@submilli/jina`](jina/readme.md) | Jina Reader and Search for web pages and search results as Markdown or structured data. |
 | [`@submilli/linear`](linear/readme.md) | Linear issues, comments, teams, projects, users, and agent sessions. |
 | [`@submilli/notion`](notion/readme.md) | Notion search, pages, Markdown, databases, data sources, views, comments, blocks, and file uploads. |
