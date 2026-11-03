@@ -13,7 +13,7 @@
 import { get, post, Response } from "submilli:http";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
-import { PostHogError } from "./errors";
+import { httpError, invalidInput, missingCredentials } from "./errors";
 import {
     buildEventsQuery,
     CaptureInput,
@@ -25,13 +25,18 @@ import {
     ownedFilter,
     parseCursor,
     queryBody,
+    readProperties,
     requireCohortIds,
+    requireFields,
+    requireFilterCount,
+    requireId,
     requireInstantMs,
     requireLimit,
     requireList,
     requireOffset,
-    requireProjectId,
+    requirePropertyNames,
     requireSafeText,
+    show,
 } from "./request";
 import {
     Cohort,
@@ -46,7 +51,7 @@ import {
 } from "./response";
 
 export { PostHogError } from "./errors";
-export { CaptureInput, CaptureProperty, ListEventsOptions, PropertyFilter, PropertyScope } from "./request";
+export { CaptureInput, CaptureProperty, EventField, ListEventsOptions, PropertyFilter, PropertyScope } from "./request";
 export { Cohort, DefinitionPage, EventDefinition, EventPage, EventRow, PropertyDefinition, PropertyValue } from "./response";
 
 /** Options for `listEventDefinitions`. */
@@ -80,17 +85,20 @@ export interface CaptureResult {
 }
 
 /**
- * Read one page of events in a fixed time window, oldest first. The query reads
- * only the named events and properties; page with `nextCursor` until
- * `isComplete` before treating the window as fully read.
+ * Read one page of events in a fixed time window, oldest first, and check
+ * each property path or events-table field it reads (properties.read). Page
+ * with `nextCursor` until `isComplete` before treating the window as read.
  * @param projectId PostHog project id, such as 602724.
  * @param options Events, window, properties to return, filters, and pagination.
  * @returns One page of rows and the cursor for the next page.
- * @capability posthog.com/events.list { projectId: number, events: string[], properties: string[], personProperties: string[] }
+ * @capability posthog.com/events.list { projectId: number, events: string[], properties: string[], personProperties: string[], fields: string[], excludeCohortIds: number[] }
+ * @capability posthog.com/properties.read { projectId: number, scope: string, property: string }
  */
 export function listEvents(projectId: number, options: ListEventsOptions): EventPage {
-    const project = requireProjectId(projectId);
-    const { events, after, before, properties, personProperties, filters, excludeCohortIds, limit, cursor } = options;
+    const project = requireId(projectId, "projectId");
+    const { events, after, before, properties, personProperties, fields, filters, excludeCohortIds, limit, cursor } = options;
+    // Hand-written copies, not a helper: the read-once checker requires each
+    // caller array that reaches check() to be copied in this function.
     const requestedEvents: string[] = [];
     for (const name of events) requestedEvents.push(name);
     const requestedProperties: string[] = [];
@@ -101,19 +109,24 @@ export function listEvents(projectId: number, options: ListEventsOptions): Event
     if (personProperties !== undefined) {
         for (const name of personProperties) requestedPerson.push(name);
     }
+    const requestedFields: string[] = [];
+    if (fields !== undefined) {
+        for (const name of fields) requestedFields.push(name);
+    }
     const eventNames = requireList(requestedEvents, "events", 1, 50);
-    const selected = requireList(requestedProperties, "properties", 0, 50);
-    const selectedPerson = requireList(requestedPerson, "personProperties", 0, 20);
+    const selectedFields = requireFields(requestedFields);
+    const selected = requirePropertyNames(requestedProperties, "properties", 50);
+    const selectedPerson = requirePropertyNames(requestedPerson, "personProperties", 20);
     const owned: OwnedFilter[] = [];
     if (filters !== undefined) {
         for (const filter of filters) {
-            const { scope, property, operator, values } = filter;
+            const { scope, property, key, operator, values } = filter;
             const ownedValues: string[] = [];
             for (const value of values) ownedValues.push(value);
-            owned.push(ownedFilter(scope, property, operator, ownedValues));
+            owned.push(ownedFilter(scope, property, key, operator, ownedValues));
         }
     }
-    if (owned.length > 50) throw new PostHogError("invalid_input", "filters may have at most 50 entries", 0, null);
+    requireFilterCount(owned.length);
     const cohorts: number[] = [];
     if (excludeCohortIds !== undefined) {
         for (const cohort of excludeCohortIds) cohorts.push(cohort);
@@ -121,36 +134,38 @@ export function listEvents(projectId: number, options: ListEventsOptions): Event
     const excluded = requireCohortIds(cohorts);
     const startMs = requireInstantMs(after, "after");
     const endMs = requireInstantMs(before, "before");
-    if (endMs <= startMs) throw new PostHogError("invalid_input", "before must be later than after", 0, null);
+    if (Temporal.Instant.compare(Temporal.Instant.from(before), Temporal.Instant.from(after)) <= 0) {
+        throw invalidInput("before must be later than after, got " + show(after) + " and " + show(before));
+    }
     const pageSize = requireLimit(limit, 100, 1000);
     const position = parseCursor(cursor);
-    // Every property the query reads, selected or filtered, is in the check.
-    const readEvent: string[] = [];
-    const readPerson: string[] = [];
-    for (const name of selected) readEvent.push(name);
-    for (const name of selectedPerson) readPerson.push(name);
-    for (const filter of owned) {
-        if (filter.scope === "person") {
-            if (!readPerson.includes(filter.property)) readPerson.push(filter.property);
-        } else if (!readEvent.includes(filter.property)) {
-            readEvent.push(filter.property);
-        }
-    }
-    check("posthog.com/events.list", { projectId: project, events: eventNames, properties: readEvent, personProperties: readPerson });
+    // Every property path and field the query reads, selected or filtered, is
+    // checked: as lists on events.list, and one at a time on properties.read
+    // so a blueprint can allow a fixed set.
+    const read = readProperties(selected, selectedPerson, selectedFields, owned);
+    check("posthog.com/events.list", { projectId: project, events: eventNames, properties: read.event, personProperties: read.person, fields: read.field, excludeCohortIds: excluded });
+    for (const property of read.event) check("posthog.com/properties.read", { projectId: project, scope: "event", property: property });
+    for (const property of read.person) check("posthog.com/properties.read", { projectId: project, scope: "person", property: property });
+    for (const property of read.field) check("posthog.com/properties.read", { projectId: project, scope: "field", property: property });
     const hogql = buildEventsQuery({
         events: eventNames,
         startMs: startMs,
         endMs: endMs,
         properties: selected,
         personProperties: selectedPerson,
+        fields: selectedFields,
         filters: owned,
         excludeCohortIds: excluded,
         limit: pageSize,
-        cursorMs: position === null ? null : position[0],
-        cursorUuid: position === null ? "" : position[1],
+        cursor: position,
     });
-    const response = post("https://us.posthog.com/api/projects/" + project.toString() + "/query/", queryBody(hogql), jsonHeaders(personalKey()));
-    return eventPageFrom(succeeded(response).body, project, selected, selectedPerson, pageSize);
+    const key = personalKey();
+    // Both bounds round up to whole milliseconds; a window inside one
+    // millisecond holds no event, so it is read as empty without a query, but
+    // only after the checks and the key lookup, so a missing key still fails.
+    if (endMs === startMs) return { events: [], nextCursor: "", isComplete: true };
+    const response = post("https://us.posthog.com/api/projects/" + project.toString() + "/query/", queryBody(hogql), queryHeaders(key));
+    return eventPageFrom(succeeded(response).body, project, selected, selectedPerson, selectedFields, pageSize);
 }
 
 /**
@@ -161,7 +176,7 @@ export function listEvents(projectId: number, options: ListEventsOptions): Event
  * @capability posthog.com/schema.read { projectId: number }
  */
 export function listEventDefinitions(projectId: number, options: EventDefinitionOptions = {}): DefinitionPage<EventDefinition> {
-    const project = requireProjectId(projectId);
+    const project = requireId(projectId, "projectId");
     const { search, limit, offset } = options;
     const pageSize = requireLimit(limit, 100, 500);
     const start = requireOffset(offset);
@@ -179,10 +194,10 @@ export function listEventDefinitions(projectId: number, options: EventDefinition
  * @capability posthog.com/schema.read { projectId: number }
  */
 export function listPropertyDefinitions(projectId: number, options: PropertyDefinitionOptions = {}): DefinitionPage<PropertyDefinition> {
-    const project = requireProjectId(projectId);
+    const project = requireId(projectId, "projectId");
     const { type, eventNames, search, limit, offset } = options;
     const kind = type === undefined ? "event" : type;
-    if (kind !== "event" && kind !== "person") throw new PostHogError("invalid_input", "type must be event or person", 0, null);
+    if (kind !== "event" && kind !== "person") throw invalidInput("type must be event or person, got " + show(type));
     const names = requireList(copy(eventNames), "eventNames", 0, 20);
     const pageSize = requireLimit(limit, 100, 500);
     const start = requireOffset(offset);
@@ -202,8 +217,8 @@ export function listPropertyDefinitions(projectId: number, options: PropertyDefi
  * @capability posthog.com/cohorts.get { projectId: number, cohortId: number }
  */
 export function getCohort(projectId: number, cohortId: number): Cohort | null {
-    const project = requireProjectId(projectId);
-    const cohort = requireProjectId(cohortId);
+    const project = requireId(projectId, "projectId");
+    const cohort = requireId(cohortId, "cohortId");
     check("posthog.com/cohorts.get", { projectId: project, cohortId: cohort });
     const response = get("https://us.posthog.com/api/projects/" + project.toString() + "/cohorts/" + cohort.toString() + "/", authHeaders(personalKey()));
     if (response.status === 404) return null;
@@ -222,9 +237,11 @@ export function capture(input: CaptureInput): CaptureResult {
     const fields = captureFields(name, distinctId, copyProperties(properties), copyProperties(set), timestamp, uuid);
     check("posthog.com/events.capture", { event: name });
     const key = secrets.get("POSTHOG_PROJECT_API_KEY");
-    if (key === undefined) throw new PostHogError("missing_credentials", "The PostHog project API key is not configured for this blueprint", 0, null);
+    if (key === undefined) throw missingCredentials("project API key");
     const body = "{\"api_key\":" + JSON.stringify(key) + "," + fields + "}";
-    const response = post("https://us.i.posthog.com/i/v0/e/", body, jsonHeaders(""));
+    const headers = new Map<string, string>();
+    headers.set("Content-Type", "application/json");
+    const response = post("https://us.i.posthog.com/i/v0/e/", body, headers);
     succeeded(response);
     return { accepted: true };
 }
@@ -248,7 +265,7 @@ function copyProperties(values: CaptureProperty[] | undefined): CaptureProperty[
 
 function personalKey(): string {
     const key = secrets.get("POSTHOG_PERSONAL_API_KEY");
-    if (key === undefined) throw new PostHogError("missing_credentials", "The PostHog personal API key is not configured for this blueprint", 0, null);
+    if (key === undefined) throw missingCredentials("personal API key");
     return key;
 }
 
@@ -259,17 +276,13 @@ function authHeaders(key: string): Map<string, string> {
     return headers;
 }
 
-function jsonHeaders(key: string): Map<string, string> {
-    const headers = key === "" ? new Map<string, string>() : authHeaders(key);
+function queryHeaders(key: string): Map<string, string> {
+    const headers = authHeaders(key);
     headers.set("Content-Type", "application/json");
     return headers;
 }
 
 function succeeded(response: Response): Response {
     if (response.ok) return response;
-    const retry = response.headers.get("retry-after");
-    const seconds = retry === undefined || retry === null || !/^[0-9]{1,6}$/.test(retry) ? null : parseInt(retry, 10);
-    const detail = response.body.length > 300 ? response.body.substring(0, 300) : response.body;
-    const code = response.status === 429 && detail.includes("api_queries_budget_exceeded") ? "budget_exceeded" : "http_" + response.status.toString();
-    throw new PostHogError(code, "PostHog returned HTTP " + response.status.toString() + ": " + detail, response.status, seconds);
+    throw httpError(response.status, response.body, response.headers.get("retry-after"));
 }

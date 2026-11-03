@@ -8,7 +8,8 @@ property a query reads (selected or filtered).
 
 | Capability | Operation | Fields |
 | --- | --- | --- |
-| `posthog.com/events.list` | `listEvents` | `projectId`, `events`, `properties`, `personProperties` |
+| `posthog.com/events.list` | `listEvents` | `projectId`, `events`, `properties`, `personProperties`, `fields`, `excludeCohortIds` |
+| `posthog.com/properties.read` | `listEvents`, once per property path or field it reads | `projectId`, `scope` (`event`, `person` or `field`), `property` (a name, a nested path such as `first_touch.utm_source`, or a field such as `$virt_is_bot`) |
 | `posthog.com/schema.read` | `listEventDefinitions`, `listPropertyDefinitions` | `projectId` |
 | `posthog.com/cohorts.get` | `getCohort` | `projectId`, `cohortId` |
 | `posthog.com/events.capture` | `capture` | `event` |
@@ -27,17 +28,21 @@ secrets:
 
 `submilli blueprint add-package @submilli/posthog --no-capabilities` adds the
 package and the rules for its own calls. Then grant `main` only what it needs.
-For example, a read-only analytics agent scoped to one project that may never
-read email or IP properties:
+For example, a read-only analytics agent scoped to one project that may read
+only an allowlist of properties. `listEvents` checks `posthog.com/properties.read`
+once for every property a query selects or filters on, so an allowlist is a
+plain filter on that capability:
 
 ```yaml
 permissions:
   main:
     - capability: posthog.com/events.list
+      filter: projectId == 602724
+      action: allow
+    - capability: posthog.com/properties.read
       filter: >-
-        projectId == 602724
-        and not (properties contains "email") and not (personProperties contains "email")
-        and not (properties contains "$ip")
+        projectId == 602724 and scope == "event"
+        and (property == "$host" or property == "$pathname" or property == "destination")
       action: allow
     - capability: posthog.com/schema.read
       filter: projectId == 602724
@@ -63,6 +68,8 @@ A missing secret throws `PostHogError` with code `missing_credentials`.
 - Window bounds are written as `toDateTime('…', 'UTC')` for index pruning plus
   exact millisecond comparisons, so the project's time zone never shifts the
   window.
+- Filter values are folded the way ClickHouse compares them: spaces trimmed,
+  ASCII letters lower-cased. Windows must fall within 1970–2299.
 - Every caller string placed in HogQL (event names, property names, filter
   values) is refused if it contains a quote, backslash, backtick or control
   character.
@@ -82,7 +89,8 @@ The network test is read-only; it never calls `capture`.
 
 `tests/policy/read-scope.ts` runs as a real `main` caller under
 `read-scope.yaml`, without a key or network. It shows that a rule can confine
-`listEvents` to one project and keep a property out of both the selected
-columns and the filters, that `getCohort` is scoped by cohort id, and that
-`capture` stays denied when only reads are granted.
+`listEvents` to one project and allow only listed property paths and fields,
+whether selected or filtered (allowing `first_touch.utm_source` allows neither
+the whole `first_touch` object nor its other keys), that `getCohort` is scoped
+by cohort id, and that `capture` stays denied when only reads are granted.
 `cargo test -p submilli --test package_policy` runs it.

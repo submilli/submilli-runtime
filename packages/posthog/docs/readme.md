@@ -20,15 +20,23 @@ internally; never pass a key as an argument.
 
 `listEvents(projectId, options)` returns one page of rows, oldest first, for
 the named `events` with `after <= timestamp < before`. Times are ISO-8601
-instants with a time zone and millisecond precision.
+instants with Z or a ±HH:MM offset, such as `Temporal.Now.instant().toString()`;
+a bound finer than a millisecond rounds up to the next one.
 
 - Name every property you need in `properties` (event) or `personProperties`
   (person). Rows carry exactly those, in request order, as text or `null`. There
   is no way to select all properties.
-- `filters` keep (`in`) or drop (`notIn`) rows by property value. Comparison
-  trims and ignores case; a missing property compares as `""`, so `notIn`
-  keeps rows that lack the property. A filtered property counts as read, the
-  same as a selected one.
+- `filters` keep (`in`) or drop (`notIn`) rows by property value. For a
+  property that holds an object, `key` names the field inside it, such as
+  `{ property: "first_touch", key: "utm_source" }`. Comparison trims spaces and
+  ignores ASCII case; values must not be blank. A missing property compares as
+  `""`, so `notIn` keeps rows that lack the property. A filtered property counts
+  as read, the same as a selected one; a nested filter reads only its path
+  (`first_touch.utm_source`). The blueprint may allow only some properties: a
+  denial names the property it refused.
+- `fields` returns PostHog's own classification columns, which live on the
+  event rather than in its properties: `$virt_is_bot`, `$virt_traffic_type`,
+  `$virt_traffic_category`, `$virt_bot_name`. Rows carry them in `fields`.
 - `excludeCohortIds` drops events from members of those cohorts.
 - Pages are `limit` rows (1–1000, default 100). While `isComplete` is false,
   call again with the same options and `cursor: page.nextCursor`. A window is

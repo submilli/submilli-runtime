@@ -5,11 +5,16 @@ packages:
 default: deny
 permissions:
   main:
-    # One project, and never the email property, whether selected or filtered.
     - capability: posthog.com/events.list
+      filter: projectId == 602724
+      action: allow
+    # An allowlist: every property a query reads, selected or filtered, must be one of these.
+    - capability: posthog.com/properties.read
       filter: >-
-        projectId == 602724 and not (properties contains "email")
-        and not (personProperties contains "email")
+        projectId == 602724 and
+        ((scope == "event" and (property == "$host" or property == "path"))
+         or (scope == "person" and property == "first_touch.utm_source")
+         or (scope == "field" and property == "$virt_is_bot"))
       action: allow
     - capability: posthog.com/cohorts.get
       filter: projectId == 602724 and cohortId == 561927

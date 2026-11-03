@@ -1,7 +1,7 @@
 // Response mapping for the PostHog client. Internal: `src/lib.ts` re-exports
 // the result types and calls these mappers.
 
-import { invalidResponse } from "./errors";
+import { invalidResponse, PostHogError } from "./errors";
 import { formatCursor, isoMillis } from "./request";
 
 /** One named property value. Values arrive as text; a missing property is null. */
@@ -24,6 +24,8 @@ export interface EventRow {
     properties: PropertyValue[];
     /** The requested person properties, in request order. */
     personProperties: PropertyValue[];
+    /** The requested events-table fields, in request order. */
+    fields: PropertyValue[];
     /** The event's page in the PostHog app. */
     url: string;
 }
@@ -113,6 +115,25 @@ interface ApiCohort {
     deleted?: boolean | null;
 }
 
+// A body of the wrong shape fails the checked casts with a TypeError or
+// RangeError; callers branch on PostHogError codes, so report it as one.
+function shaped<T>(map: () => T): T {
+    try {
+        return map();
+    } catch (error) {
+        if (error instanceof PostHogError) throw error;
+        throw invalidResponse("PostHog returned an unexpected response: " + error.message);
+    }
+}
+
+function decode(body: string): unknown {
+    try {
+        return JSON.parse(body);
+    } catch (error) {
+        throw invalidResponse("PostHog returned a body that is not JSON");
+    }
+}
+
 function text(value: unknown): string | null {
     if (value === null || value === undefined) return null;
     if (typeof value === "string") return value;
@@ -127,14 +148,8 @@ function milliseconds(value: unknown): number {
     throw invalidResponse("PostHog returned a row without a millisecond timestamp");
 }
 
-/**
- * The PostHog app URL of one event.
- * @param projectId Project id.
- * @param uuid Event UUID.
- * @param timestamp Event time, ISO-8601.
- * @returns The URL.
- */
-export function eventUrl(projectId: number, uuid: string, timestamp: string): string {
+// The PostHog app URL of one event.
+function eventUrl(projectId: number, uuid: string, timestamp: string): string {
     return "https://us.posthog.com/project/" + projectId.toString() + "/events/" + encodeURIComponent(uuid) + "/" + encodeURIComponent(timestamp);
 }
 
@@ -144,54 +159,59 @@ export function eventUrl(projectId: number, uuid: string, timestamp: string): st
  * @param projectId Project id.
  * @param properties Selected event properties, in column order.
  * @param personProperties Selected person properties, in column order.
+ * @param fields Selected events-table fields, in column order.
  * @param limit Requested page size.
  * @returns The page.
  */
-export function eventPageFrom(body: string, projectId: number, properties: string[], personProperties: string[], limit: number): EventPage {
-    const parsed = JSON.parse(body) as QueryResponse;
-    if (typeof parsed.error === "string" && parsed.error.length > 0) {
-        throw invalidResponse("PostHog query failed: " + parsed.error);
-    }
-    const rows = parsed.results;
-    if (rows === undefined || rows === null) throw invalidResponse("PostHog query response has no results");
-    const width = 3 + properties.length + personProperties.length;
-    const events: EventRow[] = [];
-    let hasMore = false;
-    for (const raw of rows) {
-        if (events.length === limit) {
-            hasMore = true;
-            break;
+export function eventPageFrom(body: string, projectId: number, properties: string[], personProperties: string[], fields: string[], limit: number): EventPage {
+    return shaped((): EventPage => {
+        const parsed = decode(body) as QueryResponse;
+        if (typeof parsed.error === "string" && parsed.error.length > 0) {
+            throw invalidResponse("PostHog query failed: " + parsed.error);
         }
-        const row = raw as unknown[];
-        if (row.length !== width) throw invalidResponse("PostHog returned a row with " + row.length.toString() + " columns, expected " + width.toString());
-        const uuid = text(row[0]);
-        const event = text(row[1]);
-        if (uuid === null || event === null) throw invalidResponse("PostHog returned a row without a uuid or event name");
-        const timestamp = isoMillis(milliseconds(row[2]));
-        const eventValues: PropertyValue[] = [];
-        for (let index = 0; index < properties.length; index++) {
-            eventValues.push({ name: properties[index], value: text(row[3 + index]) });
+        const rows = parsed.results;
+        if (rows === undefined || rows === null) throw invalidResponse("PostHog query response has no results");
+        const width = 3 + properties.length + personProperties.length + fields.length;
+        const events: EventRow[] = [];
+        let nextCursor = "";
+        let lastMs = 0;
+        for (const raw of rows) {
+            if (events.length === limit) {
+                // The extra row exists, so another page follows the last row kept.
+                nextCursor = formatCursor(lastMs, events[events.length - 1].uuid);
+                break;
+            }
+            const row = raw as unknown[];
+            if (row.length !== width) throw invalidResponse("PostHog returned a row with " + row.length.toString() + " columns, expected " + width.toString());
+            const uuid = text(row[0]);
+            const event = text(row[1]);
+            if (uuid === null || event === null) throw invalidResponse("PostHog returned a row without a uuid or event name");
+            lastMs = milliseconds(row[2]);
+            const timestamp = isoMillis(lastMs);
+            events.push({
+                uuid: uuid,
+                event: event,
+                timestamp: timestamp,
+                properties: valuesAt(row, properties, 3),
+                personProperties: valuesAt(row, personProperties, 3 + properties.length),
+                fields: valuesAt(row, fields, 3 + properties.length + personProperties.length),
+                url: eventUrl(projectId, uuid, timestamp),
+            });
         }
-        const personValues: PropertyValue[] = [];
-        for (let index = 0; index < personProperties.length; index++) {
-            personValues.push({ name: personProperties[index], value: text(row[3 + properties.length + index]) });
-        }
-        events.push({
-            uuid: uuid,
-            event: event,
-            timestamp: timestamp,
-            properties: eventValues,
-            personProperties: personValues,
-            url: eventUrl(projectId, uuid, timestamp),
-        });
-    }
-    const last = events.length > 0 ? events[events.length - 1] : null;
-    const nextCursor = hasMore && last !== null ? formatCursor(Temporal.Instant.from(last.timestamp).epochMilliseconds, last.uuid) : "";
-    return { events: events, nextCursor: nextCursor, isComplete: !hasMore };
+        return { events: events, nextCursor: nextCursor, isComplete: nextCursor === "" };
+    });
 }
 
-function nextOffset(next: string | null | undefined, offset: number, size: number): number | null {
-    return next === null || next === undefined || next === "" ? null : offset + size;
+// The named columns starting at `first`, in request order.
+function valuesAt(row: unknown[], names: string[], first: number): PropertyValue[] {
+    const values: PropertyValue[] = [];
+    for (let index = 0; index < names.length; index++) values.push({ name: names[index], value: text(row[first + index]) });
+    return values;
+}
+
+// Advance by the rows PostHog returned, not the ones kept, and stop when a page is empty.
+function nextOffset(next: string | null | undefined, offset: number, returned: number): number | null {
+    return next === null || next === undefined || next === "" || returned === 0 ? null : offset + returned;
 }
 
 /**
@@ -201,12 +221,15 @@ function nextOffset(next: string | null | undefined, offset: number, size: numbe
  * @returns The page.
  */
 export function eventDefinitionsFrom(body: string, offset: number): DefinitionPage<EventDefinition> {
-    const parsed = JSON.parse(body) as ApiDefinitionList<ApiEventDefinition>;
-    const items: EventDefinition[] = [];
-    for (const item of parsed.results ?? []) {
-        if (typeof item.name === "string") items.push({ name: item.name, lastSeenAt: item.last_seen_at ?? null });
-    }
-    return { items: items, count: parsed.count ?? items.length, nextOffset: nextOffset(parsed.next, offset, items.length) };
+    return shaped((): DefinitionPage<EventDefinition> => {
+        const parsed = decode(body) as ApiDefinitionList<ApiEventDefinition>;
+        const items: EventDefinition[] = [];
+        const results = parsed.results ?? [];
+        for (const item of results) {
+            if (typeof item.name === "string") items.push({ name: item.name, lastSeenAt: item.last_seen_at ?? null });
+        }
+        return { items: items, count: parsed.count ?? items.length, nextOffset: nextOffset(parsed.next, offset, results.length) };
+    });
 }
 
 /**
@@ -216,12 +239,15 @@ export function eventDefinitionsFrom(body: string, offset: number): DefinitionPa
  * @returns The page.
  */
 export function propertyDefinitionsFrom(body: string, offset: number): DefinitionPage<PropertyDefinition> {
-    const parsed = JSON.parse(body) as ApiDefinitionList<ApiPropertyDefinition>;
-    const items: PropertyDefinition[] = [];
-    for (const item of parsed.results ?? []) {
-        if (typeof item.name === "string") items.push({ name: item.name, propertyType: item.property_type ?? null });
-    }
-    return { items: items, count: parsed.count ?? items.length, nextOffset: nextOffset(parsed.next, offset, items.length) };
+    return shaped((): DefinitionPage<PropertyDefinition> => {
+        const parsed = decode(body) as ApiDefinitionList<ApiPropertyDefinition>;
+        const items: PropertyDefinition[] = [];
+        const results = parsed.results ?? [];
+        for (const item of results) {
+            if (typeof item.name === "string") items.push({ name: item.name, propertyType: item.property_type ?? null });
+        }
+        return { items: items, count: parsed.count ?? items.length, nextOffset: nextOffset(parsed.next, offset, results.length) };
+    });
 }
 
 /**
@@ -230,15 +256,17 @@ export function propertyDefinitionsFrom(body: string, offset: number): Definitio
  * @returns The cohort.
  */
 export function cohortFrom(body: string): Cohort {
-    const parsed = JSON.parse(body) as ApiCohort;
-    if (typeof parsed.id !== "number") throw invalidResponse("PostHog cohort response has no id");
-    return {
-        id: parsed.id,
-        name: parsed.name ?? "",
-        count: parsed.count ?? null,
-        isCalculating: parsed.is_calculating === true,
-        lastCalculation: parsed.last_calculation ?? null,
-        errorsCalculating: parsed.errors_calculating ?? 0,
-        deleted: parsed.deleted === true,
-    };
+    return shaped((): Cohort => {
+        const parsed = decode(body) as ApiCohort;
+        if (typeof parsed.id !== "number") throw invalidResponse("PostHog cohort response has no id");
+        return {
+            id: parsed.id,
+            name: parsed.name ?? "",
+            count: parsed.count ?? null,
+            isCalculating: parsed.is_calculating === true,
+            lastCalculation: parsed.last_calculation ?? null,
+            errorsCalculating: parsed.errors_calculating ?? 0,
+            deleted: parsed.deleted === true,
+        };
+    });
 }

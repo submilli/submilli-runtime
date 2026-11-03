@@ -7,6 +7,9 @@ read whole discussions. It is read-only and needs no credentials.
   argument refused before any request, `http_<status>`, or `invalid_response`.
 - A `PermissionDeniedError` means the blueprint forbids that call, not that it
   was mis-called.
+- Time bounds are ISO-8601 instants with Z or a ±HH:MM offset, such as
+  `Temporal.Now.instant().toString()`; HN records whole seconds. `createdAt`
+  is `""` when HN did not report a time.
 - `text` is HN's HTML. `author` is an HN username, which is not evidence of
   who the person is on any other site.
 
@@ -14,12 +17,13 @@ read whole discussions. It is read-only and needs no credentials.
 
 ## Search
 
-`search({ query, sort, exact, type, storyId, author, createdAfter, createdBefore, page, hitsPerPage })`
-returns one page of matching stories and comments, newest first unless
-`sort: "relevance"`. Words match exactly unless `exact: false`. Times are
-ISO-8601 instants. Request `page + 1` while it is below `pageCount`. When
+`search({ query, sort, exact, type, storyId, author, createdAfter,
+createdBefore, page, hitsPerPage })` returns one page of matching stories and
+comments, newest first unless `sort: "relevance"`. Words match exactly unless
+`exact: false`. Request `page + 1` while it is below `pageCount`. When
 `exhaustive` is false the total is an estimate, so an empty page then is not
-proof that nothing matches.
+proof that nothing matches. A query serves at most 1,000 hits; narrow it with
+`createdAfter` when `total` is larger.
 
 <!-- submilli:endif -->
 
@@ -44,14 +48,15 @@ New comments in every story that mentions Submilli since a time.
 import { search, getThread } from "@submilli/hacker-news";
 
 function main(): string {
-    const since = "2026-10-20T21:00:00Z";
+    const since = Temporal.Instant.from("2026-10-20T21:00:00Z").epochMilliseconds;
     const stories = search({ query: "submilli", type: "story", hitsPerPage: 50 });
     const lines: string[] = [];
     for (const story of stories.items) {
         const thread = getThread(story.id);
         if (thread === null) continue;
         for (const item of thread.items) {
-            if (item.type === "comment" && item.createdAt >= since) {
+            if (item.type !== "comment" || item.createdAt === "") continue;
+            if (Temporal.Instant.from(item.createdAt).epochMilliseconds >= since) {
                 lines.push((item.author ?? "[deleted]") + " " + item.createdAt + " " + item.link);
             }
         }

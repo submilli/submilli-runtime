@@ -16,9 +16,9 @@ export { HackerNewsError, Item, SearchOptions, SearchPage, Thread } from "./inte
  * @capability news.ycombinator.com/search {}
  */
 export function search(options: SearchOptions): SearchPage {
-    const { query, sort, exact, type, storyId, author, createdAfter, createdBefore, page, hitsPerPage } = options;
-    const request = searchRequest(query, sort, exact, type, storyId, author, createdAfter, createdBefore, page, hitsPerPage);
+    const request = searchRequest(options);
     check("news.ycombinator.com/search", {});
+    // Each URL stays a literal at its call site so the build derives the host rule.
     const response = request.endpoint === "search_by_date"
         ? get("https://hn.algolia.com/api/v1/search_by_date" + request.query)
         : get("https://hn.algolia.com/api/v1/search" + request.query);

@@ -13,9 +13,13 @@ provides:
     event:
       type: string
 - name: posthog.com/events.list
-  description: Read one page of events in a fixed time window, oldest first. The query reads only the named events and properties; page with `nextCursor` until `isComplete` before treating the window as fully read.
+  description: Read one page of events in a fixed time window, oldest first, and check each property path or events-table field it reads (properties.read). Page with `nextCursor` until `isComplete` before treating the window as read.
   fields:
     events:
+      type: string[]
+    excludeCohortIds:
+      type: number[]
+    fields:
       type: string[]
     personProperties:
       type: string[]
@@ -23,6 +27,15 @@ provides:
       type: number
     properties:
       type: string[]
+- name: posthog.com/properties.read
+  description: Read one page of events in a fixed time window, oldest first, and check each property path or events-table field it reads (properties.read). Page with `nextCursor` until `isComplete` before treating the window as read.
+  fields:
+    projectId:
+      type: number
+    property:
+      type: string
+    scope:
+      type: string
 - name: posthog.com/schema.read
   description: List the event names PostHog has seen in a project.
   fields:

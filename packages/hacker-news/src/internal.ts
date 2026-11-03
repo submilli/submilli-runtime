@@ -48,7 +48,7 @@ export interface Item {
     type: string;
     /** Author's HN username, or null when deleted. */
     author: string | null;
-    /** Creation time, an ISO-8601 instant. */
+    /** Creation time, an ISO-8601 instant, or "" when HN did not report one. */
     createdAt: string;
     /** Story title, or null for comments. */
     title: string | null;
@@ -76,7 +76,7 @@ export interface SearchPage {
     total: number;
     /** This page's number. */
     page: number;
-    /** Number of pages; request `page + 1` while it is below this. */
+    /** Number of pages; request `page + 1` while it is below this. The API serves at most 1,000 hits per query, so narrow the query (for example by `createdAfter`) when `total` is larger. */
     pageCount: number;
     /** Whether `total` is exact. When false, the search may have stopped early and the result is not proof of absence. */
     exhaustive: boolean;
@@ -91,50 +91,47 @@ export interface Thread {
 /** The search query string after validation, and the endpoint path it uses. */
 export interface SearchRequest {
     /** `search_by_date` or `search`. */
-    endpoint: string;
+    endpoint: "search_by_date" | "search";
     /** Encoded query string, starting with `?`. */
     query: string;
 }
 
 /**
  * Validate search options and encode them.
- * @param query Search text.
- * @param sort date or relevance.
- * @param exact Exact word matching.
- * @param type story or comment.
- * @param storyId Story id filter.
- * @param author Author filter.
- * @param createdAfter ISO-8601 lower bound.
- * @param createdBefore ISO-8601 upper bound.
- * @param page Page number.
- * @param hitsPerPage Page size.
+ * @param options The caller's search options.
  * @returns The endpoint and query string.
  */
-export function searchRequest(query: string, sort: string | undefined, exact: boolean | undefined, type: string | undefined,
-    storyId: number | undefined, author: string | undefined, createdAfter: string | undefined, createdBefore: string | undefined,
-    page: number | undefined, hitsPerPage: number | undefined): SearchRequest {
+export function searchRequest(options: SearchOptions): SearchRequest {
+    const { query, sort, exact, type, storyId, author, createdAfter, createdBefore, page, hitsPerPage } = options;
     if (typeof query !== "string" || query.trim().length === 0 || query.length > 300) {
-        throw invalidInput("query must be 1–300 characters");
+        throw invalidInput("query must be 1–300 characters, got " + show(query));
     }
     const order = sort === undefined ? "date" : sort;
-    if (order !== "date" && order !== "relevance") throw invalidInput("sort must be date or relevance");
+    if (order !== "date" && order !== "relevance") throw invalidInput("sort must be date or relevance, got " + show(sort));
     const tags: string[] = [];
     if (type !== undefined) {
-        if (type !== "story" && type !== "comment") throw invalidInput("type must be story or comment");
+        if (type !== "story" && type !== "comment") throw invalidInput("type must be story or comment, got " + show(type));
         tags.push(type);
     }
     if (storyId !== undefined) tags.push("story_" + requireId(storyId, "storyId").toString());
     if (author !== undefined) {
-        if (!/^[A-Za-z0-9_-]{1,32}$/.test(author)) throw invalidInput("author must be an HN username");
+        if (!/^[A-Za-z0-9_-]{1,32}$/.test(author)) throw invalidInput("author must be an HN username, got " + show(author));
         tags.push("author_" + author);
     }
     const numeric: string[] = [];
-    if (createdAfter !== undefined) numeric.push("created_at_i>=" + epochSeconds(createdAfter, "createdAfter", false).toString());
-    if (createdBefore !== undefined) numeric.push("created_at_i<" + epochSeconds(createdBefore, "createdBefore", true).toString());
+    const start = createdAfter === undefined ? null : epochSeconds(createdAfter, "createdAfter");
+    const end = createdBefore === undefined ? null : epochSeconds(createdBefore, "createdBefore");
+    if (createdAfter !== undefined && createdBefore !== undefined
+        && Temporal.Instant.compare(Temporal.Instant.from(createdBefore), Temporal.Instant.from(createdAfter)) <= 0) {
+        throw invalidInput("createdBefore must be later than createdAfter, got " + show(createdAfter) + " and " + show(createdBefore));
+    }
+    if (start !== null) numeric.push("created_at_i>=" + start.toString());
+    // A window with no whole second in it stays valid and simply matches nothing.
+    if (end !== null) numeric.push("created_at_i<" + end.toString());
     const pageNumber = page === undefined ? 0 : page;
-    if (!Number.isInteger(pageNumber) || pageNumber < 0 || pageNumber > 1000) throw invalidInput("page must be an integer from 0 through 1000");
+    if (!Number.isInteger(pageNumber) || pageNumber < 0 || pageNumber > 1000) throw invalidInput("page must be an integer from 0 through 1000, got " + show(pageNumber));
     const size = hitsPerPage === undefined ? 50 : hitsPerPage;
-    if (!Number.isInteger(size) || size < 1 || size > 100) throw invalidInput("hitsPerPage must be an integer from 1 through 100");
+    if (!Number.isInteger(size) || size < 1 || size > 100) throw invalidInput("hitsPerPage must be an integer from 1 through 100, got " + show(size));
     let encoded = "?query=" + encodeURIComponent(query);
     if (exact !== false) encoded += "&typoTolerance=false&queryType=prefixNone";
     if (tags.length > 0) encoded += "&tags=" + encodeURIComponent(tags.join(","));
@@ -150,22 +147,58 @@ export function searchRequest(query: string, sort: string | undefined, exact: bo
  * @returns The id.
  */
 export function requireId(value: number, name: string): number {
-    if (!Number.isInteger(value) || value < 1 || value > 1000000000000) throw invalidInput(name + " must be a positive integer item id");
+    if (!Number.isInteger(value) || value < 1 || value > 1000000000000) throw invalidInput(name + " must be a positive integer item id up to 10^12, got " + show(value));
     return value;
 }
 
-function epochSeconds(value: string, name: string, roundUp: boolean): number {
+// Z or a whole-minute offset (the runtime rounds fractional-second offsets),
+// up to nine fractional digits, and an optional [Zone] annotation.
+const INSTANT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-5][0-9]([.,][0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2})(\[[A-Za-z0-9_+\/-]{1,64}\])?$/;
+
+// HN times are whole seconds, so both bounds round up: `>= ceil(after)` and
+// `< ceil(before)` select exactly the items in [after, before).
+function epochSeconds(value: string, name: string): number {
+    const invalid = invalidInput(name + " must be an ISO-8601 instant with Z or a ±HH:MM offset (a plain [Zone] annotation is ignored), such as 2026-10-24T06:50:00Z, got " + show(value));
+    if (typeof value !== "string" || !INSTANT.test(value)) throw invalid;
     let ms = 0;
     try {
         ms = Temporal.Instant.from(value).epochMilliseconds;
     } catch (error) {
-        throw invalidInput(name + " must be an ISO-8601 instant with a time zone, such as 2026-10-24T06:50:00Z");
+        throw invalid;
     }
-    return roundUp ? Math.ceil(ms / 1000) : Math.floor(ms / 1000);
+    // A fraction finer than milliseconds still counts as after the whole second.
+    if (/[.,][0-9]{3}[0-9]*[1-9]/.test(value)) ms++;
+    return Math.ceil(ms / 1000);
+}
+
+// Render a value for an error message.
+function show(value: unknown): string {
+    if (typeof value === "number" && !Number.isFinite(value)) return value.toString();
+    const rendered = JSON.stringify(value);
+    if (rendered === undefined) return "undefined";
+    if (rendered.length <= 200) return rendered;
+    // Do not end on the first half of a surrogate pair.
+    const high = rendered.charCodeAt(199);
+    return rendered.substring(0, high >= 0xd800 && high <= 0xdbff ? 199 : 200) + "…";
 }
 
 function invalidInput(message: string): HackerNewsError {
     return new HackerNewsError("invalid_input", message, 0);
+}
+
+function invalidResponse(message: string): HackerNewsError {
+    return new HackerNewsError("invalid_response", message, 0);
+}
+
+// A body of the wrong shape fails the checked casts with a TypeError; report
+// it with the package's own error code instead.
+function shaped<T>(map: () => T): T {
+    try {
+        return map();
+    } catch (error) {
+        if (error instanceof HackerNewsError) throw error;
+        throw invalidResponse("HN Search API returned an unexpected response: " + error.message);
+    }
 }
 
 interface ApiHit {
@@ -205,6 +238,14 @@ interface ApiItem {
     children?: unknown[] | null;
 }
 
+function decode(body: string): unknown {
+    try {
+        return JSON.parse(body);
+    } catch (error) {
+        throw invalidResponse("HN Search API returned a body that is not JSON");
+    }
+}
+
 function link(id: number): string {
     return "https://news.ycombinator.com/item?id=" + id.toString();
 }
@@ -222,34 +263,36 @@ function hitType(tags: string[]): string {
  * @returns The page.
  */
 export function searchPageFrom(body: string): SearchPage {
-    const parsed = JSON.parse(body) as ApiSearch;
-    const items: Item[] = [];
-    for (const hit of parsed.hits ?? []) {
-        const id = parseInt(hit.objectID ?? "", 10);
-        if (!Number.isInteger(id)) throw new HackerNewsError("invalid_response", "search hit without a numeric objectID", 0);
-        const text = hit.comment_text ?? hit.story_text ?? null;
-        items.push({
-            id: id,
-            type: hitType(hit._tags ?? []),
-            author: hit.author ?? null,
-            createdAt: hit.created_at ?? "",
-            title: hit.title ?? null,
-            url: hit.url ?? null,
-            text: text,
-            points: hit.points ?? null,
-            parentId: hit.parent_id ?? null,
-            storyId: hit.story_id ?? null,
-            storyTitle: hit.story_title ?? hit.title ?? null,
-            link: link(id),
-        });
-    }
-    return {
-        items: items,
-        total: parsed.nbHits ?? items.length,
-        page: parsed.page ?? 0,
-        pageCount: parsed.nbPages ?? 0,
-        exhaustive: parsed.exhaustiveNbHits === true,
-    };
+    return shaped((): SearchPage => {
+        const parsed = decode(body) as ApiSearch;
+        const items: Item[] = [];
+        for (const hit of parsed.hits ?? []) {
+            const id = parseInt(hit.objectID ?? "", 10);
+            if (!Number.isInteger(id)) throw invalidResponse("search hit without a numeric objectID");
+            const text = hit.comment_text ?? hit.story_text ?? null;
+            items.push({
+                id: id,
+                type: hitType(hit._tags ?? []),
+                author: hit.author ?? null,
+                createdAt: hit.created_at ?? "",
+                title: hit.title ?? null,
+                url: hit.url ?? null,
+                text: text,
+                points: hit.points ?? null,
+                parentId: hit.parent_id ?? null,
+                storyId: hit.story_id ?? null,
+                storyTitle: hit.story_title ?? hit.title ?? null,
+                link: link(id),
+            });
+        }
+        return {
+            items: items,
+            total: parsed.nbHits ?? items.length,
+            page: parsed.page ?? 0,
+            pageCount: parsed.nbPages ?? 0,
+            exhaustive: parsed.exhaustiveNbHits === true,
+        };
+    });
 }
 
 /**
@@ -258,30 +301,32 @@ export function searchPageFrom(body: string): SearchPage {
  * @returns The thread, root first.
  */
 export function threadFrom(body: string): Thread {
-    const root = JSON.parse(body) as ApiItem;
-    const items: Item[] = [];
-    const stack: unknown[] = [root];
-    let storyTitle: string | null = root.type === "story" ? root.title ?? null : null;
-    while (stack.length > 0) {
-        const node = stack.pop() as ApiItem;
-        const id = node.id;
-        if (typeof id !== "number") throw new HackerNewsError("invalid_response", "item without a numeric id", 0);
-        items.push({
-            id: id,
-            type: node.type ?? "unknown",
-            author: node.author ?? null,
-            createdAt: node.created_at ?? "",
-            title: node.title ?? null,
-            url: node.url ?? null,
-            text: node.text ?? null,
-            points: node.points ?? null,
-            parentId: node.parent_id ?? null,
-            storyId: node.story_id ?? null,
-            storyTitle: storyTitle,
-            link: link(id),
-        });
-        const children = node.children ?? [];
-        for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]);
-    }
-    return { items: items };
+    return shaped((): Thread => {
+        const root = decode(body) as ApiItem;
+        const items: Item[] = [];
+        const stack: unknown[] = [root];
+        const storyTitle: string | null = root.type === "story" ? root.title ?? null : null;
+        while (stack.length > 0) {
+            const node = stack.pop() as ApiItem;
+            const id = node.id;
+            if (typeof id !== "number") throw invalidResponse("item without a numeric id");
+            items.push({
+                id: id,
+                type: node.type ?? "unknown",
+                author: node.author ?? null,
+                createdAt: node.created_at ?? "",
+                title: node.title ?? null,
+                url: node.url ?? null,
+                text: node.text ?? null,
+                points: node.points ?? null,
+                parentId: node.parent_id ?? null,
+                storyId: node.story_id ?? null,
+                storyTitle: storyTitle,
+                link: link(id),
+            });
+            const children = node.children ?? [];
+            for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]);
+        }
+        return { items: items };
+    });
 }
