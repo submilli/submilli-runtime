@@ -1,28 +1,22 @@
 //! Type surface of `submilli:llm`.
 //!
-//! `call` and `batch` are declared **generic**, and that generic is only sound
-//! because the typechecker intercepts it. With a type argument —
-//! `call<Verdict>(model, prompt)` — the typechecker retargets the call to the
-//! compiler-only `#call`, the same call with two arguments appended that no
-//! program can write: `schema`, the JSON Schema emitted from `T`, and `check`,
-//! a closure that is exactly `value as T`. The host sends the schema to the
-//! provider, parses each response as JSON, and runs the check on the parsed
-//! value; a value the check rejects becomes an `ok: false` entry with
-//! `reason: "invalid-output"` and the cast's message. So the `value` field of
-//! a `Success<T>` holds only what the check returned, which is what lets the
-//! declared return type `Completion<T>` be trusted without a cast around the
-//! call. The declaration and that interception are a matched pair; a generic
-//! declaration without the interception would type a `value` nothing verified.
-//! [`is_checked_call`] is the hook the interception matches on, and
-//! [`typed_symbol`] names what it retargets to.
+//! `call` and `batch` are declared **generic** and **runtime-generic**: like
+//! every generic function, a call passes one entry per type parameter in a
+//! trailing `$types` environment, and for a host function that entry is a
+//! `$TypeWitness` — the type's structural predicate, its name, the JSON
+//! Schema the typechecker emitted for a *written* type argument, and its
+//! TypeInfo id (`codegen::runtime_descriptors::host_environment`). The host
+//! sends the schema to the provider, parses each response as JSON and runs the
+//! predicate on it; a rejected value becomes an `ok: false` entry with
+//! `reason: "invalid-output"`. So the `value` of a `Success<T>` holds only
+//! what the predicate accepted, which is what lets the declared return type
+//! `Completion<T>` be trusted without a cast around the call. The typechecker
+//! gates the type argument ([`is_checked_call`] is its hook) and records the
+//! schema per call site; nothing about the witness is a parameter, so the
+//! written declaration is the whole public API.
 //!
 //! `T` defaults to `string`: an untyped call sends no schema and `value` is the
-//! completion text. Any type argument, `string` included, asks for JSON.
-//!
-//! The `#` names are the compiler's own, as the prelude's `#getField` is: the
-//! lexer has no `#` identifiers, so a program cannot call them, and the docs
-//! do not list them. The public API is `call(model, prompt)` and
-//! `batch(model, prompts)`, nothing more.
+//! completion text. Any written type argument, `string` included, asks for JSON.
 
 use std::collections::BTreeMap;
 
@@ -33,24 +27,13 @@ use crate::{
 
 use super::MODULE_NAME;
 
-/// The export names of the checked reads. Shared with the typechecker's
-/// interception so the declaration and the check that keeps it sound cannot
-/// drift apart.
+/// The export names of the checked reads. Shared with the typechecker's gate
+/// so the declaration and the check that keeps it sound cannot drift apart.
 const LLM_CALL: &str = "call";
 const LLM_BATCH: &str = "batch";
 
-/// The compiler-only forms of [`LLM_CALL`] and [`LLM_BATCH`]: the written
-/// arguments followed by the schema and the check.
-const TYPED_CALL: &str = "#call";
-const TYPED_BATCH: &str = "#batch";
-
 /// The type parameter of [`LLM_CALL`] and [`LLM_BATCH`].
 const CALL_TYPE_PARAM: &str = "T";
-
-/// The parameter of the check closure. The `#` keeps it out of any program's
-/// namespace, and codegen recognizes it to keep a model-authored record key
-/// out of the cast's failure message.
-pub const CHECK_VALUE_PARAM: &str = "#check_value";
 
 /// The type parameter as a type, for the generic return positions.
 fn call_type_var() -> Type {
@@ -59,41 +42,13 @@ fn call_type_var() -> Type {
 
 /// Whether `mangled` is one of this package's checked reads. Matching the
 /// package-export mangled name rather than a receiver name is what makes the
-/// typechecker's rewrite independent of how the symbol was imported —
+/// typechecker's gate independent of how the symbol was imported —
 /// `llm.call`, `models.call` under an aliased namespace import, and a
 /// named-import `call` all carry this name, while a user's own `llm` binding
 /// never can.
 pub fn is_checked_call(mangled: &MangledName) -> bool {
-    typed_symbol(mangled).is_some()
-}
-
-/// The compiler-only function a typed `call` or `batch` lowers to.
-pub fn typed_symbol(mangled: &MangledName) -> Option<MangledName> {
-    if *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_CALL) {
-        Some(crate::mangle::package_symbol(MODULE_NAME, TYPED_CALL))
-    } else if *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH) {
-        Some(crate::mangle::package_symbol(MODULE_NAME, TYPED_BATCH))
-    } else {
-        None
-    }
-}
-
-/// Whether `mangled` is one of the compiler-only typed forms.
-pub fn is_typed_symbol(mangled: &MangledName) -> bool {
-    *mangled == crate::mangle::package_symbol(MODULE_NAME, TYPED_CALL)
-        || *mangled == crate::mangle::package_symbol(MODULE_NAME, TYPED_BATCH)
-}
-
-/// The type of the compiler-supplied check closure: it takes the parsed
-/// response as `unknown` and returns it boxed, after `value as T` verified it.
-pub(crate) fn check_function_type() -> Type {
-    Type::Function {
-        params: vec![Type::Unknown],
-        optional: 0,
-        ret: Box::new(Type::Unknown),
-        predicate: None,
-        has_rest: false,
-    }
+    *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_CALL)
+        || *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
 }
 
 pub fn package_declaration() -> PackageDeclaration {
@@ -119,9 +74,9 @@ pub fn package_declaration() -> PackageDeclaration {
          compile time and sent to the provider, the response is parsed as JSON and \
          checked field by field, and `value` is the checked `Verdict`. A response that \
          is not JSON, or that does not match, is `ok: false` with `reason: \
-         \"invalid-output\"` and a `message` naming the expected type and the field that \
-         failed; nothing is coerced, and no error ever quotes the prompt or the \
-         completion.\n *\n * `T` must be a type the schema can carry: no functions, no \
+         \"invalid-output\"` and a `message` naming the expected type; nothing is \
+         coerced, and no error ever quotes the prompt or the completion.\n *\n * `T` \
+         must be a type the schema can carry: no functions, no \
          `bigint`, no `Uint8Array`, no `unknown`, and no recursive type — each is \
          rejected at compile time, naming the offending field.\n *\n * `ok: false` \
          means the model did not produce a clean completion; branch on `reason`, \
@@ -164,32 +119,10 @@ pub fn package_declaration() -> PackageDeclaration {
          Bounded in count, and each in bytes.\n * @capability llm.call { model: \
          $model, prompt_count: $prompts.length }\n */",
     );
-    insert_generic_fn(
-        &mut defs,
-        TYPED_CALL,
-        vec![CALL_TYPE_PARAM.to_string()],
-        vec![
-            Param::new("model", Type::String),
-            Param::new("prompt", Type::String),
-            Param::new("schema", Type::String),
-            Param::new("check", Type::Unknown),
-        ],
-        completion_type(call_type_var()),
-        "/** Compiler-only: `call<T>` with the JSON Schema for `T` and the `value as T` check appended. */",
-    );
-    insert_generic_fn(
-        &mut defs,
-        TYPED_BATCH,
-        vec![CALL_TYPE_PARAM.to_string()],
-        vec![
-            Param::new("model", Type::String),
-            Param::new("prompts", Type::Array(Box::new(Type::String))),
-            Param::new("schema", Type::String),
-            Param::new("check", Type::Unknown),
-        ],
-        Type::Array(Box::new(completion_type(call_type_var()))),
-        "/** Compiler-only: `batch<T>` with the JSON Schema for `T` and the `value as T` check appended. */",
-    );
+    for name in [LLM_CALL, LLM_BATCH] {
+        defs.runtime_generics
+            .insert(crate::mangle::package_symbol(MODULE_NAME, name));
+    }
     insert_fn(
         &mut defs,
         "models",
@@ -319,7 +252,7 @@ fn insert_failure_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "message",
         Type::String,
-        "/** A fixed classification of the failure, or for `\"invalid-output\"` the expected type and the field that failed. Never the prompt, the completion, or a provider response body. */",
+        "/** A fixed classification of the failure, or for `\"invalid-output\"` the type the response did not match. Never the prompt, the completion, or a provider response body. */",
     );
     insert_property(
         &mut properties,

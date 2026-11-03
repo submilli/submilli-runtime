@@ -1630,11 +1630,9 @@ pub(crate) struct ThrownErrorParts {
     pub message: String,
 }
 
-/// The parts of the `$Error` a thrown exception carries, for a host function
-/// that caught a guest throw from a callback it ran and must decide whether
-/// to absorb it, and for the run's final error report. `None` when the
-/// payload is not an `Error` (a future non-Error throw); a host function then
-/// re-raises with [`rethrow`].
+/// The parts of the `$Error` a thrown exception carries, for the run's final
+/// error report. `None` when the payload is not an `Error` (a future non-Error
+/// throw).
 pub(crate) fn thrown_error_parts(
     mut ctx: impl AsContextMut<Data = StoreData>,
     exn: Rooted<wasmtime::ExnRef>,
@@ -1662,19 +1660,6 @@ pub(crate) fn thrown_error_parts(
         name,
         message,
     })
-}
-
-/// Put `exn` back as the pending exception and return the error that carries
-/// it, for a host function that took a guest throw it must not absorb.
-pub(crate) fn rethrow(
-    mut ctx: impl AsContextMut<Data = StoreData>,
-    exn: Rooted<wasmtime::ExnRef>,
-) -> wasmtime::Error {
-    match ctx.as_context_mut().throw::<()>(exn) {
-        Err(thrown) => wasmtime::Error::new(thrown),
-        // `throw` always returns the pending-exception error.
-        Ok(()) => fatal_host_error("engine did not return its pending-exception error"),
-    }
 }
 
 /// The text of a `$string` value, or `None` for anything else.

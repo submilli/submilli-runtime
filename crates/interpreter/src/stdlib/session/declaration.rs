@@ -1,12 +1,14 @@
 //! Type surface of `submilli:session`.
 //!
-//! `get` is declared generic in `T` but must never reach the ordinary
-//! generic-call lowering: that sets `return_cast`, which codegen emits as a
-//! Wasm representation cast rather than a structural check, so wrong-shaped
-//! stored data would arrive statically typed and never validated. The
-//! typechecker intercepts this symbol by mangled name and rewrites the call
-//! into a checked `Cast` instead — see `infer_generic_call`. The declaration
-//! and that interception are a matched pair; neither is sound alone.
+//! `get` is declared generic in `T` and **runtime-generic**: like every
+//! generic function, a call passes one entry per type parameter in a trailing
+//! `$types` environment, and for a host function that entry is a
+//! `$TypeWitness` carrying the type's structural predicate
+//! (`codegen::runtime_descriptors::host_environment`). The host tests the
+//! stored value against it and throws a catchable `TypeError` on a mismatch,
+//! so wrong-shaped stored data never arrives statically typed. The typechecker
+//! gates what `T` may be (`session_get_gate`, matched by mangled name through
+//! [`is_checked_get`]); the declaration and that gate are a matched pair.
 
 use std::collections::BTreeMap;
 
@@ -18,13 +20,13 @@ use crate::{
 use super::{MAX_LIST_LIMIT, MODULE_NAME};
 
 /// The export name of the checked read. Shared with the typechecker's
-/// interception (`checked_session_get`) so the declaration and the check that
-/// keeps it sound can't drift apart.
+/// gate (`session_get_gate`) so the declaration and the check that keeps it
+/// sound can't drift apart.
 const SESSION_GET: &str = "get";
 
 /// Whether `mangled` is this package's checked read. Matching the
 /// package-export mangled name rather than a receiver name is what makes the
-/// typechecker's rewrite independent of how the symbol was imported —
+/// typechecker's gate independent of how the symbol was imported —
 /// `session.get`, `kv.get` under an aliased namespace import, and a
 /// named-import `get` all carry this name, while a user's own `session`
 /// binding never can.
@@ -60,6 +62,10 @@ pub fn package_declaration() -> PackageDeclaration {
          code units; no normalization, no path semantics.\n * @capability session.read \
          { key: $key }\n */",
     );
+    // `get` reads its `T` as a `$TypeWitness` from the generic `$types`
+    // environment and checks the stored value against it host-side.
+    defs.runtime_generics
+        .insert(crate::mangle::package_symbol(MODULE_NAME, SESSION_GET));
     insert_fn(
         &mut defs,
         "has",

@@ -184,6 +184,79 @@ pub fn environment(
     Ok(())
 }
 
+/// The `$types` environment of a generic host call: one `$TypeWitness` per
+/// type argument, holding the descriptor predicate beside the type's name, the
+/// JSON Schema the call sends (its first type parameter's, and only when the
+/// program wrote the type argument) and the TypeInfo id of its reduced shape
+/// (`-1` when the package table holds no entry for it). Compiled generics read
+/// bare descriptors instead ([`environment`]); the two never mix, since a host
+/// function forwards nothing and the erasure gate keeps an erased `T` out of
+/// host generic calls. The schema belongs to the call site, so witnesses are
+/// built here per call rather than cached per type.
+pub fn host_environment(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    types: &[Type],
+    span: crate::Span,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
+    let opaque_vtable = ctx
+        .symbols
+        .global_idx(&crate::mangle::prelude("opaque_vtable"))
+        .ok_or_else(|| crate::codegen::internal_failure("opaque vtable imported"))?;
+    let shapes = ctx
+        .ta
+        .witness_shapes(span)
+        .ok_or_else(|| crate::codegen::internal_failure("witness shapes recorded"))?;
+    let schema = ctx.ta.witness_schema(span);
+    for (slot, ty) in types.iter().enumerate() {
+        emitter.instruction(Instruction::GlobalGet(opaque_vtable));
+        emit(emitter, ctx, ty)?;
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.closure,
+        )));
+        emit_text(emitter, ctx, &ty.to_string())?;
+        match schema.filter(|_| slot == 0) {
+            Some(schema) => emit_text(emitter, ctx, schema)?,
+            None => {
+                emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
+            }
+        }
+        let shape = shapes.get(slot).ok_or_else(|| {
+            crate::codegen::internal_failure("one witness shape per type argument")
+        })?;
+        let info = ctx
+            .type_info
+            .type_id(shape)
+            .map_or(-1, |id| id.as_u32() as i32);
+        emitter.instruction(Instruction::I32Const(info));
+        emitter.instruction(Instruction::StructNew(intrinsics.type_witness));
+    }
+    emitter.instruction(Instruction::ArrayNewFixed {
+        array_type_index: intrinsics.object_fields,
+        array_size: crate::codegen::wasm_u32(types.len())?,
+    });
+    Ok(())
+}
+
+/// A witness text from the string pool. Analysis interns the name of every
+/// type argument and the schema of every call that recorded witness shapes,
+/// so a miss is a compiler invariant failure, not a slow path.
+fn emit_text(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    text: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let pool_idx = ctx
+        .strings
+        .lookup_text(text)
+        .ok_or_else(|| crate::codegen::internal_failure("witness text interned"))?;
+    crate::codegen::function_emitter::emit_pooled_string(emitter, ctx, pool_idx)
+}
+
 pub fn capture(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,

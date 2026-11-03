@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "07f8d5aa0072fd5589e20a47174ffbaf82488e577fc82d3fd8cfced3bc2e80ff"
+  contentHash: "0ef3b3a2b8b4937d7748ef60e38334d9cd94832d9f794493cb228ef24eaad58d"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -608,7 +608,7 @@ The `ok: false` arm of a `Completion<T>`: why this element is not a clean comple
 | --- | --- |
 | `readonly finishReason?: string` | The provider's own raw stop reason, for diagnosis only. |
 | `readonly inputTokens?: number` | Prompt tokens the provider reported for this element, absent when indeterminate. |
-| `readonly message: string` | A fixed classification of the failure, or for `"invalid-output"` the expected type and the field that failed. |
+| `readonly message: string` | A fixed classification of the failure, or for `"invalid-output"` the type the response did not match. |
 | `readonly ok: false` | `false`: this element is not a clean completion. |
 | `readonly outputTokens?: number` | Completion tokens the provider reported for this element, absent when indeterminate. |
 | `readonly reason: "cancelled" \| "content-filtered" \| "incomplete" \| "invalid-output" \| "provider-unavailable" \| "rate-limited" \| "request-rejected" \| "transport" \| "truncated"` | Why this element is not a clean completion. |

@@ -1,7 +1,8 @@
-//! Backing-struct plumbing shared by the stdlib packages: field constructors,
-//! the vtable-headed `$Object` subtype builder, and the property-getter
-//! registrar. A package describes its backing layout as a field list and its
-//! getter surface as a data table; the mechanism lives here once.
+//! Plumbing shared by the stdlib packages: field constructors, the
+//! vtable-headed `$Object` subtype builder, the property-getter registrar, the
+//! plain-object builder, and the type witness a generic host function reads
+//! its type arguments from. A package describes its backing layout as a field
+//! list and its getter surface as a data table; the mechanism lives here once.
 
 use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
@@ -13,7 +14,9 @@ use crate::runtime::StoreData;
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{fatal_host_error, host_opaque_vtable, register_host_fn};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
+use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
+use crate::type_info::TypeInfoId;
 
 pub(crate) fn string_field(intr: &IntrinsicTypes) -> FieldType {
     ref_field(intr.string.clone().into(), false)
@@ -222,4 +225,100 @@ pub(crate) fn new_object(
         ],
     )?;
     Ok(Val::AnyRef(Some(object.to_anyref())))
+}
+
+/// A type argument of a generic host function, as the call's trailing
+/// `$types` environment carries it: the `$TypeWitness` codegen builds per type
+/// parameter (`codegen::runtime_descriptors::host_environment`). Nothing a
+/// program writes is a witness; only the compiler builds them.
+pub(crate) struct TypeWitness {
+    /// The type's structural predicate, `(value: unknown) => boolean`: the
+    /// descriptor every generic call passes for a type argument.
+    test: Closure,
+    /// The type as the program wrote it, for diagnostics.
+    pub name: String,
+    /// The JSON Schema the typechecker emitted for a written type argument of
+    /// a schema-checked call; `None` for an untyped call.
+    pub schema: Option<String>,
+    /// The id of the type's reduced shape in the package's TypeInfo table,
+    /// when the table holds it. Carried for the host consumers that walk a
+    /// shape rather than test a value (parse-time validation, SUB-363); none
+    /// reads it yet.
+    #[allow(dead_code)]
+    pub info: Option<TypeInfoId>,
+}
+
+impl TypeWitness {
+    /// Whether `value`, a boxed `unknown`, is a `T`: the predicate's answer.
+    /// The predicate runs as guest code and pays its own fuel; this charges
+    /// the host's flat call cost.
+    pub(crate) async fn accepts(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        value: Val,
+    ) -> wasmtime::Result<bool> {
+        crate::runtime::fuel::charge_call(&mut *caller)?;
+        let verdict = self.test.call(caller, &[value]).await?;
+        let boxed =
+            as_struct(caller, &verdict, "type witness verdict").map_err(fatal_host_error)?;
+        match boxed.field(&mut *caller, 1)? {
+            Val::I32(bit) => Ok(bit != 0),
+            other => Err(fatal_host_error(format!(
+                "type witness verdict is not a boxed boolean: {other:?}"
+            ))),
+        }
+    }
+}
+
+/// The witness of type parameter `slot` in `env`, the `$types` argument of a
+/// generic host call. Only the compiler builds environments, so anything but
+/// a well-formed witness is a fatal host error rather than a guest throw.
+pub(crate) fn read_witness(
+    caller: &mut Caller<'_, StoreData>,
+    env: &Val,
+    slot: usize,
+) -> wasmtime::Result<TypeWitness> {
+    decode_witness(caller, env, slot).map_err(fatal_host_error)
+}
+
+fn decode_witness(
+    caller: &mut Caller<'_, StoreData>,
+    env: &Val,
+    slot: usize,
+) -> wasmtime::Result<TypeWitness> {
+    let Val::AnyRef(Some(env)) = env else {
+        return Err(wasmtime::Error::msg(
+            "type witness environment is not an array",
+        ));
+    };
+    let env = env.unwrap_array(&mut *caller)?;
+    let slot = u32::try_from(slot).map_err(|_| wasmtime::Error::msg("type witness slot"))?;
+    let witness = env.get(&mut *caller, slot)?;
+    let witness = as_struct(caller, &witness, "type witness")?;
+    let test = witness.field(&mut *caller, 1)?;
+    let test = crate::runtime::prelude::closure::read(caller, &test, "type witness test")?;
+    let name = witness.field(&mut *caller, 2)?;
+    let name = crate::runtime::host::read_string_arg(caller, &name, "type witness name")?;
+    let schema = match witness.field(&mut *caller, 3)? {
+        Val::AnyRef(None) => None,
+        schema => Some(crate::runtime::host::read_string_arg(
+            caller,
+            &schema,
+            "type witness schema",
+        )?),
+    };
+    let info = match witness.field(&mut *caller, 4)? {
+        Val::I32(id) => u32::try_from(id).ok().map(TypeInfoId),
+        other => {
+            return Err(wasmtime::Error::msg(format!(
+                "type witness info is not an i32: {other:?}"
+            )));
+        }
+    };
+    Ok(TypeWitness {
+        test,
+        name,
+        schema,
+        info,
+    })
 }

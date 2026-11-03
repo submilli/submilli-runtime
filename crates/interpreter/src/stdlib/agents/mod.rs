@@ -32,7 +32,8 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
-    self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
+    self, HostView, backing_struct, install_field_getters, nullable_object_field, read_witness,
+    string_field,
 };
 use crate::stdlib::shared::{
     check_and_approve_call, check_candidate, permitted_candidates, preflight_listing,
@@ -76,16 +77,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
-    // The public `run` takes exactly what a program writes; its compiler-only
-    // form `#run` — which no program can name — takes the JSON Schema for
-    // `T` after them.
+    // `run<T>` is generic: after what a program writes comes the `$types`
+    // environment every generic call passes, holding the `$TypeWitness` for
+    // `T`, whose schema a typed call sends.
+    let types = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteArray(intr.object_fields.clone()),
+    ));
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "run"),
         FuncType::new(
             &engine,
-            [string.clone(), string.clone()],
+            [string.clone(), string.clone(), types],
             // `run` is generic, so its result travels in the erased `T` slot.
             [nullable_object.clone()],
         ),
@@ -95,28 +100,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
-                run(caller, agent, input, None).await
-            })
-        },
-    )?;
-    register_host_value_async(
-        linker,
-        MODULE_NAME,
-        crate::mangle::package_symbol(MODULE_NAME, "#run"),
-        FuncType::new(
-            &engine,
-            [string.clone(), string.clone(), string.clone()],
-            [nullable_object.clone()],
-        ),
-        |caller, params| {
-            Box::pin(async move {
-                let agent =
-                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
-                let input =
-                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
-                let schema =
-                    read_string_arg(&mut *caller, abi_arg(params, 2)?, "agents.run (schema)")?;
-                run(caller, agent, input, Some(schema)).await
+                let witness = read_witness(caller, abi_arg(params, 2)?, 0)?;
+                run(caller, agent, input, witness.schema).await
             })
         },
     )?;

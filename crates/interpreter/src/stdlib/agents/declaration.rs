@@ -1,11 +1,14 @@
 //! Type surface of `submilli:agents`.
 //!
-//! `run` is declared generic and typed the way `llm.call` is: the typechecker
-//! matches it by mangled name ([`is_checked_run`]), fills the trailing `schema`
-//! parameter with the JSON Schema emitted from `T`, and wraps the result in a
-//! structural check against `T`. Without a type argument `T` is `string`, the
-//! agent's final answer as text. See `stdlib/llm/declaration.rs` for why the
-//! generic declaration is sound only together with that interception.
+//! `run` is declared generic and **runtime-generic** the way `llm.call` is:
+//! the host reads the JSON Schema for a written `T` from the `$TypeWitness`
+//! in the call's `$types` environment and sends it with the run. The
+//! typechecker gates the type argument (matched by mangled name through
+//! [`is_checked_run`]) and, unlike `llm.call`, wraps the result in a
+//! structural check against `T`, so a mismatch throws. Without a type
+//! argument `T` is `string`, the agent's final answer as text. See
+//! `stdlib/llm/declaration.rs` for the witness and why the written
+//! declaration is the whole public API.
 
 use std::collections::BTreeMap;
 
@@ -19,17 +22,7 @@ use super::MODULE_NAME;
 const RUN: &str = "run";
 const RUN_TYPE_PARAM: &str = "T";
 
-/// The compiler-only form of [`RUN`]: the written arguments followed by the
-/// JSON Schema for `T`. The `#` keeps it out of every program, as the prelude's
-/// `#getField` is.
-const TYPED_RUN: &str = "#run";
-
-/// The compiler-only function a typed `run` lowers to.
-pub fn typed_symbol(mangled: &crate::MangledName) -> Option<crate::MangledName> {
-    is_checked_run(mangled).then(|| crate::mangle::package_symbol(MODULE_NAME, TYPED_RUN))
-}
-
-/// Whether `mangled` is the typed `run`, so the typechecker's interception
+/// Whether `mangled` is `run`, typed or not, so the typechecker's gate
 /// matches however the symbol was imported.
 pub fn is_checked_run(mangled: &crate::MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, RUN)
@@ -61,18 +54,10 @@ pub fn package_declaration() -> PackageDeclaration {
          may use.\n * @param input The task, as text.\n * @capability agent.run { agent: \
          $agent }\n */",
     );
-    insert_fn(
-        &mut defs,
-        TYPED_RUN,
-        vec![RUN_TYPE_PARAM.to_string()],
-        vec![
-            Param::new("agent", Type::String),
-            Param::new("input", Type::String),
-            Param::new("schema", Type::String),
-        ],
-        Type::TypeVar(RUN_TYPE_PARAM.to_string()),
-        "/** Compiler-only: `run<T>` with the JSON Schema for `T` appended. */",
-    );
+    // `run` reads its `T` as a `$TypeWitness` from the generic `$types`
+    // environment; the JSON Schema for a written `T` travels there.
+    defs.runtime_generics
+        .insert(crate::mangle::package_symbol(MODULE_NAME, RUN));
     insert_fn(
         &mut defs,
         "list",

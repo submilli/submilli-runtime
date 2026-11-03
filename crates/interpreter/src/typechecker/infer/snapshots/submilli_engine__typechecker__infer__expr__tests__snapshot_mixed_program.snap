@@ -21,6 +21,8 @@ TypedAst {
             26,
         ): Number,
     },
+    witness_shapes: {},
+    witness_schemas: {},
     postfix_operand_types: {},
     parameter_inputs: {},
     parameter_initializations: {},

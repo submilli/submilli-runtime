@@ -16,7 +16,7 @@ Decisions (discussion 2026-11-03, Doron):
 
 1. Build `Completion` values and `Model` as real `$ObjectShape` objects with `abi::new_object` (precedent: regex named groups in `runtime/prelude/regex/mod.rs` `build_match_box`). Identity, `Record` views, enumeration, structural casts, TS parity follow from the ordinary shape machinery.
 2. One discriminated-union envelope for typed and untyped calls (API below). Names: `Completion<T> = Success<T> | Failure`. A response that is JSON but not a `T` is `reason: "invalid-output"` (no new reason).
-3. The compiler passes a check closure as a trailing argument, like the schema today, but the closure is only `value as T`. The host parses JSON itself and catches the thrown `TypeError`.
+3. ~~The compiler passes a check closure as a trailing argument, like the schema today, but the closure is only `value as T`. The host parses JSON itself and catches the thrown `TypeError`.~~ Superseded by phase 2 (below): nothing about the check is an argument. The host reads `T` from the call's type witness and runs its predicate.
 
 ## API (what `submilli docs llm` will show)
 
@@ -140,5 +140,55 @@ Fixture stub `FixtureLlm` (`crates/interpreter/tests/fixtures.rs:933-1119`) scri
 ## Out of scope
 
 - SUB-2081: the other 13 data-only host views.
-- A general non-throwing cast expression for programs (the check closure stays internal).
+- A general non-throwing cast expression for programs (the witness's predicate stays internal).
 - `agents.run<T>` keeps its `Cast` wrapper and its throwing semantics.
+
+## Phase 2: type witnesses for generic host functions
+
+Decided 2026-11-03 after the closure-as-argument mechanism (decision 3) and its
+stopgap — compiler-only `#call`/`#batch`/`#run` host functions a typed call was
+retargeted to — were both rejected: the channel between the compiler and the
+host must not be a parameter, hidden or not, and not a second declaration told
+apart by a `#`. The declaration `call<T>(model, prompt): Completion<T>` is the
+whole public API.
+
+The mechanism extends the calling convention user generics already have. A
+generic function listed in `PackageDeclaration.runtime_generics` takes one
+trailing `$types: (ref $object_fields)` environment with one entry per type
+parameter; for a host callee each entry is a `$TypeWitness` intrinsic struct:
+
+```
+$TypeWitness = struct { vtable: (ref $VTable), test: (ref $Closure), name: (ref $string),
+                        schema: (ref null $string), info: i32 }
+```
+
+- `test`: the type's descriptor closure, the predicate `unknown → boolean`
+  every generic call already passes (`runtime_descriptors`).
+- `name`: the type as written, for diagnostics ("the model's response does
+  not match `Verdict`"). Host-reported mismatches carry no field path.
+- `schema`: the JSON Schema for a *written* type argument of a schema-checked
+  call, `null` otherwise. Recorded per call site (`TypedAst::witness_schemas`,
+  span-keyed), never per type: `call(m, p)` binds `T` to `string` and sends
+  none, `call<string>(m, p)` asks for a JSON string.
+- `info`: the TypeInfo id of the type's reduced shape (`TypedAst::witness_shapes`
+  interned into the package table), `-1` when there is none. No consumer yet.
+
+`llm.call`/`llm.batch`, `agents.run` and `session.get` are runtime-generic;
+`import_value_symbol` appends the environment parameter to the import and
+`emit_generic_call` builds witnesses (`runtime_descriptors::host_environment`)
+for a callee in `symbols.host_generic_functions`. The hosts read the witness
+with `abi::read_witness`: llm sends `schema`, parses each response and runs
+`accepts`, a rejection being an `invalid-output` entry; agents sends `schema`
+and keeps its `Cast` wrapper; session runs `accepts` on the stored value and
+throws a catchable `TypeError` naming the key and the type (the untyped
+`unknown` witness accepts every value). The typechecker keeps the gates
+(`schema_checked_call_schema`, `session_get_gate`) and records the shapes and
+schema; it appends nothing and retargets nothing, so the authority analysis
+sees the declared callee and its `@capability` tag.
+
+Removed with this phase: the `#` functions and `mangle::is_compiler_only`, the
+`#check_value` closure and `redact_record_keys`, the cast-side session-key
+capture, `host::rethrow`. User generics keep bare descriptor closures;
+unifying them onto witnesses (type-keyed schemas, pooled names) so a user
+generic can forward `T` into `llm.call<T>` is a follow-up, as is
+`http.Response#json<T>` as a real generic host method (SUB-363).

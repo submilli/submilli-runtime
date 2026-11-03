@@ -347,6 +347,29 @@ fn only_an_enabling_set_discovers_and_catalogs_the_packages() {
     assert!(capabilities::find_for(agents_only, "skill.load").is_none());
 }
 
+/// An untyped `run` is text whatever the binding expects: `T` is the declared
+/// default, never pinned by an annotation, so a program that wants a `Verdict`
+/// writes `run<Verdict>` and gets the schema and the check. Otherwise the
+/// agent's text would arrive typed `Verdict` and trap on first use.
+#[test]
+fn an_untyped_run_is_text_even_when_the_binding_expects_a_shape() {
+    let errors = compile_errors(
+        "import agents from \"submilli:agents\";\n\
+         interface Verdict { label: string; }\n\
+         function main(): string { const v: Verdict = agents.run(\"r\", \"go\"); return v.label; }\n",
+        harness_stdlib(),
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("`Verdict`") && e.contains("`string`")),
+        "{errors:?}"
+    );
+}
+
+/// `run` takes the agent and the input: nothing else. The JSON Schema a typed
+/// call sends travels in the call's type witness, never as an argument, so a
+/// written one hits the ordinary arity error.
 #[test]
 fn a_written_schema_argument_is_refused() {
     let errors = compile_errors(
@@ -357,7 +380,7 @@ fn a_written_schema_argument_is_refused() {
     assert!(
         errors
             .iter()
-            .any(|e| e.contains("takes the agent and the input")),
+            .any(|e| e.contains("`agents.run` expects 2 argument(s), got 3")),
         "{errors:?}"
     );
 }

@@ -246,15 +246,7 @@ fn emit_expr_value(
             type_predicate: _,
         } => {
             crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
-            emit_generic_call(
-                emitter,
-                ctx,
-                &expr.ty,
-                mangled,
-                type_args,
-                args,
-                return_cast,
-            )?;
+            emit_generic_call(emitter, ctx, expr, mangled, type_args, args, return_cast)?;
         }
         TypedExprKind::IntrinsicCall { kind, args } => {
             emit_intrinsic_call(emitter, ctx, *kind, args, &expr.ty)?;
@@ -1073,12 +1065,14 @@ fn emit_conditional_operand(
 fn emit_generic_call(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
-    result_ty: &Type,
+    expr: &crate::TypedExpr,
     mangled: &crate::MangledName,
     type_args: &[Type],
     args: &[crate::GenericArgument],
     return_cast: &Option<Type>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let result_ty = &expr.ty;
+    let span = expr.span;
     // Direct call to a user-declared top-level generic
     // function. Args whose unsubstituted slot is a bare
     // `Type::TypeVar` (`is_generic == true`) box at the
@@ -1128,7 +1122,9 @@ fn emit_generic_call(
     if crate::codegen::field_guards::guarded_constructor(ctx, mangled, result_ty)? {
         crate::codegen::field_guards::constructor_argument(emitter, ctx, result_ty)?;
     }
-    if ctx.symbols.runtime_generic_functions.contains(mangled) {
+    if ctx.symbols.witness_functions.contains(mangled) {
+        crate::codegen::runtime_descriptors::host_environment(emitter, ctx, type_args, span)?;
+    } else if ctx.symbols.runtime_generic_functions.contains(mangled) {
         crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
     }
     emitter.instruction(Instruction::Call(wasm_idx));

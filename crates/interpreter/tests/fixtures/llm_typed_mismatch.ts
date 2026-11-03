@@ -7,9 +7,9 @@
 // corruption forward silently.
 //
 // R13 binds the failure too, and this is the sharper half: a type error must
-// not become a disclosure channel. The message names the expected type and the
-// runtime kind it found, and never echoes the prompt or the completion — both
-// of which a model call carries in quantity.
+// not become a disclosure channel. The message names the expected type, and
+// never echoes the prompt or the completion — both of which a model call
+// carries in quantity.
 import llm from "submilli:llm";
 
 interface Severity {
@@ -27,8 +27,7 @@ function main(): void {
   // It is reported as invalid output — the reason a program branches on to
   // retry, fall back, or use the untyped form instead.
   assert(s.reason === "invalid-output", "a non-conforming response is invalid output");
-  assert(s.message.indexOf("type mismatch") >= 0, "the message identifies itself as a type mismatch");
-  assert(s.message.indexOf("Severity") >= 0, "and names the expected type");
+  assert(s.message.indexOf("does not match `Severity`") >= 0, "the message names the expected type");
 
   // R13: the prompt never reaches the message.
   assert(s.message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "the message never echoes the prompt");

@@ -102,25 +102,23 @@ pub fn emit_cast(
     };
 
     let mark = emitter.single_evaluation_mark();
-    let key = capture_session_key(emitter, ctx, value)?;
     emit_expr(emitter, ctx, value)?;
     emitter.end_single_evaluations(mark)?;
     let enclosing = map_cast_span(emitter, cast_span);
     cast::emit_box(emitter, ctx, &source_ty)?;
-    emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape, key)?;
+    emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape)?;
     restore_span(emitter, enclosing);
     Ok(())
 }
 
 /// The runtime half of `value as target_ty` for the boxed value on the stack:
 /// test it against `check_shape` and narrow it, or throw the cast's
-/// `TypeError`. `session_key` names the `session.get` key in that error.
+/// `TypeError`.
 pub(crate) fn emit_shape_cast_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     target_ty: &Type,
     check_shape: &Type,
-    session_key: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let object_idx = ctx
         .symbols
@@ -134,7 +132,6 @@ pub(crate) fn emit_shape_cast_on_stack(
     let scratch = emitter.add_anonymous_local(scratch_ty)?;
     emitter.instruction(Instruction::LocalSet(scratch));
     let previous_diagnostic = diagnostic::begin(emitter, ctx);
-    diagnostic::session_key(emitter, session_key);
 
     emit_structural_test(emitter, ctx, scratch, check_shape, target_ty)?;
 
@@ -161,41 +158,6 @@ fn restore_span(emitter: &mut FunctionEmitter, enclosing: Option<crate::Span>) {
     if let Some(span) = enclosing {
         emitter.record_span(span);
     }
-}
-
-fn capture_session_key(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    value: ExprId,
-) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
-    let crate::TypedExprKind::GenericCall { mangled, args, .. } = &ctx
-        .ta
-        .try_expr(value)
-        .map_err(crate::codegen::arena_failure)?
-        .kind
-    else {
-        return Ok(None);
-    };
-    if !crate::stdlib::session::declaration::is_checked_get(mangled) {
-        return Ok(None);
-    }
-    let key = match args.first() {
-        Some(value) => value,
-        None => return Ok(None),
-    }
-    .expr;
-    emit_expr(emitter, ctx, key)?;
-    let slot = emitter.add_anonymous_local(
-        ctx.symbols.value_type(
-            &ctx.ta
-                .try_expr(key)
-                .map_err(crate::codegen::arena_failure)?
-                .ty,
-        )?,
-    )?;
-    emitter.instruction(Instruction::LocalSet(slot));
-    emitter.record_single_evaluation(key, slot)?;
-    Ok(Some(slot))
 }
 
 /// `value!`. Converts a runtime `null` into a catchable `TypeError` instead

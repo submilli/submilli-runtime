@@ -44,6 +44,10 @@ pub struct SymbolTable {
     host_parameter_defaults: BTreeMap<u32, Vec<Option<crate::DefaultValue>>>,
     pub class_type_parameters: BTreeMap<MangledName, Vec<String>>,
     pub runtime_generic_functions: BTreeSet<MangledName>,
+    /// The runtime-generic functions whose `$types` environment holds
+    /// `$TypeWitness` structs rather than bare descriptor closures: the host
+    /// ones. A subset of `runtime_generic_functions`.
+    pub witness_functions: BTreeSet<MangledName>,
     pub field_guard_targets: BTreeMap<u32, Type>,
     pub type_descriptor_functions: BTreeMap<Type, u32>,
     pub type_descriptor_globals: BTreeMap<Type, u32>,

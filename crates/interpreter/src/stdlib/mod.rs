@@ -99,21 +99,20 @@ pub(crate) enum CheckedResult {
     /// The host returns the parsed value and the typechecker wraps the call in
     /// a checked `Cast` to `T`, which throws on a mismatch (`agents.run`).
     Cast,
-    /// The host returns an envelope whose `value` is a `T` only if the check
-    /// passed: the typechecker appends a `value as T` closure to the call, the
-    /// host runs it per response and turns its `TypeError` into a failure
-    /// entry (`llm.call`, `llm.batch`). The call's declared return type is
-    /// trusted as is.
+    /// The host returns an envelope whose `value` is a `T` only if the
+    /// witness's predicate accepted it; a rejected response is a failure entry
+    /// (`llm.call`, `llm.batch`). The call's declared return type is trusted
+    /// as is.
     Envelope,
 }
 
-/// A host call the typechecker types from its type argument: a typed call is
-/// retargeted to a compiler-only function (`#call` for `call`) with the JSON
-/// Schema for `T` appended, and its result is verified against `T` the way
-/// [`CheckedResult`] says. The written declaration is the whole public API;
-/// the schema and the check are never parameters a program can see or pass.
-/// What differs between such calls is what a bare call returns and how
-/// diagnostics name it.
+/// A host call the typechecker types from its type argument: the call's
+/// `$TypeWitness` environment carries the JSON Schema emitted for a written
+/// `T` (`TypedAst::witness_schemas`), and its result is verified against `T`
+/// the way [`CheckedResult`] says. The written declaration is the whole public
+/// API; the witness is part of how a generic function is called, never a
+/// parameter a program can see or pass. What differs between such calls is
+/// what a bare call returns and how diagnostics name it.
 pub(crate) struct SchemaCheckedCall {
     /// The call as diagnostics name it, e.g. `llm.call`.
     pub callee: &'static str,
@@ -128,14 +127,12 @@ pub(crate) struct SchemaCheckedCall {
     pub untyped_hint: &'static str,
     /// Ends the "has no JSON Schema" diagnostic.
     pub untyped_hint_for_no_schema: &'static str,
-    /// The compiler-only function a typed call lowers to.
-    pub typed_symbol: MangledName,
     pub result: CheckedResult,
 }
 
 /// The schema-checked call `mangled` names, if it is one.
 pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaCheckedCall> {
-    if let Some(typed_symbol) = llm::declaration::typed_symbol(mangled) {
+    if llm::declaration::is_checked_call(mangled) {
         return Some(SchemaCheckedCall {
             callee: "llm.call",
             example: "llm.call<Severity>(model, prompt)",
@@ -143,11 +140,10 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             answerer: "the model",
             untyped_hint: "read the completion text from `value` yourself",
             untyped_hint_for_no_schema: "parse the completion text in `value` yourself",
-            typed_symbol,
             result: CheckedResult::Envelope,
         });
     }
-    if let Some(typed_symbol) = agents::declaration::typed_symbol(mangled) {
+    if agents::declaration::is_checked_run(mangled) {
         return Some(SchemaCheckedCall {
             callee: "agents.run",
             example: "agents.run<Report>(agent, input)",
@@ -155,7 +151,6 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             answerer: "the agent",
             untyped_hint: "read the returned text yourself",
             untyped_hint_for_no_schema: "parse the returned text yourself",
-            typed_symbol,
             result: CheckedResult::Cast,
         });
     }
@@ -331,6 +326,42 @@ mod optional_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every runtime-generic host function is one the typechecker records
+    /// witnesses for: codegen builds a `$TypeWitness` environment for exactly
+    /// the host functions listed in `runtime_generics`, and the typechecker
+    /// records the shapes (and interns the witness texts) for exactly the
+    /// checked calls it knows. A host generic the typechecker did not learn
+    /// would reach codegen with no recorded shapes.
+    #[test]
+    fn every_runtime_generic_host_function_is_a_checked_call() {
+        let all = Stdlib::core()
+            .with(OptionalPackage::Agents)
+            .with(OptionalPackage::Skills);
+        let mut seen = Vec::new();
+        for defs in all.package_declarations() {
+            for mangled in &defs.runtime_generics {
+                assert!(
+                    session::declaration::is_checked_get(mangled)
+                        || schema_checked_call(mangled).is_some(),
+                    "{} is runtime-generic but the typechecker records no witness for it",
+                    mangled.as_str()
+                );
+                seen.push(mangled.as_str().to_string());
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                "submilli:agents#run",
+                "submilli:llm#batch",
+                "submilli:llm#call",
+                "submilli:session#get",
+            ],
+            "the host functions that read type witnesses"
+        );
+    }
 
     /// Every `Direct` interface with properties is a host-backed value whose
     /// getters and `JSON.stringify` both read its view, so each needs one

@@ -2413,7 +2413,7 @@ impl Inferer<'_> {
         generics: Vec<String>,
         params: Vec<Param>,
         ret: Type,
-        mut mangled: crate::MangledName,
+        mangled: crate::MangledName,
         predicate: Option<crate::TypePredicate>,
         type_args: Option<Vec<crate::TypeAnnotation>>,
         args: Vec<ExprId>,
@@ -2423,16 +2423,20 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
-        // `session.get<T>` is lowered as a runtime-checked cast rather than an
-        // ordinary generic call; the two sites below are the two halves of that
-        // one decision, so it is read once here.
+        // `session.get<T>` and the schema-checked calls (`llm.call<T>`,
+        // `llm.batch<T>`, `agents.run<T>`) are generic host functions: the host
+        // reads `T` from the call's `$TypeWitness` environment and checks its
+        // result against it, so the call lowers as any generic call does. The
+        // typechecker's part is to gate what `T` may be — a type the runtime
+        // can test, and for a schema-checked call one a JSON Schema can carry
+        // — and to record what the witness carries beyond the predicate: the
+        // reduced shape, and the schema a typed call sends. Both are read once
+        // here and consulted below where a bare call binds its default `T`,
+        // where the gates run, where the witness is recorded, and where the
+        // result's cast is decided. They differ in what a bare call means: an
+        // unchecked `unknown` for `session.get`, the text of a
+        // `Completion<string>` for `llm.call`.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        // Schema-checked calls (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`)
-        // lower the same way and for the same reason. They differ from
-        // `session.get` only in what a bare call means — a typed default such as
-        // `string` for the text of an `llm.call` rather than an unchecked
-        // `unknown` — and in carrying a compile-time schema (and, for an
-        // envelope call, a check closure) into the trailing arguments.
         let schema_checked = crate::stdlib::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
@@ -2457,7 +2461,16 @@ impl Inferer<'_> {
             }
         }
 
-        if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
+        // An untyped schema-checked call returns its declared default, text.
+        // Its `T` is never inferred: not from an argument (it appears only in
+        // the return type) and not from the binding's annotation, which would
+        // make `const v: Verdict = agents.run(a, i)` an unchecked call wearing
+        // `Verdict`. The program writes `run<Verdict>` and gets the schema and
+        // the check, or gets the text.
+        let result_is_declared = schema_checked.is_some() && !type_args_written;
+        if !result_is_declared
+            && let Some(want) = expected.filter(|want| pins_type_parameters(want))
+        {
             self.bind_from_expected_result(&mut sub, &ret, want);
         }
 
@@ -2585,59 +2598,52 @@ impl Inferer<'_> {
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
-        // A typed `llm.call<T>` is rewritten before the argument list is frozen:
-        // the call is retargeted to the compiler-only `#call`, with the schema
-        // emitted from `T` — and, for an envelope call, the `value as T` check —
-        // appended after the written arguments. Those two are never parameters
-        // of the declared `call`, so a program that writes a third argument
-        // gets the ordinary arity error. The rewrite can also fail (an
-        // unschemable or unverifiable `T`), in which case the whole call is
-        // already an error and no node is built. The checked type is the type
-        // argument itself: `agents.run<T>` returns it, `llm.call<T>` returns an
-        // envelope holding it.
-        if let Some(checked) = &schema_checked {
-            // A schema-checked call declares exactly one type parameter: the
-            // checked `T`. It is bound by now, by the program or by the untyped
-            // default above.
+        // The gates of a checked host call. A schema-checked call declares
+        // exactly one type parameter, the checked `T`, bound by now by the
+        // program or by the untyped default above; a typed call sends the JSON
+        // Schema emitted from it, which rides in the call's witness and never
+        // in its argument list, so a program that writes a third argument gets
+        // the ordinary arity error. A gate can fail (an unschemable or
+        // unverifiable `T`), in which case the whole call is already an error
+        // and no node is built. The checked type is the type argument itself:
+        // `agents.run<T>` returns it, `llm.call<T>` returns an envelope holding
+        // it, `session.get<T>` returns it or `undefined`.
+        let checked_ty = if checked_get || schema_checked.is_some() {
             let Some(type_param) = generics.first() else {
                 return Err(super::inference_failure(
-                    "a schema-checked call declares its type parameter",
+                    "a checked host call declares its type parameter",
                 )
                 .with_span(span));
             };
-            let checked_ty = self.instantiate(&sub, &Type::TypeVar(type_param.clone()), span)?;
-            match self.schema_checked_call_schema(checked, &checked_ty, type_args_written, span) {
-                Ok(Some(schema)) => {
-                    let schema = self
-                        .typed_ast
-                        .try_push_expr(crate::TypedExpr {
-                            kind: TypedExprKind::String(schema),
-                            span,
-                            ty: Type::String,
-                        })
-                        .map_err(crate::typechecker::arena_failure)?;
-                    typed_args.push(schema);
-                    if let crate::stdlib::CheckedResult::Envelope = checked.result {
-                        typed_args.push(self.envelope_check_closure(&checked_ty, span)?);
-                    }
-                    mangled = checked.typed_symbol.clone();
-                }
-                Ok(None) => {}
+            Some(self.instantiate(&sub, &Type::TypeVar(type_param.clone()), span)?)
+        } else {
+            None
+        };
+        let mut witness_schema = None;
+        if let Some(checked) = &schema_checked
+            && let Some(checked_ty) = &checked_ty
+        {
+            match self.schema_checked_call_schema(checked, checked_ty, type_args_written, span) {
+                Ok(schema) => witness_schema = schema,
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
         }
+        if checked_get
+            && let Some(checked_ty) = &checked_ty
+            && self
+                .session_get_gate(checked_ty, type_args_written, span)
+                .is_err()
+        {
+            return Ok((TypedExprKind::Null, Type::Error));
+        }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
 
-        // The appended schema and check have no declared parameter here; they
-        // are concrete, and the compiler-only target declares their types.
         let generic_args: Vec<crate::GenericArgument> = typed_args
             .into_iter()
-            .enumerate()
-            .map(|(i, expr)| crate::GenericArgument {
+            .zip(params.iter())
+            .map(|(expr, p)| crate::GenericArgument {
                 expr,
-                is_generic: params
-                    .get(i)
-                    .is_some_and(|p| matches!(p.ty, Type::TypeVar(_))),
+                is_generic: matches!(p.ty, Type::TypeVar(_)),
             })
             .collect();
         let return_cast = if return_erases_to_object_slot(&ret) {
@@ -2652,13 +2658,6 @@ impl Inferer<'_> {
             })),
             None => None,
         };
-        // A checked read must not keep `return_cast`: it is a representation
-        // cast that tests nothing, and on a stored or missing `null` its
-        // `ref.cast` traps uncatchably before any structural check could run.
-        // The call node is left producing `unknown` and the checked `Cast`
-        // wrapped around it does the verifying. Intercepting here rather than
-        // at a callsite is what covers every import form, since all four
-        // callers thread the package-export mangled name through unchanged.
         let runtime_args: Vec<_> = generics
             .iter()
             .map(|name| self.instantiate(&sub, &Type::TypeVar(name.clone()), span))
@@ -2666,25 +2665,46 @@ impl Inferer<'_> {
         for arg in &runtime_args {
             self.record_runtime_type_test(arg)?;
         }
+        // What the witnesses of a checked host call carry beyond the
+        // predicate: the reduced shape of each type argument (its TypeInfo id)
+        // and, for a typed schema-checked call, the schema. Keyed by the call
+        // site, because the schema is the call's and not the type's:
+        // `call(m, p)` binds `T` to `string` and sends none, while
+        // `call<string>(m, p)` asks for a JSON string. Recording here rather
+        // than at a callsite is what covers every import form, since all four
+        // callers thread the package-export mangled name through unchanged.
+        if checked_get || schema_checked.is_some() {
+            let shapes = runtime_args
+                .iter()
+                .map(|ty| self.reduce_interfaces_to_shapes(ty))
+                .collect();
+            self.typed_ast.record_witness_shapes(span, shapes);
+            if let Some(schema) = witness_schema {
+                self.typed_ast.record_witness_schema(span, schema);
+            }
+        }
+        // A schema-checked call must not keep `return_cast`, a representation
+        // cast that tests nothing: a cast-kind call (`agents.run<T>`) is
+        // verified by the `Cast` wrapped around it below, and on a JSON scalar
+        // a `ref.cast` ahead of that check would trap uncatchably; an envelope
+        // call (`llm.call<T>`) returns the envelope its declaration types, the
+        // host having stored in `value` only what the witness accepted. A
+        // checked read keeps it: its `T | undefined` is the slot the host
+        // returns into, and the host throws before a mismatch reaches it.
         let call = TypedExprKind::GenericCall {
             mangled,
             type_args: runtime_args,
             args: generic_args,
-            return_cast: if checked_get || schema_checked.is_some() {
+            return_cast: if schema_checked.is_some() {
                 None
             } else {
                 return_cast
             },
             type_predicate,
         };
-        if checked_get {
-            return self.checked_session_get(call, &result_ty, type_args_written, span);
-        }
-        // An untyped schema-checked call emitted no schema and needs no check: it
-        // returns the default the declaration already typed. An envelope call
-        // needs none either: its check rides in the argument list, and the host
-        // stores only what that check returned. A typed cast-kind call gets
-        // its cast.
+        // An untyped schema-checked call sent no schema and needs no check: it
+        // returns the default the declaration already typed. A typed cast-kind
+        // call gets its cast.
         let result = schema_checked.as_ref().map(|checked| checked.result);
         if let Some(crate::stdlib::CheckedResult::Cast) = result
             && type_args_written

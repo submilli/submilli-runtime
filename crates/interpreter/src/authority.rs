@@ -2585,6 +2585,33 @@ export function unchecked(): void { get("https://example.com"); }
         assert!(effect.witness[1].target.ends_with("#second"));
     }
 
+    /// A typed `llm.call<T>` is the same callee as an untyped one — its type
+    /// argument travels in the call's witness, not in a second function — so
+    /// both record the `llm.call` effect the declaration is tagged with.
+    #[test]
+    fn typed_and_untyped_llm_calls_record_the_same_capability_effect() {
+        let map = compile(&[(
+            "lib",
+            r#"
+                import llm from "submilli:llm";
+                interface Verdict { label: string; }
+                export function typed(): boolean { return llm.call<Verdict>("m", "p").ok; }
+                export function untyped(): boolean { return llm.call("m", "p").ok; }
+            "#,
+        )]);
+        for name in ["#typed", "#untyped"] {
+            let route = route(&map, name);
+            assert!(
+                route
+                    .effects
+                    .iter()
+                    .any(|effect| effect.effect.capability.as_deref() == Some("llm.call")),
+                "{name} lost its llm.call effect: {:#?}",
+                route.effects
+            );
+        }
+    }
+
     #[test]
     fn root_reexport_is_public_but_unreachable_private_helper_is_not_a_route() {
         let map = compile(&[

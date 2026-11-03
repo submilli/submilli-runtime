@@ -164,13 +164,7 @@ impl<'a> NamespaceMembers<'a> {
         }
     }
 
-    /// A package value by the name a program wrote, so a compiler-only value
-    /// (`#call`, which the typed `llm.call<T>` lowers to) is never one: the
-    /// lexer has no `#` identifiers, but `ns["#call"]` spells the same member.
     pub(in crate::typechecker) fn value(&self, name: &str) -> Option<&ValueSymbol> {
-        if crate::mangle::is_compiler_only(name) {
-            return None;
-        }
         match self {
             Self::Package(package) => package.values.get(name),
             Self::Module { values, .. } => values.get(name),
@@ -190,13 +184,8 @@ impl<'a> NamespaceMembers<'a> {
             Self::Module { values, .. } => values,
         };
         let mut help = self.exports_help();
-        let closest = crate::did_you_mean::closest_match(
-            missing,
-            values
-                .keys()
-                .map(String::as_str)
-                .filter(|name| !crate::mangle::is_compiler_only(name)),
-        );
+        let closest =
+            crate::did_you_mean::closest_match(missing, values.keys().map(String::as_str));
         if let Some(name) = closest {
             help.push(format!("did you mean `{name}`?"));
         }
@@ -206,7 +195,6 @@ impl<'a> NamespaceMembers<'a> {
         };
         for (name, value) in values
             .iter()
-            .filter(|(name, _)| !crate::mangle::is_compiler_only(name))
             .take(6)
             .chain(closest.and_then(|name| values.get_key_value(name)))
         {

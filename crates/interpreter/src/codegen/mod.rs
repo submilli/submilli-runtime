@@ -213,6 +213,11 @@ fn import_value_symbol(
                 symbols
                     .runtime_generic_functions
                     .insert(value.mangled_name.clone());
+                // A host function reads its type arguments as witnesses; a
+                // compiled one reads bare descriptors (`runtime_descriptors`).
+                if is_host_package(&defs.package_name) {
+                    symbols.witness_functions.insert(value.mangled_name.clone());
+                }
                 param_types.push(runtime_descriptors::environment_type(symbols)?);
             }
             if is_host_package(&defs.package_name) {
@@ -911,10 +916,14 @@ fn codegen_inner(
     let dependency_shapes = dependency_usage.dependency_shapes(dependencies);
     let user_emitted_types: Vec<Type> =
         user_subtypes::collect_object_shapes(dependency_shapes.iter().copied(), &all_shapes);
+    // Witness shapes are interned so a host can look a type argument up by
+    // its TypeInfo id; they do not join the emitted subtypes.
+    let mut type_info_types = user_emitted_types.clone();
+    type_info_types.extend(ta.witness_shapes.values().flatten().cloned());
     let (type_info, type_info_index) = crate::TypeInfoTable::collect_indexed(
         ta.package_name.clone(),
         &all_shapes,
-        &user_emitted_types,
+        &type_info_types,
     );
     let needs_host_object_to_json =
         user_subtypes::needs_host_object_to_json_adapter(&user_emitted_types);
@@ -1041,6 +1050,7 @@ fn codegen_inner(
         (crate::runtime::prelude::MODULE_NAME, "array_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "closure_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "object_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "opaque_vtable"),
     ] {
         let mangled = crate::mangle::prelude(name);
         import_section.import(
@@ -2539,6 +2549,67 @@ function main(): string {
         );
     }
 
+    /// A generic host call passes one `$TypeWitness` per type parameter, and
+    /// the witness's `info` is the TypeInfo id of the type argument's reduced
+    /// shape in the package's table, so a host consumer can walk the shape it
+    /// was called at.
+    #[test]
+    fn host_generic_call_witnesses_carry_the_type_info_id_of_the_reduced_shape() {
+        let source = r#"
+import llm from "submilli:llm";
+interface Severity { level: string; score: number; }
+function main(): boolean { return llm.call<Severity>("m", "p").ok; }
+"#;
+        let compiled =
+            crate::compile::compile_script(source, "script.subm", crate::FileId(0), &[], &[])
+                .expect("script should compile");
+        let shape = Type::Object {
+            index: None,
+            fields: std::collections::BTreeMap::from([
+                ("level".to_string(), ObjectField::required(Type::String)),
+                ("score".to_string(), ObjectField::required(Type::Number)),
+            ]),
+        };
+        let id = compiled
+            .type_info
+            .object_type_id(&shape)
+            .expect("the reduced shape of `Severity` is interned");
+        assert_eq!(
+            witness_infos(&compiled.wasm),
+            vec![i32::try_from(id.as_u32()).expect("id fits")],
+            "one witness, carrying the id of the reduced shape",
+        );
+    }
+
+    /// The `info` field of every `$TypeWitness` built in `bytes`, in emission
+    /// order: the constant pushed right before each `struct.new $TypeWitness`.
+    fn witness_infos(bytes: &[u8]) -> Vec<i32> {
+        let type_witness =
+            super::intrinsics::declare_intrinsic_types(&mut wasm_encoder::TypeSection::new())
+                .type_witness;
+        let mut infos = Vec::new();
+        for payload in Parser::new(0).parse_all(bytes) {
+            if let Payload::CodeSectionEntry(body) = payload.expect("payload") {
+                let mut reader = body
+                    .get_operators_reader()
+                    .expect("body operators readable");
+                let mut last_const = None;
+                while !reader.eof() {
+                    match reader.read().expect("operator") {
+                        wasmparser::Operator::I32Const { value } => last_const = Some(value),
+                        wasmparser::Operator::StructNew { struct_type_index }
+                            if struct_type_index == type_witness =>
+                        {
+                            infos.push(last_const.expect("a witness ends with its info"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        infos
+    }
+
     fn build_symbol_table(source: &str) -> SymbolTable {
         let _ta = type_check(source);
         let prelude_defs = prelude::prelude_package_declaration();
@@ -2552,6 +2623,7 @@ function main(): string {
             vtable: 1,
             object: 2,
             undefined: 51,
+            type_witness: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -6414,6 +6486,7 @@ function main(): void {
             vtable: 1,
             object: 2,
             undefined: 51,
+            type_witness: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

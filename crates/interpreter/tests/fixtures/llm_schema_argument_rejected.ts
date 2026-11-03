@@ -1,12 +1,13 @@
 // `call` takes a model and a prompt, `batch` a model and prompts: nothing
-// else. The JSON Schema a typed call sends and the check it runs are the
-// compiler's own, passed to a host function no program can name, so a program
-// that writes a third argument hits the ordinary arity error — it is not
-// surface, and there is no slot for it to land in.
+// else. The JSON Schema a typed call sends and the check it runs travel in the
+// call's type witness — part of how a generic function is called, built by the
+// compiler from `T` — so a program that writes a third argument hits the
+// ordinary arity error: it is not surface, and there is no slot for it to land
+// in.
 //
 // This is a soundness boundary, not a style rule. The host decides a call is
-// typed by which function the compiler called, and trusts the check to be the
-// compiler's `value as T`; a hand-written schema or check would let raw parsed
+// typed by the witness the compiler built, and trusts its predicate to be the
+// structural test of `T`; a hand-written schema or check would let raw parsed
 // JSON reach the guest wearing the declared type, and would hand
 // guest-written bytes to the provider as the schema for the request.
 // expect-error: `llm.call` expects 2 argument(s), got 3
