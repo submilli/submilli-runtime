@@ -7,14 +7,13 @@
 //
 // Here the provider ignores the schema completely and answers in prose. The
 // typed path is the only thing standing between that prose and a value the
-// program would read as a `Severity`, so it must throw.
+// program would read as a `Severity`, so it must refuse.
 //
 // Prose fails *earlier* than a wrong-shaped object does: it is not JSON at all,
-// so it is refused at the parse step and arrives as a `SyntaxError` rather than
-// the `TypeError` a well-formed mismatch produces (`llm_typed_mismatch`). The
-// two are deliberately different classes — "the provider did not answer in the
-// requested format" and "the provider answered in the format but the wrong
-// shape" are different problems with different fixes — and both are catchable.
+// so it is refused at the parse step. Both land on the same `invalid-output`
+// reason — "the provider did not answer in the requested format" and "the
+// provider answered in the format but the wrong shape" are both the model's
+// output being unusable — and the message tells them apart.
 import llm from "submilli:llm";
 
 interface Severity {
@@ -24,31 +23,19 @@ interface Severity {
 
 function main(): void {
   // Prose where an object was requested fails before any structural check.
-  let threw = false;
-  let message = "";
-  try {
-    llm.call<Severity>("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
-    assert(false, "prose must not pass as a typed result");
-  } catch (e: SyntaxError) {
-    threw = true;
-    message = e.message;
-  }
+  const s = llm.call<Severity>("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  assert(!s.ok, "a provider that ignored the schema still fails the typed call");
+  if (s.ok) return;
+  assert(s.reason === "invalid-output", "prose where JSON was asked for is invalid output");
+  assert(s.message.indexOf("not JSON") >= 0, "the failure names the format the response missed");
 
-  assert(threw, "a provider that ignored the schema still fails the typed call");
-  assert(message.indexOf("not JSON") >= 0, "the failure names the format the response missed");
-
-  // It names the operation, so a program calling several ops can attribute it.
-  assert(message.indexOf("llm.call") >= 0, "the failure names the operation that produced it");
-
-  // R13: neither the prompt nor the model's prose reaches the error.
-  assert(message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "the message never echoes the prompt");
-  assert(message.indexOf("honestly") < 0, "the message never echoes the completion");
+  // R13: neither the prompt nor the model's prose reaches the message.
+  assert(s.message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "the message never echoes the prompt");
+  assert(s.message.indexOf("honestly") < 0, "the message never echoes the completion");
 
   // The untyped form accepts the same response without complaint — it promises
   // no shape, so there is nothing to violate. This is the documented fallback
   // when a provider cannot be relied on to honor a schema.
   const raw = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
-  assert(raw.ok, "the untyped form accepts a response of any shape");
-  assert(raw.text !== undefined, "and hands the prose back for the caller to parse");
-  assert((raw.text as string).length > 0, "with the text intact");
+  assert(raw.ok && raw.value.length > 0, "the untyped form accepts a response of any shape, text intact");
 }

@@ -1838,7 +1838,7 @@ function main(): string {
 async fn a_model_call_keeps_its_prompts_reply_and_token_usage() {
     let source = r#"
 import llm from "submilli:llm";
-function main(): string { return llm.call("open", "what is two plus two").text ?? ""; }
+function main(): string { const r = llm.call("open", "what is two plus two"); return r.ok ? r.value : ""; }
 "#;
     let outcome = run(
         source,
@@ -2242,7 +2242,8 @@ function main(): string {
   const lines = read("/a.txt").lines.length;
   const stored = session.get<string>("k");
   const body = get("https://example.test/x").body;
-  const answer = llm.call("open", "ping").text ?? "";
+  const reply = llm.call("open", "ping");
+  const answer = reply.ok ? reply.value : "";
   run("1");
   return (text ?? "").length.toString() + ":" + lines.toString() + ":" + (stored ?? "") + ":" + body + ":" + answer;
 }

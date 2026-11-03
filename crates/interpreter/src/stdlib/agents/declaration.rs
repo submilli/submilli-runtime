@@ -19,6 +19,9 @@ use super::MODULE_NAME;
 const RUN: &str = "run";
 const RUN_TYPE_PARAM: &str = "T";
 
+/// The trailing slot the typechecker fills with the JSON Schema for `T`.
+pub const SCHEMA_PARAM: &str = "schema";
+
 /// Whether `mangled` is the typed `run`, so the typechecker's interception
 /// matches however the symbol was imported.
 pub fn is_checked_run(mangled: &crate::MangledName) -> bool {
@@ -36,7 +39,7 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("agent", Type::String),
             Param::new("input", Type::String),
             Param::with_default(
-                "schema",
+                SCHEMA_PARAM,
                 Type::union(vec![Type::String, Type::Undefined]),
                 crate::DefaultValue::Undefined,
             ),

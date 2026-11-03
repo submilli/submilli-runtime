@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "32c2f58fb183e16d8ded8d92bf843b4773f071eac2911f2f0804db7f34f3e6a8"
+  contentHash: "aa61b3bff87f8eda428b579cfffeb730b7ef913ae56d9453439d378a34439e5a"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -95,8 +95,8 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[], schema?: string): T;
-function call<T>(model: string, prompt: string, schema?: string): T;
+function batch<T>(model: string, prompts: string[], schema?: string, check?: (arg0: unknown) => unknown): Completion<T>[];
+function call<T>(model: string, prompt: string, schema?: string, check?: (arg0: unknown) => unknown): Completion<T>;
 function models(): Model[];
 …
 ```
@@ -163,15 +163,17 @@ function main(): Verdict {
     );
     const billing: string[] = [];
     for (let i = 0; i < answers.length; i++) {
-        const text = answers[i].text;
-        if (text !== undefined && text.trim().toLowerCase().startsWith("yes")) {
+        const answer = answers[i];
+        if (answer.ok && answer.value.trim().toLowerCase().startsWith("yes")) {
             billing.push(tickets[i]);
         }
     }
-    return llm.call<Verdict>(
+    const verdict = llm.call<Verdict>(
         "claude-sonnet-5",
         `Rate the overall severity of these billing tickets:\n\n${billing.join("\n---\n")}`,
     );
+    if (!verdict.ok) throw new Error(`no verdict: ${verdict.reason}: ${verdict.message}`);
+    return verdict.value;
 }
 ```
 
@@ -189,9 +191,11 @@ submilli run --blueprint blueprint.yaml triage.ts
 Haiku said yes to the two billing tickets and no to the dark-mode
 request, so Sonnet saw two. The three prompts and their answers stayed
 inside the program. The verdict alone came out, in the shape the
-program declared. A completion cut off at the output limit or stopped by
-a content filter has `ok: false` and still carries its text, and one
-failed prompt never fails the batch.
+program declared: `call<Verdict>` checks the response against `Verdict`
+field by field, and a response that is not JSON or does not fit is
+`ok: false` with `reason: "invalid-output"`. A completion cut off at the
+output limit or stopped by a content filter has `ok: false` and still
+carries its `text`, and one failed prompt never fails the batch.
 
 ## The result
 

@@ -1004,6 +1004,29 @@ impl FixtureLlm {
             // prose. The schema is advisory; the check is not.
             return LlmOutcome::success("I think this ticket is probably critical, honestly.");
         }
+        if scenario.contains("package_typed_caller") {
+            // A package's typed call: JSON that fits its `Label`, or prose when
+            // the prompt asks for it.
+            return if prompt.contains("prose") {
+                LlmOutcome::success("Spam, I would say.")
+            } else {
+                LlmOutcome::success(r#"{"label":"spam"}"#)
+            };
+        }
+        if scenario.contains("typed_batch_mixed") {
+            // One element per way a typed batch element can end: a conforming
+            // response, prose where JSON was asked for, and a provider failure.
+            return match index {
+                0 => LlmOutcome::success(r#"{"label":"spam","score":0.9}"#)
+                    .with_usage(Some(11), Some(12)),
+                1 => LlmOutcome::success("This one is definitely spam, trust me.")
+                    .with_usage(Some(21), Some(22)),
+                _ => LlmOutcome::failed(
+                    LlmFailure::new(FailureReason::RateLimited, "rate limited").with_status(429),
+                    None::<String>,
+                ),
+            };
+        }
         if scenario.contains("typed_get") {
             return LlmOutcome::success(
                 r#"{"level":"critical","rationale":"payment path down",

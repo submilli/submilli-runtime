@@ -1,31 +1,25 @@
 //! Type surface of `submilli:llm`.
 //!
 //! `call` and `batch` are declared **generic**, and that generic is only sound
-//! because the typechecker intercepts it. The typed forms are not a second
-//! signature: they are a rewrite. A generic `call<T>` reaching the ordinary
-//! generic-call lowering would set `return_cast`, which codegen emits as a Wasm
-//! representation cast rather than a structural check, so a response that
-//! ignored the schema would arrive statically typed and never validated. So the
-//! typechecker matches the symbol by mangled name and rewrites the call into a
-//! checked `Cast` instead — the contract `submilli:session`'s `get` carries.
-//! The declaration and that interception are a matched pair, and a generic
-//! declaration without the interception is the unsound half on its own, which
-//! is why the generics landed together with
-//! [`checked_llm_call`](crate::typechecker) rather than ahead of it.
-//! [`is_checked_call`] is the hook that interception matches on.
+//! because the typechecker intercepts it. With a type argument —
+//! `call<Verdict>(model, prompt)` — the typechecker fills two trailing slots a
+//! program never writes: `schema`, the JSON Schema emitted from `T`, and
+//! `check`, a closure that is exactly `value as T`. The host sends the schema
+//! to the provider, parses each response as JSON, and runs the check on the
+//! parsed value; a value the check rejects becomes an `ok: false` entry with
+//! `reason: "invalid-output"` and the cast's message. So the `value` field of
+//! a `Success<T>` holds only what the check returned, which is what lets the
+//! declared return type `Completion<T>` be trusted without a cast around the
+//! call. The declaration and that interception are a matched pair; a generic
+//! declaration without the interception would type a `value` nothing verified.
+//! [`is_checked_call`] is the hook the interception matches on.
 //!
-//! `T` defaults to `Completion` (or `Completion[]` for `batch`) rather than to
-//! `unknown`: the untyped call keeps its envelope, carrying `ok`/`text`/
-//! `reason`, while the typed form trades that envelope for the checked value —
-//! the same trade `session.get<T>` makes. That is why `T` appears only in the
-//! return type here and is never inferable from an argument.
+//! `T` defaults to `string`: an untyped call sends no schema and `value` is the
+//! completion text. Any type argument, `string` included, asks for JSON.
 //!
-//! The trailing `schema` parameter is likewise not surface a program writes. It
-//! defaults to `undefined`, and the typed lowering fills it with the JSON Schema
-//! emitted from `T` at compile time — the way `VirtualCall` passes its target and
-//! `tool` as constants. Passing it by hand changes only what the provider is
-//! asked for; the structural check lives in the synthetic `Cast`, not in the
-//! host fn, so a hand-passed schema buys no verification.
+//! The trailing `schema` and `check` parameters default to `undefined` and are
+//! filled together; the host refuses one without the other. A program that
+//! writes either by hand is rejected at compile time.
 
 use std::collections::BTreeMap;
 
@@ -45,30 +39,20 @@ const LLM_BATCH: &str = "batch";
 /// The type parameter of [`LLM_CALL`] and [`LLM_BATCH`].
 const CALL_TYPE_PARAM: &str = "T";
 
+/// The trailing slot the typechecker fills with the JSON Schema for `T`.
+pub const SCHEMA_PARAM: &str = "schema";
+
+/// The trailing slot the typechecker fills with the `value as T` closure.
+pub const CHECK_PARAM: &str = "check";
+
+/// The parameter of that closure. The `#` keeps it out of any program's
+/// namespace, and codegen recognizes it to keep a model-authored record key
+/// out of the cast's failure message.
+pub const CHECK_VALUE_PARAM: &str = "#check_value";
+
 /// The type parameter as a type, for the generic return positions.
 fn call_type_var() -> Type {
     Type::TypeVar(CALL_TYPE_PARAM.to_string())
-}
-
-/// Whether `mangled` is the single-prompt checked read, as opposed to the
-/// batch. The two lower the same way but differ in what a bare call returns —
-/// `Completion` against `Completion[]` — so the interception needs to tell
-/// them apart to pick the untyped default.
-pub fn is_checked_batch(mangled: &crate::MangledName) -> bool {
-    *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
-}
-
-/// What `T` binds to when the program wrote no type argument, which keeps the
-/// untyped call's pre-generic meaning: the `Completion` envelope for `call`,
-/// and one per prompt for `batch`. Unlike `session.get`, the default is *not*
-/// `unknown` — an untyped `llm.call` is not an unchecked read, it is a
-/// different and fully-typed result.
-pub fn untyped_result_type(mangled: &crate::MangledName) -> Type {
-    if is_checked_batch(mangled) {
-        Type::Array(Box::new(completion_type()))
-    } else {
-        completion_type()
-    }
 }
 
 /// Whether `mangled` is one of this package's checked reads. Matching the
@@ -82,9 +66,23 @@ pub fn is_checked_call(mangled: &crate::MangledName) -> bool {
         || *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
 }
 
+/// The type of the compiler-supplied check closure: it takes the parsed
+/// response as `unknown` and returns it boxed, after `value as T` verified it.
+pub(crate) fn check_function_type() -> Type {
+    Type::Function {
+        params: vec![Type::Unknown],
+        optional: 0,
+        ret: Box::new(Type::Unknown),
+        predicate: None,
+        has_rest: false,
+    }
+}
+
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
-    insert_completion_interface(&mut defs);
+    insert_success_interface(&mut defs);
+    insert_failure_interface(&mut defs);
+    insert_completion_alias(&mut defs);
     insert_model_interface(&mut defs);
     insert_generic_fn(
         &mut defs,
@@ -94,36 +92,33 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("model", Type::String),
             Param::new("prompt", Type::String),
             schema_param(),
+            check_param(),
         ],
-        call_type_var(),
-        "/**\n * Send one prompt to `model` and return its completion.\n *\n * With a \
-         type argument — `call<Severity>(model, prompt)` — a JSON Schema for `T` is \
-         emitted at compile time and sent to the provider, and the response is then \
-         checked structurally against `T` field by field. A response that does not \
-         match throws a catchable `TypeError`; nothing is coerced. The schema is \
-         advisory and the check is not, so a provider that ignores the schema and \
-         answers in prose throws rather than returning a wrongly-typed value. The \
-         typed form returns `T` itself, trading the `Completion` envelope for the \
-         checked value, exactly as `session.get<T>` does.\n *\n * `T` must be a type \
-         the schema can carry, which is narrower than what `as` can check: no \
-         functions, no `bigint`, no `Uint8Array`, no `unknown`, and no recursive type \
-         — each is rejected at compile time, naming the offending field.\n *\n * Check \
-         `ok` before reading `text`: `ok` means the model stopped naturally, not \
-         merely that nothing threw. A completion cut off at the output cap is `ok: \
-         false` with `reason` `\"truncated\"` and still carries the partial `text`, \
-         so a loop that skips every `!ok` element discards usable output.\n *\n * \
-         That envelope is what the typed form gives up, so a typed call on a \
-         failed completion throws a `TypeError` naming the reason and pointing \
-         back at the untyped form — there is no `ok` left to branch on, and the \
-         partial `text` is reachable only without a type argument.\n *\n * \
-         Throws a `QuotaExceededError` when the \
-         execution or server token budget cannot cover the call, a `RangeError` for prompt bounds, and a \
-         catchable error naming the model when no provider is configured. No error \
-         ever quotes the prompt or the completion.\n * @param model Model name. Call \
+        completion_type(call_type_var()),
+        "/**\n * Send one prompt to `model` and return its completion as a `Completion`: \
+         `{ ok: true, value }` or `{ ok: false, reason, message }`. Check `ok` before \
+         reading `value`; the compiler will not let you read it otherwise.\n *\n * \
+         Without a type argument, `value` is the completion text. With one — \
+         `call<Verdict>(model, prompt)` — a JSON Schema for `Verdict` is emitted at \
+         compile time and sent to the provider, the response is parsed as JSON and \
+         checked field by field, and `value` is the checked `Verdict`. A response that \
+         is not JSON, or that does not match, is `ok: false` with `reason: \
+         \"invalid-output\"` and a `message` naming the expected type and the field that \
+         failed; nothing is coerced, and no error ever quotes the prompt or the \
+         completion.\n *\n * `T` must be a type the schema can carry: no functions, no \
+         `bigint`, no `Uint8Array`, no `unknown`, and no recursive type — each is \
+         rejected at compile time, naming the offending field.\n *\n * `ok: false` \
+         means the model did not produce a clean completion; branch on `reason`, \
+         which is a closed set, not on `message`. A completion cut off at the output \
+         cap is `reason: \"truncated\"`; without a type argument it still carries the \
+         partial `text`, so a loop that only reads `ok` elements discards usable \
+         output.\n *\n * Throws a \
+         `QuotaExceededError` when the execution or server token budget cannot cover \
+         the call, a `RangeError` for prompt bounds, and a catchable error naming the \
+         model when no provider is configured.\n * @param model Model name. Call \
          `models()` for the ones this runtime serves; an undeclared name throws.\n * \
          @param prompt The prompt text. Bounded in bytes independently of the token \
-         ceiling.\n * @capability llm.call { model: $model, \
-         prompt_count: 1 }\n */",
+         ceiling.\n * @capability llm.call { model: $model, prompt_count: 1 }\n */",
     );
     insert_generic_fn(
         &mut defs,
@@ -133,27 +128,27 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("model", Type::String),
             Param::new("prompts", Type::Array(Box::new(Type::String))),
             schema_param(),
+            check_param(),
         ],
-        call_type_var(),
-        "/**\n * Send every prompt to `model` and return one completion each, \
-         positionally: `result[i]` is the outcome of `prompts[i]`, including when \
-         that element failed.\n *\n * Fan-out happens host-side at a bounded \
-         concurrency, so this is not sugar for a loop — a sequential version would \
-         misrepresent its own cost. One failing element never discards the ones that \
-         succeeded: each element carries its own `ok`, `reason`, and token counts.\n \
-         *\n * The whole slice is checked against the prompt-count and prompt-size \
-         bounds, and its tokens reserved, before any bytes leave the process — so an \
-         oversized batch is refused without partially dispatching.\n *\n * A type \
-         argument names the shape of the *whole result*, not of one element, so the \
-         typed form is `batch<Severity[]>(model, prompts)`. Every element is then \
-         checked structurally, and one non-conforming response throws for the batch \
-         rather than yielding a wrongly-typed element — which is why the untyped form, \
-         whose per-element `ok` survives a partial failure, is the right one when some \
-         prompts are expected to fail.\n * @param model Model name. \
-         Call `models()` for the ones this runtime serves.\n * @param prompts The \
-         prompts, in the order the results come back. Bounded in count, and each in \
-         bytes.\n * @capability llm.call { model: $model, \
-         prompt_count: $prompts.length }\n */",
+        Type::Array(Box::new(completion_type(call_type_var()))),
+        "/**\n * Send every prompt to `model` and return one `Completion` each, \
+         positionally: `result[i]` is the outcome of `prompts[i]`, including when that \
+         element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out happens \
+         host-side at a bounded concurrency, so this is not sugar for a loop — a \
+         sequential version would misrepresent its own cost. One failing element never \
+         discards the ones that succeeded: each element carries its own `ok`, `reason` \
+         and token counts.\n *\n * A type argument names the shape of *one* response: \
+         `batch<Verdict>(model, prompts)` returns `Completion<Verdict>[]`, each element \
+         parsed and checked on its own, so a response that is not JSON or does not \
+         match `Verdict` is `ok: false` with `reason: \"invalid-output\"` for that \
+         element only. Without a type argument each `value` is the completion \
+         text.\n *\n * The whole slice is checked against the prompt-count and \
+         prompt-size bounds, and its tokens reserved, before any bytes leave the \
+         process — so an oversized batch is refused without partially dispatching.\n \
+         * @param model Model name. Call `models()` for the ones this runtime \
+         serves.\n * @param prompts The prompts, in the order the results come back. \
+         Bounded in count, and each in bytes.\n * @capability llm.call { model: \
+         $model, prompt_count: $prompts.length }\n */",
     );
     insert_fn(
         &mut defs,
@@ -168,7 +163,7 @@ pub fn package_declaration() -> PackageDeclaration {
          *\n * Choosing a model is the delegation decision — a cheap model for a \
          thousand classifications, a strong one for the synthesis — so branch on \
          `contextWindow`, which is a fact you can compute against. Both \
-         `contextWindow` and `description` are `undefined` when the operator declared \
+         `contextWindow` and `description` are absent when the operator declared \
          none; a program filtering on `contextWindow` drops those, which is correct \
          for a chunk-size decision, because you should not size against a number \
          nobody asserted.\n *\n * Treat `description` as advice, not fact: it is \
@@ -178,22 +173,55 @@ pub fn package_declaration() -> PackageDeclaration {
     defs
 }
 
-/// The compile-time schema slot. `undefined` on the untyped path; the typed lowering
-/// substitutes the JSON Schema emitted from `T`. Declared with a default so the
-/// arity a program writes stays two.
+/// The compile-time schema slot. `undefined` on the untyped path; the typed
+/// lowering substitutes the JSON Schema emitted from `T`. Declared with a
+/// default so the arity a program writes stays two.
 fn schema_param() -> Param {
     Param::with_default(
-        "schema",
+        SCHEMA_PARAM,
         Type::union(vec![Type::String, Type::Undefined]),
         crate::DefaultValue::Undefined,
     )
 }
 
-fn completion_type() -> Type {
-    Type::InterfaceRef {
+/// The compile-time check slot, filled together with [`schema_param`].
+fn check_param() -> Param {
+    Param::with_default(
+        CHECK_PARAM,
+        Type::union(vec![check_function_type(), Type::Undefined]),
+        crate::DefaultValue::Undefined,
+    )
+}
+
+fn package() -> crate::Package {
+    crate::Package(MODULE_NAME.to_string())
+}
+
+/// `Completion<value>`: the declared alias, so diagnostics and hovers show the
+/// name a program wrote rather than the expanded union.
+fn completion_type(value: Type) -> Type {
+    Type::AliasRef {
         mangled: crate::mangle::package_symbol(MODULE_NAME, "Completion"),
-        package: crate::Package(MODULE_NAME.to_string()),
+        package: package(),
         name: "Completion".to_string(),
+        args: vec![value],
+    }
+}
+
+fn success_type(value: Type) -> Type {
+    Type::InterfaceRef {
+        mangled: crate::mangle::package_symbol(MODULE_NAME, "Success"),
+        package: package(),
+        name: "Success".to_string(),
+        args: vec![value],
+    }
+}
+
+fn failure_type() -> Type {
+    Type::InterfaceRef {
+        mangled: crate::mangle::package_symbol(MODULE_NAME, "Failure"),
+        package: package(),
+        name: "Failure".to_string(),
         args: Vec::new(),
     }
 }
@@ -201,81 +229,139 @@ fn completion_type() -> Type {
 fn model_type() -> Type {
     Type::InterfaceRef {
         mangled: crate::mangle::package_symbol(MODULE_NAME, "Model"),
-        package: crate::Package(MODULE_NAME.to_string()),
+        package: package(),
         name: "Model".to_string(),
         args: Vec::new(),
     }
 }
 
-fn optional_string() -> Type {
-    Type::union(vec![Type::String, Type::Undefined])
+/// The closed set of failure reasons, as the union of their spellings, taken
+/// from the runtime's own list so the two cannot drift.
+fn reason_type() -> Type {
+    Type::union(
+        crate::runtime::llm::FailureReason::ALL
+            .iter()
+            .map(|reason| Type::StringLiteral(reason.as_str().to_string()))
+            .collect(),
+    )
 }
 
-fn optional_number() -> Type {
-    Type::union(vec![Type::Number, Type::Undefined])
-}
-
-fn insert_completion_interface(defs: &mut PackageDeclaration) {
+fn insert_success_interface(defs: &mut PackageDeclaration) {
     let mut properties = BTreeMap::new();
     insert_property(
         &mut properties,
         "ok",
-        Type::Boolean,
-        "/** Whether the model stopped naturally. Not \"nothing threw\": a truncated or content-filtered completion is `false` and still carries `text`. */",
+        Type::BooleanLiteral(true),
+        "/** `true`: the model stopped naturally and `value` holds its answer. */",
     );
     insert_property(
         &mut properties,
-        "text",
-        optional_string(),
-        "/** The completion text. Always a string when `ok`; on the failure arm `undefined` only when the model produced none at all, so `\"\"` and `undefined` mean different things. */",
+        "value",
+        call_type_var(),
+        "/** The completion text, or — with a type argument — the parsed response, checked against `T` field by field. Only what passed the check is ever stored here. */",
+    );
+    insert_optional_property(
+        &mut properties,
+        "inputTokens",
+        Type::Number,
+        "/** Prompt tokens the provider reported. Absent means indeterminate, not free: a throttled call may still have been billed, so it is never `0` as a stand-in for unknown. */",
+    );
+    insert_optional_property(
+        &mut properties,
+        "outputTokens",
+        Type::Number,
+        "/** Completion tokens the provider reported, with the same absent-means-indeterminate rule as `inputTokens`. */",
+    );
+    insert_interface(
+        defs,
+        "Success",
+        vec![CALL_TYPE_PARAM.to_string()],
+        properties,
+        "/** The `ok: true` arm of a `Completion<T>`: the model stopped naturally and `value` is its answer — the text, or the checked `T`. */",
+    );
+}
+
+fn insert_failure_interface(defs: &mut PackageDeclaration) {
+    let mut properties = BTreeMap::new();
+    insert_property(
+        &mut properties,
+        "ok",
+        Type::BooleanLiteral(false),
+        "/** `false`: this element is not a clean completion. Not \"something threw\": a truncated or content-filtered completion is `ok: false` and may still carry `text`. */",
     );
     insert_property(
         &mut properties,
         "reason",
-        optional_string(),
-        "/** Why this element is not a clean completion, `undefined` when `ok`. One of `\"truncated\"`, `\"content-filtered\"`, `\"invalid-output\"`, `\"rate-limited\"`, `\"request-rejected\"`, `\"provider-unavailable\"`, `\"transport\"`, `\"cancelled\"`, `\"incomplete\"` — branch on this, not on `message`. */",
+        reason_type(),
+        "/** Why this element is not a clean completion. One of `\"truncated\"`, `\"content-filtered\"`, `\"invalid-output\"`, `\"rate-limited\"`, `\"request-rejected\"`, `\"provider-unavailable\"`, `\"transport\"`, `\"cancelled\"`, `\"incomplete\"` — branch on this, not on `message`. A typed call's response that is not JSON or does not match `T` is `\"invalid-output\"`. */",
     );
     insert_property(
         &mut properties,
         "message",
-        optional_string(),
-        "/** A fixed classification of the failure, `undefined` when `ok`. Never the prompt, the completion, or a provider response body. */",
+        Type::String,
+        "/** A fixed classification of the failure, or for `\"invalid-output\"` the expected type and the field that failed. Never the prompt, the completion, or a provider response body. */",
     );
     insert_property(
         &mut properties,
         "retryable",
         Type::Boolean,
-        "/** Whether re-sending this identical prompt could plausibly succeed. `false` on the success arm, where there is nothing to retry. */",
+        "/** Whether re-sending this identical prompt could plausibly succeed. */",
     );
-    insert_property(
+    insert_optional_property(
         &mut properties,
         "status",
-        optional_number(),
-        "/** The HTTP status the provider answered with, `undefined` when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. */",
+        Type::Number,
+        "/** The HTTP status the provider answered with, absent when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. */",
     );
-    insert_property(
+    insert_optional_property(
         &mut properties,
         "finishReason",
-        optional_string(),
+        Type::String,
         "/** The provider's own raw stop reason, for diagnosis only. Varies per provider and per SDK version — branch on `reason` instead. */",
     );
-    insert_property(
+    insert_optional_property(
+        &mut properties,
+        "text",
+        Type::String,
+        "/** The partial text of a truncated or filtered completion, absent when the model produced none at all. Usable output: a loop that skips every `!ok` element discards it. A typed call never carries `text` here. */",
+    );
+    insert_optional_property(
         &mut properties,
         "inputTokens",
-        optional_number(),
-        "/** Prompt tokens the provider reported. `undefined` means indeterminate, not free: a throttled call may still have been billed, so it is never `0` as a stand-in for unknown. */",
+        Type::Number,
+        "/** Prompt tokens the provider reported for this element, absent when indeterminate. A failed element may still have been billed. */",
     );
-    insert_property(
+    insert_optional_property(
         &mut properties,
         "outputTokens",
-        optional_number(),
-        "/** Completion tokens the provider reported, with the same `undefined`-means-indeterminate rule as `inputTokens`. */",
+        Type::Number,
+        "/** Completion tokens the provider reported for this element, absent when indeterminate. */",
     );
     insert_interface(
         defs,
-        "Completion",
+        "Failure",
+        Vec::new(),
         properties,
-        "/** One prompt's outcome, positionally matched to the prompt that produced it. Success and failure are one shape rather than two, because a truncated or filtered completion is `ok: false` and still carries usable `text`. Constructed only by `call` and `batch`. */",
+        "/** The `ok: false` arm of a `Completion<T>`: why this element is not a clean completion, and the partial `text` when the model produced some. */",
+    );
+}
+
+fn insert_completion_alias(defs: &mut PackageDeclaration) {
+    defs.types.insert(
+        "Completion".to_string(),
+        TypeSymbol {
+            name: "Completion".to_string(),
+            mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Completion"),
+            declaration_span: Span::at(crate::FileId::LLM),
+            kind: TypeKind::Alias {
+                generics: vec![CALL_TYPE_PARAM.to_string()],
+                ty: Type::union(vec![success_type(call_type_var()), failure_type()]),
+                doc: crate::doc(
+                    crate::FileId::LLM,
+                    "/** One prompt's outcome: `Success<T>` when the model stopped naturally, `Failure` otherwise. Narrow on `ok` before reading `value`. `T` is `string` for an untyped call. Constructed only by `call` and `batch`, but a plain object of the same shape is one too. */",
+                ),
+            },
+        },
     );
 }
 
@@ -287,29 +373,34 @@ fn insert_model_interface(defs: &mut PackageDeclaration) {
         Type::String,
         "/** The model name, exactly as `call` and `batch` expect it. */",
     );
-    insert_property(
+    insert_optional_property(
         &mut properties,
         "description",
-        optional_string(),
-        "/** Operator-authored deployment intent, or `undefined` when none was declared. Advice, not fact — it is free text that steers model selection, so weigh it after `contextWindow`. Always a single line, within a fixed length bound. */",
+        Type::String,
+        "/** Operator-authored deployment intent, absent when none was declared. Advice, not fact — it is free text that steers model selection, so weigh it after `contextWindow`. Always a single line, within a fixed length bound. */",
     );
-    insert_property(
+    insert_optional_property(
         &mut properties,
         "contextWindow",
-        optional_number(),
-        "/** The model's context window in tokens, or `undefined` when the operator declared none. Absent means unknown, not zero, and there is no fallback table — a program sizing chunks should drop a model rather than guess. */",
+        Type::Number,
+        "/** The model's context window in tokens, absent when the operator declared none. Absent means unknown, not zero, and there is no fallback table — a program sizing chunks should drop a model rather than guess. */",
     );
     insert_interface(
         defs,
         "Model",
+        Vec::new(),
         properties,
         "/** One model this caller may call. Constructed only by `models()`, and the list carries nothing — no index, no position, no count — derived from the candidates the policy filtered out. */",
     );
 }
 
+/// A data-only interface whose values are ordinary objects: no methods, no
+/// host getters, so property reads, `Object.keys`, `as Record<string, unknown>`
+/// and structural casts all go through the shared object shape.
 fn insert_interface(
     defs: &mut PackageDeclaration,
     name: &str,
+    generics: Vec<String>,
     properties: BTreeMap<String, PropertySig>,
     doc: &str,
 ) {
@@ -321,10 +412,10 @@ fn insert_interface(
             declaration_span: Span::at(crate::FileId::LLM),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new(),
+                generics,
                 methods: BTreeMap::new(),
                 properties,
-                dispatch: Dispatch::Direct,
+                dispatch: Dispatch::VTable,
                 doc: crate::doc(crate::FileId::LLM, doc),
             },
         },
@@ -343,6 +434,26 @@ fn insert_property(
             ty,
             readonly: true,
             optional: false,
+            intrinsic: false,
+            doc: crate::doc(crate::FileId::LLM, doc),
+        },
+    );
+}
+
+/// An optional property is an absent key when there is no value, so
+/// `Object.keys` lists exactly what `JSON.stringify` writes.
+fn insert_optional_property(
+    properties: &mut BTreeMap<String, PropertySig>,
+    name: &str,
+    ty: Type,
+    doc: &str,
+) {
+    properties.insert(
+        name.to_string(),
+        PropertySig {
+            ty,
+            readonly: true,
+            optional: true,
             intrinsic: false,
             doc: crate::doc(crate::FileId::LLM, doc),
         },

@@ -1104,7 +1104,7 @@ async fn execution_history_llm_charges_after_commit_and_restores_run_spend() {
                 fail_commit,
             });
             let source = r#"import llm from "submilli:llm";
-                function main(): string { return llm.call("m", "p").text ?? ""; }"#;
+                function main(): string { const r = llm.call("m", "p"); return r.ok ? r.value : ""; }"#;
             let live = try_run_script_with(source, history, directory.path(), |data| {
                 data.llm_provider = Some(provider.clone());
                 data.llm_budget = Some(budget.clone());
@@ -1128,7 +1128,8 @@ async fn execution_history_llm_charges_after_commit_and_restores_run_spend() {
                 Arc::new(ExecutionTokenBudget::new(limits, replay_aggregate.clone()));
             let resumed = r#"import llm from "submilli:llm";
                 function main(): string {
-                    assert(llm.call("m", "p").text === "done");
+                    const r = llm.call("m", "p");
+                    assert(r.ok && r.value === "done");
                     try { llm.call("m", "q"); return "missed limit"; }
                     catch (e: QuotaExceededError) { return "quota"; }
                 }"#;

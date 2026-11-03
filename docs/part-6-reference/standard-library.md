@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "88c44d6617e5eadccdb42fa183190c689d91745b9c0bfdfe2b6452dcfd022522"
+  contentHash: "b18588b598d0758275d09df09c09468702d5fe642391a305bed2db1e0fd27459"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -132,17 +132,19 @@ An operation that passes a limit throws and leaves the repository as it was.
 
 | Form | Returns |
 | --- | --- |
-| `call(model, prompt)` | One `Completion` |
-| `call<T>(model, prompt)` | A `T`, checked field by field against the response |
-| `batch(model, prompts)` | A `Completion[]`, `result[i]` for `prompts[i]` |
-| `batch<T[]>(model, prompts)` | A `T[]`. One non-conforming element throws for the whole batch |
+| `call(model, prompt)` | A `Completion<string>`: `value` is the text |
+| `call<T>(model, prompt)` | A `Completion<T>`: `value` is a `T`, checked field by field against the response |
+| `batch(model, prompts)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
+| `batch<T>(model, prompts)` | A `Completion<T>[]`, each response checked on its own |
 | `models()` | The `Model`s this caller may call |
 
-
-- A `Completion` has `ok`, `true` when the model stopped naturally, and
-  `text`. A truncated completion is `ok: false` with a `reason`.
+- A `Completion<T>` is `{ ok: true, value: T }` or `{ ok: false, reason, message }`,
+  so a program checks `ok` before it reads `value`. A truncated completion is
+  `ok: false` with `reason: "truncated"` and still carries its partial `text`.
 - The typed form sends a JSON Schema for `T` with the request and checks the
-  response against it. A response that doesn't match throws `TypeError`.
+  response against it. A response that is not JSON or doesn't match is
+  `ok: false` with `reason: "invalid-output"`; its siblings in a batch are
+  unaffected.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
@@ -586,25 +588,33 @@ Gated model calls: call/batch, and models() to discover them.
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[], schema?: string): T` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one completion each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
-| `call<T>(model: string, prompt: string, schema?: string): T` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion. |
+| `batch<T>(model: string, prompts: string[], schema?: string, check?: (arg0: unknown) => unknown): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `call<T>(model: string, prompt: string, schema?: string, check?: (arg0: unknown) => unknown): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion as a `Completion`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
 
 ### `Completion`
 
-One prompt's outcome, positionally matched to the prompt that produced it.
+One prompt's outcome: `Success<T>` when the model stopped naturally, `Failure` otherwise.
+
+```typescript
+type Completion<T> = Failure | Success<T>;
+```
+
+### `Failure`
+
+The `ok: false` arm of a `Completion<T>`: why this element is not a clean completion, and the partial `text` when the model produced some.
 
 | Member | Description |
 | --- | --- |
-| `readonly finishReason: string \| undefined` | The provider's own raw stop reason, for diagnosis only. |
-| `readonly inputTokens: number \| undefined` | Prompt tokens the provider reported. |
-| `readonly message: string \| undefined` | A fixed classification of the failure, `undefined` when `ok`. |
-| `readonly ok: boolean` | Whether the model stopped naturally. |
-| `readonly outputTokens: number \| undefined` | Completion tokens the provider reported, with the same `undefined`-means-indeterminate rule as `inputTokens`. |
-| `readonly reason: string \| undefined` | Why this element is not a clean completion, `undefined` when `ok`. |
+| `readonly finishReason?: string` | The provider's own raw stop reason, for diagnosis only. |
+| `readonly inputTokens?: number` | Prompt tokens the provider reported for this element, absent when indeterminate. |
+| `readonly message: string` | A fixed classification of the failure, or for `"invalid-output"` the expected type and the field that failed. |
+| `readonly ok: false` | `false`: this element is not a clean completion. |
+| `readonly outputTokens?: number` | Completion tokens the provider reported for this element, absent when indeterminate. |
+| `readonly reason: "cancelled" \| "content-filtered" \| "incomplete" \| "invalid-output" \| "provider-unavailable" \| "rate-limited" \| "request-rejected" \| "transport" \| "truncated"` | Why this element is not a clean completion. |
 | `readonly retryable: boolean` | Whether re-sending this identical prompt could plausibly succeed. |
-| `readonly status: number \| undefined` | The HTTP status the provider answered with, `undefined` when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. |
-| `readonly text: string \| undefined` | The completion text. |
+| `readonly status?: number` | The HTTP status the provider answered with, absent when none was observed — which is what distinguishes a dead connection from a provider that answered with an error. |
+| `readonly text?: string` | The partial text of a truncated or filtered completion, absent when the model produced none at all. |
 
 ### `Model`
 
@@ -612,9 +622,20 @@ One model this caller may call.
 
 | Member | Description |
 | --- | --- |
-| `readonly contextWindow: number \| undefined` | The model's context window in tokens, or `undefined` when the operator declared none. |
-| `readonly description: string \| undefined` | Operator-authored deployment intent, or `undefined` when none was declared. |
+| `readonly contextWindow?: number` | The model's context window in tokens, absent when the operator declared none. |
+| `readonly description?: string` | Operator-authored deployment intent, absent when none was declared. |
 | `readonly name: string` | The model name, exactly as `call` and `batch` expect it. |
+
+### `Success`
+
+The `ok: true` arm of a `Completion<T>`: the model stopped naturally and `value` is its answer — the text, or the checked `T`.
+
+| Member | Description |
+| --- | --- |
+| `readonly inputTokens?: number` | Prompt tokens the provider reported. |
+| `readonly ok: true` | `true`: the model stopped naturally and `value` holds its answer. |
+| `readonly outputTokens?: number` | Completion tokens the provider reported, with the same absent-means-indeterminate rule as `inputTokens`. |
+| `readonly value: T` | The completion text, or — with a type argument — the parsed response, checked against `T` field by field. |
 
 ## `submilli:secrets`
 

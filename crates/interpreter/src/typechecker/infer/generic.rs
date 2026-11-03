@@ -2430,8 +2430,9 @@ impl Inferer<'_> {
         // Schema-checked calls (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`)
         // lower the same way and for the same reason. They differ from
         // `session.get` only in what a bare call means — a typed default such as
-        // the `Completion` envelope rather than an unchecked `unknown` — and in
-        // carrying a compile-time schema into the trailing argument.
+        // `string` for the text of an `llm.call` rather than an unchecked
+        // `unknown` — and in carrying a compile-time schema (and, for an
+        // envelope call, a check closure) into the trailing arguments.
         let schema_checked = crate::stdlib::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
@@ -2543,21 +2544,15 @@ impl Inferer<'_> {
             bind_remaining(&mut sub, &generics, Type::Unknown, &self.type_limits)
                 .map_err(type_limit_at(span))?;
         }
-        // Same reasoning for `llm.call(model, prompt)`, but the untyped default
-        // is the `Completion` envelope rather than `unknown`: an untyped call
-        // is not an unchecked read, it is a different fully-typed result. `T`
+        // Same reasoning for `llm.call(model, prompt)` and `agents.run(agent,
+        // input)`, but the untyped default is `string` rather than `unknown`: an
+        // untyped call is not an unchecked read, it is a fully-typed text result
+        // (the `value` of a `Completion<string>`, or the answer itself). `T`
         // appears only in the return type, so it is never inferable from an
         // argument and would otherwise always trip the unbound-parameter error.
-        if let Some(checked) = &schema_checked
-            && !type_args_written
-        {
-            bind_remaining(
-                &mut sub,
-                &generics,
-                checked.untyped_result.clone(),
-                &self.type_limits,
-            )
-            .map_err(type_limit_at(span))?;
+        if schema_checked.is_some() && !type_args_written {
+            bind_remaining(&mut sub, &generics, Type::String, &self.type_limits)
+                .map_err(type_limit_at(span))?;
         }
 
         sub.bind_whole_union_fallbacks();
@@ -2592,53 +2587,77 @@ impl Inferer<'_> {
 
         // A typed `llm.call<T>` is rewritten before the argument list is frozen,
         // because the schema emitted from `T` has to replace the trailing
-        // `schema` argument the default filled with `null`. The rewrite can also
-        // fail (an unschemable or unverifiable `T`), in which case the whole
-        // call is already an error and no node is built.
-        // The `schema` slot is compiler-filled, never program-written. Rejecting
-        // a written one is a soundness requirement, not tidiness: the host keys
-        // "this call is typed" off that argument being non-null
-        // (`stdlib/llm/mod.rs`), while the structural check rides on the cast
-        // emitted here. A hand-written schema sets the first without the second,
-        // so raw parsed JSON reaches the guest wearing the `Completion`
-        // interface type — reading `ok` off a JSON object yields a fabricated
-        // `true`, and reading `text` traps outside the error taxonomy. It also
-        // hands guest-controlled bytes to the provider as the schema.
+        // `schema` argument the default filled with `undefined`. The rewrite can
+        // also fail (an unschemable or unverifiable `T`), in which case the whole
+        // call is already an error and no node is built. The checked type is the
+        // type argument itself: `agents.run<T>` returns it, `llm.call<T>` returns
+        // an envelope holding it.
+        // The `schema` and `check` slots are compiler-filled, never
+        // program-written. Rejecting a written one is a soundness requirement,
+        // not tidiness: the host keys "this call is typed" off the schema being
+        // present and trusts the check to be the compiler's `value as T`
+        // (`stdlib/llm/mod.rs`), while `agents.run`'s structural check rides on
+        // the cast emitted here. A hand-written schema or check would let raw
+        // parsed JSON reach the guest wearing the declared type, and would hand
+        // guest-controlled bytes to the provider as the schema.
         //
         // This rejects rather than ignoring the argument, because silently
         // discarding what a program wrote is its own trap. Typed calls are
-        // unaffected in behavior — `substitute_schema_argument` overwrites the
-        // slot — but a written argument there is equally meaningless, so both
-        // forms are refused and no working program changes.
+        // unaffected in behavior — `substitute_argument` overwrites the slot —
+        // but a written argument there is equally meaningless, so both forms
+        // are refused and no working program changes.
         if let Some(checked) = &schema_checked
             && args.len() > checked.written_param_count
         {
             let name = &callee_ident.name;
             let written = checked.written_params;
+            let filled = checked.compiler_filled();
             let extra = checked.schema_argument_ordinal();
             self.error_with_help(
                 span,
                 format!(
-                    "`{name}` takes {written}; the schema argument is filled by \
-                     the compiler from the type argument"
+                    "`{name}` takes {written}; {filled} filled by the compiler from the \
+                     type argument"
                 ),
                 vec![format!(
-                    "drop the {extra} argument — write `{name}<T>(...)` to send a schema for `T`, \
-                     or `{name}(...)` for an untyped call"
+                    "drop the {extra} argument and any after it — write `{name}<T>(...)` to \
+                     send a schema for `T`, or `{name}(...)` for an untyped call"
                 )],
             );
             return Ok((TypedExprKind::Null, Type::Error));
         }
 
-        let mut emitted_schema = None;
         if let Some(checked) = &schema_checked {
-            match self.schema_checked_call_schema(checked, &result_ty, type_args_written, span) {
-                Ok(schema) => emitted_schema = schema,
+            // A schema-checked call declares exactly one type parameter: the
+            // checked `T`, which `agents.run<T>` returns and `llm.call<T>` wraps
+            // in its envelope. It is bound by now, by the program or by the
+            // untyped default above.
+            let Some(type_param) = generics.first() else {
+                return Err(super::inference_failure(
+                    "a schema-checked call declares its type parameter",
+                )
+                .with_span(span));
+            };
+            let checked_ty = self.instantiate(&sub, &Type::TypeVar(type_param.clone()), span)?;
+            match self.schema_checked_call_schema(checked, &checked_ty, type_args_written, span) {
+                Ok(Some(schema)) => {
+                    let schema = self
+                        .typed_ast
+                        .try_push_expr(crate::TypedExpr {
+                            kind: TypedExprKind::String(schema),
+                            span,
+                            ty: Type::String,
+                        })
+                        .map_err(crate::typechecker::arena_failure)?;
+                    substitute_argument(&params, &mut typed_args, checked.schema_param, schema);
+                    if let crate::stdlib::CheckedResult::Envelope { check_param } = checked.result {
+                        let check = self.envelope_check_closure(&checked_ty, span)?;
+                        substitute_argument(&params, &mut typed_args, check_param, check);
+                    }
+                }
+                Ok(None) => {}
                 Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
             }
-        }
-        if let Some(schema) = &emitted_schema {
-            self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
         }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
 
@@ -2691,11 +2710,40 @@ impl Inferer<'_> {
             return self.checked_session_get(call, &result_ty, type_args_written, span);
         }
         // An untyped schema-checked call emitted no schema and needs no check: it
-        // returns the default the declaration already typed.
-        if schema_checked.is_some() && emitted_schema.is_some() {
-            return self.schema_checked_cast(call, &result_ty, span);
+        // returns the default the declaration already typed. An envelope call
+        // needs none either: its check rides in the argument list, and the host
+        // stores only what that check returned. A typed cast-kind call gets
+        // its cast.
+        let result = schema_checked.as_ref().map(|checked| checked.result);
+        if let Some(crate::stdlib::CheckedResult::Cast) = result
+            && type_args_written
+        {
+            return self.cast_after_schema_gate(call, &result_ty, span);
         }
         Ok((call, result_ty))
+    }
+}
+
+/// Replace the trailing argument named `param` — which the declaration's
+/// `undefined` default just filled — with a compiler-built expression: the
+/// schema string, or the check closure, the way `VirtualCall` carries its
+/// target and `tool` as constants.
+///
+/// The slot is found by name rather than by index so the declaration can grow
+/// a parameter without silently overwriting the wrong argument; a program that
+/// passed one by hand has it replaced, which is why the parameters are
+/// documented as not being surface a program writes.
+fn substitute_argument(
+    params: &[crate::Param],
+    typed_args: &mut [ExprId],
+    param: &str,
+    value: ExprId,
+) {
+    let Some(slot) = params.iter().position(|p| p.name == param) else {
+        return;
+    };
+    if let Some(arg) = typed_args.get_mut(slot) {
+        *arg = value;
     }
 }
 

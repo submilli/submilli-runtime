@@ -7,6 +7,10 @@
 // catch. The fake here answers with its own index, so a reordering is visible.
 import llm from "submilli:llm";
 
+function text(r: llm.Completion<string>): string {
+  return r.ok ? r.value : "";
+}
+
 function main(): void {
   const prompts = ["first", "second", "third", "fourth"];
   const results = llm.batch("claude-haiku-4-5", prompts);
@@ -18,21 +22,26 @@ function main(): void {
   for (let i = 0; i < results.length; i = i + 1) {
     const r = results[i];
     assert(r.ok, "each element of a clean batch stopped naturally");
-    const text = r.text as string;
-    assert(text.indexOf("answer " + String(i)) === 0, "result i is the outcome of prompt i");
+    assert(text(r).indexOf("answer " + String(i)) === 0, "result i is the outcome of prompt i");
   }
 
   // The fake encodes each prompt's byte length, so a swapped pair would be
   // caught even if the index prefix happened to line up.
-  assert((results[0].text as string).indexOf("5 bytes") > 0, "prompt 0's own length comes back at 0");
-  assert((results[3].text as string).indexOf("6 bytes") > 0, "prompt 3's own length comes back at 3");
+  assert(text(results[0]).indexOf("5 bytes") > 0, "prompt 0's own length comes back at 0");
+  assert(text(results[3]).indexOf("6 bytes") > 0, "prompt 3's own length comes back at 3");
 
   // A single-element batch is the degenerate case of the same rule.
   const one = llm.batch("claude-haiku-4-5", ["only"]);
   assert(one.length === 1, "a one-prompt batch returns one result");
-  assert((one[0].text as string).indexOf("answer 0") === 0, "the single result is prompt 0's");
+  assert(text(one[0]).indexOf("answer 0") === 0, "the single result is prompt 0's");
 
   // An empty batch dispatches nothing and returns nothing.
   const none = llm.batch("claude-haiku-4-5", []);
   assert(none.length === 0, "an empty batch returns an empty list");
+
+  // A completion is a plain object, so an object literal of the same shape is
+  // one too, on either arm.
+  assert(text({ ok: true, value: "literal" }) === "literal", "a hand-built success is a completion");
+  const cancelled: llm.Completion<string> = { ok: false, reason: "cancelled", message: "abandoned", retryable: false };
+  assert(text(cancelled) === "" && !cancelled.ok && cancelled.reason === "cancelled", "a hand-built failure is a completion");
 }

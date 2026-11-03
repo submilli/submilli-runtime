@@ -37,7 +37,7 @@ pub mod variables;
 use wasmtime::Linker;
 
 use crate::runtime::StoreData;
-use crate::{MangledName, PackageDeclaration, Type};
+use crate::{MangledName, PackageDeclaration};
 
 /// A standard-library package that exists only when the embedder provides it.
 ///
@@ -93,10 +93,24 @@ impl OptionalPackage {
     }
 }
 
+/// How a schema-checked call's result is verified against `T`.
+#[derive(Clone, Copy)]
+pub(crate) enum CheckedResult {
+    /// The host returns the parsed value and the typechecker wraps the call in
+    /// a checked `Cast` to `T`, which throws on a mismatch (`agents.run`).
+    Cast,
+    /// The host returns an envelope whose `value` is a `T` only if the check
+    /// passed: the typechecker fills the named trailing parameter with a
+    /// `value as T` closure, the host runs it per response and turns its
+    /// `TypeError` into a failure entry (`llm.call`, `llm.batch`). The call's
+    /// declared return type is trusted as is.
+    Envelope { check_param: &'static str },
+}
+
 /// A host call the typechecker types from its type argument: the compiler emits
-/// a JSON Schema for `T` into the call's trailing `schema` parameter and wraps
-/// the result in a structural check against `T`. What differs between such
-/// calls is what a bare call returns and how diagnostics name it.
+/// a JSON Schema for `T` into the call's trailing `schema` parameter and
+/// verifies the result against `T` the way [`CheckedResult`] says. What differs
+/// between such calls is what a bare call returns and how diagnostics name it.
 pub(crate) struct SchemaCheckedCall {
     /// The call as diagnostics name it, e.g. `llm.call`.
     pub callee: &'static str,
@@ -112,15 +126,23 @@ pub(crate) struct SchemaCheckedCall {
     /// Ends the "cannot be verified" diagnostics: what to do instead of a type
     /// argument the runtime cannot test.
     pub untyped_hint: &'static str,
-    /// Ends the `<unknown>` diagnostic.
-    pub untyped_hint_for_unknown: &'static str,
     /// Ends the "has no JSON Schema" diagnostic.
     pub untyped_hint_for_no_schema: &'static str,
-    /// What `T` binds to when the program wrote no type argument.
-    pub untyped_result: Type,
+    /// The trailing parameter the compiler fills with the JSON Schema for `T`.
+    pub schema_param: &'static str,
+    pub result: CheckedResult,
 }
 
 impl SchemaCheckedCall {
+    /// The compiler-filled arguments, as the rejection of a hand-written one
+    /// names them.
+    pub fn compiler_filled(&self) -> &'static str {
+        match self.result {
+            CheckedResult::Cast => "the schema argument is",
+            CheckedResult::Envelope { .. } => "the schema and check arguments are",
+        }
+    }
+
     /// The schema parameter's position, as an ordinal word.
     pub fn schema_argument_ordinal(&self) -> &'static str {
         match self.written_param_count {
@@ -143,10 +165,12 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             answerer: "the model",
             written_params: "the model and the prompt",
             written_param_count: 2,
-            untyped_hint: "read the `Completion` envelope yourself",
-            untyped_hint_for_unknown: "read the `Completion` envelope's `ok` and `text` yourself",
-            untyped_hint_for_no_schema: "parse the `Completion` text yourself",
-            untyped_result: llm::declaration::untyped_result_type(mangled),
+            untyped_hint: "read the completion text from `value` yourself",
+            untyped_hint_for_no_schema: "parse the completion text in `value` yourself",
+            schema_param: llm::declaration::SCHEMA_PARAM,
+            result: CheckedResult::Envelope {
+                check_param: llm::declaration::CHECK_PARAM,
+            },
         });
     }
     if agents::declaration::is_checked_run(mangled) {
@@ -158,9 +182,9 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             written_params: "the agent and the input",
             written_param_count: 2,
             untyped_hint: "read the returned text yourself",
-            untyped_hint_for_unknown: "read the returned text yourself",
             untyped_hint_for_no_schema: "parse the returned text yourself",
-            untyped_result: Type::String,
+            schema_param: agents::declaration::SCHEMA_PARAM,
+            result: CheckedResult::Cast,
         });
     }
     None
@@ -312,7 +336,6 @@ pub(crate) fn host_views() -> impl Iterator<Item = &'static abi::HostView> {
         embedding::HOST_VIEWS,
         fs::HOST_VIEWS,
         http::HOST_VIEWS,
-        llm::HOST_VIEWS,
         session::HOST_VIEWS,
         skills::HOST_VIEWS,
         url::HOST_VIEWS,

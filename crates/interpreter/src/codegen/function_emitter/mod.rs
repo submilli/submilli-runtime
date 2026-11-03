@@ -38,6 +38,15 @@ pub enum ReturnTarget {
 
 pub struct FunctionEmitter<'a> {
     pub(super) cast_diagnostic: Option<super::cast_diagnostics::Locals>,
+    /// Whether a failed cast in this function names a record's keys by a
+    /// placeholder instead of the keys themselves: set for the `value as T`
+    /// check an `llm.call<T>` carries, whose record keys are model output and
+    /// must stay out of the failure entry's message. A per-function flag
+    /// covers the whole check because every type the schema gate admits is
+    /// tested inline under this emitter: the gate rejects recursive and
+    /// host-backed types, which are the ones `cast_check` hands to a separately
+    /// emitted validator (whose emitter starts with this `false`).
+    pub(super) redact_record_keys: bool,
     pub runtime_type_params: BTreeMap<String, (u32, u32)>,
     ctx: &'a CodegenCtx<'a>,
 
@@ -178,6 +187,7 @@ impl<'a> FunctionEmitter<'a> {
             Err(limit.failure(params.last().map(|(name, _)| name.span)))
         })?;
         let mut emitter = Self {
+            redact_record_keys: false,
             ctx,
             runtime_type_params: BTreeMap::new(),
             next_local_index: parameter_count,
@@ -1132,6 +1142,10 @@ pub fn emit_closure_function(
         wasm_params.push((p.name.clone(), object_ref));
     }
     let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
+    emitter.redact_record_keys = matches!(
+        meta.params.as_slice(),
+        [param] if param.name.name == crate::stdlib::llm::declaration::CHECK_VALUE_PARAM
+    );
 
     let env_type_idx = ctx.symbols.env_type_idx(meta.expr_id).ok_or_else(|| {
         crate::codegen::internal_failure("env type registered for every closure expression")

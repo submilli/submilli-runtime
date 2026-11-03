@@ -780,6 +780,11 @@ fn emit_path(
                 super::cast_check::emit_inline_string(emitter, ctx, "]");
                 concat(emitter, ctx);
             }
+            Segment::RecordKey { .. } if emitter.redact_record_keys => {
+                ctx.charge_validator_step(emitter)?;
+                super::cast_check::emit_inline_string(emitter, ctx, "[key]");
+                concat(emitter, ctx);
+            }
             Segment::RecordKey { keys, position } => {
                 ctx.charge_validator_step(emitter)?;
                 super::cast_check::emit_inline_string(emitter, ctx, "[");

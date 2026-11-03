@@ -197,13 +197,17 @@ const GIT_GUIDANCE: &str = "\n\nGit is available as `submilli:git`. Read its pac
     Other local operations need no Git capability. Push is not available.";
 
 const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `call(model, prompt)` returns a
-`Completion`; `call<T>` returns a checked `T`. `ok` is not "nothing
-threw" — a truncated or filtered completion is `ok: false` **and still
-carries `text`**, so `if (!r.ok) continue` drops usable output. Token
-counts may be `undefined`: indeterminate, not free. `batch` is
-bounded-concurrent, one result per prompt, positionally. Models are
-operator-declared — `models()` lists them, and `contextWindow` /
-`description` are `undefined` when undeclared, so filtering drops those."#;
+`Completion<string>` — `{ ok: true, value }` or `{ ok: false, reason, message }`
+— so check `ok` before reading `value`. `call<T>(model, prompt)` sends a
+schema for `T` and returns `Completion<T>` with `value` checked field by field;
+a response that is not JSON or does not fit `T` is `ok: false` with
+`reason: "invalid-output"`, never a throw. `batch<T>(model, prompts)` returns
+one `Completion<T>` per prompt, positionally, each checked on its own, at a
+bounded concurrency. `ok` is not "nothing threw": a truncated or filtered
+completion is `ok: false` **and still carries `text`**, so `if (!r.ok) continue`
+drops usable output. Token counts may be absent: indeterminate, not free.
+Models are operator-declared — `models()` lists them, and `contextWindow` /
+`description` are absent when undeclared, so filtering drops those."#;
 
 const EMBEDDING_GUIDANCE: &str = r#"
 

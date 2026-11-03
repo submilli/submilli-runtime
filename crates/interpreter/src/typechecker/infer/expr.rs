@@ -4017,9 +4017,10 @@ impl Inferer<'_> {
     /// has to replace the trailing `schema` argument before the call node's
     /// argument list is frozen. `Ok(None)` is the untyped form, which sends no
     /// schema and gets no check; `Ok(Some(schema))` means both gates passed and
-    /// the caller must wrap the call in [`Self::schema_checked_cast`]; `Err(())`
-    /// means a diagnostic was reported (or deliberately suppressed) and the
-    /// call is an error.
+    /// the caller verifies the result as the call's [`crate::stdlib::CheckedResult`]
+    /// says — a cast around the call, or a check closure in its argument list;
+    /// `Err(())` means a diagnostic was reported (or deliberately suppressed)
+    /// and the call is an error.
     ///
     /// `checked` describes the call, from [`crate::stdlib::schema_checked_call`].
     /// `type_args_written` separates an explicit `call<unknown>` from a bare
@@ -4037,13 +4038,13 @@ impl Inferer<'_> {
             checks,
             answerer,
             untyped_hint,
-            untyped_hint_for_unknown,
             untyped_hint_for_no_schema,
             ..
         } = checked;
         // No type argument: the call keeps its pre-generic meaning and returns
-        // the `Completion` envelope, which the declaration already typed. There
-        // is nothing to check and no schema to send.
+        // what the declaration typed for the untyped default (the text in a
+        // `Completion<string>`, or a string). There is nothing to check and no
+        // schema to send.
         if !type_args_written {
             return Ok(None);
         }
@@ -4061,7 +4062,7 @@ impl Inferer<'_> {
                 ),
                 vec![format!(
                     "name the shape you expect — `{example}` — or drop the type argument \
-                     and {untyped_hint_for_unknown}."
+                     and {untyped_hint}."
                 )],
             );
             return Err(());
@@ -4148,61 +4149,77 @@ impl Inferer<'_> {
         }
     }
 
-    /// Wrap a gated schema-checked call in its checked cast. Split from
-    /// [`Self::schema_checked_call_schema`] because the gates must run before the
-    /// call node's arguments are frozen and this must run after.
-    /// `checked_cast_around` cannot fail here: `schema_checked_call_schema`
-    /// already ran the same cast gate on the same type, and passing it is what
-    /// produced the schema that got us here.
-    pub(super) fn schema_checked_cast(
+    /// The checked cast of `value` to `target_ty` after the schema gate passed
+    /// for `target_ty`: the cast around an `agents.run<T>` call, or the body of
+    /// an `llm.call<T>` check closure. Split from
+    /// [`Self::schema_checked_call_schema`] because the gates must run before
+    /// the call node's arguments are frozen and this must run after. A
+    /// rejection here is an internal failure: the gate ran the same cast gate
+    /// on the same type, and passing it is what produced the schema.
+    pub(super) fn cast_after_schema_gate(
         &mut self,
-        call: TypedExprKind,
-        result_ty: &Type,
+        value: TypedExprKind,
+        target_ty: &Type,
         span: Span,
     ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
-        Ok({
-            match self.checked_cast_around(call, result_ty, span)? {
-                Ok(checked) => checked,
-                Err(reason) => {
-                    return Err(super::inference_failure(&format!(
-                        "schema-checked result cast rejected a previously validated schema: {reason}"
-                    ))
-                    .with_span(span));
-                }
-            }
-        })
+        match self.checked_cast_around(value, target_ty, span)? {
+            Ok(checked) => Ok(checked),
+            Err(reason) => Err(super::inference_failure(&format!(
+                "schema-checked cast rejected a previously validated schema: {reason}"
+            ))
+            .with_span(span)),
+        }
     }
 
-    /// Replace the trailing `schema` argument — which the declaration's `null`
-    /// default just filled — with the compile-time schema string, the way
-    /// `VirtualCall` carries its target and `tool` as constants.
-    ///
-    /// The slot is found by name rather than by index so the declaration can
-    /// grow a parameter without silently overwriting the wrong argument; a
-    /// program that passed a schema by hand has it replaced, which is why the
-    /// parameter is documented as not being surface a program writes.
-    pub(super) fn substitute_schema_argument(
+    /// The closure an envelope call carries in its `check` slot:
+    /// `(#check_value: unknown): unknown => #check_value as T`. The host runs
+    /// it on each parsed response; the cast's `TypeError` is what the host turns
+    /// into an `invalid-output` entry, and its boxed result is what becomes
+    /// `value`. Built from the same checked cast `as` uses, so the two agree on
+    /// what a `T` is, and after the schema gate, which already proved `T`
+    /// checkable.
+    pub(super) fn envelope_check_closure(
         &mut self,
-        params: &[crate::Param],
-        typed_args: &mut [ExprId],
-        schema: &str,
+        target_ty: &Type,
         span: Span,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let Some(slot) = params.iter().position(|p| p.name == "schema") else {
-            return Ok(());
+    ) -> Result<ExprId, crate::compiler_error::CompilerFailure> {
+        let ident = crate::Ident {
+            name: crate::stdlib::llm::declaration::CHECK_VALUE_PARAM.to_string(),
+            span,
         };
-        let Some(arg) = typed_args.get_mut(slot) else {
-            return Ok(());
+        let value = TypedExprKind::LocalRef {
+            ident: ident.clone(),
+            boxed: false,
         };
-        *arg = self
+        let (cast, cast_ty) = self.cast_after_schema_gate(value, target_ty, span)?;
+        let body = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: TypedExprKind::String(schema.to_string()),
+                kind: cast,
                 span,
-                ty: Type::String,
+                ty: cast_ty,
             })
             .map_err(crate::typechecker::arena_failure)?;
-        Ok(())
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Closure {
+                    runtime_generics: Vec::new(),
+                    params: vec![crate::TypedParam {
+                        name: ident,
+                        optional: false,
+                        ty: Type::Unknown,
+                        boxed: false,
+                        rest: false,
+                        default: None,
+                    }],
+                    return_type: Type::Unknown,
+                    body: crate::ClosureBody::Expr(body),
+                    captured: Vec::new(),
+                },
+                span,
+                ty: crate::stdlib::llm::declaration::check_function_type(),
+            })
+            .map_err(crate::typechecker::arena_failure)
     }
 
     /// The inlined JSON Schema for `target_ty`, as the compact string the host
@@ -16961,27 +16978,62 @@ function main(): void { if (result < 10) { } }
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
-                continue;
-            };
             let TypedExprKind::GenericCall {
                 mangled,
+                args,
                 return_cast,
                 ..
-            } = &ta.try_expr(*value).unwrap().kind
+            } = &expr.kind
             else {
                 continue;
             };
-            if crate::stdlib::llm::declaration::is_checked_call(mangled) {
-                out.push((check.is_some(), return_cast.clone()));
+            if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
+                continue;
             }
+            // The check rides in the trailing `check` slot as a closure whose
+            // whole body is the checked cast.
+            let checked = args.last().is_some_and(|arg| {
+                let TypedExprKind::Closure {
+                    body: crate::ClosureBody::Expr(body),
+                    params,
+                    ..
+                } = &ta.try_expr(arg.expr).unwrap().kind
+                else {
+                    return false;
+                };
+                params.len() == 1
+                    && matches!(
+                        &ta.try_expr(*body).unwrap().kind,
+                        TypedExprKind::Cast { check: Some(_), .. }
+                    )
+            });
+            out.push((checked, return_cast.clone()));
         }
         out
     }
 
+    /// How many checked llm calls sit directly under a `Cast`: the old
+    /// lowering, which the envelope made unnecessary.
+    fn llm_calls_wrapped_in_cast(ta: &TypedAst) -> usize {
+        let mut count = 0;
+        for i in 0..ta.exprs_len() {
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
+            let TypedExprKind::Cast { value, .. } = &expr.kind else {
+                continue;
+            };
+            if let TypedExprKind::GenericCall { mangled, .. } = &ta.try_expr(*value).unwrap().kind
+                && crate::stdlib::llm::declaration::is_checked_call(mangled)
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Every schema string that reached an `llm.call`/`llm.batch` argument
-    /// list, in call order. The schema rides in the trailing `schema` slot,
-    /// which the untyped form leaves as the `null` default.
+    /// list, in call order. The schema rides in the `schema` slot after the
+    /// written parameters, which the untyped form leaves as the `undefined`
+    /// default; the `check` closure follows it.
     fn llm_schemas(ta: &TypedAst) -> Vec<Option<String>> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
@@ -16993,7 +17045,7 @@ function main(): void { if (result < 10) { } }
                 continue;
             }
             let schema = args
-                .last()
+                .get(2)
                 .and_then(|a| match &ta.try_expr(a.expr).unwrap().kind {
                     TypedExprKind::String(s) => Some(s.clone()),
                     _ => None,
@@ -17005,8 +17057,8 @@ function main(): void { if (result < 10) { } }
 
     const SEVERITY: &str = "interface Severity { level: string; score: number; }";
 
-    /// R5: a typed call emits a structural test, and the schema for `T` reaches
-    /// the argument list as a compile-time constant.
+    /// R5: a typed call carries a structural check, and the schema for `T`
+    /// reaches the argument list as a compile-time constant.
     #[test]
     fn typed_llm_call_emits_a_structural_test_and_a_schema() {
         let src = format!(
@@ -17072,13 +17124,13 @@ function main(): void { if (result < 10) { } }
     }
 
     /// The soundness invariant, and the one most at risk of silently
-    /// regressing: a `call<T>` must lower to a `Cast` carrying a structural
-    /// check, and the call it wraps must NOT carry a `return_cast` — that is a
-    /// `ref.cast`, a representation-only narrow that verifies nothing and traps
-    /// uncatchably on a null response. A shape mismatch throws either way, so
-    /// only this assertion distinguishes them.
+    /// regressing: a `call<T>` must carry its `value as T` check closure, the
+    /// call must NOT carry a `return_cast` — that is a `ref.cast`, a
+    /// representation-only narrow that verifies nothing and traps uncatchably
+    /// on a null response — and no `Cast` wraps the call, since the host stores
+    /// only what the check returned.
     #[test]
-    fn typed_llm_call_is_a_checked_cast_and_never_a_return_cast() {
+    fn typed_llm_call_carries_a_check_closure_and_never_a_return_cast() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
@@ -17087,11 +17139,16 @@ function main(): void { if (result < 10) { } }
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
         let shapes = llm_call_shapes(&ta);
-        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
+        assert_eq!(shapes.len(), 1, "expected one checked call, got {shapes:?}");
         assert!(shapes[0].0, "call<Severity> lost its structural check");
         assert_eq!(
             shapes[0].1, None,
             "call<Severity> kept an unsound return_cast: {shapes:?}",
+        );
+        assert_eq!(
+            llm_calls_wrapped_in_cast(&ta),
+            0,
+            "an envelope call needs no cast around it"
         );
     }
 
@@ -17167,37 +17224,41 @@ function main(): void { if (result < 10) { } }
         }
     }
 
-    /// `batch<T[]>` takes the same path: a checked cast, no `return_cast`, and
-    /// a schema for the whole result.
+    /// `batch<T>` takes the same path: a check closure, no `return_cast`, and
+    /// a schema for one response rather than for the array.
     #[test]
-    fn typed_llm_batch_is_a_checked_cast_too() {
+    fn typed_llm_batch_carries_a_check_closure_too() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
-             function main(): void {{ const s = llm.batch<Severity[]>(\"m\", [\"p\"]); }}"
+             function main(): void {{ const s = llm.batch<Severity>(\"m\", [\"p\"]); }}"
         );
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(llm_call_shapes(&ta), vec![(true, None)]);
+        assert_eq!(llm_calls_wrapped_in_cast(&ta), 0);
 
         let schema = llm_schemas(&ta)[0].clone().expect("schema emitted");
         let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
-        assert_eq!(parsed["type"], "array", "schema: {schema}");
-        assert_eq!(parsed["items"]["properties"]["level"]["type"], "string");
+        assert_eq!(parsed["type"], "object", "schema: {schema}");
+        assert_eq!(parsed["properties"]["level"]["type"], "string");
     }
 
     /// R7, and the distinction the `type_args_written` flag exists for: a bare
     /// `call(...)` is not an error — it keeps its pre-generic meaning and
-    /// returns the `Completion` envelope, unwrapped and unschema'd.
+    /// returns `Completion<string>`, unchecked and unschema'd, whose `value`
+    /// is the text once `ok` is known.
     #[test]
     fn untyped_llm_call_returns_the_completion_envelope_without_erroring() {
         let src = "import llm from \"submilli:llm\"; \
                    function main(): void { const c = llm.call(\"m\", \"p\"); \
-                                           const t = c.text; }";
+                                           if (c.ok) { const t: string = c.value; } \
+                                           else { const r: string = c.reason; } }";
         let (ta, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert!(
-            llm_call_shapes(&ta).is_empty(),
-            "an untyped call must not be wrapped in a checked cast",
+        assert_eq!(
+            llm_call_shapes(&ta),
+            vec![(false, None)],
+            "an untyped call carries no check",
         );
         assert_eq!(
             llm_schemas(&ta),
@@ -17206,7 +17267,7 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    /// The untyped `batch` likewise keeps its `Completion[]` envelope, so a
+    /// The untyped `batch` likewise returns `Completion<string>[]`, so a
     /// per-element `ok` is still readable.
     #[test]
     fn untyped_llm_batch_returns_completion_array() {

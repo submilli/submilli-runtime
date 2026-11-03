@@ -17,12 +17,12 @@ interface Severity {
 }
 
 // `T` here is erased, so the typed call inside cannot be checked.
-function classify<T>(prompt: string): T {
+function classify<T>(prompt: string): llm.Completion<T> {
   return llm.call<T>("claude-haiku-4-5", prompt);
 }
 
 function main(): void {
   const s = classify<Severity>("Classify this.");
 
-  assert(s.level === "", "unreachable — the call above does not compile");
+  assert(s.ok, "unreachable — the call above does not compile");
 }

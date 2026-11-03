@@ -109,24 +109,11 @@ fn thrown_denial(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> Option<su
 /// match (e.g. a future non-Error throw), leaving the caller to fall back to
 /// the original error.
 fn read_thrown_error_text(store: &mut Store<StoreData>, exn: Rooted<ExnRef>) -> Option<String> {
-    // The error tag carries a single param: (ref $Error).
-    let Val::AnyRef(Some(error_ref)) = exn.field(&mut *store, 0).ok()? else {
-        return None;
-    };
-    let error = error_ref.unwrap_struct(&mut *store).ok()?;
-    // $Error is class-shaped: field 2 is the object-fields payload array.
-    let Val::AnyRef(Some(payload_ref)) = error.field(&mut *store, 2).ok()? else {
-        return None;
-    };
-    let payload = payload_ref.unwrap_array(&mut *store).ok()?;
-    let message_field = payload
-        .get(&mut *store, super::prelude::error::MESSAGE_SLOT)
-        .ok()?;
-    let name_field = payload
-        .get(&mut *store, super::prelude::error::NAME_SLOT)
-        .ok()?;
-    let name = read_string_value(store, name_field)?;
-    let message = read_string_value(store, message_field)?;
+    let super::host::ThrownErrorParts {
+        error,
+        name,
+        message,
+    } = super::host::thrown_error_parts(&mut *store, exn)?;
     let header = if name.is_empty() {
         message
     } else {
@@ -182,7 +169,7 @@ fn read_error_fields_line(
             break;
         }
         let name_val = names.get(&mut *store, i).ok()?;
-        let Some(field_name) = read_string_value(store, name_val) else {
+        let Some(field_name) = super::host::read_string_value(&mut *store, name_val) else {
             continue;
         };
         let value = payload.get(&mut *store, i).ok()?;
@@ -256,20 +243,6 @@ fn quoted_truncated(text: &str) -> String {
     }
     let cut: String = text.chars().take(MAX_ERROR_FIELD_CHARS).collect();
     format!("{:?}", format!("{cut}…"))
-}
-
-/// Decodes a `$string` GC ref (as a [`Val`]) into a Rust `String`.
-fn read_string_value(store: &mut Store<StoreData>, value: Val) -> Option<String> {
-    let Val::AnyRef(Some(s_ref)) = value else {
-        return None;
-    };
-    let s_struct = s_ref.unwrap_struct(&mut *store).ok()?;
-    // Field 1 of `$string` is the packed-UTF-16 `(ref $rawString)` array.
-    let Val::AnyRef(Some(raw_ref)) = s_struct.field(&mut *store, 1).ok()? else {
-        return None;
-    };
-    let arr = raw_ref.unwrap_array(&mut *store).ok()?;
-    read_submilli_string(&mut *store, arr).ok()
 }
 
 /// Reads the `$string` produced by the `__main_output` shim (in `out[0]`) into a

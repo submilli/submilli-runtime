@@ -1,0 +1,6 @@
+# A typed model call inside a package: the compiler builds the check closure in
+# the package's module, and the host runs it from there when the script calls
+# the package. One prompt fits the declared type, the other is prose.
+# name          dir       deps           root
+@test/triage    triage    -
+main            app       @test/triage   root

@@ -1,10 +1,10 @@
-// R6: a response that does not conform to `T` throws a catchable `TypeError`
-// rather than arriving statically typed and unverified. The schema sent to the
-// provider is advisory — a model can ignore it, answer in the wrong shape, or
-// be served by a provider that drops it — so the structural check is what
-// actually holds the guarantee. Without the throw, a program would read
-// `s.level` as a string that is really a number and carry the corruption
-// forward silently.
+// R6: a response that does not conform to `T` is an `invalid-output` failure
+// entry rather than a value that arrives statically typed and unverified. The
+// schema sent to the provider is advisory — a model can ignore it, answer in
+// the wrong shape, or be served by a provider that drops it — so the
+// structural check is what actually holds the guarantee. Without it, a program
+// would read `level` as a string that is really a number and carry the
+// corruption forward silently.
 //
 // R13 binds the failure too, and this is the sharper half: a type error must
 // not become a disclosure channel. The message names the expected type and the
@@ -20,52 +20,40 @@ interface Severity {
 function main(): void {
   // The provider answers with `level` as a number where the interface says
   // string, so the check must reject it.
-  let threw = false;
-  let message = "";
-  try {
-    llm.call<Severity>("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
-    assert(false, "a non-conforming response must not pass the check");
-  } catch (e: TypeError) {
-    threw = true;
-    message = e.message;
-  }
+  const s = llm.call<Severity>("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  assert(!s.ok, "a non-conforming response is not a clean completion");
+  if (s.ok) return;
 
-  // It throws, and as a `TypeError` specifically — a class a program can
-  // branch on to retry, fall back, or use the untyped form instead.
-  assert(threw, "a non-conforming response throws");
-  assert(message.length > 0, "the failure carries a message");
-  assert(message.indexOf("type mismatch") >= 0, "the failure identifies itself as a type mismatch");
+  // It is reported as invalid output — the reason a program branches on to
+  // retry, fall back, or use the untyped form instead.
+  assert(s.reason === "invalid-output", "a non-conforming response is invalid output");
+  assert(s.message.indexOf("type mismatch") >= 0, "the message identifies itself as a type mismatch");
+  assert(s.message.indexOf("Severity") >= 0, "and names the expected type");
 
   // R13: the prompt never reaches the message.
-  assert(message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "the message never echoes the prompt");
+  assert(s.message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "the message never echoes the prompt");
 
   // Nor does the offending completion — the value that failed the check is
   // model output, which is exactly what must not leak into an error string.
-  assert(message.indexOf("malformed on purpose") < 0, "the message never echoes the completion");
+  assert(s.message.indexOf("malformed on purpose") < 0, "the message never echoes the completion");
 
-  // The same rejection reaches `batch<T>`: one non-conforming element throws
-  // for the batch rather than yielding a wrongly-typed element.
-  let batchThrew = false;
-  let batchMessage = "";
-  try {
-    llm.batch<Severity[]>("claude-haiku-4-5", ["CONFIDENTIAL-PROMPT-TEXT"]);
-    assert(false, "a non-conforming batch element must not pass the check");
-  } catch (e: TypeError) {
-    batchThrew = true;
-    batchMessage = e.message;
-  }
-  assert(batchThrew, "a typed batch throws on a non-conforming element");
-  assert(batchMessage.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "and never echoes the prompt either");
-  assert(batchMessage.indexOf("malformed on purpose") < 0, "nor the completion");
+  // A typed failure carries no partial text: `value` could never have held it.
+  assert(s.text === undefined, "a typed mismatch keeps the completion off the envelope");
+
+  // The same rejection reaches `batch<T>`: a non-conforming element is its
+  // own failure entry, and its siblings are unaffected.
+  const many = llm.batch<Severity>("claude-haiku-4-5", ["CONFIDENTIAL-PROMPT-TEXT"]);
+  assert(many.length === 1, "a batch with a non-conforming element still returns it");
+  const element = many[0];
+  assert(!element.ok, "a typed batch marks a non-conforming element");
+  if (element.ok) return;
+  assert(element.reason === "invalid-output", "with the same reason");
+  assert(element.message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "and never echoes the prompt either");
+  assert(element.message.indexOf("malformed on purpose") < 0, "nor the completion");
 
   // The untyped form is the documented alternative when responses may not
-  // conform: it returns the envelope instead of throwing, so the caller can
-  // inspect the raw text and decide.
+  // conform: it promises no shape, so the raw text comes back for the caller
+  // to inspect and decide.
   const raw = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
-  assert(raw.ok, "the untyped form does not apply a structural check");
-  assert(raw.text !== undefined, "and hands back the raw text for the caller to judge");
-
-  // Execution continues past a caught mismatch — the check refuses a value, it
-  // does not end the program.
-  assert(true, "a caught type mismatch leaves the execution usable");
+  assert(raw.ok && raw.value.length > 0, "the untyped form hands back the raw text for the caller to judge");
 }

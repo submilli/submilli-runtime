@@ -945,8 +945,8 @@ llm:
     const CATCH: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const t = llm.call("test-model", "hi").text;
-        return "OK:" + (t === null ? "NULL" : (t as string));
+        const r = llm.call("test-model", "hi");
+        return "OK:" + (r.ok ? r.value : r.reason);
     } catch (e: Error) {
         return e.message;
     }
