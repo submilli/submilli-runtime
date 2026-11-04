@@ -562,6 +562,7 @@ fn request_principal(
     let guard = CapabilityGuard::new(
         who.clone(),
         std::sync::Arc::clone(&caller.data().security_check),
+        std::sync::Arc::clone(&caller.data().metrics),
         request,
         caller.data().vfs.cwd().to_owned(),
         ticket,

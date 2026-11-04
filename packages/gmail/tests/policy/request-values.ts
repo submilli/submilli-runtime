@@ -1,12 +1,9 @@
 // Run through `submilli run --blueprint request-values.yaml`, not the allow-all build test runner.
 import { EmailInput, sendEmail, createDraft } from "@submilli/gmail";
 
-// The reason of the blueprint's `ask-human` rule, which matches a request as small as the
-// message to the allowed list.
-// Run without a terminal, the call cannot be put to a person, so it is refused with that reason.
-const ALLOWED_MESSAGE = "@submilli/gmail: policy requires a person's approval (ask-human) for http.post "
-    + "(caller @submilli/gmail), and approval can't be asked here";
-const LARGER_MESSAGE = "@submilli/gmail: policy denied http.post for @submilli/gmail";
+// The blueprint denies the package every request, so a message that passes main's check
+// stops at its HTTP call, and nothing is sent.
+const SENT_MESSAGE = "@submilli/gmail: policy denied http.post for @submilli/gmail";
 
 const ALLOWED: string[] = ["allowed@example.com"];
 const BLOCKED: string[] = ["blocked@example.com", "blocked.archive@example.com", "blocked.audit@example.com"];
@@ -34,12 +31,12 @@ class FlippingEmail implements EmailInput {
 
 function requestValuesHold(capability: string, call: (input: EmailInput) => void): void {
     assertOutcome("main: policy denied " + capability + " for main", () => { call({ to: BLOCKED, subject: "s", text: "t" }); });
-    assertOutcome(ALLOWED_MESSAGE, () => { call({ to: ALLOWED, subject: "s", text: "t" }); });
-    // The blueprint tells the two messages apart: this list is as long as the blocked one.
-    assertOutcome(LARGER_MESSAGE, () => { call({ to: ["another@example.com", "another.archive@example.com", "another.audit@example.com"], subject: "s", text: "t" }); });
+    assertOutcome(SENT_MESSAGE, () => { call({ to: ALLOWED, subject: "s", text: "t" }); });
 
+    // Main's check saw the allowed list, and the package read it once, so the message it
+    // built is for the recipients main's check allowed.
     const flipping = new FlippingEmail();
-    assertOutcome(ALLOWED_MESSAGE, () => { call(flipping); });
+    assertOutcome(SENT_MESSAGE, () => { call(flipping); });
     assert(flipping.toReads() === 1, capability + " read to " + flipping.toReads().toString() + " times, expected 1");
 }
 

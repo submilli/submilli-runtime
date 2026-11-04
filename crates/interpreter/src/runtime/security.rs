@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::approvals::{Approver, AskRule};
 use super::decision::{CallSite, DecisionExplanation, DecisionRecorder};
+use crate::stdlib::capabilities;
 
 #[non_exhaustive]
 pub enum CheckOutcome {
@@ -17,12 +18,11 @@ pub enum CheckOutcome {
         reason: String,
         rule: Option<usize>,
     },
-    /// The call may run once `approver` approves it. `reason` is the denial when
-    /// the call cannot be put to them.
+    /// The call may run once `approver` approves it. A call that cannot be put to
+    /// them is denied, with the [`denial_reason`] a deny gives.
     Ask {
         approver: Approver,
         rule: AskRule,
-        reason: String,
     },
 }
 
@@ -138,6 +138,95 @@ impl SecurityCheck for AllowAllCheck {
 
 pub fn default_check() -> Arc<dyn SecurityCheck> {
     Arc::new(AllowAllCheck)
+}
+
+/// The reason a policy denial gives `caller` for `capability`. `context` is the one
+/// the policy tested ([`SecurityCheck::audit_context`]), so a filesystem path is named
+/// as normalized.
+pub fn denial_reason(caller: &str, capability: &str, context: &serde_json::Value) -> String {
+    format!(
+        "policy denied {capability}{} for {caller}",
+        denial_target(capability, context)
+    )
+}
+
+/// What a denial was for, named in its reason: the VFS paths of a filesystem capability,
+/// or the values of an application-defined one. Empty for other capabilities.
+fn denial_target(capability: &str, context: &serde_json::Value) -> String {
+    let paths = filesystem_target(capability, context);
+    if paths.is_empty() && is_application_defined(capability) {
+        request_values(context)
+    } else {
+        paths
+    }
+}
+
+/// The most values a denial names, and the most of each string value it shows.
+const MAX_NAMED_VALUES: usize = 4;
+const MAX_NAMED_VALUE_CHARS: usize = 64;
+
+/// The scalar values of an application-defined capability's request, so a model can tell
+/// the request refused (`customerId = "cus_globex"`) from the capability being refused,
+/// and so a narrowed filter can be fixed from the message. Every one was put there by the
+/// program or by a package it called. A built-in capability's values are left out: a
+/// runtime library can fill them with what the program never saw, such as a redirect's
+/// URL.
+fn request_values(context: &serde_json::Value) -> String {
+    let Some(fields) = context.as_object() else {
+        return String::new();
+    };
+    let named: Vec<String> = fields
+        .iter()
+        .filter_map(|(name, value)| {
+            let shown = match value {
+                serde_json::Value::String(text) => {
+                    let mut chars = text.chars();
+                    let mut cut: String = chars.by_ref().take(MAX_NAMED_VALUE_CHARS).collect();
+                    if chars.next().is_some() {
+                        cut.push('…');
+                    }
+                    serde_json::Value::String(cut).to_string()
+                }
+                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => value.to_string(),
+                _ => return None,
+            };
+            Some(format!("{name} = {shown}"))
+        })
+        .collect();
+    if named.is_empty() {
+        return String::new();
+    }
+    let more = if named.len() > MAX_NAMED_VALUES {
+        ", …"
+    } else {
+        ""
+    };
+    format!(
+        " with {}{more}",
+        named[..named.len().min(MAX_NAMED_VALUES)].join(", ")
+    )
+}
+
+/// Whether `capability` is one an application's package declares: not one the runtime
+/// gates itself, nor an MCP server's tool.
+fn is_application_defined(capability: &str) -> bool {
+    !capability.starts_with("mcp.") && capabilities::find_any(capability).is_none()
+}
+
+/// The normalized VFS paths a denial was for, so a narrowed filter can be fixed
+/// from the message. The library may have probed a path on the program's
+/// behalf, as `submilli:code` does for ignore files, so the program's own
+/// arguments do not always name it. Empty for capabilities without VFS paths.
+fn filesystem_target(capability: &str, context: &serde_json::Value) -> String {
+    let path = |field: &&str| context.get(*field).and_then(serde_json::Value::as_str);
+    match capabilities::vfs_path_fields(capability) {
+        [single] => path(single).map_or_else(String::new, |path| format!(" on {path}")),
+        [from, to] => match (path(from), path(to)) {
+            (Some(from), Some(to)) => format!(" from {from} to {to}"),
+            _ => String::new(),
+        },
+        _ => String::new(),
+    }
 }
 
 #[cfg(test)]

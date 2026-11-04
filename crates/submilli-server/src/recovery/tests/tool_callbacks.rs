@@ -47,10 +47,25 @@ async fn session(state: &AppState, timeout: &str) -> (Router, String) {
 }
 
 async fn session_with_vfs(state: &AppState, timeout: &str, vfs: &str) -> (Router, String) {
-    let blueprint = submilli_blueprint::parse(&format!(
-        "name: callbacks\ndefault: allow\nvfs: {vfs}\ntool_call_timeout: {timeout}\n"
-    ))
-    .unwrap();
+    open(
+        state,
+        &format!("name: callbacks\ndefault: allow\nvfs: {vfs}\ntool_call_timeout: {timeout}\n"),
+    )
+    .await
+}
+
+/// A session whose every tool call waits for a person's approval first.
+async fn approval_session(state: &AppState) -> (Router, String) {
+    open(
+        state,
+        "name: callbacks\ndefault: allow\nvfs: none\ntool_call_timeout: 30s\npermissions:\n  main:\n    - {capability: tools.call, action: ask-human}\n",
+    )
+    .await
+}
+
+/// A session with the `echo` tool under `blueprint`, which is named `callbacks`.
+async fn open(state: &AppState, blueprint: &str) -> (Router, String) {
+    let blueprint = submilli_blueprint::parse(blueprint).unwrap();
     state.blueprints().upsert(blueprint).await.unwrap();
     let router = crate::app(state.clone());
     let (status, body) = request(&router, "/v1/sessions", json!({"blueprint":"callbacks", "tools":[{
@@ -93,6 +108,16 @@ async fn resume(router: &Router, run: &str, call: &str, value: i32) -> (StatusCo
         router,
         &format!("/v1/runs/{run}/resume"),
         json!({"results":[{"call_id":call, "ok":true, "value":value}]}),
+        None,
+    )
+    .await
+}
+
+async fn approve(router: &Router, run: &str, call: &str) -> (StatusCode, Value) {
+    request(
+        router,
+        &format!("/v1/runs/{run}/resume"),
+        json!({"results":[{"call_id":call, "decision":"approve"}]}),
         None,
     )
     .await
@@ -453,63 +478,89 @@ async fn a_recovering_registry_entry_preserves_durable_get_metadata() {
 
 mod lifecycle;
 
-#[tokio::test]
-async fn an_approval_survives_a_restart_and_is_not_asked_again() {
-    const REFUND: &str = r#"import { check } from "submilli:security";
-function main(): string { check("test.refund", { amount: 250 }); return "refunded"; }"#;
-    let blueprint = || {
-        submilli_blueprint::parse(
-            "name: approvals\ndefault: deny\nvfs: none\ntool_call_timeout: 30s\npermissions:\n  main:\n    - {capability: test.refund, action: ask-human}\n",
-        )
-        .unwrap()
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_crash_child() {
+    let Some(root) = std::env::var_os("SUBMILLI_RECOVERY_CRASH_ROOT") else {
+        return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let first = app(root.path(), 10_000_000).await;
-    first.boot().await.unwrap();
-    first.blueprints().upsert(blueprint()).await.unwrap();
-    let router = crate::app(first.clone());
-    let (status, opened) = request(
-        &router,
-        "/v1/sessions",
-        json!({"blueprint": "approvals"}),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{opened}");
-    let session = opened["session_id"].as_str().unwrap().to_owned();
-    let suspended = execute(&router, &session, REFUND).await;
-    let run = suspended["execution_id"].as_str().unwrap().to_owned();
-    assert_eq!(suspended["calls"][0]["kind"], "approval", "{suspended}");
-    let asked = call(&suspended);
-    stop(&first).await;
-    first.database().unwrap().close().await.unwrap();
-    drop(router);
-    drop(first);
+    let root = std::path::PathBuf::from(root);
+    let state = app(&root, 10_000_000).await;
+    state.boot().await.unwrap();
+    let (router, session) = approval_session(&state).await;
+    let first = execute(&router, &session, ONE).await;
+    std::fs::write(root.join("approval-call.json"), first.to_string()).unwrap();
+    super::process::checkpoint("tool-wait");
+    let run = first["execution_id"].as_str().unwrap();
+    approve(&router, run, &call(&first)).await;
+    panic!("approval crash checkpoint was never reached");
+}
 
-    let second = app(root.path(), 10_000_000).await;
-    second.boot().await.unwrap();
-    let router = crate::app(second.clone());
-    // The same key answers the replayed wait: the same call, under the same id.
-    let replayed = execute(&router, &session, REFUND).await;
-    assert_eq!(call(&replayed), asked, "{replayed}");
-    let (status, done) = request(
-        &router,
-        &format!("/v1/runs/{run}/resume"),
-        json!({"results":[{"call_id": asked, "decision": "approve"}]}),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{done}");
-    assert_eq!(done["result"], "refunded", "{done}");
-    stop(&second).await;
-    second.database().unwrap().close().await.unwrap();
-    drop(router);
-    drop(second);
-
-    // A committed decision replays without asking: the retry is the result.
-    let third = app(root.path(), 10_000_000).await;
-    third.boot().await.unwrap();
-    let router = crate::app(third.clone());
-    assert_eq!(execute(&router, &session, REFUND).await, done);
-    stop(&third).await;
+/// The approval is an effect like a tool's answer: killed before its decision
+/// commits, the run waits on the same call again; killed after, the run goes on
+/// without asking, and the call it guarded runs once.
+#[tokio::test]
+async fn killed_process_replays_an_approval_before_and_after_its_decision_commits() {
+    use std::process::{Command, Stdio};
+    for point in ["tool-wait", "tool-answer", "tool-committed"] {
+        let root = tempfile::tempdir().unwrap();
+        let log = std::fs::File::create(root.path().join("child.log")).unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "recovery::tests::tool_callbacks::approval_crash_child",
+                "--nocapture",
+            ])
+            .env("SUBMILLI_RECOVERY_CRASH_ROOT", root.path())
+            .env("SUBMILLI_RECOVERY_CRASH_POINT", point)
+            .stdout(Stdio::from(log.try_clone().unwrap()))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !root.path().join("checkpoint").exists() {
+            if child.try_wait().unwrap().is_some() || std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "{point}: {}",
+                    std::fs::read_to_string(root.path().join("child.log")).unwrap()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let first: Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("approval-call.json")).unwrap())
+                .unwrap();
+        assert_eq!(first["calls"][0]["kind"], "approval", "{first}");
+        let run = first["execution_id"].as_str().unwrap();
+        let state = app(root.path(), 10_000_000).await;
+        state.boot().await.unwrap();
+        let router = crate::app(state.clone());
+        let recovered = execute(&router, first["session_id"].as_str().unwrap(), ONE).await;
+        let tool = if point == "tool-committed" {
+            recovered
+        } else {
+            // Its expiry restarts with the attempt, so compare the call, not its times.
+            assert_eq!(call(&recovered), call(&first), "{point}");
+            assert_eq!(
+                recovered["calls"][0]["approval"]["context"],
+                first["calls"][0]["approval"]["context"],
+                "{point}"
+            );
+            let (status, next) = approve(&router, run, &call(&first)).await;
+            assert_eq!(status, StatusCode::OK, "{point}: {next}");
+            next
+        };
+        assert_eq!(tool["calls"][0]["kind"], "tool", "{point}: {tool}");
+        let (status, done) = resume(&router, run, &call(&tool), 3).await;
+        assert_eq!(status, StatusCode::OK, "{point}: {done}");
+        assert_eq!(done["result"], "3", "{point}: {done}");
+        // One decision and one tool answer: neither was asked for twice.
+        assert_eq!(outcomes(&state, run).await, 2, "{point}");
+        assert_eq!(until(&state, &run.into(), "completed").await["attempt"], 2);
+        stop(&state).await;
+        state.database().unwrap().close().await.unwrap();
+    }
 }

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "bd25a48620eeb5d376838d5db86386cfb29bc772baa5550ae4bad62d37af7700"
+  contentHash: "18e225e8c5683692c782386f0a398037036efb1a801e65e6f353be4c84ef5102"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -87,7 +87,8 @@ under the same id, and a decision already made is not asked again. Without
 `durable_execution`, a restart ends the waiting run, as it ends any run.
 
 Some calls can't wait for an approver. A call one of these makes, and an
-ask rule matches, is denied with `source` `policy`:
+ask rule matches, is denied as a `deny` rule would deny it: the same
+reason, with `source` `policy`. The server logs a warning naming the rule:
 
 - A run over MCP, or through `POST /v1/execute`.
 - A `git.*` operation. `blueprint lint` warns about an ask rule for one.
@@ -322,8 +323,7 @@ that refused.
 
 | Reason | Cause |
 | --- | --- |
-| `policy denied <capability><target> for <caller>` | A `deny` rule, or the default |
-| `policy requires a person's approval (ask-human) for <capability><target> (caller <caller>), and approval can't be asked here` | An ask rule, for a call that can't wait for its approver. An `ask-admin` rule says `an administrator's`. A harness that answered the approval like a tool call adds why |
+| `policy denied <capability><target> for <caller>` | A `deny` rule, the default, or an ask rule for a call that can't be put to its approver |
 | `the person asked declined the call (ask-human)` | The person refused it, followed by `: <reason>` when they gave one. `source` is `human` |
 | `an administrator declined the call (ask-admin)` | An administrator refused it, followed by `: <reason>` when they gave one. `source` is `admin` |
 | `the person asked did not decide in time (ask-human)`, `an administrator did not decide in time (ask-admin)` | No decision before the timeout |

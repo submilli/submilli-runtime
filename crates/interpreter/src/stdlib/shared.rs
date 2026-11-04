@@ -1,6 +1,6 @@
 //! Helpers shared across stdlib libraries.
 
-use crate::runtime::approvals::{ApprovalRequest, Ask};
+use crate::runtime::approvals::{self, ApprovalRequest, Unasked};
 use crate::runtime::decision::{
     CallOrigin, CallSite, CallTicket, EntryPath, PackageLine, SourceLine,
 };
@@ -10,6 +10,7 @@ use crate::runtime::host::{
     permission_denied, permission_denied_invariant, permission_denied_read_only,
     quota_exceeded_error, write_boxed_number_struct,
 };
+use crate::runtime::metrics::MetricsSink;
 use crate::runtime::security::{AuditDecision, CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
 use crate::runtime::{QuotaExceeded, StoreData};
@@ -118,12 +119,14 @@ pub(crate) fn check_security_call(
     context: serde_json::Value,
 ) -> wasmtime::Result<Option<CallTicket>> {
     let (caller, ticket) = enter_gate(&mut store, capability, &context)?;
+    let data = store.as_context().data();
     authorize_capability(
         &caller,
-        store.as_context().data().security_check.as_ref(),
+        data.security_check.as_ref(),
+        data.metrics.as_ref(),
         capability,
         &context,
-        store.as_context().data().vfs.cwd(),
+        data.vfs.cwd(),
         CallSite::new(ticket, EntryPath::GatedOp),
     )?;
     Ok(ticket)
@@ -149,8 +152,8 @@ pub(crate) async fn check_and_approve_call(
             site,
         )?
     };
-    if let Checked::Ask(ask) = checked {
-        crate::runtime::approvals::ask(caller, ask, site).await?;
+    if let Checked::Ask(request) = checked {
+        approvals::ask(caller, request, site).await?;
     }
     Ok(ticket)
 }
@@ -178,7 +181,15 @@ pub(crate) fn check_candidate(
     )? {
         Checked::Allowed => Ok(()),
         Checked::Ask(_) if data.approval_provider.is_some() => Ok(()),
-        Checked::Ask(ask) => Err(ask.refuse(security_check, site)),
+        // Filtered out, not refused: no call was made, so nothing is reported.
+        Checked::Ask(request) => {
+            let denial = approvals::deny_unasked(&request, security_check, site);
+            Err(permission_denied(
+                request.caller,
+                request.capability,
+                denial,
+            ))
+        }
     }
 }
 
@@ -278,10 +289,11 @@ pub(crate) fn mark_filtered(store: &impl wasmtime::AsContext<Data = StoreData>) 
 
 /// [`check_security`] for a caller resolved earlier, such as the principal of a
 /// request whose redirect hops are checked after the host fn has suspended. A call
-/// the policy asks about is refused: this check cannot wait.
+/// the policy asks about is refused, and reported to `metrics`: this check cannot wait.
 pub(crate) fn authorize_capability(
     caller: &str,
     security_check: &dyn SecurityCheck,
+    metrics: &dyn MetricsSink,
     capability: &str,
     context: &serde_json::Value,
     cwd: &str,
@@ -289,7 +301,13 @@ pub(crate) fn authorize_capability(
 ) -> wasmtime::Result<()> {
     match authorize_or_ask(caller, security_check, capability, context, cwd, site)? {
         Checked::Allowed => Ok(()),
-        Checked::Ask(ask) => Err(ask.refuse(security_check, site)),
+        Checked::Ask(request) => Err(approvals::refuse(
+            request,
+            Unasked::CannotWait,
+            security_check,
+            metrics,
+            site,
+        )),
     }
 }
 
@@ -330,14 +348,15 @@ fn authorize_or_ask(
 pub(crate) enum Checked {
     Allowed,
     /// The policy asks an approver; nothing is audited until they decide.
-    Ask(Ask),
+    Ask(ApprovalRequest),
 }
 
 /// Asks the policy whether `caller` may use `capability`, and audits its answer with the
 /// recorder's explanation. A denial returns the policy's reason. It cannot wait, so a
-/// call the policy asks about is refused.
+/// call the policy asks about is refused, and reported to `metrics`.
 pub(crate) fn check_and_audit(
     security_check: &dyn SecurityCheck,
+    metrics: &dyn MetricsSink,
     caller: &str,
     capability: &str,
     context: &serde_json::Value,
@@ -346,15 +365,15 @@ pub(crate) fn check_and_audit(
 ) -> Result<(), String> {
     match check_or_ask(security_check, caller, capability, context, cwd, site)? {
         Checked::Allowed => Ok(()),
-        Checked::Ask(ask) => {
-            ask.audit_unasked(security_check, site);
-            Err(ask.unasked)
+        Checked::Ask(request) => {
+            request.report_unasked(Unasked::CannotWait, None, metrics);
+            Err(approvals::deny_unasked(&request, security_check, site))
         }
     }
 }
 
-/// [`check_and_audit`], handing back a call the policy asks about. The ask carries the
-/// context as the policy tested it.
+/// [`check_and_audit`], handing back a call the policy asks about. Its request carries
+/// the context as the policy tested it.
 pub(crate) fn check_or_ask(
     security_check: &dyn SecurityCheck,
     caller: &str,
@@ -368,20 +387,13 @@ pub(crate) fn check_or_ask(
         match security_check.check_with_cwd(caller, capability, context, cwd) {
             CheckOutcome::Allow { rule } => (true, rule, None),
             CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
-            CheckOutcome::Ask {
-                approver,
-                rule,
-                reason,
-            } => {
-                return Ok(Checked::Ask(Ask {
-                    request: ApprovalRequest {
-                        approver,
-                        caller: caller.to_owned(),
-                        capability: capability.to_owned(),
-                        context: audit_context.into_owned(),
-                        rule,
-                    },
-                    unasked: reason,
+            CheckOutcome::Ask { approver, rule } => {
+                return Ok(Checked::Ask(ApprovalRequest {
+                    approver,
+                    caller: caller.to_owned(),
+                    capability: capability.to_owned(),
+                    context: audit_context.into_owned(),
+                    rule,
                 }));
             }
         };

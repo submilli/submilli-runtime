@@ -74,10 +74,7 @@ impl AuditLog {
         let (allowed, rule, reason) = match outcome {
             CheckOutcome::Allow { rule } => (true, *rule, None),
             CheckOutcome::Deny { rule, reason } => (false, *rule, Some(reason.as_str())),
-            // A file tool cannot wait for an approver, so an ask is refused.
-            CheckOutcome::Ask { rule, reason, .. } => {
-                (false, Some(rule.index), Some(reason.as_str()))
-            }
+            // The file tools deny an ask before it gets here: they cannot wait.
             _ => return,
         };
         if allowed && self.config.allows == Allows::None {

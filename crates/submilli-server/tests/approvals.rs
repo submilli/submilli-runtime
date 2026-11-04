@@ -47,6 +47,9 @@ function main(): string {
 }
 "#;
 
+/// What a deny rule on `REFUND`'s call gives, and so what a refusal without asking gives.
+const REFUND_DENIED: &str = "policy denied test.refund with amount = 250 for main";
+
 const REFUND_OR_REASON: &str = r#"
 import { check } from "submilli:security";
 function main(): string {
@@ -282,6 +285,13 @@ async fn an_approval_answered_like_a_tool_call_is_denied_by_policy() {
     assert_eq!(status, StatusCode::OK, "{finished}");
     assert_eq!(finished["error"]["kind"], "permission_denied", "{finished}");
     assert_eq!(finished["error"]["source"], "policy", "{finished}");
+    assert!(
+        finished["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(REFUND_DENIED),
+        "{finished}"
+    );
 }
 
 #[tokio::test]
@@ -581,7 +591,7 @@ async fn a_one_shot_run_cannot_ask_and_is_denied_by_policy() {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("approval can't be asked here"),
+            .contains(REFUND_DENIED),
         "{body}"
     );
 }

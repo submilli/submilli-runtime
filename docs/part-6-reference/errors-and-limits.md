@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a518a48f4445ea623936b113aa54e845498addcd7cf3d457c8005206c7161ca0"
+  contentHash: "cdc60c534861bf091409044ea3362d241ebcddd8b2e090b40da76174bca90e3d"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -274,12 +274,11 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 
 | `reason` | Cause |
 | --- | --- |
-| `policy denied <capability> for <caller>` | A `deny` rule, or the Blueprint's `default` |
+| `policy denied <capability> for <caller>` | A `deny` rule, the Blueprint's `default`, or an ask rule for a call that can't be put to its approver, as over MCP or when the harness answered it like a tool call |
 | `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program |
 | `@tools.<tool>: <message>` | The application refused the call, with `capability` `tools.call` |
 | `the person asked declined the call (ask-human)`, `an administrator declined the call (ask-admin)` | The approver refused it, followed by `: <reason>` when they gave one |
 | `the person asked did not decide in time (ask-human)`, `an administrator did not decide in time (ask-admin)` | No decision before the timeout |
-| `policy requires a person's approval (ask-human) for <capability> (caller <caller>), and approval can't be asked here` | The call can't wait for its approver, as over MCP. `ask-admin` says `an administrator's`. It is followed by `: <why>` when the run could ask but the call couldn't be put to the approver, as when the harness answered it like a tool call |
 
 For a capability on files, `<capability>` is followed by the path, after
 `.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.

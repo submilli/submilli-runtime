@@ -64,6 +64,9 @@ hmac = "0.12"
 gix = { version = "0.87.1", default-features = false, features = ["sha1", "basic", "revision", "index", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
 # The timestamp gix-index decodes an index with; already in the tree through gix.
 filetime = "0.2"
+# Warnings for the embedder's operator, such as a call refused because it needed an
+# approval the run could not ask for. Already in the tree through reqwest.
+tracing = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

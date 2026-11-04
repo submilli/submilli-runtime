@@ -7,10 +7,9 @@ use std::sync::Arc;
 
 use interpreter::runtime::{
     Approver, AskRule, CheckOutcome, DecisionAction, DecisionCause, DecisionExplanation,
-    FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation, SecurityCheck,
+    FailureReasonRecord, FailureRecord, NearMissRecord, RuleCitation, SecurityCheck, denial_reason,
 };
 use interpreter::stdlib::capabilities;
-use interpreter::stdlib::{OptionalPackage, Stdlib};
 
 use crate::filter::{ComparisonFailure, FailureReason, VarBindings};
 use crate::rules::{
@@ -24,7 +23,7 @@ use crate::rules::{
 /// [`DefaultAction::Deny`](crate::DefaultAction::Deny) a rule set without rules
 /// denies every capability. An allow default inverts this to allow-by-default.
 /// `ask-human` and `ask-admin` answer [`CheckOutcome::Ask`], naming the rule;
-/// a call that cannot ask its approver is denied with the reason given there.
+/// a call that cannot ask its approver is denied as a deny rule would deny it.
 ///
 /// Filesystem rules see absolute guest paths with `.` and `..` collapsed using
 /// the same lexical resolver as VFS I/O. This also applies to both endpoints of
@@ -105,10 +104,7 @@ impl<R: Rules + Send + Sync + ?Sized + 'static> SecurityCheck for PermissionChec
             Action::Allow => CheckOutcome::Allow { rule },
             Action::Deny => CheckOutcome::Deny {
                 rule,
-                reason: format!(
-                    "policy denied {capability}{} for {caller}",
-                    denial_target(capability, &context)
-                ),
+                reason: denial_reason(caller, capability, &context),
             },
             Action::AskHuman => self.ask(Approver::Human, caller, capability, &context, rule),
             Action::AskAdmin => self.ask(Approver::Admin, caller, capability, &context, rule),
@@ -117,8 +113,7 @@ impl<R: Rules + Send + Sync + ?Sized + 'static> SecurityCheck for PermissionChec
 }
 
 impl<R: Rules + ?Sized> PermissionCheck<R> {
-    /// The outcome of the rule at `rule` asking `approver`, with the reason a call
-    /// that can't ask them is refused with.
+    /// The outcome of the rule at `rule` asking `approver`.
     fn ask(
         &self,
         approver: Approver,
@@ -127,19 +122,12 @@ impl<R: Rules + ?Sized> PermissionCheck<R> {
         context: &serde_json::Value,
         rule: Option<usize>,
     ) -> CheckOutcome {
-        let reason = format!(
-            "policy requires {} approval ({}) for {capability}{} (caller {caller}), \
-             and approval can't be asked here",
-            match approver {
-                Approver::Human => "a person's",
-                Approver::Admin => "an administrator's",
-            },
-            approver.action(),
-            denial_target(capability, context)
-        );
         // An ask comes from a rule: the default never asks.
         let Some(index) = rule else {
-            return CheckOutcome::Deny { rule, reason };
+            return CheckOutcome::Deny {
+                rule,
+                reason: denial_reason(caller, capability, context),
+            };
         };
         let asked = self
             .rules
@@ -156,7 +144,6 @@ impl<R: Rules + ?Sized> PermissionCheck<R> {
                     .and_then(|rule| rule.filter.as_ref())
                     .map(ToString::to_string),
             },
-            reason,
         }
     }
 }
@@ -216,99 +203,6 @@ fn failure_record(failure: ComparisonFailure) -> FailureRecord {
     }
 }
 
-/// What a denial was for, named in its reason: the VFS paths of a filesystem capability,
-/// or the values of an application-defined one. Empty for other capabilities.
-fn denial_target(capability: &str, context: &serde_json::Value) -> String {
-    let paths = filesystem_target(capability, context);
-    if paths.is_empty() && is_application_defined(capability) {
-        request_values(context)
-    } else {
-        paths
-    }
-}
-
-/// The most values a denial names, and the most of each string value it shows.
-const MAX_NAMED_VALUES: usize = 4;
-const MAX_NAMED_VALUE_CHARS: usize = 64;
-
-/// The scalar values of an application-defined capability's request, so a model can tell
-/// the request refused (`customerId = "cus_globex"`) from the capability being refused,
-/// and so a narrowed filter can be fixed from the message. Every one was put there by the
-/// program or by a package it called. A built-in capability's values are left out: a
-/// runtime library can fill them with what the program never saw, such as a redirect's
-/// URL.
-fn request_values(context: &serde_json::Value) -> String {
-    let Some(fields) = context.as_object() else {
-        return String::new();
-    };
-    let named: Vec<String> = fields
-        .iter()
-        .filter_map(|(name, value)| {
-            let shown = match value {
-                serde_json::Value::String(text) => {
-                    let mut chars = text.chars();
-                    let mut cut: String = chars.by_ref().take(MAX_NAMED_VALUE_CHARS).collect();
-                    if chars.next().is_some() {
-                        cut.push('…');
-                    }
-                    serde_json::Value::String(cut).to_string()
-                }
-                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => value.to_string(),
-                _ => return None,
-            };
-            Some(format!("{name} = {shown}"))
-        })
-        .collect();
-    if named.is_empty() {
-        return String::new();
-    }
-    let more = if named.len() > MAX_NAMED_VALUES {
-        ", …"
-    } else {
-        ""
-    };
-    format!(
-        " with {}{more}",
-        named[..named.len().min(MAX_NAMED_VALUES)].join(", ")
-    )
-}
-
-/// Whether `capability` is one an application's package declares: not one the runtime
-/// gates itself, nor an MCP server's tool.
-fn is_application_defined(capability: &str) -> bool {
-    let every = OptionalPackage::ALL
-        .iter()
-        .fold(Stdlib::core(), |stdlib, package| stdlib.with(*package));
-    !capability.starts_with("mcp.") && capabilities::find_for(every, capability).is_none()
-}
-
-/// The normalized VFS paths a denial was for, so a narrowed filter can be fixed
-/// from the message. The library may have probed a path on the program's
-/// behalf, as `submilli:code` does for ignore files, so the program's own
-/// arguments do not always name it. Empty for capabilities without VFS paths.
-fn filesystem_target(capability: &str, context: &serde_json::Value) -> String {
-    let path = |field: &&str| context.get(*field).and_then(serde_json::Value::as_str);
-    match filesystem_path_fields(capability) {
-        [single] => path(single).map_or_else(String::new, |path| format!(" on {path}")),
-        [from, to] => match (path(from), path(to)) {
-            (Some(from), Some(to)) => format!(" from {from} to {to}"),
-            _ => String::new(),
-        },
-        _ => String::new(),
-    }
-}
-
-/// The context fields of a capability that hold VFS paths.
-fn filesystem_path_fields(capability: &str) -> &'static [&'static str] {
-    match capability {
-        "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
-        "fs.copy" | "fs.move" => &["from", "to"],
-        "git.init" | "git.clone" | "git.fetch" | "git.commit" => &["path"],
-        "http.download" => &["vfs_path"],
-        _ => &[],
-    }
-}
-
 /// Keep policy paths in the same guest namespace as the subsequent VFS operation.
 /// Normalization is lexical and performs no I/O, so a denial cannot reveal whether
 /// the target exists. URL paths and application-defined capabilities stay untouched.
@@ -317,7 +211,7 @@ fn filesystem_policy_context<'a>(
     context: &'a serde_json::Value,
     cwd: &str,
 ) -> Result<Cow<'a, serde_json::Value>, String> {
-    let fields = filesystem_path_fields(capability);
+    let fields = capabilities::vfs_path_fields(capability);
     let mut normalized_context = Cow::Borrowed(context);
     for &field in fields {
         let path = context
@@ -501,11 +395,7 @@ permissions:
         assert_eq!(explanation.action, DecisionAction::AskHuman);
         assert!(matches!(explanation.cause, DecisionCause::Rule(_)));
         match policy.check_with_cwd("main", "fs.write", &context, "/") {
-            CheckOutcome::Ask {
-                approver,
-                rule,
-                reason,
-            } => {
+            CheckOutcome::Ask { approver, rule } => {
                 assert_eq!(approver, Approver::Human);
                 assert_eq!(
                     rule,
@@ -516,7 +406,6 @@ permissions:
                         filter: None,
                     }
                 );
-                assert!(reason.contains("can't be asked here"), "{reason}");
             }
             _ => panic!("ask-human asks"),
         }
@@ -570,26 +459,6 @@ permissions:
             missing.cause,
             DecisionCause::RuntimeInvariant { .. }
         ));
-    }
-
-    #[test]
-    fn normalized_policy_paths_are_vfs_path_fields_in_the_catalog() {
-        use interpreter::stdlib::capabilities::{FieldNormalization, catalog};
-        for capability in catalog().iter().flat_map(|group| group.capabilities) {
-            for field in filesystem_path_fields(capability.name) {
-                let normalization = capability
-                    .filter_fields
-                    .iter()
-                    .find(|candidate| candidate.name == *field)
-                    .map(|candidate| candidate.normalization);
-                assert_eq!(
-                    normalization,
-                    Some(FieldNormalization::VfsPath),
-                    "{}.{field}",
-                    capability.name
-                );
-            }
-        }
     }
 
     #[test]
@@ -727,10 +596,17 @@ permissions:
             )
             .unwrap(),
         ));
+        // An ask that can't be put to its approver is refused with a deny's reason, named
+        // from the context the policy tested.
         let reason = |capability: &str, context: serde_json::Value| match policy
             .check("main", capability, &context)
         {
-            CheckOutcome::Deny { reason, .. } | CheckOutcome::Ask { reason, .. } => reason,
+            CheckOutcome::Deny { reason, .. } => reason,
+            CheckOutcome::Ask { .. } => denial_reason(
+                "main",
+                capability,
+                &policy.audit_context(capability, &context, "/"),
+            ),
             _ => panic!("{capability} not denied"),
         };
         assert_eq!(
@@ -742,8 +618,7 @@ permissions:
         );
         assert_eq!(
             reason("fs.write", serde_json::json!({"path": "notes/a.md"})),
-            "policy requires a person's approval (ask-human) for fs.write on /notes/a.md \
-             (caller main), and approval can't be asked here"
+            "policy denied fs.write on /notes/a.md for main"
         );
         assert_eq!(
             reason("fs.move", serde_json::json!({"from": "a", "to": "/b/./c"})),

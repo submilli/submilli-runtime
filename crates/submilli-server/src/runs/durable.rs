@@ -307,6 +307,51 @@ mod tests {
         })
     }
 
+    /// A history that replays `0` as the recorded outcome of every effect.
+    struct Replayed(RecordedOutcome);
+
+    #[async_trait::async_trait]
+    impl EffectHistory for Replayed {
+        async fn begin(&self, _: &str, _: [u8; 32]) -> Result<EffectCall, HistoryError> {
+            Ok(EffectCall {
+                id: EFFECT.into(),
+                sequence: 0,
+                recorded: Some(self.0.clone()),
+            })
+        }
+        async fn complete(&self, _: &EffectCall, _: RecordedOutcome) -> Result<(), HistoryError> {
+            unreachable!("a replayed effect is not completed again")
+        }
+        async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
+            Ok(())
+        }
+    }
+
+    /// Replay rebuilds an expiry as the live run left it: a tool's timeout marks the
+    /// harness gone, so later tool calls fail at once; an approval's expiry doesn't.
+    #[tokio::test]
+    async fn a_replayed_expiry_marks_the_harness_gone_only_for_a_tool() {
+        let expired = rmp_serde::to_vec_named(&ApprovalOutcome::Expired).unwrap();
+        for (operation, outcome, gone) in [
+            (
+                "tools.call",
+                Err(NativeError::Timeout("no answer".into())),
+                true,
+            ),
+            (APPROVAL_OPERATION, Ok(OutcomeBytes(expired)), false),
+        ] {
+            let entry = provider().entry.clone();
+            let history = ToolHistory::new(Arc::new(Replayed(outcome)), entry.clone());
+            history.begin(operation, [0; 32]).await.unwrap();
+            let inner = entry.lock();
+            assert_eq!(inner.harness_gone, gone, "{operation}");
+            assert!(
+                inner.rejected.contains(&format!("run:{EFFECT}")),
+                "{operation}"
+            );
+        }
+    }
+
     fn submission(value: &str) -> Submission {
         let answer = CallAnswer {
             call_id: format!("run:{EFFECT}"),

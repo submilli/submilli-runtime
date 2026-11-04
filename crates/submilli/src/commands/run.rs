@@ -289,6 +289,17 @@ fn exit_status_of(err: &wasmtime::Error) -> u8 {
 }
 
 pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
+    // The engine's warnings are for whoever runs the program, as a server's are for
+    // its operator. `RUST_LOG` replaces the filter.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "submilli_engine=warn".into()),
+        )
+        .with_writer(std::io::stderr)
+        .without_time()
+        .with_target(false)
+        .try_init();
     // `None` means "build the real HTTP dispatch below, once the blueprint and
     // the secret store it needs are in hand". A test passes `Some(fake)` to
     // drive `llm.call` without a socket.

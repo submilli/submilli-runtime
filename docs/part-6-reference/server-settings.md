@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "63f0a2ad6fd4bccd418883cf53ee9e1bf41fa3cc524b1c0fe5b48c7cf1d4dc0c"
+  contentHash: "2f639dd57c2038d3f1be0bda66e2dacb8afa39400d255a20c49806dbbd6fe7e3"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -327,7 +327,7 @@ Off by default. When on, the server reports to the Submilli maintainers:
 
 | Reported | When |
 | --- | --- |
-| Crashes; usage counters (sessions opened, programs run by outcome, Package and built-in lookups, Blueprint changes); for each failed program, its error `kind` and the first line of its message | `telemetry` is on |
+| Crashes; usage counters (sessions opened, programs run by outcome, Package and built-in lookups, Blueprint changes, calls denied because their approval couldn't be asked, by approver and why); for each failed program, its error `kind` and the first line of its message | `telemetry` is on |
 | The failed program's source and its full error, including the backtrace or the diagnostics that quote its lines | `telemetry` and `telemetry_include_source` are both on |
 | Client IP addresses, request headers, the hosts of programs' outbound calls | Never |
 

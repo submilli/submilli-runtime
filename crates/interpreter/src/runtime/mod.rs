@@ -46,7 +46,7 @@ pub use agents::{
 };
 pub use approvals::{
     APPROVAL_OPERATION, ApprovalError, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
-    Approver, AskRule,
+    Approver, AskRule, Unasked,
 };
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{
@@ -92,7 +92,7 @@ pub use model_calls::{AttributedUsage, ModelCallUsage};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{EncryptedSecret, NoopSecretProvider, SecretKeyId, SecretProvider};
-pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
+pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck, denial_reason};
 pub use session_kv::{
     CURSOR_KEY_ID_LEN, CursorKey, CursorKeys, InMemorySessionKv, SessionKvEntry, SessionKvError,
     SessionKvFuture, SessionKvLimitKind, SessionKvLimits, SessionKvPage, SessionKvStore,

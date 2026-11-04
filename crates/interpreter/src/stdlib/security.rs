@@ -121,7 +121,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 // check never begins.
                 let asked_ticket = Arc::new(OnceLock::new());
                 let check_ticket = Arc::clone(&asked_ticket);
-                let ask = effects::execute(
+                let asked = effects::execute(
                     caller,
                     "security.check",
                     Check {
@@ -152,11 +152,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                                 site,
                             ) {
                                 Ok(Checked::Allowed) => Ok(None),
-                                Ok(Checked::Ask(ask)) => {
+                                Ok(Checked::Ask(request)) => {
                                     if let Some(ticket) = ticket {
                                         let _ = check_ticket.set(ticket);
                                     }
-                                    Ok(Some(ask))
+                                    Ok(Some(request))
                                 }
                                 Err(reason) => Err(permission_denied(&who, &capability, reason)),
                             }
@@ -164,9 +164,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     },
                 )
                 .await?;
-                if let Some(ask) = ask {
+                if let Some(request) = asked {
                     let site = CallSite::new(asked_ticket.get().copied(), EntryPath::PackageCheck);
-                    approvals::ask(caller, ask, site).await?;
+                    approvals::ask(caller, request, site).await?;
                 }
                 Ok(())
             })

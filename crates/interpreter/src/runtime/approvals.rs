@@ -26,7 +26,8 @@ use super::durable::EffectId;
 use super::host::{
     DenialSource, fatal_host_error, permission_denied, permission_denied_by, quota_exceeded_error,
 };
-use super::security::{AuditDecision, SecurityCheck};
+use super::metrics::MetricsSink;
+use super::security::{AuditDecision, SecurityCheck, denial_reason};
 
 /// The effect every approval is recorded under.
 pub const APPROVAL_OPERATION: &str = "policy.approval";
@@ -110,7 +111,8 @@ pub enum ApprovalOutcome {
     /// No decision came in time. Reported with the approver as its source.
     Expired,
     /// The request could not be put to its approver, as when a harness answered
-    /// it like a tool call. Reported as a policy denial.
+    /// it like a tool call. Denied as a deny rule would deny the call, and
+    /// reported ([`ApprovalRequest::report_unasked`]) with `message`.
     Unanswerable {
         message: String,
     },
@@ -137,31 +139,82 @@ pub trait ApprovalProvider: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<ApprovalOutcome, ApprovalError>> + Send + 'a>>;
 }
 
-/// A call the policy asks about, before anyone was asked. `unasked` is the
-/// policy's reason, used when the call cannot be put to its approver.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Ask {
-    pub request: ApprovalRequest,
-    pub unasked: String,
+/// Why a call that needs approval was denied without asking anyone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Unasked {
+    /// The run has no approval provider, as over MCP or for a one-off run.
+    NoProvider,
+    /// The call is made where the run can't wait, as during another operation.
+    CannotWait,
+    /// The provider could not put the request to its approver, as when a harness
+    /// answered it like a tool call.
+    Unanswerable,
 }
 
-impl Ask {
-    /// Audits this ask as the policy denial a call that cannot put it to its
-    /// approver makes of it.
-    pub(crate) fn audit_unasked(&self, security: &dyn SecurityCheck, site: CallSite) {
-        audit(
-            security,
-            &self.request,
-            &Err((DenialSource::Policy, self.unasked.clone())),
-            site,
-        );
+impl Unasked {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoProvider => "no_provider",
+            Self::CannotWait => "cannot_wait",
+            Self::Unanswerable => "unanswerable",
+        }
+    }
+}
+
+impl ApprovalRequest {
+    /// The reason a call that can't be asked is denied with: the one a deny rule gives.
+    pub fn denial(&self) -> String {
+        denial_reason(&self.caller, &self.capability, &self.context)
     }
 
-    /// [`Self::audit_unasked`], then the policy denial to throw.
-    pub(crate) fn refuse(self, security: &dyn SecurityCheck, site: CallSite) -> wasmtime::Error {
-        self.audit_unasked(security, site);
-        permission_denied(self.request.caller, self.request.capability, self.unasked)
+    /// Reports this request as denied without asking, for `why`: a warning in the log
+    /// for the operator, and a count in `metrics`. The program is told only that the
+    /// call was denied.
+    pub fn report_unasked(&self, why: Unasked, detail: Option<&str>, metrics: &dyn MetricsSink) {
+        tracing::warn!(
+            caller = %self.caller,
+            capability = %self.capability,
+            approver = self.approver.as_str(),
+            rule_caller = %self.rule.caller,
+            rule = self.rule.index,
+            why = why.as_str(),
+            detail,
+            "denied a call that needs approval without asking"
+        );
+        metrics.approval_unasked(self.approver, why);
     }
+}
+
+/// Denies `request` without asking anyone, as a deny rule would: audits the denial
+/// and returns its reason.
+pub(crate) fn deny_unasked(
+    request: &ApprovalRequest,
+    security: &dyn SecurityCheck,
+    site: CallSite,
+) -> String {
+    let denial = request.denial();
+    audit(
+        security,
+        request,
+        &Err((DenialSource::Policy, denial.clone())),
+        site,
+    );
+    denial
+}
+
+/// Refuses a call `request` asks about without asking, for `why`: reports it, then
+/// throws the policy denial [`deny_unasked`] audits.
+pub(crate) fn refuse(
+    request: ApprovalRequest,
+    why: Unasked,
+    security: &dyn SecurityCheck,
+    metrics: &dyn MetricsSink,
+    site: CallSite,
+) -> wasmtime::Error {
+    request.report_unasked(why, None, metrics);
+    let denial = deny_unasked(&request, security, site);
+    permission_denied(request.caller, request.capability, denial)
 }
 
 /// The approval outcome recorded in `bytes`, for an embedder that tracks waiting
@@ -174,19 +227,23 @@ pub fn recorded_outcome(bytes: &super::effects::OutcomeBytes) -> Option<Approval
 /// denied, with the denial's source and reason.
 type Decision = Result<Option<String>, (DenialSource, String)>;
 
-/// Puts `ask` to its approver and waits for the decision, as one effect. Ok means
+/// Puts `request` to its approver and waits for the decision, as one effect. Ok means
 /// approved; every other outcome is a thrown denial.
 pub(crate) async fn ask(
     caller: &mut Caller<'_, StoreData>,
-    ask: Ask,
+    request: ApprovalRequest,
     site: CallSite,
 ) -> wasmtime::Result<()> {
     let Some(provider) = caller.data().approval_provider.clone() else {
-        let security = caller.data().security_check.clone();
-        return Err(ask.refuse(security.as_ref(), site));
+        let data = caller.data();
+        return Err(refuse(
+            request,
+            Unasked::NoProvider,
+            data.security_check.as_ref(),
+            data.metrics.as_ref(),
+            site,
+        ));
     };
-    let Ask { request, unasked } = ask;
-    let unasked_in_effect = unasked.clone();
     let outcome = super::effects::execute(
         caller,
         APPROVAL_OPERATION,
@@ -206,17 +263,24 @@ pub(crate) async fn ask(
                         request.capability
                     )),
                 })?;
-                // Audited once, when decided: a replay returns the recorded outcome
-                // without running this.
-                let security = caller.data().security_check.clone();
-                let decision = decision_of(&request, &outcome, &unasked_in_effect);
-                audit(security.as_ref(), &request, &decision, site);
+                // Reported and audited once, when decided: a replay returns the
+                // recorded outcome without running this.
+                let data = caller.data();
+                if let ApprovalOutcome::Unanswerable { message } = &outcome {
+                    request.report_unasked(
+                        Unasked::Unanswerable,
+                        Some(message),
+                        data.metrics.as_ref(),
+                    );
+                }
+                let decision = decision_of(&request, &outcome);
+                audit(data.security_check.as_ref(), &request, &decision, site);
                 Ok(outcome)
             })
         },
     )
     .await?;
-    match decision_of(&request, &outcome, &unasked) {
+    match decision_of(&request, &outcome) {
         Ok(_) => Ok(()),
         Err((source, reason)) => Err(permission_denied_by(
             source,
@@ -227,9 +291,8 @@ pub(crate) async fn ask(
     }
 }
 
-/// What `outcome` decides for `request`. `unasked` is the policy's reason for a
-/// call that could not be put to its approver.
-fn decision_of(request: &ApprovalRequest, outcome: &ApprovalOutcome, unasked: &str) -> Decision {
+/// What `outcome` decides for `request`.
+fn decision_of(request: &ApprovalRequest, outcome: &ApprovalOutcome) -> Decision {
     let approver = request.approver;
     let who = approver.who();
     let action = approver.action();
@@ -248,9 +311,7 @@ fn decision_of(request: &ApprovalRequest, outcome: &ApprovalOutcome, unasked: &s
             approver.denial_source(),
             format!("{who} did not decide in time ({action})"),
         )),
-        ApprovalOutcome::Unanswerable { message } => {
-            Err((DenialSource::Policy, format!("{unasked}: {message}")))
-        }
+        ApprovalOutcome::Unanswerable { .. } => Err((DenialSource::Policy, request.denial())),
     }
 }
 
@@ -314,7 +375,6 @@ mod tests {
                     name: Some("refunds".to_owned()),
                     filter: None,
                 },
-                reason: "refunds need approval, which can't be asked here".to_owned(),
             }
         }
     }
@@ -343,9 +403,20 @@ mod tests {
         }
     }
 
+    /// Counts the calls denied without asking.
+    #[derive(Default)]
+    struct Unaskeds(Mutex<Vec<(Approver, Unasked)>>);
+
+    impl MetricsSink for Unaskeds {
+        fn approval_unasked(&self, approver: Approver, why: Unasked) {
+            self.0.lock().unwrap().push((approver, why));
+        }
+    }
+
     struct Run {
         result: wasmtime::Result<Option<String>>,
         asked: Vec<ApprovalRequest>,
+        unasked: Vec<(Approver, Unasked)>,
         clock_paused: Duration,
     }
 
@@ -360,9 +431,11 @@ mod tests {
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().unwrap();
         let asked = Asked::default();
+        let unasked = Arc::new(Unaskeds::default());
         let mut data = StoreData::with_vfs("test-run".into(), Vfs::none());
         data.install_type_info(compiled.type_info.clone());
         data.security_check = Arc::new(AsksRefunds(approver));
+        data.metrics = unasked.clone();
         if let Some(outcome) = outcome {
             data.approval_provider = Some(Arc::new(Decides {
                 outcome,
@@ -380,9 +453,11 @@ mod tests {
         let instance = linker.instantiate_async(&mut store, &module).await.unwrap();
         let result = dispatch_main_async(&mut store, &instance).await;
         let asked = asked.lock().unwrap().clone();
+        let unasked = unasked.0.lock().unwrap().clone();
         Run {
             result,
             asked,
+            unasked,
             clock_paused: store.data().clock_paused,
         }
     }
@@ -472,23 +547,52 @@ mod tests {
         }
     }
 
+    /// What a deny rule on the same call gives.
+    const REFUND_DENIED: &str = "policy denied test.refund with amount = 250 for main";
+
     #[tokio::test]
-    async fn without_an_approver_an_ask_is_a_policy_denial() {
+    async fn without_an_approver_an_ask_is_denied_as_a_deny_rule_would_deny_it() {
         let caught = run(REFUND_OR_REASON, Approver::Admin, None, Duration::ZERO).await;
-        assert_eq!(
-            caught.result.unwrap().as_deref(),
-            Some("refunds need approval, which can't be asked here")
-        );
+        assert_eq!(caught.result.unwrap().as_deref(), Some(REFUND_DENIED));
+        assert_eq!(caught.unasked, [(Approver::Admin, Unasked::NoProvider)]);
         let escaped = run(REFUND, Approver::Human, None, Duration::ZERO).await;
         let error = escaped.result.expect_err("refused");
         assert_eq!(escaped_source(&error), Some(DenialSource::Policy));
     }
 
+    #[tokio::test]
+    async fn an_unanswerable_request_is_denied_as_a_deny_rule_would_deny_it() {
+        let run = run(
+            REFUND_OR_REASON,
+            Approver::Human,
+            Some(ApprovalOutcome::Unanswerable {
+                message: "the harness answered it like a tool call".to_owned(),
+            }),
+            Duration::ZERO,
+        )
+        .await;
+        assert_eq!(run.result.unwrap().as_deref(), Some(REFUND_DENIED));
+        assert_eq!(run.unasked, [(Approver::Human, Unasked::Unanswerable)]);
+    }
+
+    #[tokio::test]
+    async fn a_decided_request_is_not_reported_as_unasked() {
+        let run = run(
+            REFUND,
+            Approver::Human,
+            Some(ApprovalOutcome::Denied { reason: None }),
+            Duration::ZERO,
+        )
+        .await;
+        assert!(run.result.is_err());
+        assert_eq!(run.unasked, []);
+    }
+
     #[test]
     fn a_package_check_recorded_before_approvals_replays_as_allowed() {
         let legacy = crate::runtime::effects::encode(&()).unwrap();
-        let ask: Option<Ask> = crate::runtime::effects::decode(&legacy).unwrap();
-        assert_eq!(ask, None);
+        let request: Option<ApprovalRequest> = crate::runtime::effects::decode(&legacy).unwrap();
+        assert_eq!(request, None);
     }
 
     #[test]

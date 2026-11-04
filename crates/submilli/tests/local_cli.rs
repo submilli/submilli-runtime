@@ -2779,9 +2779,17 @@ function main(): string {
     ]);
 
     assert!(out.status.success(), "stderr: {}", stderr(&out));
+    // Denied as a deny rule would deny it: the program isn't told about the approval,
+    // whoever runs it is.
     let result = stdout(&out);
     assert!(
-        result.contains("approval (ask-human)") && result.contains("approval can't be asked here"),
+        result.contains("policy denied test.refund with amount = 250 for main"),
         "got: {result}"
+    );
+    let warning = stderr(&out);
+    assert!(
+        warning.contains("denied a call that needs approval without asking")
+            && warning.contains("no_provider"),
+        "stderr: {warning}"
     );
 }

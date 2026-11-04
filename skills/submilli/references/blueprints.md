@@ -201,10 +201,10 @@ answers `POST /v1/runs/{id}/resume` with `{"call_id", "decision": "approve" |
 (`submilli server approval approve <call_id>`, or `/v1/approvals`). Approved,
 the call runs once. Denied or expired, it throws `PermissionDeniedError` with
 `source` `human` or `admin`. The harness must put the question to the person,
-never to the model. Over MCP or `POST /v1/execute` an ask is denied with
-`source` `policy`, as are asks inside `git.*` and `submilli:code` file
-operations, so use ask rules only where the harness speaks the HTTP session
-API and handles approvals.
+never to the model. Over MCP or `POST /v1/execute` an ask is denied as a
+`deny` rule would deny it, with `source` `policy` and the same reason, as are
+asks inside `git.*` and `submilli:code` file operations, so use ask rules only
+where the harness speaks the HTTP session API and handles approvals.
 
 ## Roles and tenants
 

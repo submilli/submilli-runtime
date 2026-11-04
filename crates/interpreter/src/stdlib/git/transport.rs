@@ -891,6 +891,7 @@ mod tests {
                     username: Some("test".into()),
                 },
                 security: data.security_check.clone(),
+                metrics: data.metrics.clone(),
                 secrets: providers.clone(),
                 http: providers.clone(),
                 runtime: tokio::runtime::Handle::current(),

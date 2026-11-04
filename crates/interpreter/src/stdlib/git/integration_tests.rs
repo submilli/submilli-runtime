@@ -103,6 +103,7 @@ fn job(vfs: &Vfs, op: &str) -> Job {
             username: None,
         },
         security: data.security_check.clone(),
+        metrics: data.metrics.clone(),
         secrets: data.secret_provider.clone(),
         http: data.http_client.clone(),
         runtime: tokio::runtime::Handle::current(),

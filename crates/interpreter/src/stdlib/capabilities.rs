@@ -678,6 +678,18 @@ pub fn find_any(name: &str) -> Option<&'static Capability> {
         .find(|cap| cap.name == name)
 }
 
+/// The fields of `capability`'s context that hold VFS paths, which a policy tests
+/// normalized and a denial names. Empty for capabilities without VFS paths.
+pub fn vfs_path_fields(capability: &str) -> &'static [&'static str] {
+    match capability {
+        "fs.read" | "fs.write" | "fs.stat" | "fs.list" | "fs.mkdir" | "fs.remove" => &["path"],
+        "fs.copy" | "fs.move" => &["from", "to"],
+        "git.init" | "git.clone" | "git.fetch" | "git.commit" => &["path"],
+        "http.download" => &["vfs_path"],
+        _ => &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +708,25 @@ mod tests {
             refused,
             ["secrets.get", "session.finalize", "variables.get"]
         );
+    }
+
+    #[test]
+    fn vfs_path_fields_are_vfs_path_fields_in_the_catalog() {
+        for capability in catalog().iter().flat_map(|group| group.capabilities) {
+            for field in vfs_path_fields(capability.name) {
+                let normalization = capability
+                    .filter_fields
+                    .iter()
+                    .find(|candidate| candidate.name == *field)
+                    .map(|candidate| candidate.normalization);
+                assert_eq!(
+                    normalization,
+                    Some(FieldNormalization::VfsPath),
+                    "{}.{field}",
+                    capability.name
+                );
+            }
+        }
     }
 
     /// The core set lists exactly the core catalog, in the same order, so every

@@ -12,6 +12,7 @@ use url::Url;
 
 use super::transport::{EgressAt, RedirectDenied, RedirectGuard, RedirectHop};
 use crate::runtime::decision::{CallSite, CallTicket, EntryPath};
+use crate::runtime::metrics::MetricsSink;
 use crate::runtime::security::SecurityCheck;
 use crate::stdlib::shared::{audit_denial_at, authorize_capability};
 use crate::stdlib::url::host_without_trailing_dots;
@@ -103,6 +104,7 @@ pub(super) enum GuardedRequest {
 pub(super) struct CapabilityGuard {
     caller: String,
     security_check: Arc<dyn SecurityCheck>,
+    metrics: Arc<dyn MetricsSink>,
     request: GuardedRequest,
     cwd: String,
     /// The call that started the request: a hop's record names it and reuses its line,
@@ -129,6 +131,7 @@ impl CapabilityGuard {
     pub(super) fn new(
         caller: String,
         security_check: Arc<dyn SecurityCheck>,
+        metrics: Arc<dyn MetricsSink>,
         request: GuardedRequest,
         cwd: String,
         parent: Option<CallTicket>,
@@ -136,6 +139,7 @@ impl CapabilityGuard {
         Self {
             caller,
             security_check,
+            metrics,
             request,
             cwd,
             parent,
@@ -233,6 +237,7 @@ impl RedirectGuard for CapabilityGuard {
         authorize_capability(
             &self.caller,
             self.security_check.as_ref(),
+            self.metrics.as_ref(),
             &capability,
             &context,
             &self.cwd,
