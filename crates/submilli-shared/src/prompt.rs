@@ -12,7 +12,7 @@ use submilli_blueprint::{Action, Blueprint, DefaultAction, FieldMatch, FilterExp
 
 /// The canonical LLM-facing prompt, embedded at build time. We serve its
 /// `## The prompt` section as the `execute` tool description.
-const LLM_PROMPT_DOC: &str = include_str!("../../../llm-prompt.md");
+const LLM_PROMPT_DOC: &str = include_str!("../llm-prompt.md");
 
 /// The caller id of the user's script — the one the prompt describes.
 const MAIN_CALLER: &str = "main";
