@@ -1,0 +1,39 @@
+# MOCK: run by scripts/policy.test.mjs against a copy of the package whose endpoint points at
+# a fake Shopify on 127.0.0.1. The policy engine is real; the Shopify answers are not. Refund
+# and cancel resolve facts from Shopify before their check, so only a fake can exercise those rules.
+kind: blueprint
+name: shopify-money-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/shopify-admin'
+secrets:
+  SHOPIFY_ACCESS_TOKEN:
+    store: policy-access-token
+  SHOPIFY_SHOP:
+    store: policy-shop
+default: deny
+permissions:
+  main:
+    - capability: shopify.com/refunds.create
+      filter: amount <= 200 and currency == "USD" and restock == false
+      action: allow
+    - capability: shopify.com/orders.cancel
+      filter: totalAmount <= 500
+      action: allow
+    - capability: shopify.com/fulfillments.updateTracking
+      filter: orderId == "gid://shopify/Order/1"
+      action: allow
+    - capability: shopify.com/inventory.set
+      filter: delta >= -5 and delta <= 5
+      action: allow
+    - capability: shopify.com/inventory.adjust
+      action: allow
+    - capability: shopify.com/orders.get
+      action: allow
+  '@submilli/shopify-admin':
+    - capability: http.post
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "SHOPIFY_ACCESS_TOKEN" or name == "SHOPIFY_SHOP"
+      action: allow

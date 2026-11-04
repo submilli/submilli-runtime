@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf433d888bb1853a3206091bd115f1fa1ddeb8873b4cce5c1a1d8b710f6ff5bd"
+  contentHash: "08e05da9ff884d2ecaba6f308866266e00e4255d4951adf2e6b35e31583513ac"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -36,6 +36,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/linear`](#submillilinear) | Linear issues, comments, teams, projects, users, and agent sessions, through Linear's GraphQL API. | `LINEAR_API_KEY` | `api.linear.app` |
 | [`@submilli/notion`](#submillinotion) | Notion search, pages as enhanced Markdown, databases, data sources, views, comments, users, blocks, and file uploads. | `NOTION_ACCESS_TOKEN` | `api.notion.com` |
 | [`@submilli/sentry`](#submillisentry) | Sentry Cloud organizations, projects, issues, and events, and issue triage. | `SENTRY_AUTH_TOKEN` | `sentry.io` |
+| [`@submilli/shopify-admin`](#submillishopify-admin) | One Shopify store's orders, refunds, fulfillment, products, inventory, customers, discount codes, draft orders, and abandoned checkouts, over the GraphQL Admin API. | `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_SHOP` | `<store>.myshopify.com` |
 | [`@submilli/slack-bot`](#submillislack-bot) | Slack as the app's bot: bot messages, conversation history and threads, conversations and members, direct messages, users, and reactions. | `SLACK_BOT_TOKEN` | `slack.com` |
 | [`@submilli/slack-user`](#submillislack-user) | Slack as the authenticated user: search, messages and threads, channels, users, files, sending messages, and reactions. | `SLACK_USER_TOKEN` | `files.slack.com`, `slack.com` |
 | [`@submilli/typesafe`](#submillitypesafe) | Semantic judgments by TypeSafe's Jev model: choice, yes/no, and rubric-scored questions with typed answers and probabilities. | `TYPESAFE_AI_KEY` | `api.typesafe.ai` |
@@ -347,6 +348,26 @@ submilli install submilli/submilli-runtime @submilli/sentry
 submilli blueprint add-package @submilli/sentry --no-capabilities
 submilli blueprint capability list @submilli/sentry
 submilli blueprint capability add sentry.io/issues.list
+```
+
+## @submilli/shopify-admin
+
+One Shopify store's orders, refunds, fulfillment, products, inventory, customers, discount codes, draft orders, and abandoned checkouts, over the GraphQL Admin API.
+
+| | |
+| --- | --- |
+| Secret | `SHOPIFY_ACCESS_TOKEN`, `SHOPIFY_SHOP` |
+| Credential | An offline access token from an app installed on the store, with the scopes the operations need (see the readme), and the store's `myshopify.com` subdomain |
+| Without the secret | Throws `ShopifyError` with code `missing_shop` or `missing_access_token` |
+| HTTP | `<store>.myshopify.com`: POST. The host holds the store's name, so the Package declares no host filter; add one to the Blueprint (see the readme) |
+| Filesystem | None |
+| Readme | [`packages/shopify-admin/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/shopify-admin/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/shopify-admin
+submilli blueprint add-package @submilli/shopify-admin --no-capabilities
+submilli blueprint capability list @submilli/shopify-admin
+submilli blueprint capability add shopify.com/orders.search
 ```
 
 ## @submilli/slack-bot

@@ -1,0 +1,44 @@
+# Run under the real policy engine by scripts/policy.test.mjs and crates/submilli/tests/package_policy.rs. No network and no token:
+# SHOPIFY_SHOP comes from a throwaway store, and secrets.get for SHOPIFY_ACCESS_TOKEN is denied,
+# so an allowed call stops there, proving the business check passed before any request.
+kind: blueprint
+name: shopify-shop-scope-test
+packages:
+  - '@submilli/shopify-admin'
+secrets:
+  SHOPIFY_SHOP:
+    store: policy-shop
+default: deny
+permissions:
+  main:
+    - capability: shopify.com/orders.search
+      filter: shop == "policy-test-shop"
+      action: allow
+    - capability: shopify.com/orders.get
+      filter: shop == "policy-test-shop"
+      action: allow
+    - capability: shopify.com/orders.update
+      filter: not (fields contains "tags")
+      action: allow
+    - capability: shopify.com/products.update
+      filter: not (fields contains "status")
+      action: allow
+    - capability: shopify.com/variants.updatePrices
+      filter: maxPrice <= 100
+      action: allow
+    - capability: shopify.com/inventory.adjust
+      filter: delta >= -50 and delta <= 500
+      action: allow
+    - capability: shopify.com/discounts.create
+      filter: percentage <= 20 and amount == 0 and usageLimit >= 1 and usageLimit <= 100
+      action: allow
+    - capability: shopify.com/draftOrders.create
+      filter: itemCount <= 10 and discountPercentage <= 20
+      action: allow
+    - capability: shopify.com/draftOrders.sendInvoice
+      filter: to == "buyer@example.com"
+      action: allow
+  '@submilli/shopify-admin':
+    - capability: secrets.get
+      filter: name == "SHOPIFY_SHOP"
+      action: allow

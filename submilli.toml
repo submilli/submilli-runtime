@@ -116,3 +116,10 @@ version = "0.1.0"
 description = "Native Attio CRM client for object and status discovery, typed record queries, people and company upserts by email and domain, record writes, stage changes, and notes."
 keywords = ["attio", "crm", "records", "deals", "people", "companies", "api"]
 path = "packages/attio"
+
+[[package]]
+name = "@submilli/shopify-admin"
+version = "0.1.0"
+description = "Native Shopify GraphQL Admin API client for orders, refunds, fulfillment, products, inventory, customers, discounts, draft orders, and abandoned checkouts."
+keywords = ["shopify", "ecommerce", "orders", "refunds", "inventory", "graphql", "api"]
+path = "packages/shopify-admin"

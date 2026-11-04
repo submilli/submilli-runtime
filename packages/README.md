@@ -22,6 +22,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/linear`](linear/readme.md) | Linear issues, comments, teams, projects, users, and agent sessions. |
 | [`@submilli/notion`](notion/readme.md) | Notion search, pages, Markdown, databases, data sources, views, comments, blocks, and file uploads. |
 | [`@submilli/sentry`](sentry/readme.md) | Sentry Cloud organizations, projects, issues, events, and issue triage. |
+| [`@submilli/shopify-admin`](shopify-admin/readme.md) | One Shopify store's orders, refunds, fulfillment, products, inventory, customers, discount codes, draft orders, and abandoned checkouts, over the GraphQL Admin API. |
 | [`@submilli/slack-bot`](slack-bot/readme.md) | Slack messages, conversations, users, and reactions as the app's bot. |
 | [`@submilli/slack-user`](slack-user/readme.md) | Slack search, messages, channels, users, files, and reactions as the authenticated user. |
 | [`@submilli/typesafe`](typesafe/readme.md) | TypeSafe's Jev model for yes/no, choice, and scoring judgments with typed answers and probabilities. |
