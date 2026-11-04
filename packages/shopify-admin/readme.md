@@ -76,7 +76,7 @@ the bound store, so `shop == "..."` pins one.
 | `shopify.com/orders.search` | | |
 | `shopify.com/orders.get` | `orderId` | |
 | `shopify.com/orders.update` | `orderId`, `fields` | `addOrderNote` sets `["note"]`, `addOrderTags` sets `["tags"]` |
-| `shopify.com/orders.cancel` | `orderId`, `totalAmount`, `currency`, `restock`, `refund` | The total comes from Shopify. Cancelling cannot be undone |
+| `shopify.com/orders.cancel` | `orderId`, `totalAmount`, `currency`, `restock`, `refund` | The total comes from Shopify. Cancelling cannot be undone. With `refund`, this returns money; with `restock`, stock |
 | `shopify.com/refunds.suggest` | `orderId` | Writes nothing |
 | `shopify.com/refunds.create` | `orderId`, `amount`, `currency`, `restock` | Shopify works out the amount; the caller cannot name one. Money is the buyer's currency, so cap `amount` together with `currency` |
 | `shopify.com/fulfillmentOrders.list` | `orderId` | |
@@ -118,8 +118,15 @@ permissions:
       action: allow
 ```
 
-The limits above are examples. Choose your own. Note that `percentage <= 20` alone
-would allow any fixed `amount`, and a code with no usage limit.
+The limits above are examples. Choose your own. Keep in mind:
+
+- `percentage <= 20` alone would allow any fixed `amount`, and a code with no usage
+  limit.
+- `orders.cancel` can refund, so a cap on `refunds.create` does not cover it. Filter
+  `refund == false` to keep refunds to one capability.
+- `restock` moves stock without `shopify.com/inventory.adjust`, so limits on `delta`
+  do not cover it. Filter `restock == false` on refunds and cancels if they should.
+- A cap is per call. Three refunds of 100 pass a cap of 200.
 
 ## Behavior to know
 
