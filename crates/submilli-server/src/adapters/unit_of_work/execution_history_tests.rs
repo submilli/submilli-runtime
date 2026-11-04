@@ -110,6 +110,7 @@ async fn execution_history_records_secret_envelopes_before_decryption() {
         let config = RuntimeConfig::default();
         let engine = config.engine().unwrap();
         let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().unwrap());
+        data.install_type_info(compiled.type_info.clone());
         data.effects = Some(history);
         data.secret_provider = provider;
         let mut store = config.store(&engine, data).unwrap();
@@ -396,6 +397,7 @@ async fn try_run_script_with(
         Vfs::external(root.to_path_buf()).unwrap(),
     );
     data.effects = Some(history.clone());
+    data.install_type_info(compiled.type_info.clone());
     configure(&mut data);
     let mut store = config.store(&engine, data).unwrap();
     let module = wasmtime::Module::new(&engine, &compiled.wasm).unwrap();
@@ -585,6 +587,7 @@ async fn measure_filesystem_script(
     let compiled =
         interpreter::compile_script(source, "resources.ts", interpreter::FileId(0), &[], &[])
             .unwrap();
+    data.install_type_info(compiled.type_info.clone());
     let config = RuntimeConfig::default();
     let engine = config.engine()?;
     let mut store = config.store(&engine, data)?;
