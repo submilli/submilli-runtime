@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2f639dd57c2038d3f1be0bda66e2dacb8afa39400d255a20c49806dbbd6fe7e3"
+  contentHash: "c917691ea72eea17f0ad0e0737ead1916c369dc5242f0ade7afdf322ea42b0c6"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -68,7 +68,7 @@ flat names listed. A dash means the form doesn't exist.
 | `max_last_run_size` | `--max-last-run-size` | `SUBMILLI_MAX_LAST_RUN_SIZE` | megabytes | `64` | The largest [last run](/docs/reference/http-api#get-v1sessionssession_idlast-run) a session keeps, as JSON. A larger one keeps only its size, and its last-run answers `413`. |
 | `idempotency_retention` | `--idempotency-retention` | `SUBMILLI_IDEMPOTENCY_RETENTION` | seconds | `86400` | How long a keyed execute's response is kept for replay after it completes. `0` keeps only the newest `idempotency_keep_last`. See [Idempotency](/docs/reference/http-api#idempotency). |
 | `idempotency_keep_last` | `--idempotency-keep-last` | `SUBMILLI_IDEMPOTENCY_KEEP_LAST` | responses | `3` | A session's newest keyed-execute responses kept for replay whatever their age. `0` keeps each only for `idempotency_retention`. |
-| `admin_approval_timeout` | `--admin-approval-timeout` | `SUBMILLI_ADMIN_APPROVAL_TIMEOUT` | seconds, at least 1 | `86400` | How long a call an `ask-admin` rule matches waits for an administrator, under a Blueprint that sets no `admin_approval_timeout`. See [Approvals](/docs/reference/permissions#approvals). |
+| `approval_timeout` | `--approval-timeout` | `SUBMILLI_APPROVAL_TIMEOUT` | seconds, at least 1 | `86400` | How long a call an `ask-human` or `ask-admin` rule matches waits for a decision, under a Blueprint that sets no `approval_timeout`. See [Approvals](/docs/reference/permissions#approvals). |
 | `max_embedding_tokens` | `--max-embedding-tokens` | `SUBMILLI_MAX_EMBEDDING_TOKENS` | count, at least 1 | `50M` | Embedding tokens across all runs. Separate from the model-token budgets. |
 | `max_execution_embedding_tokens` | `--max-execution-embedding-tokens` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | count, at least 1 | `2M` | Embedding tokens one run may spend. |
 | `max_execution_embedding_requests` | `--max-execution-embedding-requests` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | count, at least 1 | `1K` | Provider requests one run's `submilli:embedding` calls may send. |
@@ -571,10 +571,10 @@ Options:
           How many of a session's newest keyed-execute responses are kept for replay whatever their
           age. `0` keeps each only for `--idempotency-retention`. [default: 3] Env:
           `$SUBMILLI_IDEMPOTENCY_KEEP_LAST`, which outranks the config file
-      --admin-approval-timeout <SECONDS>
-          Seconds a call an `ask-admin` rule matches waits for an administrator's decision before it
-          is denied, under a Blueprint that sets no `admin_approval_timeout`. [default: 86400] Env:
-          `$SUBMILLI_ADMIN_APPROVAL_TIMEOUT`, which outranks the config file
+      --approval-timeout <SECONDS>
+          Seconds a call an `ask-human` or `ask-admin` rule matches waits for a decision before it
+          is denied, under a Blueprint that sets no `approval_timeout`. [default: 86400] Env:
+          `$SUBMILLI_APPROVAL_TIMEOUT`, which outranks the config file
       --max-embedding-tokens <TOKENS>
           Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate
           from `--max-llm-tokens`: embedding and `llm.call` spend against different provider

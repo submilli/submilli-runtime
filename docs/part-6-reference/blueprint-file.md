@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c8d85de8ac45cdd4cbc7c962cf676a06d29f4b996a52a9ab540af6276380293a"
+  contentHash: "046c47b425b3f1e3b41ab9ab51ce9e3eb1dafaaf25c14dbd15d5fd86e12658b1"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -24,7 +24,7 @@ errors that refuse a file when it is linted or registered.
 | [`allow_insecure_http`](#allow_insecure_http) | boolean | no | `false` |
 | [`idle_timeout`](#idle_timeout) | duration | no | `24h` |
 | [`tool_call_timeout`](#tool_call_timeout) | duration | no | `10m` |
-| [`admin_approval_timeout`](#admin_approval_timeout) | duration | no | the server's `admin_approval_timeout`, `24h` by default |
+| [`approval_timeout`](#approval_timeout) | duration | no | the server's `approval_timeout`, `24h` by default |
 | [`vfs`](#vfs) | mode name or map | no | `ephemeral` |
 | [`secrets`](#secrets) | map | no | empty |
 | [`variables`](#variables) | map | no | empty |
@@ -46,7 +46,7 @@ refused. The same rule applies to MCP and auth-proxy header maps,
 auth-proxy query maps, and paths in `vfs.mounts`.
 
 ```text
-error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `tool_call_timeout`, `admin_approval_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
+error: case.yaml: blueprint parse error: unknown field `permision`, expected one of `kind`, `name`, `allow_insecure_http`, `idle_timeout`, `tool_call_timeout`, `approval_timeout`, `vfs`, `secrets`, `variables`, `packages`, `auth_proxy`, `git`, `default`, `permissions`, `mcp`, `llm`, `embedding` at line 3 column 1
 ```
 
 ```text
@@ -220,26 +220,23 @@ tool, `@tools`, before the call throws `TimeoutError` in the program. Later
 calls of that run then throw `TimeoutError` without waiting. The time a run
 waits does not count against `max_execution_time`.
 
-It is also how long a call an `ask-human` rule matches waits for the person's
-decision. With none in time, that call throws `PermissionDeniedError`, and
-later tool calls still wait.
-
 For a durable run, this bound applies per attempt. Recovery after a server
 restart starts a fresh timeout when it reconstructs an unresolved call. A
 committed timeout replays as `TimeoutError` and later calls still fail without
 waiting. See
 [Application tools](/docs/reference/http-api#application-tools).
 
-## admin_approval_timeout
+## approval_timeout
 
 | | |
 | --- | --- |
 | Type | duration, a whole number followed by `s`, `m` or `h`, longer than `0s` |
-| Default | the server's [`admin_approval_timeout`](/docs/reference/server-settings), `24h` by default |
+| Default | the server's [`approval_timeout`](/docs/reference/server-settings), `24h` by default |
 
-How long a call an `ask-admin` rule matches waits for an administrator's
-decision. With none in time, the call throws `PermissionDeniedError` with
-`source` `admin`. The time a run waits does not count against
+How long a call an `ask-human` or `ask-admin` rule matches waits for the
+person's or an administrator's decision. With none in time, the call throws
+`PermissionDeniedError` with `source` `human` or `admin`, and later calls
+still wait. The time a run waits does not count against
 `max_execution_time`. As with `tool_call_timeout`, the bound applies per
 attempt of a durable run. See [Approvals](/docs/reference/permissions#approvals).
 

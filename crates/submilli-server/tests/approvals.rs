@@ -20,11 +20,13 @@ use tower::ServiceExt;
 const ADMIN: &str = "admin-token-0123456789abcdef0123456789";
 const USER: &str = "user-token-0123456789abcdef01234567890";
 
+/// `ask-human` and `ask-admin` both wait `approval_timeout`, whatever
+/// `tool_call_timeout` says.
 const BLUEPRINT: &str = "\
 name: refunds
 default: deny
-tool_call_timeout: 2s
-admin_approval_timeout: 2s
+tool_call_timeout: 30s
+approval_timeout: 2s
 permissions:
   main:
     - capability: test.refund

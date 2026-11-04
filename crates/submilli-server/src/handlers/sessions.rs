@@ -735,8 +735,7 @@ pub(crate) fn approval_provider(
 ) -> Arc<dyn interpreter::runtime::ApprovalProvider> {
     Arc::new(crate::runs::SuspendingApprovalProvider {
         entry: Arc::clone(entry),
-        human_timeout: blueprint.tool_call_timeout,
-        admin_timeout: state.admin_approval_timeout(blueprint),
+        timeout: state.approval_timeout(blueprint),
         touch: session_touch(state, session_id),
         audit: Arc::clone(audit),
     })

@@ -36,9 +36,9 @@ use tokio::sync::{oneshot, watch};
 /// holds its Wasm instance in memory.
 pub const DEFAULT_MAX_SUSPENDED_RUNS: usize = 256;
 
-/// How long a call an `ask-admin` rule matches waits for an administrator, by
-/// default, under a Blueprint that sets no `admin_approval_timeout`.
-pub const DEFAULT_ADMIN_APPROVAL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+/// How long a call an ask rule matches waits for its approver, by default, under
+/// a Blueprint that sets no `approval_timeout`.
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How long a finished run's result stays readable through `GET /v1/runs/{id}`.
 /// Only a run that suspended is kept: one that never did was answered whole by
@@ -831,11 +831,9 @@ impl ToolProvider for SuspendingToolProvider {
 /// runs out.
 pub struct SuspendingApprovalProvider {
     pub entry: Arc<RunEntry>,
-    /// How long an `ask-human` call waits: the Blueprint's `tool_call_timeout`.
-    pub human_timeout: Duration,
-    /// How long an `ask-admin` call waits: the Blueprint's
-    /// `admin_approval_timeout`, else the server's.
-    pub admin_timeout: Duration,
+    /// How long a call waits for its approver: the Blueprint's
+    /// `approval_timeout`, else the server's.
+    pub timeout: Duration,
     /// Marks the session active as the run suspends, so its idle window starts over.
     pub touch: Arc<dyn Fn() -> Touch + Send + Sync>,
     /// Records each request and what became of it.
@@ -849,10 +847,7 @@ impl ApprovalProvider for SuspendingApprovalProvider {
         request: &'a ApprovalRequest,
     ) -> Pin<Box<dyn Future<Output = Result<ApprovalOutcome, ApprovalError>> + Send + 'a>> {
         Box::pin(async move {
-            let timeout = match request.approver {
-                Approver::Human => self.human_timeout,
-                Approver::Admin => self.admin_timeout,
-            };
+            let timeout = self.timeout;
             let requested_at_unix_ms = unix_ms();
             let view = |call_id| PendingCallView::Approval {
                 call_id,

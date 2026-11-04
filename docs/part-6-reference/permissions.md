@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "18e225e8c5683692c782386f0a398037036efb1a801e65e6f353be4c84ef5102"
+  contentHash: "6f257a37511826e7c24d76d6211281f908155e7c2acaa5e0517a506d3264977f"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -78,7 +78,7 @@ call as `kind: "approval"`, with the values the filter tested
 | | `ask-human` | `ask-admin` |
 | --- | --- | --- |
 | Who decides | The harness, with a `user` or an `admin` token, after asking the person | Only an `admin` token: `submilli server approval`, `/v1/approvals`, or `POST /v1/runs/{run_id}/resume` |
-| How long it waits | The Blueprint's `tool_call_timeout`, 10 minutes by default | The Blueprint's `admin_approval_timeout`, else the server's, 24 hours by default |
+| How long it waits | The Blueprint's `approval_timeout`, else the server's, 24 hours by default | The same |
 | A refusal or no decision in time | `PermissionDeniedError`, `source` `human` | `PermissionDeniedError`, `source` `admin` |
 
 An approval covers the call it was asked for, once. The same operation run

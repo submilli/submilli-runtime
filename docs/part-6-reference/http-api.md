@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2fcc4ae0a22aaab9e9e62b4584a485824730b37b888abb37694d87fca891930f"
+  contentHash: "4c750ee9637c92eb48aaa51d7b9b09fef8be2515571eae79ed192f301d4a83c0"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -333,9 +333,8 @@ in `results`:
   person the action is waiting and notify an administrator.
 - An approval covers that call once. The program running the same operation
   again asks again.
-- Waiting does not count against `max_execution_time` or fuel. An
-  `ask-human` call waits the Blueprint's `tool_call_timeout`. An `ask-admin`
-  call waits its `admin_approval_timeout`, else the server's, 24 hours by
+- Waiting does not count against `max_execution_time` or fuel. A call
+  waits the Blueprint's `approval_timeout`, else the server's, 24 hours by
   default. A run waiting counts toward `max_suspended_runs`, and its session
   is not idle.
 - Approvals are answered over this API only. A run over MCP, or through

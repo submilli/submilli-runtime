@@ -330,8 +330,8 @@ fn diff_unclassified(old: &Blueprint, new: &Blueprint, out: &mut Vec<Change>) {
             old.tool_call_timeout != new.tool_call_timeout,
         ),
         (
-            "admin_approval_timeout",
-            old.admin_approval_timeout != new.admin_approval_timeout,
+            "approval_timeout",
+            old.approval_timeout != new.approval_timeout,
         ),
         ("vfs", old.vfs != new.vfs),
         ("secrets", old.secrets != new.secrets),

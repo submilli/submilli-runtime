@@ -111,8 +111,8 @@ struct AppStateInner {
     unit_of_work: Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory>,
     history_objects: Option<Arc<crate::adapters::history::HistoryObjects>>,
     durable_execution: bool,
-    /// How long an `ask-admin` call waits under a Blueprint that sets none.
-    admin_approval_timeout: std::time::Duration,
+    /// How long an asked call waits under a Blueprint that sets none.
+    approval_timeout: std::time::Duration,
     max_durable_runs: usize,
     recovery_wakeup: Arc<Notify>,
     secret_store: Option<Arc<dyn SecretStore>>,
@@ -468,9 +468,9 @@ impl AppState {
                 unit_of_work,
                 history_objects,
                 durable_execution: config.durable_execution,
-                admin_approval_timeout: config
-                    .admin_approval_timeout
-                    .unwrap_or(crate::runs::DEFAULT_ADMIN_APPROVAL_TIMEOUT),
+                approval_timeout: config
+                    .approval_timeout
+                    .unwrap_or(crate::runs::DEFAULT_APPROVAL_TIMEOUT),
                 max_durable_runs: config.max_durable_runs.unwrap_or(4),
                 recovery_wakeup: Arc::new(Notify::new()),
                 secret_store,
@@ -664,14 +664,14 @@ impl AppState {
         self.inner.durable_execution
     }
 
-    /// How long a call an `ask-admin` rule matches waits under `blueprint`.
-    pub(crate) fn admin_approval_timeout(
+    /// How long a call an ask rule matches waits for its approver under `blueprint`.
+    pub(crate) fn approval_timeout(
         &self,
         blueprint: &submilli_blueprint::Blueprint,
     ) -> std::time::Duration {
         blueprint
-            .admin_approval_timeout
-            .unwrap_or(self.inner.admin_approval_timeout)
+            .approval_timeout
+            .unwrap_or(self.inner.approval_timeout)
     }
     pub(crate) fn units(&self) -> Arc<dyn crate::application::unit_of_work::UnitOfWorkFactory> {
         self.inner.unit_of_work.clone()
