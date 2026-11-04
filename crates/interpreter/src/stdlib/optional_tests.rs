@@ -503,13 +503,54 @@ async fn a_typed_run_throws_when_the_answer_does_not_match() {
                    agents.run<Review>("researcher", "review it");
                    return "accepted";
                  } catch (e: TypeError) {
-                   return "rejected";
+                   return e.message;
                  }
                }"#,
         )
         .await
         .expect("program completes");
-    assert_eq!(out, "rejected");
+    assert_eq!(
+        out,
+        "agents.run(\"researcher\"): the agent's answer does not match `Review`"
+    );
+}
+
+/// A generic forwards its own `T` into `agents.run<T>`: the caller's type is
+/// what is asked for and what the answer is checked against.
+#[tokio::test]
+async fn a_generic_forwards_its_type_to_run() {
+    let agents = FakeAgents::answering(r#"{"score": 7}"#);
+    let out = Harness::default()
+        .agents(agents.clone())
+        .run(
+            r#"import agents from "submilli:agents";
+               interface Review { score: number }
+               interface Other { label: string }
+               function ask<T>(input: string): T { return agents.run<T>("researcher", input); }
+               function main(): string {
+                 const review = ask<Review>("review it");
+                 try { ask<Other>("again"); return "accepted"; }
+                 catch (e: TypeError) { return String(review.score) + "|" + e.message; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(
+        out,
+        "7|agents.run(\"researcher\"): the agent's answer does not match `Other`"
+    );
+    let schemas: Vec<String> = agents
+        .requests()
+        .iter()
+        .map(|request| {
+            request
+                .schema
+                .clone()
+                .expect("a forwarded run sends a schema")
+        })
+        .collect();
+    assert!(schemas[0].contains("\"score\""), "{schemas:?}");
+    assert!(schemas[1].contains("\"label\""), "{schemas:?}");
 }
 
 #[tokio::test]

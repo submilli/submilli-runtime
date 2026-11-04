@@ -264,6 +264,21 @@ Review follow-through, also part of phase 3:
 - An expected `string` makes the typed `call<string>`, a JSON string: by
   design, the expected type supplies `T` whatever it is.
 
-Still open: forwarding a user generic's `T` into `llm.call<T>` (SUB-2085). It
-needs the erasure gate lifted for host generics and schemas recorded for types
-that reach typed host calls through user generics.
+### Phase 3b (2026-11-04): no TypeInfo id, schemas in codegen, forwarding
+
+- The descriptor is `{vtable, test, name, schema?}`. The TypeInfo id and its
+  package were dropped: nothing read them, and `Response#json<T>` (SUB-363)
+  needs only the predicate.
+- Codegen computes each descriptor's schema (`codegen::descriptor_schema`)
+  from the type and the typechecker's `runtime_type_tests`, through the shared
+  emitter `typechecker::json_schema`, for every descriptor type that has one.
+  The typechecker keeps only the gate; the typed AST carries nothing for
+  descriptors.
+- A generic forwards its own `T` into `llm.call<T>`, `llm.batch<T>`,
+  `agents.run<T>` and `session.get<T>`, across packages and generic layers:
+  the caller's descriptor carries its type's schema and predicate. A
+  forwarded type without a schema is a catchable `TypeError` when the call
+  runs; a type built from a parameter (`T[]`) is a compile error.
+- `agents.run<T>` checks the answer with the descriptor's predicate on the
+  host, like `session.get`, so the typechecker's cast wrapper and
+  `CheckedResult` are gone, and a mismatch names only the type.

@@ -21,8 +21,6 @@ TypedAst {
             26,
         ): Number,
     },
-    descriptor_shapes: {},
-    descriptor_schemas: {},
     postfix_operand_types: {},
     parameter_inputs: {},
     parameter_initializations: {},

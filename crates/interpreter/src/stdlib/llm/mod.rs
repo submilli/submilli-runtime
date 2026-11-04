@@ -219,6 +219,11 @@ impl Api {
     }
 }
 
+/// The function as a program names it, `llm.call`.
+fn api_name(api: Api) -> String {
+    format!("llm.{}", api.name())
+}
+
 /// One provider request for `text`, `texts`, `call` or `batch`: gate, bound,
 /// reserve, dispatch, reconcile.
 ///
@@ -814,7 +819,7 @@ async fn call(
     prompt: String,
     descriptor: &abi::TypeDescriptor,
 ) -> wasmtime::Result<Val> {
-    let schema = descriptor.required_schema()?.to_string();
+    let schema = descriptor.schema_for(&api_name(Api::Call))?.to_string();
     let outcomes = dispatch(caller, Api::Call, &model, vec![prompt], Some(schema)).await?;
     let outcome = first_outcome(Api::Call, &model, outcomes)?;
     envelope(caller, outcome, descriptor).await
@@ -827,7 +832,7 @@ async fn batch(
     prompts: Vec<String>,
     descriptor: &abi::TypeDescriptor,
 ) -> wasmtime::Result<Val> {
-    let schema = descriptor.required_schema()?.to_string();
+    let schema = descriptor.schema_for(&api_name(Api::Batch))?.to_string();
     let outcomes = dispatch(caller, Api::Batch, &model, prompts, Some(schema)).await?;
     let mut built = Vec::with_capacity(outcomes.len());
     for outcome in outcomes {
@@ -1234,9 +1239,6 @@ mod tests {
         policy: Option<Arc<dyn SecurityCheck>>,
         effects: Option<Arc<dyn crate::runtime::effects::EffectHistory>>,
         fuel: Option<u64>,
-        /// Install the compiled TypeInfo table under this package name instead
-        /// of the one it was compiled for.
-        type_info_package: Option<String>,
     }
 
     struct Observed {
@@ -1252,13 +1254,7 @@ mod tests {
                 policy: None,
                 effects: None,
                 fuel: None,
-                type_info_package: None,
             }
-        }
-
-        fn type_info_package(mut self, package: &str) -> Self {
-            self.type_info_package = Some(package.to_string());
-            self
         }
 
         fn fuel(mut self, fuel: u64) -> Self {
@@ -1304,11 +1300,7 @@ mod tests {
             }
             let engine = cfg.engine().expect("engine");
             let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
-            let mut type_info = compiled.type_info.clone();
-            if let Some(package) = self.type_info_package {
-                type_info.package_name = package;
-            }
-            data.install_type_info(type_info);
+            data.install_type_info(compiled.type_info.clone());
             data.llm_provider = self.provider;
             data.llm_budget = self.budget;
             data.effects = self.effects;
@@ -2155,6 +2147,77 @@ mod tests {
         assert!(recorder.dispatches().is_empty(), "nothing was sent");
     }
 
+    /// A generic forwards its own `T` into `llm.call<T>` and `llm.batch<T>`,
+    /// through a second generic layer too: each call sends the schema of the
+    /// type its caller named and checks against it.
+    #[tokio::test]
+    async fn a_generic_forwards_its_type_to_call_and_batch() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":1}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Severity { level: string; score: number; }
+                   interface Tag { name: string; }
+                   function classify<T>(p: string): llm.Completion<T> { return llm.call<T>("m", p); }
+                   function outer<T>(p: string): llm.Completion<T> { return classify<T>(p); }
+                   function each<T>(ps: string[]): llm.Completion<T>[] { return llm.batch<T>("m", ps); }
+                   function main(): string {
+                     const s = outer<Severity>("p");
+                     const t = classify<Tag>("p");
+                     const b = each<Severity>(["p"]);
+                     return (s.ok ? s.value.level : s.reason) + "|"
+                       + (t.ok ? t.value.name : t.message) + "|"
+                       + (b[0].ok ? String(b[0].value.score) : b[0].reason);
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "high|the model's response does not match `Tag`|1");
+        let schemas: Vec<String> = recorder
+            .dispatches()
+            .iter()
+            .map(|dispatch| {
+                dispatch
+                    .schema
+                    .clone()
+                    .expect("a forwarded call sends a schema")
+            })
+            .collect();
+        assert!(schemas[0].contains("\"level\""), "{schemas:?}");
+        assert!(schemas[1].contains("\"name\""), "{schemas:?}");
+        assert_eq!(schemas[0], schemas[2], "one type, one schema: {schemas:?}");
+    }
+
+    /// A forwarded type with no JSON Schema is refused when the call runs,
+    /// before anything is sent: only the caller knew the type.
+    #[tokio::test]
+    async fn a_forwarded_type_without_a_schema_is_a_catchable_type_error() {
+        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function classify<T>(p: string): llm.Completion<T> { return llm.call<T>("m", p); }
+                   function main(): string {
+                     try { classify<Uint8Array>("p"); return "sent"; }
+                     catch (e) { return (e instanceof TypeError ? "TypeError:" : "other:") + e.message; }
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert!(
+            out.starts_with("TypeError:llm.call<Uint8Array>: `Uint8Array` has no JSON Schema"),
+            "{out}"
+        );
+        assert!(recorder.dispatches().is_empty(), "nothing was sent");
+    }
+
     /// One type is one descriptor: a user generic and a typed model call at
     /// the same `T` in one module share it, and the model call still sends the
     /// schema and checks the answer.
@@ -2359,43 +2422,6 @@ mod tests {
             schemas,
             vec![None, Some("{\"type\":\"string\"}".to_string())],
             "only the typed call asks for JSON",
-        );
-    }
-
-    /// A descriptor's TypeInfo id is read against the table of the package that
-    /// compiled the call, named in the descriptor itself: ids are local to a
-    /// package's table, and the running frame says nothing about which
-    /// package built a descriptor. The same program installed under another
-    /// package name leaves the id unresolvable, which is a broken
-    /// installation, never a guest error.
-    #[tokio::test]
-    async fn a_descriptor_names_the_package_whose_type_info_it_indexes() {
-        let ok = || {
-            MockProvider::new(
-                vec![LlmOutcome::success(
-                    r#"{"level":"high","score":1}"#.to_string(),
-                )],
-                Vec::new(),
-            )
-            .0
-        };
-        let out = Harness::new()
-            .provider(ok())
-            .run(TYPED_PROGRAM)
-            .await
-            .expect("the descriptor resolves in its own package's table");
-        assert_eq!(out, "high");
-
-        let error = Harness::new()
-            .provider(ok())
-            .type_info_package("@someone/else")
-            .run(TYPED_PROGRAM)
-            .await
-            .expect_err("an id read against no table for its package is fatal");
-        assert!(
-            error.is::<crate::runtime::host::FatalHostError>()
-                && format!("{error:#}").contains("is not installed"),
-            "{error:#}"
         );
     }
 

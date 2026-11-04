@@ -130,17 +130,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
                 let descriptor = read_type_argument(caller, abi_arg(params, 2)?, 0)?;
-                let schema = descriptor.required_schema()?.to_string();
+                let schema = descriptor.schema_for("agents.run")?.to_string();
                 let answer = run(caller, "run", &agent, input, Some(schema)).await?;
-                // The cast around the call checks the parsed value against `T`.
-                crate::runtime::json::parse_json_as_unknown(
+                let value = crate::runtime::json::parse_json_as_unknown(
                     caller,
                     &answer,
                     &format!(
                         "agents.run(\"{}\"): the agent's result is not JSON",
                         truncated(&agent)
                     ),
-                )
+                )?;
+                // The descriptor's predicate checks the answer against `T`. The
+                // message names the type, never the answer or a key in it.
+                if descriptor.accepts(caller, value).await? {
+                    return Ok(value);
+                }
+                Err(crate::runtime::host::type_error(format!(
+                    "agents.run(\"{}\"): the agent's answer does not match `{}`",
+                    truncated(&agent),
+                    descriptor.name
+                )))
             })
         },
     )?;

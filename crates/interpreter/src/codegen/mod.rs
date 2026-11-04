@@ -18,6 +18,7 @@ mod closure_coercions;
 pub(crate) use closure_coercions::ADAPTER_ORIGINAL_FIELD;
 pub mod closures;
 pub mod dependency_usage;
+pub(crate) mod descriptor_schema;
 pub mod dwarf;
 mod field_guards;
 mod field_lookup;
@@ -911,14 +912,10 @@ fn codegen_inner(
     let dependency_shapes = dependency_usage.dependency_shapes(dependencies);
     let user_emitted_types: Vec<Type> =
         user_subtypes::collect_object_shapes(dependency_shapes.iter().copied(), &all_shapes);
-    // Descriptor shapes are interned so a host can look a type argument up by
-    // its TypeInfo id; they do not join the emitted subtypes.
-    let mut type_info_types = user_emitted_types.clone();
-    type_info_types.extend(ta.descriptor_shapes.values().cloned());
     let (type_info, type_info_index) = crate::TypeInfoTable::collect_indexed(
         ta.package_name.clone(),
         &all_shapes,
-        &type_info_types,
+        &user_emitted_types,
     );
     let needs_host_object_to_json =
         user_subtypes::needs_host_object_to_json_adapter(&user_emitted_types);
@@ -1501,7 +1498,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_func_idx,
     )?;
-    runtime_descriptors::intern_texts(&mut pool, ta, &symbols);
+    runtime_descriptors::prepare_descriptor_data(&mut pool, ta, &mut symbols);
 
     let field_lookup_signature = field_lookup::allocate(
         &mut types,
@@ -2356,7 +2353,7 @@ pub(crate) mod tests {
         super::tests::compile("function main(): number { return 42; }");
     }
 
-    fn type_check(source: &str) -> TypedAst {
+    pub(crate) fn type_check(source: &str) -> TypedAst {
         type_check_with_packages(source, &[])
     }
 
@@ -2543,67 +2540,6 @@ function main(): string {
                 .all(|ty| compiled.type_info.object_type_id(ty).is_some()),
             "every emitted object subtype should have TypeInfo"
         );
-    }
-
-    /// A generic host call passes one `$TypeDescriptor` per type parameter, and
-    /// the descriptor's `info` is the TypeInfo id of the type argument's reduced
-    /// shape in the package's table, so a host consumer can walk the shape it
-    /// was called at.
-    #[test]
-    fn host_generic_call_descriptors_carry_the_type_info_id_of_the_reduced_shape() {
-        let source = r#"
-import llm from "submilli:llm";
-interface Severity { level: string; score: number; }
-function main(): boolean { return llm.call<Severity>("m", "p").ok; }
-"#;
-        let compiled =
-            crate::compile::compile_script(source, "script.subm", crate::FileId(0), &[], &[])
-                .expect("script should compile");
-        let shape = Type::Object {
-            index: None,
-            fields: std::collections::BTreeMap::from([
-                ("level".to_string(), ObjectField::required(Type::String)),
-                ("score".to_string(), ObjectField::required(Type::Number)),
-            ]),
-        };
-        let id = compiled
-            .type_info
-            .object_type_id(&shape)
-            .expect("the reduced shape of `Severity` is interned");
-        assert_eq!(
-            descriptor_infos(&compiled.wasm),
-            vec![i32::try_from(id.as_u32()).expect("id fits")],
-            "one descriptor, carrying the id of the reduced shape",
-        );
-    }
-
-    /// The `info` field of every `$TypeDescriptor` built in `bytes`, in emission
-    /// order: the constant pushed right before each `struct.new $TypeDescriptor`.
-    fn descriptor_infos(bytes: &[u8]) -> Vec<i32> {
-        let type_descriptor =
-            super::intrinsics::declare_intrinsic_types(&mut wasm_encoder::TypeSection::new())
-                .type_descriptor;
-        let mut infos = Vec::new();
-        for payload in Parser::new(0).parse_all(bytes) {
-            if let Payload::CodeSectionEntry(body) = payload.expect("payload") {
-                let mut reader = body
-                    .get_operators_reader()
-                    .expect("body operators readable");
-                let mut last_const = None;
-                while !reader.eof() {
-                    match reader.read().expect("operator") {
-                        wasmparser::Operator::I32Const { value } => last_const = Some(value),
-                        wasmparser::Operator::StructNew { struct_type_index }
-                            if struct_type_index == type_descriptor =>
-                        {
-                            infos.push(last_const.expect("a descriptor ends with its info"));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        infos
     }
 
     fn build_symbol_table(source: &str) -> SymbolTable {

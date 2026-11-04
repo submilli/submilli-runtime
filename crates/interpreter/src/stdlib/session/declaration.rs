@@ -56,8 +56,11 @@ pub fn package_declaration() -> PackageDeclaration {
          * Returns `T | undefined`: a missing key returns `undefined`; a stored `null` \
          is preserved when `T` permits it and otherwise throws a `TypeError`.\n *\n * `T` must be a type the runtime can \
          verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a \
-         generic parameter of the calling function, a class, or an interface with \
-         methods is rejected at compile time.\n * @param key Session key. Exact UTF-16 \
+         class, or an interface with methods is rejected at compile time. A generic \
+         may pass its own type parameter, or a type built from it (`get<T>` or \
+         `get<T[]>` inside `function load<T>`): the stored value is checked against \
+         the type its caller names.\n * @param key \
+         Session key. Exact UTF-16 \
          code units; no normalization, no path semantics.\n * @capability session.read \
          { key: $key }\n */",
     );

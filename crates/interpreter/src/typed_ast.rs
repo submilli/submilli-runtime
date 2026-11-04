@@ -922,15 +922,6 @@ pub struct TypedAst {
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Parameter declaration types before optional/default ABI input widening.
     pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
-    /// The reduced shape of a type that is a host generic call's type
-    /// argument, keyed by the type. Codegen interns the shapes as TypeInfo and
-    /// puts the id in the `info` of that type's `$TypeDescriptor`; a type
-    /// absent here gets `-1`.
-    pub descriptor_shapes: std::collections::BTreeMap<Type, Type>,
-    /// The JSON Schema of a type that is a schema-checked call's `T`, keyed by
-    /// the type: a pure function of it, carried by every `$TypeDescriptor` of
-    /// that type. A type absent here has a null schema.
-    pub descriptor_schemas: std::collections::BTreeMap<Type, String>,
     /// The type a binding's postfix `++`/`--` reads it at, keyed by the name's
     /// span: its narrowed type, where the target records the declared one.
     pub postfix_operand_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
@@ -1511,22 +1502,6 @@ impl TypedAst {
     pub fn authored_call_arguments(&self, span: Span) -> Option<&Vec<ExprId>> {
         self.authored_arguments
             .get(&(span.file.0, span.start, span.end))
-    }
-
-    pub fn record_descriptor_shape(&mut self, ty: Type, shape: Type) {
-        self.descriptor_shapes.insert(ty, shape);
-    }
-
-    /// A type's schema is a function of the type, so a second record must
-    /// agree with the first.
-    pub fn record_descriptor_schema(&mut self, ty: Type, schema: String) {
-        let previous = self.descriptor_schemas.insert(ty.clone(), schema);
-        debug_assert!(
-            previous
-                .as_deref()
-                .is_none_or(|p| p == self.descriptor_schemas[&ty]),
-            "a type's schema changed between inferences"
-        );
     }
 
     /// Checked allocation; failure leaves the arena unchanged.

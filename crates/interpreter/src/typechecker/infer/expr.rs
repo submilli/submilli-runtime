@@ -543,6 +543,36 @@ pub(super) fn is_type_parameter_position(hint: &Type) -> bool {
     matches!(hint.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
 }
 
+/// Whether a type parameter occurs anywhere in `ty`. Unlike
+/// [`mentions_type_var`], it also counts body-internal `GenericParam`s and
+/// looks through refinements: a type argument written inside a generic is
+/// built from either.
+fn holds_type_parameter(ty: &Type) -> bool {
+    match ty {
+        Type::TypeVar(_) | Type::GenericParam { .. } => true,
+        Type::Array(inner) | Type::Readonly(inner) => holds_type_parameter(inner),
+        Type::Refined { ty: inner, .. } => holds_type_parameter(inner),
+        Type::Tuple(elements) => elements.iter().any(holds_type_parameter),
+        Type::Function { params, ret, .. } => {
+            params.iter().any(holds_type_parameter) || holds_type_parameter(ret)
+        }
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|i| holds_type_parameter(&i.value))
+                || fields.values().any(|f| holds_type_parameter(&f.ty))
+        }
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.iter().any(holds_type_parameter),
+        Type::Alias {
+            args, ty: inner, ..
+        } => args.iter().any(holds_type_parameter) || holds_type_parameter(inner),
+        Type::Union(members) => members.iter().any(holds_type_parameter),
+        _ => false,
+    }
+}
+
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
 pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bool {
     let recurse = |ty: &Type| mentions_type_var(ty, wanted);
@@ -3953,6 +3983,14 @@ impl Inferer<'_> {
         if matches!(target_ty.peel(), Type::Unknown) && !type_args_written {
             return Ok(());
         }
+        // A type parameter of the calling generic, or a type built from one
+        // (`T[]`), checks against the type its caller names: the caller's
+        // descriptor is forwarded, and a descriptor built from it here tests
+        // through it. Only the stored value's shape is checked, so nothing
+        // has to be known at compile time.
+        if holds_type_parameter(target_ty) {
+            return Ok(());
+        }
         if matches!(target_ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
@@ -3993,8 +4031,9 @@ impl Inferer<'_> {
         Err(())
     }
 
-    /// The gates of a schema-checked call such as `llm.call<T>(model, prompt)`,
-    /// and the JSON Schema for `T` that rides in its descriptor to the provider.
+    /// The gates of a schema-checked call such as `llm.call<T>(model, prompt)`:
+    /// whether `T` has a JSON Schema the request can carry and a structure the
+    /// descriptor's predicate can test. Codegen emits the schema itself.
     ///
     /// Mirrors [`Self::session_get_gate`] — same soundness argument, same cast
     /// gate — with one addition: the schema gate. A typed call must pass
@@ -4004,18 +4043,17 @@ impl Inferer<'_> {
     /// in the safe subset, so a type that cleared only the cast gate would
     /// reach a provider as a schema that constrained nothing.
     ///
-    /// `Ok(schema)` means both gates passed and the result is verified as the
-    /// call's [`crate::stdlib::json_schema::CheckedResult`] says — a cast around the call,
-    /// or the descriptor's predicate run by the host; `Err(())` means a
-    /// diagnostic was reported (or deliberately suppressed) and the call is an
-    /// error. `checked` describes the call, from
+    /// `Ok(())` means both gates passed: the host sends the schema codegen
+    /// emits for `T` and checks the answer with its predicate. `Err(())` means
+    /// a diagnostic was reported (or deliberately suppressed) and the call is
+    /// an error. `checked` describes the call, from
     /// [`crate::stdlib::json_schema::schema_checked_call`].
-    pub(super) fn schema_checked_call_schema(
+    pub(super) fn schema_checked_call_gate(
         &mut self,
         checked: &crate::stdlib::json_schema::SchemaCheckedCall,
         result_ty: &Type,
         span: Span,
-    ) -> Result<String, ()> {
+    ) -> Result<(), ()> {
         let crate::stdlib::json_schema::SchemaCheckedCall {
             callee,
             example,
@@ -4043,41 +4081,60 @@ impl Inferer<'_> {
             return Err(());
         }
 
-        // An erased `T` — a type parameter of the *calling* function — is
-        // reported against the cast gate rather than the schema gate. Both
-        // reject it, but only this diagnostic says what to do about it, and it
-        // is the wording `as` and MCP already use for the same mistake
-        // (`unsupported_cast_target_reason`'s `TypeVar | GenericParam` arm), so
-        // a program hitting it under `llm.call` reads the same advice it would
-        // hit under `as`.
-        let shape = self.reduce_cast_target(result_ty);
-        if matches!(shape.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
-            && let Some(reason) =
-                unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
-        {
+        // A bare type parameter of the calling generic forwards the caller's
+        // descriptor: the caller named the type, and its descriptor carries
+        // the schema when the type has one. Whether it does is known only
+        // there, so a forwarded type without one is the host's catchable
+        // `TypeError`, not a diagnostic here.
+        if is_type_parameter_position(result_ty) {
+            return Ok(());
+        }
+        // A type built from a type parameter (`T[]`, `{ item: T }`) has no
+        // descriptor schema: its descriptor is assembled here, where `T` is
+        // unknown, so it cannot be described at compile time.
+        if holds_type_parameter(result_ty) {
             self.error_with_help(
                 span,
-                format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
+                format!(
+                    "`{callee}<{result_ty}>` cannot send a JSON Schema: `{result_ty}` is \
+                     built from a type parameter, and its schema would only be known where \
+                     the parameter is"
+                ),
                 vec![format!(
-                    "`{callee}` checks {checks} against its type argument, so \
-                     that argument must be one the runtime can test, and the schema is \
-                     emitted at compile time where `{result_ty}` is not yet known. Call it \
-                     at a concrete type — `{example}` — inside the \
-                     generic function, or {text_hint}."
+                    "pass the type parameter itself (`{callee}<T>`) and let the caller \
+                     name the whole type, call it at a concrete type — `{example}` — or \
+                     {text_hint}."
                 )],
             );
             return Err(());
         }
+        let shape = self.reduce_cast_target(result_ty);
 
         // The schema gate runs before the cast gate, because it is strictly
         // narrower (KTD5) *and* its rejections name the offending field. A
         // recursive type fails both; the schema reason points at the field that
         // closes the cycle, which is the one the author has to change.
         match self.json_schema_for(result_ty) {
-            Ok(schema) => {
-                // The cast gate still has to pass: it is what `checked_cast_around`
-                // will re-run, and the two surfaces agree everywhere except the
-                // arms handled above.
+            Ok(schema) if schema.len() > crate::stdlib::json_schema::MAX_SCHEMA_BYTES => {
+                self.error_with_help(
+                    span,
+                    format!(
+                        "`{callee}<{result_ty}>` has a JSON Schema of {} bytes, more than the {} \
+                         a request may carry",
+                        schema.len(),
+                        crate::stdlib::json_schema::MAX_SCHEMA_BYTES
+                    ),
+                    vec![format!(
+                        "name a smaller shape — `{example}` — or {text_hint}."
+                    )],
+                );
+                Err(())
+            }
+            Ok(_) => {
+                // The cast gate still has to pass: the descriptor's predicate,
+                // which the host runs on the answer, is the structural test the
+                // cast gate admits, and the two surfaces agree everywhere except
+                // the arms handled above.
                 if let Some(reason) =
                     unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
                 {
@@ -4097,7 +4154,7 @@ impl Inferer<'_> {
                     );
                     return Err(());
                 }
-                Ok(schema)
+                Ok(())
             }
             Err(reject) => {
                 // A `Type::Error` already reported its own diagnostic; a second
@@ -4123,29 +4180,10 @@ impl Inferer<'_> {
         }
     }
 
-    /// The checked cast of `value` to `target_ty` after the schema gate passed
-    /// for `target_ty`: the cast around an `agents.run<T>` call. Split from
-    /// [`Self::schema_checked_call_schema`] because the gates must run before
-    /// the call node's arguments are frozen and this must run after. A
-    /// rejection here is an internal failure: the gate ran the same cast gate
-    /// on the same type, and passing it is what produced the schema.
-    pub(super) fn cast_after_schema_gate(
-        &mut self,
-        value: TypedExprKind,
-        target_ty: &Type,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
-        match self.checked_cast_around(value, target_ty, span)? {
-            Ok(checked) => Ok(checked),
-            Err(reason) => Err(super::inference_failure(&format!(
-                "schema-checked cast rejected a previously validated schema: {reason}"
-            ))
-            .with_span(span)),
-        }
-    }
-
-    /// The inlined JSON Schema for `target_ty`, as the compact string the
-    /// call's descriptor carries to the host.
+    /// The inlined JSON Schema for `target_ty`, for the gate to judge: whether
+    /// it exists (a rejection names the field that has none) and how large it
+    /// is. Codegen emits the schema a descriptor carries
+    /// (`codegen::descriptor_schema`).
     ///
     /// Reduces interfaces to their structural shapes first, since a schema
     /// describes fields, not names; the cast gate that also runs rejects what
@@ -4171,8 +4209,8 @@ impl Inferer<'_> {
     ///
     /// This is the soundness-critical construction behind every "the host
     /// handed us data, prove it matches" call that the guest verifies — an MCP
-    /// tool with a declared return type and `agents.run<T>` — so both go
-    /// through here rather than building the `Cast` themselves. `Err` carries the reason `target_ty`
+    /// tool with a declared return type — so it goes
+    /// through here rather than building the `Cast` itself. `Err` carries the reason `target_ty`
     /// cannot be verified; the caller words its own diagnostic around it.
     fn checked_cast_around(
         &mut self,
@@ -14983,9 +15021,9 @@ mod tests {
         run_with_packages(source, &[&session])
     }
 
-    /// Every `session.get` call in `ta`, as (is wrapped in a `Cast`, the
-    /// reduced shape its descriptor carries, its `return_cast`).
-    fn session_get_shapes(ta: &TypedAst) -> Vec<(bool, Option<Vec<Type>>, Option<Type>)> {
+    /// Every `session.get` call in `ta`, as (is wrapped in a `Cast`, its type
+    /// arguments, its `return_cast`).
+    fn session_get_calls(ta: &TypedAst) -> Vec<(bool, Vec<Type>, Option<Type>)> {
         let mut wrapped = std::collections::BTreeSet::new();
         for i in 0..ta.exprs_len() {
             if let TypedExprKind::Cast { value, .. } =
@@ -15008,64 +15046,51 @@ mod tests {
                 continue;
             };
             if crate::stdlib::session::declaration::is_checked_get(mangled) {
-                let shapes: Option<Vec<Type>> = type_args
-                    .iter()
-                    .map(|ty| ta.descriptor_shapes.get(ty).cloned())
-                    .collect();
-                out.push((wrapped.contains(&id), shapes, return_cast.clone()));
+                out.push((
+                    wrapped.contains(&id),
+                    type_args.clone(),
+                    return_cast.clone(),
+                ));
             }
         }
         out
     }
 
     /// The soundness invariant of the checked read: a `get<T>` is a plain
-    /// generic call whose descriptor carries the reduced shape of `T` for the
-    /// host to test the stored value against, with no `Cast` around it — the
-    /// host throws before a mismatch reaches the guest — and its `return_cast`
-    /// is the `T | undefined` slot the host returns into.
+    /// generic call whose type argument is `T` — its descriptor's predicate is
+    /// what the host tests the stored value against — with no `Cast` around
+    /// it, since the host throws before a mismatch reaches the guest, and its
+    /// `return_cast` is the `T | undefined` slot the host returns into.
     #[test]
-    fn typed_session_get_records_its_descriptor_shape_and_is_not_wrapped_in_a_cast() {
+    fn typed_session_get_passes_t_and_is_not_wrapped_in_a_cast() {
         let src = "import session from \"submilli:session\"; \
                    interface P { step: number; } \
                    function main(): void { const p = session.get<P>(\"k\"); }";
         let (ta, diags) = run_with_session(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = session_get_shapes(&ta);
+        let shapes = session_get_calls(&ta);
         assert_eq!(shapes.len(), 1, "expected one get, got {shapes:?}");
-        let (wrapped, descriptor, return_cast) = &shapes[0];
+        let (wrapped, type_args, return_cast) = &shapes[0];
         assert!(
             !wrapped,
             "get<P> is verified by the host, not by a cast around it"
         );
-        let descriptor = descriptor
-            .as_deref()
-            .expect("get<P> records its descriptor shape");
-        assert_eq!(
-            descriptor.len(),
-            1,
-            "one descriptor per type parameter: {descriptor:?}"
-        );
         assert!(
-            matches!(descriptor[0].peel(), Type::Object { .. }),
-            "the descriptor carries the reduced shape of `P`: {descriptor:?}",
+            matches!(type_args.as_slice(), [Type::InterfaceRef { name, .. }] if name == "P"),
+            "get<P> passes `P` as its one type argument: {type_args:?}",
         );
         assert!(
             matches!(return_cast, Some(Type::Union(_))),
             "get<P> returns into its `P | undefined` slot: {return_cast:?}",
         );
-        assert!(
-            ta.descriptor_schemas.is_empty(),
-            "a session read records no schema: {:?}",
-            ta.descriptor_schemas
-        );
     }
 
-    /// The same invariant across every import form: the gate and the descriptor
-    /// recording match the package-export mangled name, so an alias, a named
-    /// import, and a namespace import all land on the checked path.
+    /// The same invariant across every import form: the gate matches the
+    /// package-export mangled name, so an alias, a named import, and a
+    /// namespace import all land on the checked path.
     #[test]
-    fn every_import_form_of_session_get_records_a_descriptor_shape() {
+    fn every_import_form_of_session_get_is_a_checked_read() {
         let src = "import session from \"submilli:session\"; \
                    import kv from \"submilli:session\"; \
                    import { get } from \"submilli:session\"; \
@@ -15076,14 +15101,11 @@ mod tests {
                      const c = get<P>(\"k\"); }";
         let (ta, diags) = run_with_session(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        let shapes = session_get_shapes(&ta);
+        let shapes = session_get_calls(&ta);
         assert_eq!(shapes.len(), 3, "{shapes:?}");
-        for (wrapped, descriptor, _) in &shapes {
+        for (wrapped, type_args, _) in &shapes {
             assert!(!wrapped, "{shapes:?}");
-            assert!(
-                descriptor.is_some(),
-                "every import form records a descriptor: {shapes:?}"
-            );
+            assert_eq!(type_args.len(), 1, "{shapes:?}");
         }
     }
 
@@ -15111,18 +15133,15 @@ mod tests {
         );
     }
 
-    /// A user generic parameter is erased, so it cannot be a check target.
+    /// A generic forwards its own `T`: the call passes the caller's descriptor,
+    /// whose predicate tests the type the caller named.
     #[test]
-    fn erased_type_parameter_is_rejected() {
+    fn a_generic_forwards_its_type_parameter_to_session_get() {
         let src = "import session from \"submilli:session\"; \
-                   function load<T>(k: string): T { return session.get<T>(k); } \
+                   function load<T>(k: string): T | undefined { return session.get<T>(k); } \
                    function main(): void { const n = load<number>(\"k\"); }";
         let (_, diags) = run_with_session(src);
-        assert!(
-            diags.iter().any(|d| d.message.contains("erased at runtime")
-                && d.message.contains("`session.get<T>`")),
-            "expected the erasure rejection naming the type argument, got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
     }
 
     /// The narrowing hint may only fire when dropping `null` actually makes the
@@ -16914,10 +16933,9 @@ function main(): void { if (result < 10) { } }
         run_with_packages(source, &[&llm])
     }
 
-    /// Every `llm.call`/`llm.batch` in `ta`, as (its `T` has a recorded
-    /// descriptor shape, the call's `return_cast`). Mirrors
-    /// `session_get_shapes`.
-    fn llm_call_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
+    /// Every `llm.call`/`llm.batch` in `ta`, as (it passes one type argument,
+    /// the call's `return_cast`). Mirrors `session_get_calls`.
+    fn llm_calls(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
@@ -16933,10 +16951,7 @@ function main(): void { if (result < 10) { } }
             if !is_llm_call(mangled) {
                 continue;
             }
-            let shaped = type_args
-                .iter()
-                .all(|ty| ta.descriptor_shapes.contains_key(ty));
-            out.push((shaped, return_cast.clone()));
+            out.push((type_args.len() == 1, return_cast.clone()));
         }
         out
     }
@@ -16999,8 +17014,7 @@ function main(): void { if (result < 10) { } }
             out.push(
                 type_args
                     .first()
-                    .and_then(|ty| ta.descriptor_schemas.get(ty))
-                    .cloned(),
+                    .and_then(|ty| crate::codegen::descriptor_schema::schema_of(ta, ty)),
             );
         }
         out
@@ -17008,11 +17022,10 @@ function main(): void { if (result < 10) { } }
 
     const SEVERITY: &str = "interface Severity { level: string; score: number; }";
 
-    /// R5: a typed call records the descriptor shape the host tests against, and
-    /// the schema for `T` is recorded for the call site as a compile-time
-    /// constant.
+    /// R5: a typed call passes `T`, and the schema codegen emits for `T` is a
+    /// fully inlined compile-time constant.
     #[test]
-    fn typed_llm_call_records_a_descriptor_shape_and_a_schema() {
+    fn typed_llm_call_passes_t_and_its_type_has_a_schema() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
@@ -17020,9 +17033,9 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = llm_call_shapes(&ta);
+        let shapes = llm_calls(&ta);
         assert_eq!(shapes.len(), 1, "expected one call, got {shapes:?}");
-        assert!(shapes[0].0, "call<Severity> lost its descriptor shape");
+        assert!(shapes[0].0, "call<Severity> passes its type argument");
 
         let schemas = llm_schemas(&ta);
         assert_eq!(schemas.len(), 1, "expected one call, got {schemas:?}");
@@ -17069,39 +17082,8 @@ function main(): void { if (result < 10) { } }
             "an optional field must not be required: {schema}",
         );
 
-        // And the descriptor carries the same nested shape, reduced, rather than
-        // stopping at the outer object.
-        let shapes = llm_call_shapes(&ta);
+        let shapes = llm_calls(&ta);
         assert_eq!(shapes, vec![(true, None)], "shapes: {shapes:?}");
-        let descriptor = [ta
-            .descriptor_shapes
-            .get(&llm_call_type_argument(&ta))
-            .cloned()
-            .expect("descriptor shape recorded")];
-        let Type::Object { fields, .. } = descriptor[0].peel() else {
-            panic!("the descriptor shape is the reduced object: {descriptor:?}");
-        };
-        assert!(
-            fields
-                .iter()
-                .any(|(name, field)| name == "inner"
-                    && matches!(field.ty.peel(), Type::Object { .. })),
-            "the nested interface is reduced in place: {descriptor:?}",
-        );
-    }
-
-    /// The type argument of the one llm call in `ta`.
-    fn llm_call_type_argument(ta: &TypedAst) -> Type {
-        (0..ta.exprs_len())
-            .find_map(
-                |i| match &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind {
-                    TypedExprKind::GenericCall {
-                        mangled, type_args, ..
-                    } if is_llm_call(mangled) => type_args.first().cloned(),
-                    _ => None,
-                },
-            )
-            .expect("one llm call")
     }
 
     /// The soundness invariant, and the one most at risk of silently
@@ -17120,9 +17102,9 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = llm_call_shapes(&ta);
+        let shapes = llm_calls(&ta);
         assert_eq!(shapes.len(), 1, "expected one checked call, got {shapes:?}");
-        assert!(shapes[0].0, "call<Severity> lost its descriptor shape");
+        assert!(shapes[0].0, "call<Severity> passes its type argument");
         assert_eq!(
             shapes[0].1, None,
             "call<Severity> kept an unsound return_cast: {shapes:?}",
@@ -17159,7 +17141,7 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(
-            llm_call_shapes(&ta),
+            llm_calls(&ta),
             vec![(true, None), (true, None), (true, None), (true, None)],
             "every import form must produce a checked, uncast call",
         );
@@ -17211,17 +17193,17 @@ function main(): void { if (result < 10) { } }
         }
     }
 
-    /// `batch<T>` takes the same path: a descriptor shape, no `return_cast`, and
-    /// a schema for one response rather than for the array.
+    /// `batch<T>` takes the same path: `T` passed, no `return_cast`, and a
+    /// schema for one response rather than for the array.
     #[test]
-    fn typed_llm_batch_records_a_descriptor_too() {
+    fn typed_llm_batch_passes_t_and_sends_one_response_schema() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.batch<Severity>(\"m\", [\"p\"]); }}"
         );
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert_eq!(llm_call_shapes(&ta), vec![(true, None)]);
+        assert_eq!(llm_calls(&ta), vec![(true, None)]);
         assert_eq!(llm_calls_wrapped_in_cast(&ta), 0);
 
         let schema = llm_schemas(&ta)[0].clone().expect("schema emitted");
@@ -17246,7 +17228,7 @@ function main(): void { if (result < 10) { } }
             "{:?}",
             d.help
         );
-        assert!(ta.descriptor_schemas.is_empty(), "nothing is recorded");
+        assert!(llm_schemas(&ta).is_empty(), "the call is not built");
     }
 
     /// `llm.batch` names itself and its own text form, `llm.texts`.
@@ -17400,30 +17382,48 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    /// R7: `call<T>` inside a user generic. The reason is
-    /// `unsupported_cast_target_reason`'s erasure arm verbatim — the same text
-    /// `as` and MCP produce — and the `help:` names the fix.
+    /// A generic forwards its own `T` into `llm.call<T>` and `llm.batch<T>`:
+    /// the schema is the caller's type's, carried by the descriptor the caller
+    /// built, so nothing is gated here.
     #[test]
-    fn type_argument_erased_by_a_user_generic_is_rejected() {
+    fn a_generic_forwards_its_type_parameter_to_llm_calls() {
         let src = "import llm from \"submilli:llm\"; \
-                   function pick<T>(): T { return llm.call<T>(\"m\", \"p\"); } \
-                   function main(): void { const n = pick<number>(); }";
+                   function classify<T>(p: string): llm.Completion<T> { return llm.call<T>(\"m\", p); } \
+                   function each<T>(ps: string[]): llm.Completion<T>[] { return llm.batch<T>(\"m\", ps); } \
+                   interface V { label: string; } \
+                   function main(): void { const c = classify<V>(\"p\"); const d = each<V>([\"p\"]); }";
+        let (_, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    /// `session.get` needs only a predicate, and a descriptor built from a
+    /// forwarded parameter tests through it, so `session.get<T[]>` inside a
+    /// generic checks against the array of whatever its caller names.
+    #[test]
+    fn session_get_accepts_a_type_built_from_a_type_parameter() {
+        let src = "import session from \"submilli:session\"; \
+                   function loadAll<T>(k: string): T[] | undefined { return session.get<T[]>(k); } \
+                   function main(): void { const n = loadAll<number>(\"k\"); }";
+        let (_, diags) = run_with_session(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    /// A type built from a type parameter has no schema anywhere: its
+    /// descriptor is assembled where the parameter is unknown. The error says
+    /// to forward the parameter itself.
+    #[test]
+    fn a_type_built_from_a_type_parameter_is_rejected() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function many<T>(p: string): llm.Completion<T[]> { return llm.call<T[]>(\"m\", p); } \
+                   function main(): void { const c = many<number>(\"p\"); }";
         let (_, diags) = run_with_llm(src);
         let d = diags
             .iter()
-            .find(|d| d.message.contains("cannot be verified at runtime"))
-            .unwrap_or_else(|| panic!("expected an erasure rejection, got: {diags:?}"));
+            .find(|d| d.message.contains("built from a type parameter"))
+            .unwrap_or_else(|| panic!("expected the open-type rejection, got: {diags:?}"));
         assert!(
-            d.message
-                .contains("generic type parameters are erased at runtime"),
-            "must reuse the shared erasure reason verbatim: {}",
-            d.message,
-        );
-        assert!(
-            d.help
-                .iter()
-                .any(|h| h.contains("emitted at compile time") && h.contains("llm.call<Severity>")),
-            "help must explain the erasure and name the fix: {:?}",
+            d.help.iter().any(|h| h.contains("`llm.call<T>`")),
+            "help names the forwarding form: {:?}",
             d.help,
         );
     }

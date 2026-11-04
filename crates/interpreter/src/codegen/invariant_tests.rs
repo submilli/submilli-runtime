@@ -69,9 +69,9 @@ fn descriptor_requires_every_companion_registration() {
     let ta = TypedAst::new();
     let mut symbols = super::tests::mock_symbols_with_intrinsics();
     let mut strings = super::StringPool::default();
-    let interned = |symbols: &SymbolTable| {
+    let interned = |symbols: &mut SymbolTable| {
         let mut strings = super::StringPool::default();
-        super::runtime_descriptors::intern_texts(&mut strings, &ta, symbols);
+        super::runtime_descriptors::prepare_descriptor_data(&mut strings, &ta, symbols);
         strings
     };
     for step in 0..6 {
@@ -91,8 +91,8 @@ fn descriptor_requires_every_companion_registration() {
             2 => symbols.set_closure_vtable_global(2),
             3 => symbols.record_closure_struct_type(super::field_guards::signature(), 3),
             4 => symbols.record_global(crate::mangle::prelude("string_vtable"), 5),
-            // The descriptor's name and package come from the pool.
-            5 => strings = interned(&symbols),
+            // The descriptor's name and schema come from the pool.
+            5 => strings = interned(&mut symbols),
             _ => unreachable!(),
         }
     }

@@ -16,7 +16,6 @@ use crate::runtime::host::{fatal_host_error, host_opaque_vtable, register_host_f
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
-use crate::type_info::TypeInfoId;
 
 pub(crate) fn string_field(intr: &IntrinsicTypes) -> FieldType {
     ref_field(intr.string.clone().into(), false)
@@ -236,44 +235,25 @@ pub(crate) struct TypeDescriptor {
     test: Closure,
     /// The type as the program wrote it, for diagnostics.
     pub name: String,
-    /// The JSON Schema the typechecker emitted for the type, present whenever
-    /// the type is a schema-checked call's `T`.
+    /// The type's JSON Schema, which codegen emits for every type that has one
+    /// (`codegen::descriptor_schema`).
     pub schema: Option<String>,
-    /// Where the type's reduced shape sits in a TypeInfo table, when one holds
-    /// it: for the host consumers that walk a shape rather than test a value
-    /// (parse-time validation, SUB-363), none of which exists yet. It is
-    /// checked to resolve on every read anyway, so a build or installation
-    /// that pairs an id with the wrong table fails at the first typed call
-    /// rather than when a consumer arrives.
-    #[allow(dead_code)]
-    pub info: Option<TypeInfoRef>,
-}
-
-/// A TypeInfo id together with the package whose table it indexes. Ids are
-/// local to a package's table — the same shape has different ids in two
-/// packages — and the package is the one that compiled the call, not the one
-/// running when the host reads the descriptor, so it travels with the id.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct TypeInfoRef {
-    pub package: String,
-    pub id: TypeInfoId,
-}
-
-impl TypeInfoRef {
-    /// The entry this reference names in the store's tables.
-    pub(crate) fn resolve<'a>(&self, store: &'a StoreData) -> Option<&'a crate::TypeInfo> {
-        store.type_info.get(&self.package)?.get(self.id)
-    }
 }
 
 impl TypeDescriptor {
-    /// The schema a schema-checked call sends. The typechecker records one for
-    /// every such call's `T`, so a descriptor without one is a compiler bug.
-    pub(crate) fn required_schema(&self) -> wasmtime::Result<&str> {
+    /// The schema a schema-checked call (`api`, e.g. `llm.call`) sends. A
+    /// direct call's `T` passed the compile-time schema gate, so it has one;
+    /// a `T` forwarded through a generic was named by its caller, and when it
+    /// has no JSON Schema the call is a catchable `TypeError` here.
+    pub(crate) fn schema_for(&self, api: &str) -> wasmtime::Result<&str> {
         self.schema.as_deref().ok_or_else(|| {
-            fatal_host_error(format!(
-                "the descriptor of `{}` carries no schema for a schema-checked call",
-                self.name
+            crate::runtime::host::type_error(format!(
+                "{api}<{name}>: `{name}` has no JSON Schema to send — it is not a JSON \
+                 data shape (a function, `bigint`, `Uint8Array`, `unknown`, a class, a \
+                 `Map`, an enum, a recursive or method-bearing type), or its schema is \
+                 larger than a request may carry; name an object, array, tuple, union or \
+                 primitive shape instead",
+                name = self.name
             ))
         })
     }
@@ -336,44 +316,5 @@ fn decode_type_argument(
             "type descriptor schema",
         )?),
     };
-    let package = descriptor.field(&mut *caller, 4)?;
-    let package =
-        crate::runtime::host::read_string_arg(caller, &package, "type descriptor package")?;
-    let info = match descriptor.field(&mut *caller, 5)? {
-        Val::I32(-1) => None,
-        Val::I32(id) => {
-            let id = u32::try_from(id).map_err(|_| {
-                wasmtime::Error::msg(format!(
-                    "type descriptor info {id} is neither -1 nor a TypeInfo id"
-                ))
-            })?;
-            Some(TypeInfoRef {
-                package,
-                id: TypeInfoId(id),
-            })
-        }
-        other => {
-            return Err(wasmtime::Error::msg(format!(
-                "type descriptor info is not an i32: {other:?}"
-            )));
-        }
-    };
-    // The compiler interned the shape in the calling package's table and the
-    // embedder installed that table with the package, so an id that does not
-    // resolve is a broken build or installation, not a guest error.
-    if let Some(info) = &info
-        && info.resolve(caller.data()).is_none()
-    {
-        return Err(wasmtime::Error::msg(format!(
-            "type descriptor names TypeInfo {}#{} that is not installed",
-            info.package,
-            info.id.as_u32()
-        )));
-    }
-    Ok(TypeDescriptor {
-        test,
-        name,
-        schema,
-        info,
-    })
+    Ok(TypeDescriptor { test, name, schema })
 }

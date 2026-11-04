@@ -1015,12 +1015,8 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
 
     // `$TypeDescriptor` — what every generic call passes per type argument,
     // in its `$types` environment: the type's structural predicate (a
-    // `$Closure`), its display name, its JSON Schema (null when none was
-    // recorded), the package whose TypeInfo table the id indexes, and its
-    // TypeInfo id (-1 when none). A TypeInfo id means nothing without its
-    // table, and the table is the package that compiled the call, which the
-    // host cannot recover from the stack once descriptors travel between
-    // packages. An `$Object` subtype so it fits a `$object_fields` slot. The
+    // `$Closure`), its display name, and its JSON Schema (null when the type
+    // has none). An `$Object` subtype so it fits a `$object_fields` slot. The
     // host mirrors this in `runtime::intrinsic_types`.
     types.ty().subtype(&SubType {
         is_final: true,
@@ -1031,11 +1027,6 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 fieldtype_ref(string),
                 FieldType {
                     element_type: StorageType::Val(ref_null(string)),
-                    mutable: false,
-                },
-                fieldtype_ref(string),
-                FieldType {
-                    element_type: StorageType::Val(ValType::I32),
                     mutable: false,
                 },
             ],

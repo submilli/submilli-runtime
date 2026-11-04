@@ -236,7 +236,7 @@ interface Stat {
 # submilli:session
 
 /**
- * Read a session value, checked against `T`. The stored value is tested structurally — every field, element, and union arm — and a mismatch throws a catchable `TypeError` rather than handing back a wrongly-typed value, so `get<Progress>("progress")` returns a real `Progress`, `undefined` for a missing key, or throws. Returns `T | undefined`: a missing key returns `undefined`; a stored `null` is preserved when `T` permits it and otherwise throws a `TypeError`. `T` must be a type the runtime can verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a generic parameter of the calling function, a class, or an interface with methods is rejected at compile time.
+ * Read a session value, checked against `T`. The stored value is tested structurally — every field, element, and union arm — and a mismatch throws a catchable `TypeError` rather than handing back a wrongly-typed value, so `get<Progress>("progress")` returns a real `Progress`, `undefined` for a missing key, or throws. Returns `T | undefined`: a missing key returns `undefined`; a stored `null` is preserved when `T` permits it and otherwise throws a `TypeError`. `T` must be a type the runtime can verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a class, or an interface with methods is rejected at compile time. A generic may pass its own type parameter, or a type built from it (`get<T>` or `get<T[]>` inside `function load<T>`): the stored value is checked against the type its caller names.
  * @param key Session key. Exact UTF-16 code units; no normalization, no path semantics.
  * @capability session.read { key }
  */

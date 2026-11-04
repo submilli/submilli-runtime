@@ -11,6 +11,12 @@
 use wasmtime::{Caller, Val};
 
 use crate::MangledName;
+
+/// The most bytes a JSON Schema may have: what one request may carry
+/// ([`DEFAULT_MAX_PROMPT_BYTES`](crate::runtime::llm::DEFAULT_MAX_PROMPT_BYTES)).
+/// The typechecker refuses a direct call at a type whose schema is larger,
+/// and codegen gives such a type no schema.
+pub(crate) const MAX_SCHEMA_BYTES: usize = crate::runtime::llm::DEFAULT_MAX_PROMPT_BYTES as usize;
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{read_string_arg, type_error};
@@ -42,23 +48,10 @@ pub(crate) fn read_written_schema(
     }
 }
 
-/// How a schema-checked call's result is verified against `T`.
-#[derive(Clone, Copy)]
-pub(crate) enum CheckedResult {
-    /// The host returns the parsed value and the typechecker wraps the call in
-    /// a checked `Cast` to `T`, which throws on a mismatch (`agents.run`).
-    Cast,
-    /// The host returns an envelope whose `value` is a `T` only if the
-    /// descriptor's predicate accepted it; a rejected response is a failure entry
-    /// (`llm.call`, `llm.batch`). The call's declared return type is trusted
-    /// as is.
-    Envelope,
-}
-
 /// A host call the typechecker types from its type argument: the
 /// `$TypeDescriptor` of `T` in the call's `$types` environment carries the
-/// JSON Schema emitted for it (`TypedAst::descriptor_schemas`), and its result
-/// is verified against `T` the way [`CheckedResult`] says. `T` has no
+/// JSON Schema codegen emitted for it (`codegen::descriptor_schema`), the
+/// host sends it, and checks the answer with the descriptor's predicate. `T` has no
 /// default; the text form is a separate function. The written declaration is
 /// the whole public API; the descriptor is part of how a generic function is
 /// called, never a parameter a program can see or pass.
@@ -74,7 +67,6 @@ pub(crate) struct SchemaCheckedCall {
     /// Ends a diagnostic about the type argument: the text form to call
     /// instead, e.g. "call `llm.text(model, prompt)` for the completion text".
     pub text_hint: &'static str,
-    pub result: CheckedResult,
 }
 
 /// The schema-checked call `mangled` names, if it is one.
@@ -86,7 +78,6 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             checks: "each model response",
             answerer: "the model",
             text_hint: "call `llm.texts(model, prompts)` for the completion texts",
-            result: CheckedResult::Envelope,
         });
     }
     if super::llm::declaration::is_checked_call(mangled) {
@@ -96,7 +87,6 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             checks: "the model's response",
             answerer: "the model",
             text_hint: "call `llm.text(model, prompt)` for the completion text",
-            result: CheckedResult::Envelope,
         });
     }
     if super::agents::declaration::is_checked_run(mangled) {
@@ -106,7 +96,6 @@ pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaChecked
             checks: "the agent's result",
             answerer: "the agent",
             text_hint: "call `agents.runText(agent, input)` for the answer as text",
-            result: CheckedResult::Cast,
         });
     }
     None

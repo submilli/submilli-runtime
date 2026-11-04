@@ -154,7 +154,10 @@ pub fn package_declaration() -> PackageDeclaration {
          coerced, and no error ever quotes the prompt or the completion.\n *\n * `T` \
          must be a type the schema can carry: no functions, no \
          `bigint`, no `Uint8Array`, no `unknown`, and no recursive type — each is \
-         rejected at compile time, naming the offending field.\n *\n * `ok: false` \
+         rejected at compile time, naming the offending field. A generic may pass \
+         its own type parameter (`call<T>` inside `function f<T>`): the caller's \
+         type is asked for and checked, and one with no JSON Schema throws a \
+         catchable `TypeError` when the call runs.\n *\n * `ok: false` \
          means the model did not produce a clean completion; branch on `reason`, \
          which is a closed set, not on `message`. A completion cut off at the output \
          cap is `reason: \"truncated\"` and carries no text: a typed `value` could \

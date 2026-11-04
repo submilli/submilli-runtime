@@ -3,9 +3,8 @@
 //!
 //! A descriptor is a `$TypeDescriptor` struct, not a closure: its `test` field
 //! is the type's structural predicate (a `$closure_1` whose body is
-//! [`body`]), beside the type's name, its JSON Schema when the typechecker
-//! recorded one, the package that compiled it and the TypeInfo id of its
-//! reduced shape. Compiled generics read the predicate (`test_parameter`);
+//! [`body`]), beside the type's name and its JSON Schema when it has one
+//! (`codegen::descriptor_schema`). Compiled generics read the predicate (`test_parameter`);
 //! host generics read all of it (`stdlib::abi::read_type_argument`). Every
 //! field is a function of the type, so a closed type's descriptor is built
 //! once into a lazily initialised global and its identity holds for the
@@ -196,10 +195,35 @@ pub fn environment(
     Ok(())
 }
 
+/// A schema-checked host call at a type the program names (`llm.call<Verdict>`)
+/// passed the typechecker's schema gate, so codegen must have emitted a schema
+/// for that type: the gate and `codegen::descriptor_schema` decide it
+/// independently, and a disagreement would compile a call that always throws.
+/// A type parameter forwards its caller's descriptor and is checked when the
+/// call runs instead.
+pub fn require_direct_schema(
+    ctx: &CodegenCtx,
+    mangled: &crate::MangledName,
+    type_args: &[Type],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(ty) = type_args.first() else {
+        return Ok(());
+    };
+    if crate::stdlib::json_schema::schema_checked_call(mangled).is_none()
+        || !parameters(ty).is_empty()
+        || ctx.symbols.descriptor_schemas.contains_key(ty)
+    {
+        return Ok(());
+    }
+    Err(crate::codegen::internal_failure(
+        "a type the schema gate admitted has a descriptor schema",
+    ))
+}
+
 /// A descriptor text from the string pool. Codegen interns the name and
-/// schema of every allocated descriptor type and the package name before any
-/// function is emitted (`intern_texts`), so a miss is a compiler invariant
-/// failure, not a slow path.
+/// schema of every allocated descriptor type before any function is emitted
+/// ([`prepare_descriptor_data`]), so a miss is a compiler invariant failure, not a slow
+/// path.
 fn emit_text(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -333,48 +357,34 @@ fn emit_new_descriptor(
             .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?,
     ));
     emit_text(emitter, ctx, &ty.to_string())?;
-    match ctx.ta.descriptor_schemas.get(ty) {
+    match ctx.symbols.descriptor_schemas.get(ty) {
         Some(schema) => emit_text(emitter, ctx, schema)?,
         None => {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
         }
     }
-    emit_text(emitter, ctx, &ctx.ta.package_name)?;
-    let info = match ctx
-        .ta
-        .descriptor_shapes
-        .get(ty)
-        .and_then(|shape| ctx.type_info.type_id(shape))
-    {
-        Some(id) => i32::try_from(id.as_u32())
-            .map_err(|_| crate::codegen::internal_failure("TypeInfo id fits an i32"))?,
-        None => -1,
-    };
-    emitter.instruction(Instruction::I32Const(info));
     emitter.instruction(Instruction::StructNew(intrinsics.type_descriptor));
 
     Ok(())
 }
 
-/// Intern the texts every allocated descriptor carries — its type's name and
-/// recorded schema — and the package name, so [`emit_text`] finds them. Run
-/// once [`allocate`] has fixed the descriptor types and before any function
-/// is emitted; a module with no descriptor interns nothing.
-pub fn intern_texts(
+/// Compute the JSON Schema of every allocated descriptor type that has one
+/// (`codegen::descriptor_schema`), and intern each descriptor's name and
+/// schema so [`emit_text`] finds them. Run once [`allocate`] has fixed the
+/// descriptor types and before any function is emitted.
+pub fn prepare_descriptor_data(
     pool: &mut crate::codegen::string_pool::StringPool,
     ta: &TypedAst,
-    symbols: &SymbolTable,
+    symbols: &mut SymbolTable,
 ) {
-    if symbols.type_descriptor_functions.is_empty() {
-        return;
-    }
-    for ty in symbols.type_descriptor_functions.keys() {
+    let types: Vec<Type> = symbols.type_descriptor_functions.keys().cloned().collect();
+    for ty in types {
         pool.intern_text(&ty.to_string());
-        if let Some(schema) = ta.descriptor_schemas.get(ty) {
-            pool.intern_text(schema);
+        if let Some(schema) = super::descriptor_schema::schema_of(ta, &ty) {
+            pool.intern_text(&schema);
+            symbols.descriptor_schemas.insert(ty, schema);
         }
     }
-    pool.intern_text(&ta.package_name);
 }
 
 pub fn test_parameter(

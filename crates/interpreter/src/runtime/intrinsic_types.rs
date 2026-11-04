@@ -632,9 +632,9 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         ],
     )?;
 
-    // `$TypeDescriptor`: `{vtable, test: $Closure, name: $string, schema: $string?,
-    // package: $string, info: i32}`, what every generic call passes per type
-    // argument in its `$types` environment; a host function reads it with
+    // `$TypeDescriptor`: `{vtable, test: $Closure, name: $string, schema: $string?}`,
+    // what every generic call passes per type argument in its `$types`
+    // environment; a host function reads it with
     // `stdlib::abi::read_type_argument`. Mirrors codegen index 52.
     let type_descriptor = singleton_struct(
         engine,
@@ -657,11 +657,6 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(true, string.clone().into()))),
             ),
-            FieldType::new(
-                imm,
-                StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
-            ),
-            FieldType::new(imm, StorageType::ValType(ValType::I32)),
         ],
     )?;
 
