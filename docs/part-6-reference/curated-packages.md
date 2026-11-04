@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf433d888bb1853a3206091bd115f1fa1ddeb8873b4cce5c1a1d8b710f6ff5bd"
+  contentHash: "e757ff746a0edfc564e482128ec1e32b52e440c904ade4719b9481f591e593fe"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -26,6 +26,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/attio`](#submilliattio) | Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes. | `ATTIO_API_KEY` | `api.attio.com` |
 | [`@submilli/brave-search`](#submillibrave-search) | Web search, one page of results at a time, and extracted passages grouped by source URL. | `BRAVE_SEARCH_API_KEY` | `api.search.brave.com` |
 | [`@submilli/browserbase-stagehand`](#submillibrowserbase-stagehand) | Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser. | `BROWSERBASE_API_KEY` | `api.browserbase.com`, `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com` |
+| [`@submilli/chargeafter`](#submillichargeafter) | ChargeAfter merchant-financing application links, statuses, offers, charges, funding reports, and consumer accounts. | `CHARGEAFTER_PRIVATE_KEY` | configured sandbox or production API host |
 | [`@submilli/exa`](#submilliexa) | Web search with highlights, and extraction of known URLs with a status for each URL. | `EXA_API_KEY` | `api.exa.ai` |
 | [`@submilli/firecrawl`](#submillifirecrawl) | Firecrawl v2 web search, page scraping, site URL discovery, and explicit Batch Scrape and Crawl jobs. | `FIRECRAWL_API_KEY` | `api.firecrawl.dev` |
 | [`@submilli/github`](#submilligithub) | GitHub.com repositories, file contents, commits, branches, issues, pull requests, teams, releases, and search. | `GITHUB_TOKEN` | `api.github.com` |
@@ -138,6 +139,33 @@ protocol, not the query and not redirects. `session.liveView` needs
 Proxies, Verified, and CAPTCHA solving default off. `StagehandSession.open`
 registers cleanup. `StagehandSession.current` stores the id in the runtime
 session under `stagehand`. Drive it with `session.goto` and `session.act`.
+
+## @submilli/chargeafter
+
+ChargeAfter merchant-financing application links, application status and offers,
+charges, funding reports, and consumer accounts.
+
+| | |
+| --- | --- |
+| Secret | `CHARGEAFTER_PRIVATE_KEY` |
+| Credential | A ChargeAfter private key for one merchant and one environment. |
+| Without the secret | Throws `ChargeAfterError` with code `missing_private_key`. |
+| HTTP | The configured `baseUrl`: GET, PATCH, and POST. Use `https://api-sandbox.ca-dev.co` for sandbox or `https://api.chargeafter.com` for production. |
+| Filesystem | None |
+| Readme | [`packages/chargeafter/README.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/chargeafter/README.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/chargeafter --config baseUrl=https://api-sandbox.ca-dev.co
+submilli blueprint add-package @submilli/chargeafter --no-capabilities
+submilli blueprint capability list @submilli/chargeafter
+submilli blueprint capability add chargeafter.com/applications.status
+```
+
+The key scopes requests to one merchant. Read grants accept identifiers and
+date ranges, not `storeId`, so their grants cannot isolate reads by store.
+`sendApplyLink` and `sendCheckoutLink` carry `storeId` and can be filtered.
+Charge mutations fetch the authoritative charge before their capability check.
+If that check is denied, the lookup may have occurred but the mutation does not.
 
 ## @submilli/exa
 

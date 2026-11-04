@@ -116,3 +116,17 @@ version = "0.1.0"
 description = "Native Attio CRM client for object and status discovery, typed record queries, people and company upserts by email and domain, record writes, stage changes, and notes."
 keywords = ["attio", "crm", "records", "deals", "people", "companies", "api"]
 path = "packages/attio"
+
+[[package]]
+name = "@submilli/chargeafter"
+version = "0.1.0"
+description = "Typed ChargeAfter merchant-financing client for application links, application status and offers, charges, funding reports, and consumer accounts."
+keywords = ["chargeafter", "financing", "payments", "merchant", "applications", "charges"]
+path = "packages/chargeafter"
+
+[[package]]
+name = "@submilli/chargeafter-demo"
+version = "0.1.0"
+description = "Demo data: fictional ChargeAfter fixtures for offline agent and policy demonstrations."
+keywords = ["chargeafter", "demo", "fixtures", "financing", "payments"]
+path = "packages/chargeafter-demo"

@@ -1,0 +1,102 @@
+namespace: submilli
+provides:
+- name: chargeafter.com/applications.offers
+  description: List lender offers for an application.
+  fields:
+    applicationId:
+      type: string
+- name: chargeafter.com/applications.status
+  description: Get an application status.
+  fields:
+    applicationId:
+      type: string
+- name: chargeafter.com/charges.get
+  description: Get a charge.
+  fields:
+    chargeId:
+      type: string
+- name: chargeafter.com/charges.refund
+  description: Refund a settled charge.
+  fields:
+    amount:
+      type: number
+    chargeId:
+      type: string
+    settledAmount:
+      type: number
+- name: chargeafter.com/charges.settle
+  description: Settle a charge after reading its authoritative amount.
+  fields:
+    amount:
+      type: number
+    authorizedAmount:
+      type: number
+    chargeId:
+      type: string
+    merchantOrderId:
+      type: string
+- name: chargeafter.com/charges.update
+  description: Set the merchant order ID of a charge.
+  fields:
+    chargeId:
+      type: string
+- name: chargeafter.com/charges.void
+  description: Void a charge.
+  fields:
+    amount:
+      type: number
+    chargeId:
+      type: string
+    state:
+      type: string
+- name: chargeafter.com/consumers.accounts
+  description: List known accounts for a consumer.
+  fields:
+    consumerId:
+      type: string
+- name: chargeafter.com/consumers.lookup
+  description: Look up consumer accounts by contact details.
+  fields:
+    email:
+      type: string
+    phone:
+      type: string
+- name: chargeafter.com/fundings.list
+  description: List one bounded funding-report page.
+  fields:
+    fromDate:
+      type: string
+    toDate:
+      type: string
+- name: chargeafter.com/links.get
+  description: Get one existing Omni-Link.
+  fields:
+    linkId:
+      type: string
+- name: chargeafter.com/links.sendApply
+  description: Send an Apply link.
+  fields:
+    deliveryMethod:
+      type: string
+    storeId:
+      type: string
+- name: chargeafter.com/links.sendCheckout
+  description: Send a Checkout link.
+  fields:
+    autoCharge:
+      type: boolean
+    deliveryMethod:
+      type: string
+    storeId:
+      type: string
+    totalAmount:
+      type: number
+requires:
+- capability: http.get
+  filter: host == "api-sandbox.ca-dev.co"
+- capability: http.patch
+  filter: host == "api-sandbox.ca-dev.co"
+- capability: http.post
+  filter: host == "api-sandbox.ca-dev.co"
+- capability: secrets.get
+  filter: name == "CHARGEAFTER_PRIVATE_KEY"

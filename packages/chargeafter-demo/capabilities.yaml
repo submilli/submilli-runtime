@@ -1,0 +1,94 @@
+namespace: submilli
+provides:
+- name: chargeafter.com/applications.offers
+  description: List fictional lender offers.
+  fields:
+    applicationId:
+      type: string
+- name: chargeafter.com/applications.status
+  description: Get a fictional application status.
+  fields:
+    applicationId:
+      type: string
+- name: chargeafter.com/charges.get
+  description: Get a fictional charge.
+  fields:
+    chargeId:
+      type: string
+- name: chargeafter.com/charges.refund
+  description: Refund a fictional charge.
+  fields:
+    amount:
+      type: number
+    chargeId:
+      type: string
+    settledAmount:
+      type: number
+- name: chargeafter.com/charges.settle
+  description: Settle a fictional charge.
+  fields:
+    amount:
+      type: number
+    authorizedAmount:
+      type: number
+    chargeId:
+      type: string
+    merchantOrderId:
+      type: string
+- name: chargeafter.com/charges.update
+  description: Update a fictional merchant order id.
+  fields:
+    chargeId:
+      type: string
+- name: chargeafter.com/charges.void
+  description: Void a fictional charge.
+  fields:
+    amount:
+      type: number
+    chargeId:
+      type: string
+    state:
+      type: string
+- name: chargeafter.com/consumers.accounts
+  description: List fictional consumer accounts.
+  fields:
+    consumerId:
+      type: string
+- name: chargeafter.com/consumers.lookup
+  description: Look up a fictional consumer.
+  fields:
+    email:
+      type: string
+    phone:
+      type: string
+- name: chargeafter.com/fundings.list
+  description: List the fictional funding report.
+  fields:
+    fromDate:
+      type: string
+    toDate:
+      type: string
+- name: chargeafter.com/links.get
+  description: Get a fictional Omni-Link.
+  fields:
+    linkId:
+      type: string
+- name: chargeafter.com/links.sendApply
+  description: Create a fictional application link.
+  fields:
+    deliveryMethod:
+      type: string
+    storeId:
+      type: string
+- name: chargeafter.com/links.sendCheckout
+  description: Create a fictional checkout link.
+  fields:
+    autoCharge:
+      type: boolean
+    deliveryMethod:
+      type: string
+    storeId:
+      type: string
+    totalAmount:
+      type: number
+requires: []
