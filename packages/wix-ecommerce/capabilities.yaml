@@ -89,8 +89,10 @@ provides:
     siteId:
       type: string
 - name: wix.com/orders.cancel
-  description: Cancel an order. The order is fetched first, so a policy sees its real total and payment status.
+  description: Cancel an order. The order is fetched first, so a policy sees its real total, currency and payment status.
   fields:
+    currency:
+      type: string
     orderId:
       type: string
     paymentStatus:

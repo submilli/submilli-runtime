@@ -68,8 +68,8 @@ capability has `siteId`, the bound site, so `siteId == "..."` pins one.
 | --- | --- | --- |
 | `wix.com/orders.search` | | |
 | `wix.com/orders.get`, `orders.note` | `orderId` | |
-| `wix.com/orders.cancel` | `orderId`, `totalAmount`, `paymentStatus`, `restock` | The order is fetched first; total and status come from Wix |
-| `wix.com/orders.refund` | `orderId`, `amount`, `currency`, `restock`, `externalRefund` | The currency comes from Wix. An amount above what is left on the payment never reaches the check |
+| `wix.com/orders.cancel` | `orderId`, `totalAmount`, `currency`, `paymentStatus`, `restock` | The order is fetched first; total, currency and status come from Wix. `restock` returns every line to stock |
+| `wix.com/orders.refund` | `orderId`, `amount`, `currency`, `restock`, `externalRefund` | The currency comes from Wix. An amount above what is left on the payment never reaches the check. `restock` returns the lines to stock |
 | `wix.com/fulfillments.list` | `orderId` | |
 | `wix.com/fulfillments.create` | `orderId`, `shippingProvider` | |
 | `wix.com/fulfillments.update` | `orderId`, `fulfillmentId` | |
@@ -104,7 +104,12 @@ permissions:
       action: allow
 ```
 
-The limits above are examples. Choose your own.
+The limits above are examples. Choose your own. Keep in mind:
+
+- A cap is per call. Three refunds of 100 pass a cap of 200.
+- A cap on an amount means little across currencies, so filter `currency` too.
+- `restock` on a refund or a cancel moves stock without `wix.com/inventory.adjust`,
+  so limits on `delta` do not cover it. Filter `restock == false` if they should.
 
 ## Behavior to know
 

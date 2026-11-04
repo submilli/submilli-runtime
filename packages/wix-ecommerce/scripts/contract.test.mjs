@@ -188,7 +188,7 @@ test('cancelOrder fetches the order, checks its real total, then posts', () => {
     reset(orderAndPayments(() => reply(200, { order: { ...rawOrder, status: 'CANCELED' } })));
     const order = wix.cancelOrder(ORDER, { restock: true, notifyCustomer: true, message: 'Sorry' });
     assert.deepEqual(kinds(), [`GET ecom/v1/orders/${ORDER}`, 'check', `POST ecom/v1/orders/${ORDER}/cancel`]);
-    assert.deepEqual(checks[0].context, { siteId: SITE, orderId: ORDER, totalAmount: 150.5, paymentStatus: 'PAID', restock: true });
+    assert.deepEqual(checks[0].context, { siteId: SITE, orderId: ORDER, totalAmount: 150.5, currency: 'USD', paymentStatus: 'PAID', restock: true });
     assert.deepEqual(requests[1].body, { restockAllItems: true, sendOrderCanceledEmail: true, customMessage: 'Sorry' });
     assert.equal(order.status, 'CANCELED');
 });
@@ -244,6 +244,12 @@ test('listPayments works out what is left, and a failed refund took nothing', ()
     const [payment] = wix.listPayments(ORDER);
     assert.equal(payment.refunded, 50.25);
     assert.equal(payment.refundable, 100.25);
+});
+
+test('cancelOrder refuses an order with no currency, before its check', () => {
+    reset((request) => (request.path === `ecom/v1/orders/${ORDER}` ? reply(200, { order: { ...rawOrder, currency: undefined } }) : reply(500, {})));
+    assert.throws(() => wix.cancelOrder(ORDER), { code: 'unexpected_response' });
+    assert.deepEqual(checks, []);
 });
 
 test('refundOrder resolves the currency and the payment, checks, then posts one refund', () => {

@@ -196,11 +196,11 @@ export function addOrderNote(orderId: string, message: string): void {
 }
 
 /**
- * Cancel an order. The order is fetched first, so a policy sees its real total and payment status.
+ * Cancel an order. The order is fetched first, so a policy sees its real total, currency and payment status.
  * @param orderId Order id.
  * @param input Whether to restock, whether to email the buyer, and a note for that email.
  * @returns The canceled order.
- * @capability wix.com/orders.cancel { siteId: string, orderId: string, totalAmount: number, paymentStatus: string, restock: boolean }
+ * @capability wix.com/orders.cancel { siteId: string, orderId: string, totalAmount: number, currency: string, paymentStatus: string, restock: boolean }
  */
 export function cancelOrder(orderId: string, input: CancelInput = {}): Order {
     const { restock, notifyCustomer, message } = input;
@@ -210,10 +210,13 @@ export function cancelOrder(orderId: string, input: CancelInput = {}): Order {
     const note = optionalMessage(message, notify);
     const siteId = requireSiteId();
     const order = requireOrder(siteId, id);
+    const currency = order.currency ?? "";
+    if (currency.length === 0) throw validationError("unexpected_response", "Wix sent no order currency");
     check("wix.com/orders.cancel", {
         siteId: siteId,
         orderId: id,
         totalAmount: requireAmount(order.priceSummary?.total?.amount, "order total"),
+        currency: currency,
         paymentStatus: order.paymentStatus ?? "",
         restock: shouldRestock,
     });
