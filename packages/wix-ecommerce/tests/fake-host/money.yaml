@@ -1,0 +1,32 @@
+# MOCK: run by scripts/policy.test.mjs against a copy of the package whose API base points at
+# a fake Wix on 127.0.0.1. The policy engine is real; the Wix answers are not. Refund and cancel
+# resolve facts from Wix before their check, so only a fake can exercise those rules.
+kind: blueprint
+name: wix-money-fake-host-test
+allow_insecure_http: true
+packages:
+  - '@submilli/wix-ecommerce'
+secrets:
+  WIX_API_KEY:
+    store: policy-api-key
+  WIX_SITE_ID:
+    store: policy-site-id
+default: deny
+permissions:
+  main:
+    - capability: wix.com/orders.refund
+      filter: amount <= 200 and externalRefund == false
+      action: allow
+    - capability: wix.com/orders.cancel
+      filter: totalAmount <= 500
+      action: allow
+  '@submilli/wix-ecommerce':
+    - capability: http.get
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: http.post
+      filter: host == "127.0.0.1"
+      action: allow
+    - capability: secrets.get
+      filter: name == "WIX_API_KEY" or name == "WIX_SITE_ID"
+      action: allow

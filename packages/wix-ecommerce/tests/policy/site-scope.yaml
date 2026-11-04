@@ -1,0 +1,41 @@
+# Run by scripts/policy.test.mjs under the real policy engine. No network and no key:
+# WIX_SITE_ID comes from a throwaway store, and secrets.get for WIX_API_KEY is denied,
+# so an allowed call stops there, proving the business check passed before any request.
+kind: blueprint
+name: wix-site-scope-test
+packages:
+  - '@submilli/wix-ecommerce'
+secrets:
+  WIX_SITE_ID:
+    store: policy-site-id
+default: deny
+permissions:
+  main:
+    - capability: wix.com/orders.search
+      filter: siteId == "11111111-2222-4333-8444-555555555555"
+      action: allow
+    - capability: wix.com/orders.get
+      filter: siteId == "11111111-2222-4333-8444-555555555555"
+      action: allow
+    - capability: wix.com/products.search
+      filter: includeHidden == false
+      action: allow
+    - capability: wix.com/products.update
+      filter: not (fields contains "price")
+      action: allow
+    - capability: wix.com/inventory.adjust
+      filter: delta >= -50 and delta <= 500
+      action: allow
+    - capability: wix.com/carts.create
+      filter: itemCount <= 10
+      action: allow
+    - capability: wix.com/fulfillments.create
+      filter: shippingProvider == "ups"
+      action: allow
+    - capability: wix.com/contacts.find
+      filter: email == "buyer@example.com"
+      action: allow
+  '@submilli/wix-ecommerce':
+    - capability: secrets.get
+      filter: name == "WIX_SITE_ID"
+      action: allow

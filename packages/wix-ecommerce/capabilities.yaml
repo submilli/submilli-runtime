@@ -1,0 +1,178 @@
+namespace: submilli
+provides:
+- name: wix.com/abandonedCheckouts.get
+  description: Get one abandoned checkout, with the link the buyer can use to finish it; null when it does not exist.
+  fields:
+    abandonedCheckoutId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/abandonedCheckouts.list
+  description: List abandoned checkouts, newest first.
+  fields:
+    siteId:
+      type: string
+- name: wix.com/carts.checkoutUrl
+  description: Get the checkout link for a cart.
+  fields:
+    cartId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/carts.create
+  description: Create a cart of Wix Stores products, ready for `getCheckoutUrl`.
+  fields:
+    itemCount:
+      type: number
+    siteId:
+      type: string
+- name: wix.com/catalog.version
+  description: Get which Stores catalog the site uses. The two catalogs are not compatible; the product and inventory operations follow it.
+  fields:
+    siteId:
+      type: string
+- name: wix.com/contacts.find
+  description: Find the contact with an email address; null when nobody has it.
+  fields:
+    email:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/contacts.get
+  description: Get one contact; null when it does not exist.
+  fields:
+    contactId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/fulfillments.create
+  description: Record a fulfillment with tracking. Wix may email the buyer, depending on the site's settings. The order must be `APPROVED`.
+  fields:
+    orderId:
+      type: string
+    shippingProvider:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/fulfillments.list
+  description: List an order's fulfillments.
+  fields:
+    orderId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/fulfillments.update
+  description: Change the tracking on a fulfillment.
+  fields:
+    fulfillmentId:
+      type: string
+    orderId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/inventory.adjust
+  description: Add to or take from a variant's stock. Inventory must be tracked by quantity. On catalog V3 a variant stocked in several locations is refused with `ambiguous_inventory_item`.
+  fields:
+    delta:
+      type: number
+    productId:
+      type: string
+    siteId:
+      type: string
+    variantId:
+      type: string
+- name: wix.com/inventory.get
+  description: Get a product's stock, one entry per variant, and per location on catalog V3. Also the way to find variant ids.
+  fields:
+    productId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/orders.cancel
+  description: Cancel an order. The order is fetched first, so a policy sees its real total and payment status.
+  fields:
+    orderId:
+      type: string
+    paymentStatus:
+      type: string
+    restock:
+      type: boolean
+    siteId:
+      type: string
+    totalAmount:
+      type: number
+- name: wix.com/orders.get
+  description: Get one order; null when it does not exist.
+  fields:
+    orderId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/orders.note
+  description: Add a note for the merchant to an order. Buyers do not see it.
+  fields:
+    orderId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/orders.refund
+  description: Refund part or all of one payment. The order and its payments are fetched first, so a policy sees the real amount and currency, and an amount above what is left on the payment is refused with no refund.
+  fields:
+    amount:
+      type: number
+    currency:
+      type: string
+    externalRefund:
+      type: boolean
+    orderId:
+      type: string
+    restock:
+      type: boolean
+    siteId:
+      type: string
+- name: wix.com/orders.search
+  description: Search the site's orders, newest first unless `query.sort` says otherwise.
+  fields:
+    siteId:
+      type: string
+- name: wix.com/payments.list
+  description: List an order's payments, with what is left to refund on each.
+  fields:
+    orderId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/products.get
+  description: Get one product; null when it does not exist.
+  fields:
+    productId:
+      type: string
+    siteId:
+      type: string
+- name: wix.com/products.search
+  description: Search the catalog. Hidden products are left out unless asked for.
+  fields:
+    includeHidden:
+      type: boolean
+    siteId:
+      type: string
+- name: wix.com/products.update
+  description: Change a product. The check lists the field names set, so a policy can forbid `price`. `ribbon` and `price` work on catalog V1 only; on V3 they are refused with `unsupported_on_catalog`.
+  fields:
+    fields:
+      type: string[]
+    productId:
+      type: string
+    siteId:
+      type: string
+requires:
+- capability: http.get
+  filter: host == "www.wixapis.com"
+- capability: http.patch
+  filter: host == "www.wixapis.com"
+- capability: http.post
+  filter: host == "www.wixapis.com"
+- capability: secrets.get
+  filter: name == "WIX_API_KEY"
+- capability: secrets.get
+  filter: name == "WIX_SITE_ID"

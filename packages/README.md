@@ -25,3 +25,4 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/slack-bot`](slack-bot/readme.md) | Slack messages, conversations, users, and reactions as the app's bot. |
 | [`@submilli/slack-user`](slack-user/readme.md) | Slack search, messages, channels, users, files, and reactions as the authenticated user. |
 | [`@submilli/typesafe`](typesafe/readme.md) | TypeSafe's Jev model for yes/no, choice, and scoring judgments with typed answers and probabilities. |
+| [`@submilli/wix-ecommerce`](wix-ecommerce/readme.md) | One Wix site's orders, fulfillments, payments and refunds, Stores catalog V1 and V3, inventory, checkout links, abandoned checkouts, and contacts. |

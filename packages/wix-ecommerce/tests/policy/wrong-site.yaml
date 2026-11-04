@@ -1,0 +1,22 @@
+# Control for site-scope.yaml: the same site id secret, with rules that pin another site.
+# Every call must stop at main, which proves the site filter is load-bearing.
+kind: blueprint
+name: wix-wrong-site-test
+packages:
+  - '@submilli/wix-ecommerce'
+secrets:
+  WIX_SITE_ID:
+    store: policy-site-id
+default: deny
+permissions:
+  main:
+    - capability: wix.com/orders.search
+      filter: siteId == "99999999-2222-4333-8444-555555555555"
+      action: allow
+    - capability: wix.com/orders.get
+      filter: siteId == "99999999-2222-4333-8444-555555555555"
+      action: allow
+  '@submilli/wix-ecommerce':
+    - capability: secrets.get
+      filter: name == "WIX_SITE_ID"
+      action: allow

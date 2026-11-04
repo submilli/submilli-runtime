@@ -39,6 +39,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/slack-bot`](#submillislack-bot) | Slack as the app's bot: bot messages, conversation history and threads, conversations and members, direct messages, users, and reactions. | `SLACK_BOT_TOKEN` | `slack.com` |
 | [`@submilli/slack-user`](#submillislack-user) | Slack as the authenticated user: search, messages and threads, channels, users, files, sending messages, and reactions. | `SLACK_USER_TOKEN` | `files.slack.com`, `slack.com` |
 | [`@submilli/typesafe`](#submillitypesafe) | Semantic judgments by TypeSafe's Jev model: choice, yes/no, and rubric-scored questions with typed answers and probabilities. | `TYPESAFE_AI_KEY` | `api.typesafe.ai` |
+| [`@submilli/wix-ecommerce`](#submilliwix-ecommerce) | One Wix site's orders, fulfillments, payments and refunds, Stores catalog V1 and V3, inventory, checkout links, abandoned checkouts, and contacts. | `WIX_API_KEY`, `WIX_SITE_ID` | `www.wixapis.com` |
 
 ## Package entries
 
@@ -407,4 +408,24 @@ submilli install submilli/submilli-runtime @submilli/typesafe
 submilli blueprint add-package @submilli/typesafe --no-capabilities
 submilli blueprint capability list @submilli/typesafe
 submilli blueprint capability add typesafe.ai/systemone
+```
+
+## @submilli/wix-ecommerce
+
+One Wix site's orders, fulfillments, payments and refunds, Stores catalog V1 and V3, inventory, checkout links, abandoned checkouts, and contacts.
+
+| | |
+| --- | --- |
+| Secret | `WIX_API_KEY`, `WIX_SITE_ID` |
+| Credential | A Wix API key from the site owner's API Keys Manager with the scopes the operations need (see the readme), and the id of the site |
+| Without the secret | Throws `WixError` with code `missing_site_id` or `missing_api_key` |
+| HTTP | `www.wixapis.com`: GET, PATCH, POST |
+| Filesystem | None |
+| Readme | [`packages/wix-ecommerce/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/wix-ecommerce/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/wix-ecommerce
+submilli blueprint add-package @submilli/wix-ecommerce --no-capabilities
+submilli blueprint capability list @submilli/wix-ecommerce
+submilli blueprint capability add wix.com/orders.search
 ```

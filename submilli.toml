@@ -116,3 +116,10 @@ version = "0.1.0"
 description = "Native Attio CRM client for object and status discovery, typed record queries, people and company upserts by email and domain, record writes, stage changes, and notes."
 keywords = ["attio", "crm", "records", "deals", "people", "companies", "api"]
 path = "packages/attio"
+
+[[package]]
+name = "@submilli/wix-ecommerce"
+version = "0.1.0"
+description = "Native Wix client for orders, fulfillments, payments and refunds, Stores catalog V1 and V3, inventory, cart checkout links, abandoned checkouts, and contacts."
+keywords = ["wix", "ecommerce", "orders", "refunds", "catalog", "inventory", "api"]
+path = "packages/wix-ecommerce"
