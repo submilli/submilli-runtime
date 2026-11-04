@@ -31,6 +31,7 @@ use crate::CapabilitySchema;
 // v10: `submilli:fs` `Info` drops `pathLimit`, so its intrinsic layout loses a field.
 // v12: a package exporting `finalizer` also exports the check embedders restore
 // its argument through; without it, cleanup cannot run.
+// v15: interface narrowing metadata can carry `RegExpMatchArray`.
 //
 // The release skill increments this on every runtime release, even when the
 // metadata and declaration shapes are unchanged. A mismatch means `pkg.wasm`
@@ -38,7 +39,7 @@ use crate::CapabilitySchema;
 // retained sources and does not execute it. The number still gates those file
 // shapes, so a reader that asks for a runnable artifact refuses a version it
 // does not understand instead of decoding it with the wrong types.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 14;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 15;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";

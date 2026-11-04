@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6c723670e4ed4aa0644c968c04464d8e3259a82fff248a83007b5d48f534fe9a"
+  contentHash: "72432b2354be216b99eff68057f40428e08765d942a86225e2f7fb45d826ae29"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -255,6 +255,7 @@ Arbitrary-precision integer.
 | --- | --- |
 | `toJson(): string` | Returns the canonical decimal representation — JSON has no native bigint literal, so this matches `toString`. |
 | `toString(radix?: number): string` | Returns this bigint formatted in the given base. |
+| `valueOf(): bigint` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -276,6 +277,7 @@ The boolean type — `true` or `false`.
 | --- | --- |
 | `toJson(): string` | Returns `"true"` or `"false"` — same as `toString` (booleans are JSON-native). |
 | `toString(): string` | Returns `"true"` or `"false"`. |
+| `valueOf(): boolean` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -351,6 +353,7 @@ The IEEE-754 double-precision number type.
 | `toJson(): string` | Returns the JSON representation of this number. |
 | `toPrecision(precision?: number): string` | Formats to `precision` significant digits, switching to exponential form for very large or small values. |
 | `toString(radix?: number): string` | Returns this number formatted in the given base. |
+| `valueOf(): number` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -582,6 +585,7 @@ The UTF-16 string type.
 | `trimLeft(): string` | The older name of `trimStart`: returns a new string with Unicode whitespace removed from the start. |
 | `trimRight(): string` | The older name of `trimEnd`: returns a new string with Unicode whitespace removed from the end. |
 | `trimStart(): string` | Returns a new string with Unicode whitespace removed from the start. |
+| `valueOf(): string` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
