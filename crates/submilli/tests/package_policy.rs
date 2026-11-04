@@ -30,12 +30,19 @@ const PACKAGES: &[&str] = &[
     "notion",
     "slack-bot",
     "slack-user",
+    "wix-ecommerce",
 ];
 
 #[test]
 fn policy_scripts_pass_under_their_blueprints() {
     let home = tempfile::tempdir().expect("package store");
     put_secret(home.path(), "policy-token", "policy-placeholder");
+    // The Wix package puts the site id in every check, so its scripts need a real one.
+    put_secret(
+        home.path(),
+        "policy-site-id",
+        "11111111-2222-4333-8444-555555555555",
+    );
     let mut failures = Vec::new();
     for package in PACKAGES {
         let published = submilli(

@@ -78,7 +78,7 @@ export interface CancelInput {
 export interface LineItemQuantity {
     /** Line item id, from `order.lineItems`. */
     lineItemId: string;
-    /** Quantity, 1-100000. Optional for a fulfillment, where it defaults to what remains unfulfilled. */
+    /** Quantity, 1-100000. Required for a refund. Optional for a fulfillment, where it defaults to what remains unfulfilled. */
     quantity?: number;
 }
 
@@ -324,6 +324,11 @@ export function prepareLine(lineItemId: string, quantity: number | undefined): P
     };
 }
 
+export function prepareRefundLine(lineItemId: string, quantity: number | undefined): PreparedLine {
+    if (quantity === undefined) throw validationError("invalid_quantity", "a refunded line needs a quantity");
+    return prepareLine(lineItemId, quantity);
+}
+
 export function prepareCartItem(productId: string, quantity: number, variantId: string | undefined): PreparedCartItem {
     return {
         productId: normalizeId(productId, "productId"),
@@ -444,9 +449,7 @@ export function decimalText(amount: number): string {
 function refundLines(lines: PreparedLine[]): Record<string, unknown>[] {
     const items: Record<string, unknown>[] = [];
     for (const line of lines) {
-        const item: Record<string, unknown> = { lineItemId: line.lineItemId };
-        item["quantity"] = line.quantity ?? 1;
-        items.push(item);
+        items.push({ lineItemId: line.lineItemId, quantity: line.quantity });
     }
     return items;
 }

@@ -71,7 +71,8 @@ changes the fields you set. A tracking `link` must be `https://`.
 
 `refundOrder(orderId, input)` refunds one payment. Give `paymentId` and `amount`;
 an amount above `refundable` fails with `refund_too_large` and refunds nothing.
-`lineItems` says what is being refunded and is required for `restock`.
+`lineItems` says what is being refunded, each with a `quantity`, and is required
+for `restock`.
 `notifyCustomer` sends the buyer an email, with an optional `message`.
 `externalRefund` records a refund already made at the payment provider, without
 moving money.

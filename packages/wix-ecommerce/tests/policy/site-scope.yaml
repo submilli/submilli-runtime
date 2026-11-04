@@ -1,4 +1,4 @@
-# Run by scripts/policy.test.mjs under the real policy engine. No network and no key:
+# Run under the real policy engine by scripts/policy.test.mjs and crates/submilli/tests/package_policy.rs. No network and no key:
 # WIX_SITE_ID comes from a throwaway store, and secrets.get for WIX_API_KEY is denied,
 # so an allowed call stops there, proving the business check passed before any request.
 kind: blueprint

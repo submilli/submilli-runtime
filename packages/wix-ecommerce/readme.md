@@ -79,7 +79,7 @@ capability has `siteId`, the bound site, so `siteId == "..."` pins one.
 | `wix.com/carts.create` | `itemCount` | Total units across lines |
 | `wix.com/carts.checkoutUrl` | `cartId` | |
 | `wix.com/catalog.version` | | |
-| `wix.com/products.search` | `includeHidden` | |
+| `wix.com/products.search` | `includeHidden` | A cursor carries its first page's filter, so `includeHidden` describes the request, not a cursor from another search |
 | `wix.com/products.get` | `productId` | |
 | `wix.com/products.update` | `productId`, `fields` | Sorted field names: `not (fields contains "price")` forbids price changes |
 | `wix.com/inventory.get` | `productId` | |

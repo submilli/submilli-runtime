@@ -173,6 +173,7 @@ function main(): void {
     expectCode("invalid_email", () => { findContactByEmail("x"); });
     expectCode("invalid_amount", () => { refundOrder(ORDER, { paymentId: PAYMENT, amount: -1 }); });
     expectCode("restock_needs_line_items", () => { refundOrder(ORDER, { paymentId: PAYMENT, amount: 1, restock: true }); });
+    expectCode("invalid_quantity", () => { refundOrder(ORDER, { paymentId: PAYMENT, amount: 1, lineItems: [{ lineItemId: PAYMENT }] }); });
     expectCode("invalid_delta", () => { adjustInventory(PRODUCT, VARIANT, 0); });
     expectCode("empty_update", () => { updateProduct(PRODUCT, {}); });
     expectCode("empty_update", () => { updateTracking(ORDER, PAYMENT, {}); });

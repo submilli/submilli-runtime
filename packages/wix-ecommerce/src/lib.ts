@@ -54,6 +54,7 @@ import {
     PreparedLine,
     prepareCartItem,
     prepareLine,
+    prepareRefundLine,
     PreparedCartItem,
     ProductQuery,
     productFields,
@@ -321,7 +322,7 @@ export function refundOrder(orderId: string, input: RefundInput): Refund {
     const lines: PreparedLine[] = [];
     for (const line of lineItems ?? []) {
         const { lineItemId, quantity } = line;
-        lines.push(prepareLine(lineItemId, quantity));
+        lines.push(prepareRefundLine(lineItemId, quantity));
     }
     if (lineItems !== undefined) requireLineCount(lines.length);
     if (shouldRestock && lines.length === 0) {
