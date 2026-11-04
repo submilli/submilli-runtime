@@ -227,36 +227,6 @@ pub(crate) fn new_object(
     Ok(Val::AnyRef(Some(object.to_anyref())))
 }
 
-/// The optional `schema?: string` a text form (`llm.text`, `agents.runText`)
-/// takes from the program: `None` when omitted, otherwise the text, which
-/// must be a JSON Schema object. The host sends it as written and never
-/// checks an answer against it, but anything else (a scalar, an array, or
-/// the boolean schemas structured-output endpoints do not take) would be
-/// dropped or refused on the way to the provider, so it is refused here with
-/// a catchable `TypeError`. Parsing it is charged as
-/// parsing, since its size is the program's.
-pub(crate) fn read_written_schema(
-    caller: &mut Caller<'_, StoreData>,
-    val: &Val,
-    api: &str,
-) -> wasmtime::Result<Option<String>> {
-    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
-        return Ok(None);
-    }
-    let schema = crate::runtime::host::read_string_arg(caller, val, &format!("{api} (schema)"))?;
-    crate::runtime::fuel::charge(
-        &mut *caller,
-        crate::runtime::fuel::PARSE,
-        schema.len() as u64,
-    )?;
-    match serde_json::from_str::<serde_json::Value>(&schema) {
-        Ok(serde_json::Value::Object(_)) => Ok(Some(schema)),
-        _ => Err(crate::runtime::host::type_error(format!(
-            "{api}: `schema` is not a JSON Schema: write a JSON object"
-        ))),
-    }
-}
-
 /// A type argument of a generic host function, as the call's trailing
 /// `$types` environment carries it: the `$TypeDescriptor` every generic call
 /// passes per type parameter (`codegen::runtime_descriptors`). Nothing a

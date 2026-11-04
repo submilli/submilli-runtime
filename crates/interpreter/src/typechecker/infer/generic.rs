@@ -2494,7 +2494,7 @@ impl Inferer<'_> {
         // has a bare meaning, an unchecked `unknown`; a schema-checked `T` is
         // written or supplied by the expected type.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        let schema_checked = crate::stdlib::schema_checked_call(&mangled);
+        let schema_checked = crate::stdlib::json_schema::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -2772,7 +2772,7 @@ impl Inferer<'_> {
         // A cast-kind call (`agents.run<T>`) gets its cast; an envelope call
         // returns the envelope as declared.
         let result = schema_checked.as_ref().map(|checked| checked.result);
-        if let Some(crate::stdlib::CheckedResult::Cast) = result {
+        if let Some(crate::stdlib::json_schema::CheckedResult::Cast) = result {
             return self.cast_after_schema_gate(call, &result_ty, span);
         }
         Ok((call, result_ty))

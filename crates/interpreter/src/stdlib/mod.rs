@@ -18,6 +18,7 @@ pub mod embedding;
 pub mod fs;
 pub mod git;
 pub mod http;
+pub(crate) mod json_schema;
 pub mod llm;
 pub mod secrets;
 pub mod security;
@@ -36,8 +37,8 @@ pub mod variables;
 
 use wasmtime::Linker;
 
+use crate::PackageDeclaration;
 use crate::runtime::StoreData;
-use crate::{MangledName, PackageDeclaration};
 
 /// A standard-library package that exists only when the embedder provides it.
 ///
@@ -91,76 +92,6 @@ impl OptionalPackage {
             Self::Skills => 1 << 1,
         }
     }
-}
-
-/// How a schema-checked call's result is verified against `T`.
-#[derive(Clone, Copy)]
-pub(crate) enum CheckedResult {
-    /// The host returns the parsed value and the typechecker wraps the call in
-    /// a checked `Cast` to `T`, which throws on a mismatch (`agents.run`).
-    Cast,
-    /// The host returns an envelope whose `value` is a `T` only if the
-    /// descriptor's predicate accepted it; a rejected response is a failure entry
-    /// (`llm.call`, `llm.batch`). The call's declared return type is trusted
-    /// as is.
-    Envelope,
-}
-
-/// A host call the typechecker types from its type argument: the
-/// `$TypeDescriptor` of `T` in the call's `$types` environment carries the
-/// JSON Schema emitted for it (`TypedAst::descriptor_schemas`), and its result
-/// is verified against `T` the way [`CheckedResult`] says. `T` has no
-/// default; the text form is a separate function. The written declaration is
-/// the whole public API; the descriptor is part of how a generic function is
-/// called, never a parameter a program can see or pass.
-pub(crate) struct SchemaCheckedCall {
-    /// The call as diagnostics name it, e.g. `llm.call`.
-    pub callee: &'static str,
-    /// A typed call to show in a diagnostic.
-    pub example: &'static str,
-    /// What the structural check is applied to.
-    pub checks: &'static str,
-    /// Who the schema is sent to.
-    pub answerer: &'static str,
-    /// Ends a diagnostic about the type argument: the text form to call
-    /// instead, e.g. "call `llm.text(model, prompt)` for the completion text".
-    pub text_hint: &'static str,
-    pub result: CheckedResult,
-}
-
-/// The schema-checked call `mangled` names, if it is one.
-pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaCheckedCall> {
-    if llm::declaration::is_checked_batch(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "llm.batch",
-            example: "llm.batch<Severity>(model, prompts)",
-            checks: "each model response",
-            answerer: "the model",
-            text_hint: "call `llm.texts(model, prompts)` for the completion texts",
-            result: CheckedResult::Envelope,
-        });
-    }
-    if llm::declaration::is_checked_call(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "llm.call",
-            example: "llm.call<Severity>(model, prompt)",
-            checks: "the model's response",
-            answerer: "the model",
-            text_hint: "call `llm.text(model, prompt)` for the completion text",
-            result: CheckedResult::Envelope,
-        });
-    }
-    if agents::declaration::is_checked_run(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "agents.run",
-            example: "agents.run<Report>(agent, input)",
-            checks: "the agent's result",
-            answerer: "the agent",
-            text_hint: "call `agents.runText(agent, input)` for the answer as text",
-            result: CheckedResult::Cast,
-        });
-    }
-    None
 }
 
 /// The standard library an embedder offers its programs: the core packages
@@ -348,7 +279,7 @@ mod tests {
             for mangled in &defs.runtime_generics {
                 assert!(
                     session::declaration::is_checked_get(mangled)
-                        || schema_checked_call(mangled).is_some(),
+                        || json_schema::schema_checked_call(mangled).is_some(),
                     "{} is runtime-generic but the typechecker does not gate it",
                     mangled.as_str()
                 );

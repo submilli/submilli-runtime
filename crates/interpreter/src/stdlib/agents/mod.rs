@@ -35,6 +35,7 @@ use crate::stdlib::abi::{
     self, HostView, backing_struct, install_field_getters, nullable_object_field,
     read_type_argument, string_field,
 };
+use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
     check_and_approve_call, check_candidate, permitted_candidates, preflight_listing,
     running_package, sanitize_description, truncated,
@@ -94,8 +95,11 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.runText (agent)")?;
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.runText (input)")?;
-                let schema =
-                    abi::read_written_schema(caller, abi_arg(params, 2)?, "agents.runText")?;
+                let schema = json_schema::read_written_schema(
+                    caller,
+                    abi_arg(params, 2)?,
+                    "agents.runText",
+                )?;
                 let answer = run(caller, "runText", &agent, input, schema).await?;
                 let text = write_submilli_string_struct(caller, &answer)?;
                 Ok(Val::AnyRef(Some(text.to_anyref())))

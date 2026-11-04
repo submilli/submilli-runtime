@@ -46,6 +46,7 @@ use crate::runtime::llm::{
     LlmProvider, PromptBoundKind,
 };
 use crate::stdlib::abi;
+use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
     audit_quota_denial, check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
     preflight_models, sanitize_description,
@@ -105,7 +106,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.text (model)")?;
                 let prompt =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.text (prompt)")?;
-                let schema = abi::read_written_schema(caller, abi_arg(params, 2)?, "llm.text")?;
+                let schema =
+                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.text")?;
                 text(caller, model, prompt, schema).await
             })
         },
@@ -124,7 +126,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.texts (model)")?;
                 let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.texts (prompts)")?;
-                let schema = abi::read_written_schema(caller, abi_arg(params, 2)?, "llm.texts")?;
+                let schema =
+                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.texts")?;
                 texts(caller, model, prompts, schema).await
             })
         },

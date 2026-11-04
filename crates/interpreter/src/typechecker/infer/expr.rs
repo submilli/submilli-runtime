@@ -4005,18 +4005,18 @@ impl Inferer<'_> {
     /// reach a provider as a schema that constrained nothing.
     ///
     /// `Ok(schema)` means both gates passed and the result is verified as the
-    /// call's [`crate::stdlib::CheckedResult`] says — a cast around the call,
+    /// call's [`crate::stdlib::json_schema::CheckedResult`] says — a cast around the call,
     /// or the descriptor's predicate run by the host; `Err(())` means a
     /// diagnostic was reported (or deliberately suppressed) and the call is an
     /// error. `checked` describes the call, from
-    /// [`crate::stdlib::schema_checked_call`].
+    /// [`crate::stdlib::json_schema::schema_checked_call`].
     pub(super) fn schema_checked_call_schema(
         &mut self,
-        checked: &crate::stdlib::SchemaCheckedCall,
+        checked: &crate::stdlib::json_schema::SchemaCheckedCall,
         result_ty: &Type,
         span: Span,
     ) -> Result<String, ()> {
-        let crate::stdlib::SchemaCheckedCall {
+        let crate::stdlib::json_schema::SchemaCheckedCall {
             callee,
             example,
             checks,
