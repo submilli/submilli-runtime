@@ -1,5 +1,6 @@
 //! Helpers shared across stdlib libraries.
 
+use crate::runtime::approvals::{self, ApprovalRequest, Unasked};
 use crate::runtime::decision::{
     CallOrigin, CallSite, CallTicket, EntryPath, PackageLine, SourceLine,
 };
@@ -9,6 +10,7 @@ use crate::runtime::host::{
     permission_denied, permission_denied_invariant, permission_denied_read_only,
     quota_exceeded_error, write_boxed_number_struct,
 };
+use crate::runtime::metrics::MetricsSink;
 use crate::runtime::security::{AuditDecision, CheckOutcome, SecurityCheck};
 use crate::runtime::vfs::{Access, Placement};
 use crate::runtime::{QuotaExceeded, StoreData};
@@ -108,11 +110,95 @@ pub fn check_security(
 
 /// [`check_security`], returning the recorder's ticket for the call when one is installed,
 /// for host functions whose later decisions (redirect hops) belong to the same call.
+///
+/// It cannot wait, so a call the policy asks about is refused as a policy denial. A gate
+/// that can wait for the approver uses [`check_and_approve_call`].
 pub(crate) fn check_security_call(
     mut store: impl wasmtime::AsContextMut<Data = StoreData>,
     capability: &str,
     context: serde_json::Value,
 ) -> wasmtime::Result<Option<CallTicket>> {
+    let (caller, ticket) = enter_gate(&mut store, capability, &context)?;
+    let data = store.as_context().data();
+    authorize_capability(
+        &caller,
+        data.security_check.as_ref(),
+        data.metrics.as_ref(),
+        capability,
+        &context,
+        data.vfs.cwd(),
+        CallSite::new(ticket, EntryPath::GatedOp),
+    )?;
+    Ok(ticket)
+}
+
+/// [`check_security_call`] for a gate that can wait: a call the policy asks about waits
+/// for its approver's decision, as an effect of its own ahead of the operation's.
+pub(crate) async fn check_and_approve_call(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    capability: &str,
+    context: serde_json::Value,
+) -> wasmtime::Result<Option<CallTicket>> {
+    let (principal, ticket) = enter_gate(&mut *caller, capability, &context)?;
+    let site = CallSite::new(ticket, EntryPath::GatedOp);
+    let checked = {
+        let data = caller.data();
+        authorize_or_ask(
+            &principal,
+            data.security_check.as_ref(),
+            capability,
+            &context,
+            data.vfs.cwd(),
+            site,
+        )?
+    };
+    if let Checked::Ask(request) = checked {
+        approvals::ask(caller, request, site).await?;
+    }
+    Ok(ticket)
+}
+
+/// The check a listing makes for one candidate, the check its use would make,
+/// without waiting. A candidate the policy asks about is kept, and not audited, when
+/// this run can ask its approver, since using it asks. Otherwise it is refused as a
+/// policy denial, as its use would be.
+pub(crate) fn check_candidate(
+    mut store: impl wasmtime::AsContextMut<Data = StoreData>,
+    capability: &str,
+    context: serde_json::Value,
+) -> wasmtime::Result<()> {
+    let (caller, ticket) = enter_gate(&mut store, capability, &context)?;
+    let site = CallSite::new(ticket, EntryPath::GatedOp);
+    let data = store.as_context().data();
+    let security_check = data.security_check.as_ref();
+    match authorize_or_ask(
+        &caller,
+        security_check,
+        capability,
+        &context,
+        data.vfs.cwd(),
+        site,
+    )? {
+        Checked::Allowed => Ok(()),
+        Checked::Ask(_) if data.approval_provider.is_some() => Ok(()),
+        // Filtered out, not refused: no call was made, so nothing is reported.
+        Checked::Ask(request) => {
+            let denial = approvals::deny_unasked(&request, security_check, site);
+            Err(permission_denied(
+                request.caller,
+                request.capability,
+                denial,
+            ))
+        }
+    }
+}
+
+/// The gate's entry: its flat charge, the caller's attribution, and the recorder's call.
+fn enter_gate(
+    mut store: impl wasmtime::AsContextMut<Data = StoreData>,
+    capability: &str,
+    context: &serde_json::Value,
+) -> wasmtime::Result<(String, Option<CallTicket>)> {
     // Direct caller attribution and the policy check have one flat gate charge.
     fuel::charge_host_fuel(&mut store, fuel::GATE)?;
     let caller = running_package(&store).map_err(|error| {
@@ -121,7 +207,7 @@ pub(crate) fn check_security_call(
                 &store,
                 unknown.label,
                 capability,
-                &context,
+                context,
                 "invariant",
                 unknown.reason,
             );
@@ -130,15 +216,7 @@ pub(crate) fn check_security_call(
     })?;
     // Uncharged on purpose; see `DecisionLogConfig::max_line_capture_frames`.
     let ticket = begin_recorded_call(&store, &caller, capability);
-    authorize_capability(
-        &caller,
-        store.as_context().data().security_check.as_ref(),
-        capability,
-        &context,
-        store.as_context().data().vfs.cwd(),
-        CallSite::new(ticket, EntryPath::GatedOp),
-    )?;
-    Ok(ticket)
+    Ok((caller, ticket))
 }
 
 /// Begins the recorder's call for a host function at its entry, with where in the
@@ -210,15 +288,39 @@ pub(crate) fn mark_filtered(store: &impl wasmtime::AsContext<Data = StoreData>) 
 }
 
 /// [`check_security`] for a caller resolved earlier, such as the principal of a
-/// request whose redirect hops are checked after the host fn has suspended.
+/// request whose redirect hops are checked after the host fn has suspended. A call
+/// the policy asks about is refused, and reported to `metrics`: this check cannot wait.
 pub(crate) fn authorize_capability(
+    caller: &str,
+    security_check: &dyn SecurityCheck,
+    metrics: &dyn MetricsSink,
+    capability: &str,
+    context: &serde_json::Value,
+    cwd: &str,
+    site: CallSite,
+) -> wasmtime::Result<()> {
+    match authorize_or_ask(caller, security_check, capability, context, cwd, site)? {
+        Checked::Allowed => Ok(()),
+        Checked::Ask(request) => Err(approvals::refuse(
+            request,
+            Unasked::CannotWait,
+            security_check,
+            metrics,
+            site,
+        )),
+    }
+}
+
+/// [`authorize_capability`], handing back a call the policy asks about instead of
+/// refusing it.
+fn authorize_or_ask(
     caller: &str,
     security_check: &dyn SecurityCheck,
     capability: &str,
     context: &serde_json::Value,
     cwd: &str,
     site: CallSite,
-) -> wasmtime::Result<()> {
+) -> wasmtime::Result<Checked> {
     // The ordering is the invariant. This must precede both the delegation
     // below and any work the host fn does after we return — a reorder that
     // consults the policy first makes the refusal conditional on a policy
@@ -238,52 +340,83 @@ pub(crate) fn authorize_capability(
         );
         return Err(permission_denied_invariant(caller, capability, reason));
     }
-    check_and_audit(security_check, caller, capability, context, cwd, site)
+    check_or_ask(security_check, caller, capability, context, cwd, site)
         .map_err(|reason| permission_denied(caller, capability, reason))
 }
 
+/// A policy check's answer short of a denial.
+pub(crate) enum Checked {
+    Allowed,
+    /// The policy asks an approver; nothing is audited until they decide.
+    Ask(ApprovalRequest),
+}
+
 /// Asks the policy whether `caller` may use `capability`, and audits its answer with the
-/// recorder's explanation. A denial returns the policy's reason.
+/// recorder's explanation. A denial returns the policy's reason. It cannot wait, so a
+/// call the policy asks about is refused, and reported to `metrics`.
 pub(crate) fn check_and_audit(
     security_check: &dyn SecurityCheck,
+    metrics: &dyn MetricsSink,
     caller: &str,
     capability: &str,
     context: &serde_json::Value,
     cwd: &str,
     site: CallSite,
 ) -> Result<(), String> {
-    let outcome = security_check.check_with_cwd(caller, capability, context, cwd);
+    match check_or_ask(security_check, caller, capability, context, cwd, site)? {
+        Checked::Allowed => Ok(()),
+        Checked::Ask(request) => {
+            request.report_unasked(Unasked::CannotWait, None, metrics);
+            Err(approvals::deny_unasked(&request, security_check, site))
+        }
+    }
+}
+
+/// [`check_and_audit`], handing back a call the policy asks about. Its request carries
+/// the context as the policy tested it.
+pub(crate) fn check_or_ask(
+    security_check: &dyn SecurityCheck,
+    caller: &str,
+    capability: &str,
+    context: &serde_json::Value,
+    cwd: &str,
+    site: CallSite,
+) -> Result<Checked, String> {
+    let audit_context = security_check.audit_context(capability, context, cwd);
+    let (allowed, rule, reason) =
+        match security_check.check_with_cwd(caller, capability, context, cwd) {
+            CheckOutcome::Allow { rule } => (true, rule, None),
+            CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
+            CheckOutcome::Ask { approver, rule } => {
+                return Ok(Checked::Ask(ApprovalRequest {
+                    approver,
+                    caller: caller.to_owned(),
+                    capability: capability.to_owned(),
+                    context: audit_context.into_owned(),
+                    rule,
+                }));
+            }
+        };
     // The explanation is for the recorder alone; enforcement never reads it.
     let explanation = security_check
         .recorder()
         .and_then(|_| security_check.explain(caller, capability, context, cwd));
-    let audit_context = security_check.audit_context(capability, context, cwd);
-    let context = audit_context.as_ref();
-    match outcome {
-        CheckOutcome::Allow { rule } => {
-            security_check.audit(
-                AuditDecision::new(caller, capability, context, true, "policy", rule, None)
-                    .with_explanation(explanation.as_ref())
-                    .with_site(site),
-            );
-            Ok(())
-        }
-        CheckOutcome::Deny { reason, rule } => {
-            security_check.audit(
-                AuditDecision::new(
-                    caller,
-                    capability,
-                    context,
-                    false,
-                    "policy",
-                    rule,
-                    Some(&reason),
-                )
-                .with_explanation(explanation.as_ref())
-                .with_site(site),
-            );
-            Err(reason)
-        }
+    security_check.audit(
+        AuditDecision::new(
+            caller,
+            capability,
+            audit_context.as_ref(),
+            allowed,
+            "policy",
+            rule,
+            reason.as_deref(),
+        )
+        .with_explanation(explanation.as_ref())
+        .with_site(site),
+    );
+    match reason {
+        None => Ok(Checked::Allowed),
+        Some(reason) => Err(reason),
     }
 }
 

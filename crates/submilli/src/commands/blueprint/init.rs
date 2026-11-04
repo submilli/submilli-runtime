@@ -110,8 +110,9 @@ const HEADER: &str = "\
 #
 # The capability policy is deny-by-default: a capability is blocked unless a
 # rule under `main` (your script's caller id) allows it. Grant one with
-# `action: allow` (or `ask-human`), and constrain it with a `filter:`
-# expression over the call's context fields.
+# `action: allow`, or require approval with `ask-human` (the person in the
+# conversation) or `ask-admin` (an administrator), and constrain it with a
+# `filter:` expression over the call's context fields.
 #
 # `default:` is the fall-through for any capability no rule matches. It governs
 # even when the `permissions:` block is removed: `default: deny` (the scaffold)

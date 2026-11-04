@@ -271,6 +271,13 @@ pub struct Cli {
     #[arg(long, value_name = "RESPONSES")]
     idempotency_keep_last: Option<usize>,
 
+    /// Seconds a call an `ask-human` or `ask-admin` rule matches waits for a
+    /// decision before it is denied, under a Blueprint that sets no
+    /// `approval_timeout`. [default: 86400]
+    /// Env: `$SUBMILLI_APPROVAL_TIMEOUT`, which outranks the config file.
+    #[arg(long, value_name = "SECONDS")]
+    approval_timeout: Option<u64>,
+
     /// Tokens every live execution's `submilli:embedding` calls may spend *in
     /// total*. Separate from `--max-llm-tokens`: embedding and `llm.call` spend
     /// against different provider credentials and neither can starve the other.

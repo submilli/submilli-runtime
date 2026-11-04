@@ -87,6 +87,8 @@ pub(crate) async fn admit(
     inputs.vfs_source = execute::VfsSource::Opened { vfs, vfs_info };
     let source = inputs.code.to_owned();
     let blueprint = (*inputs.blueprint).clone();
+    // Only the HTTP session API can answer an approval; an MCP run is refused one.
+    let approvals = inputs.run_entry == "session";
     let prepared = execute::prepare_execution(state, inputs, None, None)
         .await
         .map_err(|outcome| {
@@ -98,6 +100,7 @@ pub(crate) async fn admit(
     let mut program =
         runner::durable::capture_program(source, blueprint, &prepared.services, state.runtime());
     program.mcp_catalog = prepared.mcp_catalog;
+    program.approvals = approvals;
     // The session catalog is immutable. Retain it with the accepted program,
     // independently of later blueprint availability and session hydration.
     program.tools =
@@ -473,6 +476,18 @@ async fn run_attempt(
         (Some(_), None) => return Err(StuckReason::Interrupted),
         _ => None,
     };
+    let asks = program.approvals && program.blueprint.asks();
+    let approvals = match &entry {
+        Some(entry) if asks => Some(crate::handlers::sessions::approval_provider(
+            state,
+            entry,
+            run.session_id(),
+            &program.blueprint,
+            &audit,
+        )),
+        None if asks => return Err(StuckReason::Interrupted),
+        _ => None,
+    };
     let inputs = ExecuteInputs {
         session_id: run.session_id(),
         code: &program.source,
@@ -484,7 +499,11 @@ async fn run_attempt(
         vfs_source: execute::VfsSource::Opened { vfs, vfs_info },
         run_entry: "session",
         idempotency_key: run.optional_key(),
-        tools,
+        suspension: Some(execute::RunSuspension {
+            tools,
+            approvals,
+            cancel: None,
+        }),
     };
     let mut prepared = execute::prepare_execution(state, inputs, Some(cancelled), Some(program.mcp_catalog.clone())).await.map_err(|outcome| {
         tracing::warn!(run = %run.reservation_id(), error = ?outcome.response.error, "recovery preparation failed");
@@ -688,7 +707,6 @@ fn run_tools(
             timeout: program.blueprint.tool_call_timeout,
             touch: crate::handlers::sessions::session_touch(state, run.session_id()),
         }),
-        cancel: None,
     }
 }
 

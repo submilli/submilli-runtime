@@ -105,6 +105,9 @@ pub struct HostServices {
     /// What answers the session's `@tools` calls. `None` when the run has no
     /// application tools.
     pub tool_provider: Option<Arc<dyn ToolProvider>>,
+    /// What decides a call an `ask-human` or `ask-admin` rule matches. `None`
+    /// when the run cannot suspend, which refuses such a call.
+    pub approval_provider: Option<Arc<dyn interpreter::runtime::ApprovalProvider>>,
     /// `submilli:session` storage for the session this run belongs to.
     pub session_kv: Arc<dyn SessionKvStore>,
     pub session_finalizers:
@@ -339,6 +342,7 @@ async fn run_inner(
     data.http_client = services.http_client;
     data.mcp_transport = Some(services.mcp_transport);
     data.tool_provider = services.tool_provider;
+    data.approval_provider = services.approval_provider;
     data.session_kv = Some(services.session_kv);
     data.session_finalizers = services.session_finalizers;
     data.cursor_keys = services.cursor_keys;
@@ -1089,6 +1093,7 @@ mod tests {
             http_client: defaults.http_client,
             mcp_transport: Arc::new(UnusedMcp),
             tool_provider: None,
+            approval_provider: None,
             session_kv: Arc::new(InMemorySessionKv::default()),
             session_finalizers: None,
             resource_use: None,

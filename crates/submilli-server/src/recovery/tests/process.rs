@@ -60,7 +60,7 @@ async fn recovery_child() {
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key: Some("key"),
-            tools: None,
+            suspension: None,
         },
     )
     .await

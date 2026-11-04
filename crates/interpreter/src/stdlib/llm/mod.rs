@@ -48,8 +48,8 @@ use crate::stdlib::abi::{
     string_field,
 };
 use crate::stdlib::shared::{
-    audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
-    preflight_models, sanitize_description,
+    audit_quota_denial, check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
+    optional_number, preflight_models, sanitize_description,
 };
 
 pub const MODULE_NAME: &str = "submilli:llm";
@@ -249,7 +249,7 @@ async fn dispatch(
     prompts: Vec<String>,
     schema: Option<String>,
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
-    let ticket = gate(caller, model, prompts.len())?;
+    let ticket = gate(caller, model, prompts.len()).await?;
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(op, model, &prompts, schema.as_deref())
     });
@@ -506,16 +506,16 @@ fn reported_usage(outcomes: &[LlmOutcome]) -> ModelUsage {
 /// constrain which models a caller reaches and how wide a fan-out it may
 /// request; it cannot see what is being asked, because prompt text is what this
 /// boundary exists to keep in.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: &str,
     prompt_count: usize,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(
-        caller,
-        CAPABILITY,
-        serde_json::json!({ "model": model, "prompt_count": prompt_count }),
-    )
+    check_and_approve_call(caller, CAPABILITY, gate_context(model, prompt_count)).await
+}
+
+fn gate_context(model: &str, prompt_count: usize) -> serde_json::Value {
+    serde_json::json!({ "model": model, "prompt_count": prompt_count })
 }
 
 /// `models()`: check runtime invariants, then gate each candidate with the same
@@ -553,7 +553,11 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
-    let keeps = filters_candidate(gate(caller, model, 0).map(|_| ()))?;
+    let keeps = filters_candidate(check_candidate(
+        &mut *caller,
+        CAPABILITY,
+        gate_context(model, 0),
+    ))?;
     if !keeps {
         mark_filtered(&*caller);
     }

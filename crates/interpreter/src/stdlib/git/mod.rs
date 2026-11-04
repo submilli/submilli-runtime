@@ -25,7 +25,7 @@ mod worker;
 use crate::runtime::Vfs;
 use crate::runtime::decision::{CallOrigin, CallSite, EntryPath};
 use crate::runtime::fuel;
-use crate::runtime::{HttpClient, SecretProvider, SecurityCheck, StoreData};
+use crate::runtime::{HttpClient, MetricsSink, SecretProvider, SecurityCheck, StoreData};
 use crate::stdlib::shared::running_package;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -56,6 +56,7 @@ struct Job {
     caller: String,
     config: GitConfig,
     security: Arc<dyn SecurityCheck>,
+    metrics: Arc<dyn MetricsSink>,
     secrets: Arc<dyn SecretProvider>,
     http: Arc<dyn HttpClient>,
     runtime: tokio::runtime::Handle,
@@ -94,6 +95,7 @@ impl Job {
         );
         crate::stdlib::shared::check_and_audit(
             self.security.as_ref(),
+            self.metrics.as_ref(),
             &self.caller,
             capability,
             &context,
@@ -396,6 +398,7 @@ impl GitCall {
                     caller: principal,
                     config,
                     security: caller.data().security_check.clone(),
+                    metrics: caller.data().metrics.clone(),
                     secrets: caller.data().secret_provider.clone(),
                     http: caller.data().http_client.clone(),
                     runtime: tokio::runtime::Handle::try_current().map_err(|_| {

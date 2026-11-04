@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "eb55e82dad2d85a8ad988efb6214e19f47d4c2c2e53207c3f29df07417b9e33b"
+  contentHash: "c917691ea72eea17f0ad0e0737ead1916c369dc5242f0ade7afdf322ea42b0c6"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -64,10 +64,11 @@ flat names listed. A dash means the form doesn't exist.
 | `durable_objects.inline_threshold` | — | — | bytes or size string | `64KiB` | Maximum serialized effect-history entry size kept inline. Equality stays inline. Accepts `0` through 64 MiB + 64 KiB. No separate directory or capacity setting. See [effect-history storage](/docs/reference/run-recovery#effect-history-storage). |
 | `durable_execution` | — | — | boolean | `false` | Retain and recover persistent session executions. Requires persistent SQLite and an encryption key. See [run recovery](/docs/reference/run-recovery). |
 | `max_durable_runs` | — | — | runs | `4` | Maximum simultaneous durable session runs. Must be positive. |
-| `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting on the harness at an [application tool](/docs/reference/http-api#application-tools) call at once, across the server. Each holds its program in memory. `0` turns application tool calls off. |
+| `max_suspended_runs` | `--max-suspended-runs` | `SUBMILLI_MAX_SUSPENDED_RUNS` | runs | `256` | Runs waiting at once, across the server, on the harness at an [application tool](/docs/reference/http-api#application-tools) call or on an [approval](/docs/reference/http-api#approvals). Each holds its program in memory. `0` turns application tool calls and approvals off. |
 | `max_last_run_size` | `--max-last-run-size` | `SUBMILLI_MAX_LAST_RUN_SIZE` | megabytes | `64` | The largest [last run](/docs/reference/http-api#get-v1sessionssession_idlast-run) a session keeps, as JSON. A larger one keeps only its size, and its last-run answers `413`. |
 | `idempotency_retention` | `--idempotency-retention` | `SUBMILLI_IDEMPOTENCY_RETENTION` | seconds | `86400` | How long a keyed execute's response is kept for replay after it completes. `0` keeps only the newest `idempotency_keep_last`. See [Idempotency](/docs/reference/http-api#idempotency). |
 | `idempotency_keep_last` | `--idempotency-keep-last` | `SUBMILLI_IDEMPOTENCY_KEEP_LAST` | responses | `3` | A session's newest keyed-execute responses kept for replay whatever their age. `0` keeps each only for `idempotency_retention`. |
+| `approval_timeout` | `--approval-timeout` | `SUBMILLI_APPROVAL_TIMEOUT` | seconds, at least 1 | `86400` | How long a call an `ask-human` or `ask-admin` rule matches waits for a decision, under a Blueprint that sets no `approval_timeout`. See [Approvals](/docs/reference/permissions#approvals). |
 | `max_embedding_tokens` | `--max-embedding-tokens` | `SUBMILLI_MAX_EMBEDDING_TOKENS` | count, at least 1 | `50M` | Embedding tokens across all runs. Separate from the model-token budgets. |
 | `max_execution_embedding_tokens` | `--max-execution-embedding-tokens` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_TOKENS` | count, at least 1 | `2M` | Embedding tokens one run may spend. |
 | `max_execution_embedding_requests` | `--max-execution-embedding-requests` | `SUBMILLI_MAX_EXECUTION_EMBEDDING_REQUESTS` | count, at least 1 | `1K` | Provider requests one run's `submilli:embedding` calls may send. |
@@ -326,7 +327,7 @@ Off by default. When on, the server reports to the Submilli maintainers:
 
 | Reported | When |
 | --- | --- |
-| Crashes; usage counters (sessions opened, programs run by outcome, Package and built-in lookups, Blueprint changes); for each failed program, its error `kind` and the first line of its message | `telemetry` is on |
+| Crashes; usage counters (sessions opened, programs run by outcome, Package and built-in lookups, Blueprint changes, calls denied because their approval couldn't be asked, by approver and why); for each failed program, its error `kind` and the first line of its message | `telemetry` is on |
 | The failed program's source and its full error, including the backtrace or the diagnostics that quote its lines | `telemetry` and `telemetry_include_source` are both on |
 | Client IP addresses, request headers, the hosts of programs' outbound calls | Never |
 
@@ -570,6 +571,10 @@ Options:
           How many of a session's newest keyed-execute responses are kept for replay whatever their
           age. `0` keeps each only for `--idempotency-retention`. [default: 3] Env:
           `$SUBMILLI_IDEMPOTENCY_KEEP_LAST`, which outranks the config file
+      --approval-timeout <SECONDS>
+          Seconds a call an `ask-human` or `ask-admin` rule matches waits for a decision before it
+          is denied, under a Blueprint that sets no `approval_timeout`. [default: 86400] Env:
+          `$SUBMILLI_APPROVAL_TIMEOUT`, which outranks the config file
       --max-embedding-tokens <TOKENS>
           Tokens every live execution's `submilli:embedding` calls may spend *in total*. Separate
           from `--max-llm-tokens`: embedding and `llm.call` spend against different provider

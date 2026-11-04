@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
-use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
+use interpreter::runtime::{ApprovalRequest, CheckOutcome, SecurityCheck, Unasked, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -26,6 +26,7 @@ use submilli_shared::PolicyCheck;
 use crate::app::AppState;
 use crate::error::ExecuteError;
 use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
+use crate::metrics::SentryMetricsSink;
 use crate::packages;
 use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
@@ -370,7 +371,7 @@ impl SubmilliMcp {
                     vfs_source: VfsSource::Rest,
                     run_entry: "mcp",
                     idempotency_key: None,
-                    tools: None,
+                    suspension: None,
                 },
             )
             .await
@@ -411,7 +412,7 @@ impl SubmilliMcp {
                 run_entry: "mcp",
                 idempotency_key: None,
                 // MCP's `tools/call` cannot suspend: no application tools here.
-                tools: None,
+                suspension: None,
             },
         )
         .await;
@@ -743,8 +744,25 @@ impl SubmilliMcp {
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
         let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
-        let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
         let audit_context = policy.audit_context(capability, &context, config.cwd());
+        let outcome = match policy.check_with_cwd("main", capability, &context, config.cwd()) {
+            // A file tool can't wait for an approver, so it denies as a deny rule would.
+            CheckOutcome::Ask { approver, rule } => {
+                let request = ApprovalRequest {
+                    approver,
+                    caller: "main".to_owned(),
+                    capability: capability.to_owned(),
+                    context: audit_context.clone().into_owned(),
+                    rule,
+                };
+                request.report_unasked(Unasked::NoProvider, None, &SentryMetricsSink);
+                CheckOutcome::Deny {
+                    reason: request.denial(),
+                    rule: Some(request.rule.index),
+                }
+            }
+            outcome => outcome,
+        };
         self.state.audit().file_decision(
             parts,
             blueprint,

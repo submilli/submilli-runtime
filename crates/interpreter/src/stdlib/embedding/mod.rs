@@ -1,7 +1,7 @@
 //! `submilli:embedding` — remote text embeddings from inside a Submilli program.
 //!
 //! Rust host functions registered directly under the package name. Each op runs
-//! `check_security_call` before anything leaves the process; the one gated
+//! the security gate before anything leaves the process; the one gated
 //! capability is `embedding.embed`, cataloged in [`crate::stdlib::capabilities`]
 //! — keep it in sync when adding or removing a gate (see AGENTS.md).
 //!
@@ -56,8 +56,8 @@ use crate::stdlib::abi::{
     raw_bytes_field, string_field,
 };
 use crate::stdlib::shared::{
-    audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
-    preflight_models, sanitize_description,
+    audit_quota_denial, check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
+    optional_number, preflight_models, sanitize_description,
 };
 
 pub use crate::runtime::EMBEDDING_MODULE_NAME as MODULE_NAME;
@@ -248,7 +248,7 @@ async fn embed(
     purpose: &str,
 ) -> wasmtime::Result<Val> {
     let elements = crate::runtime::prelude::collection::read_array_vals(caller, texts)?;
-    let ticket = gate(caller, model, elements.len())?;
+    let ticket = gate(caller, model, elements.len()).await?;
 
     let budget = execution_budget(caller);
     let limits = budget.limits();
@@ -439,16 +439,16 @@ fn note_embedding_usage(
 
 /// The capability check, run before any bytes leave the process. The context is
 /// exactly `model` and `input_count`; input text is never in it.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: &str,
     input_count: usize,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(
-        caller,
-        CAPABILITY,
-        serde_json::json!({ "model": model, "input_count": input_count }),
-    )
+    check_and_approve_call(caller, CAPABILITY, gate_context(model, input_count)).await
+}
+
+fn gate_context(model: &str, input_count: usize) -> serde_json::Value {
+    serde_json::json!({ "model": model, "input_count": input_count })
 }
 
 /// Bound the call by count and total bytes, then read the texts. The count is
@@ -573,7 +573,11 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
 /// call: a listing that threw on the first forbidden alias would itself disclose
 /// that the operator configured it.
 fn may_embed(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
-    let keeps = filters_candidate(gate(caller, model, 0).map(|_| ()))?;
+    let keeps = filters_candidate(check_candidate(
+        &mut *caller,
+        CAPABILITY,
+        gate_context(model, 0),
+    ))?;
     if !keeps {
         mark_filtered(&*caller);
     }

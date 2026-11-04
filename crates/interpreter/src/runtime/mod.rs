@@ -2,6 +2,7 @@
 
 use crate::runtime::durable::RunId;
 pub mod agents;
+pub mod approvals;
 pub(crate) mod array_storage;
 pub mod blocking;
 pub mod call_log;
@@ -42,6 +43,10 @@ pub mod watchdog;
 pub use agents::{
     AGENTS_MODULE_NAME, AgentCallError, AgentInfo, AgentOutcome, AgentProvider, AgentRequest,
     AgentUsage,
+};
+pub use approvals::{
+    APPROVAL_OPERATION, ApprovalError, ApprovalOutcome, ApprovalProvider, ApprovalRequest,
+    Approver, AskRule, Unasked,
 };
 pub use call_log::{BodyCopy, CallOutcome, CallRecord, ModelUsage, PayloadRecord};
 pub use decision::{
@@ -87,7 +92,7 @@ pub use model_calls::{AttributedUsage, ModelCallUsage};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{EncryptedSecret, NoopSecretProvider, SecretKeyId, SecretProvider};
-pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck};
+pub use security::{AllowAllCheck, AuditDecision, CheckOutcome, SecurityCheck, denial_reason};
 pub use session_kv::{
     CURSOR_KEY_ID_LEN, CursorKey, CursorKeys, InMemorySessionKv, SessionKvEntry, SessionKvError,
     SessionKvFuture, SessionKvLimitKind, SessionKvLimits, SessionKvPage, SessionKvStore,
@@ -166,8 +171,13 @@ pub struct StoreData {
     /// through, present only when the embedder wires one. `None` makes every
     /// call a catchable "no application tools" error.
     pub tool_provider: Option<Arc<dyn ToolProvider>>,
+    /// Who decides a call a rule marks `ask-human` or `ask-admin`, present only
+    /// when the embedder can put such a call to its approver. `None` refuses
+    /// every asked call as a policy denial.
+    pub approval_provider: Option<Arc<dyn ApprovalProvider>>,
     /// Time this execution spent waiting outside the program on a host call
-    /// that must not count against its time limit (an application tool call).
+    /// that must not count against its time limit (an application tool call, or an
+    /// approval).
     /// An embedder's execution timeout subtracts it from the elapsed time.
     pub clock_paused: std::time::Duration,
     /// The model provider `submilli:llm` dispatches through, present only when
@@ -333,6 +343,7 @@ impl StoreData {
             secret_provider: Arc::new(secrets::NoopSecretProvider),
             mcp_transport: None,
             tool_provider: None,
+            approval_provider: None,
             clock_paused: std::time::Duration::ZERO,
             llm_provider: None,
             llm_budget: None,

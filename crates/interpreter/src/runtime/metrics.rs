@@ -1,9 +1,12 @@
 //! Embedder hook for runtime observability. The interpreter times host-side
-//! operations (currently HTTP transport) and hands each one to a [`MetricsSink`]
+//! operations (currently HTTP transport), counts calls that needed an approval it
+//! could not ask for, and hands each to a [`MetricsSink`]
 //! the embedder installs on [`StoreData`](super::StoreData). The default sink
 //! discards everything, so the pure-interpreter path stays dependency-free —
 //! the binary crates (CLI, server) are the only place a real metrics backend
 //! (Sentry) is wired in.
+
+use super::approvals::{Approver, Unasked};
 
 /// One completed HTTP host operation, handed to [`MetricsSink::http_operation`]
 /// after the transport returns (success or failure).
@@ -31,6 +34,9 @@ pub trait MetricsSink: Send + Sync {
     /// An HTTP host operation finished. Called once per `http_request` /
     /// `http_download` host call, on both the success and failure paths.
     fn http_operation(&self, _metric: HttpMetric) {}
+    /// A call that needs `approver`'s approval was denied without asking anyone,
+    /// for `why`.
+    fn approval_unasked(&self, _approver: Approver, _why: Unasked) {}
 }
 
 /// Discards every metric. The [`StoreData`](super::StoreData) default.

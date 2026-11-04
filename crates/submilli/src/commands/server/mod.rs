@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Subcommand;
 
 pub mod apply;
+pub mod approval;
 pub mod blueprint;
 pub mod docs;
 pub mod mcp;
@@ -21,6 +22,9 @@ pub enum ServerCmd {
     /// Inspect executions and resume stuck runs.
     #[command(subcommand)]
     Runs(runs::RunsCmd),
+    /// Decide calls waiting for approval (`ask-admin`, `ask-human`).
+    #[command(subcommand)]
+    Approval(approval::ApprovalCmd),
     /// Apply blueprint YAML documents to a running submilli-server.
     Apply(apply::Args),
     /// Manage approved HTTPS server public keys.
@@ -55,6 +59,7 @@ pub enum ServerCmd {
 pub fn execute(cmd: ServerCmd) -> Result<ExitCode> {
     match cmd {
         ServerCmd::Runs(cmd) => runs::execute(cmd),
+        ServerCmd::Approval(cmd) => approval::execute(cmd),
         ServerCmd::Apply(args) => apply::execute(args),
         ServerCmd::Trust(cmd) => trust::execute(cmd),
         ServerCmd::Docs(args) => docs::execute(args),

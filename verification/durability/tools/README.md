@@ -7,6 +7,17 @@ It extends the durability verification suite at the HTTP callback handoff.
 restart scheduling. This model assumes those guarantees and expands their
 application-tool seam. It is not a proof of their end-to-end composition.
 
+Approval calls (`ask-human` and `ask-admin`, SUB-1320) use the same protocol.
+Each approval is its own `policy.approval` effect, and it goes through the same
+suspension, delivery, commit and replay code as a tool call, so this model
+covers it. Two differences stay outside the model. An `ask-admin` approval
+refuses an answer from a `user` token before delivery, so that answer never
+changes state. An approval's expiry does not make later calls fail, unlike
+a committed tool timeout (the model's `HasTimedOut`). The Rust test
+`a_replayed_expiry_marks_the_harness_gone_only_for_a_tool` pins the difference on
+replay, and `killed_process_replays_an_approval_before_and_after_its_decision_commits`
+kills the process around an approval's commit.
+
 Waiting Wasm instances stay in memory, including instances rebuilt at startup.
 A call ID encodes the run and logical effect identity. Replay skips completed
 effects and reconstructs the first unanswered call. There is no durable pending

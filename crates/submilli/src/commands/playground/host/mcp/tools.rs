@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
 use interpreter::runtime::security::AuditDecision;
-use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs};
+use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs, denial_reason};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
@@ -650,6 +650,12 @@ impl SubmilliMcp {
         let (allowed, rule, refusal) = match outcome {
             CheckOutcome::Allow { rule } => (true, rule, None),
             CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
+            // A file tool cannot wait for an approver, so it denies as a deny rule would.
+            CheckOutcome::Ask { rule, .. } => (
+                false,
+                Some(rule.index),
+                Some(denial_reason("main", capability, audit_context.as_ref())),
+            ),
             _ => (false, None, Some("unrecognized policy outcome".to_string())),
         };
         if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {

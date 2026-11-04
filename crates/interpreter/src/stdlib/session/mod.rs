@@ -34,7 +34,9 @@ use crate::runtime::session_kv::{
 use crate::stdlib::abi::{
     self, HostView, backing_struct, f64_field, install_field_getters, string_field,
 };
-use crate::stdlib::shared::check_security_call;
+use crate::stdlib::shared::{
+    check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
+};
 
 pub const MODULE_NAME: &str = "submilli:session";
 
@@ -99,7 +101,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
-                let ticket = gate(caller, "session.read", &key)?;
+                let ticket = gate(caller, "session.read", &key).await?;
                 let found = effects::execute(caller, "session.get", key, |caller, _, key| {
                     Box::pin(async move {
                         let found = provider(caller, "get")?
@@ -140,7 +142,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
-                let ticket = gate(caller, "session.read", &key)?;
+                let ticket = gate(caller, "session.read", &key).await?;
                 let found = effects::execute(caller, "session.has", key, |caller, _, key| {
                     Box::pin(async move {
                         provider(caller, "has")?
@@ -166,7 +168,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "set")?;
-                let ticket = gate(caller, "session.write", &key)?;
+                let ticket = gate(caller, "session.write", &key).await?;
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
@@ -198,7 +200,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
-                gate(caller, "session.remove", &key)?;
+                gate(caller, "session.remove", &key).await?;
                 let removed = effects::execute(caller, "session.remove", key, |caller, _, key| {
                     Box::pin(async move {
                         provider(caller, "remove")?
@@ -313,11 +315,12 @@ async fn list(
 ) -> wasmtime::Result<Val> {
     let prefix = value::read_units(caller, prefix_val, "session.list (prefix)")?;
     let limit = read_limit(limit_val)?;
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "session.list",
         serde_json::json!({ "prefix": String::from_utf16_lossy(&prefix) }),
-    )?;
+    )
+    .await?;
     let cursor = if crate::runtime::prelude::undefined::is_undefined(caller, cursor_val)? {
         None
     } else {
@@ -433,19 +436,15 @@ fn read_limit(val: &Val) -> wasmtime::Result<usize> {
 /// failing the call: a listing that threw on the first forbidden key would
 /// itself disclose that the key exists.
 fn may_read(caller: &mut wasmtime::Caller<'_, StoreData>, key: &[u16]) -> wasmtime::Result<bool> {
-    let Err(err) = gate(caller, "session.read", key) else {
-        return Ok(true);
-    };
-    // Only the policy's own answer filters. An invariant denial means the check
-    // could not be made at all, and swallowing it would turn a runtime refusal
-    // into a silently short listing.
-    match err.downcast_ref::<crate::runtime::host::PermissionDenied>() {
-        Some(denial) if denial.is_policy() => {
-            crate::stdlib::shared::mark_filtered(&*caller);
-            Ok(false)
-        }
-        _ => Err(err),
+    let keeps = filters_candidate(check_candidate(
+        &mut *caller,
+        "session.read",
+        key_context(key),
+    ))?;
+    if !keeps {
+        mark_filtered(&*caller);
     }
+    Ok(keeps)
 }
 
 fn build_page(
@@ -490,16 +489,16 @@ fn read_key(
 /// The policy sees the key as text. A lone surrogate is not expressible in a
 /// JSON string, so the context renders it lossily — matching on such a key is
 /// not something a rule can express, and the store keeps the exact units.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     capability: &str,
     key: &[u16],
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(
-        caller,
-        capability,
-        serde_json::json!({ "key": String::from_utf16_lossy(key) }),
-    )
+    check_and_approve_call(caller, capability, key_context(key)).await
+}
+
+fn key_context(key: &[u16]) -> serde_json::Value {
+    serde_json::json!({ "key": String::from_utf16_lossy(key) })
 }
 
 /// Clone the provider out of the store before any `await` or guest re-entry:
