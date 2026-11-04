@@ -22,7 +22,7 @@ function main(): void {
   for (const m of models) {
     // A listed name is exactly the spelling `call` expects — no prefix to
     // strip, no provider to qualify it with.
-    const c = llm.call(m.name, "Summarize this.");
+    const c = llm.text(m.name, "Summarize this.");
     assert(c.ok, "a listed model completes when called");
     called = called + 1;
   }
@@ -31,7 +31,7 @@ function main(): void {
   // The same names work through `batch`, which shares the capability and the
   // filter — discovery is not `call`-specific.
   for (const m of models) {
-    const results = llm.batch(m.name, ["one", "two"]);
+    const results = llm.texts(m.name, ["one", "two"]);
     assert(results.length === 2, "a listed model accepts a batch too");
   }
 
@@ -39,7 +39,7 @@ function main(): void {
   // authoritative, so an undeclared model is refused rather than attempted.
   let unknown = "";
   try {
-    llm.call("no-such-model", "Summarize this.");
+    llm.text("no-such-model", "Summarize this.");
     assert(false, "an unlisted model must not dispatch");
   } catch (e: Error) {
     unknown = e.message;

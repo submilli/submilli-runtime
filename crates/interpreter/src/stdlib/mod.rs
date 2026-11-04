@@ -18,6 +18,7 @@ pub mod embedding;
 pub mod fs;
 pub mod git;
 pub mod http;
+pub(crate) mod json_schema;
 pub mod llm;
 pub mod secrets;
 pub mod security;
@@ -36,8 +37,8 @@ pub mod variables;
 
 use wasmtime::Linker;
 
+use crate::PackageDeclaration;
 use crate::runtime::StoreData;
-use crate::{MangledName, PackageDeclaration, Type};
 
 /// A standard-library package that exists only when the embedder provides it.
 ///
@@ -91,79 +92,6 @@ impl OptionalPackage {
             Self::Skills => 1 << 1,
         }
     }
-}
-
-/// A host call the typechecker types from its type argument: the compiler emits
-/// a JSON Schema for `T` into the call's trailing `schema` parameter and wraps
-/// the result in a structural check against `T`. What differs between such
-/// calls is what a bare call returns and how diagnostics name it.
-pub(crate) struct SchemaCheckedCall {
-    /// The call as diagnostics name it, e.g. `llm.call`.
-    pub callee: &'static str,
-    /// A typed call to show in a diagnostic.
-    pub example: &'static str,
-    /// What the structural check is applied to.
-    pub checks: &'static str,
-    /// Who the schema is sent to.
-    pub answerer: &'static str,
-    /// The parameters a program writes, in prose; the schema parameter follows.
-    pub written_params: &'static str,
-    pub written_param_count: usize,
-    /// Ends the "cannot be verified" diagnostics: what to do instead of a type
-    /// argument the runtime cannot test.
-    pub untyped_hint: &'static str,
-    /// Ends the `<unknown>` diagnostic.
-    pub untyped_hint_for_unknown: &'static str,
-    /// Ends the "has no JSON Schema" diagnostic.
-    pub untyped_hint_for_no_schema: &'static str,
-    /// What `T` binds to when the program wrote no type argument.
-    pub untyped_result: Type,
-}
-
-impl SchemaCheckedCall {
-    /// The schema parameter's position, as an ordinal word.
-    pub fn schema_argument_ordinal(&self) -> &'static str {
-        match self.written_param_count {
-            0 => "first",
-            1 => "second",
-            2 => "third",
-            3 => "fourth",
-            _ => "last",
-        }
-    }
-}
-
-/// The schema-checked call `mangled` names, if it is one.
-pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaCheckedCall> {
-    if llm::declaration::is_checked_call(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "llm.call",
-            example: "llm.call<Severity>(model, prompt)",
-            checks: "the model's response",
-            answerer: "the model",
-            written_params: "the model and the prompt",
-            written_param_count: 2,
-            untyped_hint: "read the `Completion` envelope yourself",
-            untyped_hint_for_unknown: "read the `Completion` envelope's `ok` and `text` yourself",
-            untyped_hint_for_no_schema: "parse the `Completion` text yourself",
-            untyped_result: llm::declaration::untyped_result_type(mangled),
-        });
-    }
-    if agents::declaration::is_checked_run(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "agents.run",
-            example: "agents.run<Report>(agent, input)",
-            checks: "the agent's result",
-            answerer: "the agent",
-            written_params: "the agent and the input",
-            written_param_count: 2,
-            untyped_hint: "read the returned text yourself",
-            untyped_hint_for_unknown: "read the returned text yourself",
-            untyped_hint_for_no_schema: "parse the returned text yourself",
-            untyped_result: Type::String,
-        });
-    }
-    None
 }
 
 /// The standard library an embedder offers its programs: the core packages
@@ -312,7 +240,6 @@ pub(crate) fn host_views() -> impl Iterator<Item = &'static abi::HostView> {
         embedding::HOST_VIEWS,
         fs::HOST_VIEWS,
         http::HOST_VIEWS,
-        llm::HOST_VIEWS,
         session::HOST_VIEWS,
         skills::HOST_VIEWS,
         url::HOST_VIEWS,
@@ -336,6 +263,41 @@ mod optional_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every runtime-generic host function is one the typechecker gates: it
+    /// records the schema a schema-checked call's descriptor carries and the
+    /// shapes behind its TypeInfo ids, and rejects a `T` the host's predicate
+    /// cannot test. A host generic the typechecker did not learn would reach
+    /// the host with a descriptor carrying no schema, a fatal host error.
+    #[test]
+    fn every_runtime_generic_host_function_is_a_checked_call() {
+        let all = Stdlib::core()
+            .with(OptionalPackage::Agents)
+            .with(OptionalPackage::Skills);
+        let mut seen = Vec::new();
+        for defs in all.package_declarations() {
+            for mangled in &defs.runtime_generics {
+                assert!(
+                    session::declaration::is_checked_get(mangled)
+                        || json_schema::schema_checked_call(mangled).is_some(),
+                    "{} is runtime-generic but the typechecker does not gate it",
+                    mangled.as_str()
+                );
+                seen.push(mangled.as_str().to_string());
+            }
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                "submilli:agents#run",
+                "submilli:llm#batch",
+                "submilli:llm#call",
+                "submilli:session#get",
+            ],
+            "the host functions that read their type descriptors"
+        );
+    }
 
     /// Every `Direct` interface with properties is a host-backed value whose
     /// getters and `JSON.stringify` both read its view, so each needs one

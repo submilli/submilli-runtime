@@ -13,7 +13,7 @@ import llm from "submilli:llm";
 
 function main(): void {
   // Calls inside the ceiling succeed and are billed against it.
-  const first = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  const first = llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
   assert(first.ok, "a call within the budget dispatches");
   assert(first.inputTokens === 10, "the provider's reported usage reaches the guest");
   assert(first.outputTokens === 10, "for both directions");
@@ -25,7 +25,7 @@ function main(): void {
   let completed = 0;
   for (let i = 0; i < 20; i = i + 1) {
     try {
-      llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+      llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
       completed = completed + 1;
     } catch (e: QuotaExceededError) {
       assert(e instanceof Error, "quota is an Error");

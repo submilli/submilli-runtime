@@ -57,6 +57,6 @@ function main(): void {
 
   // Dropping it from a sizing decision does not make it uncallable: an undefined
   // window means unknown, not unusable.
-  const c = llm.call("bare-model", "Summarize this.");
+  const c = llm.text("bare-model", "Summarize this.");
   assert(c.ok, "a model that declared no context window is still callable");
 }

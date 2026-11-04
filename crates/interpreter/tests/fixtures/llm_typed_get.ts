@@ -1,9 +1,9 @@
-// The typed `call<T>` returns `T` itself, not a wrapper — the same trade
-// `session.get<T>` makes, swapping the `Completion` envelope for a value that
-// has actually been checked. A JSON Schema for `T` is emitted at compile time
-// and sent to the provider, and the response is then verified structurally,
-// field by field. Both halves are needed: the schema is advisory, so a provider
-// may ignore it, and the check is what makes the returned value trustworthy.
+// The typed `call<T>` returns `Completion<T>`: the same envelope as the text
+// form `text`, with `value` holding a `T` that has actually been checked. A JSON
+// Schema for `T` is emitted at compile time and sent to the provider, and the
+// response is then verified structurally, field by field. Both halves are
+// needed: the schema is advisory, so a provider may ignore it, and the check is
+// what makes `value` trustworthy.
 //
 // Nothing is coerced. A value that reaches the guest as `T` really does have
 // `T`'s shape, all the way down through nested objects and optional fields.
@@ -26,29 +26,41 @@ interface Severity {
 function main(): void {
   const s = llm.call<Severity>("claude-haiku-4-5", "Classify this ticket.");
 
-  // The result is `T` itself: fields are read directly, with no `.text` to
-  // parse and no envelope to unwrap.
-  assert(s.level === "critical", "a top-level string field arrives checked");
-  assert(s.rationale === "payment path down", "every declared field is present");
+  // The envelope is the same one the text form returns, so `ok` is checked
+  // first; `value` is then `T` itself, with no `.text` to parse.
+  assert(s.ok, "a conforming response is a clean completion");
+  if (!s.ok) return;
+  const v = s.value;
+  assert(v.level === "critical", "a top-level string field arrives checked");
+  assert(v.rationale === "payment path down", "every declared field is present");
 
   // The nested object was checked all the way down, not merely accepted as
   // "some object".
-  assert(s.detail.service === "billing", "a nested string field round-trips");
-  assert(s.detail.restarts === 3, "a nested number field round-trips as a number");
+  assert(v.detail.service === "billing", "a nested string field round-trips");
+  assert(v.detail.restarts === 3, "a nested number field round-trips as a number");
 
   // An explicit null satisfies a required nullable field; an absent field does not.
-  assert(s.owner === null, "a nullable field accepts an explicit null");
+  assert(v.owner === null, "a nullable field accepts an explicit null");
 
-  // The typed form has no `ok` to branch on: that is the trade. A caller who
-  // needs the envelope uses the untyped form instead, which still works.
-  const untyped = llm.call("claude-haiku-4-5", "Classify this ticket.");
-  assert(untyped.ok, "the untyped form still returns the envelope");
-  assert(untyped.text !== undefined, "carrying the raw text for a caller that wants it");
+  // The text form, `llm.text`, hands back the raw text in `value` for a caller that
+  // wants to parse it some other way.
+  const text = llm.text("claude-haiku-4-5", "Classify this ticket.");
+  assert(text.ok && text.value.indexOf("critical") > 0, "the text form carries the raw text");
 
-  // `batch<T>` names the shape of the *whole result*, not of one element, so
-  // the type argument is an array type.
-  const many = llm.batch<Severity[]>("claude-haiku-4-5", ["one", "two"]);
-  assert(many.length === 2, "a typed batch returns one checked value per prompt");
-  assert(many[0].level === "critical", "each element is checked against the element type");
-  assert(many[1].detail.restarts === 3, "including its nested fields");
+  // `batch<T>` names the shape of *one* response, so each element is a
+  // `Completion<T>` checked on its own.
+  const many = llm.batch<Severity>("claude-haiku-4-5", ["one", "two"]);
+  assert(many.length === 2, "a typed batch returns one checked completion per prompt");
+  const first = many[0];
+  assert(first.ok && first.value.level === "critical", "each element is checked against the element type");
+  const second = many[1];
+  assert(second.ok && second.value.detail.restarts === 3, "including its nested fields");
+
+  // A typed call inside a closure carries its check the same way: the
+  // compiler's check closure nests inside the program's own.
+  const levels = ["a", "b"].map((prompt) => {
+    const c = llm.call<Severity>("claude-haiku-4-5", prompt);
+    return c.ok ? c.value.level : c.reason;
+  });
+  assert(levels.join(",") === "critical,critical", "a typed call works inside a closure");
 }

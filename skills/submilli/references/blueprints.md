@@ -139,7 +139,7 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 | `session.read` `write` `remove` `list` | `key` or `prefix` |
 | `secrets.get` (packages only) | `name` |
 | `mcp.<server>` | `tool`, `transport` |
-| `llm.call` (covers `call`, `batch`, `models()`) | `model`, `prompt_count`; narrowing `model` also narrows what `models()` lists |
+| `llm.call` (covers `text`, `texts`, `call`, `batch`, `models()`) | `model`, `prompt_count`; narrowing `model` also narrows what `models()` lists |
 | `embedding.embed` (covers `embed`, `models()`) | `model`, `input_count`; narrowing `model` also narrows what `models()` lists, and decides which provider receives which texts |
 
 ## A real service

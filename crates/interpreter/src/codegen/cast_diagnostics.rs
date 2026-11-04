@@ -49,7 +49,6 @@ const PATH_UNITS_PER_STEP: usize = 64;
 pub(super) struct Locals {
     current: u32,
     failure: Failure,
-    key: Option<u32>,
     path: Vec<Segment>,
     /// Union locals by nesting depth: sibling unions reuse them, so a large
     /// type does not cost locals for each union it contains.
@@ -173,7 +172,6 @@ pub(super) fn begin(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Option<L
     emitter.cast_diagnostic = Some(Locals {
         current,
         failure,
-        key: None,
         path: Vec::new(),
         unions: Vec::new(),
         open_unions: Vec::new(),
@@ -202,12 +200,6 @@ fn copy_failure(emitter: &mut FunctionEmitter, from: Failure, to: Failure) {
     ] {
         emitter.instruction(Instruction::LocalGet(from));
         emitter.instruction(Instruction::LocalSet(to));
-    }
-}
-
-pub(super) fn session_key(emitter: &mut FunctionEmitter, key: Option<u32>) {
-    if let Some(state) = &mut emitter.cast_diagnostic {
-        state.key = key;
     }
 }
 
@@ -881,12 +873,6 @@ fn append_failure_checked(
     emitter.instruction(Instruction::LocalGet(message));
     emitter.emit_end();
     emitter.instruction(Instruction::RefAsNonNull);
-    if let Some(key) = state.key {
-        super::cast_check::emit_inline_string(emitter, ctx, " for session key ");
-        concat(emitter, ctx);
-        emitter.instruction(Instruction::LocalGet(key));
-        concat(emitter, ctx);
-    }
 
     Ok(())
 }

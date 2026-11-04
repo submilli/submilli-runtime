@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3227ba4087342c65ac81356ae9e5245ddbcc3e4cdc10a4548694e505b50d346f"
+  contentHash: "c23cd973b67d39b71a910032b5a4aa19d7c1d74e0871a5acab02900eb45a260c"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -432,7 +432,7 @@ Options:
           1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
 
       --max-llm-concurrency <PROMPTS>
-          Prompts one `llm.batch` dispatches at once. [default: 4] Env:
+          Prompts one `llm.batch` or `llm.texts` dispatches at once. [default: 4] Env:
           `$SUBMILLI_MAX_LLM_CONCURRENCY`
 
       --max-execution-embedding-tokens <TOKENS>

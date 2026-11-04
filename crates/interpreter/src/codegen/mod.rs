@@ -18,6 +18,7 @@ mod closure_coercions;
 pub(crate) use closure_coercions::ADAPTER_ORIGINAL_FIELD;
 pub mod closures;
 pub mod dependency_usage;
+pub(crate) mod descriptor_schema;
 pub mod dwarf;
 mod field_guards;
 mod field_lookup;
@@ -844,7 +845,7 @@ fn codegen_inner(
     let dependencies: Vec<_> = lowered_dependencies.iter().collect();
     let dependencies = dependencies.as_slice();
     let analysis = CodegenAnalysis::collect(ta, dependencies)?;
-    let pool = analysis.string_pool;
+    let mut pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
     let dependency_usage = analysis.dependency_usage.finish(dependencies);
 
@@ -1041,6 +1042,7 @@ fn codegen_inner(
         (crate::runtime::prelude::MODULE_NAME, "array_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "closure_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "object_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "opaque_vtable"),
     ] {
         let mangled = crate::mangle::prelude(name);
         import_section.import(
@@ -1496,6 +1498,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_func_idx,
     )?;
+    runtime_descriptors::prepare_descriptor_data(&mut pool, ta, &mut symbols);
 
     let field_lookup_signature = field_lookup::allocate(
         &mut types,
@@ -2350,7 +2353,7 @@ pub(crate) mod tests {
         super::tests::compile("function main(): number { return 42; }");
     }
 
-    fn type_check(source: &str) -> TypedAst {
+    pub(crate) fn type_check(source: &str) -> TypedAst {
         type_check_with_packages(source, &[])
     }
 
@@ -2552,6 +2555,7 @@ function main(): string {
             vtable: 1,
             object: 2,
             undefined: 51,
+            type_descriptor: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -6414,6 +6418,7 @@ function main(): void {
             vtable: 1,
             object: 2,
             undefined: 51,
+            type_descriptor: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

@@ -13,7 +13,7 @@ import llm from "submilli:llm";
 
 function main(): void {
   // A baseline call succeeds and reconciles to its reported usage.
-  const first = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  const first = llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
   assert(first.ok, "the baseline call dispatches");
 
   // Now fail a dispatch repeatedly against an undeclared model. Each one is
@@ -22,7 +22,7 @@ function main(): void {
   let rejected = 0;
   for (let i = 0; i < 12; i = i + 1) {
     try {
-      llm.call("no-such-model", "CONFIDENTIAL-PROMPT-TEXT");
+      llm.text("no-such-model", "CONFIDENTIAL-PROMPT-TEXT");
       assert(false, "an undeclared model must not dispatch");
     } catch (e: Error) {
       rejected = rejected + 1;
@@ -40,13 +40,13 @@ function main(): void {
 
   // The budget survived all of it: a normal call still fits, which it could
   // not if twelve reservations had leaked.
-  const after = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  const after = llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
   assert(after.ok, "a call still fits after a dozen failed dispatches returned their reservations");
   assert(after.inputTokens === 10, "and reconciles against real reported usage");
 
   // A batch whose prompts exceed nothing still works afterwards too — the
   // release path is not specific to single calls.
-  const batched = llm.batch("claude-haiku-4-5", ["one", "two"]);
+  const batched = llm.texts("claude-haiku-4-5", ["one", "two"]);
   assert(batched.length === 2, "a batch still fits after the failed dispatches");
   assert(batched[0].ok, "and its elements complete normally");
 }

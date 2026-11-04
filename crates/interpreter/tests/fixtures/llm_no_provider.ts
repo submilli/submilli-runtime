@@ -13,7 +13,7 @@ function main(): void {
   // `call` fails, and the failure is catchable rather than a trap.
   let caught = "";
   try {
-    llm.call("claude-haiku-4-5", "Summarize this.");
+    llm.text("claude-haiku-4-5", "Summarize this.");
     assert(false, "a call without a provider must not succeed");
   } catch (e: Error) {
     caught = e.message;
@@ -36,7 +36,7 @@ function main(): void {
   // nothing dispatched, so there are no elements to report on.
   let batchCaught = "";
   try {
-    llm.batch("claude-haiku-4-5", ["a", "b"]);
+    llm.texts("claude-haiku-4-5", ["a", "b"]);
     assert(false, "a batch without a provider must not succeed");
   } catch (e: Error) {
     batchCaught = e.message;

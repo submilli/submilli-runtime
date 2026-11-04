@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c917691ea72eea17f0ad0e0737ead1916c369dc5242f0ade7afdf322ea42b0c6"
+  contentHash: "283c68941f280530b83afaff6bb4b98ed742e46c3643f9f24ae4332f18afad3b"
   confirmedAt: "2026-10-15T18:11:14.000Z"
 ---
 
@@ -551,9 +551,9 @@ Options:
           budget. [default: 1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`, which outranks the
           config file. Accepts decimal K/M/B/T suffixes and digit separators, e.g. 1M or 10_000
       --max-llm-concurrency <PROMPTS>
-          Prompts one `llm.batch` dispatches at once. Bounded deliberately: unbounded fan-out
-          manufactures the rate-limit errors it then cannot honor a `retry-after` against. [default:
-          4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
+          Prompts one `llm.batch` or `llm.texts` dispatches at once. Bounded deliberately: unbounded
+          fan-out manufactures the rate-limit errors it then cannot honor a `retry-after` against.
+          [default: 4] Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file
       --max-suspended-runs <RUNS>
           Runs that may wait on the harness at once, server-wide: each suspended at an application
           tool call (`@tools`), holding its program in memory. [default: 256] Env:

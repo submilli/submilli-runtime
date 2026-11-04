@@ -1,11 +1,16 @@
 //! Type surface of `submilli:agents`.
 //!
-//! `run` is declared generic and typed the way `llm.call` is: the typechecker
-//! matches it by mangled name ([`is_checked_run`]), fills the trailing `schema`
-//! parameter with the JSON Schema emitted from `T`, and wraps the result in a
-//! structural check against `T`. Without a type argument `T` is `string`, the
-//! agent's final answer as text. See `stdlib/llm/declaration.rs` for why the
-//! generic declaration is sound only together with that interception.
+//! Two forms, one per meaning, as in `submilli:llm`. `runText` returns the
+//! agent's final answer as text and is a plain function; a `schema` it takes
+//! is the program's own, sent with the task and never used to check the
+//! answer. `run<T>` returns a checked `T`: it is declared generic and
+//! **runtime-generic**, so the host reads the JSON Schema of `T` from the
+//! `$TypeDescriptor` in the call's `$types` environment and sends it with the
+//! run. `T` has no default. The typechecker gates it (matched by mangled name
+//! through [`is_checked_run`]) and, unlike `llm.call`, wraps the result in a
+//! structural check against `T`, so a mismatch throws. See
+//! `stdlib/llm/declaration.rs` for the descriptor and why the written
+//! declaration is the whole public API.
 
 use std::collections::BTreeMap;
 
@@ -17,10 +22,11 @@ use crate::{
 use super::MODULE_NAME;
 
 const RUN: &str = "run";
+const RUN_TEXT: &str = "runText";
 const RUN_TYPE_PARAM: &str = "T";
 
-/// Whether `mangled` is the typed `run`, so the typechecker's interception
-/// matches however the symbol was imported.
+/// Whether `mangled` is the typed `run`, so the typechecker's gate matches
+/// however the symbol was imported. `runText` is a plain function.
 pub fn is_checked_run(mangled: &crate::MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, RUN)
 }
@@ -30,23 +36,44 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_agent_info_interface(&mut defs);
     insert_fn(
         &mut defs,
-        RUN,
-        vec![RUN_TYPE_PARAM.to_string()],
+        RUN_TEXT,
+        Vec::new(),
         vec![
             Param::new("agent", Type::String),
             Param::new("input", Type::String),
             Param::with_default(
                 "schema",
-                Type::union(vec![Type::String, Type::Undefined]),
+                Type::Union(vec![Type::String, Type::Undefined]),
                 crate::DefaultValue::Undefined,
             ),
         ],
+        Type::String,
+        "/**\n * Hand `input` to the sub-agent `agent` and return its final answer as \
+         text.\n *\n * `schema`, when given, is a JSON Schema sent with the task as \
+         written; it must be a JSON object, else a catchable \
+         `TypeError`. The answer is not parsed or checked against it; for a checked answer \
+         call `run<T>`, whose schema the compiler emits from `T`.\n *\n * The harness \
+         runs the agent and decides how long it may take and what it may spend. A run \
+         that fails, is cancelled, or names an agent the harness does not have throws \
+         a catchable error; so does a runtime with no agent provider.\n * @param agent \
+         Agent name. Call `list()` for the agents you may use.\n * @param input The \
+         task, as text.\n * @param schema A JSON Schema sent with the task, unchanged; \
+         the answer stays text.\n * @capability agent.run { agent: $agent }\n */",
+    );
+    insert_fn(
+        &mut defs,
+        RUN,
+        vec![RUN_TYPE_PARAM.to_string()],
+        vec![
+            Param::new("agent", Type::String),
+            Param::new("input", Type::String),
+        ],
         Type::TypeVar(RUN_TYPE_PARAM.to_string()),
-        "/**\n * Hand `input` to the sub-agent `agent` and return its final answer.\n *\n \
-         * Without a type argument the answer is the agent's text. With one — \
-         `run<Report>(agent, input)` — a JSON Schema for `T` is emitted at compile time \
-         and sent with the task, and the answer is then checked structurally against \
-         `T`. An answer that is not JSON throws a catchable `SyntaxError`, and one \
+        "/**\n * Hand `input` to the sub-agent `agent` and return its final answer, \
+         checked as a `T`.\n *\n * `run<Report>(agent, input)` emits a JSON Schema for \
+         `T` at compile time and sends it with the task, and the answer is then checked \
+         structurally against `T`. `T` is required: write it, or let the expected type \
+         supply it. For the answer as text call `runText(agent, input)`. An answer that is not JSON throws a catchable `SyntaxError`, and one \
          that does not match throws a catchable `TypeError`; nothing is coerced.\n *\n * `T` must be a type the schema can \
          carry: no functions, no `bigint`, no `Uint8Array`, no `unknown`, and no \
          recursive type.\n *\n * The harness runs the agent and decides how long it may \
@@ -56,6 +83,10 @@ pub fn package_declaration() -> PackageDeclaration {
          may use.\n * @param input The task, as text.\n * @capability agent.run { agent: \
          $agent }\n */",
     );
+    // `run` reads its `T` as a `$TypeDescriptor` from the generic `$types`
+    // environment; the JSON Schema of `T` travels there.
+    defs.runtime_generics
+        .insert(crate::mangle::package_symbol(MODULE_NAME, RUN));
     insert_fn(
         &mut defs,
         "list",

@@ -1,0 +1,6 @@
+# A package's generic forwards its type parameter into `session.get<T>`: the
+# script's descriptor for the type it names is what the stored value is
+# checked against, across the package boundary.
+# name        dir     deps   root
+@test/store   store   -
+main          app     @test/store   root

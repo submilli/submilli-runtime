@@ -1129,6 +1129,7 @@ fn emit_generic_call(
         crate::codegen::field_guards::constructor_argument(emitter, ctx, result_ty)?;
     }
     if ctx.symbols.runtime_generic_functions.contains(mangled) {
+        crate::codegen::runtime_descriptors::require_direct_schema(ctx, mangled, type_args)?;
         crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
     }
     emitter.instruction(Instruction::Call(wasm_idx));

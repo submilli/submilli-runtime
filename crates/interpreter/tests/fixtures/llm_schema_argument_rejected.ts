@@ -1,21 +1,19 @@
-// The `schema` slot is compiler-filled, and writing it by hand is a compile
-// error rather than a call that quietly does something else.
+// `call<T>` takes a model and a prompt, `batch<T>` a model and prompts:
+// nothing else. The JSON Schema a typed call sends and the check it runs
+// travel in the type descriptor of `T` — part of how a generic function is
+// called, built by the compiler — so a program that writes a schema or a
+// check as an argument hits the ordinary arity error: it is not surface, and
+// there is no slot for it to land in.
 //
-// This is a soundness boundary, not a style rule. The host decides a call is
-// typed by looking at whether the schema argument is not undefined, while the
-// structural check that makes a typed call safe is a cast the typechecker emits
-// only when a type argument was written. A hand-written schema sets the first
-// without the second, so raw parsed JSON would reach the guest wearing the
-// `Completion` interface type: reading `ok` off a JSON object returns a
-// fabricated `true`, and reading `text` traps outside the error taxonomy
-// entirely. It would also hand guest-written bytes to the provider as the
-// schema for the request.
-//
-// Both entry points are refused, and so is the typed form — the argument is
-// meaningless there too, since the compiler overwrites the slot.
-// expect-error: the schema argument is filled by the compiler
-// expect-error: the schema argument is filled by the compiler
-// expect-error: the schema argument is filled by the compiler
+// This is a soundness boundary, not a style rule. The host decides a value is
+// a `T` by the descriptor the compiler built and trusts its predicate to be
+// the structural test of `T`; a hand-written schema or check would let raw
+// parsed JSON reach the guest wearing the declared type. The text forms take
+// a program's own schema instead, and never treat the answer as typed.
+// expect-error: `llm.call` expects 2 argument(s), got 3
+// expect-error: `llm.batch` expects 2 argument(s), got 3
+// expect-error: `llm.call` expects 2 argument(s), got 4
+// expect-error: expected 2-3 argument(s), got 4
 import llm from "submilli:llm";
 
 interface Severity {
@@ -24,19 +22,20 @@ interface Severity {
 }
 
 function main(): void {
-  // Untyped with a hand-written schema: the case that produced a fabricated
-  // `ok` before this was rejected.
-  const handWritten = llm.call("m", "classify this", "{}");
-
-  // The same hole through `batch`.
-  const batched = llm.batch("m", ["classify this"], "{}");
-
-  // Typed with a hand-written schema. Behaviorally this one was already safe —
-  // the compiler overwrites the slot — but accepting an argument that is
-  // silently discarded is its own trap, so it is refused too.
+  // Typed with a hand-written schema: the compiler emits its own.
   const typed = llm.call<Severity>("m", "classify this", "{}");
 
-  assert(handWritten.ok, "unreachable — the call above does not compile");
+  // The same through `batch`.
+  const batched = llm.batch<Severity>("m", ["classify this"], "{}");
+
+  // A hand-written check is refused for the same reason.
+  const checked = llm.call<Severity>("m", "classify this", "{}", (v: unknown): unknown => v);
+
+  // The text form takes a schema, and nothing beyond it.
+  const text = llm.text("m", "classify this", "{}", (v: unknown): unknown => v);
+
+  assert(typed.ok, "unreachable — the calls above do not compile");
   assert(batched.length === 1, "unreachable");
-  assert(typed.level === "", "unreachable");
+  assert(checked.ok, "unreachable");
+  assert(text.ok, "unreachable");
 }

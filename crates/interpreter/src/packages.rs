@@ -1071,7 +1071,7 @@ fn user_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
 fn module_description(name: &str) -> &'static str {
     match name {
         "submilli:agents" => {
-            "Harness sub-agents: run<T>(agent, input), and list() to discover them."
+            "Harness sub-agents: runText(agent, input) and run<T>(agent, input), and list() to discover them."
         }
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:code" => {
@@ -1083,7 +1083,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:fs" => "Sandbox filesystem: files and directories under the VFS root.",
         "submilli:git" => "Capability-controlled Git repositories in the VFS, with HTTPS remotes.",
         "submilli:http" => "Outbound HTTP requests, and downloads into the filesystem.",
-        "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
+        "submilli:llm" => {
+            "Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and models() to discover them."
+        }
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => {
             "Session-scoped key-value state and durable package-owned resource cleanup."

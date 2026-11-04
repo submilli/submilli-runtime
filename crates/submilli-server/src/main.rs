@@ -235,7 +235,7 @@ pub struct Cli {
     #[arg(long, value_name = "TOKENS", value_parser = count::parse_count)]
     max_execution_llm_tokens: Option<u64>,
 
-    /// Prompts one `llm.batch` dispatches at once. Bounded deliberately:
+    /// Prompts one `llm.batch` or `llm.texts` dispatches at once. Bounded deliberately:
     /// unbounded fan-out manufactures the rate-limit errors it then cannot honor
     /// a `retry-after` against. [default: 4]
     /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`, which outranks the config file.

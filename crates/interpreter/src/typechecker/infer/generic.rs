@@ -969,7 +969,17 @@ impl Inferer<'_> {
     /// member unification can't match, such as a wider object or an interface.
     /// A mismatch is reported later, where the call's result is checked
     /// against the expected type.
+    ///
+    /// A result spelled as a generic alias (`Completion<T>`), expected as the
+    /// same alias (`Completion<Verdict>`), binds argument to argument; when an
+    /// argument does not unify, the structural rules above apply instead. A
+    /// union flattens the alias into its members (`Completion<Verdict> |
+    /// undefined` is `Success<Verdict> | Failure | undefined`), so it binds
+    /// nothing here.
     fn bind_from_expected_type(&self, sub: &mut TypeParamSubstitution, ret: &Type, want: &Type) {
+        if self.bind_alias_arguments(sub, ret, want) {
+            return;
+        }
         let want = &writable_view_for(ret, want);
         // A result with several bare type parameters (`A | B`) can't say which
         // of them takes which part of `want`: tsc gives each the whole of it,
@@ -1015,6 +1025,51 @@ impl Inferer<'_> {
         if let Some(bindings) = agreed {
             *sub = bindings;
         }
+    }
+
+    /// Bind `ret`'s alias arguments to `want`'s when both name the same
+    /// generic alias. Expanded, the two are unions whose members unify only
+    /// one at a time, which would bind nothing. True when both name the same
+    /// alias and every argument unified; `sub` changes only then.
+    fn bind_alias_arguments(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        ret: &Type,
+        want: &Type,
+    ) -> bool {
+        let Type::AliasRef {
+            mangled,
+            args: ret_args,
+            ..
+        } = ret
+        else {
+            return false;
+        };
+        let (Type::Alias {
+            mangled: want_mangled,
+            args: want_args,
+            ..
+        }
+        | Type::AliasRef {
+            mangled: want_mangled,
+            args: want_args,
+            ..
+        }) = want
+        else {
+            return false;
+        };
+        if mangled != want_mangled || ret_args.len() != want_args.len() {
+            return false;
+        }
+        let mut trial = sub.clone();
+        let unified = ret_args
+            .iter()
+            .zip(want_args)
+            .all(|(ret_arg, want_arg)| trial.unify(ret_arg, want_arg, self.resolver()).is_ok());
+        if unified {
+            *sub = trial;
+        }
+        unified
     }
 
     /// Bind the type parameters of a program's own generic that nothing
@@ -2423,16 +2478,21 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
-        // `session.get<T>` is lowered as a runtime-checked cast rather than an
-        // ordinary generic call; the two sites below are the two halves of that
-        // one decision, so it is read once here.
+        let errors_at_call = self.error_count();
+        // `session.get<T>` and the schema-checked calls (`llm.call<T>`,
+        // `llm.batch<T>`, `agents.run<T>`) are generic host functions: the host
+        // reads `T` from its `$TypeDescriptor` in the call's `$types`
+        // environment — its predicate, and for a schema-checked call the JSON
+        // Schema codegen emits — and checks its result against it, so the call
+        // lowers as any generic call does. The typechecker only gates what `T`
+        // may be: a type the predicate can test, and for a schema-checked call
+        // one a JSON Schema can carry. Both flags are read once here and
+        // consulted below where `session.get` binds its default `T`, where an
+        // unbound schema-checked `T` is reported, and where the gates run.
+        // Only `session.get` has a bare meaning, an unchecked `unknown`; a
+        // schema-checked `T` is written or supplied by the expected type.
         let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        // Schema-checked calls (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`)
-        // lower the same way and for the same reason. They differ from
-        // `session.get` only in what a bare call means — a typed default such as
-        // the `Completion` envelope rather than an unchecked `unknown` — and in
-        // carrying a compile-time schema into the trailing argument.
-        let schema_checked = crate::stdlib::schema_checked_call(&mangled);
+        let schema_checked = crate::stdlib::json_schema::schema_checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -2456,6 +2516,9 @@ impl Inferer<'_> {
             }
         }
 
+        // A schema-checked call has no default `T`: the expected type may
+        // supply it (`const r: Report = agents.run(a, i)`), and the call is
+        // then checked against it like a written one.
         if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
             self.bind_from_expected_result(&mut sub, &ret, want);
         }
@@ -2538,31 +2601,42 @@ impl Inferer<'_> {
         // meaning: an unchecked read of `unknown` the caller narrows with a
         // runtime-checked `as`. Only a *written* `<unknown>` is an error, so
         // bind the parameter here rather than letting it go unbound and trip
-        // both the inference error and the erasure gate below.
+        // the unbound-parameter error below.
         if checked_get && !type_args_written {
             bind_remaining(&mut sub, &generics, Type::Unknown, &self.type_limits)
                 .map_err(type_limit_at(span))?;
         }
-        // Same reasoning for `llm.call(model, prompt)`, but the untyped default
-        // is the `Completion` envelope rather than `unknown`: an untyped call
-        // is not an unchecked read, it is a different fully-typed result. `T`
-        // appears only in the return type, so it is never inferable from an
-        // argument and would otherwise always trip the unbound-parameter error.
-        if let Some(checked) = &schema_checked
-            && !type_args_written
-        {
-            bind_remaining(
-                &mut sub,
-                &generics,
-                checked.untyped_result.clone(),
-                &self.type_limits,
-            )
-            .map_err(type_limit_at(span))?;
-        }
-
         sub.bind_whole_union_fallbacks();
         let close_match_spans = self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
+        // A schema-checked `T` appears only in the return type, so neither an
+        // argument nor `unknown` may stand in for it: unbound here, the call
+        // is the text form spelled with the typed name, and the diagnostic
+        // says which one to call. A call already reported (a wrong argument
+        // count or argument) is an error either way and is not reported twice.
+        if let Some(checked) = &schema_checked
+            && let Err(unbound) = sub
+                .resolve_all(&generics, &self.type_limits)
+                .map_err(type_limit_at(span))?
+            && !unbound.is_empty()
+        {
+            if self.error_count() > errors_at_call {
+                return Ok((TypedExprKind::Null, Type::Error));
+            }
+            self.error_with_help(
+                span,
+                format!(
+                    "`{}` needs its type argument: it checks the answer against `T`, and \
+                     neither a written type argument nor the expected type supplies it",
+                    checked.callee
+                ),
+                vec![format!(
+                    "write the type you expect — `{}` — or {}",
+                    checked.example, checked.text_hint
+                )],
+            );
+            return Ok((TypedExprKind::Null, Type::Error));
+        }
         self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&generics, &self.type_limits)
@@ -2590,55 +2664,42 @@ impl Inferer<'_> {
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
-        // A typed `llm.call<T>` is rewritten before the argument list is frozen,
-        // because the schema emitted from `T` has to replace the trailing
-        // `schema` argument the default filled with `null`. The rewrite can also
-        // fail (an unschemable or unverifiable `T`), in which case the whole
-        // call is already an error and no node is built.
-        // The `schema` slot is compiler-filled, never program-written. Rejecting
-        // a written one is a soundness requirement, not tidiness: the host keys
-        // "this call is typed" off that argument being non-null
-        // (`stdlib/llm/mod.rs`), while the structural check rides on the cast
-        // emitted here. A hand-written schema sets the first without the second,
-        // so raw parsed JSON reaches the guest wearing the `Completion`
-        // interface type — reading `ok` off a JSON object yields a fabricated
-        // `true`, and reading `text` traps outside the error taxonomy. It also
-        // hands guest-controlled bytes to the provider as the schema.
-        //
-        // This rejects rather than ignoring the argument, because silently
-        // discarding what a program wrote is its own trap. Typed calls are
-        // unaffected in behavior — `substitute_schema_argument` overwrites the
-        // slot — but a written argument there is equally meaningless, so both
-        // forms are refused and no working program changes.
+        // The gates of a checked host call. A schema-checked call declares
+        // exactly one type parameter, the checked `T`, bound by now by the
+        // program or by the expected type; the call sends the JSON Schema
+        // emitted from it, which rides in the type's descriptor and never in
+        // the argument list, so a program that writes a third argument gets
+        // the ordinary arity error. A gate can fail (an unschemable or
+        // unverifiable `T`), in which case the whole call is already an error
+        // and no node is built. The checked type is the type argument itself:
+        // `agents.run<T>` returns it, `llm.call<T>` returns an envelope holding
+        // it, `session.get<T>` returns it or `undefined`.
+        let checked_ty = if checked_get || schema_checked.is_some() {
+            let Some(type_param) = generics.first() else {
+                return Err(super::inference_failure(
+                    "a checked host call declares its type parameter",
+                )
+                .with_span(span));
+            };
+            Some(self.instantiate(&sub, &Type::TypeVar(type_param.clone()), span)?)
+        } else {
+            None
+        };
         if let Some(checked) = &schema_checked
-            && args.len() > checked.written_param_count
+            && let Some(checked_ty) = &checked_ty
+            && self
+                .schema_checked_call_gate(checked, checked_ty, span)
+                .is_err()
         {
-            let name = &callee_ident.name;
-            let written = checked.written_params;
-            let extra = checked.schema_argument_ordinal();
-            self.error_with_help(
-                span,
-                format!(
-                    "`{name}` takes {written}; the schema argument is filled by \
-                     the compiler from the type argument"
-                ),
-                vec![format!(
-                    "drop the {extra} argument — write `{name}<T>(...)` to send a schema for `T`, \
-                     or `{name}(...)` for an untyped call"
-                )],
-            );
             return Ok((TypedExprKind::Null, Type::Error));
         }
-
-        let mut emitted_schema = None;
-        if let Some(checked) = &schema_checked {
-            match self.schema_checked_call_schema(checked, &result_ty, type_args_written, span) {
-                Ok(schema) => emitted_schema = schema,
-                Err(()) => return Ok((TypedExprKind::Null, Type::Error)),
-            }
-        }
-        if let Some(schema) = &emitted_schema {
-            self.substitute_schema_argument(&params, &mut typed_args, schema, span)?;
+        if checked_get
+            && let Some(checked_ty) = &checked_ty
+            && self
+                .session_get_gate(checked_ty, type_args_written, span)
+                .is_err()
+        {
+            return Ok((TypedExprKind::Null, Type::Error));
         }
         self.record_generic_call_arguments(&typed_args, &params, &ret, type_args_written);
 
@@ -2662,13 +2723,6 @@ impl Inferer<'_> {
             })),
             None => None,
         };
-        // A checked read must not keep `return_cast`: it is a representation
-        // cast that tests nothing, and on a stored or missing `null` its
-        // `ref.cast` traps uncatchably before any structural check could run.
-        // The call node is left producing `unknown` and the checked `Cast`
-        // wrapped around it does the verifying. Intercepting here rather than
-        // at a callsite is what covers every import form, since all four
-        // callers thread the package-export mangled name through unchanged.
         let runtime_args: Vec<_> = generics
             .iter()
             .map(|name| self.instantiate(&sub, &Type::TypeVar(name.clone()), span))
@@ -2680,21 +2734,9 @@ impl Inferer<'_> {
             mangled,
             type_args: runtime_args,
             args: generic_args,
-            return_cast: if checked_get || schema_checked.is_some() {
-                None
-            } else {
-                return_cast
-            },
+            return_cast,
             type_predicate,
         };
-        if checked_get {
-            return self.checked_session_get(call, &result_ty, type_args_written, span);
-        }
-        // An untyped schema-checked call emitted no schema and needs no check: it
-        // returns the default the declaration already typed.
-        if schema_checked.is_some() && emitted_schema.is_some() {
-            return self.schema_checked_cast(call, &result_ty, span);
-        }
         Ok((call, result_ty))
     }
 }

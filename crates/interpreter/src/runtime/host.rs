@@ -1023,6 +1023,18 @@ pub(crate) fn read_boxed_number(
     }
 }
 
+/// Box a `bool` into a `$boxed_boolean` — the erased-object form of a
+/// `boolean` (e.g. an object field). Requires `StoreData::host_abi`.
+pub(crate) fn write_boxed_boolean_struct(
+    caller: &mut Caller<'_, StoreData>,
+    value: bool,
+) -> wasmtime::Result<Rooted<StructRef>> {
+    let boxed_type = intrinsic_types(&mut *caller)?.boxed_boolean.clone();
+    let vtable = host_boxed_boolean_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, boxed_type);
+    StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(i32::from(value))])
+}
+
 /// Box an `f64` into a `$boxed_number` — the erased-object form of a `number`
 /// (e.g. a `number | null` field or result). Requires `StoreData::host_abi`.
 pub(crate) fn write_boxed_number_struct(
@@ -1609,6 +1621,62 @@ pub(crate) fn throw_host_error(
         .downcast_ref::<PermissionDenied>()
         .map(PermissionDenied::denial);
     throw_error_with(caller, class, &err.to_string(), &own, denial)
+}
+
+/// The `$Error` a thrown exception carries, with its `name` and `message`.
+pub(crate) struct ThrownErrorParts {
+    pub error: Rooted<StructRef>,
+    pub name: String,
+    pub message: String,
+}
+
+/// The parts of the `$Error` a thrown exception carries, for the run's final
+/// error report. `None` when the payload is not an `Error` (a future non-Error
+/// throw).
+pub(crate) fn thrown_error_parts(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    exn: Rooted<wasmtime::ExnRef>,
+) -> Option<ThrownErrorParts> {
+    // The error tag carries a single param: (ref $Error).
+    let Val::AnyRef(Some(error_ref)) = exn.field(&mut ctx, 0).ok()? else {
+        return None;
+    };
+    let error = error_ref.unwrap_struct(&mut ctx).ok()?;
+    // $Error is class-shaped: field 2 is the object-fields payload array.
+    let Val::AnyRef(Some(payload_ref)) = error.field(&mut ctx, 2).ok()? else {
+        return None;
+    };
+    let payload = payload_ref.unwrap_array(&mut ctx).ok()?;
+    let message = payload
+        .get(&mut ctx, super::prelude::error::MESSAGE_SLOT)
+        .ok()?;
+    let name = payload
+        .get(&mut ctx, super::prelude::error::NAME_SLOT)
+        .ok()?;
+    let name = read_string_value(&mut ctx, name)?;
+    let message = read_string_value(&mut ctx, message)?;
+    Some(ThrownErrorParts {
+        error,
+        name,
+        message,
+    })
+}
+
+/// The text of a `$string` value, or `None` for anything else.
+pub(crate) fn read_string_value(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    value: Val,
+) -> Option<String> {
+    let Val::AnyRef(Some(s_ref)) = value else {
+        return None;
+    };
+    let s_struct = s_ref.unwrap_struct(&mut ctx).ok()?;
+    // Field 1 of `$string` is the packed-UTF-16 `(ref $rawString)` array.
+    let Val::AnyRef(Some(raw_ref)) = s_struct.field(&mut ctx, 1).ok()? else {
+        return None;
+    };
+    let arr = raw_ref.unwrap_array(&mut ctx).ok()?;
+    read_submilli_string(&mut ctx, arr).ok()
 }
 
 /// Whether `err` must reach the embedder as it is instead of becoming a guest
