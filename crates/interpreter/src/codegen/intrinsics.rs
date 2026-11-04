@@ -1016,9 +1016,12 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     // `$TypeWitness` — what a generic host function receives per type
     // argument, in its `$types` environment: the type's descriptor predicate
     // (a `$Closure`), its display name, the JSON Schema a typed call sends
-    // (null when none), and its TypeInfo id (-1 when none). An `$Object`
-    // subtype so it fits a `$object_fields` slot. The host mirrors this in
-    // `runtime::intrinsic_types`.
+    // (null when none), the package whose TypeInfo table the id indexes, and
+    // its TypeInfo id (-1 when none). A TypeInfo id means nothing without its
+    // table, and the table is the package that compiled the call, which the
+    // host cannot recover from the stack once witnesses travel between
+    // packages. An `$Object` subtype so it fits a `$object_fields` slot. The
+    // host mirrors this in `runtime::intrinsic_types`.
     types.ty().subtype(&SubType {
         is_final: true,
         ..substruct(
@@ -1030,6 +1033,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                     element_type: StorageType::Val(ref_null(string)),
                     mutable: false,
                 },
+                fieldtype_ref(string),
                 FieldType {
                     element_type: StorageType::Val(ValType::I32),
                     mutable: false,

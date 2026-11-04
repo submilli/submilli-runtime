@@ -240,12 +240,31 @@ pub(crate) struct TypeWitness {
     /// The JSON Schema the typechecker emitted for a written type argument of
     /// a schema-checked call; `None` for an untyped call.
     pub schema: Option<String>,
-    /// The id of the type's reduced shape in the package's TypeInfo table,
-    /// when the table holds it. Carried for the host consumers that walk a
-    /// shape rather than test a value (parse-time validation, SUB-363); none
-    /// reads it yet.
+    /// Where the type's reduced shape sits in a TypeInfo table, when one holds
+    /// it: for the host consumers that walk a shape rather than test a value
+    /// (parse-time validation, SUB-363), none of which exists yet. It is
+    /// checked to resolve on every read anyway, so a build or installation
+    /// that pairs an id with the wrong table fails at the first typed call
+    /// rather than when a consumer arrives.
     #[allow(dead_code)]
-    pub info: Option<TypeInfoId>,
+    pub info: Option<TypeInfoRef>,
+}
+
+/// A TypeInfo id together with the package whose table it indexes. Ids are
+/// local to a package's table — the same shape has different ids in two
+/// packages — and the package is the one that compiled the call, not the one
+/// running when the host reads the witness, so it travels with the id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TypeInfoRef {
+    pub package: String,
+    pub id: TypeInfoId,
+}
+
+impl TypeInfoRef {
+    /// The entry this reference names in the store's tables.
+    pub(crate) fn resolve<'a>(&self, store: &'a StoreData) -> Option<&'a crate::TypeInfo> {
+        store.type_info.get(&self.package)?.get(self.id)
+    }
 }
 
 impl TypeWitness {
@@ -307,14 +326,39 @@ fn decode_witness(
             "type witness schema",
         )?),
     };
-    let info = match witness.field(&mut *caller, 4)? {
-        Val::I32(id) => u32::try_from(id).ok().map(TypeInfoId),
+    let package = witness.field(&mut *caller, 4)?;
+    let package = crate::runtime::host::read_string_arg(caller, &package, "type witness package")?;
+    let info = match witness.field(&mut *caller, 5)? {
+        Val::I32(-1) => None,
+        Val::I32(id) => {
+            let id = u32::try_from(id).map_err(|_| {
+                wasmtime::Error::msg(format!(
+                    "type witness info {id} is neither -1 nor a TypeInfo id"
+                ))
+            })?;
+            Some(TypeInfoRef {
+                package,
+                id: TypeInfoId(id),
+            })
+        }
         other => {
             return Err(wasmtime::Error::msg(format!(
                 "type witness info is not an i32: {other:?}"
             )));
         }
     };
+    // The compiler interned the shape in the calling package's table and the
+    // embedder installed that table with the package, so an id that does not
+    // resolve is a broken build or installation, not a guest error.
+    if let Some(info) = &info
+        && info.resolve(caller.data()).is_none()
+    {
+        return Err(wasmtime::Error::msg(format!(
+            "type witness names TypeInfo {}#{} that is not installed",
+            info.package,
+            info.id.as_u32()
+        )));
+    }
     Ok(TypeWitness {
         test,
         name,

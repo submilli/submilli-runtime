@@ -656,6 +656,10 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(true, string.clone().into()))),
             ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, string.clone().into()))),
+            ),
             FieldType::new(imm, StorageType::ValType(ValType::I32)),
         ],
     )?;

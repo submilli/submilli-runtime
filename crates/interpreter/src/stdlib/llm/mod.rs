@@ -1069,6 +1069,9 @@ mod tests {
         policy: Option<Arc<dyn SecurityCheck>>,
         effects: Option<Arc<dyn crate::runtime::effects::EffectHistory>>,
         fuel: Option<u64>,
+        /// Install the compiled TypeInfo table under this package name instead
+        /// of the one it was compiled for.
+        type_info_package: Option<String>,
     }
 
     struct Observed {
@@ -1084,7 +1087,13 @@ mod tests {
                 policy: None,
                 effects: None,
                 fuel: None,
+                type_info_package: None,
             }
+        }
+
+        fn type_info_package(mut self, package: &str) -> Self {
+            self.type_info_package = Some(package.to_string());
+            self
         }
 
         fn fuel(mut self, fuel: u64) -> Self {
@@ -1130,7 +1139,11 @@ mod tests {
             }
             let engine = cfg.engine().expect("engine");
             let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
-            data.install_type_info(compiled.type_info.clone());
+            let mut type_info = compiled.type_info.clone();
+            if let Some(package) = self.type_info_package {
+                type_info.package_name = package;
+            }
+            data.install_type_info(type_info);
             data.llm_provider = self.provider;
             data.llm_budget = self.budget;
             data.effects = self.effects;
@@ -2085,6 +2098,43 @@ mod tests {
             schemas,
             vec![None, Some("{\"type\":\"string\"}".to_string())],
             "only the written type argument asks for JSON",
+        );
+    }
+
+    /// A witness's TypeInfo id is read against the table of the package that
+    /// compiled the call, named in the witness itself: ids are local to a
+    /// package's table, and the running frame says nothing about which
+    /// package built a witness. The same program installed under another
+    /// package name leaves the id unresolvable, which is a broken
+    /// installation, never a guest error.
+    #[tokio::test]
+    async fn a_witness_names_the_package_whose_type_info_it_indexes() {
+        let ok = || {
+            MockProvider::new(
+                vec![LlmOutcome::success(
+                    r#"{"level":"high","score":1}"#.to_string(),
+                )],
+                Vec::new(),
+            )
+            .0
+        };
+        let out = Harness::new()
+            .provider(ok())
+            .run(TYPED_PROGRAM)
+            .await
+            .expect("the witness resolves in its own package's table");
+        assert_eq!(out, "high");
+
+        let error = Harness::new()
+            .provider(ok())
+            .type_info_package("@someone/else")
+            .run(TYPED_PROGRAM)
+            .await
+            .expect_err("an id read against no table for its package is fatal");
+        assert!(
+            error.is::<crate::runtime::host::FatalHostError>()
+                && format!("{error:#}").contains("is not installed"),
+            "{error:#}"
         );
     }
 

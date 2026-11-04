@@ -187,8 +187,9 @@ pub fn environment(
 /// The `$types` environment of a generic host call: one `$TypeWitness` per
 /// type argument, holding the descriptor predicate beside the type's name, the
 /// JSON Schema the call sends (its first type parameter's, and only when the
-/// program wrote the type argument) and the TypeInfo id of its reduced shape
-/// (`-1` when the package table holds no entry for it). Compiled generics read
+/// program wrote the type argument), the package whose TypeInfo table the id
+/// indexes (the one this module compiles) and the TypeInfo id of its reduced
+/// shape (`-1` when that table holds no entry for it). Compiled generics read
 /// bare descriptors instead ([`environment`]); the two never mix, since a host
 /// function forwards nothing and the erasure gate keeps an erased `T` out of
 /// host generic calls. The schema belongs to the call site, so witnesses are
@@ -225,13 +226,15 @@ pub fn host_environment(
                 emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
             }
         }
+        emit_text(emitter, ctx, &ctx.ta.package_name)?;
         let shape = shapes.get(slot).ok_or_else(|| {
             crate::codegen::internal_failure("one witness shape per type argument")
         })?;
-        let info = ctx
-            .type_info
-            .type_id(shape)
-            .map_or(-1, |id| id.as_u32() as i32);
+        let info = match ctx.type_info.type_id(shape) {
+            Some(id) => i32::try_from(id.as_u32())
+                .map_err(|_| crate::codegen::internal_failure("TypeInfo id fits an i32"))?,
+            None => -1,
+        };
         emitter.instruction(Instruction::I32Const(info));
         emitter.instruction(Instruction::StructNew(intrinsics.type_witness));
     }
@@ -243,8 +246,9 @@ pub fn host_environment(
 }
 
 /// A witness text from the string pool. Analysis interns the name of every
-/// type argument and the schema of every call that recorded witness shapes,
-/// so a miss is a compiler invariant failure, not a slow path.
+/// type argument, the schema and the package name of every call that
+/// recorded witness shapes, so a miss is a compiler invariant failure, not a
+/// slow path.
 fn emit_text(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,

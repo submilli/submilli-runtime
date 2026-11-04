@@ -159,7 +159,7 @@ parameter; for a host callee each entry is a `$TypeWitness` intrinsic struct:
 
 ```
 $TypeWitness = struct { vtable: (ref $VTable), test: (ref $Closure), name: (ref $string),
-                        schema: (ref null $string), info: i32 }
+                        schema: (ref null $string), package: (ref $string), info: i32 }
 ```
 
 - `test`: the type's descriptor closure, the predicate `unknown → boolean`
@@ -170,8 +170,13 @@ $TypeWitness = struct { vtable: (ref $VTable), test: (ref $Closure), name: (ref 
   call, `null` otherwise. Recorded per call site (`TypedAst::witness_schemas`,
   span-keyed), never per type: `call(m, p)` binds `T` to `string` and sends
   none, `call<string>(m, p)` asks for a JSON string.
-- `info`: the TypeInfo id of the type's reduced shape (`TypedAst::witness_shapes`
-  interned into the package table), `-1` when there is none. No consumer yet.
+- `package` and `info`: the TypeInfo id of the type's reduced shape
+  (`TypedAst::witness_shapes` interned into the package table), `-1` when
+  there is none, and the package whose table it indexes. Ids are local to a
+  package's table, and the package that built a witness is not recoverable
+  from the stack once witnesses travel between packages, so the pair travels
+  together (`abi::TypeInfoRef`); the host checks on every read that it
+  resolves. No consumer of the shape yet.
 
 `llm.call`/`llm.batch`, `agents.run` and `session.get` are runtime-generic;
 `import_value_symbol` appends the environment parameter to the import and
