@@ -54,7 +54,7 @@ def main():
                     'function main(): number {\n'
                     f'    const response = get({json.dumps(url)});\n'
                     '    if (response.status !== 200) { throw new Error("HTTP failure"); }\n'
-                    '    return (response.json() as unknown[]).length;\n'
+                    '    return response.json<unknown[]>().length;\n'
                     '}\n'
                 )
                 matched = True

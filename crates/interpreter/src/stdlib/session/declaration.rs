@@ -6,8 +6,9 @@
 //! predicate (`codegen::runtime_descriptors`). The host tests the
 //! stored value against it and throws a catchable `TypeError` on a mismatch,
 //! so wrong-shaped stored data never arrives statically typed. The typechecker
-//! gates what `T` may be (`session_get_gate`, matched by mangled name through
-//! [`is_checked_get`]); the declaration and that gate are a matched pair.
+//! gates what `T` may be through its row in the checked-call table
+//! (`stdlib::checked_call`, matched by mangled name through
+//! [`is_checked_get`]); the declaration and that row are a matched pair.
 
 use std::collections::BTreeMap;
 
@@ -18,8 +19,8 @@ use crate::{
 
 use super::{MAX_LIST_LIMIT, MODULE_NAME};
 
-/// The export name of the checked read. Shared with the typechecker's
-/// gate (`session_get_gate`) so the declaration and the check that keeps it
+/// The export name of the checked read. Shared with the checked-call table
+/// (`stdlib::checked_call`) so the declaration and the gate that keeps it
 /// sound can't drift apart.
 const SESSION_GET: &str = "get";
 

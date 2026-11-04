@@ -69,9 +69,10 @@
 //!    expression's, a Temporal value's, a `TextEncoder`'s or a
 //!    `TextDecoder`'s methods never do; any other method may. A new value
 //!    (a literal, `new` of a builtin such as `new Map()` or
-//!    `new Uint8Array(n)`, `Array.from`, `Object.keys`, `JSON.parse`, or a
-//!    copy such as `slice`, `map` or `split`) is the body's own; `new` of a
-//!    package class is a call of its constructor, whose result is not new.
+//!    `new Uint8Array(n)`, `Array.from`, `Object.keys`, `JSON.parse`,
+//!    `r.json()`, or a copy such as `slice`, `map` or `split`) is the body's
+//!    own; `new` of a package class is a call of its constructor, whose
+//!    result is not new.
 //!    The change may be read back where the walk cannot see it. Assigning a
 //!    module `let` or a static field counts too;
 //! 5. the body calls itself, so a write after its `check()` runs before the
@@ -2040,10 +2041,11 @@ fn may_change(ty: &Type, method: &str) -> bool {
 
 /// Whether `expr` makes a new value, which no one else holds: a literal, a
 /// builtin constructor (`new` of a builtin such as `new Map()` or
-/// `new Uint8Array(n)`, `Array.from`, `Object.keys` and the like), or a
-/// builtin method that returns a copy (`slice`, `map`, `split` and the
-/// like), or `JSON.parse`. `Object.assign` returns its first argument, so it
-/// is not one, and `new` of a package class is a call of its constructor.
+/// `new Uint8Array(n)`, `Array.from`, `Object.keys` and the like), a builtin
+/// method that returns a copy (`slice`, `map`, `split` and the like),
+/// `JSON.parse`, or `r.json()`. `Object.assign` returns its first argument,
+/// so it is not one, and `new` of a package class is a call of its
+/// constructor.
 fn is_fresh(ta: &crate::TypedAst, expr: &TypedExpr) -> Result<bool, CompilerFailure> {
     Ok(match &expr.kind {
         TypedExprKind::ArrayLiteral { .. }
@@ -2077,7 +2079,11 @@ fn is_fresh(ta: &crate::TypedAst, expr: &TypedExpr) -> Result<bool, CompilerFail
                 .map_err(crate::typechecker::arena_failure)?;
             let constructs = iface.as_str().ends_with("Constructor")
                 && CONSTRUCTORS.contains(&name.name.as_str());
-            constructs || copies(&receiver.ty, &name.name)
+            // `r.json()` parses the body into a new value, as `JSON.parse` does.
+            let parses = crate::stdlib::http::declaration::is_checked_json(&crate::mangle::extend(
+                iface, &name.name,
+            ));
+            constructs || parses || copies(&receiver.ty, &name.name)
         }
         _ => false,
     })

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4b12bc7c7f6a7cd396b4f7b20a62dc0b7ae90fa53449387948384198269cbf4c"
+  contentHash: "75aa98961d060f1550bd117aa412ffb04989088aee243291146a89f3b472ed46"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -63,7 +63,7 @@ checked against the Blueprint.
 
 ### `unknown` instead of `any`
 
-`JSON.parse` and `response.json()` return `unknown`, and Submilli has no
+`JSON.parse` and an untyped `response.json()` return `unknown`, and Submilli has no
 `any`, so data from outside can't bypass type checking and fail later in the
 program. Narrow an `unknown` value with `typeof`, `Array.isArray`,
 `instanceof`, `in`, `=== null`, or `=== undefined`, or cast it with `as`:

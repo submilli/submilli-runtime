@@ -394,7 +394,7 @@ export { PageOptions, IssueFilter } from "./internal";
  */
 export function getViewer(): User {
     check("linear.app/getViewer", {});
-    const envelope = graphqlPost(VIEWER_QUERY, {}).json() as GraphQlResponse<ViewerData>;
+    const envelope = graphqlPost(VIEWER_QUERY, {}).json<GraphQlResponse<ViewerData>>();
     return requireData(envelope).viewer;
 }
 
@@ -409,7 +409,7 @@ export function getIssue(id: string): Issue | null {
     check("linear.app/getIssue", { teamId: teamId });
     if (teamId === null) return null;
     const vars: IdVars = { id: id };
-    const envelope = graphqlPost(GET_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueData>;
+    const envelope = graphqlPost(GET_ISSUE_QUERY, vars).json<GraphQlResponse<IssueData>>();
     return requireData(envelope).issue;
 }
 
@@ -437,7 +437,7 @@ export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue
     }
     check("linear.app/listIssues", { teamId: teamId ?? null });
     const vars = buildListIssuesVars(owned, page);
-    const envelope = graphqlPost(LIST_ISSUES_QUERY, vars).json() as GraphQlResponse<ListIssuesData>;
+    const envelope = graphqlPost(LIST_ISSUES_QUERY, vars).json<GraphQlResponse<ListIssuesData>>();
     return requireData(envelope).issues;
 }
 
@@ -450,7 +450,7 @@ export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue
 export function getTeam(id: string): Team | null {
     check("linear.app/getTeam", { teamId: id });
     const vars: IdVars = { id: id };
-    const envelope = graphqlPost(GET_TEAM_QUERY, vars).json() as GraphQlResponse<TeamData>;
+    const envelope = graphqlPost(GET_TEAM_QUERY, vars).json<GraphQlResponse<TeamData>>();
     return requireData(envelope).team;
 }
 
@@ -462,7 +462,7 @@ export function getTeam(id: string): Team | null {
  */
 export function listTeams(page?: PageOptions): Page<Team> {
     check("linear.app/listTeams", {});
-    const envelope = graphqlPost(LIST_TEAMS_QUERY, buildPageVars(page)).json() as GraphQlResponse<ListTeamsData>;
+    const envelope = graphqlPost(LIST_TEAMS_QUERY, buildPageVars(page)).json<GraphQlResponse<ListTeamsData>>();
     return requireData(envelope).teams;
 }
 
@@ -474,7 +474,7 @@ export function listTeams(page?: PageOptions): Page<Team> {
  */
 export function listProjects(page?: PageOptions): Page<Project> {
     check("linear.app/listProjects", {});
-    const envelope = graphqlPost(LIST_PROJECTS_QUERY, buildPageVars(page)).json() as GraphQlResponse<ListProjectsData>;
+    const envelope = graphqlPost(LIST_PROJECTS_QUERY, buildPageVars(page)).json<GraphQlResponse<ListProjectsData>>();
     return requireData(envelope).projects;
 }
 
@@ -486,7 +486,7 @@ export function listProjects(page?: PageOptions): Page<Project> {
  */
 export function listUsers(page?: PageOptions): Page<User> {
     check("linear.app/listUsers", {});
-    const envelope = graphqlPost(LIST_USERS_QUERY, buildPageVars(page)).json() as GraphQlResponse<ListUsersData>;
+    const envelope = graphqlPost(LIST_USERS_QUERY, buildPageVars(page)).json<GraphQlResponse<ListUsersData>>();
     return requireData(envelope).users;
 }
 
@@ -519,7 +519,7 @@ export function createIssue(input: IssueCreateInput): Issue {
     if (projectId !== undefined) issueInput.projectId = projectId;
     check("linear.app/createIssue", { teamId: teamId });
     const vars: CreateIssueVars = { input: issueInput };
-    const envelope = graphqlPost(CREATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueCreateData>;
+    const envelope = graphqlPost(CREATE_ISSUE_QUERY, vars).json<GraphQlResponse<IssueCreateData>>();
     return requirePayloadIssue(requireData(envelope).issueCreate);
 }
 
@@ -551,7 +551,7 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
     const teamId = issueTeamId(id);
     check("linear.app/updateIssue", { teamId: teamId, projectId: projectId ?? null });
     const vars: UpdateIssueVars = { id: id, input: issueInput };
-    const envelope = graphqlPost(UPDATE_ISSUE_QUERY, vars).json() as GraphQlResponse<IssueUpdateData>;
+    const envelope = graphqlPost(UPDATE_ISSUE_QUERY, vars).json<GraphQlResponse<IssueUpdateData>>();
     return requirePayloadIssue(requireData(envelope).issueUpdate);
 }
 
@@ -572,7 +572,7 @@ export function createComment(input: CommentCreateInput): Comment {
     check("linear.app/createComment", { teamId: teamId });
     const vars: CreateCommentVars = { input: commentInput };
     const envelope = graphqlPost(CREATE_COMMENT_QUERY, vars)
-        .json() as GraphQlResponse<CommentCreateData>;
+        .json<GraphQlResponse<CommentCreateData>>();
     const payload = requireData(envelope).commentCreate;
     const comment = payload.comment;
     if (!payload.success || comment === null) {
@@ -590,13 +590,13 @@ function issueTeamId(issueId: string): string {
 }
 
 function nullableIssueTeamId(issueId: string): string | null {
-    const envelope = graphqlPost(ISSUE_TEAM_QUERY, { id: issueId }).json() as GraphQlResponse<IssueTeamData>;
+    const envelope = graphqlPost(ISSUE_TEAM_QUERY, { id: issueId }).json<GraphQlResponse<IssueTeamData>>();
     const issue = requireData(envelope).issue;
     return issue === null ? null : issue.team.id;
 }
 
 function commentTeamId(commentId: string): string {
-    const envelope = graphqlPost(COMMENT_TEAM_QUERY, { id: commentId }).json() as GraphQlResponse<CommentTeamData>;
+    const envelope = graphqlPost(COMMENT_TEAM_QUERY, { id: commentId }).json<GraphQlResponse<CommentTeamData>>();
     const comment = requireData(envelope).comment;
     if (comment === null) throw new Error("Linear comment was not found");
     if (comment.issue === null) throw new Error("Linear comment has no issue team");
@@ -604,7 +604,7 @@ function commentTeamId(commentId: string): string {
 }
 
 function agentSessionTeamId(sessionId: string): string {
-    const envelope = graphqlPost(AGENT_SESSION_TEAM_QUERY, { id: sessionId }).json() as GraphQlResponse<AgentSessionTeamData>;
+    const envelope = graphqlPost(AGENT_SESSION_TEAM_QUERY, { id: sessionId }).json<GraphQlResponse<AgentSessionTeamData>>();
     const session = requireData(envelope).agentSession;
     if (session === null) throw new Error("Linear agent session was not found");
     if (session.issue !== null) return session.issue.team.id;
@@ -621,7 +621,7 @@ function agentSessionTeamId(sessionId: string): string {
 export function listComments(issueId: string, page?: PageOptions): Page<Comment> {
     check("linear.app/listComments", { teamId: issueTeamId(issueId) });
     const vars = buildEntityPageVars(issueId, page);
-    const envelope = graphqlPost(LIST_COMMENTS_QUERY, vars).json() as GraphQlResponse<IssueCommentsData>;
+    const envelope = graphqlPost(LIST_COMMENTS_QUERY, vars).json<GraphQlResponse<IssueCommentsData>>();
     return requireData(envelope).issue.comments;
 }
 
@@ -633,7 +633,7 @@ export function listComments(issueId: string, page?: PageOptions): Page<Comment>
 export function getAgentSession(id: string): AgentSession {
     check("linear.app/getAgentSession", { teamId: agentSessionTeamId(id) });
     const vars: IdVars = { id: id };
-    const envelope = graphqlPost(GET_AGENT_SESSION_QUERY, vars).json() as GraphQlResponse<AgentSessionData>;
+    const envelope = graphqlPost(GET_AGENT_SESSION_QUERY, vars).json<GraphQlResponse<AgentSessionData>>();
     return requireData(envelope).agentSession;
 }
 
@@ -646,7 +646,7 @@ export function getAgentSession(id: string): AgentSession {
 export function listAgentActivities(id: string, page?: PageOptions): Page<AgentActivity> {
     check("linear.app/listAgentActivities", { teamId: agentSessionTeamId(id) });
     const vars = buildEntityPageVars(id, page);
-    const envelope = graphqlPost(LIST_AGENT_ACTIVITIES_QUERY, vars).json() as GraphQlResponse<AgentActivitiesData>;
+    const envelope = graphqlPost(LIST_AGENT_ACTIVITIES_QUERY, vars).json<GraphQlResponse<AgentActivitiesData>>();
     return requireData(envelope).agentSession.activities;
 }
 
@@ -664,7 +664,7 @@ export function createAgentActivity(input: AgentActivityCreateInput): AgentActiv
     if (signal !== undefined) owned.signal = signal;
     if (signalMetadata !== undefined) owned.signalMetadata = signalMetadata;
     const vars: CreateAgentActivityVars = { input: owned };
-    const envelope = graphqlPost(CREATE_AGENT_ACTIVITY_QUERY, vars).json() as GraphQlResponse<AgentActivityCreateData>;
+    const envelope = graphqlPost(CREATE_AGENT_ACTIVITY_QUERY, vars).json<GraphQlResponse<AgentActivityCreateData>>();
     const payload = requireData(envelope).agentActivityCreate;
     if (!payload.success || payload.agentActivity === null) {
         throw new Error("Linear agentActivityCreate did not succeed");
@@ -681,7 +681,7 @@ export function createAgentActivity(input: AgentActivityCreateInput): AgentActiv
 export function updateAgentSession(id: string, input: AgentSessionUpdateInput): AgentSession {
     check("linear.app/updateAgentSession", { teamId: agentSessionTeamId(id) });
     const vars: UpdateAgentSessionVars = { id: id, input: input };
-    const envelope = graphqlPost(UPDATE_AGENT_SESSION_QUERY, vars).json() as GraphQlResponse<AgentSessionUpdateData>;
+    const envelope = graphqlPost(UPDATE_AGENT_SESSION_QUERY, vars).json<GraphQlResponse<AgentSessionUpdateData>>();
     return requireAgentSession(requireData(envelope).agentSessionUpdate, "agentSessionUpdate");
 }
 
@@ -696,7 +696,7 @@ export function createAgentSessionOnIssue(input: AgentSessionCreateOnIssueInput)
     const owned: AgentSessionCreateOnIssueInput = { issueId: issueId };
     if (externalUrls !== undefined) owned.externalUrls = externalUrls;
     const vars: CreateAgentSessionOnIssueVars = { input: owned };
-    const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_ISSUE_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnIssueData>;
+    const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_ISSUE_QUERY, vars).json<GraphQlResponse<AgentSessionCreateOnIssueData>>();
     return requireAgentSession(requireData(envelope).agentSessionCreateOnIssue, "agentSessionCreateOnIssue");
 }
 
@@ -711,7 +711,7 @@ export function createAgentSessionOnComment(input: AgentSessionCreateOnCommentIn
     const owned: AgentSessionCreateOnCommentInput = { commentId: commentId };
     if (externalUrls !== undefined) owned.externalUrls = externalUrls;
     const vars: CreateAgentSessionOnCommentVars = { input: owned };
-    const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_COMMENT_QUERY, vars).json() as GraphQlResponse<AgentSessionCreateOnCommentData>;
+    const envelope = graphqlPost(CREATE_AGENT_SESSION_ON_COMMENT_QUERY, vars).json<GraphQlResponse<AgentSessionCreateOnCommentData>>();
     return requireAgentSession(requireData(envelope).agentSessionCreateOnComment, "agentSessionCreateOnComment");
 }
 

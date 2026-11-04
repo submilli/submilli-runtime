@@ -101,13 +101,22 @@ pub fn allocate(
     targets.extend(extra.iter().cloned());
     let mut has_generic_calls = false;
     for index in ta.expr_ids().map_err(crate::codegen::arena_failure)? {
-        if let TypedExprKind::GenericCall { type_args, .. } = &ta
+        match &ta
             .try_expr(index)
             .map_err(crate::codegen::arena_failure)?
             .kind
         {
-            has_generic_calls = true;
-            targets.extend(type_args.iter().cloned());
+            TypedExprKind::GenericCall { type_args, .. } => {
+                has_generic_calls = true;
+                targets.extend(type_args.iter().cloned());
+            }
+            // A runtime-generic host method (`Response#json<T>`); every
+            // other generic method call carries no type arguments.
+            TypedExprKind::GenericMethodCall { type_args, .. } if !type_args.is_empty() => {
+                has_generic_calls = true;
+                targets.extend(type_args.iter().cloned());
+            }
+            _ => {}
         }
     }
     for contexts in ta.runtime_class_contexts.values() {
@@ -195,7 +204,7 @@ pub fn environment(
     Ok(())
 }
 
-/// A schema-checked host call at a type the program names (`llm.call<Verdict>`)
+/// A schema call at a type the program names (`llm.call<Verdict>`)
 /// passed the typechecker's schema gate, so codegen must have emitted a schema
 /// for that type: the gate and `codegen::descriptor_schema` decide it
 /// independently, and a disagreement would compile a call that always throws.
@@ -209,7 +218,7 @@ pub fn require_direct_schema(
     let Some(ty) = type_args.first() else {
         return Ok(());
     };
-    if crate::stdlib::json_schema::schema_checked_call(mangled).is_none()
+    if !crate::stdlib::checked_call::checked_call(mangled).is_some_and(|c| c.sends_schema())
         || !parameters(ty).is_empty()
         || ctx.symbols.descriptor_schemas.contains_key(ty)
     {

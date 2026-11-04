@@ -19,7 +19,7 @@ function main(): void {
         headers.set("User-Agent", "submilli-search-scope-test");
         const response = get("https://api.github.com/search/issues?" + encodeQuery(params), headers);
         assert(response.status === 200, "public GitHub search must succeed; got " + response.status.toString());
-        const data = response.json() as SearchResponse;
+        const data = response.json<SearchResponse>();
         let outside = false;
         for (const item of data.items) {
             if (item.repository_url !== "https://api.github.com/repos/octocat/Hello-World") outside = true;

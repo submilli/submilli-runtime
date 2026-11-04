@@ -512,6 +512,7 @@ fn emit_class_field_store(
             &setter,
             std::slice::from_ref(&value),
             None,
+            &[],
             None,
             &Type::Void,
         )?;

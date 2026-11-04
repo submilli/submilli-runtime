@@ -6,9 +6,10 @@
 //! answer. `run<T>` returns a checked `T`: it is declared generic and
 //! **runtime-generic**, so the host reads the JSON Schema of `T` from the
 //! `$TypeDescriptor` in the call's `$types` environment and sends it with the
-//! run. `T` has no default. The typechecker gates it (matched by mangled name
-//! through [`is_checked_run`]) and, unlike `llm.call`, wraps the result in a
-//! structural check against `T`, so a mismatch throws. See
+//! run. `T` has no default. The typechecker gates it through its row in the
+//! checked-call table (`stdlib::checked_call`, matched by mangled name through
+//! [`is_checked_run`]), and the host checks the answer with the descriptor's
+//! predicate, so a mismatch throws a `TypeError` naming the type. See
 //! `stdlib/llm/declaration.rs` for the descriptor and why the written
 //! declaration is the whole public API.
 

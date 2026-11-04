@@ -9,6 +9,6 @@ function main(): void {
   h.set("Content-Type", "application/vnd.api+json");
   const r: Response = post("{{BASE}}/echo-json-custom-ct", { name: "alice" }, h);
   assert(r.status === 200, "user Content-Type survived (not overridden)");
-  const parsed = r.json() as { name: string };
+  const parsed = r.json<{ name: string }>();
   assert(parsed.name === "alice", "object body still serialized as JSON");
 }

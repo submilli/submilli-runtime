@@ -515,6 +515,32 @@ async fn a_typed_run_throws_when_the_answer_does_not_match() {
     );
 }
 
+/// SUB-2084: a mismatched answer's `TypeError` names the type, never a key
+/// the agent wrote, so agent output does not reach the message.
+#[tokio::test]
+async fn a_mismatched_run_never_names_a_key_of_the_answer() {
+    let out = Harness::default()
+        .agents(FakeAgents::answering(r#"{"sk-live-SECRET": "high"}"#))
+        .run(
+            r#"import agents from "submilli:agents";
+               function main(): string {
+                 try {
+                   agents.run<Record<string, number>>("researcher", "score it");
+                   return "accepted";
+                 } catch (e: TypeError) {
+                   return e.message;
+                 }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert!(!out.contains("sk-live"), "{out}");
+    assert_eq!(
+        out,
+        "agents.run(\"researcher\"): the agent's answer does not match `{ [key: string]: number }`"
+    );
+}
+
 /// A generic forwards its own `T` into `agents.run<T>`: the caller's type is
 /// what is asked for and what the answer is checked against.
 #[tokio::test]

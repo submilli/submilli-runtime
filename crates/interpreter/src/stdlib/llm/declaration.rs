@@ -14,8 +14,9 @@
 //! what the predicate accepted, which is what lets the declared return type
 //! `Completion<T>` be trusted without a cast around the call. `T` has no
 //! default: it is written, or inferred from the expected type, and the call is
-//! typed either way. The typechecker gates it ([`is_checked_call`] and
-//! [`is_checked_batch`] are its hooks) and records the schema per type;
+//! typed either way. The typechecker gates it through its rows in the
+//! checked-call table (`stdlib::checked_call`; [`is_checked_call`] and
+//! [`is_checked_batch`] are its hooks), and codegen emits the schema per type;
 //! nothing about the descriptor is a parameter, so the written declaration is
 //! the whole public API.
 

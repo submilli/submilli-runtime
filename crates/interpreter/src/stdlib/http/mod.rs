@@ -12,7 +12,7 @@ use crate::runtime::host::{
     abi_arg, abi_result, read_boxed_number, read_string_arg, read_uint8_array_arg,
     register_host_fn, register_host_value_async, write_submilli_string_struct,
 };
-mod declaration;
+pub(crate) mod declaration;
 pub mod policy;
 mod redirect_guard;
 pub mod transport;
@@ -1068,7 +1068,7 @@ fn install_response_members(
         linker,
         MODULE_NAME,
         crate::mangle::extend(&response_key, "toString"),
-        FuncType::new(engine, [receiver], [string]),
+        FuncType::new(engine, [receiver.clone()], [string]),
         |caller, params, results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
             let (status, status_text, url) = read_response_status_line(caller, &st)?;
@@ -1080,6 +1080,46 @@ fn install_response_members(
             let out = write_submilli_string_struct(caller, &text)?;
             *abi_result(results, 0)? = Val::AnyRef(Some(out.to_anyref()));
             Ok(())
+        },
+    )?;
+
+    // `json<T>` is generic: after the receiver comes the `$types`
+    // environment every generic call passes, holding the `$TypeDescriptor`
+    // for `T`. The result travels in the erased `T` slot.
+    let types = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteArray(intr.object_fields.clone()),
+    ));
+    let erased = ValType::Ref(RefType::new(
+        true,
+        HeapType::ConcreteStruct(intr.object.clone()),
+    ));
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        declaration::response_json(),
+        FuncType::new(engine, [receiver, types], [erased]),
+        |caller, params| {
+            Box::pin(async move {
+                let st = backing_receiver(caller, abi_arg(params, 0)?)?;
+                let body_val = st.field(&mut *caller, R_BODY)?;
+                let body = read_string_arg(caller, &body_val, "Response (body)")?;
+                let descriptor = abi::read_type_argument(caller, abi_arg(params, 1)?, 0)?;
+                let value = crate::runtime::json::parse_json_as_unknown(
+                    caller,
+                    &body,
+                    "r.json(): cannot parse the body",
+                )?;
+                // The message names the type, never the body or a key in it:
+                // the body is whatever the server sent.
+                if descriptor.accepts(caller, value).await? {
+                    return Ok(value);
+                }
+                Err(crate::runtime::host::type_error(format!(
+                    "r.json(): the body does not match `{}`",
+                    descriptor.name
+                )))
+            })
         },
     )?;
 
@@ -3422,47 +3462,160 @@ function main(): void {
     }
 
     #[tokio::test]
-    async fn response_json_type_arg_errors() {
+    async fn response_json_checks_the_body_against_its_type_argument() {
         let source = r#"
             import { get, Response } from "submilli:http";
             function main(): void {
                 const r: Response = get("https://example.test/json");
-                const o: { k: string } = r.json<{ k: string }>();
-                assert(o.k === "v", "parsed json field");
+                const o = r.json<{ k: string }>();
+                assert(o.k === "v", "parsed and checked json field");
             }
         "#;
-        let diags = compile_script(source, "test.subm", crate::FileId(0), &[], &[])
-            .expect_err("Response#json type arguments must error");
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("`r.json` does not take type arguments")),
-            "expected the type-argument diagnostic; got: {:?}",
-            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
-        );
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
     }
 
     #[tokio::test]
-    async fn response_json_assignment_to_concrete_type_errors() {
+    async fn response_json_takes_its_type_from_the_expected_type() {
         let source = r#"
             import { get, Response } from "submilli:http";
             function main(): void {
                 const r: Response = get("https://example.test/json");
                 const o: { k: string } = r.json();
+                assert(o.k === "v", "checked through the expected type");
+                try {
+                    const n: { k: number } = r.json();
+                    assert(false, "a mismatch must throw");
+                } catch (e: TypeError) {
+                    assert(
+                        e.message === "r.json(): the body does not match `{ k: number }`",
+                        e.message
+                    );
+                }
             }
         "#;
-        let diags = compile_script(source, "test.subm", crate::FileId(0), &[], &[])
-            .expect_err("assigning unknown to concrete type must error");
-        assert!(
-            diags.iter().any(|d| d.message.contains("got `unknown`")),
-            "expected the `unknown` assignment diagnostic; got: {:?}",
-            diags.iter().map(|d| &d.message).collect::<Vec<_>>(),
-        );
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
+    }
+
+    #[tokio::test]
+    async fn response_json_of_a_body_that_is_not_json_is_a_syntax_error() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                try {
+                    r.json<{ k: string }>();
+                    assert(false, "a non-JSON body must throw");
+                } catch (e: SyntaxError) {
+                    assert(e.message.startsWith("r.json(): cannot parse the body: "), e.message);
+                }
+            }
+        "#;
+        run_with_mock(source, vec![json_response("not json")]).await;
+    }
+
+    /// SUB-2084: a mismatch names the type, never a key the server chose,
+    /// so remote content does not reach an error message.
+    #[tokio::test]
+    async fn a_mismatched_response_json_never_names_a_key_of_the_body() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                try {
+                    r.json<Record<string, number>>();
+                    assert(false, "a mismatch must throw");
+                } catch (e: TypeError) {
+                    assert(!e.message.includes("sk-live"), e.message);
+                    assert(
+                        e.message === "r.json(): the body does not match `{ [key: string]: number }`",
+                        e.message
+                    );
+                }
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#"{"sk-live-SECRET":"high"}"#)]).await;
+    }
+
+    /// A number past the `number` range is a `RangeError`, a primitive `T`
+    /// travels through the erased slot, and the expected type of a `return`
+    /// or an argument supplies `T` too.
+    #[tokio::test]
+    async fn response_json_reads_primitives_and_takes_t_from_returns_and_arguments() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            interface Pair { k: string }
+            function read(r: Response): Pair { return r.json(); }
+            function show(p: Pair): string { return p.k; }
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                assert(read(r).k === "v", "return position");
+                assert(show(r.json()) === "v", "argument position");
+                const n = get("https://example.test/n").json<number>();
+                assert(n === 7, "a primitive T");
+                try {
+                    get("https://example.test/big").json<number>();
+                    assert(false, "an out-of-range number must throw");
+                } catch (e: RangeError) {
+                    assert(e.message.startsWith("r.json(): cannot parse the body: "), e.message);
+                }
+            }
+        "#;
+        run_with_mock(
+            source,
+            vec![
+                json_response(r#"{"k":"v"}"#),
+                json_response("7"),
+                json_response("1e400"),
+            ],
+        )
+        .await;
+    }
+
+    /// A generic class's `T` comes from its instance context, not a call's
+    /// type arguments, and forwards into `r.json<T>()` all the same.
+    #[tokio::test]
+    async fn a_generic_class_forwards_its_type_to_response_json() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            class Loader<T> { load(r: Response): T { return r.json<T>(); } }
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                const o = new Loader<{ k: string }>().load(r);
+                assert(o.k === "v", "class-forwarded type checked");
+                try {
+                    new Loader<number>().load(r);
+                    assert(false, "a mismatch must throw");
+                } catch (e: TypeError) {
+                    assert(e.message === "r.json(): the body does not match `number`", e.message);
+                }
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
+    }
+
+    #[tokio::test]
+    async fn a_generic_forwards_its_type_to_response_json() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function load<T>(r: Response): T { return r.json<T>(); }
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                const o = load<{ k: string }>(r);
+                assert(o.k === "v", "forwarded type checked");
+                try {
+                    load<number[]>(r);
+                    assert(false, "a forwarded mismatch must throw");
+                } catch (e: TypeError) {
+                    assert(e.message === "r.json(): the body does not match `number[]`", e.message);
+                }
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
     }
 
     #[tokio::test]
     async fn response_json_as_cast() {
-        // `r.json()` returns `unknown`; `as T` performs normal runtime validation.
+        // A bare `r.json()` returns `unknown`; `as T` performs normal runtime validation.
         let source = r#"
             import { get, Response } from "submilli:http";
             function main(): void {
@@ -3508,7 +3661,7 @@ function main(): void {
 
     #[tokio::test]
     async fn importless_response_json() {
-        // The `json()` rewrite must also fire without a `Response` import.
+        // `json()` resolves without a `Response` import.
         let source = r#"
             import { get } from "submilli:http";
             function main(): void {

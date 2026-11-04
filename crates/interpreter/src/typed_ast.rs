@@ -146,6 +146,10 @@ pub enum TypedExprKind {
         receiver: ExprId,
         iface: MangledName,
         name: Ident,
+        /// The method's own type arguments, for a runtime-generic host method
+        /// (`Response#json<T>`) whose call passes their descriptors in a
+        /// trailing `$types` environment; empty for every other method.
+        type_args: Vec<Type>,
         args: Vec<GenericArgument>,
         return_cast: Option<crate::Type>,
         /// Guard predicate after type-arg substitution; codegen ignores it.

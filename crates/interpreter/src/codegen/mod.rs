@@ -1266,17 +1266,6 @@ fn codegen_inner(
             if !dependency_usage.is_interface_member_used(ty_sym, method_name) {
                 continue;
             }
-            // TODO(reified generics): `Response#json` is recognised by the typechecker
-            // and lowered to `JSON.parse(body)`; it has no host export, so skip its
-            // import (declaring it would import an unresolvable symbol and fail link).
-            // Remove once reified generics let the shim host a real per-call validator
-            // (SUB-363).
-            if defs.package_name.as_str() == crate::stdlib::http::MODULE_NAME
-                && iface_name == "Response"
-                && method_name == "json"
-            {
-                continue;
-            }
             let mangled = crate::mangle::extend(&ty_sym.mangled_name, method_name);
             // Recorded above the host-implemented `continue` below, not after it:
             // the methods that take that branch are precisely the ones whose call
@@ -1287,7 +1276,7 @@ fn codegen_inner(
             // earlier value-symbol loop is host-implemented (every prelude
             // method is — its value symbol is declared beside the Rust impl in
             // `runtime::prelude`); only interface members without one
-            // (stdlib shim exports like `File#close`) import here.
+            // (stdlib host methods like `File#close`) import here.
             // The receiver, when the method has one, is a Wasm parameter
             // without a default.
             let host_defaults = is_host_package(&defs.package_name).then(|| {
@@ -1306,6 +1295,13 @@ fn codegen_inner(
                 params.push(recv);
             }
             params.extend(abi.params.iter().copied());
+            // A runtime-generic method takes its type arguments' descriptors
+            // after the declared parameters; kept out of `abi.params`, which
+            // a call fills one slot per argument.
+            if defs.runtime_generics.contains(&mangled) {
+                symbols.runtime_generic_functions.insert(mangled.clone());
+                params.push(runtime_descriptors::environment_type(&symbols)?);
+            }
             if let Some(defaults) = host_defaults {
                 symbols.record_host_parameter_defaults(next_func_idx, defaults);
             }
