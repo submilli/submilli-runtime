@@ -239,7 +239,7 @@ fn bounded_events(
             yield_once().await;
             chunk
         });
-    SseStream::from_byte_stream(chunks)
+    SseStream::from_bytes_stream(chunks)
         .then(|event| async move {
             // rmcp skips control/empty events recursively within poll_next. Yield
             // between events so that dependency recursion cannot accumulate.
