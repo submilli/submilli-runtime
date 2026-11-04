@@ -2140,7 +2140,7 @@ fn emit_type_tag(
 }
 
 /// Visited entries pair the value with its effective type arguments. Forwarded
-/// predicates preserve identity; growing arguments construct fresh predicates.
+/// descriptors preserve identity; growing arguments construct fresh ones.
 fn emit_same_validator_environment(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -2158,7 +2158,7 @@ fn emit_same_validator_environment(
     let closure = ctx
         .symbols
         .closure_struct_type_idx(super::field_guards::signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?;
     for slot in 0..count {
         emitter.instruction(Instruction::LocalGet(1));
         emitter.instruction(Instruction::LocalGet(index));
@@ -2197,7 +2197,7 @@ fn emit_store_validator_environment(
     let closure = ctx
         .symbols
         .closure_struct_type_idx(super::field_guards::signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?;
     emitter.instruction(Instruction::LocalGet(1));
     emitter.instruction(Instruction::LocalGet(3));
     emitter.instruction(Instruction::I32Const(2));

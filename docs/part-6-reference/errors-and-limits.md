@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cdc60c534861bf091409044ea3362d241ebcddd8b2e090b40da76174bca90e3d"
+  contentHash: "808744f00cf1f9ce1025211e760a87241f0fdb3828ab2d2fd1313f94811473da"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -36,7 +36,7 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Stack | `max_execution_stack` | 512, at most 16,384 | kibibytes | One run | `call stack exhausted`, `kind` `runtime_error` | No |
 | Model tokens, one run | `max_execution_llm_tokens` | 1,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes, unless `0` |
 | Model tokens, all runs | `max_llm_tokens` | 20,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
-| Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` call | Further prompts wait | — |
+| Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` or `llm.texts` call | Further prompts wait | — |
 | Embedding tokens, one run | `max_execution_embedding_tokens` | 2,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Embedding tokens, all runs | `max_embedding_tokens` | 50,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Embedding requests, one run | `max_execution_embedding_requests` | 1,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
@@ -180,7 +180,7 @@ volume can undo each other's changes.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| Prompts in one `llm.batch` | 128 | `RangeError` |
+| Prompts in one `llm.batch` or `llm.texts` | 128 | `RangeError` |
 | One prompt | 262,144 bytes of UTF-8 | `RangeError` |
 | Output reserved per prompt | 64,000 tokens, or the model's `output_reserve` | Sent as the request's output cap |
 | Reserve held for calls whose usage the provider didn't report | 200,000 tokens per run | `QuotaExceededError` |
@@ -293,7 +293,7 @@ call is decided.
 | Budget | Example message |
 | --- | --- |
 | Filesystem size | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
-| Model tokens, one run | `llm.call: llm.call("claude-haiku-4-5") exceeded the execution token budget: 64006 tokens exceeds the 1000 this execution may spend — use fewer or shorter calls, or split the work across executions` |
+| Model tokens, one run | `llm.call: model "claude-haiku-4-5": exceeded the execution token budget: 64006 tokens exceeds the 1000 this execution may spend — use fewer or shorter calls, or split the work across executions` |
 | Model tokens, all runs | Names the server token budget, says the run's own spend isn't what is in the way, and names `--max-llm-tokens`. |
 | Embedding tokens, one run | Names the execution embedding token budget and `--max-execution-embedding-tokens`. |
 | Embedding tokens, all runs | Names the server embedding token budget and `--max-embedding-tokens`. |
@@ -311,7 +311,7 @@ RangeError: Invalid string length
 RangeError: invalid Uint8Array length 1073741825 — the maximum is 1073741824
 RangeError: object graph is nested deeper than 128 levels, so it cannot be compared, hashed, or serialized — a cycle (an object reachable from itself) reaches this bound too
 RangeError: embedding.embed("notes-embedding"): text 2 exceeds the 96000 bytes this model accepts — shorten or split it
-RangeError: llm.batch: llm.call("claude-haiku-4-5"): prompt bound exceeded: 129 prompts in one batch exceeds the 128 allowed — send fewer prompts per call, or shorten each one
+RangeError: llm.batch: model "claude-haiku-4-5": prompt bound exceeded: 129 prompts in one batch exceeds the 128 allowed — send fewer prompts per call, or shorten each one
 RangeError: session.set("big") exceeded the value size limit: 1200004 serialized bytes exceeds the 1048576 allowed
 SyntaxError: JSON.parse: recursion limit exceeded at line 1 column 128
 SyntaxError: RegExp: invalid regex pattern: Compiled regex exceeds size limit of 1048576 bytes.

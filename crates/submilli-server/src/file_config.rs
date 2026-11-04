@@ -132,7 +132,7 @@ pub struct FileConfig {
     /// Tokens a single execution's `submilli:llm` calls may spend.
     #[serde(default, deserialize_with = "crate::count::deserialize_optional_count")]
     pub max_execution_llm_tokens: Option<u64>,
-    /// Prompts one `llm.batch` dispatches at once.
+    /// Prompts one `llm.batch` or `llm.texts` dispatches at once.
     pub max_llm_concurrency: Option<usize>,
     /// Runs that may wait on the harness at once, server-wide.
     pub max_suspended_runs: Option<usize>,

@@ -1,4 +1,15 @@
-//! Runtime predicates passed through erased generic calls.
+//! Runtime type descriptors: what every generic call passes per type
+//! parameter, in its trailing `$types` environment.
+//!
+//! A descriptor is a `$TypeDescriptor` struct, not a closure: its `test` field
+//! is the type's structural predicate (a `$closure_1` whose body is
+//! [`body`]), beside the type's name, its JSON Schema when the typechecker
+//! recorded one, the package that compiled it and the TypeInfo id of its
+//! reduced shape. Compiled generics read the predicate (`test_parameter`);
+//! host generics read all of it (`stdlib::abi::read_type_argument`). Every
+//! field is a function of the type, so a closed type's descriptor is built
+//! once into a lazily initialised global and its identity holds for the
+//! `ref.eq` tests of recursive validators.
 
 use super::function_emitter::{FunctionEmitter, cast};
 use super::{CodegenCtx, field_guards, symbol_table::SymbolTable};
@@ -128,7 +139,7 @@ pub fn allocate(
     Ok(descriptors)
 }
 
-/// Closed predicates are singletons so recursive calls retain effective type identity.
+/// Closed types' descriptors are singletons so recursive calls retain effective type identity.
 pub fn allocate_globals(
     globals: &mut GlobalSection,
     symbols: &mut SymbolTable,
@@ -143,9 +154,10 @@ pub fn allocate_globals(
     if closed.is_empty() {
         return Ok(0);
     }
-    let closure = symbols
-        .closure_struct_type_idx(field_guards::signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+    let descriptor = symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
+        .type_descriptor;
     for ty in &closed {
         symbols.type_descriptor_globals.insert(ty.clone(), *next);
         crate::codegen::next_index(next)?;
@@ -153,12 +165,12 @@ pub fn allocate_globals(
             GlobalType {
                 val_type: ValType::Ref(RefType {
                     nullable: true,
-                    heap_type: HeapType::Concrete(closure),
+                    heap_type: HeapType::Concrete(descriptor),
                 }),
                 mutable: true,
                 shared: false,
             },
-            &ConstExpr::ref_null(HeapType::Concrete(closure)),
+            &ConstExpr::ref_null(HeapType::Concrete(descriptor)),
         );
     }
     crate::codegen::wasm_u32(closed.len())
@@ -184,71 +196,10 @@ pub fn environment(
     Ok(())
 }
 
-/// The `$types` environment of a generic host call: one `$TypeWitness` per
-/// type argument, holding the descriptor predicate beside the type's name, the
-/// JSON Schema the call sends (its first type parameter's, and only when the
-/// program wrote the type argument), the package whose TypeInfo table the id
-/// indexes (the one this module compiles) and the TypeInfo id of its reduced
-/// shape (`-1` when that table holds no entry for it). Compiled generics read
-/// bare descriptors instead ([`environment`]); the two never mix, since a host
-/// function forwards nothing and the erasure gate keeps an erased `T` out of
-/// host generic calls. The schema belongs to the call site, so witnesses are
-/// built here per call rather than cached per type.
-pub fn host_environment(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    types: &[Type],
-    span: crate::Span,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
-    let opaque_vtable = ctx
-        .symbols
-        .global_idx(&crate::mangle::prelude("opaque_vtable"))
-        .ok_or_else(|| crate::codegen::internal_failure("opaque vtable imported"))?;
-    let shapes = ctx
-        .ta
-        .witness_shapes(span)
-        .ok_or_else(|| crate::codegen::internal_failure("witness shapes recorded"))?;
-    let schema = ctx.ta.witness_schema(span);
-    for (slot, ty) in types.iter().enumerate() {
-        emitter.instruction(Instruction::GlobalGet(opaque_vtable));
-        emit(emitter, ctx, ty)?;
-        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
-            intrinsics.closure,
-        )));
-        emit_text(emitter, ctx, &ty.to_string())?;
-        match schema.filter(|_| slot == 0) {
-            Some(schema) => emit_text(emitter, ctx, schema)?,
-            None => {
-                emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
-            }
-        }
-        emit_text(emitter, ctx, &ctx.ta.package_name)?;
-        let shape = shapes.get(slot).ok_or_else(|| {
-            crate::codegen::internal_failure("one witness shape per type argument")
-        })?;
-        let info = match ctx.type_info.type_id(shape) {
-            Some(id) => i32::try_from(id.as_u32())
-                .map_err(|_| crate::codegen::internal_failure("TypeInfo id fits an i32"))?,
-            None => -1,
-        };
-        emitter.instruction(Instruction::I32Const(info));
-        emitter.instruction(Instruction::StructNew(intrinsics.type_witness));
-    }
-    emitter.instruction(Instruction::ArrayNewFixed {
-        array_type_index: intrinsics.object_fields,
-        array_size: crate::codegen::wasm_u32(types.len())?,
-    });
-    Ok(())
-}
-
-/// A witness text from the string pool. Analysis interns the name of every
-/// type argument, the schema and the package name of every call that
-/// recorded witness shapes, so a miss is a compiler invariant failure, not a
-/// slow path.
+/// A descriptor text from the string pool. Codegen interns the name and
+/// schema of every allocated descriptor type and the package name before any
+/// function is emitted (`intern_texts`), so a miss is a compiler invariant
+/// failure, not a slow path.
 fn emit_text(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -257,7 +208,7 @@ fn emit_text(
     let pool_idx = ctx
         .strings
         .lookup_text(text)
-        .ok_or_else(|| crate::codegen::internal_failure("witness text interned"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("descriptor text interned"))?;
     crate::codegen::function_emitter::emit_pooled_string(emitter, ctx, pool_idx)
 }
 
@@ -358,6 +309,16 @@ fn emit_new_descriptor(
         .type_descriptor_functions
         .get(ty)
         .ok_or_else(|| crate::codegen::internal_failure("type descriptor allocated"))?;
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?;
+    emitter.instruction(Instruction::GlobalGet(
+        ctx.symbols
+            .global_idx(&crate::mangle::prelude("opaque_vtable"))
+            .ok_or_else(|| crate::codegen::internal_failure("opaque vtable imported"))?,
+    ));
+    // `test`: the predicate closure, capturing its free parameters' descriptors.
     emitter.instruction(Instruction::GlobalGet(
         ctx.symbols
             .closure_vtable_global_idx()
@@ -369,10 +330,51 @@ fn emit_new_descriptor(
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
             .closure_struct_type_idx(field_guards::signature())
-            .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?,
+            .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?,
     ));
+    emit_text(emitter, ctx, &ty.to_string())?;
+    match ctx.ta.descriptor_schemas.get(ty) {
+        Some(schema) => emit_text(emitter, ctx, schema)?,
+        None => {
+            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
+        }
+    }
+    emit_text(emitter, ctx, &ctx.ta.package_name)?;
+    let info = match ctx
+        .ta
+        .descriptor_shapes
+        .get(ty)
+        .and_then(|shape| ctx.type_info.type_id(shape))
+    {
+        Some(id) => i32::try_from(id.as_u32())
+            .map_err(|_| crate::codegen::internal_failure("TypeInfo id fits an i32"))?,
+        None => -1,
+    };
+    emitter.instruction(Instruction::I32Const(info));
+    emitter.instruction(Instruction::StructNew(intrinsics.type_descriptor));
 
     Ok(())
+}
+
+/// Intern the texts every allocated descriptor carries — its type's name and
+/// recorded schema — and the package name, so [`emit_text`] finds them. Run
+/// once [`allocate`] has fixed the descriptor types and before any function
+/// is emitted; a module with no descriptor interns nothing.
+pub fn intern_texts(
+    pool: &mut crate::codegen::string_pool::StringPool,
+    ta: &TypedAst,
+    symbols: &SymbolTable,
+) {
+    if symbols.type_descriptor_functions.is_empty() {
+        return;
+    }
+    for ty in symbols.type_descriptor_functions.keys() {
+        pool.intern_text(&ty.to_string());
+        if let Some(schema) = ta.descriptor_schemas.get(ty) {
+            pool.intern_text(schema);
+        }
+    }
+    pool.intern_text(&ta.package_name);
 }
 
 pub fn test_parameter(
@@ -388,12 +390,22 @@ pub fn test_parameter(
     let closure_type = ctx
         .symbols
         .closure_struct_type_idx(field_guards::signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?;
+    let descriptor = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
+        .type_descriptor;
     let local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(closure_type),
     }))?;
     emit(emitter, ctx, &Type::TypeVar(name.into()))?;
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(descriptor)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: descriptor,
+        field_index: 1,
+    });
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         closure_type,
     )));

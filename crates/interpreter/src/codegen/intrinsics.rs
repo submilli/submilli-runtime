@@ -9,7 +9,7 @@ use wasm_encoder::{
 #[derive(Clone, Copy, Debug)]
 pub struct IntrinsicTypeIndices {
     pub undefined: u32,
-    pub type_witness: u32,
+    pub type_descriptor: u32,
     pub raw_string: u32,
     pub vtable: u32,
     pub object: u32,
@@ -70,7 +70,7 @@ pub const INTRINSIC_TYPE_COUNT: u32 = 53;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
     let undefined = 51u32;
-    let type_witness = 52u32;
+    let type_descriptor = 52u32;
     let raw_string = 0u32;
     let vtable = 1u32;
     let object = 2u32;
@@ -1013,13 +1013,13 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         )
     });
 
-    // `$TypeWitness` — what a generic host function receives per type
-    // argument, in its `$types` environment: the type's descriptor predicate
-    // (a `$Closure`), its display name, the JSON Schema a typed call sends
-    // (null when none), the package whose TypeInfo table the id indexes, and
-    // its TypeInfo id (-1 when none). A TypeInfo id means nothing without its
+    // `$TypeDescriptor` — what every generic call passes per type argument,
+    // in its `$types` environment: the type's structural predicate (a
+    // `$Closure`), its display name, its JSON Schema (null when none was
+    // recorded), the package whose TypeInfo table the id indexes, and its
+    // TypeInfo id (-1 when none). A TypeInfo id means nothing without its
     // table, and the table is the package that compiled the call, which the
-    // host cannot recover from the stack once witnesses travel between
+    // host cannot recover from the stack once descriptors travel between
     // packages. An `$Object` subtype so it fits a `$object_fields` slot. The
     // host mirrors this in `runtime::intrinsic_types`.
     types.ty().subtype(&SubType {
@@ -1045,7 +1045,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
 
     IntrinsicTypeIndices {
         undefined,
-        type_witness,
+        type_descriptor,
         raw_string,
         vtable,
         object,
@@ -1113,7 +1113,7 @@ pub(crate) fn intrinsic_supertypes(
 ) -> impl IntoIterator<Item = (u32, u32)> {
     [
         (indices.undefined, indices.object),
-        (indices.type_witness, indices.object),
+        (indices.type_descriptor, indices.object),
         (indices.string, indices.object),
         (indices.boxed_number, indices.object),
         (indices.boxed_boolean, indices.object),
@@ -1321,7 +1321,7 @@ mod tests {
         assert_eq!(indices.temporal_plain_month_day, 40);
         assert_eq!(indices.fs_mount_info, 50);
         assert_eq!(indices.undefined, 51);
-        assert_eq!(indices.type_witness, 52);
+        assert_eq!(indices.type_descriptor, 52);
         assert_eq!(super::INTRINSIC_TYPE_COUNT, 53);
     }
 }

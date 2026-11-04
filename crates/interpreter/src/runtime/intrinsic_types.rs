@@ -35,7 +35,7 @@ use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 #[derive(Clone)]
 pub(crate) struct IntrinsicTypes {
     pub undefined: StructType,
-    pub type_witness: StructType,
+    pub type_descriptor: StructType,
     pub raw_string: ArrayType,
     pub vtable: StructType,
     pub object: StructType,
@@ -632,10 +632,11 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         ],
     )?;
 
-    // `$TypeWitness`: `{vtable, test: $Closure, name: $string, schema: $string?, info: i32}`,
-    // what a generic host function reads per type argument from its `$types`
-    // environment. Mirrors codegen index 52.
-    let type_witness = singleton_struct(
+    // `$TypeDescriptor`: `{vtable, test: $Closure, name: $string, schema: $string?,
+    // package: $string, info: i32}`, what every generic call passes per type
+    // argument in its `$types` environment; a host function reads it with
+    // `stdlib::abi::read_type_argument`. Mirrors codegen index 52.
+    let type_descriptor = singleton_struct(
         engine,
         Final,
         Some(object.clone()),
@@ -666,7 +667,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
 
     Ok(IntrinsicTypes {
         undefined,
-        type_witness,
+        type_descriptor,
         raw_string,
         vtable,
         object,
@@ -794,7 +795,7 @@ mod tests {
         assert!(StructType::eq(&intr.boxed_number, &recovered_struct(4)));
         assert!(StructType::eq(&intr.boxed_boolean, &recovered_struct(5)));
         assert!(StructType::eq(&intr.undefined, &recovered_struct(51)));
-        assert!(StructType::eq(&intr.type_witness, &recovered_struct(52)));
+        assert!(StructType::eq(&intr.type_descriptor, &recovered_struct(52)));
         assert!(!StructType::eq(&intr.undefined, &intr.object));
         assert!(!StructType::eq(&intr.undefined, &intr.boxed_boolean));
         assert!(ArrayType::eq(&intr.field_names, &recovered_array(6)));

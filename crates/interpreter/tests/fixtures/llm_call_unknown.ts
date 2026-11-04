@@ -3,7 +3,7 @@
 // runtime check that could fail, and the JSON Schema for `unknown` could only
 // be `{}`, which constrains the model to nothing. Accepting it would hand back
 // an entirely unvalidated value wearing a validated call's shape, which is
-// strictly worse than the untyped form: the untyped form at least tells the
+// strictly worse than the text form: `llm.text` at least tells the
 // truth about what it checked.
 //
 // Two gates would each catch this — the cast gate and the schema gate — and the

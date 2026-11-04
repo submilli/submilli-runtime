@@ -33,9 +33,9 @@ function main(): void {
   assert(s.message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "the message never echoes the prompt");
   assert(s.message.indexOf("honestly") < 0, "the message never echoes the completion");
 
-  // The untyped form accepts the same response without complaint — it promises
+  // The text form, `llm.text`, accepts the same response without complaint — it promises
   // no shape, so there is nothing to violate. This is the documented fallback
   // when a provider cannot be relied on to honor a schema.
-  const raw = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
-  assert(raw.ok && raw.value.length > 0, "the untyped form accepts a response of any shape, text intact");
+  const raw = llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  assert(raw.ok && raw.value.length > 0, "the text form accepts a response of any shape, text intact");
 }

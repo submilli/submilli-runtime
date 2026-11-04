@@ -19,7 +19,7 @@ function main(): void {
   let caller = "";
   let reason = "";
   try {
-    llm.call("claude-haiku-4-5", "Summarize this.");
+    llm.text("claude-haiku-4-5", "Summarize this.");
     assert(false, "a denied model call must not dispatch");
   } catch (e: PermissionDeniedError) {
     capability = e.capability;
@@ -37,7 +37,7 @@ function main(): void {
   // discovery omits denied candidates and returns an empty listing.
   let batchDenied = false;
   try {
-    llm.batch("claude-haiku-4-5", ["a"]);
+    llm.texts("claude-haiku-4-5", ["a"]);
   } catch (e: PermissionDeniedError) {
     batchDenied = true;
   }

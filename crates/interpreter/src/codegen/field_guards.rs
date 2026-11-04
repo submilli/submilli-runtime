@@ -217,7 +217,7 @@ pub(super) fn constructor_argument(
             emitter.instruction(Instruction::StructNew(
                 ctx.symbols
                     .closure_struct_type_idx(signature())
-                    .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?,
+                    .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?,
             ));
             emitter.instruction(Instruction::ArraySet(intr.object_fields));
         }
@@ -489,7 +489,7 @@ pub(super) fn bind_receiver(
     let closure = ctx
         .symbols
         .closure_struct_type_idx(signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?;
     let env =
         emitter.add_anonymous_local(super::runtime_descriptors::environment_type(ctx.symbols)?)?;
     emit_slot(emitter, ctx, object, layout.inheritance_depth, 0)?;

@@ -25,7 +25,7 @@ function main(): void {
   if (s.ok) return;
 
   // It is reported as invalid output — the reason a program branches on to
-  // retry, fall back, or use the untyped form instead.
+  // retry, fall back, or use the text form instead.
   assert(s.reason === "invalid-output", "a non-conforming response is invalid output");
   assert(s.message.indexOf("does not match `Severity`") >= 0, "the message names the expected type");
 
@@ -50,9 +50,9 @@ function main(): void {
   assert(element.message.indexOf("CONFIDENTIAL-PROMPT-TEXT") < 0, "and never echoes the prompt either");
   assert(element.message.indexOf("malformed on purpose") < 0, "nor the completion");
 
-  // The untyped form is the documented alternative when responses may not
+  // The text form, `llm.text`, is the documented alternative when responses may not
   // conform: it promises no shape, so the raw text comes back for the caller
   // to inspect and decide.
-  const raw = llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
-  assert(raw.ok && raw.value.length > 0, "the untyped form hands back the raw text for the caller to judge");
+  const raw = llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+  assert(raw.ok && raw.value.length > 0, "the text form hands back the raw text for the caller to judge");
 }

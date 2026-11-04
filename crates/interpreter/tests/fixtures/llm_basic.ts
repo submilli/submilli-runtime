@@ -1,4 +1,4 @@
-// The untyped `call` returns a `Completion` envelope rather than a bare string,
+// The text form `text` returns a `Completion` envelope rather than a bare string,
 // because a model call has more outcomes than "worked" and "threw". `ok` means
 // the model stopped naturally — not merely that nothing was raised — and the
 // envelope is a discriminated union, so a program cannot read `value` until it
@@ -6,7 +6,7 @@
 import llm from "submilli:llm";
 
 function main(): void {
-  const c = llm.call("claude-haiku-4-5", "Summarize this.");
+  const c = llm.text("claude-haiku-4-5", "Summarize this.");
 
   // A clean completion reports a natural stop and carries its text in `value`.
   assert(c.ok, "a clean completion reports a natural stop");

@@ -213,11 +213,6 @@ fn import_value_symbol(
                 symbols
                     .runtime_generic_functions
                     .insert(value.mangled_name.clone());
-                // A host function reads its type arguments as witnesses; a
-                // compiled one reads bare descriptors (`runtime_descriptors`).
-                if is_host_package(&defs.package_name) {
-                    symbols.witness_functions.insert(value.mangled_name.clone());
-                }
                 param_types.push(runtime_descriptors::environment_type(symbols)?);
             }
             if is_host_package(&defs.package_name) {
@@ -849,7 +844,7 @@ fn codegen_inner(
     let dependencies: Vec<_> = lowered_dependencies.iter().collect();
     let dependencies = dependencies.as_slice();
     let analysis = CodegenAnalysis::collect(ta, dependencies)?;
-    let pool = analysis.string_pool;
+    let mut pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
     let dependency_usage = analysis.dependency_usage.finish(dependencies);
 
@@ -916,10 +911,10 @@ fn codegen_inner(
     let dependency_shapes = dependency_usage.dependency_shapes(dependencies);
     let user_emitted_types: Vec<Type> =
         user_subtypes::collect_object_shapes(dependency_shapes.iter().copied(), &all_shapes);
-    // Witness shapes are interned so a host can look a type argument up by
+    // Descriptor shapes are interned so a host can look a type argument up by
     // its TypeInfo id; they do not join the emitted subtypes.
     let mut type_info_types = user_emitted_types.clone();
-    type_info_types.extend(ta.witness_shapes.values().flatten().cloned());
+    type_info_types.extend(ta.descriptor_shapes.values().cloned());
     let (type_info, type_info_index) = crate::TypeInfoTable::collect_indexed(
         ta.package_name.clone(),
         &all_shapes,
@@ -1506,6 +1501,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_func_idx,
     )?;
+    runtime_descriptors::intern_texts(&mut pool, ta, &symbols);
 
     let field_lookup_signature = field_lookup::allocate(
         &mut types,
@@ -2549,12 +2545,12 @@ function main(): string {
         );
     }
 
-    /// A generic host call passes one `$TypeWitness` per type parameter, and
-    /// the witness's `info` is the TypeInfo id of the type argument's reduced
+    /// A generic host call passes one `$TypeDescriptor` per type parameter, and
+    /// the descriptor's `info` is the TypeInfo id of the type argument's reduced
     /// shape in the package's table, so a host consumer can walk the shape it
     /// was called at.
     #[test]
-    fn host_generic_call_witnesses_carry_the_type_info_id_of_the_reduced_shape() {
+    fn host_generic_call_descriptors_carry_the_type_info_id_of_the_reduced_shape() {
         let source = r#"
 import llm from "submilli:llm";
 interface Severity { level: string; score: number; }
@@ -2575,18 +2571,18 @@ function main(): boolean { return llm.call<Severity>("m", "p").ok; }
             .object_type_id(&shape)
             .expect("the reduced shape of `Severity` is interned");
         assert_eq!(
-            witness_infos(&compiled.wasm),
+            descriptor_infos(&compiled.wasm),
             vec![i32::try_from(id.as_u32()).expect("id fits")],
-            "one witness, carrying the id of the reduced shape",
+            "one descriptor, carrying the id of the reduced shape",
         );
     }
 
-    /// The `info` field of every `$TypeWitness` built in `bytes`, in emission
-    /// order: the constant pushed right before each `struct.new $TypeWitness`.
-    fn witness_infos(bytes: &[u8]) -> Vec<i32> {
-        let type_witness =
+    /// The `info` field of every `$TypeDescriptor` built in `bytes`, in emission
+    /// order: the constant pushed right before each `struct.new $TypeDescriptor`.
+    fn descriptor_infos(bytes: &[u8]) -> Vec<i32> {
+        let type_descriptor =
             super::intrinsics::declare_intrinsic_types(&mut wasm_encoder::TypeSection::new())
-                .type_witness;
+                .type_descriptor;
         let mut infos = Vec::new();
         for payload in Parser::new(0).parse_all(bytes) {
             if let Payload::CodeSectionEntry(body) = payload.expect("payload") {
@@ -2598,9 +2594,9 @@ function main(): boolean { return llm.call<Severity>("m", "p").ok; }
                     match reader.read().expect("operator") {
                         wasmparser::Operator::I32Const { value } => last_const = Some(value),
                         wasmparser::Operator::StructNew { struct_type_index }
-                            if struct_type_index == type_witness =>
+                            if struct_type_index == type_descriptor =>
                         {
-                            infos.push(last_const.expect("a witness ends with its info"));
+                            infos.push(last_const.expect("a descriptor ends with its info"));
                         }
                         _ => {}
                     }
@@ -2623,7 +2619,7 @@ function main(): boolean { return llm.call<Severity>("m", "p").ok; }
             vtable: 1,
             object: 2,
             undefined: 51,
-            type_witness: 52,
+            type_descriptor: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -6486,7 +6482,7 @@ function main(): void {
             vtable: 1,
             object: 2,
             undefined: 51,
-            type_witness: 52,
+            type_descriptor: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

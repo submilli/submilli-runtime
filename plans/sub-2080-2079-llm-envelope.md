@@ -145,6 +145,8 @@ Fixture stub `FixtureLlm` (`crates/interpreter/tests/fixtures.rs:933-1119`) scri
 
 ## Phase 2: type witnesses for generic host functions
 
+*Superseded in part by phase 3 below: the witness became the runtime descriptor for every generic call, its schema moved from the call site to the type, and the `T = string` default was split into separate text functions. The rest of this section is the history that led there.*
+
 Decided 2026-11-03 after the closure-as-argument mechanism (decision 3) and its
 stopgap — compiler-only `#call`/`#batch`/`#run` host functions a typed call was
 retargeted to — were both rejected: the channel between the compiler and the
@@ -197,3 +199,71 @@ capture, `host::rethrow`. User generics keep bare descriptor closures;
 unifying them onto witnesses (type-keyed schemas, pooled names) so a user
 generic can forward `T` into `llm.call<T>` is a follow-up, as is
 `http.Response#json<T>` as a real generic host method (SUB-363).
+
+## Phase 3: text functions and one runtime type descriptor
+
+Decided 2026-11-04 with Doron. Phase 2 left one name with two meanings,
+`call(m, p)` (text, `T` defaulted to `string`) and `call<string>(m, p)` (a JSON
+string), and two conventions in the `$types` environment: bare descriptor
+closures for user generics, per-call `$TypeWitness` structs for host generics.
+
+API (no backwards compatibility):
+
+```ts
+// submilli:llm
+text(model: string, prompt: string, schema?: string): Completion<string>
+texts(model: string, prompts: string[], schema?: string): Completion<string>[]
+call<T>(model: string, prompt: string): Completion<T>
+batch<T>(model: string, prompts: string[]): Completion<T>[]
+// submilli:agents
+runText(agent: string, input: string, schema?: string): string
+run<T>(agent: string, input: string): T
+```
+
+- The text forms are plain functions and take no descriptor. A `schema` they
+  take is the program's own, sent to the provider unchanged, and the answer is
+  never parsed or checked. On failure the partial `text` stays on `Failure`.
+- `call<T>`, `batch<T>` and `run<T>` have no default `T`. It is written, or
+  supplied by the expected type (`const r: Report = agents.run(a, i)`), and
+  the call is typed either way. Unbound, it is the error "`llm.call` needs its
+  type argument", with help naming the text form. The pinned-annotation hole
+  of phase 2 is gone by construction.
+- `session.get<T>` keeps its `unknown` default. A bare read checks against
+  `unknown`, whose predicate accepts everything: same meaning, no variant.
+- The host's internal op names stay `call` and `batch` for both forms, so the
+  call log, request digests and replay history are unchanged.
+
+The descriptor: `$TypeWitness` became `$TypeDescriptor` (intrinsic 52, layout
+`{vtable, test: $Closure, name, schema?, package, info}`), an `$Object`
+subtype that holds the predicate closure as its `test` field. Every `$types`
+element of every runtime-generic call is one: user generics, host generics,
+class contexts, validator environments. Every field is a function of the
+type, so a closed type's descriptor is built once into its lazily initialised
+global (`runtime_descriptors::emit`), and `ref.eq` identity in recursive
+validators holds as before. Open types are built at the use site, the closure
+still capturing its free parameters' descriptors. `test_parameter` reads the
+`test` field. The data is type-keyed (`TypedAst::descriptor_schemas`,
+`descriptor_shapes`); names, schemas and the package are interned in codegen
+right after `runtime_descriptors::allocate` (`intern_texts`). Removed:
+`host_environment`, the span-keyed witness tables, `symbols.witness_functions`,
+the untyped-default binding and `result_is_declared`. A schema-checked
+descriptor without a schema is a fatal host error (`required_schema`).
+
+Review follow-through, also part of phase 3:
+
+- A program-written schema must be a JSON object (a catchable `TypeError`
+  otherwise), is charged as parsing, is held to the per-prompt byte bound
+  (`PromptBoundKind::SchemaBytes`), and counts toward the token estimate and
+  the bytes sent once per prompt.
+- Errors name the function the program called, then the model:
+  `llm.text: model "m": …`, `agents.runText: …`. The call log, request digest
+  and replay history keep the provider operation (`call`/`batch`, `run`).
+- An expected type supplies `T` through a generic alias returned as the same
+  alias (`const c: Completion<V> = llm.call(m, p)`), but not through a union,
+  which flattens the alias (`Completion<V> | undefined` needs a written `T`).
+- An expected `string` makes the typed `call<string>`, a JSON string: by
+  design, the expected type supplies `T` whatever it is.
+
+Still open: forwarding a user generic's `T` into `llm.call<T>` (SUB-2085). It
+needs the erasure gate lifted for host generics and schemas recorded for types
+that reach typed host calls through user generics.

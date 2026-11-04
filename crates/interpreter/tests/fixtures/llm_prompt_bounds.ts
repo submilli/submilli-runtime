@@ -12,13 +12,13 @@ import llm from "submilli:llm";
 
 function main(): void {
   // Inside both bounds, a batch dispatches normally.
-  const ok = llm.batch("claude-haiku-4-5", ["a", "b", "c"]);
+  const ok = llm.texts("claude-haiku-4-5", ["a", "b", "c"]);
   assert(ok.length === 3, "a batch inside both bounds dispatches");
 
   // Too many prompts in one slice is refused, by count.
   let countCaught = "";
   try {
-    llm.batch("claude-haiku-4-5", ["a", "b", "c", "d", "e", "f"]);
+    llm.texts("claude-haiku-4-5", ["a", "b", "c", "d", "e", "f"]);
     assert(false, "an over-count batch must not dispatch");
   } catch (e: RangeError) {
     countCaught = e.message;
@@ -38,7 +38,7 @@ function main(): void {
   const huge =
     "CONFIDENTIAL-PROMPT-TEXT-0123456789-0123456789-0123456789-0123456789-0123456789";
   try {
-    llm.call("claude-haiku-4-5", huge);
+    llm.text("claude-haiku-4-5", huge);
     assert(false, "an oversized prompt must not dispatch");
   } catch (e: RangeError) {
     bytesCaught = e.message;
@@ -58,6 +58,6 @@ function main(): void {
   assert(bytesCaught.indexOf("token budget") < 0, "a size refusal is not a budget refusal");
 
   // The budget really is intact — a normal call still dispatches afterwards.
-  const after = llm.call("claude-haiku-4-5", "small");
+  const after = llm.text("claude-haiku-4-5", "small");
   assert(after.ok, "a refused-for-bounds call charged nothing against the budget");
 }

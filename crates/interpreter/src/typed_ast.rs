@@ -922,17 +922,15 @@ pub struct TypedAst {
     pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
     /// Parameter declaration types before optional/default ABI input widening.
     pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
-    /// For a generic host call, the reduced shape of each type argument (one
-    /// per declared parameter, in order), keyed by call span. Codegen interns
-    /// them as TypeInfo and puts each one's id in the `info` of the call's
-    /// `$TypeWitness`; the predicate and the name come from the type
-    /// arguments themselves. A call absent here is not a host generic call.
-    pub witness_shapes: std::collections::BTreeMap<(u32, u32, u32), Vec<Type>>,
-    /// The JSON Schema a typed host call sends, keyed by call span. Recorded
-    /// only when the program wrote the type argument, which is what tells
-    /// `call(m, p)` (text) from `call<string>`. It describes the first type
-    /// parameter: every schema-checked host function declares exactly one.
-    pub witness_schemas: std::collections::BTreeMap<(u32, u32, u32), String>,
+    /// The reduced shape of a type that is a host generic call's type
+    /// argument, keyed by the type. Codegen interns the shapes as TypeInfo and
+    /// puts the id in the `info` of that type's `$TypeDescriptor`; a type
+    /// absent here gets `-1`.
+    pub descriptor_shapes: std::collections::BTreeMap<Type, Type>,
+    /// The JSON Schema of a type that is a schema-checked call's `T`, keyed by
+    /// the type: a pure function of it, carried by every `$TypeDescriptor` of
+    /// that type. A type absent here has a null schema.
+    pub descriptor_schemas: std::collections::BTreeMap<Type, String>,
     /// The type a binding's postfix `++`/`--` reads it at, keyed by the name's
     /// span: its narrowed type, where the target records the declared one.
     pub postfix_operand_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
@@ -1515,35 +1513,20 @@ impl TypedAst {
             .get(&(span.file.0, span.start, span.end))
     }
 
-    pub fn record_witness_shapes(&mut self, span: Span, shapes: Vec<Type>) {
-        self.witness_shapes
-            .insert((span.file.0, span.start, span.end), shapes);
+    pub fn record_descriptor_shape(&mut self, ty: Type, shape: Type) {
+        self.descriptor_shapes.insert(ty, shape);
     }
 
-    pub fn witness_shapes(&self, span: Span) -> Option<&[Type]> {
-        self.witness_shapes
-            .get(&(span.file.0, span.start, span.end))
-            .map(Vec::as_slice)
-    }
-
-    /// A call's schema is a function of its written type argument, so a
-    /// second record at the same span (a re-inferred receiver) must agree.
-    pub fn record_witness_schema(&mut self, span: Span, schema: String) {
-        let previous = self
-            .witness_schemas
-            .insert((span.file.0, span.start, span.end), schema);
+    /// A type's schema is a function of the type, so a second record must
+    /// agree with the first.
+    pub fn record_descriptor_schema(&mut self, ty: Type, schema: String) {
+        let previous = self.descriptor_schemas.insert(ty.clone(), schema);
         debug_assert!(
-            previous.as_deref().is_none_or(|p| {
-                p == self.witness_schemas[&(span.file.0, span.start, span.end)]
-            }),
-            "a call's schema changed between inferences"
+            previous
+                .as_deref()
+                .is_none_or(|p| p == self.descriptor_schemas[&ty]),
+            "a type's schema changed between inferences"
         );
-    }
-
-    pub fn witness_schema(&self, span: Span) -> Option<&str> {
-        self.witness_schemas
-            .get(&(span.file.0, span.start, span.end))
-            .map(String::as_str)
     }
 
     /// Checked allocation; failure leaves the arena unchanged.

@@ -166,7 +166,7 @@ variable beats file). A blueprint can't raise them.
 | `max_execution_fuel` | 10¹² | Run ends `fuel exhausted`; deterministic, a backstop |
 | `max_execution_stack` (KiB, ≤ 16384) | 512 | Run ends `call stack exhausted` |
 | `max_execution_llm_tokens` / `max_llm_tokens` | 1M / 20M | Catchable `QuotaExceededError` before the prompt is billed |
-| `max_llm_concurrency` | 4 prompts | Limits prompts in one `llm.batch` |
+| `max_llm_concurrency` | 4 prompts | Limits prompts in one `llm.batch` or `llm.texts` |
 
 Without `max_execution_time` a runaway loop runs until its fuel is gone, far
 longer than any caller waits: set it a few seconds under the caller's own

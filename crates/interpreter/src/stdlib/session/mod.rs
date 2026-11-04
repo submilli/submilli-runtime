@@ -32,8 +32,8 @@ use crate::runtime::session_kv::{
     CursorKeys, SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore,
 };
 use crate::stdlib::abi::{
-    self, HostView, TypeWitness, backing_struct, f64_field, install_field_getters, read_witness,
-    string_field,
+    self, HostView, TypeDescriptor, backing_struct, f64_field, install_field_getters,
+    read_type_argument, string_field,
 };
 use crate::stdlib::shared::{
     check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
@@ -94,7 +94,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
     // `get<T>` is generic: after the key comes the `$types` environment every
-    // generic call passes, holding the `$TypeWitness` for `T`.
+    // generic call passes, holding the `$TypeDescriptor` for `T`.
     let types = ValType::Ref(RefType::new(
         false,
         HeapType::ConcreteArray(intr.object_fields.clone()),
@@ -108,7 +108,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
-                let witness = read_witness(caller, abi_arg(params, 1)?, 0)?;
+                let descriptor = read_type_argument(caller, abi_arg(params, 1)?, 0)?;
                 let ticket = gate(caller, "session.read", &key).await?;
                 let found =
                     effects::execute(caller, "session.get", key.clone(), |caller, _, key| {
@@ -139,7 +139,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 };
                 fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
                 let value = value::deserialize(caller, payload)?;
-                accept_or_throw(caller, &key, &witness, value).await
+                accept_or_throw(caller, &key, &descriptor, value).await
             })
         },
     )?;
@@ -488,17 +488,17 @@ fn build_page(
     abi::new_backing(caller, page_ty, &[array, cursor])
 }
 
-/// The stored `value` of `key` once the witness for `T` accepts it, or the
+/// The stored `value` of `key` once the descriptor for `T` accepts it, or the
 /// catchable `TypeError` a mismatch throws. The message names the key and the
 /// expected type and never the value: a session holds a tenant's data. A bare
-/// `get(key)` binds `T` to `unknown`, whose witness accepts every value.
+/// `get(key)` binds `T` to `unknown`, whose descriptor accepts every value.
 async fn accept_or_throw(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     key: &[u16],
-    witness: &TypeWitness,
+    descriptor: &TypeDescriptor,
     value: Val,
 ) -> wasmtime::Result<Val> {
-    if witness.accepts(caller, value).await? {
+    if descriptor.accepts(caller, value).await? {
         return Ok(value);
     }
     // The key is quoted as a JSON string, so a quote or a newline in it
@@ -507,7 +507,7 @@ async fn accept_or_throw(
         .map_err(crate::runtime::host::fatal_host_error)?;
     Err(crate::runtime::host::type_error(format!(
         "session.get({key}): the stored value does not match `{}`",
-        witness.name
+        descriptor.name
     )))
 }
 
@@ -730,7 +730,7 @@ mod tests {
     }
 
     /// A typed read tests the stored value against `T` on the host — the
-    /// witness's predicate, the same structural test `x as T` gets — and a
+    /// descriptor's predicate, the same structural test `x as T` gets — and a
     /// mismatch throws a catchable `TypeError` naming the key and the type and
     /// never the value: a session holds a tenant's data.
     #[tokio::test]
@@ -760,7 +760,7 @@ mod tests {
         );
     }
 
-    /// A bare `get(key)` binds `T` to `unknown`, whose witness accepts every
+    /// A bare `get(key)` binds `T` to `unknown`, whose descriptor accepts every
     /// value: whatever is stored comes back.
     #[tokio::test]
     async fn an_untyped_read_accepts_every_stored_value() {

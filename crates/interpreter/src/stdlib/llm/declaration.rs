@@ -1,22 +1,23 @@
 //! Type surface of `submilli:llm`.
 //!
-//! `call` and `batch` are declared **generic** and **runtime-generic**: like
-//! every generic function, a call passes one entry per type parameter in a
-//! trailing `$types` environment, and for a host function that entry is a
-//! `$TypeWitness` — the type's structural predicate, its name, the JSON
-//! Schema the typechecker emitted for a *written* type argument, and its
-//! TypeInfo id (`codegen::runtime_descriptors::host_environment`). The host
-//! sends the schema to the provider, parses each response as JSON and runs the
+//! Two forms, one per meaning. `text` and `texts` return the completion text:
+//! they are plain functions, and a `schema` they take is the program's own,
+//! sent to the provider as written and never used to parse or check the
+//! answer. `call<T>` and `batch<T>` return a checked `T`: they are declared
+//! **generic** and **runtime-generic**, so like every generic function a call
+//! passes one `$TypeDescriptor` per type parameter in a trailing `$types`
+//! environment — the type's structural predicate, its name, its JSON Schema,
+//! and its TypeInfo reference (`codegen::runtime_descriptors`). The host sends
+//! the schema to the provider, parses each response as JSON and runs the
 //! predicate on it; a rejected value becomes an `ok: false` entry with
 //! `reason: "invalid-output"`. So the `value` of a `Success<T>` holds only
 //! what the predicate accepted, which is what lets the declared return type
-//! `Completion<T>` be trusted without a cast around the call. The typechecker
-//! gates the type argument ([`is_checked_call`] is its hook) and records the
-//! schema per call site; nothing about the witness is a parameter, so the
-//! written declaration is the whole public API.
-//!
-//! `T` defaults to `string`: an untyped call sends no schema and `value` is the
-//! completion text. Any written type argument, `string` included, asks for JSON.
+//! `Completion<T>` be trusted without a cast around the call. `T` has no
+//! default: it is written, or inferred from the expected type, and the call is
+//! typed either way. The typechecker gates it ([`is_checked_call`] and
+//! [`is_checked_batch`] are its hooks) and records the schema per type;
+//! nothing about the descriptor is a parameter, so the written declaration is
+//! the whole public API.
 
 use std::collections::BTreeMap;
 
@@ -31,6 +32,9 @@ use super::MODULE_NAME;
 /// so the declaration and the check that keeps it sound cannot drift apart.
 const LLM_CALL: &str = "call";
 const LLM_BATCH: &str = "batch";
+/// The text forms: plain functions, no type argument, no check.
+const LLM_TEXT: &str = "text";
+const LLM_TEXTS: &str = "texts";
 
 /// The type parameter of [`LLM_CALL`] and [`LLM_BATCH`].
 const CALL_TYPE_PARAM: &str = "T";
@@ -40,15 +44,21 @@ fn call_type_var() -> Type {
     Type::TypeVar(CALL_TYPE_PARAM.to_string())
 }
 
-/// Whether `mangled` is one of this package's checked reads. Matching the
-/// package-export mangled name rather than a receiver name is what makes the
-/// typechecker's gate independent of how the symbol was imported —
-/// `llm.call`, `models.call` under an aliased namespace import, and a
-/// named-import `call` all carry this name, while a user's own `llm` binding
-/// never can.
+// The checked reads, `call<T>` and `batch<T>`, are recognised by their
+// package-export mangled name rather than a receiver name, which is what makes
+// the typechecker's gate independent of how the symbol was imported —
+// `llm.call`, `models.call` under an aliased namespace import, and a
+// named-import `call` all carry this name, while a user's own `llm` binding
+// never can.
+
+/// Whether `mangled` is `call<T>`.
 pub fn is_checked_call(mangled: &MangledName) -> bool {
     *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_CALL)
-        || *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
+}
+
+/// Whether `mangled` is `batch<T>`.
+pub fn is_checked_batch(mangled: &MangledName) -> bool {
+    *mangled == crate::mangle::package_symbol(MODULE_NAME, LLM_BATCH)
 }
 
 pub fn package_declaration() -> PackageDeclaration {
@@ -57,6 +67,71 @@ pub fn package_declaration() -> PackageDeclaration {
     insert_failure_interface(&mut defs);
     insert_completion_alias(&mut defs);
     insert_model_interface(&mut defs);
+    insert_fn(
+        &mut defs,
+        LLM_TEXT,
+        vec![
+            Param::new("model", Type::String),
+            Param::new("prompt", Type::String),
+            Param::with_default(
+                "schema",
+                Type::Union(vec![Type::String, Type::Undefined]),
+                crate::DefaultValue::Undefined,
+            ),
+        ],
+        completion_type(Type::String),
+        "/**\n * Send one prompt to `model` and return its completion text as a \
+         `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. \
+         Check `ok` before reading `value`; the compiler will not let you read it \
+         otherwise.\n *\n * `schema`, when given, is a JSON Schema sent to the provider \
+         as written, to constrain the output. It must be a JSON object, else a catchable `TypeError`, and it is held to the same \
+         byte bound as a prompt. The answer is not parsed or checked against it: \
+         `value` is the text, and a program that wants a checked value calls \
+         `call<T>` instead, whose schema the compiler emits from `T`.\n *\n * \
+         `ok: false` means the model did not produce a clean completion; branch on \
+         `reason`, which is a closed set, not on `message`. A completion cut off at \
+         the output cap is `reason: \"truncated\"` and still carries the partial \
+         `text`, so a loop that only reads `ok` elements discards usable output.\n *\n \
+         * Throws a `QuotaExceededError` when the execution or server token budget \
+         cannot cover the call, a `RangeError` for prompt bounds, and a catchable \
+         error naming the model when no provider is configured.\n * @param model \
+         Model name. Call `models()` for the ones this runtime serves; an undeclared \
+         name throws.\n * @param prompt The prompt text. Bounded in bytes \
+         independently of the token ceiling.\n * @param schema A JSON Schema for the \
+         provider, sent unchanged; the result stays text.\n * @capability llm.call \
+         { model: $model, prompt_count: 1 }\n */",
+    );
+    insert_fn(
+        &mut defs,
+        LLM_TEXTS,
+        vec![
+            Param::new("model", Type::String),
+            Param::new("prompts", Type::Array(Box::new(Type::String))),
+            Param::with_default(
+                "schema",
+                Type::Union(vec![Type::String, Type::Undefined]),
+                crate::DefaultValue::Undefined,
+            ),
+        ],
+        Type::Array(Box::new(completion_type(Type::String))),
+        "/**\n * Send every prompt to `model` and return one `Completion<string>` each, \
+         positionally: `result[i]` is the text outcome of `prompts[i]`, including when \
+         that element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out \
+         happens host-side at a bounded concurrency, so this is not sugar for a loop. \
+         One failing element never discards the ones that succeeded: each element \
+         carries its own `ok`, `reason` and token counts. `schema`, when given, goes \
+         to the provider with every prompt and never checks an answer; it must be a \
+         JSON object, and it is held to the per-prompt byte \
+         bound. For checked values call `batch<T>`.\n *\n * The whole slice is \
+         checked against the \
+         prompt-count and prompt-size bounds, and its tokens reserved, before any \
+         bytes leave the process.\n * @param model Model name. Call `models()` for \
+         the ones this runtime serves.\n * @param prompts The prompts, in the order \
+         the results come back. Bounded in count, and each in bytes.\n * @param \
+         schema A JSON Schema for the provider, sent unchanged; the results stay \
+         text.\n * @capability llm.call { model: $model, prompt_count: \
+         $prompts.length }\n */",
+    );
     insert_generic_fn(
         &mut defs,
         LLM_CALL,
@@ -66,13 +141,14 @@ pub fn package_declaration() -> PackageDeclaration {
             Param::new("prompt", Type::String),
         ],
         completion_type(call_type_var()),
-        "/**\n * Send one prompt to `model` and return its completion as a `Completion`: \
+        "/**\n * Send one prompt to `model` and return its answer checked as a `T`: \
          `{ ok: true, value }` or `{ ok: false, reason, message }`. Check `ok` before \
          reading `value`; the compiler will not let you read it otherwise.\n *\n * \
-         Without a type argument, `value` is the completion text. With one — \
-         `call<Verdict>(model, prompt)` — a JSON Schema for `Verdict` is emitted at \
-         compile time and sent to the provider, the response is parsed as JSON and \
-         checked field by field, and `value` is the checked `Verdict`. A response that \
+         `call<Verdict>(model, prompt)` emits a JSON Schema for `Verdict` at compile \
+         time and sends it to the provider; the response is parsed as JSON and \
+         checked field by field, and `value` is the checked `Verdict`. `T` is \
+         required: write it, or let the expected type supply it. For the completion \
+         text call `text(model, prompt)` instead. A response that \
          is not JSON, or that does not match, is `ok: false` with `reason: \
          \"invalid-output\"` and a `message` naming the expected type; nothing is \
          coerced, and no error ever quotes the prompt or the completion.\n *\n * `T` \
@@ -81,9 +157,8 @@ pub fn package_declaration() -> PackageDeclaration {
          rejected at compile time, naming the offending field.\n *\n * `ok: false` \
          means the model did not produce a clean completion; branch on `reason`, \
          which is a closed set, not on `message`. A completion cut off at the output \
-         cap is `reason: \"truncated\"`; without a type argument it still carries the \
-         partial `text`, so a loop that only reads `ok` elements discards usable \
-         output.\n *\n * Throws a \
+         cap is `reason: \"truncated\"` and carries no text: a typed `value` could \
+         never hold it.\n *\n * Throws a \
          `QuotaExceededError` when the execution or server token budget cannot cover \
          the call, a `RangeError` for prompt bounds, and a catchable error naming the \
          model when no provider is configured.\n * @param model Model name. Call \
@@ -110,8 +185,8 @@ pub fn package_declaration() -> PackageDeclaration {
          `batch<Verdict>(model, prompts)` returns `Completion<Verdict>[]`, each element \
          parsed and checked on its own, so a response that is not JSON or does not \
          match `Verdict` is `ok: false` with `reason: \"invalid-output\"` for that \
-         element only. Without a type argument each `value` is the completion \
-         text.\n *\n * The whole slice is checked against the prompt-count and \
+         element only. `T` is required; for the completion text of each prompt call \
+         `texts(model, prompts)` instead.\n *\n * The whole slice is checked against the prompt-count and \
          prompt-size bounds, and its tokens reserved, before any bytes leave the \
          process — so an oversized batch is refused without partially dispatching.\n \
          * @param model Model name. Call `models()` for the ones this runtime \
@@ -211,7 +286,7 @@ fn insert_success_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "value",
         call_type_var(),
-        "/** The completion text, or — with a type argument — the parsed response, checked against `T` field by field. Only what passed the check is ever stored here. */",
+        "/** The completion text from `text`/`texts`, or from `call<T>`/`batch<T>` the parsed response, checked against `T` field by field. Only what passed the check is ever stored here. */",
     );
     insert_optional_property(
         &mut properties,
@@ -276,7 +351,7 @@ fn insert_failure_interface(defs: &mut PackageDeclaration) {
         &mut properties,
         "text",
         Type::String,
-        "/** The partial text of a truncated or filtered completion, absent when the model produced none at all. Usable output: a loop that skips every `!ok` element discards it. A typed call never carries `text` here. */",
+        "/** The partial text of a truncated or filtered completion, absent when the model produced none at all. Usable output: a loop that skips every `!ok` element discards it. Only `text` and `texts` carry it: a checked `call<T>` never does. */",
     );
     insert_optional_property(
         &mut properties,
@@ -311,7 +386,7 @@ fn insert_completion_alias(defs: &mut PackageDeclaration) {
                 ty: Type::union(vec![success_type(call_type_var()), failure_type()]),
                 doc: crate::doc(
                     crate::FileId::LLM,
-                    "/** One prompt's outcome: `Success<T>` when the model stopped naturally, `Failure` otherwise. Narrow on `ok` before reading `value`. `T` is `string` for an untyped call. Constructed only by `call` and `batch`, but a plain object of the same shape is one too. */",
+                    "/** One prompt's outcome: `Success<T>` when the model stopped naturally, `Failure` otherwise. Narrow on `ok` before reading `value`. `T` is `string` for `text` and `texts`. Constructed only by this package's calls, but a plain object of the same shape is one too. */",
                 ),
             },
         },

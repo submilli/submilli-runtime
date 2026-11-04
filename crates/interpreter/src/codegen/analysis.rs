@@ -605,18 +605,6 @@ impl CodegenAnalysis {
                 for ty in type_args {
                     self.visit_type(ty)?;
                 }
-                // A host generic call names its type arguments, its schema and
-                // its package in witnesses; the texts come from the pool rather
-                // than being rebuilt per call.
-                if ta.witness_shapes(expr.span).is_some() {
-                    for ty in type_args {
-                        self.string_pool.intern_text(&ty.to_string());
-                    }
-                    if let Some(schema) = ta.witness_schema(expr.span) {
-                        self.string_pool.intern_text(schema);
-                    }
-                    self.string_pool.intern_text(&ta.package_name);
-                }
                 for arg in args {
                     self.walk_expr(ta, arg.expr)?;
                 }

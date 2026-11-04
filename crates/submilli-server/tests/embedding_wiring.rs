@@ -166,7 +166,7 @@ function main(): string {{
 const LLM_CALL: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const c = llm.call("test-model", "hi");
+        const c = llm.text("test-model", "hi");
         return "OK:" + (c.ok ? c.value : "UNDEFINED");
     } catch (e: Error) {
         return e.message;

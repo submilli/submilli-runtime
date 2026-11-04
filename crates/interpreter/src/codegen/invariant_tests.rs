@@ -11,7 +11,15 @@ pub(super) fn with_context<T>(
     symbols: &SymbolTable,
     action: impl FnOnce(&CodegenCtx<'_>) -> T,
 ) -> T {
-    let strings = super::StringPool::default();
+    with_context_and_strings(ta, symbols, super::StringPool::default(), action)
+}
+
+pub(super) fn with_context_and_strings<T>(
+    ta: &TypedAst,
+    symbols: &SymbolTable,
+    strings: super::StringPool,
+    action: impl FnOnce(&CodegenCtx<'_>) -> T,
+) -> T {
     let bigints = super::BigIntPool::default();
     let line_index = LineIndex::new("").unwrap();
     let validator_bodies = super::recursive_validators::ValidatorBodies::collect(ta, []);
@@ -57,27 +65,38 @@ fn invalid_parameter_slots_and_representation_coercions_return_errors() {
 }
 
 #[test]
-fn descriptor_closure_requires_every_companion_registration() {
+fn descriptor_requires_every_companion_registration() {
     let ta = TypedAst::new();
     let mut symbols = super::tests::mock_symbols_with_intrinsics();
-    for step in 0..3 {
-        with_context(&ta, &symbols, |ctx| {
+    let mut strings = super::StringPool::default();
+    let interned = |symbols: &SymbolTable| {
+        let mut strings = super::StringPool::default();
+        super::runtime_descriptors::intern_texts(&mut strings, &ta, symbols);
+        strings
+    };
+    for step in 0..6 {
+        with_context_and_strings(&ta, &symbols, strings, |ctx| {
             let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
             assert_internal(
                 super::runtime_descriptors::environment(&mut emitter, ctx, &[Type::Number])
                     .unwrap_err(),
             );
         });
+        strings = super::StringPool::default();
         match step {
             0 => {
                 symbols.type_descriptor_functions.insert(Type::Number, 1);
             }
-            1 => symbols.set_closure_vtable_global(2),
-            2 => symbols.record_closure_struct_type(super::field_guards::signature(), 3),
+            1 => symbols.record_global(crate::mangle::prelude("opaque_vtable"), 4),
+            2 => symbols.set_closure_vtable_global(2),
+            3 => symbols.record_closure_struct_type(super::field_guards::signature(), 3),
+            4 => symbols.record_global(crate::mangle::prelude("string_vtable"), 5),
+            // The descriptor's name and package come from the pool.
+            5 => strings = interned(&symbols),
             _ => unreachable!(),
         }
     }
-    with_context(&ta, &symbols, |ctx| {
+    with_context_and_strings(&ta, &symbols, strings, |ctx| {
         let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
         super::runtime_descriptors::environment(&mut emitter, ctx, &[Type::Number]).unwrap();
     });

@@ -454,7 +454,7 @@ const LLM: &[Capability] = &[Capability {
     // secret read — the program names a model and supplies a prompt, and the
     // credential is resolved inside the provider and never returned.
     main_denial: None,
-    summary: "Call a model (call, batch) and enumerate the models it may call (models). \
+    summary: "Call a model (text, texts, call, batch) and enumerate the models it may call (models). \
               Narrowing `model` also narrows what `models()` reveals: every candidate is \
               filtered through this same rule, so a listing never offers a model the \
               caller would be denied at call time. A policy allowing no candidates \

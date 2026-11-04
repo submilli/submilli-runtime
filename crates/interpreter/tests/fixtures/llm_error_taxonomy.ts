@@ -24,7 +24,7 @@ function failed(r: llm.Completion<string>): llm.Failure {
 
 function main(): void {
   // One prompt per category, in the order the fake answers them.
-  const results = llm.batch("claude-haiku-4-5", [
+  const results = llm.texts("claude-haiku-4-5", [
     "a", "b", "c", "d", "e", "f", "g", "h", "i",
   ]);
   assert(results.length === 9, "every category is represented");

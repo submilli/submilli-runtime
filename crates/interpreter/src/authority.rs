@@ -2585,18 +2585,19 @@ export function unchecked(): void { get("https://example.com"); }
         assert!(effect.witness[1].target.ends_with("#second"));
     }
 
-    /// A typed `llm.call<T>` is the same callee as an untyped one — its type
-    /// argument travels in the call's witness, not in a second function — so
-    /// both record the `llm.call` effect the declaration is tagged with.
+    /// The typed `llm.call<T>` and the text form `llm.text` are both tagged
+    /// `@capability llm.call`, and the type argument rides in the call's type
+    /// descriptor rather than in a compiler-only function, so both record the
+    /// same effect.
     #[test]
-    fn typed_and_untyped_llm_calls_record_the_same_capability_effect() {
+    fn typed_call_and_text_record_the_same_llm_call_capability_effect() {
         let map = compile(&[(
             "lib",
             r#"
                 import llm from "submilli:llm";
                 interface Verdict { label: string; }
                 export function typed(): boolean { return llm.call<Verdict>("m", "p").ok; }
-                export function untyped(): boolean { return llm.call("m", "p").ok; }
+                export function untyped(): boolean { return llm.text("m", "p").ok; }
             "#,
         )]);
         for name in ["#typed", "#untyped"] {

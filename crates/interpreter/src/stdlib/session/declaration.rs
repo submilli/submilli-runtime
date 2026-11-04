@@ -1,10 +1,9 @@
 //! Type surface of `submilli:session`.
 //!
 //! `get` is declared generic in `T` and **runtime-generic**: like every
-//! generic function, a call passes one entry per type parameter in a trailing
-//! `$types` environment, and for a host function that entry is a
-//! `$TypeWitness` carrying the type's structural predicate
-//! (`codegen::runtime_descriptors::host_environment`). The host tests the
+//! generic function, a call passes one `$TypeDescriptor` per type parameter
+//! in a trailing `$types` environment, carrying the type's structural
+//! predicate (`codegen::runtime_descriptors`). The host tests the
 //! stored value against it and throws a catchable `TypeError` on a mismatch,
 //! so wrong-shaped stored data never arrives statically typed. The typechecker
 //! gates what `T` may be (`session_get_gate`, matched by mangled name through
@@ -62,7 +61,7 @@ pub fn package_declaration() -> PackageDeclaration {
          code units; no normalization, no path semantics.\n * @capability session.read \
          { key: $key }\n */",
     );
-    // `get` reads its `T` as a `$TypeWitness` from the generic `$types`
+    // `get` reads its `T` as a `$TypeDescriptor` from the generic `$types`
     // environment and checks the stored value against it host-side.
     defs.runtime_generics
         .insert(crate::mangle::package_symbol(MODULE_NAME, SESSION_GET));

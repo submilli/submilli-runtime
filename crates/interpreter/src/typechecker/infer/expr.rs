@@ -3928,8 +3928,8 @@ impl Inferer<'_> {
     }
 
     /// The gate of a `session.get<T>` call: whether `T` is a type the host's
-    /// witness check can verify. The host tests the stored value against the
-    /// witness's predicate — the same structural test `x as T` gets — and
+    /// descriptor check can verify. The host tests the stored value against the
+    /// descriptor's predicate — the same structural test `x as T` gets — and
     /// throws a catchable `TypeError` on a mismatch, so a wrong-shaped stored
     /// value never arrives statically typed. What the predicate cannot test
     /// is rejected here, worded as the cast gate words it.
@@ -3946,7 +3946,7 @@ impl Inferer<'_> {
         type_args_written: bool,
         span: Span,
     ) -> Result<(), ()> {
-        // An `unknown` target admits every value, so its witness accepts
+        // An `unknown` target admits every value, so its descriptor accepts
         // everything. As the *default* that is the honest reading of
         // `get(key)` — an unchecked read. Written out, it asks for a check
         // that cannot exist, so only that form is an error.
@@ -3994,7 +3994,7 @@ impl Inferer<'_> {
     }
 
     /// The gates of a schema-checked call such as `llm.call<T>(model, prompt)`,
-    /// and the JSON Schema for `T` that rides in its witness to the provider.
+    /// and the JSON Schema for `T` that rides in its descriptor to the provider.
     ///
     /// Mirrors [`Self::session_get_gate`] — same soundness argument, same cast
     /// gate — with one addition: the schema gate. A typed call must pass
@@ -4004,43 +4004,30 @@ impl Inferer<'_> {
     /// in the safe subset, so a type that cleared only the cast gate would
     /// reach a provider as a schema that constrained nothing.
     ///
-    /// `Ok(None)` is the untyped form, which sends no schema and gets no check;
-    /// `Ok(Some(schema))` means both gates passed and the result is verified as
-    /// the call's [`crate::stdlib::CheckedResult`] says — a cast around the
-    /// call, or the witness's predicate run by the host; `Err(())` means a
+    /// `Ok(schema)` means both gates passed and the result is verified as the
+    /// call's [`crate::stdlib::CheckedResult`] says — a cast around the call,
+    /// or the descriptor's predicate run by the host; `Err(())` means a
     /// diagnostic was reported (or deliberately suppressed) and the call is an
-    /// error.
-    ///
-    /// `checked` describes the call, from [`crate::stdlib::schema_checked_call`].
-    /// `type_args_written` separates an explicit `call<unknown>` from a bare
-    /// `call(...)`, whose result is the untyped default and needs no check.
+    /// error. `checked` describes the call, from
+    /// [`crate::stdlib::schema_checked_call`].
     pub(super) fn schema_checked_call_schema(
         &mut self,
         checked: &crate::stdlib::SchemaCheckedCall,
         result_ty: &Type,
-        type_args_written: bool,
         span: Span,
-    ) -> Result<Option<String>, ()> {
+    ) -> Result<String, ()> {
         let crate::stdlib::SchemaCheckedCall {
             callee,
             example,
             checks,
             answerer,
-            untyped_hint,
-            untyped_hint_for_no_schema,
+            text_hint,
             ..
         } = checked;
-        // No type argument: the call keeps its pre-generic meaning and returns
-        // what the declaration typed for the untyped default (the text in a
-        // `Completion<string>`, or a string). There is nothing to check and no
-        // schema to send.
-        if !type_args_written {
-            return Ok(None);
-        }
-        // Written `<unknown>` asks for a check that cannot exist. Unlike
-        // `session.get`, there is no honest unchecked reading to fall back on —
-        // the untyped form is a different, fully-typed result — so this is
-        // caught here as well as by the schema gate, which would also reject it.
+        // `<unknown>` asks for a check that cannot exist. Unlike `session.get`,
+        // there is no honest unchecked reading to fall back on — the text form
+        // is a different function — so this is caught here as well as by the
+        // schema gate, which would also reject it.
         if matches!(result_ty.peel(), Type::Unknown) {
             self.error_with_help(
                 span,
@@ -4050,8 +4037,7 @@ impl Inferer<'_> {
                      be `{{}}`, which constrains {answerer} to nothing"
                 ),
                 vec![format!(
-                    "name the shape you expect — `{example}` — or drop the type argument \
-                     and {untyped_hint}."
+                    "name the shape you expect — `{example}` — or {text_hint}."
                 )],
             );
             return Err(());
@@ -4077,7 +4063,7 @@ impl Inferer<'_> {
                      that argument must be one the runtime can test, and the schema is \
                      emitted at compile time where `{result_ty}` is not yet known. Call it \
                      at a concrete type — `{example}` — inside the \
-                     generic function, or drop the type argument and {untyped_hint}."
+                     generic function, or {text_hint}."
                 )],
             );
             return Err(());
@@ -4105,14 +4091,13 @@ impl Inferer<'_> {
                                  argument, so that argument must be one the runtime can test: \
                                  an object, array, tuple, union, or primitive shape. Call it \
                                  at a concrete type instead of `{result_ty}` — \
-                                 `{example}` — or drop the type \
-                                 argument and {untyped_hint}."
+                                 `{example}` — or {text_hint}."
                             ),
                         ),
                     );
                     return Err(());
                 }
-                Ok(Some(schema))
+                Ok(schema)
             }
             Err(reject) => {
                 // A `Type::Error` already reported its own diagnostic; a second
@@ -4129,7 +4114,7 @@ impl Inferer<'_> {
                              `$ref`, so every field must be an object, array, tuple, union, \
                              enum, or primitive shape. Replace that field with one — a \
                              `string` for bytes or a big number, a named shape in place of \
-                             `unknown` — or drop the type argument and {untyped_hint_for_no_schema}."
+                             `unknown` — or {text_hint}."
                         )],
                     );
                 }
@@ -4160,7 +4145,7 @@ impl Inferer<'_> {
     }
 
     /// The inlined JSON Schema for `target_ty`, as the compact string the
-    /// call's witness carries to the host.
+    /// call's descriptor carries to the host.
     ///
     /// Reduces interfaces to their structural shapes first, since a schema
     /// describes fields, not names; the cast gate that also runs rejects what
@@ -14999,7 +14984,7 @@ mod tests {
     }
 
     /// Every `session.get` call in `ta`, as (is wrapped in a `Cast`, the
-    /// reduced shape its witness carries, its `return_cast`).
+    /// reduced shape its descriptor carries, its `return_cast`).
     fn session_get_shapes(ta: &TypedAst) -> Vec<(bool, Option<Vec<Type>>, Option<Type>)> {
         let mut wrapped = std::collections::BTreeSet::new();
         for i in 0..ta.exprs_len() {
@@ -15015,6 +15000,7 @@ mod tests {
             let expr = ta.try_expr(id).unwrap();
             let TypedExprKind::GenericCall {
                 mangled,
+                type_args,
                 return_cast,
                 ..
             } = &expr.kind
@@ -15022,23 +15008,23 @@ mod tests {
                 continue;
             };
             if crate::stdlib::session::declaration::is_checked_get(mangled) {
-                out.push((
-                    wrapped.contains(&id),
-                    ta.witness_shapes(expr.span).map(<[Type]>::to_vec),
-                    return_cast.clone(),
-                ));
+                let shapes: Option<Vec<Type>> = type_args
+                    .iter()
+                    .map(|ty| ta.descriptor_shapes.get(ty).cloned())
+                    .collect();
+                out.push((wrapped.contains(&id), shapes, return_cast.clone()));
             }
         }
         out
     }
 
     /// The soundness invariant of the checked read: a `get<T>` is a plain
-    /// generic call whose witness carries the reduced shape of `T` for the
+    /// generic call whose descriptor carries the reduced shape of `T` for the
     /// host to test the stored value against, with no `Cast` around it — the
     /// host throws before a mismatch reaches the guest — and its `return_cast`
     /// is the `T | undefined` slot the host returns into.
     #[test]
-    fn typed_session_get_records_its_witness_shape_and_is_not_wrapped_in_a_cast() {
+    fn typed_session_get_records_its_descriptor_shape_and_is_not_wrapped_in_a_cast() {
         let src = "import session from \"submilli:session\"; \
                    interface P { step: number; } \
                    function main(): void { const p = session.get<P>(\"k\"); }";
@@ -15047,45 +15033,39 @@ mod tests {
 
         let shapes = session_get_shapes(&ta);
         assert_eq!(shapes.len(), 1, "expected one get, got {shapes:?}");
-        let (wrapped, witness, return_cast) = &shapes[0];
+        let (wrapped, descriptor, return_cast) = &shapes[0];
         assert!(
             !wrapped,
             "get<P> is verified by the host, not by a cast around it"
         );
-        let witness = witness
+        let descriptor = descriptor
             .as_deref()
-            .expect("get<P> records its witness shape");
+            .expect("get<P> records its descriptor shape");
         assert_eq!(
-            witness.len(),
+            descriptor.len(),
             1,
-            "one witness per type parameter: {witness:?}"
+            "one descriptor per type parameter: {descriptor:?}"
         );
         assert!(
-            matches!(witness[0].peel(), Type::Object { .. }),
-            "the witness carries the reduced shape of `P`: {witness:?}",
+            matches!(descriptor[0].peel(), Type::Object { .. }),
+            "the descriptor carries the reduced shape of `P`: {descriptor:?}",
         );
         assert!(
             matches!(return_cast, Some(Type::Union(_))),
             "get<P> returns into its `P | undefined` slot: {return_cast:?}",
         );
-        for i in 0..ta.exprs_len() {
-            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            if let TypedExprKind::GenericCall { mangled, .. } = &expr.kind
-                && crate::stdlib::session::declaration::is_checked_get(mangled)
-            {
-                assert!(
-                    ta.witness_schema(expr.span).is_none(),
-                    "a session read sends no schema"
-                );
-            }
-        }
+        assert!(
+            ta.descriptor_schemas.is_empty(),
+            "a session read records no schema: {:?}",
+            ta.descriptor_schemas
+        );
     }
 
-    /// The same invariant across every import form: the gate and the witness
+    /// The same invariant across every import form: the gate and the descriptor
     /// recording match the package-export mangled name, so an alias, a named
     /// import, and a namespace import all land on the checked path.
     #[test]
-    fn every_import_form_of_session_get_records_a_witness() {
+    fn every_import_form_of_session_get_records_a_descriptor_shape() {
         let src = "import session from \"submilli:session\"; \
                    import kv from \"submilli:session\"; \
                    import { get } from \"submilli:session\"; \
@@ -15098,11 +15078,11 @@ mod tests {
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         let shapes = session_get_shapes(&ta);
         assert_eq!(shapes.len(), 3, "{shapes:?}");
-        for (wrapped, witness, _) in &shapes {
+        for (wrapped, descriptor, _) in &shapes {
             assert!(!wrapped, "{shapes:?}");
             assert!(
-                witness.is_some(),
-                "every import form records a witness: {shapes:?}"
+                descriptor.is_some(),
+                "every import form records a descriptor: {shapes:?}"
             );
         }
     }
@@ -16934,14 +16914,16 @@ function main(): void { if (result < 10) { } }
         run_with_packages(source, &[&llm])
     }
 
-    /// Every `llm.call`/`llm.batch` in `ta`, as (its witness carries a
-    /// reduced shape, the call's `return_cast`). Mirrors `session_get_shapes`.
+    /// Every `llm.call`/`llm.batch` in `ta`, as (its `T` has a recorded
+    /// descriptor shape, the call's `return_cast`). Mirrors
+    /// `session_get_shapes`.
     fn llm_call_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
             let TypedExprKind::GenericCall {
                 mangled,
+                type_args,
                 return_cast,
                 ..
             } = &expr.kind
@@ -16951,7 +16933,10 @@ function main(): void { if (result < 10) { } }
             if !is_llm_call(mangled) {
                 continue;
             }
-            out.push((ta.witness_shapes(expr.span).is_some(), return_cast.clone()));
+            let shaped = type_args
+                .iter()
+                .all(|ty| ta.descriptor_shapes.contains_key(ty));
+            out.push((shaped, return_cast.clone()));
         }
         out
     }
@@ -16974,13 +16959,14 @@ function main(): void { if (result < 10) { } }
         count
     }
 
-    /// An llm call: the declared `call`/`batch`, typed or not.
+    /// A typed llm call: the declared `call`/`batch`.
     fn is_llm_call(mangled: &crate::MangledName) -> bool {
         crate::stdlib::llm::declaration::is_checked_call(mangled)
+            || crate::stdlib::llm::declaration::is_checked_batch(mangled)
     }
 
-    /// The argument count of every llm call, in call order: the public
-    /// parameters are all a call carries, typed or not.
+    /// The argument count of every typed llm call, in call order: the public
+    /// parameters are all a call carries.
     fn llm_argument_counts(ta: &TypedAst) -> Vec<usize> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
@@ -16994,31 +16980,39 @@ function main(): void { if (result < 10) { } }
         out
     }
 
-    /// Every schema recorded for an `llm.call`/`llm.batch` call site, in call
-    /// order: what the call's witness carries to the provider, and `None` for
-    /// an untyped call.
+    /// The schema each `llm.call`/`llm.batch` in `ta` sends, in call order:
+    /// the one recorded for its `T`, which every descriptor of that type
+    /// carries.
     fn llm_schemas(ta: &TypedAst) -> Vec<Option<String>> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            let TypedExprKind::GenericCall { mangled, .. } = &expr.kind else {
+            let TypedExprKind::GenericCall {
+                mangled, type_args, ..
+            } = &expr.kind
+            else {
                 continue;
             };
             if !is_llm_call(mangled) {
                 continue;
             }
-            out.push(ta.witness_schema(expr.span).map(str::to_string));
+            out.push(
+                type_args
+                    .first()
+                    .and_then(|ty| ta.descriptor_schemas.get(ty))
+                    .cloned(),
+            );
         }
         out
     }
 
     const SEVERITY: &str = "interface Severity { level: string; score: number; }";
 
-    /// R5: a typed call records the witness shape the host tests against, and
+    /// R5: a typed call records the descriptor shape the host tests against, and
     /// the schema for `T` is recorded for the call site as a compile-time
     /// constant.
     #[test]
-    fn typed_llm_call_records_a_witness_shape_and_a_schema() {
+    fn typed_llm_call_records_a_descriptor_shape_and_a_schema() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
@@ -17028,7 +17022,7 @@ function main(): void { if (result < 10) { } }
 
         let shapes = llm_call_shapes(&ta);
         assert_eq!(shapes.len(), 1, "expected one call, got {shapes:?}");
-        assert!(shapes[0].0, "call<Severity> lost its witness shape");
+        assert!(shapes[0].0, "call<Severity> lost its descriptor shape");
 
         let schemas = llm_schemas(&ta);
         assert_eq!(schemas.len(), 1, "expected one call, got {schemas:?}");
@@ -17075,41 +17069,48 @@ function main(): void { if (result < 10) { } }
             "an optional field must not be required: {schema}",
         );
 
-        // And the witness carries the same nested shape, reduced, rather than
+        // And the descriptor carries the same nested shape, reduced, rather than
         // stopping at the outer object.
         let shapes = llm_call_shapes(&ta);
         assert_eq!(shapes, vec![(true, None)], "shapes: {shapes:?}");
-        let witness = ta
-            .witness_shapes(llm_call_span(&ta))
-            .expect("witness recorded");
-        let Type::Object { fields, .. } = witness[0].peel() else {
-            panic!("the witness shape is the reduced object: {witness:?}");
+        let descriptor = [ta
+            .descriptor_shapes
+            .get(&llm_call_type_argument(&ta))
+            .cloned()
+            .expect("descriptor shape recorded")];
+        let Type::Object { fields, .. } = descriptor[0].peel() else {
+            panic!("the descriptor shape is the reduced object: {descriptor:?}");
         };
         assert!(
             fields
                 .iter()
                 .any(|(name, field)| name == "inner"
                     && matches!(field.ty.peel(), Type::Object { .. })),
-            "the nested interface is reduced in place: {witness:?}",
+            "the nested interface is reduced in place: {descriptor:?}",
         );
     }
 
-    /// The span of the one llm call in `ta`.
-    fn llm_call_span(ta: &TypedAst) -> crate::Span {
+    /// The type argument of the one llm call in `ta`.
+    fn llm_call_type_argument(ta: &TypedAst) -> Type {
         (0..ta.exprs_len())
-            .map(|i| ta.try_expr(crate::ExprId(i as u32)).unwrap())
-            .find(|expr| matches!(&expr.kind, TypedExprKind::GenericCall { mangled, .. } if is_llm_call(mangled)))
+            .find_map(
+                |i| match &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind {
+                    TypedExprKind::GenericCall {
+                        mangled, type_args, ..
+                    } if is_llm_call(mangled) => type_args.first().cloned(),
+                    _ => None,
+                },
+            )
             .expect("one llm call")
-            .span
     }
 
     /// The soundness invariant, and the one most at risk of silently
     /// regressing: a `call<T>` keeps the declared `call` as its callee with
-    /// exactly the written arguments — the witness is the call's environment,
+    /// exactly the written arguments — the descriptor is the call's environment,
     /// never a parameter — the call must NOT carry a `return_cast` (a
     /// `ref.cast`, a representation-only narrow that verifies nothing), and
     /// no `Cast` wraps the call, since the host stores in `value` only what
-    /// the witness accepted.
+    /// the descriptor accepted.
     #[test]
     fn typed_llm_call_keeps_its_declared_arguments_and_never_a_return_cast() {
         let src = format!(
@@ -17121,7 +17122,7 @@ function main(): void { if (result < 10) { } }
 
         let shapes = llm_call_shapes(&ta);
         assert_eq!(shapes.len(), 1, "expected one checked call, got {shapes:?}");
-        assert!(shapes[0].0, "call<Severity> lost its witness shape");
+        assert!(shapes[0].0, "call<Severity> lost its descriptor shape");
         assert_eq!(
             shapes[0].1, None,
             "call<Severity> kept an unsound return_cast: {shapes:?}",
@@ -17210,10 +17211,10 @@ function main(): void { if (result < 10) { } }
         }
     }
 
-    /// `batch<T>` takes the same path: a witness shape, no `return_cast`, and
+    /// `batch<T>` takes the same path: a descriptor shape, no `return_cast`, and
     /// a schema for one response rather than for the array.
     #[test]
-    fn typed_llm_batch_records_a_witness_too() {
+    fn typed_llm_batch_records_a_descriptor_too() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.batch<Severity>(\"m\", [\"p\"]); }}"
@@ -17229,77 +17230,148 @@ function main(): void { if (result < 10) { } }
         assert_eq!(parsed["properties"]["level"]["type"], "string");
     }
 
-    /// R7, and the distinction the `type_args_written` flag exists for: a bare
-    /// `call(...)` is not an error — it keeps its pre-generic meaning and
-    /// returns `Completion<string>`, unchecked and unschema'd, whose `value`
-    /// is the text once `ok` is known.
+    /// `T` has no default. With nothing to supply it, the call is an error
+    /// whose help names the text form, rather than a silent `unknown`.
     #[test]
-    fn untyped_llm_call_returns_the_completion_envelope_without_erroring() {
+    fn an_llm_call_without_its_type_argument_is_an_error_naming_the_text_form() {
         let src = "import llm from \"submilli:llm\"; \
-                   function main(): void { const c = llm.call(\"m\", \"p\"); \
-                                           if (c.ok) { const t: string = c.value; } \
-                                           else { const r: string = c.reason; } }";
+                   function main(): void { const c = llm.call(\"m\", \"p\"); }";
         let (ta, diags) = run_with_llm(src);
-        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert_eq!(
-            llm_call_shapes(&ta),
-            vec![(true, None)],
-            "an untyped call still names its default `T` in a witness",
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("`llm.call` needs its type argument"))
+            .unwrap_or_else(|| panic!("expected the missing-T error, got: {diags:?}"));
+        assert!(
+            d.help.iter().any(|h| h.contains("llm.text(model, prompt)")),
+            "{:?}",
+            d.help
         );
-        assert_eq!(
-            llm_schemas(&ta),
-            vec![None],
-            "an untyped call must send no schema",
+        assert!(ta.descriptor_schemas.is_empty(), "nothing is recorded");
+    }
+
+    /// `llm.batch` names itself and its own text form, `llm.texts`.
+    #[test]
+    fn an_llm_batch_without_its_type_argument_names_texts() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const c = llm.batch(\"m\", [\"p\"]); }";
+        let (_, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("`llm.batch` needs its type argument"))
+            .unwrap_or_else(|| panic!("expected the missing-T error, got: {diags:?}"));
+        assert!(
+            d.help
+                .iter()
+                .any(|h| h.contains("llm.texts(model, prompts)")),
+            "{:?}",
+            d.help
         );
     }
 
-    /// The schema is the call site's, not the type's: in one module a bare
-    /// `call(m, p)` binds `T` to `string` and records no schema, while
-    /// `call<string>(m, p)` records the schema of a JSON string.
+    /// A call already reported for its arguments is not reported again for
+    /// its type argument.
     #[test]
-    fn a_schema_belongs_to_the_call_site_and_not_to_the_type() {
+    fn a_wrong_argument_count_is_the_only_diagnostic() {
         let src = "import llm from \"submilli:llm\"; \
-                   function main(): void { const a = llm.call(\"m\", \"p\"); \
-                                           const b = llm.call<string>(\"m\", \"p\"); }";
+                   function main(): void { const c = llm.call(\"m\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("argument(s)"), "{diags:?}");
+    }
+
+    /// `Completion<T>` is a generic alias: a binding expected as
+    /// `Completion<V>` supplies `T = V` argument to argument, so `call` is
+    /// typed the way `batch` is under `Completion<V>[]`.
+    #[test]
+    fn a_completion_annotation_supplies_the_type_argument_of_call() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface V { label: string; } \
+                   function main(): void { \
+                     const c: llm.Completion<V> = llm.call(\"m\", \"p\"); }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        let schema = llm_schemas(&ta)[0]
+            .clone()
+            .expect("the annotation supplies `T` and the call sends its schema");
+        assert!(schema.contains("\"label\""), "{schema}");
+    }
+
+    /// A union flattens the alias into its members, so an optional binding,
+    /// `Completion<V> | undefined`, does not supply `T`: the program writes it.
+    #[test]
+    fn an_optional_completion_annotation_needs_a_written_type_argument() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface V { label: string; } \
+                   function main(): void { \
+                     let c: llm.Completion<V> | undefined = llm.call(\"m\", \"p\"); \
+                     let d: llm.Completion<V> | undefined = llm.call<V>(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0].message.contains("needs its type argument"),
+            "{diags:?}"
+        );
+    }
+
+    /// An expected type supplies `T` whatever it is, `string` included: a
+    /// call whose result is expected as `Completion<string>` is the typed
+    /// `call<string>`, asking for a JSON string. The text is `llm.text`.
+    #[test]
+    fn an_expected_string_type_argument_is_still_a_typed_call() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { \
+                     const xs: llm.Completion<string>[] = llm.batch(\"m\", [\"p\"]); }";
         let (ta, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(
             llm_schemas(&ta),
-            vec![None, Some("{\"type\":\"string\"}".to_string())],
+            vec![Some("{\"type\":\"string\"}".to_string())]
         );
     }
 
-    /// An untyped `batch` returns `Completion<string>[]` whatever the binding
-    /// expects: `T` is the declared default, never pinned by an annotation.
-    /// Array element unification is what would pin it (a bare
-    /// `Completion<T>` alias never unifies), and a pinned `T` would send no
-    /// schema and run no check while the text arrives typed `V`.
+    /// An expected type that supplies `T` makes the call typed: the schema of
+    /// `V` is recorded and sent, and each response is checked against it.
+    /// Array element unification is what lets `batch` take `T` from the
+    /// binding's annotation.
     #[test]
-    fn an_untyped_batch_is_text_even_when_the_binding_expects_a_shape() {
+    fn a_type_argument_supplied_by_the_expected_type_is_a_typed_call() {
         let src = "import llm from \"submilli:llm\"; \
                    interface V { label: string; } \
                    function main(): void { \
                      const arr: llm.Completion<V>[] = llm.batch(\"m\", [\"p\"]); }";
         let (ta, diags) = run_with_llm(src);
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("got `Completion<string>[]`")),
-            "expected the assignment error, got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        let schema = llm_schemas(&ta)[0]
+            .clone()
+            .expect("the pinned `T` sends a schema");
+        let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
+        assert_eq!(parsed["properties"]["label"]["type"], "string", "{schema}");
+    }
+
+    /// The schema is a function of the type: `call<string>` records the
+    /// schema of a JSON string under `string`, and the text form records
+    /// nothing at all.
+    #[test]
+    fn the_text_form_records_no_descriptor_and_call_string_asks_for_json() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const a = llm.text(\"m\", \"p\"); \
+                                           const b = llm.call<string>(\"m\", \"p\"); \
+                                           if (a.ok) { const t: string = a.value; } }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(
             llm_schemas(&ta),
-            vec![None],
-            "no schema for an untyped batch"
+            vec![Some("{\"type\":\"string\"}".to_string())],
+            "only the typed call is a generic call with a schema",
         );
     }
 
-    /// The untyped `batch` likewise returns `Completion<string>[]`, so a
-    /// per-element `ok` is still readable.
+    /// `texts` returns `Completion<string>[]`, so a per-element `ok` is
+    /// readable, and its optional `schema` is the program's own argument.
     #[test]
-    fn untyped_llm_batch_returns_completion_array() {
+    fn llm_texts_returns_completion_array_and_takes_a_written_schema() {
         let src = "import llm from \"submilli:llm\"; \
-                   function main(): void { const r = llm.batch(\"m\", [\"p\"]); \
+                   function main(): void { const r = llm.texts(\"m\", [\"p\"], \"{}\"); \
                                            const ok = r[0].ok; }";
         let (_, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");

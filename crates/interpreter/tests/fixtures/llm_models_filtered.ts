@@ -32,7 +32,7 @@ function main(): void {
   // refused at `call` time too — discovery and dispatch agree.
   let denied = "";
   try {
-    llm.call("internal-secret-model", "Summarize this.");
+    llm.text("internal-secret-model", "Summarize this.");
     assert(false, "a filtered model must not be callable");
   } catch (e: PermissionDeniedError) {
     denied = e.capability;
@@ -41,6 +41,6 @@ function main(): void {
 
   // And a permitted model really is callable — the filter hides, it does not
   // disable everything.
-  const c = llm.call("claude-haiku-4-5", "Summarize this.");
+  const c = llm.text("claude-haiku-4-5", "Summarize this.");
   assert(c.ok, "a permitted model still dispatches");
 }

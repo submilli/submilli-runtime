@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6f257a37511826e7c24d76d6211281f908155e7c2acaa5e0517a506d3264977f"
+  contentHash: "1aeaae70df6bee6d69b2bd2698709c4738d23a6d85501769dd2e49cb5cdeb173"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -237,7 +237,7 @@ read checks the requested alias name and grants no access to its target name.
 
 | Capability | Fields | Operation | Example filter |
 | --- | --- | --- | --- |
-| `llm.call` | `model: string`, `prompt_count: number` | Call a model (call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time. A policy allowing no candidates returns an empty listing | `model glob "claude-*"` |
+| `llm.call` | `model: string`, `prompt_count: number` | Call a model (text, texts, call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time. A policy allowing no candidates returns an empty listing | `model glob "claude-*"` |
 
 ### `submilli:secrets`
 

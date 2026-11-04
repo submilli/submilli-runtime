@@ -182,7 +182,7 @@ fn dispatch(reported_tokens: f64) -> (Arc<dyn ModelDispatch>, Arc<AtomicUsize>) 
 /// narrows on `ok` before reading `value`.
 const CALL: &str = r#"import llm from "submilli:llm";
 function main(): string {
-    const c = llm.call("test-model", "hi");
+    const c = llm.text("test-model", "hi");
     return c.ok ? c.value : "NULL";
 }"#;
 
@@ -190,7 +190,7 @@ function main(): string {
 const CATCH: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const c = llm.call("test-model", "hi");
+        const c = llm.text("test-model", "hi");
         return "OK:" + (c.ok ? c.value : "NULL");
     } catch (e: Error) {
         return e.message;
@@ -203,7 +203,7 @@ function main(): string {
 const CATCH_GHOST: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const c = llm.call("ghost-model", "hi");
+        const c = llm.text("ghost-model", "hi");
         return "OK:" + (c.ok ? c.value : "NULL");
     } catch (e: Error) {
         return e.message;

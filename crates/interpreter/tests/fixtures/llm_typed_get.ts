@@ -1,5 +1,5 @@
-// The typed `call<T>` returns `Completion<T>`: the same envelope as the untyped
-// form, with `value` holding a `T` that has actually been checked. A JSON
+// The typed `call<T>` returns `Completion<T>`: the same envelope as the text
+// form `text`, with `value` holding a `T` that has actually been checked. A JSON
 // Schema for `T` is emitted at compile time and sent to the provider, and the
 // response is then verified structurally, field by field. Both halves are
 // needed: the schema is advisory, so a provider may ignore it, and the check is
@@ -26,7 +26,7 @@ interface Severity {
 function main(): void {
   const s = llm.call<Severity>("claude-haiku-4-5", "Classify this ticket.");
 
-  // The envelope is the same one the untyped form returns, so `ok` is checked
+  // The envelope is the same one the text form returns, so `ok` is checked
   // first; `value` is then `T` itself, with no `.text` to parse.
   assert(s.ok, "a conforming response is a clean completion");
   if (!s.ok) return;
@@ -42,10 +42,10 @@ function main(): void {
   // An explicit null satisfies a required nullable field; an absent field does not.
   assert(v.owner === null, "a nullable field accepts an explicit null");
 
-  // The untyped form hands back the raw text in `value` for a caller that
+  // The text form, `llm.text`, hands back the raw text in `value` for a caller that
   // wants to parse it some other way.
-  const untyped = llm.call("claude-haiku-4-5", "Classify this ticket.");
-  assert(untyped.ok && untyped.value.indexOf("critical") > 0, "the untyped form carries the raw text");
+  const text = llm.text("claude-haiku-4-5", "Classify this ticket.");
+  assert(text.ok && text.value.indexOf("critical") > 0, "the text form carries the raw text");
 
   // `batch<T>` names the shape of *one* response, so each element is a
   // `Completion<T>` checked on its own.

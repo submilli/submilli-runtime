@@ -97,7 +97,7 @@ pub struct Args {
     #[arg(long, value_name = "TOKENS")]
     max_llm_tokens: Option<u64>,
 
-    /// Prompts one `llm.batch` dispatches at once. [default: 4]
+    /// Prompts one `llm.batch` or `llm.texts` dispatches at once. [default: 4]
     /// Env: `$SUBMILLI_MAX_LLM_CONCURRENCY`.
     #[arg(long, value_name = "PROMPTS")]
     max_llm_concurrency: Option<usize>,
@@ -945,7 +945,7 @@ llm:
     const CATCH: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const r = llm.call("test-model", "hi");
+        const r = llm.text("test-model", "hi");
         return "OK:" + (r.ok ? r.value : r.reason);
     } catch (e: Error) {
         return e.message;

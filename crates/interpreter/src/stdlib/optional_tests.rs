@@ -347,34 +347,97 @@ fn only_an_enabling_set_discovers_and_catalogs_the_packages() {
     assert!(capabilities::find_for(agents_only, "skill.load").is_none());
 }
 
-/// An untyped `run` is text whatever the binding expects: `T` is the declared
-/// default, never pinned by an annotation, so a program that wants a `Verdict`
-/// writes `run<Verdict>` and gets the schema and the check. Otherwise the
-/// agent's text would arrive typed `Verdict` and trap on first use.
+/// `run<T>` has no default `T`: with nothing to supply it the call is an
+/// error naming the text form, never an unchecked answer wearing a type.
 #[test]
-fn an_untyped_run_is_text_even_when_the_binding_expects_a_shape() {
+fn a_run_without_its_type_argument_names_the_text_form() {
     let errors = compile_errors(
         "import agents from \"submilli:agents\";\n\
-         interface Verdict { label: string; }\n\
-         function main(): string { const v: Verdict = agents.run(\"r\", \"go\"); return v.label; }\n",
+         function main(): void { agents.run(\"r\", \"go\"); }\n",
         harness_stdlib(),
     );
     assert!(
         errors
             .iter()
-            .any(|e| e.contains("`Verdict`") && e.contains("`string`")),
+            .any(|e| e.contains("`agents.run` needs its type argument")),
         "{errors:?}"
     );
 }
 
-/// `run` takes the agent and the input: nothing else. The JSON Schema a typed
-/// call sends travels in the call's type witness, never as an argument, so a
+/// An expected type that supplies `T` makes the run typed: the schema of
+/// `Verdict` is sent and the answer is checked against it.
+#[tokio::test]
+async fn a_run_whose_type_comes_from_the_binding_is_typed() {
+    let agents = FakeAgents::answering(r#"{"label": "ok"}"#);
+    let out = Harness::default()
+        .agents(agents.clone())
+        .run(
+            r#"import agents from "submilli:agents";
+               interface Verdict { label: string; }
+               function main(): string { const v: Verdict = agents.run("r", "go"); return v.label; }"#,
+        )
+        .await
+        .expect("program completes");
+    assert_eq!(out, "ok");
+    let schema = agents.requests()[0]
+        .schema
+        .clone()
+        .expect("a run typed by its binding sends the schema");
+    assert!(schema.contains("\"label\""), "{schema}");
+}
+
+/// `runText` sends a program's own schema unchanged and returns the answer as
+/// text, unparsed and unchecked.
+#[tokio::test]
+async fn run_text_sends_a_written_schema_and_returns_the_text() {
+    let agents = FakeAgents::answering("not json at all");
+    let out = Harness::default()
+        .agents(agents.clone())
+        .run(
+            r#"import agents from "submilli:agents";
+               function main(): string { return agents.runText("r", "go", "{\"type\":\"object\"}"); }"#,
+        )
+        .await
+        .expect("a text answer is never parsed");
+    assert_eq!(out, "not json at all");
+    assert_eq!(
+        agents.requests()[0].schema.as_deref(),
+        Some("{\"type\":\"object\"}")
+    );
+}
+
+/// A written schema must be a JSON Schema document; anything else is a
+/// catchable `TypeError` naming `runText`, and nothing reaches the harness.
+#[tokio::test]
+async fn run_text_refuses_a_schema_that_is_not_a_json_schema() {
+    let agents = FakeAgents::answering("unused");
+    let out = Harness::default()
+        .agents(agents.clone())
+        .run(
+            r#"import agents from "submilli:agents";
+               function main(): string {
+                 try { agents.runText("r", "go", "42"); return "sent"; }
+                 catch (e) { return (e instanceof TypeError ? "TypeError:" : "other:") + e.message; }
+               }"#,
+        )
+        .await
+        .expect("program completes");
+    assert!(
+        out.starts_with("TypeError:agents.runText: `schema` is not a JSON Schema"),
+        "{out}"
+    );
+    assert!(agents.requests().is_empty(), "nothing reached the harness");
+}
+
+/// `run<T>` takes the agent and the input: nothing else. The JSON Schema it
+/// sends travels in the type descriptor of `T`, never as an argument, so a
 /// written one hits the ordinary arity error.
 #[test]
 fn a_written_schema_argument_is_refused() {
     let errors = compile_errors(
         "import agents from \"submilli:agents\";\n\
-         function main(): void { agents.run(\"researcher\", \"go\", \"{}\"); }\n",
+         interface Verdict { label: string; }\n\
+         function main(): void { agents.run<Verdict>(\"researcher\", \"go\", \"{}\"); }\n",
         harness_stdlib(),
     );
     assert!(
@@ -392,7 +455,7 @@ async fn an_untyped_run_returns_the_agents_text() {
         .agents(agents.clone())
         .run(
             r#"import agents from "submilli:agents";
-               function main(): string { return agents.run("researcher", "find sources"); }"#,
+               function main(): string { return agents.runText("researcher", "find sources"); }"#,
         )
         .await
         .expect("program completes");
@@ -460,7 +523,7 @@ async fn a_denied_run_never_reaches_the_harness() {
             r#"import agents from "submilli:agents";
                function main(): string {
                  try {
-                   agents.run("deployer", "ship it");
+                   agents.runText("deployer", "ship it");
                    return "ran";
                  } catch (e: PermissionDeniedError) {
                    return "denied";
@@ -527,7 +590,7 @@ async fn agent_and_skill_values_stringify_their_properties() {
 async fn harness_failures_and_a_missing_provider_are_catchable() {
     let source = r#"import agents from "submilli:agents";
         function main(): string {
-          try { agents.run("researcher", "go"); return "ran"; }
+          try { agents.runText("researcher", "go"); return "ran"; }
           catch (e) { return e.message; }
         }"#;
     let failed = Harness::default()
@@ -540,7 +603,7 @@ async fn harness_failures_and_a_missing_provider_are_catchable() {
         .expect("program completes");
     assert_eq!(
         failed,
-        "agents.run: agent `researcher` failed: step limit reached"
+        "agents.runText: agent `researcher` failed: step limit reached"
     );
 
     let unconfigured = Harness::default()

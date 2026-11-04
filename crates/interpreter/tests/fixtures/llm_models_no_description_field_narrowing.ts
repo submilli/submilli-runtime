@@ -1,7 +1,7 @@
 import llm from "submilli:llm";
 
 function main(): void {
-  const first = llm.batch("claude-haiku-4-5", ["hello"])[0];
+  const first = llm.texts("claude-haiku-4-5", ["hello"])[0];
   let text = "";
   if (first.ok) text = first.value;
   assert(text.startsWith("answer 0"));

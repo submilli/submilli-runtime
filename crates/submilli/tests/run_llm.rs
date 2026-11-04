@@ -77,7 +77,7 @@ llm:
 const CATCH: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const c = llm.call("test-model", "hi");
+        const c = llm.text("test-model", "hi");
         return "OK:" + (c.ok ? c.value : "UNDEFINED");
     } catch (e: Error) {
         return e.message;
@@ -89,7 +89,7 @@ function main(): string {
 const UNDECLARED: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const c = llm.call("ghost-model", "hi");
+        const c = llm.text("ghost-model", "hi");
         return "OK:" + (c.ok ? c.value : "UNDEFINED");
     } catch (e: Error) {
         return e.message;
@@ -105,7 +105,7 @@ function main(): string {
 const REPORT: &str = r#"import llm from "submilli:llm";
 function main(): string {
     try {
-        const c = llm.call("test-model", "hi");
+        const c = llm.text("test-model", "hi");
         if (c.ok) { return "OK"; }
         return "FAIL:" + c.reason;
     } catch (e: Error) {

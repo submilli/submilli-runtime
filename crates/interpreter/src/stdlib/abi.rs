@@ -1,6 +1,6 @@
 //! Plumbing shared by the stdlib packages: field constructors, the
 //! vtable-headed `$Object` subtype builder, the property-getter registrar, the
-//! plain-object builder, and the type witness a generic host function reads
+//! plain-object builder, and the type descriptor a generic host function reads
 //! its type arguments from. A package describes its backing layout as a field
 //! list and its getter surface as a data table; the mechanism lives here once.
 
@@ -227,18 +227,47 @@ pub(crate) fn new_object(
     Ok(Val::AnyRef(Some(object.to_anyref())))
 }
 
+/// The optional `schema?: string` a text form (`llm.text`, `agents.runText`)
+/// takes from the program: `None` when omitted, otherwise the text, which
+/// must be a JSON Schema object. The host sends it as written and never
+/// checks an answer against it, but anything else (a scalar, an array, or
+/// the boolean schemas structured-output endpoints do not take) would be
+/// dropped or refused on the way to the provider, so it is refused here with
+/// a catchable `TypeError`. Parsing it is charged as
+/// parsing, since its size is the program's.
+pub(crate) fn read_written_schema(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+    api: &str,
+) -> wasmtime::Result<Option<String>> {
+    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
+        return Ok(None);
+    }
+    let schema = crate::runtime::host::read_string_arg(caller, val, &format!("{api} (schema)"))?;
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::PARSE,
+        schema.len() as u64,
+    )?;
+    match serde_json::from_str::<serde_json::Value>(&schema) {
+        Ok(serde_json::Value::Object(_)) => Ok(Some(schema)),
+        _ => Err(crate::runtime::host::type_error(format!(
+            "{api}: `schema` is not a JSON Schema: write a JSON object"
+        ))),
+    }
+}
+
 /// A type argument of a generic host function, as the call's trailing
-/// `$types` environment carries it: the `$TypeWitness` codegen builds per type
-/// parameter (`codegen::runtime_descriptors::host_environment`). Nothing a
-/// program writes is a witness; only the compiler builds them.
-pub(crate) struct TypeWitness {
-    /// The type's structural predicate, `(value: unknown) => boolean`: the
-    /// descriptor every generic call passes for a type argument.
+/// `$types` environment carries it: the `$TypeDescriptor` every generic call
+/// passes per type parameter (`codegen::runtime_descriptors`). Nothing a
+/// program writes is a descriptor; only the compiler builds them.
+pub(crate) struct TypeDescriptor {
+    /// The type's structural predicate, `(value: unknown) => boolean`.
     test: Closure,
     /// The type as the program wrote it, for diagnostics.
     pub name: String,
-    /// The JSON Schema the typechecker emitted for a written type argument of
-    /// a schema-checked call; `None` for an untyped call.
+    /// The JSON Schema the typechecker emitted for the type, present whenever
+    /// the type is a schema-checked call's `T`.
     pub schema: Option<String>,
     /// Where the type's reduced shape sits in a TypeInfo table, when one holds
     /// it: for the host consumers that walk a shape rather than test a value
@@ -253,7 +282,7 @@ pub(crate) struct TypeWitness {
 /// A TypeInfo id together with the package whose table it indexes. Ids are
 /// local to a package's table — the same shape has different ids in two
 /// packages — and the package is the one that compiled the call, not the one
-/// running when the host reads the witness, so it travels with the id.
+/// running when the host reads the descriptor, so it travels with the id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TypeInfoRef {
     pub package: String,
@@ -267,7 +296,18 @@ impl TypeInfoRef {
     }
 }
 
-impl TypeWitness {
+impl TypeDescriptor {
+    /// The schema a schema-checked call sends. The typechecker records one for
+    /// every such call's `T`, so a descriptor without one is a compiler bug.
+    pub(crate) fn required_schema(&self) -> wasmtime::Result<&str> {
+        self.schema.as_deref().ok_or_else(|| {
+            fatal_host_error(format!(
+                "the descriptor of `{}` carries no schema for a schema-checked call",
+                self.name
+            ))
+        })
+    }
+
     /// Whether `value`, a boxed `unknown`, is a `T`: the predicate's answer.
     /// The predicate runs as guest code and pays its own fuel; this charges
     /// the host's flat call cost.
@@ -279,61 +319,62 @@ impl TypeWitness {
         crate::runtime::fuel::charge_call(&mut *caller)?;
         let verdict = self.test.call(caller, &[value]).await?;
         let boxed =
-            as_struct(caller, &verdict, "type witness verdict").map_err(fatal_host_error)?;
+            as_struct(caller, &verdict, "type descriptor verdict").map_err(fatal_host_error)?;
         match boxed.field(&mut *caller, 1)? {
             Val::I32(bit) => Ok(bit != 0),
             other => Err(fatal_host_error(format!(
-                "type witness verdict is not a boxed boolean: {other:?}"
+                "type descriptor verdict is not a boxed boolean: {other:?}"
             ))),
         }
     }
 }
 
-/// The witness of type parameter `slot` in `env`, the `$types` argument of a
+/// The descriptor of type parameter `slot` in `env`, the `$types` argument of a
 /// generic host call. Only the compiler builds environments, so anything but
-/// a well-formed witness is a fatal host error rather than a guest throw.
-pub(crate) fn read_witness(
+/// a well-formed descriptor is a fatal host error rather than a guest throw.
+pub(crate) fn read_type_argument(
     caller: &mut Caller<'_, StoreData>,
     env: &Val,
     slot: usize,
-) -> wasmtime::Result<TypeWitness> {
-    decode_witness(caller, env, slot).map_err(fatal_host_error)
+) -> wasmtime::Result<TypeDescriptor> {
+    decode_type_argument(caller, env, slot).map_err(fatal_host_error)
 }
 
-fn decode_witness(
+fn decode_type_argument(
     caller: &mut Caller<'_, StoreData>,
     env: &Val,
     slot: usize,
-) -> wasmtime::Result<TypeWitness> {
+) -> wasmtime::Result<TypeDescriptor> {
     let Val::AnyRef(Some(env)) = env else {
         return Err(wasmtime::Error::msg(
-            "type witness environment is not an array",
+            "type descriptor environment is not an array",
         ));
     };
     let env = env.unwrap_array(&mut *caller)?;
-    let slot = u32::try_from(slot).map_err(|_| wasmtime::Error::msg("type witness slot"))?;
-    let witness = env.get(&mut *caller, slot)?;
-    let witness = as_struct(caller, &witness, "type witness")?;
-    let test = witness.field(&mut *caller, 1)?;
-    let test = crate::runtime::prelude::closure::read(caller, &test, "type witness test")?;
-    let name = witness.field(&mut *caller, 2)?;
-    let name = crate::runtime::host::read_string_arg(caller, &name, "type witness name")?;
-    let schema = match witness.field(&mut *caller, 3)? {
+    let slot = u32::try_from(slot).map_err(|_| wasmtime::Error::msg("type descriptor slot"))?;
+    let descriptor = env.get(&mut *caller, slot)?;
+    let descriptor = as_struct(caller, &descriptor, "type descriptor")?;
+    let test = descriptor.field(&mut *caller, 1)?;
+    let test = crate::runtime::prelude::closure::read(caller, &test, "type descriptor test")?;
+    let name = descriptor.field(&mut *caller, 2)?;
+    let name = crate::runtime::host::read_string_arg(caller, &name, "type descriptor name")?;
+    let schema = match descriptor.field(&mut *caller, 3)? {
         Val::AnyRef(None) => None,
         schema => Some(crate::runtime::host::read_string_arg(
             caller,
             &schema,
-            "type witness schema",
+            "type descriptor schema",
         )?),
     };
-    let package = witness.field(&mut *caller, 4)?;
-    let package = crate::runtime::host::read_string_arg(caller, &package, "type witness package")?;
-    let info = match witness.field(&mut *caller, 5)? {
+    let package = descriptor.field(&mut *caller, 4)?;
+    let package =
+        crate::runtime::host::read_string_arg(caller, &package, "type descriptor package")?;
+    let info = match descriptor.field(&mut *caller, 5)? {
         Val::I32(-1) => None,
         Val::I32(id) => {
             let id = u32::try_from(id).map_err(|_| {
                 wasmtime::Error::msg(format!(
-                    "type witness info {id} is neither -1 nor a TypeInfo id"
+                    "type descriptor info {id} is neither -1 nor a TypeInfo id"
                 ))
             })?;
             Some(TypeInfoRef {
@@ -343,7 +384,7 @@ fn decode_witness(
         }
         other => {
             return Err(wasmtime::Error::msg(format!(
-                "type witness info is not an i32: {other:?}"
+                "type descriptor info is not an i32: {other:?}"
             )));
         }
     };
@@ -354,12 +395,12 @@ fn decode_witness(
         && info.resolve(caller.data()).is_none()
     {
         return Err(wasmtime::Error::msg(format!(
-            "type witness names TypeInfo {}#{} that is not installed",
+            "type descriptor names TypeInfo {}#{} that is not installed",
             info.package,
             info.id.as_u32()
         )));
     }
-    Ok(TypeWitness {
+    Ok(TypeDescriptor {
         test,
         name,
         schema,

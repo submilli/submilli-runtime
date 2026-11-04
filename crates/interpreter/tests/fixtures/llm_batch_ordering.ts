@@ -13,7 +13,7 @@ function text(r: llm.Completion<string>): string {
 
 function main(): void {
   const prompts = ["first", "second", "third", "fourth"];
-  const results = llm.batch("claude-haiku-4-5", prompts);
+  const results = llm.texts("claude-haiku-4-5", prompts);
 
   // One result per prompt, never fewer and never more.
   assert(results.length === prompts.length, "batch returns one result per prompt");
@@ -31,12 +31,12 @@ function main(): void {
   assert(text(results[3]).indexOf("6 bytes") > 0, "prompt 3's own length comes back at 3");
 
   // A single-element batch is the degenerate case of the same rule.
-  const one = llm.batch("claude-haiku-4-5", ["only"]);
+  const one = llm.texts("claude-haiku-4-5", ["only"]);
   assert(one.length === 1, "a one-prompt batch returns one result");
   assert(text(one[0]).indexOf("answer 0") === 0, "the single result is prompt 0's");
 
   // An empty batch dispatches nothing and returns nothing.
-  const none = llm.batch("claude-haiku-4-5", []);
+  const none = llm.texts("claude-haiku-4-5", []);
   assert(none.length === 0, "an empty batch returns an empty list");
 
   // A completion is a plain object, so an object literal of the same shape is

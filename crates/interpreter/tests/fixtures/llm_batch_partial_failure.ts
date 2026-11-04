@@ -12,7 +12,7 @@ import llm from "submilli:llm";
 
 function main(): void {
   const prompts = ["alpha", "beta", "gamma"];
-  const results = llm.batch("claude-haiku-4-5", prompts);
+  const results = llm.texts("claude-haiku-4-5", prompts);
 
   // The batch returns rather than throwing, and keeps its positional shape
   // even though an element inside it failed.

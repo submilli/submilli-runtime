@@ -16,7 +16,7 @@ function main(): void {
   let completed = 0;
   for (let i = 0; i < 20; i = i + 1) {
     try {
-      llm.call("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
+      llm.text("claude-haiku-4-5", "CONFIDENTIAL-PROMPT-TEXT");
       completed = completed + 1;
     } catch (e: QuotaExceededError) {
       assert(e instanceof Error, "quota is an Error");

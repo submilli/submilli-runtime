@@ -17,7 +17,7 @@ interface Brief {
 type Loose = Record<string, unknown>;
 
 function main(): void {
-  const raw = llm.batch("claude-haiku-4-5", ["Reply with the single word ok."]);
+  const raw = llm.texts("claude-haiku-4-5", ["Reply with the single word ok."]);
   const item = raw[0] as Record<string, unknown>;
 
   // The view enumerates exactly the fields the object carries: an absent
