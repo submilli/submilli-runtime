@@ -146,7 +146,7 @@ Stdlib gates and their fields, from `submilli blueprint capability list`:
 
 For the orders package in [packages](packages.md): a required customer
 binding, a server-side token, read allowed for the bound customer, and small
-cancellations held for a separate application approval workflow.
+cancellations that wait for a person's approval.
 
 ```yaml
 kind: blueprint
