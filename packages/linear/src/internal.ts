@@ -165,10 +165,10 @@ export interface ValidationErrorDetail {
     property?: string | null;
 }
 
-// `data` is read concretely per operation (`json() as GraphQlResponse<XData>`):
-// a runtime cast can't target an unconstrained generic, so the envelope is cast
-// with a concrete data type at each call site, then `requireData` does the
-// shared error/null unwrap generically (it only reads fields, never parses).
+// `data` is read concretely per operation (`json<GraphQlResponse<XData>>()`):
+// each call site checks the envelope with its concrete data type, then
+// `requireData` does the shared error/null unwrap generically (it only reads
+// fields, never parses).
 /** A GraphQL response envelope. */
 export interface GraphQlResponse<T> {
     /** The operation result; an error response omits it or sends null. */

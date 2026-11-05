@@ -11,6 +11,7 @@
 pub(crate) mod abi;
 pub mod agents;
 pub mod capabilities;
+pub(crate) mod checked_call;
 pub mod code;
 pub mod crypto;
 pub(crate) mod dot_segments;
@@ -264,11 +265,11 @@ mod optional_tests;
 mod tests {
     use super::*;
 
-    /// Every runtime-generic host function is one the typechecker gates: it
-    /// records the schema a schema-checked call's descriptor carries and the
-    /// shapes behind its TypeInfo ids, and rejects a `T` the host's predicate
-    /// cannot test. A host generic the typechecker did not learn would reach
-    /// the host with a descriptor carrying no schema, a fatal host error.
+    /// Every runtime-generic host function or method is a row of the
+    /// checked-call table the typechecker gates by: the gate rejects a `T`
+    /// the host's predicate cannot test, or a schema call's `T` with no
+    /// schema. A host generic outside the table would reach the host at a
+    /// type nothing vetted.
     #[test]
     fn every_runtime_generic_host_function_is_a_checked_call() {
         let all = Stdlib::core()
@@ -278,8 +279,7 @@ mod tests {
         for defs in all.package_declarations() {
             for mangled in &defs.runtime_generics {
                 assert!(
-                    session::declaration::is_checked_get(mangled)
-                        || json_schema::schema_checked_call(mangled).is_some(),
+                    checked_call::checked_call(mangled).is_some(),
                     "{} is runtime-generic but the typechecker does not gate it",
                     mangled.as_str()
                 );
@@ -291,6 +291,7 @@ mod tests {
             seen,
             [
                 "submilli:agents#run",
+                "submilli:http#Response#json",
                 "submilli:llm#batch",
                 "submilli:llm#call",
                 "submilli:session#get",

@@ -622,7 +622,7 @@ fn wildcard_undetermined_args(ty: &Type) -> Type {
     }
 }
 
-/// Whether `kind` is `JSON.parse(…)`, or `r.json()`, which lowers to it.
+/// Whether `kind` is `JSON.parse(…)`.
 fn parses_json(kind: &TypedExprKind) -> bool {
     matches!(
         kind,
@@ -981,7 +981,7 @@ impl Inferer<'_> {
             // checked cast, which is the usual fix, when `as` accepts the target.
             if matches!(ty.peel(), Type::Unknown) && self.is_legal_cast_target(&ty, want) {
                 if parses_json(&kind) {
-                    help.extend(self.parsed_json_cast_help(expr_id, span, want)?);
+                    help.extend(self.parsed_json_cast_help(span, want)?);
                 } else {
                     help.push(self.checked_cast_help(expr_id, span, want)?);
                 }
@@ -1571,13 +1571,12 @@ impl Inferer<'_> {
         ))
     }
 
-    /// [`Self::checked_cast_help`] for `JSON.parse(…)` or `r.json()` itself,
+    /// [`Self::checked_cast_help`] for `JSON.parse(…)` itself,
     /// which says why the value is `unknown` and what the cast does. `None` when
     /// a parsed value could never pass the cast, or would pass it only to fail
     /// on the first read.
     fn parsed_json_cast_help(
         &self,
-        expr_id: ExprId,
         span: Span,
         want: &Type,
     ) -> Result<Option<String>, CompilerFailure> {
@@ -1588,29 +1587,12 @@ impl Inferer<'_> {
         // A call binds tighter than `as`, so it needs no parentheses.
         let call = match self.short_source(span) {
             Some(call) => call.to_string(),
-            None if self.calls_json_method(expr_id)? => "….json()".to_string(),
             None => "JSON.parse(…)".to_string(),
         };
         Ok(Some(format!(
             "`{call}` returns `unknown`. Cast it to the type you expect, which checks the value at \
              run time and throws a `TypeError` if it doesn't match: `{call} as {want}`"
         )))
-    }
-
-    /// Whether `expr_id` is a `….json()` call, as an http response's is.
-    fn calls_json_method(&self, expr_id: ExprId) -> Result<bool, CompilerFailure> {
-        let ExprKind::Call { callee, .. } = self
-            .ast
-            .try_expr(expr_id)
-            .map_err(super::arena_failure)?
-            .kind
-        else {
-            return Ok(false);
-        };
-        Ok(matches!(
-            &self.ast.try_expr(callee).map_err(super::arena_failure)?.kind,
-            ExprKind::FieldAccess { name, .. } if name.name == "json"
-        ))
     }
 
     /// Whether `ty` holds a host type anywhere, interface properties and index
@@ -2800,22 +2782,6 @@ impl Inferer<'_> {
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind {
             let diags_before = self.diagnostics.len();
             let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
-            // `r.json()` on an http `Response` has no host backing, so the
-            // typechecker lowers it to `JSON.parse(r.body)`. This must run before `find_method`: the `json`
-            // method is declared on `Response` only for the LLM-facing type surface and
-            // must never be dispatched as a real (importless) interface method.
-            if name.name == "json"
-                && matches!(&recv_ty, Type::InterfaceRef { name: iface, .. } if iface == "Response")
-            {
-                return self.infer_response_json_call(
-                    typed_receiver,
-                    &recv_ty,
-                    type_args,
-                    args,
-                    expected,
-                    span,
-                );
-            }
             // A generic receiver inferred in isolation can't resolve its own type
             // parameters and reports a premature "cannot infer" error — e.g.
             // `new Map()` in `new Map().set(k, v)`. The enclosing call resolves
@@ -3490,6 +3456,7 @@ impl Inferer<'_> {
                     receiver: typed_receiver,
                     iface: iface_mangled,
                     name,
+                    type_args: Vec::new(),
                     args: generic_args,
                     return_cast,
                     type_predicate,
@@ -3957,125 +3924,60 @@ impl Inferer<'_> {
         })
     }
 
-    /// The gate of a `session.get<T>` call: whether `T` is a type the host's
-    /// descriptor check can verify. The host tests the stored value against the
-    /// descriptor's predicate — the same structural test `x as T` gets — and
-    /// throws a catchable `TypeError` on a mismatch, so a wrong-shaped stored
-    /// value never arrives statically typed. What the predicate cannot test
-    /// is rejected here, worded as the cast gate words it.
+    /// The gate of a checked host call (`session.get<T>`, `llm.call<T>`,
+    /// `r.json<T>()`, …; [`crate::stdlib::checked_call::checked_call`]):
+    /// whether `T` is a type the host's descriptor check can verify and, for
+    /// a call that sends a JSON Schema, one a request can carry. The host
+    /// tests what it hands back against the descriptor's predicate — the same
+    /// structural test `x as T` gets — and throws a catchable `TypeError` on a
+    /// mismatch; codegen emits the schema. What neither can do is rejected
+    /// here.
     ///
-    /// Call only for a [`crate::stdlib::session::declaration::is_checked_get`]
-    /// mangled name, with `target_ty` the instantiated `T`. `type_args_written`
-    /// separates an explicit `get<unknown>` from a bare `get(key)`, whose `T`
-    /// defaulted to `unknown` and keeps its pre-generic unchecked-read
-    /// meaning. `Err(())` means a diagnostic was reported and the call is an
-    /// error.
-    pub(super) fn session_get_gate(
+    /// `target_ty` is the instantiated `T`. `type_args_written` separates an
+    /// explicit `<unknown>` from a call whose `T` defaulted to `unknown`,
+    /// which is an unchecked read where the call allows one. `Err(())` means
+    /// a diagnostic was reported (or deliberately suppressed) and the call is
+    /// an error.
+    pub(super) fn checked_call_gate(
         &mut self,
+        checked: &crate::stdlib::checked_call::CheckedCall,
         target_ty: &Type,
         type_args_written: bool,
         span: Span,
     ) -> Result<(), ()> {
-        // An `unknown` target admits every value, so its descriptor accepts
-        // everything. As the *default* that is the honest reading of
-        // `get(key)` — an unchecked read. Written out, it asks for a check
-        // that cannot exist, so only that form is an error.
-        if matches!(target_ty.peel(), Type::Unknown) && !type_args_written {
-            return Ok(());
-        }
-        // A type parameter of the calling generic, or a type built from one
-        // (`T[]`), checks against the type its caller names: the caller's
-        // descriptor is forwarded, and a descriptor built from it here tests
-        // through it. Only the stored value's shape is checked, so nothing
-        // has to be known at compile time.
-        if holds_type_parameter(target_ty) {
-            return Ok(());
-        }
-        if matches!(target_ty.peel(), Type::Unknown) {
-            self.error_with_help(
-                span,
-                "`session.get<unknown>` would not verify anything: `unknown` admits \
-                 every value, so no runtime check is possible"
-                    .to_string(),
-                vec![
-                    "name the shape you expect — `session.get<Progress>(key)` — or drop \
-                     the type argument and narrow the result yourself with a \
-                     runtime-checked `as`: `session.get(key) as Progress`. Use \
-                     `session.get<Progress>(key)` returns undefined when the key is absent."
-                        .to_string(),
-                ],
-            );
-            return Err(());
-        }
-
-        let shape = self.reduce_cast_target(target_ty);
-        let Some(reason) = unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
-        else {
-            return Ok(());
-        };
-        self.error_with_help(
-            span,
-            format!("`session.get<{target_ty}>` cannot be verified at runtime: {reason}"),
-            cast_gate_help(
-                reason,
-                format!(
-                    "`session.get` checks the stored value against its type argument, so \
-                     that argument must be one the runtime can test: an object, array, \
-                     tuple, union, or primitive shape, optionally `| null`. Call it at a \
-                     concrete type instead of `{target_ty}` — `session.get<Progress>(key)` \
-                     — or drop the type argument and narrow the result yourself with a \
-                     runtime-checked `as`."
-                ),
-            ),
-        );
-        Err(())
-    }
-
-    /// The gates of a schema-checked call such as `llm.call<T>(model, prompt)`:
-    /// whether `T` has a JSON Schema the request can carry and a structure the
-    /// descriptor's predicate can test. Codegen emits the schema itself.
-    ///
-    /// Mirrors [`Self::session_get_gate`] — same soundness argument, same cast
-    /// gate — with one addition: the schema gate. A typed call must pass
-    /// **both** gates, because the schema surface is strictly narrower than
-    /// what the cast machinery can test (KTD5). `Function`, `bigint`,
-    /// `Uint8Array`, and `unknown` are all castable and none has a JSON Schema
-    /// in the safe subset, so a type that cleared only the cast gate would
-    /// reach a provider as a schema that constrained nothing.
-    ///
-    /// `Ok(())` means both gates passed: the host sends the schema codegen
-    /// emits for `T` and checks the answer with its predicate. `Err(())` means
-    /// a diagnostic was reported (or deliberately suppressed) and the call is
-    /// an error. `checked` describes the call, from
-    /// [`crate::stdlib::json_schema::schema_checked_call`].
-    pub(super) fn schema_checked_call_gate(
-        &mut self,
-        checked: &crate::stdlib::json_schema::SchemaCheckedCall,
-        result_ty: &Type,
-        span: Span,
-    ) -> Result<(), ()> {
-        let crate::stdlib::json_schema::SchemaCheckedCall {
+        let crate::stdlib::checked_call::CheckedCall {
             callee,
             example,
-            checks,
+            alternative,
             answerer,
-            text_hint,
             ..
         } = checked;
-        // `<unknown>` asks for a check that cannot exist. Unlike `session.get`,
-        // there is no honest unchecked reading to fall back on — the text form
-        // is a different function — so this is caught here as well as by the
-        // schema gate, which would also reject it.
-        if matches!(result_ty.peel(), Type::Unknown) {
-            self.error_with_help(
+        // An `unknown` target admits every value, so its descriptor accepts
+        // everything. As a predicate call's *default* that is the honest
+        // reading — an unchecked read. Written out, or for a schema call,
+        // whose text form is the unchecked reading, it asks for a check that
+        // cannot exist.
+        if matches!(target_ty.peel(), Type::Unknown) {
+            if !type_args_written && !checked.sends_schema() {
+                return Ok(());
+            }
+            let schema = match answerer {
+                Some(answerer) => format!(
+                    " and its JSON Schema could only be `{{}}`, which constrains {answerer} to \
+                     nothing"
+                ),
+                None => String::new(),
+            };
+            self.checked_call_error(
+                type_args_written,
+                target_ty,
                 span,
                 format!(
                     "`{callee}<unknown>` would not verify anything: `unknown` admits every \
-                     value, so no runtime check is possible and its JSON Schema could only \
-                     be `{{}}`, which constrains {answerer} to nothing"
+                     value, so no runtime check is possible{schema}"
                 ),
                 vec![format!(
-                    "name the shape you expect — `{example}` — or {text_hint}."
+                    "name the shape you expect — `{example}` — or {alternative}."
                 )],
             );
             return Err(());
@@ -4083,101 +3985,156 @@ impl Inferer<'_> {
 
         // A bare type parameter of the calling generic forwards the caller's
         // descriptor: the caller named the type, and its descriptor carries
-        // the schema when the type has one. Whether it does is known only
-        // there, so a forwarded type without one is the host's catchable
-        // `TypeError`, not a diagnostic here.
-        if is_type_parameter_position(result_ty) {
+        // the predicate and, when the type has one, the schema. Whether it
+        // has one is known only there, so a forwarded type without one is
+        // the host's catchable `TypeError`, not a diagnostic here.
+        if is_type_parameter_position(target_ty) {
             return Ok(());
         }
-        // A type built from a type parameter (`T[]`, `{ item: T }`) has no
-        // descriptor schema: its descriptor is assembled here, where `T` is
-        // unknown, so it cannot be described at compile time.
-        if holds_type_parameter(result_ty) {
-            self.error_with_help(
+        // A type built from a type parameter (`T[]`, `{ item: T }`) gets a
+        // descriptor assembled here, whose predicate tests through the
+        // caller's. That is enough for a call that only checks; a schema
+        // cannot be described where `T` is unknown.
+        if holds_type_parameter(target_ty) {
+            if !checked.sends_schema() {
+                return Ok(());
+            }
+            self.checked_call_error(
+                type_args_written,
+                target_ty,
                 span,
                 format!(
-                    "`{callee}<{result_ty}>` cannot send a JSON Schema: `{result_ty}` is \
+                    "`{callee}<{target_ty}>` cannot send a JSON Schema: `{target_ty}` is \
                      built from a type parameter, and its schema would only be known where \
                      the parameter is"
                 ),
                 vec![format!(
                     "pass the type parameter itself (`{callee}<T>`) and let the caller \
                      name the whole type, call it at a concrete type — `{example}` — or \
-                     {text_hint}."
+                     {alternative}."
                 )],
             );
             return Err(());
         }
-        let shape = self.reduce_cast_target(result_ty);
 
         // The schema gate runs before the cast gate, because it is strictly
         // narrower (KTD5) *and* its rejections name the offending field. A
-        // recursive type fails both; the schema reason points at the field that
-        // closes the cycle, which is the one the author has to change.
-        match self.json_schema_for(result_ty) {
-            Ok(schema) if schema.len() > crate::stdlib::json_schema::MAX_SCHEMA_BYTES => {
-                self.error_with_help(
-                    span,
-                    format!(
-                        "`{callee}<{result_ty}>` has a JSON Schema of {} bytes, more than the {} \
-                         a request may carry",
-                        schema.len(),
-                        crate::stdlib::json_schema::MAX_SCHEMA_BYTES
-                    ),
-                    vec![format!(
-                        "name a smaller shape — `{example}` — or {text_hint}."
-                    )],
-                );
-                Err(())
-            }
-            Ok(_) => {
-                // The cast gate still has to pass: the descriptor's predicate,
-                // which the host runs on the answer, is the structural test the
-                // cast gate admits, and the two surfaces agree everywhere except
-                // the arms handled above.
-                if let Some(reason) =
-                    unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
-                {
-                    self.error_with_help(
+        // recursive type fails both; the schema reason points at the field
+        // that closes the cycle, which is the one the author has to change.
+        // `Function`, `bigint`, `Uint8Array` and `unknown` are castable and
+        // have no schema, so a type that cleared only the cast gate would
+        // reach the answerer as a schema that constrained nothing.
+        if let Some(answerer) = answerer {
+            match self.json_schema_for(target_ty) {
+                Ok(schema) if schema.len() > crate::stdlib::json_schema::MAX_SCHEMA_BYTES => {
+                    self.checked_call_error(
+                        type_args_written,
+                        target_ty,
                         span,
-                        format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
-                        cast_gate_help(
-                            reason,
-                            format!(
-                                "`{callee}` checks {checks} against its type \
-                                 argument, so that argument must be one the runtime can test: \
-                                 an object, array, tuple, union, or primitive shape. Call it \
-                                 at a concrete type instead of `{result_ty}` — \
-                                 `{example}` — or {text_hint}."
-                            ),
+                        format!(
+                            "`{callee}<{target_ty}>` has a JSON Schema of {} bytes, more than \
+                             the {} a request may carry",
+                            schema.len(),
+                            crate::stdlib::json_schema::MAX_SCHEMA_BYTES
                         ),
+                        vec![format!(
+                            "name a smaller shape — `{example}` — or {alternative}."
+                        )],
                     );
                     return Err(());
                 }
-                Ok(())
-            }
-            Err(reject) => {
-                // A `Type::Error` already reported its own diagnostic; a second
-                // one here would blame the same mistake twice.
-                if !reject.cascading {
-                    self.error_with_help(
-                        span,
-                        format!(
-                            "`{callee}<{result_ty}>` has no JSON Schema: {}",
-                            reject.describe()
-                        ),
-                        vec![format!(
-                            "the schema sent to {answerer} is fully inlined and carries no \
-                             `$ref`, so every field must be an object, array, tuple, union, \
-                             enum, or primitive shape. Replace that field with one — a \
-                             `string` for bytes or a big number, a named shape in place of \
-                             `unknown` — or {text_hint}."
-                        )],
-                    );
+                Ok(_) => {}
+                Err(reject) => {
+                    // A `Type::Error` already reported its own diagnostic; a
+                    // second one here would blame the same mistake twice.
+                    if !reject.cascading {
+                        self.checked_call_error(
+                            type_args_written,
+                            target_ty,
+                            span,
+                            format!(
+                                "`{callee}<{target_ty}>` has no JSON Schema: {}",
+                                reject.describe()
+                            ),
+                            vec![format!(
+                                "the schema sent to {answerer} is fully inlined and carries \
+                                 no `$ref`, so every field must be an object, array, tuple, \
+                                 union, enum, or primitive shape. Replace that field with one \
+                                 — a `string` for bytes or a big number, a named shape in \
+                                 place of `unknown` — or {alternative}."
+                            )],
+                        );
+                    }
+                    return Err(());
                 }
-                Err(())
             }
         }
+
+        // The cast gate: the descriptor's predicate, which the host runs, is
+        // the structural test the cast gate admits.
+        let shape = self.reduce_cast_target(target_ty);
+        let Some(reason) = unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
+        else {
+            return Ok(());
+        };
+        self.cast_gate_rejection(checked, target_ty, type_args_written, reason, span);
+        Err(())
+    }
+
+    /// The diagnostic for a checked call whose `T` the runtime cannot test,
+    /// worded as the cast gate words it.
+    fn cast_gate_rejection(
+        &mut self,
+        checked: &crate::stdlib::checked_call::CheckedCall,
+        target_ty: &Type,
+        type_args_written: bool,
+        reason: &'static str,
+        span: Span,
+    ) {
+        let crate::stdlib::checked_call::CheckedCall {
+            callee,
+            example,
+            checks,
+            alternative,
+            ..
+        } = checked;
+        let help = cast_gate_help(
+            reason,
+            format!(
+                "`{callee}` checks {checks} against its type argument, so that argument \
+                 must be one the runtime can test: an object, array, tuple, union, or \
+                 primitive shape. Call it at a concrete type instead of `{target_ty}` — \
+                 `{example}` — or {alternative}."
+            ),
+        );
+        self.checked_call_error(
+            type_args_written,
+            target_ty,
+            span,
+            format!("`{callee}<{target_ty}>` cannot be verified at runtime: {reason}"),
+            help,
+        );
+    }
+
+    /// Report a checked call's gate rejection. When no type argument is
+    /// written, the expected type supplied `T`, so the diagnostic names a
+    /// type the program never wrote as one: say where it came from.
+    fn checked_call_error(
+        &mut self,
+        type_args_written: bool,
+        target_ty: &Type,
+        span: Span,
+        message: String,
+        mut help: Vec<String>,
+    ) {
+        if !type_args_written {
+            help.push(format!(
+                "no type argument is written, so the expected type supplies \
+                 `{target_ty}`: change the type the result is assigned, returned or \
+                 passed to, or write the type argument."
+            ));
+        }
+        self.error_with_help(span, message, help);
     }
 
     /// The inlined JSON Schema for `target_ty`, for the gate to judge: whether
@@ -5163,76 +5120,6 @@ impl Inferer<'_> {
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonParse,
                 args: vec![typed_arg],
-            },
-            Type::Unknown,
-        ))
-    }
-
-    fn infer_response_json_call(
-        &mut self,
-        typed_receiver: ExprId,
-        recv_ty: &Type,
-        type_args: Option<Vec<crate::TypeAnnotation>>,
-        args: Vec<ExprId>,
-        _expected: Option<&Type>,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        // `r.json()` takes no value arguments — the body is the implicit source.
-        if !args.is_empty() {
-            self.error_with_help(
-                span,
-                format!("`r.json()` takes no value arguments, got {}", args.len()),
-                vec![
-                    "the response body is parsed automatically; validate the \
-                     result with `as`, for example `r.json() as User`"
-                        .to_string(),
-                ],
-            );
-            for &arg in &args {
-                let _ = self.infer_expr(arg, None)?;
-            }
-        }
-        if let Some(targs) = &type_args {
-            self.error_with_help(
-                span,
-                format!("`r.json` does not take type arguments, got {}", targs.len()),
-                vec!["parse first, then validate with `as`: `r.json() as User`".to_string()],
-            );
-        }
-
-        // Synthesize the `r.body` argument — a `string` property on `Response`.
-        let Some((body_prop, _bindings, iface_mangled, _dispatch)) =
-            self.find_property(recv_ty, "body")
-        else {
-            // `Response` always declares `body`; unreachable in practice.
-            return Ok((
-                TypedExprKind::IntrinsicCall {
-                    kind: Intrinsic::JsonParse,
-                    args: Vec::new(),
-                },
-                Type::Error,
-            ));
-        };
-        let body = self
-            .typed_ast
-            .try_push_expr(TypedExpr {
-                kind: TypedExprKind::InterfacePropertyAccess {
-                    receiver: typed_receiver,
-                    iface: iface_mangled,
-                    name: Ident {
-                        name: "body".to_string(),
-                        span,
-                    },
-                },
-                span,
-                ty: body_prop.ty,
-            })
-            .map_err(crate::typechecker::arena_failure)?;
-
-        Ok((
-            TypedExprKind::IntrinsicCall {
-                kind: Intrinsic::JsonParse,
-                args: vec![body],
             },
             Type::Unknown,
         ))
@@ -15520,26 +15407,135 @@ mod tests {
         );
     }
 
+    /// `r.json()` takes `T` from the expected type, so assigning it to a
+    /// declared type is a checked read rather than an `unknown` mismatch; a
+    /// call with neither reads `unknown`.
     #[test]
-    fn response_json_names_the_checked_cast() {
+    fn response_json_takes_its_type_from_the_expected_type() {
         let http = crate::stdlib::http::package_declaration();
         let src = "import * as http from \"submilli:http\"; \
                    interface User { name: string; } \
                    function main(): void { \
                      const r = http.get(\"https://example.com\"); \
                      const u: User = r.json(); \
-                     const v: User[] = http.get(\"https://example.com/a/rather/long/path/that/is/long\").json(); }";
-        let (_, diags) = run_with_packages(src, &[&http]);
-        let casts: Vec<_> = diags
-            .iter()
-            .filter_map(|d| d.help.last())
-            .map(|h| h.rsplit(": ").next().unwrap_or_default())
-            .collect();
+                     const v: User[] = http.get(\"https://example.com/a\").json(); \
+                     const w = r.json(); \
+                     const x = r.json<User>(); }";
+        let (ta, diags) = run_with_packages(src, &[&http]);
+        assert!(diags.is_empty(), "{diags:?}");
+        let mut type_args = Vec::new();
+        for i in 0..ta.exprs_len() {
+            if let TypedExprKind::GenericMethodCall {
+                name,
+                type_args: args,
+                ..
+            } = &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind
+                && name.name == "json"
+            {
+                type_args.push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
+            }
+        }
         assert_eq!(
-            casts,
-            vec!["`r.json() as User`", "`….json() as User[]`"],
+            type_args,
+            vec![vec!["User"], vec!["User[]"], vec!["unknown"], vec!["User"]],
+        );
+    }
+
+    /// `r.json<T>()` is gated like every checked call: a written `<unknown>`
+    /// and a type the runtime cannot test are errors, and a generic forwards
+    /// its own `T` or a type built from it.
+    #[test]
+    fn response_json_is_gated_like_a_checked_call() {
+        let http = crate::stdlib::http::package_declaration();
+        let (_, diags) = run_with_packages(
+            "import * as http from \"submilli:http\"; \
+             class C { n: number = 0; } \
+             function main(): void { \
+               const r = http.get(\"https://example.com\"); \
+               r.json<unknown>(); r.json<C>(); }",
+            &[&http],
+        );
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(
+            messages[0].starts_with("`r.json<unknown>` would not verify anything"),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1].starts_with("`r.json<C>` cannot be verified at runtime"),
+            "{messages:?}"
+        );
+        let (_, diags) = run_with_packages(
+            "import * as http from \"submilli:http\"; \
+             function one<T>(r: http.Response): T { return r.json<T>(); } \
+             function all<T>(r: http.Response): T[] { return r.json<T[]>(); } \
+             function main(): void { \
+               const r = http.get(\"https://example.com\"); \
+               const n: number = one<number>(r); const s: string[] = all<string>(r); }",
+            &[&http],
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    /// A `T` the expected type supplied is gated like a written one, and the
+    /// diagnostic says where it came from.
+    #[test]
+    fn an_expected_type_the_gate_rejects_says_it_supplied_the_type() {
+        let http = crate::stdlib::http::package_declaration();
+        let (_, diags) = run_with_packages(
+            "import * as http from \"submilli:http\"; \
+             class C { n: number = 0; } \
+             function main(): void { const c: C = http.get(\"https://example.com\").json(); }",
+            &[&http],
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`r.json<C>` cannot be verified at runtime"),
             "{diags:?}"
         );
+        assert!(
+            diags[0]
+                .help
+                .iter()
+                .any(|h| h
+                    .starts_with("no type argument is written, so the expected type supplies `C`")),
+            "{diags:?}"
+        );
+    }
+
+    /// A schema call's `T` from the expected type gets the same note when the
+    /// schema gate rejects it.
+    #[test]
+    fn an_expected_type_a_schema_call_rejects_says_it_supplied_the_type() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const c: llm.Completion<Uint8Array> = llm.call(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`llm.call<Uint8Array>` has no JSON Schema"),
+            "{diags:?}"
+        );
+        assert!(
+            diags[0].help.iter().any(|h| h.starts_with(
+                "no type argument is written, so the expected type supplies `Uint8Array`"
+            )),
+            "{diags:?}"
+        );
+    }
+
+    /// A program's own `Response` interface keeps its own `json` method: only
+    /// the http package's `Response#json` is the checked host method.
+    #[test]
+    fn a_user_response_interface_keeps_its_own_json_method() {
+        let (_, diags) = run("interface Response { json(): number; } \
+             function main(): void { \
+               const r: Response = { json: () => 7 }; \
+               const n: number = r.json(); }");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     /// No cast is offered for a parsed value where it could never pass, or

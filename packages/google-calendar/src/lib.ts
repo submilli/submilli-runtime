@@ -454,7 +454,7 @@ export function listCalendars(page: PageOptions = {}): Page<Calendar> {
     check("submilli/google-calendar.listCalendars", {});
     const query = new Map<string, string>();
     applyPage(query, limit, pageToken, 20, 250);
-    const data = calendarGet("/users/me/calendarList", query).json() as CalendarListResponse;
+    const data = calendarGet("/users/me/calendarList", query).json<CalendarListResponse>();
     const items: Calendar[] = [];
     const calendars = data.items;
     if (calendars !== undefined) for (const item of calendars) items.push(calendarFrom(item));
@@ -491,7 +491,7 @@ export function listEvents(options: EventListOptions = {}): Page<Event> {
     putQuery(query, "orderBy", orderBy);
     putBool(query, "showDeleted", showDeleted);
     putQuery(query, "timeZone", timeZone);
-    const data = calendarGet("/calendars/" + encodeComponent(calendarId) + "/events", query).json() as EventListResponse;
+    const data = calendarGet("/calendars/" + encodeComponent(calendarId) + "/events", query).json<EventListResponse>();
     return eventPage(data);
 }
 
@@ -516,7 +516,7 @@ function fetchApiEvent(eventId: string, calendarId: string): ApiEvent | null {
     const response = calendarRawGet("/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId), new Map<string, string>());
     if (response.status === 404) return null;
     requireOk(response);
-    return response.json() as ApiEvent;
+    return response.json<ApiEvent>();
 }
 
 /**
@@ -575,7 +575,7 @@ export function createEvent(input: EventCreateInput, calendarId: string = "prima
     }
     const response = post(API + calendarPath("/calendars/" + encodeComponent(calendarId) + "/events", query), body, authHeaders());
     requireOk(response);
-    return eventFrom(response.json() as ApiEvent);
+    return eventFrom(response.json<ApiEvent>());
 }
 
 /**
@@ -654,7 +654,7 @@ export function updateEvent(eventId: string, input: EventUpdateInput, calendarId
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
     const response = patch(API + calendarPath(path, query), body, authHeaders());
     requireOk(response);
-    return eventFrom(response.json() as ApiEvent);
+    return eventFrom(response.json<ApiEvent>());
 }
 
 /**
@@ -689,7 +689,7 @@ export function respondToEvent(eventId: string, response: string, calendarId: st
     const path = "/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId);
     const result = patch(API + calendarPath(path, query), { attendees: attendees }, authHeaders());
     requireOk(result);
-    return eventFrom(result.json() as ApiEvent);
+    return eventFrom(result.json<ApiEvent>());
 }
 
 /**
@@ -718,7 +718,7 @@ function currentAttendeeAddresses(eventId: string, calendarId: string): string[]
     const response = calendarRawGet("/calendars/" + encodeComponent(calendarId) + "/events/" + encodeComponent(eventId), query);
     if (response.status === 404) throw new CalendarError("not_found", "Calendar event was not found", 404);
     requireOk(response);
-    const current = response.json() as EventAttendeeMetadata;
+    const current = response.json<EventAttendeeMetadata>();
     if (current.attendeesOmitted === true) {
         throw new CalendarError("incomplete_attendees", "Calendar omitted attendees; notification recipients cannot be authorized", 0);
     }
@@ -815,7 +815,7 @@ export function queryFreeBusy(input: FreeBusyInput): FreeBusyResult {
         if (timeZone !== undefined) body.timeZone = timeZone;
         const response = post(API + "/freeBusy", body, authHeaders());
         requireOk(response);
-        const data = response.json() as FreeBusyResponse;
+        const data = response.json<FreeBusyResponse>();
         const values = Object.values(data.calendars);
         let busy: BusyPeriod[] = [];
         if (values.length > 0) {
@@ -1010,7 +1010,7 @@ function requireOk(response: Response): Response {
     let code = response.status === 401 ? "unauthorized" : "http_error";
     let message = "Google Calendar request failed: HTTP " + response.status.toString() + " " + response.statusText;
     if (response.body.startsWith("{")) {
-        const envelope = response.json() as GoogleErrorEnvelope;
+        const envelope = response.json<GoogleErrorEnvelope>();
         const body = envelope.error;
         if (body !== undefined) {
             const errors = body.errors;

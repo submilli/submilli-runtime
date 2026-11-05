@@ -286,10 +286,16 @@ pub(super) fn erase_generic_params_in_expr(expr: &mut crate::TypedExpr) {
             }
         }
         TypedExprKind::GenericMethodCall {
-            return_cast: Some(t),
+            type_args,
+            return_cast,
             ..
         } => {
-            *t = erase_generic_params(t);
+            for arg in type_args {
+                *arg = erase_generic_params(arg);
+            }
+            if let Some(t) = return_cast {
+                *t = erase_generic_params(t);
+            }
         }
         TypedExprKind::InstanceOf { class, .. } => {
             *class = erase_generic_params(class);
@@ -588,6 +594,13 @@ impl Inferer<'_> {
             .ty
             .clone();
         let mut sub = TypeParamSubstitution::new();
+        let errors_at_call = self.error_count();
+        // A checked host method (`Response#json<T>`) is gated and defaulted
+        // like a checked host function; see `infer_generic_call`.
+        let checked = crate::stdlib::checked_call::checked_call(&crate::mangle::extend(
+            &iface_mangled,
+            &name.name,
+        ));
 
         for (k, v) in interface_bindings {
             sub.insert(k, v);
@@ -783,6 +796,19 @@ impl Inferer<'_> {
             expected,
             errors_before_args,
         );
+        if let Some(checked) = &checked
+            && self
+                .settle_unwritten_checked_type(
+                    checked,
+                    &mut sub,
+                    &sig.generics,
+                    errors_at_call,
+                    span,
+                )?
+                .is_err()
+        {
+            return Ok((TypedExprKind::Null, Type::Error));
+        }
         self.bind_uninferred_to_unknown(&mut sub, &sig.generics, &iface_mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&sig.generics, &self.type_limits)
@@ -830,6 +856,34 @@ impl Inferer<'_> {
             })),
             None => None,
         };
+        // A checked host method passes its type arguments' descriptors, so
+        // they are gated and recorded like a checked function's.
+        let runtime_type_args = match &checked {
+            Some(checked) => {
+                let runtime_type_args: Vec<Type> = sig
+                    .generics
+                    .iter()
+                    .map(|name| self.instantiate(&sub, &Type::TypeVar(name.clone()), span))
+                    .collect::<Result<_, _>>()?;
+                let Some(checked_ty) = runtime_type_args.first() else {
+                    return Err(super::inference_failure(
+                        "a checked host method declares its type parameter",
+                    )
+                    .with_span(span));
+                };
+                if self
+                    .checked_call_gate(checked, checked_ty, type_args.is_some(), span)
+                    .is_err()
+                {
+                    return Ok((TypedExprKind::Null, Type::Error));
+                }
+                for arg in &runtime_type_args {
+                    self.record_runtime_type_test(arg)?;
+                }
+                runtime_type_args
+            }
+            None => Vec::new(),
+        };
         self.record_generic_call_arguments(&typed_args, &sig.params, &sig.ret, type_args.is_some());
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
@@ -862,12 +916,19 @@ impl Inferer<'_> {
                     receiver: typed_receiver,
                     iface: iface_mangled,
                     name,
+                    type_args: runtime_type_args,
                     args: generic_args,
                     return_cast,
                     type_predicate,
                 },
                 result_ty,
             ));
+        }
+        if !runtime_type_args.is_empty() {
+            return Err(super::inference_failure(
+                "a checked host method returns its type parameter",
+            )
+            .with_span(span));
         }
         // sub carries interface bindings even when the method itself isn't generic.
         Ok((
@@ -1070,6 +1131,53 @@ impl Inferer<'_> {
             *sub = trial;
         }
         unified
+    }
+
+    /// Settle a checked host call's `T` that neither a written type argument
+    /// nor the expected type bound. A predicate call reads `unknown`,
+    /// unchecked: `session.get(key)` and `r.json()` keep their pre-generic
+    /// meaning, a read the caller narrows with a runtime-checked `as`. A
+    /// schema call is an error naming its text form, the function for the
+    /// unchecked answer, unless the call was already reported (a wrong
+    /// argument count or argument): that is not reported twice. `Err(())`
+    /// means the call is an error.
+    pub(super) fn settle_unwritten_checked_type(
+        &mut self,
+        checked: &crate::stdlib::checked_call::CheckedCall,
+        sub: &mut TypeParamSubstitution,
+        generics: &[String],
+        errors_at_call: usize,
+        span: Span,
+    ) -> Result<Result<(), ()>, CompilerFailure> {
+        let unbound = match sub
+            .resolve_all(generics, &self.type_limits)
+            .map_err(type_limit_at(span))?
+        {
+            Err(unbound) if !unbound.is_empty() => unbound,
+            _ => return Ok(Ok(())),
+        };
+        if !checked.sends_schema() {
+            for name in unbound {
+                sub.insert(name, Type::Unknown);
+            }
+            return Ok(Ok(()));
+        }
+        if self.error_count() > errors_at_call {
+            return Ok(Err(()));
+        }
+        self.error_with_help(
+            span,
+            format!(
+                "`{}` needs its type argument: it checks the answer against `T`, and \
+                 neither a written type argument nor the expected type supplies it",
+                checked.callee
+            ),
+            vec![format!(
+                "write the type you expect — `{}` — or {}",
+                checked.example, checked.alternative
+            )],
+        );
+        Ok(Err(()))
     }
 
     /// Bind the type parameters of a program's own generic that nothing
@@ -2479,20 +2587,15 @@ impl Inferer<'_> {
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
         let errors_at_call = self.error_count();
-        // `session.get<T>` and the schema-checked calls (`llm.call<T>`,
-        // `llm.batch<T>`, `agents.run<T>`) are generic host functions: the host
-        // reads `T` from its `$TypeDescriptor` in the call's `$types`
-        // environment — its predicate, and for a schema-checked call the JSON
-        // Schema codegen emits — and checks its result against it, so the call
-        // lowers as any generic call does. The typechecker only gates what `T`
-        // may be: a type the predicate can test, and for a schema-checked call
-        // one a JSON Schema can carry. Both flags are read once here and
-        // consulted below where `session.get` binds its default `T`, where an
-        // unbound schema-checked `T` is reported, and where the gates run.
-        // Only `session.get` has a bare meaning, an unchecked `unknown`; a
-        // schema-checked `T` is written or supplied by the expected type.
-        let checked_get = crate::stdlib::session::declaration::is_checked_get(&mangled);
-        let schema_checked = crate::stdlib::json_schema::schema_checked_call(&mangled);
+        // A checked host call (`session.get<T>`, `llm.call<T>`, …) is a
+        // generic host function: the host reads `T` from its
+        // `$TypeDescriptor` in the call's `$types` environment — its
+        // predicate, and for a schema call the JSON Schema codegen emits —
+        // and checks its result against it, so the call lowers as any generic
+        // call does. The typechecker only gates what `T` may be, and the
+        // call's row says what an unwritten `T` means: consulted below where
+        // `T` is defaulted or reported unbound, and where the gate runs.
+        let checked = crate::stdlib::checked_call::checked_call(&mangled);
 
         if let Some(targs) = &type_args {
             if targs.len() != generics.len() {
@@ -2516,9 +2619,9 @@ impl Inferer<'_> {
             }
         }
 
-        // A schema-checked call has no default `T`: the expected type may
-        // supply it (`const r: Report = agents.run(a, i)`), and the call is
-        // then checked against it like a written one.
+        // The expected type may supply a checked call's `T`
+        // (`const r: Report = agents.run(a, i)`), and the call is then
+        // checked against it like a written one.
         if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
             self.bind_from_expected_result(&mut sub, &ret, want);
         }
@@ -2597,44 +2700,14 @@ impl Inferer<'_> {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
-        // `session.get(key)` without a type argument keeps its pre-generic
-        // meaning: an unchecked read of `unknown` the caller narrows with a
-        // runtime-checked `as`. Only a *written* `<unknown>` is an error, so
-        // bind the parameter here rather than letting it go unbound and trip
-        // the unbound-parameter error below.
-        if checked_get && !type_args_written {
-            bind_remaining(&mut sub, &generics, Type::Unknown, &self.type_limits)
-                .map_err(type_limit_at(span))?;
-        }
         sub.bind_whole_union_fallbacks();
         let close_match_spans = self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
-        // A schema-checked `T` appears only in the return type, so neither an
-        // argument nor `unknown` may stand in for it: unbound here, the call
-        // is the text form spelled with the typed name, and the diagnostic
-        // says which one to call. A call already reported (a wrong argument
-        // count or argument) is an error either way and is not reported twice.
-        if let Some(checked) = &schema_checked
-            && let Err(unbound) = sub
-                .resolve_all(&generics, &self.type_limits)
-                .map_err(type_limit_at(span))?
-            && !unbound.is_empty()
+        if let Some(checked) = &checked
+            && self
+                .settle_unwritten_checked_type(checked, &mut sub, &generics, errors_at_call, span)?
+                .is_err()
         {
-            if self.error_count() > errors_at_call {
-                return Ok((TypedExprKind::Null, Type::Error));
-            }
-            self.error_with_help(
-                span,
-                format!(
-                    "`{}` needs its type argument: it checks the answer against `T`, and \
-                     neither a written type argument nor the expected type supplies it",
-                    checked.callee
-                ),
-                vec![format!(
-                    "write the type you expect — `{}` — or {}",
-                    checked.example, checked.text_hint
-                )],
-            );
             return Ok((TypedExprKind::Null, Type::Error));
         }
         self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
@@ -2664,17 +2737,17 @@ impl Inferer<'_> {
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
-        // The gates of a checked host call. A schema-checked call declares
-        // exactly one type parameter, the checked `T`, bound by now by the
-        // program or by the expected type; the call sends the JSON Schema
-        // emitted from it, which rides in the type's descriptor and never in
-        // the argument list, so a program that writes a third argument gets
-        // the ordinary arity error. A gate can fail (an unschemable or
-        // unverifiable `T`), in which case the whole call is already an error
-        // and no node is built. The checked type is the type argument itself:
-        // `agents.run<T>` returns it, `llm.call<T>` returns an envelope holding
-        // it, `session.get<T>` returns it or `undefined`.
-        let checked_ty = if checked_get || schema_checked.is_some() {
+        // The gate of a checked host call. It declares exactly one type
+        // parameter, the checked `T`, bound by now by the program, by the
+        // expected type or by the call's default; its descriptor (and a
+        // schema call's schema) rides in the `$types` environment and never
+        // in the argument list, so a program that writes an extra argument
+        // gets the ordinary arity error. A failed gate (an unschemable or
+        // unverifiable `T`) makes the whole call an error and builds no node.
+        // The checked type is the type argument itself: `agents.run<T>`
+        // returns it, `llm.call<T>` returns an envelope holding it,
+        // `session.get<T>` returns it or `undefined`.
+        let checked_ty = if checked.is_some() {
             let Some(type_param) = generics.first() else {
                 return Err(super::inference_failure(
                     "a checked host call declares its type parameter",
@@ -2685,18 +2758,10 @@ impl Inferer<'_> {
         } else {
             None
         };
-        if let Some(checked) = &schema_checked
+        if let Some(checked) = &checked
             && let Some(checked_ty) = &checked_ty
             && self
-                .schema_checked_call_gate(checked, checked_ty, span)
-                .is_err()
-        {
-            return Ok((TypedExprKind::Null, Type::Error));
-        }
-        if checked_get
-            && let Some(checked_ty) = &checked_ty
-            && self
-                .session_get_gate(checked_ty, type_args_written, span)
+                .checked_call_gate(checked, checked_ty, type_args_written, span)
                 .is_err()
         {
             return Ok((TypedExprKind::Null, Type::Error));

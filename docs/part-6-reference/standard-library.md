@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "417f32d52cfaae6a339122bbce733cb302dc7e360b17dbfcf7c8ca8fd98fe658"
+  contentHash: "d52cfb3c22dc390005ab418a990482352cf4caaefc5992d704d7b474c5d9b2e9"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -582,7 +582,7 @@ Result of an HTTP call — status, headers, body, and the final URL after any re
 | `readonly status: number` | HTTP status code (e.g. `200`, `404`). |
 | `readonly statusText: string` | Reason phrase (e.g. `"OK"`, `"Not Found"`). |
 | `readonly url: string` | Final URL after any redirects. |
-| `json(): unknown` | Parse the response body as JSON into `unknown`. |
+| `json<T>(): T` | Parse the response body as JSON and check it against `T`, for example `r.json<User>()`. |
 | `throwForStatus(): void` | Throw if `ok` is `false`. |
 | `toString(): string` | Concise description of the response — `"Response(200 OK, https://...)"`. |
 

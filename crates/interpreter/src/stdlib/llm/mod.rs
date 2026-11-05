@@ -2147,6 +2147,34 @@ mod tests {
         assert!(recorder.dispatches().is_empty(), "nothing was sent");
     }
 
+    /// SUB-2084: an `invalid-output` entry names the type, never a key the
+    /// model wrote, so model text does not reach the message.
+    #[tokio::test]
+    async fn a_mismatched_response_never_names_a_key_of_the_answer() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"sk-live-SECRET":"high"}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const r = llm.call<Record<string, number>>("m", "p");
+                     return r.ok ? "accepted" : r.message;
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert!(!out.contains("sk-live"), "{out}");
+        assert_eq!(
+            out,
+            "the model's response does not match `{ [key: string]: number }`"
+        );
+    }
+
     /// A generic forwards its own `T` into `llm.call<T>` and `llm.batch<T>`,
     /// through a second generic layer too: each call sends the schema of the
     /// type its caller named and checks against it.

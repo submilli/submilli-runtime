@@ -97,7 +97,7 @@ export function listOrganizations(page: PageOptions = {}): PageResult<Organizati
     check("sentry.io/organizations.list", {});
     const response = sentryGet("/organizations/" + buildPageQuery(limit, cursor));
     const items: Organization[] = [];
-    for (const item of response.json() as ApiOrganization[]) items.push(organizationFrom(item));
+    for (const item of response.json<ApiOrganization[]>()) items.push(organizationFrom(item));
     return pageFrom(response, items);
 }
 
@@ -113,7 +113,7 @@ export function listProjects(organization: string, page: PageOptions = {}): Page
     check("sentry.io/projects.list", { organization: slug });
     const response = sentryGet("/organizations/" + encodeComponent(slug) + "/projects/" + buildPageQuery(limit, cursor));
     const items: Project[] = [];
-    for (const item of response.json() as ApiProject[]) items.push(projectFrom(item, slug));
+    for (const item of response.json<ApiProject[]>()) items.push(projectFrom(item, slug));
     return pageFrom(response, items);
 }
 
@@ -162,7 +162,7 @@ export function listIssues(organization: string, options: ListIssuesOptions = {}
     check("sentry.io/issues.list", { organization: slug, projects: projects });
     const response = sentryGet("/organizations/" + encodeComponent(slug) + "/issues/" + buildIssueQuery(issueOptions));
     const items: Issue[] = [];
-    for (const item of response.json() as ApiIssue[]) items.push(issueFrom(item));
+    for (const item of response.json<ApiIssue[]>()) items.push(issueFrom(item));
     return pageFrom(response, items);
 }
 
@@ -218,7 +218,7 @@ export function listIssueEvents(
     const loaded = requireIssueForProject(slug, projectSlug, issue);
     const response = sentryGet(issuePath(slug, loaded.id) + "/events/" + buildEventQuery(eventOptions));
     const items: EventSummary[] = [];
-    for (const item of response.json() as ApiEvent[]) items.push(eventSummaryFrom(item));
+    for (const item of response.json<ApiEvent[]>()) items.push(eventSummaryFrom(item));
     return pageFrom(response, items);
 }
 
@@ -244,7 +244,7 @@ export function getIssueEvent(
     const loaded = loadIssueForProject(slug, projectSlug, issue);
     if (loaded === null) return null;
     const response = sentryGetNullable(issuePath(slug, loaded.id) + "/events/" + encodeComponent(event) + "/");
-    return response === null ? null : eventDetailsFrom(response.json() as ApiEvent);
+    return response === null ? null : eventDetailsFrom(response.json<ApiEvent>());
 }
 
 /** Apply a core triage update to an issue.
@@ -271,7 +271,7 @@ export function updateIssue(organization: string, project: string, issueId: stri
     check("sentry.io/issues.update", { organization: slug, project: projectSlug, issue: issue });
     const loaded = requireIssueForProject(slug, projectSlug, issue);
     const response = sentryPut(issuePath(slug, loaded.id) + "/", buildUpdateIssueBody(changes));
-    const updated = issueFrom(response.json() as ApiIssue);
+    const updated = issueFrom(response.json<ApiIssue>());
     requireMatchingProject(updated, projectSlug);
     return updated;
 }
@@ -290,7 +290,7 @@ function resolveIssueId(organization: string, issueId: string): string | null {
         "/organizations/" + encodeComponent(organization) + "/shortids/" + encodeComponent(issueId) + "/",
     );
     if (response === null) return null;
-    const data = response.json() as ApiShortIdLookup;
+    const data = response.json<ApiShortIdLookup>();
     const groupId = data.groupId;
     if (groupId) return groupId;
     const embeddedId = data.group?.id;
@@ -303,7 +303,7 @@ function loadIssueForProject(organization: string, project: string, issueId: str
     if (resolved === null) return null;
     const response = sentryGetNullable(issuePath(organization, resolved) + "/");
     if (response === null) return null;
-    const issue = issueFrom(response.json() as ApiIssue);
+    const issue = issueFrom(response.json<ApiIssue>());
     requireMatchingProject(issue, project);
     return issue;
 }

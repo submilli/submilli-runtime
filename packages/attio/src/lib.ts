@@ -107,7 +107,7 @@ const API = "https://api.attio.com/v2";
  */
 export function listObjects(): AttioObject[] {
     check("attio.com/objects.list", {});
-    const list = attioGet("/objects").json() as ObjectList;
+    const list = attioGet("/objects").json<ObjectList>();
     const items: AttioObject[] = [];
     for (const item of list.data) items.push(objectFrom(item));
     return items;
@@ -146,7 +146,7 @@ export function listStatuses(object: string, attribute: string): Status[] {
  */
 export function listMembers(): Member[] {
     check("attio.com/members.list", {});
-    const list = attioGet("/workspace_members").json() as MemberList;
+    const list = attioGet("/workspace_members").json<MemberList>();
     const items: Member[] = [];
     for (const item of list.data) items.push(memberFrom(item));
     return items;
@@ -165,7 +165,7 @@ export function getRecord(object: string, recordId: string): AttioRecord | null 
     check("attio.com/records.get", { object: slug, recordId: id });
     const response = attioGetNullable(recordPath(slug, id));
     if (response === null) return null;
-    return recordFrom((response.json() as RecordEnvelope).data, slug);
+    return recordFrom(response.json<RecordEnvelope>().data, slug);
 }
 
 /**
@@ -184,7 +184,7 @@ export function queryRecords(object: string, query: RecordQuery = {}): Page<Atti
     for (const sort of sorts ?? []) order.push(prepareSort(sort));
     const window = queryWindow(limit, offset);
     check("attio.com/records.query", { object: slug });
-    const list = attioPost("/objects/" + slug + "/records/query", buildQueryBody(conditions, order, window)).json() as RecordList;
+    const list = attioPost("/objects/" + slug + "/records/query", buildQueryBody(conditions, order, window)).json<RecordList>();
     return recordPage(list.data, slug, window);
 }
 
@@ -198,7 +198,7 @@ export function findPersonByEmail(email: string): AttioRecord | null {
     const address = normalizeEmail(email);
     check("attio.com/people.find", { email: address });
     const body: Record<string, unknown> = { filter: { email_addresses: address }, limit: 2, offset: 0 };
-    const list = attioPost("/objects/people/records/query", body).json() as RecordList;
+    const list = attioPost("/objects/people/records/query", body).json<RecordList>();
     if (list.data.length === 0) return null;
     if (list.data.length > 1) {
         throw validationError("multiple_match_results", "more than one person in Attio has the email " + address + "; merge them in Attio");
@@ -220,7 +220,7 @@ export function upsertPerson(input: PersonInput): AttioRecord {
     const attributes = sortedKeys(values);
     check("attio.com/people.upsert", { email: address, attributes: attributes });
     const response = upsertOn("people", "email_addresses", values, "more than one person in Attio has the email " + address);
-    return recordFrom((response.json() as RecordEnvelope).data, "people");
+    return recordFrom(response.json<RecordEnvelope>().data, "people");
 }
 
 /**
@@ -236,7 +236,7 @@ export function upsertCompany(input: CompanyInput): AttioRecord {
     const attributes = sortedKeys(values);
     check("attio.com/companies.upsert", { domain: bare, attributes: attributes });
     const response = upsertOn("companies", "domains", values, "more than one company in Attio has the domain " + bare);
-    return recordFrom((response.json() as RecordEnvelope).data, "companies");
+    return recordFrom(response.json<RecordEnvelope>().data, "companies");
 }
 
 /**
@@ -291,7 +291,7 @@ export function createRecord(object: string, input: CreateRecordInput): AttioRec
         body[statusAttribute] = [{ status: resolved.statusId }];
     }
     const response = attioPost("/objects/" + slug + "/records", { data: { values: body } });
-    return recordFrom((response.json() as RecordEnvelope).data, slug);
+    return recordFrom(response.json<RecordEnvelope>().data, slug);
 }
 
 /**
@@ -324,7 +324,7 @@ export function updateRecord(object: string, recordId: string, values: RecordVal
     if (attributes.length === 0) throw validationError("empty_update", "updateRecord needs at least one attribute value");
     requirePlainAttributes(slug, attributes, fetchAttributes(slug), "change it with setStatus");
     const response = attioPatch(recordPath(slug, id), { data: { values: buildValues(attributes) } });
-    return recordFrom((response.json() as RecordEnvelope).data, slug);
+    return recordFrom(response.json<RecordEnvelope>().data, slug);
 }
 
 /**
@@ -348,7 +348,7 @@ export function setStatus(object: string, recordId: string, attribute: string, s
     check("attio.com/statuses.list", { object: slug, attribute: attributeSlug });
     const target = findStatus(fetchStatuses(slug, attributeSlug), requested, slug, attributeSlug);
     check("attio.com/records.get", { object: slug, recordId: id });
-    const current = (attioGet(recordPath(slug, id)).json() as RecordEnvelope).data;
+    const current = attioGet(recordPath(slug, id)).json<RecordEnvelope>().data;
     const previous = currentStatus(current, attributeSlug);
     check("attio.com/records.setStatus", {
         object: slug,
@@ -364,7 +364,7 @@ export function setStatus(object: string, recordId: string, attribute: string, s
     values[attributeSlug] = [{ status: target.statusId }];
     const updated = attioPatch(recordPath(slug, id), { data: { values: values } });
     return {
-        record: recordFrom((updated.json() as RecordEnvelope).data, slug),
+        record: recordFrom(updated.json<RecordEnvelope>().data, slug),
         status: target.title,
         previousStatus: previous.title,
         changed: true,
@@ -392,7 +392,7 @@ export function createNote(parentObject: string, parentRecordId: string, input: 
     const body: Record<string, unknown> = {
         data: { parent_object: parent, parent_record_id: id, title: heading, format: kind, content: content },
     };
-    return noteFrom((attioPost("/notes", body).json() as NoteEnvelope).data);
+    return noteFrom(attioPost("/notes", body).json<NoteEnvelope>().data);
 }
 
 /**
@@ -409,7 +409,7 @@ export function listNotes(parentObject: string, parentRecordId: string, page: Pa
     const { limit, offset } = page;
     const window = noteWindow(limit, offset);
     check("attio.com/notes.list", { parentObject: parent, parentRecordId: id });
-    const list = attioGet("/notes" + buildNotesQuery(parent, id, window)).json() as NoteList;
+    const list = attioGet("/notes" + buildNotesQuery(parent, id, window)).json<NoteList>();
     const items: Note[] = [];
     for (const note of list.data) {
         // Attio lists workspace-wide notes when the parent filter is missing, so
@@ -424,7 +424,7 @@ function recordPath(object: string, recordId: string): string {
 }
 
 function fetchAttributes(object: string): Attribute[] {
-    const list = attioGet("/objects/" + object + "/attributes").json() as AttributeList;
+    const list = attioGet("/objects/" + object + "/attributes").json<AttributeList>();
     const items: Attribute[] = [];
     for (const item of list.data) {
         if (item.is_archived !== true) items.push(attributeFrom(item));
@@ -433,7 +433,7 @@ function fetchAttributes(object: string): Attribute[] {
 }
 
 function fetchStatuses(object: string, attribute: string): Status[] {
-    const list = attioGet("/objects/" + object + "/attributes/" + attribute + "/statuses").json() as StatusList;
+    const list = attioGet("/objects/" + object + "/attributes/" + attribute + "/statuses").json<StatusList>();
     const items: Status[] = [];
     for (const item of list.data) {
         if (item.is_archived !== true) items.push(statusFrom(item));

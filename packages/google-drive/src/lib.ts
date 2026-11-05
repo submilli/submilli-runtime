@@ -303,7 +303,7 @@ export function searchFiles(options: SearchFilesOptions = {}): Page<DriveFile> {
     if (rawQuery !== undefined && rawQuery.length > 0) clauses.push("(" + rawQuery + ")");
     applySharedDrive(query, driveId);
     if (clauses.length > 0) query.set("q", clauses.join(" and "));
-    const data = driveGet("/files", query).json() as FileListResponse;
+    const data = driveGet("/files", query).json<FileListResponse>();
     return filePage(data);
 }
 
@@ -426,7 +426,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
         emptyHeaders.set("Content-Length", "0");
         const response = put(GOOGLE_API + uploadLocation, new Uint8Array([]), emptyHeaders);
         requireOk(response);
-        return fileFrom(response.json() as ApiFile);
+        return fileFrom(response.json<ApiFile>());
     }
     let offset = 0;
     while (offset < sourceSize) {
@@ -442,7 +442,7 @@ export function uploadFile(sourcePath: string, options: FileUploadOptions): Driv
             offset += chunk.length;
         } else {
             requireOk(response);
-            return fileFrom(response.json() as ApiFile);
+            return fileFrom(response.json<ApiFile>());
         }
     }
     throw new DriveError("upload_incomplete", "Drive did not finalize the resumable upload", 0);
@@ -468,7 +468,7 @@ export function createFolder(name: string, parentId: string = ""): DriveFile {
     query.set("supportsAllDrives", "true");
     const response = post(API + "/files?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
-    return fileFrom(response.json() as ApiFile);
+    return fileFrom(response.json<ApiFile>());
 }
 
 /**
@@ -488,7 +488,7 @@ export function copyFile(fileId: string, options: FileCopyOptions = {}): DriveFi
     const query = mutationQuery();
     const response = post(API + "/files/" + encodeComponent(fileId) + "/copy?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
-    return fileFrom(response.json() as ApiFile);
+    return fileFrom(response.json<ApiFile>());
 }
 
 /**
@@ -521,7 +521,7 @@ export function moveFile(fileId: string, parentId: string): DriveFile {
     if (current.parents.length > 0) query.set("removeParents", current.parents.join(","));
     const response = patch(API + "/files/" + encodeComponent(fileId) + "?" + encodeQuery(query), {}, authHeaders());
     requireOk(response);
-    return fileFrom(response.json() as ApiFile);
+    return fileFrom(response.json<ApiFile>());
 }
 
 /**
@@ -557,7 +557,7 @@ export function listPermissions(fileId: string): Permission[] {
     const query = new Map<string, string>();
     query.set("fields", "permissions(id,type,role,emailAddress,domain,displayName,allowFileDiscovery,expirationTime)");
     query.set("supportsAllDrives", "true");
-    const data = driveGet("/files/" + encodeComponent(fileId) + "/permissions", query).json() as PermissionListResponse;
+    const data = driveGet("/files/" + encodeComponent(fileId) + "/permissions", query).json<PermissionListResponse>();
     const permissions: Permission[] = [];
     const items = data.permissions;
     if (items !== undefined) for (const item of items) permissions.push(permissionFrom(item));
@@ -606,7 +606,7 @@ export function shareFile(fileId: string, input: ShareFileInput): Permission {
     if (principalType === "domain") body.domain = principal;
     const response = post(API + "/files/" + encodeComponent(fileId) + "/permissions?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
-    return permissionFrom(response.json() as ApiPermission);
+    return permissionFrom(response.json<ApiPermission>());
 }
 
 // The one principal a permission of this type names, in the one spelling policy reads. A field
@@ -684,7 +684,7 @@ function uploadDestinationDrive(parentId: string, requestedDriveId: string | und
     const response = driveRawGet("/files/" + encodeComponent(folderId), query);
     if (response.status === 404) throw new DriveError("invalid_parent", "upload destination folder was not found", 404);
     requireOk(response);
-    const folder = response.json() as UploadDestinationMetadata;
+    const folder = response.json<UploadDestinationMetadata>();
     if (folder.mimeType !== "application/vnd.google-apps.folder") {
         throw new DriveError("invalid_parent", "upload parent must be a folder", 0);
     }
@@ -702,14 +702,14 @@ function fetchFile(fileId: string): DriveFile | null {
     const response = driveRawGet("/files/" + encodeComponent(fileId), query);
     if (response.status === 404) return null;
     requireOk(response);
-    return fileFrom(response.json() as ApiFile);
+    return fileFrom(response.json<ApiFile>());
 }
 
 function patchFile(fileId: string, body: {}): DriveFile {
     const query = mutationQuery();
     const response = patch(API + "/files/" + encodeComponent(fileId) + "?" + encodeQuery(query), body, authHeaders());
     requireOk(response);
-    return fileFrom(response.json() as ApiFile);
+    return fileFrom(response.json<ApiFile>());
 }
 
 function mutationQuery(): Map<string, string> {
@@ -790,7 +790,7 @@ function requireOk(response: Response): Response {
     let code = response.status === 401 ? "unauthorized" : "http_error";
     let message = "Google Drive request failed: HTTP " + response.status.toString() + " " + response.statusText;
     if (response.body.startsWith("{")) {
-        const envelope = response.json() as GoogleErrorEnvelope;
+        const envelope = response.json<GoogleErrorEnvelope>();
         const body = envelope.error;
         if (body !== undefined) {
             const errors = body.errors;

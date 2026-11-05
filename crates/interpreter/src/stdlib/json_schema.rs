@@ -1,16 +1,14 @@
 //! JSON Schemas the standard library sends to a model or an agent.
 //!
-//! Two kinds, never mixed. A **schema-checked call** (`llm.call<T>`,
-//! `llm.batch<T>`, `agents.run<T>`) sends the schema the compiler emits from
-//! `T`, carried in the type descriptor (`abi::read_type_argument`), and checks
-//! the answer against `T`; [`schema_checked_call`] is the table the
+//! Two kinds, never mixed. A **schema call** (`llm.call<T>`, `llm.batch<T>`,
+//! `agents.run<T>`) sends the schema codegen emits from `T`, carried in the
+//! type descriptor (`abi::read_type_argument`), and checks the answer against
+//! `T`; [`checked_call`](super::checked_call::checked_call) is the table the
 //! typechecker gates those calls by. A **text form** (`llm.text`,
 //! `llm.texts`, `agents.runText`) may send a schema the program wrote
 //! ([`read_written_schema`]), as written, and never checks the answer.
 
 use wasmtime::{Caller, Val};
-
-use crate::MangledName;
 
 /// The most bytes a JSON Schema may have: what one request may carry
 /// ([`DEFAULT_MAX_PROMPT_BYTES`](crate::runtime::llm::DEFAULT_MAX_PROMPT_BYTES)).
@@ -46,57 +44,4 @@ pub(crate) fn read_written_schema(
             "{api}: `schema` is not a JSON Schema: write a JSON object"
         ))),
     }
-}
-
-/// A host call the typechecker types from its type argument: the
-/// `$TypeDescriptor` of `T` in the call's `$types` environment carries the
-/// JSON Schema codegen emitted for it (`codegen::descriptor_schema`), the
-/// host sends it, and checks the answer with the descriptor's predicate. `T` has no
-/// default; the text form is a separate function. The written declaration is
-/// the whole public API; the descriptor is part of how a generic function is
-/// called, never a parameter a program can see or pass.
-pub(crate) struct SchemaCheckedCall {
-    /// The call as diagnostics name it, e.g. `llm.call`.
-    pub callee: &'static str,
-    /// A typed call to show in a diagnostic.
-    pub example: &'static str,
-    /// What the structural check is applied to.
-    pub checks: &'static str,
-    /// Who the schema is sent to.
-    pub answerer: &'static str,
-    /// Ends a diagnostic about the type argument: the text form to call
-    /// instead, e.g. "call `llm.text(model, prompt)` for the completion text".
-    pub text_hint: &'static str,
-}
-
-/// The schema-checked call `mangled` names, if it is one.
-pub(crate) fn schema_checked_call(mangled: &MangledName) -> Option<SchemaCheckedCall> {
-    if super::llm::declaration::is_checked_batch(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "llm.batch",
-            example: "llm.batch<Severity>(model, prompts)",
-            checks: "each model response",
-            answerer: "the model",
-            text_hint: "call `llm.texts(model, prompts)` for the completion texts",
-        });
-    }
-    if super::llm::declaration::is_checked_call(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "llm.call",
-            example: "llm.call<Severity>(model, prompt)",
-            checks: "the model's response",
-            answerer: "the model",
-            text_hint: "call `llm.text(model, prompt)` for the completion text",
-        });
-    }
-    if super::agents::declaration::is_checked_run(mangled) {
-        return Some(SchemaCheckedCall {
-            callee: "agents.run",
-            example: "agents.run<Report>(agent, input)",
-            checks: "the agent's result",
-            answerer: "the agent",
-            text_hint: "call `agents.runText(agent, input)` for the answer as text",
-        });
-    }
-    None
 }

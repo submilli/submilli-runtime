@@ -10,6 +10,24 @@ use crate::{
 
 use super::MODULE_NAME;
 
+/// The `Response` method that parses the body as JSON and checks it against
+/// its type argument.
+const RESPONSE_JSON: &str = "json";
+
+/// The mangled name of `Response#json`, the key the typechecker's gate, the
+/// runtime-generic set and the host registration share.
+pub(crate) fn response_json() -> crate::MangledName {
+    crate::mangle::extend(
+        &crate::mangle::package_symbol(MODULE_NAME, "Response"),
+        RESPONSE_JSON,
+    )
+}
+
+/// Whether `mangled` is `Response#json`.
+pub(crate) fn is_checked_json(mangled: &crate::MangledName) -> bool {
+    *mangled == response_json()
+}
+
 pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
 
@@ -34,6 +52,7 @@ pub fn package_declaration() -> PackageDeclaration {
     );
 
     insert_response_interface(&mut defs);
+    defs.runtime_generics.insert(response_json());
     insert_download_options_interface(&mut defs);
     insert_download_result_interface(&mut defs);
 
@@ -278,19 +297,18 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
             ),
         },
     );
-    // Recognised and lowered by the typechecker to `JSON.parse(body)`; it has no host
-    // export. Declared here only for the LLM-facing type surface — codegen skips
-    // emitting its import.
+    // Runtime-generic: the call passes `T`'s type descriptor, and the host
+    // parses the body and checks it with the descriptor's predicate.
     methods.insert(
-        "json".to_string(),
+        RESPONSE_JSON.to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new(),
+            generics: vec!["T".to_string()],
             params: Vec::new(),
-            ret: Type::Unknown,
+            ret: Type::TypeVar("T".to_string()),
             predicate: None,
             doc: crate::doc(crate::FileId::HTTP,
-                "/** Parse the response body as JSON into `unknown`. Validate with `as`, for example `r.json() as User`. */",
+                "/** Parse the response body as JSON and check it against `T`, for example `r.json<User>()`. The check covers every field, element, and union arm; a body that does not match throws a catchable `TypeError` naming the type, a body that is not JSON throws a `SyntaxError`, and a number past the `number` range throws a `RangeError`. The expected type supplies `T` when none is written (`const user: User = r.json()`); with neither, the result is an unchecked `unknown`. */",
             ),
         },
     );
@@ -307,7 +325,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
                 properties,
                 dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::HTTP,
-                    "/** Result of an HTTP call — status, headers, body, and the final URL after any redirects. Constructed only by the verb-form helpers; user code reads fields via property access and calls `throwForStatus()` / `toString()`. */",
+                    "/** Result of an HTTP call — status, headers, body, and the final URL after any redirects. Constructed only by the verb-form helpers; user code reads fields via property access and calls `json<T>()`, `throwForStatus()` and `toString()`. */",
                 ),
             },
         },

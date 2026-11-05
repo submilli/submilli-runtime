@@ -241,7 +241,7 @@ pub(crate) struct TypeDescriptor {
 }
 
 impl TypeDescriptor {
-    /// The schema a schema-checked call (`api`, e.g. `llm.call`) sends. A
+    /// The schema a schema call (`api`, e.g. `llm.call`) sends. A
     /// direct call's `T` passed the compile-time schema gate, so it has one;
     /// a `T` forwarded through a generic was named by its caller, and when it
     /// has no JSON Schema the call is a catchable `TypeError` here.

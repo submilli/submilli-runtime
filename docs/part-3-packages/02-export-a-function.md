@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "ab3235d74b3618543a87433656a55784cb5e95286e52aa79fd7f398b17d970f8"
+  contentHash: "5bf5c420240584b349e5d4e841fb2910056cf96b6e844cc4185cafff55aa4502"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -254,7 +254,7 @@ export function applyCredit(customerId: string, amount: number): Credit {
     if (!response.ok) {
         throw new Error("billing API failed: HTTP " + response.status.toString());
     }
-    const transaction = response.json() as BalanceTransaction;
+    const transaction = response.json<BalanceTransaction>();
     return { customerId: id, amount, balance: transaction.ending_balance };
 }
 
@@ -278,7 +278,7 @@ function lookUpClass(customerId: string): string {
         throw new Error("no such customer: " + customerId);
     }
     response.throwForStatus();
-    const customer = response.json() as Customer;
+    const customer = response.json<Customer>();
     const customerClass = customer.metadata["class"];
     return customerClass === undefined ? "standard" : customerClass;
 }
@@ -436,7 +436,7 @@ export function applyCredit(customerId: string, amount: number): Credit {
     if (!response.ok) {
         throw new Error("billing API failed: HTTP " + response.status.toString());
     }
-    const transaction = response.json() as BalanceTransaction;
+    const transaction = response.json<BalanceTransaction>();
     return { customerId: id, amount, balance: transaction.ending_balance };
 }
 
@@ -460,7 +460,7 @@ function lookUpClass(customerId: string): string {
         throw new Error("no such customer: " + customerId);
     }
     response.throwForStatus();
-    const customer = response.json() as Customer;
+    const customer = response.json<Customer>();
     const customerClass = customer.metadata["class"];
     return customerClass === undefined ? "standard" : customerClass;
 }

@@ -267,13 +267,23 @@ fn emit_expr_value(
             type_predicate: _,
         } => {
             emit_method_call(
-                emitter, ctx, *receiver, iface, &name.name, args, None, None, &expr.ty,
+                emitter,
+                ctx,
+                *receiver,
+                iface,
+                &name.name,
+                args,
+                None,
+                &[],
+                None,
+                &expr.ty,
             )?;
         }
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
             name,
+            type_args,
             args,
             return_cast,
             type_predicate: _,
@@ -287,6 +297,7 @@ fn emit_expr_value(
                 &name.name,
                 &plain_args,
                 Some(args),
+                type_args,
                 return_cast.as_ref(),
                 &expr.ty,
             )?;
@@ -1333,6 +1344,7 @@ fn emit_field_access(
                 &getter,
                 &[],
                 None,
+                &[],
                 None,
                 &ctx.ta
                     .try_expr(id)
@@ -3257,6 +3269,7 @@ fn emit_chain_access(
                 &name.name,
                 args,
                 None,
+                &[],
                 None,
                 result_ty,
             )?;
@@ -5435,6 +5448,7 @@ pub(crate) fn emit_method_call(
     method: &str,
     args: &[ExprId],
     generic_args: Option<&[crate::GenericArgument]>,
+    type_args: &[Type],
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -5454,6 +5468,7 @@ pub(crate) fn emit_method_call(
         method,
         args,
         generic_args,
+        type_args,
         return_cast,
         call_ret_ty,
     )?;
@@ -5506,6 +5521,7 @@ fn emit_method_call_with_receiver_on_stack(
     method: &str,
     args: &[ExprId],
     generic_args: Option<&[crate::GenericArgument]>,
+    type_args: &[Type],
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -5579,6 +5595,12 @@ fn emit_method_call_with_receiver_on_stack(
         )?;
         let defaults = ctx.symbols.host_call_defaults(func_idx, args.len());
         emit_args_into_slots_with_defaults(emitter, ctx, args, Some(&abi.params), defaults)?;
+        // A runtime-generic host method (`Response#json<T>`) takes its type
+        // arguments' descriptors after the declared arguments, as a generic
+        // function does.
+        if ctx.symbols.runtime_generic_functions.contains(&direct_key) {
+            crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
+        }
         emitter.instruction(Instruction::Call(func_idx));
         emit_slot_return_cast(emitter, ctx, call_ret_ty, Some(&abi))?;
         return Ok(());
@@ -7127,6 +7149,7 @@ mod tests {
                     "missingMethod",
                     &[],
                     None,
+                    &[],
                     None,
                     &Type::Number,
                 )
