@@ -1,0 +1,40 @@
+kind: blueprint
+name: github-people-requests-test
+packages:
+  - '@submilli/github'
+default: deny
+secrets:
+  GITHUB_TOKEN:
+    store: policy-token
+permissions:
+  main:
+    - capability: github.com/events.list
+      action: allow
+    - capability: github.com/stargazers.list
+      action: allow
+    - capability: github.com/forks.list
+      action: allow
+    - capability: github.com/users.get
+      action: allow
+    - capability: github.com/userOrganizations.list
+      action: allow
+    - capability: github.com/userSocialAccounts.list
+      action: allow
+  '@submilli/github':
+    - capability: secrets.get
+      filter: name == "GITHUB_TOKEN"
+      action: allow
+    # No request is sent: `ask-human` refuses like `deny`, with a reason of its own.
+    # That reason tells the script the request named one of these paths, and a request
+    # for any other falls to the default and its reason.
+    - capability: http.get
+      filter: >-
+        host == "api.github.com" and (
+        path == "/repos/allowed-org/repo.js/events"
+        or path == "/repos/allowed-org/repo.js/stargazers"
+        or path == "/repos/allowed-org/repo.js/forks"
+        or path == "/users/octocat"
+        or path == "/users/octocat/orgs"
+        or path == "/users/octocat/social_accounts"
+        or path == "/users/dependabot%5Bbot%5D")
+      action: ask-human

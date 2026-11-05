@@ -1,0 +1,28 @@
+kind: blueprint
+name: github-people-scope-test
+packages:
+  - '@submilli/github'
+default: deny
+permissions:
+  main:
+    - capability: github.com/events.list
+      filter: owner == "allowed-org" and repo == "repo"
+      action: allow
+    - capability: github.com/stargazers.list
+      filter: owner == "allowed-org" and repo == "repo"
+      action: allow
+    - capability: github.com/forks.list
+      filter: owner == "allowed-org" and repo == "repo"
+      action: allow
+    - capability: github.com/users.get
+      filter: login glob "octocat*" or login == "dependabot[bot]"
+      action: allow
+    - capability: github.com/userOrganizations.list
+      filter: login glob "octocat*"
+      action: allow
+    - capability: github.com/userSocialAccounts.list
+      filter: login glob "octocat*"
+      action: allow
+  # Deliberate sentinel: permitted operations must reach secrets.get, which is
+  # denied here before a token can be read or a network request can happen.
+  '@submilli/github': []

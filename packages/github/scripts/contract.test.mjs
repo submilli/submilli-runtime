@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { contractHost, loadPackage } from '../../../scripts/package-contract-host.mjs';
 const host = contractHost();
-const github = await loadPackage(new URL('../src/lib.ts', import.meta.url), host);
+const github = await loadPackage(new URL('../src/lib.ts', import.meta.url), host, [new URL('../src/people.ts', import.meta.url)]);
 const options = (value = {}) => value;
 const repo = { owner: 'Victim-Org', name: 'Mixed-Repo' };
 const reaction = { total_count: 3, '+1': 2, '-1': 0, laugh: 0, hooray: 0, confused: 0, heart: 1, rocket: 0, eyes: 0 };
@@ -113,4 +113,107 @@ test('invalid search responses and rate-limit errors remain typed', () => {
     assert.throws(() => github.searchIssuesAcrossRepositories('compiler', options()), (e) => e.code === 'invalid_response');
     host.response(() => ({ status: 403, data: { message: 'API rate limit exceeded' }, headers: { 'x-ratelimit-remaining': '0', 'retry-after': '5' } }));
     assert.throws(() => github.searchIssuesAcrossRepositories('compiler', options()), (e) => e instanceof github.GitHubError && e.status === 403 && e.retryAfterSeconds === 5 && e.rateLimitRemaining === 0);
+});
+
+const pageLink = (path) => ({ link: `<https://api.github.com${path}?per_page=2&page=3>; rel="next", <https://api.github.com${path}?per_page=2&page=9>; rel="last"` });
+const repositoryContext = { owner: 'victim-org', repo: 'mixed-repo', branch: null, path: null, ref: null, treeSha: null, head: null, base: null };
+
+for (const [method, capability, suffix, accept, extraQuery, data, expected] of [
+    ['listRepositoryEvents', 'github.com/events.list', '/events', 'application/vnd.github+json', {},
+        { id: '1', type: 'ForkEvent', actor: { login: 'hubot' }, created_at: '2026-10-02T00:00:00Z', payload: { action: 'forked', forkee: { full_name: 'hubot/Hello-World' } } },
+        { id: '1', type: 'ForkEvent', actorLogin: 'hubot', createdAt: '2026-10-02T00:00:00Z', action: 'forked', forkFullName: 'hubot/Hello-World' }],
+    ['listStargazers', 'github.com/stargazers.list', '/stargazers', 'application/vnd.github.star+json', {},
+        { starred_at: '2026-10-01T00:00:00Z', user: { login: 'octocat', type: 'User' } },
+        { login: 'octocat', starredAt: '2026-10-01T00:00:00Z', accountType: 'User' }],
+    ['listForks', 'github.com/forks.list', '/forks', 'application/vnd.github+json', { sort: 'newest' },
+        { full_name: 'hubot/Hello-World', html_url: 'https://github.com/hubot/Hello-World', created_at: '2026-10-02T00:00:00Z', owner: { login: 'hubot' } },
+        { fullName: 'hubot/Hello-World', ownerLogin: 'hubot', createdAt: '2026-10-02T00:00:00Z', url: 'https://github.com/hubot/Hello-World' }],
+]) {
+    test(`${method} is one GET of the owner's repository, checked with the lowercased identity`, () => {
+        const path = `/repos/victim-org/mixed-repo${suffix}`;
+        host.reset(); host.response(() => ({ data: [data], headers: pageLink(path) }));
+        const page = github[method]('Victim-Org', 'Mixed-Repo', options({ limit: 2, pageToken: '2' }));
+        assert.equal(host.requests.length, 1);
+        assert.equal(host.requests[0].method, 'get');
+        assert.deepEqual(host.checks, [{ capability, context: repositoryContext }]);
+        const url = new URL(host.requests[0].url);
+        assert.equal(url.host, 'api.github.com'); assert.equal(url.pathname, path);
+        assert.deepEqual(Object.fromEntries(url.searchParams), { per_page: '2', page: '2', ...extraQuery });
+        assert.equal(host.requests[0].headers.get('Accept'), accept);
+        assert.equal(host.requests[0].headers.get('X-GitHub-Api-Version'), '2026-03-10');
+        assert.deepEqual(page, { items: [expected], nextPageToken: '3', isComplete: false });
+
+        host.reset(); host.response(() => ({ data: [] }));
+        assert.deepEqual(github[method]('octocat', 'repo'), { items: [], nextPageToken: '', isComplete: true });
+        assert.equal(new URL(host.requests[0].url).searchParams.get('per_page'), '30');
+    });
+
+    test(`${method} surfaces GitHub's refusal as a GitHubError and checks before any request`, () => {
+        for (const [status, code, message] of [[404, 'not_found', 'Not Found'], [403, 'forbidden', 'Must have push access'], [401, 'unauthorized', 'Bad credentials']]) {
+            host.reset(); host.response(() => ({ status, data: { message, documentation_url: 'https://docs.github.com/rest' }, headers: { 'x-github-request-id': 'request-1' } }));
+            assert.throws(() => github[method]('octocat', 'repo'), (e) => e instanceof github.GitHubError && e.code === code && e.status === status && e.message === message && e.requestId === 'request-1');
+        }
+        host.reset(); host.response(() => ({ status: 403, data: { message: 'API rate limit exceeded' }, headers: { 'x-ratelimit-remaining': '0', 'retry-after': '5' } }));
+        assert.throws(() => github[method]('octocat', 'repo'), (e) => e.code === 'rate_limited' && e.retryAfterSeconds === 5);
+        host.reset(); host.denial((cap) => cap === capability);
+        assert.throws(() => github[method]('octocat', 'repo'), /Capability denied/);
+        assert.equal(host.requests.length, 0);
+    });
+}
+
+const profile = {
+    login: 'octocat', id: 583231, type: 'User', url: 'https://api.github.com/users/octocat', html_url: 'https://github.com/octocat', name: 'The Octocat', company: null, blog: '', location: 'San Francisco',
+    email: 'octocat@example.invalid', notification_email: 'octocat@example.invalid', bio: null, twitter_username: null, public_repos: 8, followers: 9000, following: 9, created_at: '2011-01-25T18:44:36Z',
+};
+
+test('getUser checks and sends one lowercased login and leaves the email address behind', () => {
+    host.reset(); host.response(() => ({ data: profile }));
+    const user = github.getUser('OctoCat');
+    assert.deepEqual(host.checks, [{ capability: 'github.com/users.get', context: { login: 'octocat' } }]);
+    assert.equal(host.requests.length, 1); assert.equal(host.requests[0].method, 'get');
+    assert.equal(new URL(host.requests[0].url).pathname, '/users/octocat');
+    assert.equal(new URL(host.requests[0].url).search, '');
+    assert.deepEqual(user, {
+        login: 'octocat', name: 'The Octocat', company: '', bio: '', blog: '', twitterUsername: '', location: 'San Francisco', url: 'https://github.com/octocat',
+        accountType: 'User', followers: 9000, following: 9, publicRepos: 8, createdAt: '2011-01-25T18:44:36Z', hasPublicEmail: true,
+    });
+    assert.ok(!JSON.stringify(user).includes('example.invalid'));
+    host.response(() => ({ data: { ...profile, email: null } }));
+    assert.equal(github.getUser('octocat').hasPublicEmail, false);
+});
+
+test('a bot login keeps its suffix in the check and is escaped in the path', () => {
+    host.reset(); host.response(() => ({ data: [] }));
+    github.listUserSocialAccounts('Dependabot[bot]');
+    assert.deepEqual(host.checks[0].context, { login: 'dependabot[bot]' });
+    assert.equal(new URL(host.requests[0].url).pathname, '/users/dependabot%5Bbot%5D/social_accounts');
+});
+
+for (const [method, capability, suffix, data, expected] of [
+    ['listUserOrganizations', 'github.com/userOrganizations.list', '/orgs', { login: 'github', url: 'https://api.github.com/orgs/github' }, { login: 'github', url: 'https://github.com/github' }],
+    ['listUserSocialAccounts', 'github.com/userSocialAccounts.list', '/social_accounts', { provider: 'twitter', url: 'https://twitter.com/octocat' }, { provider: 'twitter', url: 'https://twitter.com/octocat' }],
+]) {
+    test(`${method} pages one lowercased login`, () => {
+        const path = `/users/octocat${suffix}`;
+        host.reset(); host.response(() => ({ data: [data], headers: pageLink(path) }));
+        const page = github[method]('OctoCat', options({ limit: 2, pageToken: '2' }));
+        assert.deepEqual(host.checks, [{ capability, context: { login: 'octocat' } }]);
+        assert.equal(host.requests.length, 1); assert.equal(host.requests[0].method, 'get');
+        const url = new URL(host.requests[0].url);
+        assert.equal(url.pathname, path);
+        assert.deepEqual(Object.fromEntries(url.searchParams), { per_page: '2', page: '2' });
+        assert.deepEqual(page, { items: [expected], nextPageToken: '3', isComplete: false });
+    });
+}
+
+test('an unknown login throws, and a crafted login reaches neither the check nor HTTP', () => {
+    for (const method of ['getUser', 'listUserOrganizations', 'listUserSocialAccounts']) {
+        host.reset(); host.response(() => ({ status: 404, data: { message: 'Not Found' } }));
+        assert.throws(() => github[method]('octocat'), (e) => e instanceof github.GitHubError && e.code === 'not_found' && e.status === 404);
+        for (const login of ['..', 'a/b', '../octocat', '%2e%2e', 'octocat?x=1', 'octocat#y', 'octocat\n', 'octo--cat', '-a', 'a-', '\u212Aelvin', 'a'.repeat(40)]) {
+            host.reset();
+            assert.throws(() => github[method](login), (e) => e instanceof github.GitHubError && e.code === 'invalid_input' && e.status === 0);
+            assert.equal(host.checks.length, 0); assert.equal(host.requests.length, 0);
+        }
+    }
 });

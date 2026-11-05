@@ -209,6 +209,44 @@ provides:
       type: string
     treeSha:
       type: string
+- name: github.com/events.list
+  description: List a repository's public activity feed, newest first.
+  fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
+    owner:
+      type: string
+    path:
+      type: string
+    ref:
+      type: string
+    repo:
+      type: string
+    treeSha:
+      type: string
+- name: github.com/forks.list
+  description: List a repository's forks, newest first.
+  fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
+    owner:
+      type: string
+    path:
+      type: string
+    ref:
+      type: string
+    repo:
+      type: string
+    treeSha:
+      type: string
 - name: github.com/issueComments.create
   description: Add an issue comment.
   fields:
@@ -586,6 +624,25 @@ provides:
 - name: github.com/repositories.search
   description: Search repositories visible to the token.
   fields: {}
+- name: github.com/stargazers.list
+  description: List the accounts that starred a repository, with when each did.
+  fields:
+    base:
+      type: string
+    branch:
+      type: string
+    head:
+      type: string
+    owner:
+      type: string
+    path:
+      type: string
+    ref:
+      type: string
+    repo:
+      type: string
+    treeSha:
+      type: string
 - name: github.com/teamMembers.list
   description: List members of an organization team.
   fields:
@@ -614,6 +671,21 @@ provides:
     repo:
       type: string
     treeSha:
+      type: string
+- name: github.com/userOrganizations.list
+  description: List the organizations an account publicly belongs to.
+  fields:
+    login:
+      type: string
+- name: github.com/userSocialAccounts.list
+  description: List the social accounts linked from an account's public profile.
+  fields:
+    login:
+      type: string
+- name: github.com/users.get
+  description: 'Retrieve an account''s public GitHub profile. GitHub''s `email` is reduced to `hasPublicEmail` and the address goes no further. Reading a profile must not grant personal contact data: an agent could otherwise collect the address of every account it sees, and a policy has no field to limit that by. There is no raw passthrough.'
+  fields:
+    login:
       type: string
 - name: github.com/users.search
   description: Search GitHub users.

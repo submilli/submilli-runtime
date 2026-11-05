@@ -2,10 +2,14 @@
 import { readFile } from 'node:fs/promises';
 import { stripTypeScriptTypes } from 'node:module';
 
-export async function loadPackage(sourceUrl, host) {
+// `modules` lists the package's other `src/` files. A generated module cannot resolve relative
+// imports, so they are merged in after the root, which uses them only from function bodies.
+export async function loadPackage(sourceUrl, host, modules = []) {
     const bindings = 'get, post, put, patch, delete: remove, download, read, readBytes, stat, write, encodeComponent, decodeComponent, encodeQuery, parse, secrets, check';
-    const source = (await readFile(sourceUrl, 'utf8'))
+    const files = await Promise.all([sourceUrl, ...modules].map((url) => readFile(url, 'utf8')));
+    const source = files.join('\n')
         .replace(/import\s+[\s\S]*?from "submilli:[^"]+";\n/g, '')
+        .replace(/^(import|export) [^;]*? from "\.\/[^"]+";\n/gm, '')
         .replace(/\bdelete\(/g, 'remove(');
     // Each module captures its own host so separate package tests cannot share state.
     const key = `__packageContractHost${loadPackage.count++}`;
