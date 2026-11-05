@@ -206,11 +206,25 @@ for (const [method, capability, suffix, data, expected] of [
     });
 }
 
+test('legacy and managed-user logins are checked and sent as one lowercased name', () => {
+    for (const [login, canonical, path] of [
+        ['Octocat-', 'octocat-', '/users/octocat-'],
+        ['Octo--Cat', 'octo--cat', '/users/octo--cat'],
+        ['Octocat_Acme', 'octocat_acme', '/users/octocat_acme'],
+        ['Octocat_Acme[bot]', 'octocat_acme[bot]', '/users/octocat_acme%5Bbot%5D'],
+    ]) {
+        host.reset(); host.response(() => ({ data: profile }));
+        github.getUser(login);
+        assert.deepEqual(host.checks, [{ capability: 'github.com/users.get', context: { login: canonical } }]);
+        assert.equal(new URL(host.requests[0].url).pathname, path);
+    }
+});
+
 test('an unknown login throws, and a crafted login reaches neither the check nor HTTP', () => {
     for (const method of ['getUser', 'listUserOrganizations', 'listUserSocialAccounts']) {
         host.reset(); host.response(() => ({ status: 404, data: { message: 'Not Found' } }));
         assert.throws(() => github[method]('octocat'), (e) => e instanceof github.GitHubError && e.code === 'not_found' && e.status === 404);
-        for (const login of ['..', 'a/b', '../octocat', '%2e%2e', 'octocat?x=1', 'octocat#y', 'octocat\n', 'octo--cat', '-a', 'a-', '\u212Aelvin', 'a'.repeat(40)]) {
+        for (const login of ['..', 'a/b', '../octocat', '%2e%2e', 'octocat?x=1', 'octocat#y', 'octocat\n', ' octocat', '', ' ', '-a', '_a', 'octo.cat', '\u212Aelvin', 'a'.repeat(40)]) {
             host.reset();
             assert.throws(() => github[method](login), (e) => e instanceof github.GitHubError && e.code === 'invalid_input' && e.status === 0);
             assert.equal(host.checks.length, 0); assert.equal(host.requests.length, 0);

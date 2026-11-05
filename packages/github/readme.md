@@ -121,10 +121,10 @@ publishes about itself. Each has its own grant:
 | `listUserSocialAccounts` | `github.com/userSocialAccounts.list` | `login` |
 
 The three repository capabilities declare the same fields as `github.com/repositories.get`;
-the fields they do not use are null. `login` is lowercase. It must be GitHub's login shape
-(letters, digits and single hyphens, neither first nor last, at most 39 characters, with an
-optional `[bot]` suffix), so an older login outside it, such as one ending in a hyphen, is
-refused with `invalid_input`.
+the fields they do not use are null. `login` is lowercase. It must be one account name: at
+most 39 letters, digits, hyphens and underscores, starting with a letter or digit, with an
+optional `[bot]` suffix. This accepts legacy and managed-user logins that GitHub's sign-up rules
+no longer allow. Any other value, including path syntax, is refused with `invalid_input`.
 
 `getUser` never returns an email address. GitHub's `email` becomes the boolean
 `hasPublicEmail`, so granting a profile read does not grant personal contact data, and there

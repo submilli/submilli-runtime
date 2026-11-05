@@ -112,8 +112,8 @@ function main(): void {
     label("a login is exactly one GitHub account name");
     const craftedLogins = [
         "", " ", ".", "..", "/", "%", "?", "#", "a/b", "../octocat", "octocat/../hubot", "octocat/", "%2e%2e", "octocat%2fhubot",
-        "octocat?per_page=1", "octocat#fragment", "octo cat", "octocat\n", "octocat\r", "\toctocat", "-octocat", "octocat-", "octo--cat",
-        "octo_cat", "octo.cat", "[bot]", "octocat[bot]x", "octocat[BOT]", "octo[bot]cat", "na\u00efve", "\u212Aelvin", "a".repeat(40), "a".repeat(40) + "[bot]",
+        "octocat?per_page=1", "octocat#fragment", "octo cat", "octocat\n", "octocat\r", "\toctocat", "-octocat", "_octocat",
+        "octo.cat", "[bot]", "octocat[bot]x", "octocat[BOT]", "octo[bot]cat", "na\u00efve", "\u212Aelvin", "a".repeat(40), "a".repeat(40) + "[bot]",
     ];
     for (const login of craftedLogins) {
         assertError("invalid_input", () => getUser(login));
@@ -139,7 +139,12 @@ function main(): void {
     assertError("invalid_page_token", () => listUserSocialAccounts("octocat", { pageToken: "next" }));
     if (secrets.get("GITHUB_TOKEN") === undefined) {
         label("every valid login shape gets past validation to the unbound token");
-        for (const login of ["octocat", "OctoCat", "a", "0", "a-b-c", "a".repeat(39), "dependabot[bot]", "a".repeat(39) + "[bot]"]) {
+        const accepted = [
+            "octocat", "OctoCat", "a", "0", "a-b-c", "a".repeat(39), "dependabot[bot]", "a".repeat(39) + "[bot]",
+            // Legacy logins with a trailing or doubled hyphen, and a managed user's underscore.
+            "octocat-", "octo--cat", "octocat--", "octocat_acme", "Octo_Cat", "a" + "_".repeat(38), "octocat-[bot]",
+        ];
+        for (const login of accepted) {
             assertError("missing_token", () => getUser(login));
             assertError("missing_token", () => listUserOrganizations(login));
             assertError("missing_token", () => listUserSocialAccounts(login));

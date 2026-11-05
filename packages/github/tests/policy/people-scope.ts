@@ -51,8 +51,12 @@ function loginFilterHolds(capability: string, call: (login: string) => void): vo
     denied(capability, "another login in mixed case", () => { call("HuBot"); });
     reachesCredentialBoundary("allowed login", () => { call("octocat"); });
     reachesCredentialBoundary("allowed login in mixed case", () => { call("OctoCat"); });
-    for (const login of ["octocat/../hubot", "octocat/orgs", "octocat%2f..%2fhubot", "octocat?x=1", "octocat#x", "octocat\n", "octocat_x", "octocat--x"]) {
+    for (const login of ["octocat/../hubot", "octocat/orgs", "octocat%2f..%2fhubot", "octocat?x=1", "octocat#x", "octocat\n", "octocat.x"]) {
         assertOutcome("invalid_input", "login " + JSON.stringify(login), () => { call(login); });
+    }
+    // Real logins outside GitHub's sign-up rules: legacy hyphens and a managed user's underscore.
+    for (const login of ["octocat-", "octocat--x", "octocat_x", "OctoCat_X"]) {
+        reachesCredentialBoundary("login " + login, () => { call(login); });
     }
 }
 

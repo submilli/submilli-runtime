@@ -35,11 +35,10 @@ const MAX_FILE_BYTES = 10485760;
 // could be read as search syntax or as a second path segment.
 const OWNER_NAME = /^[A-Za-z0-9_-]+$/;
 const REPOSITORY_NAME = /^[A-Za-z0-9._-]+$/;
-// GitHub's account grammar: alphanumerics and single hyphens, neither first nor last, with
-// `[bot]` on an app's actor. Tighter than OWNER_NAME, as this value is the whole request target.
-const LOGIN = /^[A-Za-z0-9]+(-[A-Za-z0-9]+)*(\[bot\])?$/;
-const BOT_SUFFIX = "[bot]";
-const MAX_LOGIN_LENGTH = 39;
+// One account name. This stops path syntax rather than enforcing GitHub's sign-up rules: legacy
+// logins can end in or repeat a hyphen, and managed users' logins hold an underscore. `[bot]` is
+// an app's actor.
+const LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,38}(\[bot\])?$/;
 // Scope names are refused anywhere outside phrases; relying on GitHub's undocumented
 // punctuation/format-character tokenization would leave the repository boundary ambiguous.
 const SEARCH_SCOPE = /repo:|org:|user:|owner:/;
@@ -2956,9 +2955,8 @@ function checkedRepository(owner: string, name: string): RepositoryCapabilityCon
 // The login that is checked and sent. Validate before folding, as for a repository identity.
 function canonicalLogin(login: string): string {
     requireText(login, "login");
-    const name = login.endsWith(BOT_SUFFIX) ? login.slice(0, login.length - BOT_SUFFIX.length) : login;
-    if (name.length > MAX_LOGIN_LENGTH || !LOGIN.test(login)) {
-        throw validationError("invalid_input", "login must be at most 39 letters, digits, and single hyphens, optionally ending in [bot]");
+    if (!LOGIN.test(login)) {
+        throw validationError("invalid_input", "login must be at most 39 letters, digits, hyphens, and underscores, starting with a letter or digit, optionally ending in [bot]");
     }
     return login.toLowerCase();
 }
