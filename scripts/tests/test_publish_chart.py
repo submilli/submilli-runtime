@@ -116,6 +116,15 @@ class PublishTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_malformed_success_is_not_an_absent_manifest(self):
+        for body in [None, [], True, "unexpected"]:
+            with self.subTest(body=body), patch.object(
+                publisher.urllib.request, "urlopen",
+                return_value=io.BytesIO(json.dumps(body).encode()),
+            ):
+                with self.assertRaisesRegex(ValueError, "not an object"):
+                    publisher.request_json("https://ghcr.io/test", {}, missing_allowed=True)
+
     def test_only_explicit_missing_manifest_or_repository_is_absent(self):
         for code in ["MANIFEST_UNKNOWN", "NAME_UNKNOWN"]:
             with self.subTest(code=code), patch.object(publisher.urllib.request, "urlopen",

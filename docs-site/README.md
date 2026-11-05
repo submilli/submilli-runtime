@@ -101,6 +101,13 @@ The `Documentation` workflow checks and builds the site and uploads a
 described under "Pull request previews" below. Connect the docs output to
 hosting before deploying the marketing site without its former book pages.
 
+The Compose journey uses the release and image pins in the guide. Documentation
+records a deferral when the current workspace release's image is not published
+yet. The Release workflow requires the journey after publishing that image.
+Missing older images, inconsistent pins, and registry failures fail the check.
+Release retries use the workflow's verification tools against the selected tag's
+guide, so that older tags do not need to contain those tools.
+
 ### Pull request previews
 
 Render's Pull Request Previews feature builds the pull request branch of the

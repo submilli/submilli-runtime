@@ -5,7 +5,7 @@
 # documentation change cannot silently leave this check exercising a different
 # stack.
 #
-#   scripts/docker-compose-e2e.sh
+#   scripts/docker-compose-e2e.sh [release-source-root]
 #
 # This is intentionally a Linux CI check.  It uses no registry credentials and
 # never prints the generated environment, Compose config, or token-bearing
@@ -14,7 +14,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOC="${REPO_ROOT}/docs/part-4-server/06-deploy-with-compose.md"
+SOURCE_ROOT="${1:-$REPO_ROOT}"
+DOC="${SOURCE_ROOT}/docs/part-4-server/06-deploy-with-compose.md"
 PROJECT="submilli-compose-e2e-${GITHUB_RUN_ID:-$$}"
 WORKDIR="$(mktemp -d)"
 
@@ -52,19 +53,8 @@ PY
 }
 
 mkdir -p "$WORKDIR"
-read -r RELEASE IMAGE < <(python3 - "$DOC" <<'PY'
-import pathlib, re, sys
-
-doc = pathlib.Path(sys.argv[1]).read_text()
-start = doc.split("## Start it\n", 1)[1].split("\n## ", 1)[0]
-commands = re.search(r"```sh\n(.*?)```", start, re.DOTALL).group(1)
-release = re.search(r"curl -fsSLO https://raw\.githubusercontent\.com/submilli/submilli-runtime/(v[0-9.]+)/compose\.yaml", commands)
-image = re.search(r"printf 'SUBMILLI_IMAGE=(ghcr\.io/submilli/submilli-runtime:([0-9.]+))\\n", commands)
-assert release and image, "Start commands must specify a release and image pin"
-assert release.group(1) == "v" + image.group(2), "Compose and image releases differ"
-print(release.group(1), image.group(1))
-PY
-)
+read -r RELEASE IMAGE < <(python3 "$REPO_ROOT/scripts/check_compose_release.py" \
+    --source-root "$SOURCE_ROOT" --print-target)
 curl -fsSL "https://raw.githubusercontent.com/submilli/submilli-runtime/${RELEASE}/compose.yaml" \
     -o "$WORKDIR/compose.yaml"
 

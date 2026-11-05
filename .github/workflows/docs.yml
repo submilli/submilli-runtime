@@ -8,6 +8,10 @@ on:
       - "docs-site/**"
       - "examples/quickstart/**"
       - "scripts/docker-compose-e2e.sh"
+      - "scripts/check_compose_release.py"
+      - "scripts/publish_chart.py"
+      - "scripts/tests/test_check_compose_release.py"
+      - "scripts/tests/test_publish_chart.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
@@ -15,6 +19,10 @@ on:
       - "docs-site/**"
       - "examples/quickstart/**"
       - "scripts/docker-compose-e2e.sh"
+      - "scripts/check_compose_release.py"
+      - "scripts/publish_chart.py"
+      - "scripts/tests/test_check_compose_release.py"
+      - "scripts/tests/test_publish_chart.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -28,7 +36,15 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Check Compose release gating
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_check_compose_release.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_publish_chart.py'
+      - name: Check the documented runtime image
+        id: image
+        run: python3 scripts/check_compose_release.py
       - name: Replay the published Compose deployment
+        if: steps.image.outputs.available == 'true'
         run: scripts/docker-compose-e2e.sh
 
   build:
