@@ -1,0 +1,22 @@
+# Control for shop-scope.yaml: the same store secret, with rules that pin another store.
+# Every call must stop at main, which proves the store filter is load-bearing.
+kind: blueprint
+name: shopify-wrong-shop-test
+packages:
+  - '@submilli/shopify-admin'
+secrets:
+  SHOPIFY_SHOP:
+    store: policy-shop
+default: deny
+permissions:
+  main:
+    - capability: shopify.com/orders.search
+      filter: shop == "another-shop"
+      action: allow
+    - capability: shopify.com/orders.get
+      filter: shop == "another-shop"
+      action: allow
+  '@submilli/shopify-admin':
+    - capability: secrets.get
+      filter: name == "SHOPIFY_SHOP"
+      action: allow

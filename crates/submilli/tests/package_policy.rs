@@ -28,6 +28,7 @@ const PACKAGES: &[&str] = &[
     "google-drive",
     "jina",
     "notion",
+    "shopify-admin",
     "slack-bot",
     "slack-user",
 ];
@@ -36,6 +37,8 @@ const PACKAGES: &[&str] = &[
 fn policy_scripts_pass_under_their_blueprints() {
     let home = tempfile::tempdir().expect("package store");
     put_secret(home.path(), "policy-token", "policy-placeholder");
+    // The Shopify package puts the store in every check, so its scripts need a valid one.
+    put_secret(home.path(), "policy-shop", "policy-test-shop");
     let mut failures = Vec::new();
     for package in PACKAGES {
         let published = submilli(

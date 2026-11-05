@@ -1,0 +1,235 @@
+namespace: submilli
+provides:
+- name: shopify.com/abandonedCheckouts.list
+  description: List abandoned checkouts, newest first, each with the link the buyer can use to finish it.
+  fields:
+    shop:
+      type: string
+- name: shopify.com/customers.get
+  description: Get one customer, with their last 10 orders; null when they do not exist.
+  fields:
+    customerId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/customers.search
+  description: Search the store's customers.
+  fields:
+    shop:
+      type: string
+- name: shopify.com/discounts.create
+  description: Create a discount code for the whole store. In the check, the kind not used is 0 and no usage limit is 0.
+  fields:
+    amount:
+      type: number
+    code:
+      type: string
+    percentage:
+      type: number
+    shop:
+      type: string
+    usageLimit:
+      type: number
+- name: shopify.com/discounts.deactivate
+  description: Stop a discount code from working.
+  fields:
+    discountId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/draftOrders.create
+  description: Create a draft order from catalog variants. Its `invoiceUrl` is a link the buyer can pay at. In the check, `itemCount` is the total units, and `discountPercentage` is 0 without a discount.
+  fields:
+    discountPercentage:
+      type: number
+    email:
+      type: string
+    itemCount:
+      type: number
+    shop:
+      type: string
+- name: shopify.com/draftOrders.sendInvoice
+  description: Email a draft order's invoice.
+  fields:
+    draftOrderId:
+      type: string
+    shop:
+      type: string
+    to:
+      type: string
+- name: shopify.com/fulfillmentOrders.hold
+  description: Put a fulfillment order on hold, so it does not ship.
+  fields:
+    fulfillmentOrderId:
+      type: string
+    reason:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/fulfillmentOrders.list
+  description: List an order's fulfillment orders; null when the order does not exist.
+  fields:
+    orderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/fulfillmentOrders.release
+  description: Release holds on a fulfillment order.
+  fields:
+    fulfillmentOrderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/fulfillments.create
+  description: Record a shipment of an order. Each fulfillment order named must be open on this order, and all must be at one location. With none named, every open one is fulfilled.
+  fields:
+    notifyCustomer:
+      type: boolean
+    orderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/fulfillments.updateTracking
+  description: Change the tracking on a fulfillment. Its order is resolved from Shopify, so a policy sees the real one.
+  fields:
+    fulfillmentId:
+      type: string
+    orderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/inventory.adjust
+  description: Add to or take from the quantity available at a location.
+  fields:
+    delta:
+      type: number
+    inventoryItemId:
+      type: string
+    locationId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/inventory.get
+  description: Get a product's stock, by variant and location; null when the product does not exist. Also the way to find inventory item ids.
+  fields:
+    productId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/inventory.set
+  description: Set the quantity available at a location. The current level is read first, so a policy sees the real change, and Shopify refuses the write with `CHANGE_FROM_QUANTITY_STALE` if stock moved in between.
+  fields:
+    delta:
+      type: number
+    inventoryItemId:
+      type: string
+    locationId:
+      type: string
+    quantity:
+      type: number
+    shop:
+      type: string
+- name: shopify.com/locations.list
+  description: List the store's first 50 locations.
+  fields:
+    shop:
+      type: string
+- name: shopify.com/orders.cancel
+  description: Cancel an order. This cannot be undone. The order is fetched first, so a policy sees its real total and currency. Shopify finishes the cancellation in the background.
+  fields:
+    currency:
+      type: string
+    orderId:
+      type: string
+    refund:
+      type: boolean
+    restock:
+      type: boolean
+    shop:
+      type: string
+    totalAmount:
+      type: number
+- name: shopify.com/orders.get
+  description: Get one order, with its first 100 lines; null when it does not exist.
+  fields:
+    orderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/orders.search
+  description: Search the store's orders, newest first unless `sortKey` or `reverse` says otherwise.
+  fields:
+    shop:
+      type: string
+- name: shopify.com/orders.update
+  description: Add a line to an order's note for staff. What is already there stays.
+  fields:
+    fields:
+      type: string[]
+    orderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/products.get
+  description: Get one product, with its first 100 variants; null when it does not exist.
+  fields:
+    productId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/products.search
+  description: Search the catalog.
+  fields:
+    shop:
+      type: string
+- name: shopify.com/products.update
+  description: Change a product. The check lists the field names set, so a policy can forbid `status`.
+  fields:
+    fields:
+      type: string[]
+    productId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/refunds.create
+  description: Refund lines of an order, its shipping, or both. Shopify works out the amount and the payment transactions first, so a policy sees the real amount and currency.
+  fields:
+    amount:
+      type: number
+    currency:
+      type: string
+    orderId:
+      type: string
+    restock:
+      type: boolean
+    shop:
+      type: string
+- name: shopify.com/refunds.suggest
+  description: Work out what a refund would return, without refunding. Null when the order does not exist.
+  fields:
+    orderId:
+      type: string
+    shop:
+      type: string
+- name: shopify.com/shop.get
+  description: Get the store's name, currency, time zone and plan.
+  fields:
+    shop:
+      type: string
+- name: shopify.com/variants.updatePrices
+  description: Change prices of a product's variants. Each variant must belong to the product.
+  fields:
+    maxPrice:
+      type: number
+    productId:
+      type: string
+    shop:
+      type: string
+    variantIds:
+      type: string[]
+requires:
+- capability: http.post
+- capability: secrets.get
+  filter: name == "SHOPIFY_ACCESS_TOKEN"
+- capability: secrets.get
+  filter: name == "SHOPIFY_SHOP"
