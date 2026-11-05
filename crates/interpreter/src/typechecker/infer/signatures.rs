@@ -1,6 +1,7 @@
 //! Signature pass: resolve and register top-level function and interface declarations.
 
 use crate::compiler_error::CompilerFailure;
+use crate::lower_local_types::display_type_name;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -162,7 +163,10 @@ impl<'a> Inferer<'a> {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: name.span,
-                            message: format!("duplicate declaration of interface `{}`", name.name,),
+                            message: format!(
+                                "duplicate declaration of interface `{}`",
+                                display_type_name(&name.name)
+                            ),
                             help: Vec::new(),
                             notes: Vec::new(),
                         });
@@ -246,7 +250,10 @@ impl<'a> Inferer<'a> {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: name.span,
-                            message: format!("duplicate declaration of type `{}`", name.name,),
+                            message: format!(
+                                "duplicate declaration of type `{}`",
+                                display_type_name(&name.name)
+                            ),
                             help: Vec::new(),
                             notes: vec![(prev_span, "previously declared here".into())],
                         });
@@ -407,11 +414,15 @@ impl<'a> Inferer<'a> {
                     if !own_names.insert(m_name.name.clone()) {
                         // `@call` is the call-signature sentinel — give it a distinct duplicate message.
                         let message = if m_name.name == "@call" {
-                            format!("duplicate call signature on interface `{}`", name.name,)
+                            format!(
+                                "duplicate call signature on interface `{}`",
+                                display_type_name(&name.name)
+                            )
                         } else {
                             format!(
                                 "duplicate member `{}` on interface `{}`",
-                                m_name.name, name.name,
+                                m_name.name,
+                                display_type_name(&name.name),
                             )
                         };
                         self.diagnostics.push(Diagnostic {
@@ -506,7 +517,8 @@ impl<'a> Inferer<'a> {
                             span: p_name.span,
                             message: format!(
                                 "duplicate member `{}` on interface `{}`",
-                                p_name.name, name.name,
+                                p_name.name,
+                                display_type_name(&name.name),
                             ),
                             help: Vec::new(),
                             notes: Vec::new(),

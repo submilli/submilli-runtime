@@ -1,5 +1,6 @@
 //! Validates source metadata before inference consumes a caller-supplied AST.
 
+use crate::lower_local_types::display_type_name;
 use crate::{FileId, Span, ast::*, source::SourceError};
 
 pub(crate) fn validate(ast: &Ast, source: &str, file: FileId) -> Result<(), SourceError> {
@@ -421,7 +422,8 @@ impl<'a> Validator<'a> {
 
     fn name(&self, name: &Ident) -> Result<(), SourceError> {
         let text = name.span.text(self.source, self.file)?;
-        if text != name.name {
+        // A lifted local type keeps its source name before its block suffix.
+        if text != display_type_name(&name.name) {
             return Err(SourceError::InvalidSpan {
                 span: name.span,
                 reason: "type name does not match its source",

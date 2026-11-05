@@ -148,6 +148,11 @@ fn check_structure_limits() {
             "function main(): number {{ return {}; }}",
             chain(" + ", "1", 253)
         ),
+        // Lifting a local type walks the same height.
+        format!(
+            "function main(): number {{ type N = number; const n: N = 1; return {}; }}",
+            chain(" + ", "n", 253)
+        ),
         format!(
             "function main(): number {{ const a = 1; const s = `{}`; return s.length; }}",
             "${a}x".repeat(510)

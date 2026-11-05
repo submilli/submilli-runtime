@@ -1,4 +1,5 @@
 //! Iterative type spelling; frames borrow the input and never clone recursive types.
+use crate::lower_local_types::{display_type_name, written_type_args};
 use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
 use crate::{IndexSignature, ObjectField, Type};
 
@@ -201,9 +202,9 @@ fn write_node<'a>(
         Type::NonPrimitive => out.push("object"),
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
-        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(name),
+        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(display_type_name(name)),
         Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
-            out.push(name)?;
+            out.push(display_type_name(name))?;
             match ty.enum_member_name() {
                 Some((_, member, _)) => {
                     out.push(".")?;
@@ -310,7 +311,8 @@ fn write_node<'a>(
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. }
         | Type::AliasRef { name, args, .. } => {
-            out.push(name)?;
+            out.push(display_type_name(name))?;
+            let args = written_type_args(name, args);
             if args.is_empty() {
                 return Ok(());
             }
@@ -484,7 +486,7 @@ impl CopyBudget {
                 continue;
             }
             validate_function_metadata(ty)?;
-            let children = child_count(ty);
+            let children = crate::type_size::child_count(ty);
             let frontier = children
                 .checked_add(pending.len())
                 .ok_or(RenderError::Truncated)?;
@@ -597,45 +599,6 @@ fn copied_text_bytes(ty: &Type) -> Result<usize, RenderError> {
         _ => {}
     }
     Ok(bytes)
-}
-
-fn child_count(ty: &Type) -> usize {
-    match ty {
-        Type::Function {
-            params, predicate, ..
-        } => params
-            .len()
-            .saturating_add(1 + usize::from(predicate.is_some())),
-        Type::Object { fields, index } => fields.len().saturating_add(usize::from(index.is_some())),
-        Type::Array(_) | Type::Readonly(_) => 1,
-        Type::Tuple(tuple) => tuple.elements.len(),
-        Type::Union(members) => members.len(),
-        Type::Refined { .. } => 2,
-        Type::InterfaceRef { args, .. }
-        | Type::ClassRef { args, .. }
-        | Type::AliasRef { args, .. } => args.len(),
-        Type::Alias { args, .. } => args.len().saturating_add(1),
-        Type::Number
-        | Type::NumberLiteral(_)
-        | Type::BigInt
-        | Type::BigIntLiteral(_)
-        | Type::String
-        | Type::StringLiteral(_)
-        | Type::Uint8Array
-        | Type::Boolean
-        | Type::BooleanLiteral(_)
-        | Type::Null
-        | Type::Undefined
-        | Type::Void
-        | Type::Unknown
-        | Type::NonPrimitive
-        | Type::Error
-        | Type::Never
-        | Type::TypeVar(_)
-        | Type::GenericParam { .. }
-        | Type::NumberEnum { .. }
-        | Type::StringEnum { .. } => 0,
-    }
 }
 
 #[cfg(test)]

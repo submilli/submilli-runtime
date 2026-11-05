@@ -5,7 +5,7 @@ in `/`) is left out whole, with its subdirectories, except for any case in the s
 Written by `../typescript-baselines/port-suite.cjs`: change its lists or the porter,
 not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't read.
 
-3479 entries: 3208 not supported, 73 the port changes what it checks, 120 duplicate, 77 checks too little, 1 porter failure.
+3478 entries: 3207 not supported, 73 the port changes what it checks, 120 duplicate, 77 checks too little, 1 porter failure.
 
 | Case | Reason | Detail |
 |:-----|:-------|:-------|
@@ -3038,7 +3038,6 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/localTypes/localTypes1.ts` | not supported | a `class` must be declared at the top level of the module, on ` class C { ` |
 | `types/localTypes/localTypes2.ts` | not supported | a `class` must be declared at the top level of the module, on ` class C { ` |
 | `types/localTypes/localTypes3.ts` | not supported | a `class` must be declared at the top level of the module, on ` class C<X, Y> { ` |
-| `types/localTypes/localTypes4.ts` | not supported | unknown type `T`, on ` let v: T = null as unknown as (T); ` |
 | `types/localTypes/localTypes5.ts` | not supported | expected `{`, on ` function foo<A>(): X.m<number, boolean>.(Anonymous function)<Date>.Y<string> { ` |
 | `types/mapped/` | not supported | mapped types |
 | `types/members/augmentedTypeAssignmentCompatIndexSignature.ts` | not supported | index signatures |

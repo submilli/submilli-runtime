@@ -26,23 +26,23 @@ line, a name it declares, or the type `tsc` printed. It is approximate, and
 `COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that
 pruning nearly removed.
 
-Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
+Upstream: 5055 TypeScript tests. Suite: 903 TypeScript cases, 714 test262 cases.
 
 ## Types
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `number` | §1.1 | done | 1514 | 363 | 1151 | 0 | 4207 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1566 | 366 | 1200 | 0 | 3538 | 1 of 1 | — | — |  |
+| `number` | §1.1 | done | 1514 | 364 | 1150 | 0 | 4207 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1566 | 367 | 1199 | 0 | 3540 | 1 of 1 | — | — |  |
 | `boolean` | §1.1 | done | 493 | 154 | 339 | 0 | 2552 | 1 of 1 | — | — |  |
-| `null` | §1.1 | done | 401 | 115 | 286 | 0 | 1629 | 1 of 1 | — | — |  |
-| `undefined` | §1.1 | done | 386 | 158 | 228 | 0 | 1445 | 1 of 1 | — | — |  |
+| `null` | §1.1 | done | 401 | 115 | 286 | 0 | 1631 | 1 of 1 | — | — |  |
+| `undefined` | §1.1 | done | 386 | 159 | 227 | 0 | 1447 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 521 | 80 | 441 | 0 | 1359 | 1 of 1 | — | — |  |
 | `never` | §1.1 | done | 74 | 16 | 58 | 0 | 159 | 1 of 1 | — | — |  |
 | `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 50 | 1 of 1 | 16 | 71 |  |
 | Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 25 | 7 | 18 | 0 | 31 | 4 of 4 | — | — |  |
 | Numeric separators (`1_000`) | §1.1 | done | 11 | 6 | 5 | 0 | 70 | 1 of 1 | — | — |  |
-| `unknown` | §2.11 | done | 77 | 16 | 61 | 0 | 1043 | 1 of 1 | — | — |  |
+| `unknown` | §2.11 | done | 77 | 16 | 61 | 0 | 1045 | 1 of 1 | — | — |  |
 | `object` | §2.11 | done | 67 | 21 | 46 | 0 | 80 | 1 of 1 | — | — |  |
 | Object types (`{ x: T }`) | §1.2 | done | 1575 | 300 | 1275 | 0 | 1716 | 1 of 1 | — | — |  |
 | Optional properties (`a?: T`) | §1.2 | done | 129 | 46 | 83 | 0 | 57 | 1 of 1 | — | — |  |
@@ -60,7 +60,7 @@ Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `let` | §1.3 | done | 550 | 152 | 398 | 0 | 4643 | 1 of 1 | — | — |  |
+| `let` | §1.3 | done | 550 | 153 | 397 | 0 | 4645 | 1 of 1 | — | — |  |
 | `const` | §1.3 | done | 789 | 133 | 656 | 0 | 593 | 1 of 1 | — | — |  |
 | Several declarators (`let a = 0, b = 1;`) | §1.3 | done | 128 | 4 | 124 | 0 | 4 | 2 of 2 | — | — |  |
 | Type inference on `let`/`const` | §1.3 | done | 2223 | 505 | 1718 | 0 | 3750 | 1 of 1 | — | — |  |
@@ -69,8 +69,8 @@ Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Function declarations | §1.4 | done | 1567 | 287 | 1280 | 0 | 1154 | 1 of 1 | — | — |  |
-| Nested function declarations | §1.4 | done | 67 | 10 | 57 | 0 | 12 | 1 of 1 | — | — |  |
+| Function declarations | §1.4 | done | 1567 | 288 | 1279 | 0 | 1154 | 1 of 1 | — | — |  |
+| Nested function declarations | §1.4 | done | 67 | 11 | 56 | 0 | 14 | 1 of 1 | — | — |  |
 | Arrow functions | §1.4 | done | 625 | 134 | 491 | 0 | 330 | 1 of 1 | — | — |  |
 | Closures (function expressions and arrows in a function) | §1.4 | done | 242 | 43 | 199 | 0 | 76 | 1 of 1 | — | — |  |
 | Optional parameters (`x?: T`) | §1.4 | done | 132 | 27 | 105 | 0 | 76 | 1 of 1 | — | — |  |
@@ -82,7 +82,7 @@ Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `if` / `else` | §1.5 | done | 288 | 110 | 178 | 0 | 577 | 1 of 1 | — | — |  |
+| `if` / `else` | §1.5 | done | 288 | 111 | 177 | 0 | 577 | 1 of 1 | — | — |  |
 | `while` | §1.5 | done | 54 | 16 | 38 | 0 | 53 | 1 of 1 | — | — |  |
 | `do…while` | §1.5 | done | 19 | 4 | 15 | 0 | 25 | 1 of 1 | — | — |  |
 | `for` (C-style) | §1.5 | done | 58 | 10 | 48 | 0 | 45 | 2 of 2 | — | — |  |
@@ -102,7 +102,7 @@ Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
 | Logical (`&&`, `||`, `!`) | §1.6 | done | 225 | 94 | 131 | 0 | 560 | 3 of 3 | — | — |  |
 | Unary arithmetic (`+x`, `-x`) | §1.6 | done | 105 | 38 | 67 | 0 | 188 | 2 of 2 | — | — |  |
 | Ternary (`? :`) | §1.6 | done | 110 | 51 | 59 | 0 | 247 | 1 of 1 | — | — |  |
-| Assignment (`=`, `+=`, …) | §1.6 | done | 719 | 195 | 524 | 0 | 1181 | 7 of 7 | — | — |  |
+| Assignment (`=`, `+=`, …) | §1.6 | done | 719 | 196 | 523 | 0 | 1184 | 7 of 7 | — | — |  |
 | Postfix `++` / `--` | §1.6 | done | 88 | 28 | 60 | 0 | 158 | 2 of 2 | — | — |  |
 | `typeof x === "T"` narrowing | §1.6 | done | 84 | 54 | 30 | 0 | 287 | 7 of 7 | — | — |  |
 | `x === null` narrowing | §1.6 | done | 33 | 16 | 17 | 0 | 72 | 2 of 2 | — | — |  |
@@ -150,14 +150,14 @@ Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Interface declarations | §2.3 | done | 897 | 151 | 746 | 0 | 457 | 1 of 1 | — | — |  |
+| Interface declarations | §2.3 | done | 897 | 152 | 745 | 0 | 463 | 1 of 1 | — | — |  |
 | `implements` | §2.3 | done | 78 | 19 | 59 | 0 | 12 | 1 of 1 | — | — |  |
 
 ## Generics
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Generic functions | §2.1 | done | 607 | 92 | 515 | 0 | 197 | 1 of 1 | — | — |  |
+| Generic functions | §2.1 | done | 607 | 93 | 514 | 0 | 198 | 1 of 1 | — | — |  |
 | Generic types | §2.1 | done | 302 | 37 | 265 | 0 | 96 | 1 of 1 | — | — |  |
 | Explicit type arguments | §2.1 | done | 135 | 37 | 98 | 0 | 55 | 1 of 1 | — | — |  |
 
@@ -188,7 +188,7 @@ Upstream: 5055 TypeScript tests. Suite: 902 TypeScript cases, 714 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| String literals | §1.7 | done | 1902 | 391 | 1511 | 0 | 1474 | 2 of 2 | — | — |  |
+| String literals | §1.7 | done | 1902 | 392 | 1510 | 0 | 1475 | 2 of 2 | — | — |  |
 | Template literals | §1.7 | done | 280 | 75 | 205 | 0 | 426 | 1 of 1 | — | — |  |
 | String methods | §1.7 | done | — | — | — | — | — | — | 87 | 555 |  |
 

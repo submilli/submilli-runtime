@@ -1,4 +1,5 @@
 use crate::compiler_error::CompilerFailure;
+use crate::lower_local_types::{display_type_name, written_type_args};
 use crate::{Package, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeSymbol};
 
 use super::Inferer;
@@ -423,12 +424,13 @@ impl<'a> Inferer<'a> {
                     // Identity = the declaring symbol's mangled name; no change
                     // needed here, `mangled_name` carries the public/internal form.
                     let mangled = sym.mangled_name.clone();
+                    let shown = display_type_name(text);
                     return Ok(match &sym.kind {
                         TypeKind::NumberEnum { .. } => {
                             if !args.is_empty() {
                                 self.error(
                                     annot.span,
-                                    format!("enum `{text}` is not a generic type"),
+                                    format!("enum `{shown}` is not a generic type"),
                                 );
                                 return Ok(Type::Error);
                             }
@@ -438,7 +440,7 @@ impl<'a> Inferer<'a> {
                             if !args.is_empty() {
                                 self.error(
                                     annot.span,
-                                    format!("enum `{text}` is not a generic type"),
+                                    format!("enum `{shown}` is not a generic type"),
                                 );
                                 return Ok(Type::Error);
                             }
@@ -446,10 +448,11 @@ impl<'a> Inferer<'a> {
                         }
                         TypeKind::Interface { generics, .. } => {
                             if args.len() != generics.len() {
+                                let written = written_type_args(text, generics);
                                 let header = self.render_help(
-                                    format_definition::format_interface_header(text, generics),
+                                    format_definition::format_interface_header(shown, written),
                                 );
-                                let plural = if generics.len() == 1 {
+                                let plural = if written.len() == 1 {
                                     "argument"
                                 } else {
                                     "arguments"
@@ -458,10 +461,10 @@ impl<'a> Inferer<'a> {
                                     annot.span,
                                     format!(
                                         "interface `{}` expects {} type {}, got {}",
-                                        text,
-                                        generics.len(),
+                                        shown,
+                                        written.len(),
                                         plural,
-                                        args.len(),
+                                        written_type_args(text, args).len(),
                                     ),
                                     vec![header],
                                 );
@@ -557,7 +560,7 @@ impl<'a> Inferer<'a> {
                     return Ok(member_ty);
                 }
                 let help: Vec<String> = self
-                    .closest_type_name(text)
+                    .closest_type_name(name)
                     .map(|s| vec![format!("did you mean `{}`?", s)])
                     .unwrap_or_default();
                 self.error_with_help(annot.span, format!("unknown type `{text}`"), help);
@@ -884,7 +887,11 @@ impl<'a> Inferer<'a> {
             (TypeofRoot::Enum { .. }, [member]) => {
                 self.error(
                     member.span,
-                    format!("no variant `{}` on enum `{name}`", member.name),
+                    format!(
+                        "no variant `{}` on enum `{}`",
+                        member.name,
+                        display_type_name(name)
+                    ),
                 );
                 Type::Error
             }
@@ -905,7 +912,7 @@ impl<'a> Inferer<'a> {
     /// `typeof` of a name that is only a type: a whole enum, a class, or another
     /// named type.
     fn reject_typeof_of_type(&mut self, root: &crate::Ident, kind: &TypeofRoot) {
-        let name = &root.name;
+        let name = display_type_name(&root.name);
         let (what, help) = match kind {
             TypeofRoot::Enum { .. } => (
                 "an enum type",
@@ -1058,8 +1065,12 @@ impl Inferer<'_> {
             _ => return None,
         };
         let variants = super::comparable::enum_variant_values(&sym.kind)?;
+        let shown = display_type_name(enum_text);
         if !args.is_empty() {
-            self.error(span, format!("enum member `{text}` is not a generic type"));
+            self.error(
+                span,
+                format!("enum member `{shown}.{member}` is not a generic type"),
+            );
             return Some(Type::Error);
         }
         let Some((_, value)) = variants.iter().find(|(name, _)| name == member) else {
@@ -1067,7 +1078,7 @@ impl Inferer<'_> {
                 super::expr::enum_variant_help(enum_text, variants.iter().map(|(name, _)| name));
             self.error_with_help(
                 span,
-                format!("no variant `{member}` on enum `{enum_text}`"),
+                format!("no variant `{member}` on enum `{shown}`"),
                 help,
             );
             return Some(Type::Error);

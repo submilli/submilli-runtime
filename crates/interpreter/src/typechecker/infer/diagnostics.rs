@@ -5,6 +5,7 @@
 //! delegate to [`crate::did_you_mean`] but need access to `self.types`
 //! and `self.scopes`, so the helper sits here on the `Inferer`.
 
+use crate::lower_local_types::{display_type_name, is_local_type_name};
 use crate::{Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, ValueKind};
 
 use super::format_signature::SignatureKind;
@@ -781,7 +782,8 @@ impl<'a> Inferer<'a> {
             );
             return;
         }
-        let message = format!("unresolved identifier `{name}`");
+        // An assignment to a local enum names it by its key.
+        let message = format!("unresolved identifier `{}`", display_type_name(name));
         if name == "await" {
             self.error_with_help(
                 span,
@@ -856,13 +858,44 @@ impl<'a> Inferer<'a> {
             .collect()
     }
 
-    /// Suggest the closest type name to `query` from the four
-    /// primitive keywords + every name in `self.types`. Used by B3's
-    /// "unknown type" diagnostic.
-    pub(super) fn closest_type_name(&self, query: &str) -> Option<String> {
+    /// The key of the innermost type declared in a block under the source
+    /// name `name` whose scope encloses `name`.
+    pub(super) fn local_type_in_scope(&self, name: &crate::Ident) -> Option<&'a str> {
+        let lowered = self.ast.lowered_local_types.as_ref()?;
+        lowered
+            .scopes
+            .iter()
+            .filter(|(key, scope)| display_type_name(key) == name.name && scope.encloses(name.span))
+            .max_by_key(|(_, scope)| scope.start)
+            .map(|(key, _)| key.as_str())
+    }
+
+    /// The type to suggest for the unknown type `name`: the closest of the
+    /// primitive keywords and the types in scope where `name` is written. A
+    /// type declared in a block is in scope only in that block, and goes by
+    /// its source name.
+    pub(super) fn closest_type_name(&self, name: &crate::Ident) -> Option<String> {
         const BUILTINS: [&str; 5] = ["number", "string", "boolean", "void", "never"];
-        let user_types: Vec<&str> = self.types.iter_names().collect();
-        did_you_mean::closest_match(query, BUILTINS.into_iter().chain(user_types)).map(String::from)
+        let scopes = self
+            .ast
+            .lowered_local_types
+            .as_ref()
+            .map(|lowered| &lowered.scopes);
+        let user_types: Vec<&str> = self
+            .types
+            .iter_names()
+            .filter_map(|type_name| {
+                if !is_local_type_name(type_name) {
+                    return Some(type_name);
+                }
+                let scope = scopes?.get(type_name)?;
+                scope
+                    .encloses(name.span)
+                    .then(|| display_type_name(type_name))
+            })
+            .collect();
+        did_you_mean::closest_match(&name.name, BUILTINS.into_iter().chain(user_types))
+            .map(String::from)
     }
 
     /// Report a field that does not exist on `receiver_ty` — the single place
