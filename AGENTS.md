@@ -9,7 +9,7 @@ This workspace contains the compiler/runtime (`interpreter`), CLI (`submilli`),
 HTTP/MCP server (`submilli-server`), supporting build/blueprint/policy/shared crates,
 and the conformance suite. Maintained TypeScript packages live in `packages/`.
 
-The runtime embeds [llm-prompt.md](llm-prompt.md) at compile time.
+The runtime embeds [llm-prompt.md](crates/submilli-shared/llm-prompt.md) at compile time.
 Package `docs/readme.md` files are build inputs and their examples are tested.
 Changes must build and test from this repository without private documentation.
 
@@ -355,7 +355,7 @@ Run any additional package-specific checks documented by those packages, such as
 blueprint policy tests. Ordinary TypeScript package or documentation edits do not
 require Rust formatting or clippy. During development, documentation changes need
 only affected documentation checks. Embedded/build-input documentation (such as
-`llm-prompt.md` and package `docs/readme.md`) also needs its owning build/example
+`crates/submilli-shared/llm-prompt.md` and package `docs/readme.md`) also needs its owning build/example
 checks. For public book changes, use the documentation-site checks below. For
 agent instructions, commands, and skills, validate their frontmatter, referenced
 paths, and workflow consistency.

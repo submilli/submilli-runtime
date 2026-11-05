@@ -25,6 +25,9 @@ publish = false
 # `[workspace.package].version`.
 interpreter = { package = "submilli-engine", path = "crates/interpreter", version = "=0.6.0" }
 submilli-policy = { path = "crates/submilli-policy", version = "=0.6.0" }
+submilli-build = { path = "crates/submilli-build", version = "=0.6.0" }
+submilli-blueprint = { path = "crates/submilli-blueprint", version = "=0.6.0" }
+submilli-shared = { path = "crates/submilli-shared", version = "=0.6.0" }
 wasmtime = { package = "submilli-wasm", version = "0.1.12", features = ["async"] }
 wasm-encoder = "0.248"
 wasmparser = "0.248"

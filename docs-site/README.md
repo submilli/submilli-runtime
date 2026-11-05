@@ -2,7 +2,7 @@
 
 The user book is Markdown in `../docs/`. This Astro/Starlight application reads
 those files directly; no private repository or runtime build is needed.
-`../llm-prompt.md` is a runtime build input and is not part of the book.
+`../crates/submilli-shared/llm-prompt.md` is a runtime build input and is not part of the book.
 
 ## Build and preview
 
