@@ -14,11 +14,11 @@ Install a published chart version from GHCR. The chart and its default runtime
 image can be pulled without a registry login or an image pull secret:
 
 ```bash
-helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.7 --wait
+helm install submilli oci://ghcr.io/submilli/charts/submilli --version 0.4.8 --wait
 helm test submilli
 ```
 
-Chart 0.4.7 deploys runtime 0.6.0. Pin the chart version to control upgrades.
+Chart 0.4.8 deploys runtime 0.6.1. Pin the chart version to control upgrades.
 See [Publishing](PUBLISHING.md) for the workflow and first-publication steps.
 
 If you installed an early development checkout that used a Deployment and one
@@ -425,6 +425,8 @@ files. The revisions and active selections commit in one SQLite transaction,
 then the whole blueprint directory moves to `server/archive/blueprints/` inside the state volume.
 Subsequent blueprint changes live only in SQLite. Back up the state
 volume while the server is stopped.
+
+Chart 0.4.8 selects runtime 0.6.1. The chart templates and values are unchanged.
 
 Chart 0.4.7 selects runtime 0.6.0. The chart templates and values are unchanged.
 
