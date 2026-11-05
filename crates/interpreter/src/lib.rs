@@ -20,6 +20,7 @@ pub mod doc_directives;
 pub mod docs_view;
 pub mod lexer;
 pub(crate) mod literal_units;
+pub(crate) mod lower_local_types;
 pub mod lower_patterns;
 pub mod mangle;
 pub mod package_config;
@@ -48,9 +49,10 @@ pub use ast::{
     AccessorKind, ArrayLiteralElement, ArrowBody, Ast, BinOp, Binding, BindingKind, CatchClause,
     ChainPart, ClassMember, ClassModifiers, EnumInitializer, EnumMember, ExportedDecl, Expr,
     ExprId, ExprKind, Ident, ImportKind, ImportSpecifier, IndexSignatureAnnotation,
-    InterfaceMember, ObjectLiteralField, ObjectLiteralMember, ObjectPatternField, ParamDecl,
-    PatternOrigin, PostfixOp, Stmt, StmtId, StmtKind, SwitchCase, SwitchDefault, TypeAnnotation,
-    TypeAnnotationField, TypeAnnotationKind, TypePredicateAnnotation, UnOp, Visibility,
+    InterfaceMember, LoweredLocalTypes, ObjectLiteralField, ObjectLiteralMember,
+    ObjectPatternField, ParamDecl, PatternOrigin, PostfixOp, Stmt, StmtId, StmtKind, SwitchCase,
+    SwitchDefault, TypeAnnotation, TypeAnnotationField, TypeAnnotationKind,
+    TypePredicateAnnotation, UnOp, Visibility,
 };
 pub use authority::{
     AuthorityCallable, AuthorityCallableKind, AuthorityCheck, AuthorityEdge, AuthorityEffect,

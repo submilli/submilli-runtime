@@ -6,6 +6,7 @@
 //! `.toString()` and `String(x)` paths.
 
 use crate::compiler_error::CompilerFailure;
+use crate::lower_local_types::display_type_name;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1269,17 +1270,18 @@ impl Inferer<'_> {
         // but is not a first-class value. The common LLM misuse is
         // forgetting to qualify; point at the right syntax.
         if let Some(sym) = self.lookup_named_type(&ident.name) {
+            let shown = display_type_name(&ident.name);
             let variant_names: Option<Vec<String>> = match &sym.kind {
                 crate::TypeKind::NumberEnum { variants, .. } => Some(
                     variants
                         .iter()
-                        .map(|(v, _)| format!("`{}.{}`", ident.name, v))
+                        .map(|(v, _)| format!("`{shown}.{v}`"))
                         .collect(),
                 ),
                 crate::TypeKind::StringEnum { variants, .. } => Some(
                     variants
                         .iter()
-                        .map(|(v, _)| format!("`{}.{}`", ident.name, v))
+                        .map(|(v, _)| format!("`{shown}.{v}`"))
                         .collect(),
                 ),
                 _ => None,
@@ -1292,10 +1294,7 @@ impl Inferer<'_> {
                 };
                 self.error_with_help(
                     span,
-                    format!(
-                        "`{}` is an enum type, not a value; use `{}.<variant>`",
-                        ident.name, ident.name,
-                    ),
+                    format!("`{shown}` is an enum type, not a value; use `{shown}.<variant>`"),
                     help,
                 );
                 return Ok(unresolved_ref(ident));
@@ -6311,7 +6310,8 @@ impl Inferer<'_> {
                     self.error_with_help(
                         span,
                         format!(
-                            "object literal is missing required {noun} {list} of type `{name}`"
+                            "object literal is missing required {noun} {list} of type `{}`",
+                            display_type_name(name)
                         ),
                         vec![self.format_definition(&ty)],
                     );
@@ -6319,7 +6319,10 @@ impl Inferer<'_> {
                     let of_type = self
                         .literal_hint_interfaces
                         .get(&literal)
-                        .map(|name| format!(" of type `{name}`"))
+                        .map(|name| {
+                            let name = display_type_name(name);
+                            format!(" of type `{name}`")
+                        })
                         .unwrap_or_default();
                     self.error(
                         span,
@@ -6778,7 +6781,8 @@ impl Inferer<'_> {
                     self.error(
                         span,
                         format!(
-                            "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
+                            "cannot spread interface `{}` into an object literal — only structural object types are accepted",
+                            display_type_name(&name)
                         ),
                     );
                     return Ok(None);
@@ -8290,7 +8294,11 @@ impl Inferer<'_> {
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
                         self.error_with_help(
                             name.span,
-                            format!("no variant `{}` on enum `{}`", name.name, recv_name,),
+                            format!(
+                                "no variant `{}` on enum `{}`",
+                                name.name,
+                                display_type_name(&recv_name),
+                            ),
                             help,
                         );
                         return Ok((
@@ -8326,7 +8334,11 @@ impl Inferer<'_> {
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
                         self.error_with_help(
                             name.span,
-                            format!("no variant `{}` on enum `{}`", name.name, recv_name,),
+                            format!(
+                                "no variant `{}` on enum `{}`",
+                                name.name,
+                                display_type_name(&recv_name),
+                            ),
                             help,
                         );
                         return Ok((
@@ -12887,10 +12899,55 @@ impl Inferer<'_> {
     /// Explicit arguments are rejected however they are spelled: directly,
     /// through a namespace, or behind an alias. Accepting them would narrow a
     /// value to an instantiation the test never checked.
+    /// A class test names a class, which is a value, so lowering leaves a
+    /// local interface or alias there under its source name: a class of the
+    /// name wins. With no type of the name at module level, the local type in
+    /// scope is what the name means, renamed to its key.
+    fn local_class_test_target(&self, ty: &TypeAnnotation) -> Option<TypeAnnotation> {
+        let crate::TypeAnnotationKind::Name { name, args } = &ty.kind else {
+            return None;
+        };
+        if self.lookup_named_type(&name.name).is_some() {
+            return None;
+        }
+        let key = self.local_type_in_scope(name)?;
+        // The pass passes a local type its lifted parameters, the leading ones
+        // of its declaration, by their own names.
+        let generics = match &self.lookup_named_type(key)?.kind {
+            crate::TypeKind::Interface { generics, .. }
+            | crate::TypeKind::Alias { generics, .. } => generics.clone(),
+            _ => Vec::new(),
+        };
+        let written = crate::lower_local_types::written_type_args(key, &generics).len();
+        let lifted = generics.len().saturating_sub(written);
+        let lifted_args = generics.iter().take(lifted).map(|param| TypeAnnotation {
+            kind: crate::TypeAnnotationKind::Name {
+                name: crate::Ident {
+                    name: param.clone(),
+                    span: name.span,
+                },
+                args: Vec::new(),
+            },
+            span: name.span,
+        });
+        Some(TypeAnnotation {
+            kind: crate::TypeAnnotationKind::Name {
+                name: crate::Ident {
+                    name: key.to_string(),
+                    span: name.span,
+                },
+                args: lifted_args.chain(args.iter().cloned()).collect(),
+            },
+            span: ty.span,
+        })
+    }
+
     pub(super) fn resolve_runtime_class_test(
         &mut self,
         ty: &TypeAnnotation,
     ) -> Result<Type, CompilerFailure> {
+        let local_target = self.local_class_test_target(ty);
+        let ty = local_target.as_ref().unwrap_or(ty);
         // The bare form is resolved first because `resolve_class_reference`
         // would reject its arity before this function saw it.
         if let Some((package, name, mangled, arity)) = self.bare_generic_class_target(ty) {
@@ -13591,6 +13648,7 @@ pub(super) fn enum_variant_help<'a>(
     enum_name: &str,
     variant_names: impl Iterator<Item = &'a String>,
 ) -> Vec<String> {
+    let enum_name = display_type_name(enum_name);
     let list: Vec<String> = variant_names
         .map(|v| format!("`{enum_name}.{v}`"))
         .collect();

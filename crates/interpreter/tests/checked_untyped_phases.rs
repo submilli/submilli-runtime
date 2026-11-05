@@ -75,6 +75,24 @@ fn inference_rejects_invalid_statement_and_expression_ids() {
 }
 
 #[test]
+fn inference_rejects_a_block_type_that_was_not_lifted() {
+    let source = "function main(): void { interface Row { a: number } const r: Row = { a: 1 }; }";
+    // Without lowering, inference would drop the local interface.
+    let error = infer(source, &parse(source, FileId(0))).unwrap_err();
+    assert!(
+        matches!(
+            &error.fatal,
+            Some(CompilerFailure::Internal { stage: CompilerStage::Infer, message, .. })
+                if message.contains("not lifted to module scope")
+        ),
+        "{error:?}"
+    );
+    let lowered = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
+    let (_, diagnostics) = infer(source, &lowered).unwrap();
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn binding_failure_retains_earlier_language_diagnostics() {
     let source = "function main(): number { let value = value; return 1; }";
     let mut ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();

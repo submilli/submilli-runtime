@@ -1,0 +1,4 @@
+localTypes4.ts(14,19): error TS2304: Cannot find name 'T'.
+localTypes4.ts(14,23): error TS2304: Cannot find name 'T'.
+localTypes4.ts(22,16): error TS2300: Duplicate identifier 'T'.
+localTypes4.ts(23,19): error TS2300: Duplicate identifier 'T'.

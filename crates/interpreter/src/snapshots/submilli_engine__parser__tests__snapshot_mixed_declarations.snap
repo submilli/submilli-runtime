@@ -223,4 +223,5 @@ Ast {
     synthetic_undefined: {},
     binding_defaults: {},
     unparsed_main: false,
+    lowered_local_types: None,
 }

@@ -133,6 +133,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
     crate::tree_height::check_syntax(ast)
         .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
+    validate_lowered_local_types(ast)?;
     check_declaration_types(packages.iter().chain(transitive).copied())?;
     let visible: Vec<_> = packages
         .iter()
@@ -157,7 +158,9 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         package_name,
         ast,
         typed_ast: TypedAst::with_package(package_name),
-        diagnostics: bindings.diagnostics,
+        diagnostics: local_type_diagnostics(ast)
+            .chain(bindings.diagnostics)
+            .collect(),
         top_symbols: BTreeMap::new(),
         imported_values: std::collections::HashSet::new(),
         types: TypeNamespace::new(),
@@ -1206,6 +1209,7 @@ impl<'a> Inferer<'a> {
         crate::tree_height::check_syntax(ast)
             .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
         validate_lowered_patterns(ast)?;
+        validate_lowered_local_types(ast)?;
         self.source = source;
         self.ast = ast;
         self.module = module;
@@ -1240,6 +1244,7 @@ impl<'a> Inferer<'a> {
         self.grown_bindings = bindings.grown_bindings;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();
+        self.diagnostics.extend(local_type_diagnostics(ast));
         self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
         self.unreachable_by_exhaustive_switch = false;
@@ -1401,6 +1406,33 @@ fn inference_failure(message: &str) -> CompilerFailure {
         span: None,
         message: message.into(),
     }
+}
+
+/// Inference registers named types from the module's top level only, so a
+/// type declared in a block must have been lifted there first.
+fn validate_lowered_local_types(ast: &Ast) -> Result<(), CompileError> {
+    // Once lowered, a type declaration left outside the top level is one no
+    // statement reaches, such as a nested `export` the parser reported and
+    // dropped.
+    if ast.lowered_local_types.is_some() {
+        return Ok(());
+    }
+    match crate::lower_local_types::first_unlifted_type_decl(ast)? {
+        None => Ok(()),
+        Some(span) => Err(CompilerFailure::Internal {
+            stage: CompilerStage::Infer,
+            span: Some(span),
+            message: "a type declared in a block was not lifted to module scope".into(),
+        }
+        .into()),
+    }
+}
+
+/// The diagnostics lifting the module's local types reported.
+fn local_type_diagnostics(ast: &Ast) -> impl Iterator<Item = Diagnostic> + '_ {
+    ast.lowered_local_types
+        .iter()
+        .flat_map(|lowered| lowered.diagnostics.iter().cloned())
 }
 
 fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {

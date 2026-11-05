@@ -7,6 +7,7 @@
 //! lazy [`Type::AliasRef`] back-edge instead of an infinite inline body.
 
 use crate::compiler_error::CompilerFailure;
+use crate::lower_local_types::{display_type_name, written_type_args};
 use crate::type_size::{TypeBudget, TypeTooLarge, map_children};
 
 use std::collections::BTreeSet;
@@ -114,7 +115,8 @@ impl<'a> Inferer<'a> {
         };
         let alias_package = self.type_package(name);
         if arg_annots.len() != generics.len() {
-            let plural = if generics.len() == 1 {
+            let expected = written_type_args(name, &generics).len();
+            let plural = if expected == 1 {
                 "argument"
             } else {
                 "arguments"
@@ -123,10 +125,10 @@ impl<'a> Inferer<'a> {
                 span,
                 format!(
                     "type alias `{}` expects {} type {}, got {}",
-                    name,
-                    generics.len(),
+                    display_type_name(name),
+                    expected,
                     plural,
-                    arg_annots.len(),
+                    written_type_args(name, arg_annots).len(),
                 ),
             );
             return Ok(Type::Error);

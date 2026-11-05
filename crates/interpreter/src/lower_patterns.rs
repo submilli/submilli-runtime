@@ -3,6 +3,8 @@
 //! `Let`/`Const`/`ObjectRest`/`ForOf` and `ParamDecl` with `pattern: None`.
 //! Synthesised array-pattern `IndexAccess` nodes are tagged in [`Ast::pattern_origins`]
 //! so the typechecker can rephrase index errors as destructure-specific diagnostics.
+//! Lowering ends by lifting block-local type declarations to module scope
+//! ([`crate::lower_local_types`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -25,6 +27,7 @@ pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
     ctx.lower_for_of_patterns(&mut ast)?;
     ctx.lower_for_pattern_inits(&mut ast)?;
     ctx.lower_pattern_stmts(&mut ast)?;
+    ast.lowered_local_types = Some(crate::lower_local_types::lower(&mut ast)?);
     Ok(ast)
 }
 
@@ -1705,7 +1708,11 @@ mod tests {
             let (ast, _) = parse(src, tokens, crate::FileId(0));
             ast
         };
-        let after = pipeline(src);
+        let mut after = pipeline(src);
+        // Lowering records that it lifted the program's local types, of which
+        // it has none.
+        let lowered = after.lowered_local_types.take().unwrap();
+        assert!(lowered.diagnostics.is_empty() && lowered.scopes.is_empty());
         assert_eq!(format!("{before:?}"), format!("{after:?}"));
     }
 

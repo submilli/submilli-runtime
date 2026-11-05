@@ -1,3 +1,4 @@
+use crate::lower_local_types::display_type_name;
 use crate::rendering::{RenderError, RenderLimits, Writer};
 use crate::type_rendering::write_type;
 
@@ -240,7 +241,7 @@ pub(super) fn write_default_value(
             ..
         } => out.format(format_args!(
             "{}.{variant}",
-            short_symbol(enum_mangled.as_str())
+            display_type_name(short_symbol(enum_mangled.as_str()))
         )),
     }
 }

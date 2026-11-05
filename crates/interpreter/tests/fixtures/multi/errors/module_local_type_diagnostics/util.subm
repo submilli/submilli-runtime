@@ -1,0 +1,11 @@
+// expect-error: a type declared in a block can't use `typeof` on the local `x`
+// expect-error: duplicate declaration of type `T`
+// Diagnostics from lifting local types report in package mode too.
+
+/** Returns its argument. */
+export function run<T>(t: T): T {
+  interface T { v: number; }
+  const x = 1;
+  type X = typeof x;
+  return t;
+}

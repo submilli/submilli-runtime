@@ -1,0 +1,12 @@
+// expect-error: exported global `DEFAULT` uses private type `Result`
+// expect-error: `Result` is declared in a block: move it to the top level of this module and export it
+
+export const DEFAULT = ((): number => 0)() === 0
+  ? (() => {
+      interface Result {
+        value: number;
+      }
+      const result: Result = { value: 1 };
+      return result;
+    })()
+  : undefined;

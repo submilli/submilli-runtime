@@ -266,6 +266,46 @@ impl TypeLimits {
     }
 }
 
+/// How many types [`for_each_child`] visits directly inside `ty`.
+pub(crate) fn child_count(ty: &Type) -> usize {
+    match ty {
+        Type::Function {
+            params, predicate, ..
+        } => params
+            .len()
+            .saturating_add(1 + usize::from(predicate.is_some())),
+        Type::Object { fields, index } => fields.len().saturating_add(usize::from(index.is_some())),
+        Type::Array(_) | Type::Readonly(_) => 1,
+        Type::Tuple(tuple) => tuple.elements.len(),
+        Type::Union(members) => members.len(),
+        Type::Refined { .. } => 2,
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.len(),
+        Type::Alias { args, .. } => args.len().saturating_add(1),
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::BigInt
+        | Type::BigIntLiteral(_)
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Uint8Array
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Unknown
+        | Type::NonPrimitive
+        | Type::Error
+        | Type::Never
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::NumberEnum { .. }
+        | Type::StringEnum { .. } => 0,
+    }
+}
+
 /// Calls `visit` on each type directly inside `ty`.
 pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
     match ty {
@@ -581,13 +621,15 @@ pub(crate) mod tests {
 
     /// Runs `test` on a thread of the stack compilation is given: substitution
     /// and drop recurse once per level of a type at the depth limit.
-    pub(crate) fn on_compiler_stack(test: impl FnOnce() + Send + 'static) {
+    pub(crate) fn on_compiler_stack<T: Send + 'static>(
+        test: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
         std::thread::Builder::new()
             .stack_size(crate::compiler_limits::COMPILER_STACK_BYTES)
             .spawn(test)
             .unwrap()
             .join()
-            .unwrap();
+            .unwrap()
     }
 
     #[test]

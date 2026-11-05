@@ -244,7 +244,9 @@ impl Inferer<'_> {
             | StmtKind::ClassDecl { .. }
             | StmtKind::EnumDecl { .. }
             | StmtKind::TypeAliasDecl { .. } => {
-                // Classes are bound in `signatures()?` and checked in `infer_classes`.
+                // Bound in `signatures()?`; classes are checked in `infer_classes`.
+                // Lowering lifts block-local interfaces, aliases and enums to the
+                // top level, and a nested class is a parse error.
                 return Ok(None);
             }
             StmtKind::Import { .. } => {
