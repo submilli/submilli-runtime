@@ -402,6 +402,23 @@ fn checked_source_validates_predicate_outer_span() {
     assert!(ast.validate_source(source, file).is_err());
 }
 
+#[test]
+fn checked_source_validates_interface_index_key_spans() {
+    let source = "interface Keys { [key: `id_${string}`]: boolean; }";
+    let file = FileId(0);
+    let mut ast = parse_ast(source, file);
+    assert!(ast.validate_source(source, file).is_ok());
+    let root = ast.top_level[0];
+    let StmtKind::InterfaceDecl { members, .. } = &mut ast.try_stmt_mut(root).unwrap().kind else {
+        panic!("interface");
+    };
+    let submilli_engine::InterfaceMember::IndexSignature(index) = &mut members[0] else {
+        panic!("signature");
+    };
+    index.key.span.end = u32::MAX;
+    assert!(ast.validate_source(source, file).is_err());
+}
+
 fn parse_ast(source: &str, file: FileId) -> Ast {
     let mut lexer = submilli_engine::Asi::new(source, file);
     let mut tokens = Vec::new();

@@ -476,7 +476,10 @@ impl<'a> Validator<'a> {
     fn interface_member(&mut self, member: &'a InterfaceMember) -> Result<(), SourceError> {
         self.interface_metadata(member)?;
         match member {
-            InterfaceMember::IndexSignature(index) => self.annotation(&index.value)?,
+            InterfaceMember::IndexSignature(index) => {
+                self.annotation(&index.key)?;
+                self.annotation(&index.value)?;
+            }
             InterfaceMember::Method {
                 params,
                 return_type,

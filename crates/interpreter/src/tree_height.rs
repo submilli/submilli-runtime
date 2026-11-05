@@ -752,6 +752,7 @@ impl SyntaxChildren {
                 for member in members {
                     match member {
                         InterfaceMember::IndexSignature(signature) => {
+                            self.annotation(&signature.key);
                             self.annotation(&signature.value);
                         }
                         InterfaceMember::Method {
@@ -1414,6 +1415,49 @@ mod tests {
         assert!(!diagnostic.help.is_empty());
         let diagnostic = syntax_limit(&sum(10 * at_limit)).expect("a long chain is rejected");
         assert_eq!(diagnostic.span.start, chain_start);
+    }
+
+    #[test]
+    fn interface_index_keys_count_toward_syntax_height() {
+        // Inject the annotation directly: parser limits can reject this shape
+        // before the syntax validator whose interface traversal is under test.
+        let ast = |depth| {
+            let mut key = annotation(TypeAnnotationKind::StringLiteral("key".into()));
+            for _ in 0..depth {
+                key = annotation(TypeAnnotationKind::Array(Box::new(key)));
+            }
+            let span = key.span;
+            let mut ast = Ast::new();
+            let root = ast
+                .try_push_stmt(crate::Stmt {
+                    span,
+                    kind: StmtKind::InterfaceDecl {
+                        name: crate::Ident {
+                            name: "Keys".into(),
+                            span,
+                        },
+                        generics: vec![],
+                        extends: vec![],
+                        doc: None,
+                        members: vec![InterfaceMember::IndexSignature(
+                            crate::IndexSignatureAnnotation {
+                                key,
+                                value: annotation(TypeAnnotationKind::BooleanLiteral(true)),
+                                readonly: false,
+                                span,
+                            },
+                        )],
+                    },
+                })
+                .unwrap();
+            ast.top_level.push(root);
+            ast
+        };
+        assert!(check_syntax(&ast(MAX_SYNTAX_HEIGHT - 2)).is_ok());
+        assert!(matches!(
+            check_syntax(&ast(MAX_SYNTAX_HEIGHT - 1)),
+            Err(CompilerFailure::Limit { .. })
+        ));
     }
 
     #[test]
