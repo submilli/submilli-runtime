@@ -81,6 +81,19 @@ pub(crate) fn push_literal_char(out: &mut String, c: char) {
 /// The UTF-16 code units that literal text stands for.
 pub(crate) fn literal_units(text: &str) -> Vec<u16> {
     let mut units = Vec::with_capacity(text.len());
+    extend_literal_units(&mut units, text);
+    units
+}
+
+/// Decode literal text after reserving its maximum UTF-16 length fallibly.
+pub(crate) fn try_literal_units(text: &str) -> Result<Vec<u16>, std::collections::TryReserveError> {
+    let mut units = Vec::new();
+    units.try_reserve(text.len())?;
+    extend_literal_units(&mut units, text);
+    Ok(units)
+}
+
+fn extend_literal_units(units: &mut Vec<u16>, text: &str) {
     let mut chars = text.chars();
     while let Some(c) = chars.next() {
         if c != MARKER {
@@ -99,7 +112,6 @@ pub(crate) fn literal_units(text: &str) -> Vec<u16> {
             units.extend_from_slice(c.encode_utf16(&mut [0; 2]));
         }
     }
-    units
 }
 
 /// The characters literal text stands for, with each lone surrogate as `Err`

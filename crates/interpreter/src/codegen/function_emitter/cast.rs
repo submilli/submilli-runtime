@@ -124,6 +124,7 @@ pub fn emit_box(
         }
         Type::String
         | Type::StringLiteral(_)
+        | Type::TemplateLiteral { .. }
         | Type::BigInt
         | Type::BigIntLiteral(_)
         | Type::Object { .. }
@@ -390,7 +391,9 @@ fn emit_ref_truthiness(
             || classes.contains(&Dynamic)
             || members.iter().any(|m| literal(m.lowered()))
     };
-    let test_string = needs(StringLike, |m| matches!(m, Type::StringLiteral(_)));
+    let test_string = needs(StringLike, |m| {
+        matches!(m, Type::StringLiteral(_) | Type::TemplateLiteral { .. })
+    });
     let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
     let test_boolean = needs(BooleanLike, |m| matches!(m, Type::BooleanLiteral(_)));
     let test_bigint = needs(BigIntLike, |_| false);
@@ -626,7 +629,7 @@ pub fn emit_cast_to(
                 field_index: 1,
             });
         }
-        Type::String | Type::StringLiteral(_) => {
+        Type::String | Type::StringLiteral(_) | Type::TemplateLiteral { .. } => {
             let idx = ctx
                 .symbols
                 .string_type_idx()

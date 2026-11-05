@@ -119,18 +119,26 @@ fn substitute_at(
     }
     budget.charge(depth)?;
     let child = depth.saturating_add(1);
-    map_children(ty, |inner| substitute_at(inner, bindings, child, budget))
+    let result = map_children(ty, |inner| substitute_at(inner, bindings, child, budget))?;
+    crate::property_keys::normalize_template(result, budget)
 }
 
 pub(super) fn erase_generic_params(ty: &Type) -> Type {
     match ty {
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => Type::TemplateLiteral {
+            parts: parts.clone(),
+            substitutions: substitutions.iter().map(erase_generic_params).collect(),
+        },
         Type::Refined { original, ty } => Type::Refined {
             original: Box::new(erase_generic_params(original)),
             ty: Box::new(erase_generic_params(ty)),
         },
         Type::GenericParam { name, .. } => Type::TypeVar(name.clone()),
         Type::Object { fields, index } => Type::Object {
-            index: index.as_ref().map(|i| i.map_value(erase_generic_params)),
+            index: index.as_ref().map(|i| i.map_types(erase_generic_params)),
             fields: fields
                 .iter()
                 .map(|(k, v)| {
@@ -1722,7 +1730,9 @@ impl Inferer<'_> {
     ) -> Option<Type> {
         super::reserved::override_field_signature(name)
             .or_else(|| self.argument_slot_hint(literal, name))
-            .or_else(|| expected_field_hint(name, expected_fields, expected_index))
+            .or_else(|| {
+                expected_field_hint(name, expected_fields, expected_index, &self.type_limits)
+            })
     }
 
     /// Infer the fields of a generic call's object literal argument other than
@@ -2969,12 +2979,17 @@ fn expected_field_hint(
     name: &str,
     expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
     expected_index: Option<&crate::IndexSignature>,
+    limits: &crate::type_size::TypeLimits,
 ) -> Option<Type> {
     // An optional field also takes `undefined`; a record key's value doesn't.
     expected_fields
         .and_then(|fields| fields.get(name))
         .map(crate::ObjectField::read_ty)
-        .or_else(|| expected_index.map(|index| (*index.value).clone()))
+        .or_else(|| {
+            expected_index
+                .filter(|index| crate::property_keys::matches_name(&index.key, name, limits))
+                .map(|index| (*index.value).clone())
+        })
 }
 
 /// Whether `inner` lies within `outer`.
@@ -3152,7 +3167,7 @@ fn expand_inferred_interfaces(
                 .collect(),
             index: index
                 .as_ref()
-                .map(|index| index.map_value(|value| expand(value, expansion))),
+                .map(|index| index.map_types(|value| expand(value, expansion))),
         },
         Type::Array(element) => Type::Array(Box::new(expand(element, expansion))),
         Type::Tuple(elements) => Type::Tuple(elements.map(|element| expand(element, expansion))),

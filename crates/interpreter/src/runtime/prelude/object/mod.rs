@@ -1083,6 +1083,8 @@ fn group_by_output() -> Type {
     Type::Object {
         fields: std::collections::BTreeMap::new(),
         index: Some(crate::types::IndexSignature {
+            string_keyof_includes_number: false,
+            key: Box::new(crate::Type::String),
             value: Box::new(Type::Array(Box::new(Type::TypeVar("T".into())))),
             readonly: false,
         }),
@@ -1108,6 +1110,8 @@ fn from_entries_output() -> Type {
     Type::Object {
         fields: std::collections::BTreeMap::new(),
         index: Some(crate::types::IndexSignature {
+            string_keyof_includes_number: false,
+            key: Box::new(crate::Type::String),
             value: Box::new(Type::TypeVar("T".to_string())),
             readonly: false,
         }),

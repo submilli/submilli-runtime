@@ -998,7 +998,7 @@ impl Inferer<'_> {
             let part = field.source.literal_expr_id()?;
             let positions = objects
                 .iter()
-                .filter_map(|object| field_position(object, &field.name.name));
+                .filter_map(|object| field_position(object, &field.name.name, &self.type_limits));
             Some((part, union_of(positions)?))
         });
         let unnamed = members
@@ -1347,14 +1347,20 @@ fn array_element(member: &Type) -> Option<&Type> {
 
 /// The type an object type `object` gives its field `name`: the field's
 /// own, or else its index signature's value type.
-fn field_position<'a>(object: &'a Type, name: &str) -> Option<&'a Type> {
+fn field_position<'a>(
+    object: &'a Type,
+    name: &str,
+    limits: &crate::type_size::TypeLimits,
+) -> Option<&'a Type> {
     let Type::Object { fields, index } = object else {
         return None;
     };
-    fields
-        .get(name)
-        .map(|field| &field.ty)
-        .or_else(|| index.as_ref().map(|index| &*index.value))
+    fields.get(name).map(|field| &field.ty).or_else(|| {
+        index
+            .as_ref()
+            .filter(|index| crate::property_keys::matches_name(&index.key, name, limits))
+            .map(|index| &*index.value)
+    })
 }
 
 /// The union of the `positions` that name a type parameter, or None when

@@ -468,9 +468,10 @@ impl TypeParamSubstitution {
                 let child = depth.saturating_add(1);
                 // An unbound or re-entered variable stays a leaf. GenericParam is
                 // opaque here: body-form, not substituted.
-                map_children(bound, |inner| {
+                let result = map_children(bound, |inner| {
                     self.apply_rec(inner, child, budget, substituting)
-                })
+                })?;
+                crate::property_keys::normalize_template(result, budget)
             });
         substituting.truncate(open_before);
         applied

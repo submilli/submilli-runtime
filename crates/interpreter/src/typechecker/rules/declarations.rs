@@ -228,7 +228,7 @@ impl<'a> TypeDeclarations<'a> {
             | Type::BigInt
             | Type::BigIntLiteral(_)
             | Type::String
-            | Type::StringLiteral(_)
+            | Type::StringLiteral(_) | Type::TemplateLiteral { .. }
             | Type::Uint8Array
             | Type::Boolean
             | Type::BooleanLiteral(_)

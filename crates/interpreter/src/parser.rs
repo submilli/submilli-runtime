@@ -3506,6 +3506,16 @@ impl<'a> Parser<'a> {
         }
 
         let mut ty = match self.peek().kind {
+            TokenKind::TemplateHead(ref text) => self.parse_template_type(text.clone())?,
+            TokenKind::TemplateNoSubstitution(ref text) => {
+                let text = text.clone();
+                let token = self.advance();
+                TypeAnnotation {
+                    kind: TypeAnnotationKind::StringLiteral(text),
+                    span: token.span,
+                }
+            }
+
             // `typeof x` names the type of a *value*. Unlike `keyof` this is already a
             // reserved word (the `typeof x === "string"` guard uses it), so it needs no
             // contextual check — in type position it is only ever the operator. Built
@@ -4043,6 +4053,33 @@ impl<'a> Parser<'a> {
         Some(())
     }
 
+    fn parse_template_type(&mut self, text: String) -> Option<TypeAnnotation> {
+        let head = self.advance();
+        let mut parts = vec![text];
+        let mut substitutions = Vec::new();
+        loop {
+            substitutions.push(self.parse_type_annotation()?);
+            let token = self.advance();
+            match token.kind {
+                TokenKind::TemplateMiddle(text) => parts.push(text),
+                TokenKind::TemplateTail(text) => {
+                    parts.push(text);
+                    return Some(TypeAnnotation {
+                        kind: TypeAnnotationKind::TemplateLiteral {
+                            parts,
+                            substitutions,
+                        },
+                        span: self.span(head.span.start, token.span.end),
+                    });
+                }
+                _ => {
+                    self.error_at_peek("expected template type continuation");
+                    return None;
+                }
+            }
+        }
+    }
+
     fn parse_index_signature(&mut self, readonly: bool) -> Option<crate::IndexSignatureAnnotation> {
         let open = self.advance();
         let parameter = self.expect_property_ident("expected index parameter name")?;
@@ -4052,11 +4089,7 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.advance();
-        if !self.peek_identifier_text_is("string") {
-            self.error_at_peek("index signatures require string keys; use `[key: string]: V`");
-            return None;
-        }
-        self.advance();
+        let key = self.parse_type_annotation()?;
         if !matches!(self.peek().kind, TokenKind::RightBracket) {
             self.error_at_peek("expected `]` after string index key type");
             return None;
@@ -4069,6 +4102,7 @@ impl<'a> Parser<'a> {
         self.advance();
         let value = self.parse_type_annotation()?;
         Some(crate::IndexSignatureAnnotation {
+            key,
             span: self.span(open.span.start, value.span.end),
             value,
             readonly,
@@ -4360,6 +4394,11 @@ impl<'a> Parser<'a> {
                 name: s.clone(),
                 span: tok.span,
             }
+        } else if let TokenKind::NumberLiteral(value) = &tok.kind {
+            Ident {
+                name: crate::runtime::number::format_number_js(*value),
+                span: tok.span,
+            }
         } else {
             self.ident_from_token(tok)
         }
@@ -4375,7 +4414,10 @@ impl<'a> Parser<'a> {
 
     fn expect_property_ident(&mut self, message: &str) -> Option<Ident> {
         if !is_property_name(&self.peek().kind)
-            && !matches!(self.peek().kind, TokenKind::StringLiteral(_))
+            && !matches!(
+                self.peek().kind,
+                TokenKind::StringLiteral(_) | TokenKind::NumberLiteral(_)
+            )
         {
             self.error_at_peek(message.to_string());
             return None;
@@ -6032,7 +6074,7 @@ impl<'a> Parser<'a> {
                 let tok = self.advance();
                 (self.ident_from_token(&tok), false)
             }
-            TokenKind::StringLiteral(_) => {
+            TokenKind::StringLiteral(_) | TokenKind::NumberLiteral(_) => {
                 let tok = self.advance();
                 (self.property_ident_from_token(&tok), false)
             }
@@ -7103,6 +7145,17 @@ mod tests {
     use crate::{Asi, Ast, ExprKind, FileId, ImportKind, StmtKind, Token, TokenKind, diagnostics};
 
     const F: FileId = FileId(0);
+
+    #[test]
+    fn index_key_type_does_not_disrupt_initializer_parsing() {
+        let (ast, diagnostics) =
+            parse_str("const byId: { [id: boolean]: string } = {}; const next = 1;");
+        assert!(
+            diagnostics.is_empty(),
+            "key-domain errors belong to typechecking: {diagnostics:?}"
+        );
+        assert_eq!(ast.top_level.len(), 2);
+    }
 
     #[test]
     fn malformed_direct_token_streams_return_typed_failures() {

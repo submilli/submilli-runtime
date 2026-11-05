@@ -911,8 +911,47 @@ fn assignable_rec(
         (Type::GenericParam { id: a, .. }, Type::GenericParam { id: b, .. }) => a == b,
         (Type::GenericParam { .. }, _) | (_, Type::GenericParam { .. }) => false,
         // Explicit before the `==` fallback, which would reject `StringLiteral("foo") <: String`.
+        (
+            Type::TemplateLiteral {
+                parts: actual_parts,
+                substitutions: actual_holes,
+            },
+            Type::TemplateLiteral {
+                parts: expected_parts,
+                substitutions: expected_holes,
+            },
+        ) => {
+            if actual_parts == expected_parts && actual_holes.len() == expected_holes.len() {
+                actual_holes
+                    .iter()
+                    .zip(expected_holes)
+                    .all(|(actual, expected)| {
+                        matches!(expected.peel(), Type::String)
+                            || assignable_rec(actual, expected, types, seen)
+                    })
+            } else if expected_holes.len() == 1
+                && matches!(expected_holes.first().map(Type::peel), Some(Type::String))
+            {
+                actual_parts
+                    .first()
+                    .zip(expected_parts.first())
+                    .is_some_and(|(a, b)| a.starts_with(b))
+                    && actual_parts
+                        .last()
+                        .zip(expected_parts.last())
+                        .is_some_and(|(a, b)| a.ends_with(b))
+            } else {
+                false
+            }
+        }
+        (Type::StringLiteral(value), Type::TemplateLiteral { .. }) => {
+            crate::property_keys::matches_name(expected, value, types.limits)
+        }
         (Type::StringLiteral(a), Type::StringLiteral(b)) => a == b,
-        (Type::StringLiteral(_) | Type::StringEnum { .. }, Type::String) => true,
+        (
+            Type::TemplateLiteral { .. } | Type::StringLiteral(_) | Type::StringEnum { .. },
+            Type::String,
+        ) => true,
         (Type::String, Type::StringLiteral(_)) => false,
         (Type::NumberLiteral(a), Type::NumberLiteral(b)) => a == b,
         (Type::NumberLiteral(_) | Type::NumberEnum { .. }, Type::Number) => true,
@@ -1224,12 +1263,16 @@ fn assignable_rec(
         ) => {
             if let Some(expected_index) = e_index {
                 if !a_fields
-                    .values()
-                    .all(|f| assignable_rec(&f.ty, &expected_index.value, types, seen))
+                    .iter()
+                    .filter(|(name, _)| {
+                        crate::property_keys::matches_name(&expected_index.key, name, types.limits)
+                    })
+                    .all(|(_, f)| assignable_rec(&f.ty, &expected_index.value, types, seen))
                 {
                     return false;
                 }
                 if let Some(actual_index) = a_index
+                    && index_domains_related(&actual_index.key, &expected_index.key, types)
                     && !assignable_rec(&actual_index.value, &expected_index.value, types, seen)
                 {
                     return false;
@@ -1548,11 +1591,13 @@ fn satisfies_structurally(
         }
         seen.push(key.clone());
         let compatible = actual_form
-            .values()
-            .all(|field| assignable_rec(&field.ty, &index.value, types, seen))
-            && types
-                .index_signature(actual)
-                .is_none_or(|actual| assignable_rec(&actual.value, &index.value, types, seen));
+            .iter()
+            .filter(|(name, _)| crate::property_keys::matches_name(&index.key, name, types.limits))
+            .all(|(_, field)| assignable_rec(&field.ty, &index.value, types, seen))
+            && types.index_signature(actual).is_none_or(|actual| {
+                !index_domains_related(&actual.key, &index.key, types)
+                    || assignable_rec(&actual.value, &index.value, types, seen)
+            });
         seen.pop();
         if !compatible {
             return false;
@@ -1764,6 +1809,13 @@ fn refinement_fits_union(
     pieces
         .iter()
         .all(|piece| assignable_rec(piece, expected, types, seen))
+}
+
+pub(super) fn index_domains_related(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
+    matches!(actual.peel(), Type::String)
+        || matches!(expected.peel(), Type::String)
+        || assignable(actual, expected, types)
+        || assignable(expected, actual, types)
 }
 
 #[cfg(test)]

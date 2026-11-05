@@ -789,6 +789,10 @@ pub enum TypeAnnotationKind {
         args: Vec<TypeAnnotation>,
     },
     StringLiteral(String),
+    TemplateLiteral {
+        parts: Vec<String>,
+        substitutions: Vec<TypeAnnotation>,
+    },
     /// Parser canonicalizes `-0.0` to `0.0`.
     NumberLiteral(crate::types::LiteralF64),
     /// Decimal digits with a leading `-` when negative, as in [`crate::Type::BigIntLiteral`].
@@ -1148,6 +1152,7 @@ mod tests {
 /// A string index signature; the parameter name is documentation only.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexSignatureAnnotation {
+    pub key: TypeAnnotation,
     pub value: TypeAnnotation,
     pub readonly: bool,
     pub span: Span,

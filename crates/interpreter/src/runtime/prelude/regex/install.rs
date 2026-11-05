@@ -654,6 +654,8 @@ fn groups_type() -> Type {
         Type::Object {
             fields: BTreeMap::new(),
             index: Some(crate::IndexSignature {
+                string_keyof_includes_number: false,
+                key: Box::new(crate::Type::String),
                 value: Box::new(Type::regexp_element()),
                 readonly: false,
             }),

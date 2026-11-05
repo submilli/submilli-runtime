@@ -99,6 +99,17 @@ fn walk(
         Type::Number => Ok(json!({ "type": "number" })),
         Type::NumberLiteral(n) => Ok(json!({ "const": n.0 })),
         Type::String => Ok(json!({ "type": "string" })),
+        Type::TemplateLiteral { .. } => {
+            if contains_number_domain(peeled) {
+                return Err(reject(
+                    path,
+                    "numeric template substitutions cannot be represented faithfully in this JSON Schema dialect",
+                ));
+            }
+            let pattern = crate::property_keys::pattern(peeled)
+                .ok_or_else(|| reject(path, "unsupported template substitution in schema"))?;
+            Ok(json!({ "type": "string", "pattern": format!("^(?:{pattern})$(?![\\s\\S])") }))
+        }
         Type::StringLiteral(s) => Ok(json!({ "const": s })),
         Type::Boolean => Ok(json!({ "type": "boolean" })),
         Type::BooleanLiteral(b) => Ok(json!({ "const": b })),
@@ -120,12 +131,31 @@ fn walk(
                     required.push(Value::String(name.clone()));
                 }
             }
-            Ok(json!({
+            let mut schema = json!({
                 "type": "object",
                 "properties": Value::Object(properties),
                 "required": Value::Array(required),
-                "additionalProperties": match index { Some(index) => walk(&index.value, expand, path, seen)?, None => Value::Bool(false) },
-            }))
+                "additionalProperties": false,
+            });
+            if let Some(index) = index {
+                let value = walk(&index.value, expand, path, seen)?;
+                if matches!(index.key.peel(), Type::String) {
+                    schema["additionalProperties"] = value;
+                } else if contains_number_domain(&index.key) {
+                    return Err(reject(
+                        path,
+                        "number index signatures require canonical JavaScript number keys, which this JSON Schema dialect cannot express; use Record<string, V> for structured output",
+                    ));
+                } else {
+                    let pattern = crate::property_keys::pattern(&index.key)
+                        .ok_or_else(|| reject(path, "unsupported index key domain in schema"))?;
+                    let mut patterns = serde_json::Map::new();
+                    patterns.insert(format!("^(?:{pattern})$(?![\\s\\S])"), value);
+                    schema["patternProperties"] = Value::Object(patterns);
+                    schema["additionalProperties"] = Value::Bool(true);
+                }
+            }
+            Ok(schema)
         }
         Type::Array(elem) => {
             let restore = path.len();
@@ -258,6 +288,18 @@ fn push_field(path: &mut String, name: &str) {
     path.push_str(name);
 }
 
+fn contains_number_domain(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Number | Type::BigInt => true,
+        Type::TemplateLiteral {
+            substitutions: members,
+            ..
+        }
+        | Type::Union(members) => members.iter().any(contains_number_domain),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -296,6 +338,62 @@ mod tests {
             name: name.to_string(),
             args: Vec::new(),
         }
+    }
+
+    #[test]
+    fn template_schema_preserves_adjacent_holes_and_surrogate_literals() {
+        let mut prefix = "id_".to_string();
+        crate::literal_units::push_lone_surrogate(&mut prefix, 0xd800);
+        let template = Type::TemplateLiteral {
+            parts: vec![prefix, String::new(), "end".into()],
+            substitutions: vec![Type::String, Type::String],
+        };
+        let schema = json_schema(&template).unwrap();
+        assert_eq!(
+            schema["pattern"],
+            r"^(?:\u0069\u0064\u005f\ud800[\s\S][\s\S]*\u0065\u006e\u0064)$(?![\s\S])"
+        );
+        let record = Type::Object {
+            fields: Default::default(),
+            index: Some(crate::IndexSignature {
+                string_keyof_includes_number: false,
+                key: Box::new(template),
+                value: Box::new(Type::Boolean),
+                readonly: false,
+            }),
+        };
+        let schema = json_schema(&record).unwrap();
+        assert_eq!(schema["patternProperties"].as_object().unwrap().len(), 1);
+        assert_eq!(schema["additionalProperties"], true);
+    }
+
+    #[test]
+    fn numeric_domains_refuse_inexact_schema_patterns() {
+        let template = Type::TemplateLiteral {
+            parts: vec!["id_".into(), String::new()],
+            substitutions: vec![Type::Number],
+        };
+        assert!(
+            json_schema(&template)
+                .unwrap_err()
+                .reason
+                .contains("faithfully")
+        );
+        let record = Type::Object {
+            fields: Default::default(),
+            index: Some(crate::IndexSignature {
+                string_keyof_includes_number: false,
+                key: Box::new(Type::Number),
+                value: Box::new(Type::Boolean),
+                readonly: false,
+            }),
+        };
+        assert!(
+            json_schema(&record)
+                .unwrap_err()
+                .reason
+                .contains("canonical")
+        );
     }
 
     #[test]

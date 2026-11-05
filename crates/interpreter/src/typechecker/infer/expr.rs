@@ -5379,7 +5379,7 @@ impl Inferer<'_> {
     /// Diagnostics point at the interpolated expression. The conversion node
     /// spans the whole `${…}`: it is not the source expression, and sharing that
     /// expression's span would make the conversion's `string` read as its type.
-    fn wrap_interpolation_in_to_string(
+    pub(super) fn wrap_interpolation_in_to_string(
         &mut self,
         expr_id: ExprId,
         ty: &Type,
@@ -5974,8 +5974,7 @@ impl Inferer<'_> {
         };
         let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         if let Some(want) = expected_fields.as_ref()
-            && expected_index.is_none()
-            && !want.is_empty()
+            && (!want.is_empty() || expected_index.is_some())
             && checks_unknown_fields
         {
             // Against a type whose fields are all optional, an unknown field
@@ -5985,6 +5984,13 @@ impl Inferer<'_> {
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
                     && !want.contains_key(&field.name.name)
+                    && !expected_index.as_ref().is_some_and(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &field.name.name,
+                            &self.type_limits,
+                        )
+                    })
                 {
                     self.report_unknown_field(field, want);
                     if is_weak_target {
@@ -6015,6 +6021,7 @@ impl Inferer<'_> {
         let mut object_members: Vec<crate::TypedObjectMember> = Vec::new();
         let mut spread_count = 0;
         let mut spread_index_values = Vec::new();
+        let mut spread_index_keys = Vec::new();
         let mut merged: std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
@@ -6228,11 +6235,26 @@ impl Inferer<'_> {
                                 &overwritten,
                             )?
                         };
-                    if let Some(value) = self.spread_source_index(typed_source, &source_ty)? {
-                        for (field, _) in merged.values_mut() {
-                            field.ty = Type::union(vec![field.ty.clone(), value.clone()]);
+                    if let Some(index) = self.spread_source_signature(typed_source, &source_ty)? {
+                        self.check_index_composition(
+                            &spread_index_keys,
+                            &spread_index_values,
+                            &index.key,
+                            &index.value,
+                            spread_span,
+                        );
+                        for (name, (field, _)) in &mut merged {
+                            if crate::property_keys::matches_name(
+                                &index.key,
+                                name,
+                                &self.type_limits,
+                            ) {
+                                field.ty =
+                                    Type::union(vec![field.ty.clone(), (*index.value).clone()]);
+                            }
                         }
-                        spread_index_values.push(value);
+                        spread_index_values.push(*index.value);
+                        spread_index_keys.push(*index.key);
                     }
                     let Some(SpreadFields { fields, by_name }) =
                         self.spread_source_fields(typed_source, &source_ty, spread_span)?
@@ -6339,6 +6361,7 @@ impl Inferer<'_> {
                 self.own_object_literal_type(
                     &merged,
                     &spread_index_values,
+                    &spread_index_keys,
                     expected,
                     expected_fields.as_ref(),
                     interface_target.is_some(),
@@ -6466,8 +6489,18 @@ impl Inferer<'_> {
                 index: if spread_index_values.is_empty() {
                     None
                 } else {
-                    spread_index_values.extend(resolved.values().map(|f| f.ty.clone()));
+                    let key = Type::union(spread_index_keys);
+                    spread_index_values.extend(
+                        resolved
+                            .iter()
+                            .filter(|(name, _)| {
+                                crate::property_keys::matches_name(&key, name, &self.type_limits)
+                            })
+                            .map(|(_, field)| field.ty.clone()),
+                    );
                     Some(crate::IndexSignature {
+                        string_keyof_includes_number: false,
+                        key: Box::new(key),
                         value: Box::new(Type::union(spread_index_values)),
                         readonly: false,
                     })
@@ -6545,6 +6578,7 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
         spread_index_values: &[Type],
+        spread_index_keys: &[Type],
         expected: Option<&Type>,
         expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
         against_interface: bool,
@@ -6560,12 +6594,22 @@ impl Inferer<'_> {
         }
         // A spread record's index signature holds the named fields too, as the
         // literal's type below has it.
+        let key = Type::union(spread_index_keys.to_vec());
         let index = (!spread_index_values.is_empty()).then(|| crate::IndexSignature {
+            string_keyof_includes_number: false,
+            key: Box::new(key.clone()),
             value: Box::new(Type::union(
                 spread_index_values
                     .iter()
                     .cloned()
-                    .chain(merged.values().map(|(field, _)| field.ty.clone()))
+                    .chain(
+                        merged
+                            .iter()
+                            .filter(|(name, _)| {
+                                crate::property_keys::matches_name(&key, name, &self.type_limits)
+                            })
+                            .map(|(_, (field, _))| field.ty.clone()),
+                    )
                     .collect(),
             )),
             readonly: false,
@@ -6593,14 +6637,11 @@ impl Inferer<'_> {
         if !self.has_index_signature_member(members) {
             return None;
         }
-        let shapes: Vec<(ObjectFields, Option<Type>)> = members
+        let shapes: Vec<(ObjectFields, Option<crate::IndexSignature>)> = members
             .iter()
             .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined))
             .map(|member| {
-                let index = self
-                    .resolver()
-                    .index_signature(member)
-                    .map(|index| *index.value);
+                let index = self.resolver().index_signature(member);
                 (self.member_shape(member).unwrap_or_default(), index)
             })
             .collect();
@@ -6617,7 +6658,18 @@ impl Inferer<'_> {
                         fields
                             .get(name)
                             .map(crate::ObjectField::read_ty)
-                            .or_else(|| index.clone())
+                            .or_else(|| {
+                                index
+                                    .as_ref()
+                                    .filter(|index| {
+                                        crate::property_keys::matches_name(
+                                            &index.key,
+                                            name,
+                                            &self.type_limits,
+                                        )
+                                    })
+                                    .map(|index| (*index.value).clone())
+                            })
                     })
                     .collect();
                 (!types.is_empty()).then(|| {
@@ -6752,10 +6804,7 @@ impl Inferer<'_> {
         }
         let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
-            let index_value = self
-                .resolver()
-                .index_signature(&alternative)
-                .map(|index| *index.value);
+            let index_value = self.resolver().index_signature(&alternative);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
                 // Like `{}`, `object` names no field to copy.
@@ -6811,7 +6860,7 @@ impl Inferer<'_> {
                 by_name: false,
             }));
         }
-        let fields = merge_spread_alternatives(&objects);
+        let fields = merge_spread_alternatives(&objects, &self.type_limits);
         self.typed_ast.spread_mask_fields.insert(
             typed_source,
             fields
@@ -6840,7 +6889,7 @@ impl Inferer<'_> {
         if !self.spreads_as_rest_source(typed_source, source_ty)? {
             return Ok(None);
         }
-        let index_value = self.spread_source_index(typed_source, source_ty)?;
+        let index_value = self.spread_source_signature(typed_source, source_ty)?;
         let Some(SpreadFields { mut fields, .. }) =
             self.spread_source_fields(typed_source, source_ty, span)?
         else {
@@ -6881,13 +6930,9 @@ impl Inferer<'_> {
                 ty: field.ty.clone(),
             })
             .collect();
-        let index = index_value.map(|value| crate::IndexSignature {
-            value: Box::new(Type::union(
-                std::iter::once(value)
-                    .chain(fields.values().map(|field| field.ty.clone()))
-                    .collect(),
-            )),
+        let index = index_value.map(|index| crate::IndexSignature {
             readonly: false,
+            ..index
         });
         let ty = Type::Object { index, fields };
         let rest = self.push_synthetic_expr(
@@ -6921,18 +6966,42 @@ impl Inferer<'_> {
             }))
     }
 
-    pub(super) fn spread_source_index(
-        &self,
+    pub(super) fn spread_source_signature(
+        &mut self,
         source: ExprId,
         ty: &Type,
-    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
+    ) -> Result<Option<crate::IndexSignature>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(source, ty, &mut alternatives)?;
-        let values: Vec<Type> = alternatives
+        let indexes: Vec<_> = alternatives
             .iter()
-            .filter_map(|ty| self.resolver().index_signature(ty).map(|i| *i.value))
+            .filter_map(|ty| self.resolver().index_signature(ty))
             .collect();
-        Ok((!values.is_empty()).then(|| Type::union(values)))
+        if indexes.is_empty() {
+            return Ok(None);
+        }
+        let keys: Vec<_> = indexes.iter().map(|index| (*index.key).clone()).collect();
+        let values: Vec<_> = indexes.iter().map(|index| (*index.value).clone()).collect();
+        let span = self
+            .typed_ast
+            .try_expr(source)
+            .map_err(super::arena_failure)?
+            .span;
+        for index in &indexes {
+            self.check_index_composition(&keys, &values, &index.key, &index.value, span);
+        }
+        Ok(Some(crate::IndexSignature {
+            string_keyof_includes_number: indexes
+                .iter()
+                .any(|index| index.string_keyof_includes_number),
+            key: Box::new(Type::union(
+                indexes.iter().map(|index| (*index.key).clone()).collect(),
+            )),
+            value: Box::new(Type::union(
+                indexes.into_iter().map(|index| *index.value).collect(),
+            )),
+            readonly: false,
+        }))
     }
 
     fn collect_spread_alternatives(
@@ -8518,6 +8587,7 @@ impl Inferer<'_> {
         }
         if matches!(receiver_ty.peel(), Type::InterfaceRef { .. })
             && let Some(index) = self.resolver().index_signature(&receiver_ty)
+            && crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
         {
             return Ok((
                 TypedExprKind::FieldAccess {
@@ -8547,7 +8617,9 @@ impl Inferer<'_> {
             Type::Object { fields, index } => {
                 if let Some(field) = fields.get(&name.name) {
                     field.read_ty()
-                } else if let Some(index) = index {
+                } else if let Some(index) = index.as_ref().filter(|index| {
+                    crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
+                }) {
                     index.read_ty()
                 } else {
                     // An object literal still resolves the prelude `Object`
@@ -9015,44 +9087,8 @@ impl Inferer<'_> {
         let Some(index) = array_index_key(&name.name) else {
             return Ok(None);
         };
-        let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
-        let elem_ty = match receiver_ty.peel() {
-            _ if receiver_ty.is_string_shaped() => Type::String,
-            _ if receiver_ty.is_regexp_match_array() => Type::regexp_element(),
-            Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => Type::Number,
-            // A tuple has no element at a key that names no slot, as tsc
-            // reports.
-            Type::Tuple(tuple) => match slot.and_then(|slot| tuple.elements.get(slot)) {
-                Some(elem) => elem.clone(),
-                None => return Ok(None),
-            },
-            // A union of arrays and tuples reads each member's element, as
-            // `infer_index_access` does with a numeric literal. With an
-            // array among them, a key that names no slot reads the number
-            // index every member has.
-            Type::Union(members) if receiver_ty.is_array_like_union() => {
-                if slot.is_none()
-                    && !members
-                        .iter()
-                        .any(|member| matches!(member.peel(), Type::Array(_)))
-                {
-                    return Ok(None);
-                }
-                let elements: Option<Vec<Type>> = members
-                    .iter()
-                    .map(|member| match member.peel() {
-                        Type::Array(elem) => Some((**elem).clone()),
-                        Type::Tuple(tuple) => tuple_key_element(tuple, slot),
-                        _ => None,
-                    })
-                    .collect();
-                match elements {
-                    Some(elements) => Type::union(elements),
-                    None => return Ok(None),
-                }
-            }
-            _ => return Ok(None),
+        let Some(elem_ty) = numeric_key_element(receiver_ty, index) else {
+            return Ok(None);
         };
         let typed_index =
             self.push_synthetic_expr(TypedExprKind::Number(index), Type::Number, name.span)?;
@@ -9061,6 +9097,20 @@ impl Inferer<'_> {
             index: typed_index,
         };
         self.narrowed_index_read(kind, elem_ty).map(Some)
+    }
+
+    pub(super) fn infer_numeric_index(
+        &mut self,
+        index: ExprId,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        if let Some(key) = string_key_name(self.ast, index)?
+            && let Some(number) = array_index_key(&key.name)
+        {
+            let index =
+                self.push_synthetic_expr(TypedExprKind::Number(number), Type::Number, key.span)?;
+            return Ok((index, Type::Number));
+        }
+        self.infer_expr(index, Some(&Type::Number))
     }
 
     fn infer_index_access(
@@ -9258,7 +9308,7 @@ impl Inferer<'_> {
                 Type::Error
             }
         };
-        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number))?;
+        let (typed_index, _) = self.infer_numeric_index(index)?;
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -10857,6 +10907,13 @@ impl Inferer<'_> {
             if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
                     .index_signature(&receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
                         optional: true,
@@ -11048,7 +11105,7 @@ impl Inferer<'_> {
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))?
+            self.infer_numeric_index(index)?
         };
         let elem_ty = if object {
             self.object_index_write_type(
@@ -11641,6 +11698,25 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
+                if let Some(index) = array_index_key(&name.name)
+                    && let Some(ty) = numeric_key_element(receiver_ty, index)
+                {
+                    let idx = self.push_synthetic_expr(
+                        TypedExprKind::Number(index),
+                        Type::Number,
+                        name.span,
+                    )?;
+                    *pending_method = None;
+                    return Ok((
+                        TypedChainPart::Index {
+                            idx,
+                            optional,
+                            result_ty: ty.clone(),
+                            span,
+                        },
+                        ty,
+                    ));
+                }
                 if self.reject_unsupported_array_call(receiver_ty, &name) {
                     *pending_method = None;
                     let typed_part = TypedChainPart::Field {
@@ -12347,7 +12423,9 @@ impl Inferer<'_> {
                     };
                     return ChainField::plain(ty);
                 }
-                if let Some(index) = index {
+                if let Some(index) = index.as_ref().filter(|index| {
+                    crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
+                }) {
                     return ChainField::plain(index.read_ty());
                 }
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
@@ -12430,7 +12508,17 @@ impl Inferer<'_> {
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
                     return found;
                 }
-                if let Some(index) = self.resolver().index_signature(receiver_ty) {
+                if let Some(index) = self
+                    .resolver()
+                    .index_signature(receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
+                {
                     return ChainField::plain(index.read_ty());
                 }
                 self.report_missing_field(span, receiver_ty, &name.name);
@@ -13267,7 +13355,7 @@ impl Inferer<'_> {
                     .resolver()
                     .index_signature(ty)
                     .map(|i| {
-                        i.try_map_value(|value| {
+                        i.try_map_types(|value| {
                             self.reduce_interfaces_rec(value, cast_target, seen, child, budget)
                         })
                     })
@@ -13565,6 +13653,7 @@ fn unsupported_cast_target_reason(
 ) -> Option<&'static str> {
     let peeled = target_ty.peel();
     match peeled {
+        Type::TemplateLiteral { .. } => None,
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
@@ -13745,6 +13834,43 @@ fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Op
         elements.push(Type::Undefined);
     }
     Some(Type::union(elements))
+}
+
+fn numeric_key_element(receiver_ty: &Type, index: f64) -> Option<Type> {
+    let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
+    let elem_ty = match receiver_ty.peel() {
+        _ if receiver_ty.is_string_shaped() => Type::String,
+        _ if receiver_ty.is_regexp_match_array() => Type::regexp_element(),
+        Type::Array(elem) => (**elem).clone(),
+        Type::Uint8Array => Type::Number,
+        // A tuple has no element at a key that names no slot, as tsc
+        // reports.
+        Type::Tuple(tuple) => slot.and_then(|slot| tuple.elements.get(slot))?.clone(),
+        // A union of arrays and tuples reads each member's element, as
+        // `infer_index_access` does with a numeric literal. With an
+        // array among them, a key that names no slot reads the number
+        // index every member has.
+        Type::Union(members) if receiver_ty.is_array_like_union() => {
+            if slot.is_none()
+                && !members
+                    .iter()
+                    .any(|member| matches!(member.peel(), Type::Array(_)))
+            {
+                return None;
+            }
+            let elements: Option<Vec<Type>> = members
+                .iter()
+                .map(|member| match member.peel() {
+                    Type::Array(elem) => Some((**elem).clone()),
+                    Type::Tuple(tuple) => tuple_key_element(tuple, slot),
+                    _ => None,
+                })
+                .collect();
+            Type::union(elements?)
+        }
+        _ => return None,
+    };
+    Some(elem_ty)
 }
 
 /// The number a numeric key names, as tsc reads one: a key that is a
@@ -14799,14 +14925,17 @@ fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
 #[derive(PartialEq)]
 struct SpreadAlternative {
     fields: ObjectFields,
-    index_value: Option<Type>,
+    index_value: Option<crate::IndexSignature>,
 }
 
 /// The fields of a spread whose source is one of several object types: every
 /// field any of them has, optional where some lack it or have it optional. An
 /// alternative with an index signature can hold a field it doesn't name, so
 /// that field may also hold the index signature's value type.
-fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields {
+fn merge_spread_alternatives(
+    alternatives: &[SpreadAlternative],
+    limits: &crate::type_size::TypeLimits,
+) -> ObjectFields {
     let names: std::collections::BTreeSet<&String> = alternatives
         .iter()
         .flat_map(|alternative| alternative.fields.keys())
@@ -14823,7 +14952,15 @@ fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields
             let index_values = alternatives
                 .iter()
                 .filter(|alternative| !alternative.fields.contains_key(name))
-                .filter_map(|alternative| alternative.index_value.clone());
+                .filter_map(|alternative| {
+                    alternative
+                        .index_value
+                        .as_ref()
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, name, limits)
+                        })
+                        .map(|index| (*index.value).clone())
+                });
             let ty = Type::union(
                 present
                     .iter()

@@ -1655,6 +1655,13 @@ impl Inferer<'_> {
             let field_lookup = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
                     .index_signature(&receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
                     .map(|i| crate::ObjectField {
                         ty: *i.value,
                         optional: false,
@@ -1824,7 +1831,7 @@ impl Inferer<'_> {
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))?
+            self.infer_numeric_index(index)?
         };
         let targets = if object {
             self.object_index_write_targets(
@@ -2572,6 +2579,13 @@ impl Inferer<'_> {
             if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
                     .index_signature(&receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
                         optional: true,
@@ -2739,7 +2753,7 @@ impl Inferer<'_> {
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))?
+            self.infer_numeric_index(index)?
         };
         let elem_ty = if object {
             self.object_index_write_type(

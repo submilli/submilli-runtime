@@ -118,6 +118,7 @@ enum Segment {
 /// later failures in the same record do not walk it again.
 #[derive(Clone, Copy)]
 pub(super) struct RecordKeys {
+    domain: u32,
     object: u32,
     values: u32,
     cache: u32,
@@ -694,6 +695,7 @@ pub(super) fn record_keys(
     ctx: &CodegenCtx,
     object: u32,
     values: u32,
+    domain: u32,
 ) -> Option<RecordKeys> {
     emitter.cast_diagnostic.as_ref()?;
     let array = ctx.require(ctx.symbols.array_type_idx(), "$Array intrinsic registered")?;
@@ -704,6 +706,7 @@ pub(super) fn record_keys(
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(array)));
     emitter.instruction(Instruction::LocalSet(cache));
     Some(RecordKeys {
+        domain,
         object,
         values,
         cache,
@@ -816,6 +819,7 @@ fn emit_record_key(
         field_index: 2,
     });
     emitter.instruction(Instruction::F64ConvertI32U);
+    emitter.instruction(Instruction::LocalGet(keys.domain));
     emitter.instruction(Instruction::Call(quoted_keys));
     emitter.instruction(Instruction::RefCastNullable(HeapType::Concrete(array)));
     emitter.instruction(Instruction::LocalSet(keys.cache));

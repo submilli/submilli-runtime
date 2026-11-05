@@ -553,6 +553,20 @@ impl<'a> Validator<'a> {
                 | TypeAnnotationKind::Optional(inner)
                 | TypeAnnotationKind::Readonly(inner)
                 | TypeAnnotationKind::KeyOf(inner) => self.annotation(inner)?,
+                TypeAnnotationKind::TemplateLiteral {
+                    parts,
+                    substitutions,
+                } => {
+                    if parts.len() != substitutions.len().saturating_add(1) {
+                        return Err(SourceError::InvalidSpan {
+                            span: annotation.span,
+                            reason: "template type has inconsistent parts and substitutions",
+                        });
+                    }
+                    for substitution in substitutions {
+                        self.annotation(substitution)?;
+                    }
+                }
                 TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {
                     for member in members {
                         self.annotation(member)?;
@@ -565,6 +579,7 @@ impl<'a> Validator<'a> {
                     }
                     if let Some(index) = index {
                         self.span(index.span)?;
+                        self.annotation(&index.key)?;
                         self.annotation(&index.value)?;
                     }
                 }
