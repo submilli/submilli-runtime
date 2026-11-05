@@ -1,0 +1,13 @@
+kind: blueprint
+name: github-repository-search-open-test
+packages:
+  - '@submilli/github'
+default: deny
+permissions:
+  main:
+    # A grant written before `query` existed: no filter, so every query stays allowed.
+    - capability: github.com/repositories.search
+      action: allow
+  # Deliberate sentinel: permitted operations must reach secrets.get, which is
+  # denied here before a token can be read or a network request can happen.
+  '@submilli/github': []

@@ -37,6 +37,10 @@ internally; never pass tokens as function arguments.
 <!-- submilli:if capability="github.com/pulls.search" -->
 - Prefer `searchPullRequests` for repository-scoped pull request discovery.
 <!-- submilli:endif -->
+<!-- submilli:if capability="github.com/repositories.search" -->
+- A policy may limit `searchRepositories` to exact queries. It compares the query exactly as
+  written, so a change in spacing or case is a different query.
+<!-- submilli:endif -->
 <!-- submilli:if any="github.com/code.search github.com/issues.search github.com/pulls.search" -->
 - The repository-scoped search functions reject query syntax that could escape the
   repository policy.

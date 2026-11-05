@@ -206,6 +206,23 @@ for (const [method, capability, suffix, data, expected] of [
     });
 }
 
+test('repository search checks the exact query it sends', () => {
+    for (const query of ['org:submilli is:public', ' Org:Submilli  is:public ']) {
+        host.reset(); host.response(() => ({ data: { total_count: 0, incomplete_results: false, items: [] } }));
+        github.searchRepositories(query, options({ limit: 5, sort: 'stars' }));
+        assert.deepEqual(host.checks, [{ capability: 'github.com/repositories.search', context: { query } }]);
+        const url = new URL(host.requests[0].url);
+        assert.equal(url.pathname, '/search/repositories');
+        assert.equal(url.searchParams.get('q'), query); assert.equal(url.searchParams.get('sort'), 'stars');
+    }
+    host.reset(); host.denial((cap, ctx) => ctx.query !== 'org:submilli is:public');
+    assert.throws(() => github.searchRepositories('org:victim-org is:private'), /Capability denied/);
+    assert.equal(host.requests.length, 0);
+    host.reset();
+    assert.throws(() => github.searchRepositories(' '), (e) => e.code === 'invalid_input');
+    assert.equal(host.checks.length, 0); assert.equal(host.requests.length, 0);
+});
+
 test('legacy and managed-user logins are checked and sent as one lowercased name', () => {
     for (const [login, canonical, path] of [
         ['Octocat-', 'octocat-', '/users/octocat-'],

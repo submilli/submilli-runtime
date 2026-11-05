@@ -1426,15 +1426,15 @@ export function listTeamMembers(org: string, teamSlug: string, options: PageOpti
     return pageFrom(response, items);
 }
 
-/** Search repositories visible to the token.
- * @param query Non-empty GitHub search query for repositories, which may use qualifiers such as `language:rust`.
+/** Search repositories visible to the token. `query` in the check is the exact text sent to GitHub.
+ * @param query Non-empty GitHub search query for repositories, which may use qualifiers such as `language:rust`. It is sent as given, without trimming or added qualifiers.
  * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of repository hits, each with a relevance `score`, plus `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
- * @capability github.com/repositories.search {}
+ * @capability github.com/repositories.search { query: string }
  */
 export function searchRepositories(query: string, options: SearchOptions = {}): SearchPageResult<RepositorySearchHit> {
-    check("github.com/repositories.search", {});
     requireText(query, "query");
+    check("github.com/repositories.search", { query: query });
     const response = githubGet("/search/repositories", searchQuery(query, options));
     const data = response.json() as ApiSearchRepositories;
     const items: RepositorySearchHit[] = [];

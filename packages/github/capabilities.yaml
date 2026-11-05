@@ -622,8 +622,10 @@ provides:
     treeSha:
       type: string
 - name: github.com/repositories.search
-  description: Search repositories visible to the token.
-  fields: {}
+  description: Search repositories visible to the token. `query` in the check is the exact text sent to GitHub.
+  fields:
+    query:
+      type: string
 - name: github.com/stargazers.list
   description: List the accounts that starred a repository, with when each did.
   fields:

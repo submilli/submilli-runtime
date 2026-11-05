@@ -75,6 +75,9 @@ restricted blueprints. Each script has a blueprint of the same name:
   repository the policy approved. The package reads a placeholder token from
   the local secret store, and the blueprint refuses the request with a reason that
   tells the approved repository from any other.
+- `repository-search-query.ts` shows that a rule can pin `searchRepositories` to one
+  exact query, and `repository-search-open.ts` that a grant with no filter still
+  allows any query.
 - `people-scope.ts` shows that events, stargazers and forks are held to a rule on
   `owner` and `repo`, and the profile reads to a rule on `login`, and that a crafted
   login is rejected with `invalid_input` even under a prefix rule it would match.
@@ -105,6 +108,20 @@ branch/ref and file-path values retain their case. Prefer allow rules for refs:
 `main`, `heads/main`, tags and commit SHAs can name the same history.
 `listCommits` checks its `sha` option as `ref` and its path as `path`; omitted or
 empty values are null and are not sent.
+
+## Repository search
+
+`searchRepositories` needs `github.com/repositories.search`, which checks the exact `query`
+sent to GitHub: nothing is trimmed, folded or added. A grant with no filter allows any query
+over everything the token can see, including `org:other is:private`. Pin it with `==`:
+
+```yaml
+- capability: github.com/repositories.search
+  filter: query == "org:pied-piper is:public"
+  action: allow
+```
+
+Do not scope it with a prefix `glob`: a later qualifier in the same query can widen the search.
 
 ## Audience and profile reads
 
