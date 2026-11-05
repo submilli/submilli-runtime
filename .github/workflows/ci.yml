@@ -100,11 +100,16 @@ jobs:
   # release workflow ships `x86_64-pc-windows-msvc`, so the platform where escape
   # classification is least certain would otherwise be the one nothing exercises.
   # A divergence here is a stop condition, not something to work around.
+  #
+  # macOS is off while GitHub has no hosted macOS runner for this repository: the
+  # job waited for one and was cancelled. To restore it, add `macos-latest` back to
+  # the matrix and `containment (macos-latest)` back to the required checks in the
+  # `main` and `main2` rulesets.
   containment:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
