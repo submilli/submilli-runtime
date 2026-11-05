@@ -247,6 +247,10 @@ PR. Do not split a rejected atomic push into a tag-only push.
 Verify remote main and the tag's peeled commit against the release commit. Wait
 for applicable main CI checks for that commit before publishing. A push alone
 does not start the current runtime release workflow.
+The Documentation workflow may explicitly defer its Compose journey while the
+new workspace release's image is unpublished. This is expected release
+preparation, not a failed check; the release workflow requires the journey
+after publishing the container.
 
 ## 6. Publish and verify delivery
 
@@ -276,6 +280,8 @@ does not trigger another workflow through a release event.
   linux/amd64 and linux/arm64 manifests and source revision matching the release
   commit. The workflow runs container smoke/conformance checks before publishing.
 - Verify the release body, stable/latest designation, and tag-pinned Compose URL.
+  Require the release workflow's Compose documentation journey to pass against
+  that published image. It cannot defer or use an older runtime pin.
   Verify the chart version from the release commit is anonymously downloadable
   from `oci://ghcr.io/submilli/charts/submilli` and the workflow's clean-cluster
   OCI install and `helm test` jobs passed. Both chart and image must be public;
