@@ -587,10 +587,11 @@ fn compare_errors(
 /// binds.
 fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
     let reachable = typed_reachability::Reachable::collect(typed);
+    let conversions = implicit_string_conversion_nodes(typed);
     let expressions = (0..typed.exprs_len()).filter_map(|i| {
         let id = ExprId(i as u32);
         // Incoming ABI reads initialize parameters; they are not authored reads.
-        if typed.parameter_inputs.contains(&id) {
+        if typed.parameter_inputs.contains(&id) || conversions.contains(&id) {
             return None;
         }
         let e = typed.try_expr(id).unwrap();
@@ -630,6 +631,39 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
             });
     }
     by_line
+}
+
+/// Implicit property-key/interpolation conversions share their operand's
+/// span. Compare the authored operand, not its generated string wrapper or
+/// default radix. A written String(x) / x.toString() has a distinct call span.
+fn implicit_string_conversion_nodes(typed: &TypedAst) -> std::collections::BTreeSet<ExprId> {
+    let mut generated = std::collections::BTreeSet::new();
+    for i in 0..typed.exprs_len() {
+        let id = ExprId(i as u32);
+        let expr = typed.try_expr(id).unwrap();
+        match &expr.kind {
+            TypedExprKind::IntrinsicCall {
+                kind: interpreter::Intrinsic::ToString,
+                args,
+            } if args.len() == 1 && typed.try_expr(args[0]).unwrap().span == expr.span => {
+                generated.insert(id);
+            }
+            TypedExprKind::MethodCall {
+                receiver,
+                name,
+                args,
+                ..
+            } if name.name == "toString"
+                && name.span == expr.span
+                && typed.try_expr(*receiver).unwrap().span == expr.span =>
+            {
+                generated.insert(id);
+                generated.extend(args.iter().copied());
+            }
+            _ => {}
+        }
+    }
+    generated
 }
 
 /// The cast a call through a union of function types puts around its callee,
@@ -1614,7 +1648,7 @@ fn canonical_optional_type(text: &str, exact_optional: bool) -> Option<String> {
 /// A generic type's canonical text. Three spellings only `tsc` uses read as ours:
 /// - `Uint8Array<ArrayBuffer>`: `tsc` names the buffer behind it, which ours has
 ///   no choice of;
-/// - `Record<string, V>`: defined as the index signature we print;
+/// - `Record<string, V>` / `Record<number, V>`: the index signatures we print;
 /// - `ArrayIterator<T>`: `tsc`'s name for an array's iterator, which is our
 ///   `Iterator<T>`.
 fn canonical_generic(name: &str, args: &[String]) -> String {
@@ -1622,7 +1656,9 @@ fn canonical_generic(name: &str, args: &[String]) -> String {
         ("Uint8Array", [buffer]) if buffer == "ArrayBuffer" || buffer == "ArrayBufferLike" => {
             name.to_string()
         }
-        ("Record", [key, value]) if key == "string" => format!("{{ [key: string]: {value} }}"),
+        ("Record", [key, value]) if matches!(key.as_str(), "string" | "number") => {
+            format!("{{ [key: {key}]: {value} }}")
+        }
         ("ArrayIterator", _) => format!("Iterator<{}>", args.join(", ")),
         _ => format!("{name}<{}>", args.join(", ")),
     }
@@ -1793,9 +1829,9 @@ const DISTINCT_SPELLINGS: &[(&str, &str, &str)] = &[
         "{}",
     ),
     (
-        "Record with a number key",
+        "Record with a different key domain",
         "Record<number, string>",
-        "{ [key: number]: string }",
+        "{ [key: string]: string }",
     ),
     (
         "Record with three arguments",
@@ -2223,6 +2259,40 @@ fn entries_keep_undefined_in_optional_parameter_reads() {
         normalize_type(&value.ty),
         normalize_type("number | undefined")
     );
+}
+
+#[test]
+fn entries_keep_numeric_keys_and_authored_string_conversions_distinct() {
+    let source = "enum Key { A, B }\nconst record: Record<number, boolean> = {};\nconst a = record[0 as 0 | 1];\nconst b = record[Key.A];\nconst n = 1;\nconst text = String(n);\nconst method = n.toString();\nfunction main(): void {}\n";
+    let (typed, errors) = case_errors::case_errors(source);
+    assert!(
+        errors.is_empty(),
+        "{:?}",
+        errors
+            .iter()
+            .map(|error| &error.message)
+            .collect::<Vec<_>>()
+    );
+    let entries = entries_by_line(&typed, source);
+    let find = |text: &str| {
+        entries
+            .values()
+            .flatten()
+            .find(|entry| entry.text == text)
+            .unwrap()
+    };
+    assert_eq!(
+        normalize_type(&find("0 as 0 | 1").ty),
+        normalize_type("0 | 1")
+    );
+    assert_ne!(find("Key.A").ty, "string");
+    assert_eq!(find("String(n)").ty, "string");
+    assert_eq!(find("n.toString()").ty, "string");
+    assert!(same_type(
+        "numeric record",
+        "Record<number, boolean>",
+        "{ [key: number]: boolean }"
+    ));
 }
 
 #[test]

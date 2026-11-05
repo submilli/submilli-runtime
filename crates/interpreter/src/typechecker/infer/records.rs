@@ -29,7 +29,7 @@ impl TypeResolver<'_> {
                 let bindings = generics.iter().cloned().zip(args.iter().cloned()).collect();
                 index
                     .as_ref()
-                    .map(|i| i.map_value(|v| substitute_or_record(v, &bindings, self.limits)))
+                    .map(|i| i.map_types(|v| substitute_or_record(v, &bindings, self.limits)))
             }
             _ => None,
         }
@@ -43,6 +43,29 @@ pub(super) struct PendingIndexCheck {
 }
 
 impl Inferer<'_> {
+    pub(super) fn check_index_composition(
+        &mut self,
+        keys: &[Type],
+        values: &[Type],
+        key: &Type,
+        value: &Type,
+        span: Span,
+    ) {
+        if keys.iter().zip(values).any(|(earlier_key, earlier_value)| {
+            earlier_key.peel() != key.peel() && earlier_value.peel() != value.peel()
+        }) {
+            self.error_with_help(
+                span,
+                "combining index signatures with different key and value types is not supported"
+                    .into(),
+                vec![
+                    "keep these records separate; their key domains need distinct value types"
+                        .into(),
+                ],
+            );
+        }
+    }
+
     pub(super) fn resolve_record(
         &mut self,
         args: &[TypeAnnotation],
@@ -54,35 +77,60 @@ impl Inferer<'_> {
         };
         let key = self.resolve_type(key)?;
         let value = self.resolve_type(value)?;
-        if matches!(key.peel(), Type::String) {
-            return Ok(Type::Object {
-                fields: BTreeMap::new(),
-                index: Some(IndexSignature {
-                    value: Box::new(value),
-                    readonly: false,
-                }),
-            });
-        }
-        let Some(keys) = finite_string_keys(&key, self.resolver()) else {
-            if !matches!(key, Type::Error) {
-                self.error_with_help(span, format!("unsupported Record key type `{key}`"), vec!["use `string` or a finite union of string literals; unresolved generic keys are not supported".into()]);
-            }
-            return Ok(Type::Error);
+        let mut fields = BTreeMap::new();
+        let mut domains = Vec::new();
+        let members = match key.peel() {
+            Type::Union(members) => members.as_slice(),
+            _ => std::slice::from_ref(&key),
         };
-        Ok(Type::Object {
-            fields: keys
-                .into_iter()
-                .map(|k| (k, ObjectField::required(value.clone())))
-                .collect(),
-            index: None,
-        })
+        for member in members {
+            if matches!(
+                member.peel(),
+                Type::Boolean
+                    | Type::BooleanLiteral(_)
+                    | Type::BigInt
+                    | Type::BigIntLiteral(_)
+                    | Type::Null
+                    | Type::Undefined
+            ) {
+                self.error(span, "Record keys must satisfy `string | number`".into());
+                return Ok(Type::Error);
+            }
+            if let Some(keys) = finite_string_keys(member, self.resolver()) {
+                for key in keys {
+                    fields.insert(key, ObjectField::required(value.clone()));
+                }
+            } else if valid_index_domain(member) {
+                domains.push(member.clone());
+            } else {
+                self.error_with_help(
+                    span,
+                    format!("unsupported Record key type `{key}`"),
+                    vec!["Record keys must satisfy `string | number`".into()],
+                );
+                return Ok(Type::Error);
+            }
+        }
+        let index = (!domains.is_empty()).then(|| IndexSignature {
+            string_keyof_includes_number: false,
+            key: Box::new(Type::union(domains)),
+            value: Box::new(value),
+            readonly: false,
+        });
+        Ok(Type::Object { fields, index })
     }
 
     pub(super) fn resolve_index_signature(
         &mut self,
         annotation: &crate::IndexSignatureAnnotation,
     ) -> Result<IndexSignature, CompilerFailure> {
+        let key = self.resolve_type(&annotation.key)?;
+        if !valid_index_domain(&key) && !matches!(key.peel(), Type::Error) {
+            self.error(annotation.key.span, "index signature keys must satisfy `string | number` and cannot be literal or enum types; use Record for finite keys".into());
+        }
         Ok(IndexSignature {
+            string_keyof_includes_number: true,
+            key: Box::new(key),
             value: Box::new(self.resolve_type(&annotation.value)?),
             readonly: annotation.readonly,
         })
@@ -128,7 +176,7 @@ impl Inferer<'_> {
                     ))
                 })
                 .collect::<Result<_, CompilerFailure>>()?,
-            index: index.try_map_value(substitute)?,
+            index: index.try_map_types(substitute)?,
             span,
         };
         if let Some(pending) = &mut self.pending_index_checks {
@@ -147,7 +195,9 @@ impl Inferer<'_> {
 
     fn validate_index_fields(&mut self, check: PendingIndexCheck) {
         for (name, field) in check.fields {
-            if !assignable(&field.ty, &check.index.value, self.resolver()) {
+            if crate::property_keys::matches_name(&check.index.key, &name, &self.type_limits)
+                && !assignable(&field.ty, &check.index.value, self.resolver())
+            {
                 self.error(check.span, format!("property `{name}` of type `{}` does not satisfy string index value type `{}`", field.ty, check.index.value));
             }
         }
@@ -157,8 +207,19 @@ impl Inferer<'_> {
         &mut self,
         key: crate::ExprId,
     ) -> Result<(crate::ExprId, Type), CompilerFailure> {
-        let (key, _) = self.infer_expr(key, Some(&Type::String))?;
-        Ok((key, self.object_key_type(key)?))
+        let span = self.ast.try_expr(key).map_err(super::arena_failure)?.span;
+        let (key, ty) = self.infer_expr(key, None)?;
+        let key_ty = self.object_key_type(key)?;
+        let key = if assignable(
+            &ty,
+            &Type::union(vec![Type::String, Type::Number]),
+            self.resolver(),
+        ) {
+            self.wrap_interpolation_in_to_string(key, &ty, span, span)?
+        } else {
+            key
+        };
+        Ok((key, key_ty))
     }
 
     // Key alternatives retain their literal values even where ordinary expression
@@ -202,10 +263,14 @@ impl Inferer<'_> {
         key: &Type,
         span: Span,
     ) -> Type {
-        if !assignable(key, &Type::String, self.resolver()) {
+        if !assignable(
+            key,
+            &Type::union(vec![Type::String, Type::Number]),
+            self.resolver(),
+        ) {
             self.error(
                 span,
-                format!("object index requires a string key, got `{key}`"),
+                format!("object index requires a string or number key, got `{key}`"),
             );
             return Type::Error;
         }
@@ -217,14 +282,26 @@ impl Inferer<'_> {
                     .collect(),
             );
         }
+        if let Type::Union(members) = key.peel() {
+            return Type::union(
+                members
+                    .iter()
+                    .map(|member| self.object_index_read_type(receiver, member, span))
+                    .collect(),
+            );
+        }
         let fields = self.assignment_target_fields(receiver).unwrap_or_default();
         let index = self.resolver().index_signature(receiver);
+        let numeric_key = assignable(key, &Type::Number, self.resolver());
         if let Some(keys) = finite_string_keys(key, self.resolver()) {
             let mut values = Vec::new();
             for key in keys {
                 if let Some(field) = fields.get(&key) {
                     values.push(field.read_ty());
-                } else if let Some(index) = &index {
+                } else if let Some(index) = &index
+                    && (!numeric_key || domain_accepts_numbers(&index.key))
+                    && crate::property_keys::matches_name(&index.key, &key, &self.type_limits)
+                {
                     values.push(index.read_ty());
                 } else {
                     self.error(span, format!("no field `{key}` on type `{receiver}`"));
@@ -234,6 +311,16 @@ impl Inferer<'_> {
             return Type::union(values);
         }
         if let Some(index) = index {
+            if !assignable(key, &index.key, self.resolver())
+                && !(matches!(index.key.peel(), Type::String)
+                    && assignable(key, &Type::Number, self.resolver()))
+            {
+                self.error(
+                    span,
+                    format!("index key `{key}` does not satisfy `{}`", index.key),
+                );
+                return Type::Error;
+            }
             return index.read_ty();
         }
         self.error_with_help(
@@ -303,6 +390,9 @@ impl Inferer<'_> {
             targets.push(*index.value);
             // An arbitrary string can name any explicitly declared member.
             for (name, field) in fields {
+                if !crate::property_keys::matches_name(key, &name, &self.type_limits) {
+                    continue;
+                }
                 if field.readonly {
                     self.error(
                         span,
@@ -342,6 +432,22 @@ impl Inferer<'_> {
 /// string enums, whose members' values are the keys, as in TypeScript.
 pub(super) fn finite_string_keys(ty: &Type, types: TypeResolver) -> Option<Vec<String>> {
     match ty.peel() {
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => finite_template_keys(parts, substitutions, types),
+        Type::Boolean => Some(vec!["false".into(), "true".into()]),
+        Type::BooleanLiteral(value) => Some(vec![value.to_string()]),
+        Type::BigIntLiteral(value) => Some(vec![value.clone()]),
+        Type::Null => Some(vec!["null".into()]),
+        Type::Undefined => Some(vec!["undefined".into()]),
+        Type::NumberLiteral(key) => Some(vec![crate::runtime::number::format_number_js(key.0)]),
+        Type::NumberEnum {
+            member: Some(member),
+            ..
+        } => Some(vec![crate::runtime::number::format_number_js(
+            member.value.0,
+        )]),
         Type::StringLiteral(key) => Some(vec![key.clone()]),
         Type::StringEnum {
             member: Some(member),
@@ -349,7 +455,13 @@ pub(super) fn finite_string_keys(ty: &Type, types: TypeResolver) -> Option<Vec<S
         } => Some(vec![member.value.clone()]),
         // The declaration's values, read directly: a member type of a
         // one-member enum is the enum itself again.
-        Type::StringEnum {
+        Type::NumberEnum {
+            mangled,
+            name,
+            member: None,
+            ..
+        }
+        | Type::StringEnum {
             mangled,
             name,
             member: None,
@@ -360,7 +472,9 @@ pub(super) fn finite_string_keys(ty: &Type, types: TypeResolver) -> Option<Vec<S
                 .into_iter()
                 .map(|(_, value)| match value {
                     crate::types::EnumValue::String(key) => Some(key),
-                    _ => None,
+                    crate::types::EnumValue::Number(key) => {
+                        Some(crate::runtime::number::format_number_js(key.0))
+                    }
                 })
                 .collect()
         }
@@ -396,7 +510,7 @@ impl Inferer<'_> {
         )?;
         let mut fields: BTreeMap<String, ObjectField> = BTreeMap::new();
         let mut values = Vec::new();
-        let mut dynamic = false;
+        let mut domains = Vec::new();
         let mut typed = Vec::new();
         for member in members {
             let (key, key_ty, value) = match member {
@@ -415,10 +529,16 @@ impl Inferer<'_> {
                     let (key, ty) = inferred_keys
                         .remove(&key)
                         .map_or_else(|| self.infer_object_key(key), Ok)?;
-                    if !assignable(&ty, &Type::String, self.resolver()) {
+                    if !assignable(
+                        &ty,
+                        &Type::union(vec![Type::String, Type::Number]),
+                        self.resolver(),
+                    ) {
                         self.error(
                             span,
-                            format!("computed property requires a string key, got `{ty}`"),
+                            format!(
+                                "computed property requires a string or number key, got `{ty}`"
+                            ),
                         );
                     }
                     (key, ty, value)
@@ -431,12 +551,26 @@ impl Inferer<'_> {
                     let Some(source_fields) = self.spread_source_fields(source, &ty, span)? else {
                         continue;
                     };
-                    if let Some(value) = self.spread_source_index(source, &ty)? {
-                        for field in fields.values_mut() {
-                            field.ty = Type::union(vec![field.ty.clone(), value.clone()]);
+                    if let Some(index) = self.spread_source_signature(source, &ty)? {
+                        self.check_index_composition(
+                            &domains,
+                            &values,
+                            &index.key,
+                            &index.value,
+                            span,
+                        );
+                        for (name, field) in &mut fields {
+                            if crate::property_keys::matches_name(
+                                &index.key,
+                                name,
+                                &self.type_limits,
+                            ) {
+                                field.ty =
+                                    Type::union(vec![field.ty.clone(), (*index.value).clone()]);
+                            }
                         }
-                        values.push(value);
-                        dynamic = true;
+                        values.push(*index.value);
+                        domains.push(*index.key);
                     }
                     for (name, mut field) in source_fields.fields {
                         if field.optional
@@ -456,6 +590,7 @@ impl Inferer<'_> {
             };
             let literal_key = match key_ty.peel() {
                 Type::StringLiteral(key) => Some(key.clone()),
+                Type::NumberLiteral(key) => Some(crate::runtime::number::format_number_js(key.0)),
                 _ => None,
             };
             let hint = literal_key
@@ -466,7 +601,20 @@ impl Inferer<'_> {
                         .as_ref()
                         .and_then(|key| expected_fields.get(key).map(|f| f.ty.clone()))
                 })
-                .or_else(|| expected_index.as_ref().map(|i| (*i.value).clone()));
+                .or_else(|| {
+                    expected_index
+                        .as_ref()
+                        .filter(|index| {
+                            literal_key.as_ref().is_none_or(|name| {
+                                crate::property_keys::matches_name(
+                                    &index.key,
+                                    name,
+                                    &self.type_limits,
+                                )
+                            })
+                        })
+                        .map(|i| (*i.value).clone())
+                });
             let previous_hint = self.object_this_hint.take();
             if matches!(
                 self.ast.try_expr(value).map_err(super::arena_failure)?.kind,
@@ -496,17 +644,29 @@ impl Inferer<'_> {
             if let Some(key) = literal_key {
                 fields.insert(key, ObjectField::required(value_ty.clone()));
             } else {
-                dynamic = true;
-                // This write can replace any preceding property.
-                for field in fields.values_mut() {
-                    field.ty = Type::union(vec![field.ty.clone(), value_ty.clone()]);
+                self.check_index_composition(&domains, &values, &key_ty, &value_ty, span);
+                domains.push(key_ty.clone());
+                for (name, field) in &mut fields {
+                    if crate::property_keys::matches_name(&key_ty, name, &self.type_limits) {
+                        field.ty = Type::union(vec![field.ty.clone(), value_ty.clone()]);
+                    }
                 }
                 values.push(value_ty);
             }
             typed.push(TypedObjectMember::Computed { key, value });
         }
-        values.extend(fields.values().map(|f| f.ty.clone()));
-        let index = dynamic.then(|| IndexSignature {
+        let key = Type::union(domains);
+        values.extend(
+            fields
+                .iter()
+                .filter(|(name, _)| {
+                    crate::property_keys::matches_name(&key, name, &self.type_limits)
+                })
+                .map(|(_, field)| field.ty.clone()),
+        );
+        let index = (!matches!(key, Type::Never)).then(|| IndexSignature {
+            string_keyof_includes_number: true,
+            key: Box::new(key),
             value: Box::new(Type::union(values)),
             readonly: false,
         });
@@ -893,7 +1053,8 @@ impl Inferer<'_> {
             generic_count: 0,
         };
         for (name, member) in members {
-            if member.generic_count > 0
+            if crate::property_keys::matches_name(&index.key, name, &self.type_limits)
+                && member.generic_count > 0
                 && !self.interface_member_assignable(member, &target, opaque)?
             {
                 self.error(span, format!("property `{name}` of type `{}` does not satisfy string index value type `{}`", member.field.ty, index.value));
@@ -1014,7 +1175,7 @@ impl Inferer<'_> {
                     })
                     .collect::<Result<_, CompilerFailure>>()?;
                 let index = index
-                    .map(|index| index.try_map_value(substitute))
+                    .map(|index| index.try_map_types(substitute))
                     .transpose()?;
                 (methods, properties, index)
             }
@@ -1185,6 +1346,87 @@ fn substitute_base_names(
             .collect::<Result<_, _>>()?;
     }
     Ok(result)
+}
+
+fn valid_index_domain(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::String | Type::Number => true,
+        Type::TemplateLiteral { .. } => {
+            valid_template_substitution(ty) && has_infinite_template_part(ty)
+        }
+        Type::Union(members) => members.iter().all(valid_index_domain),
+        _ => false,
+    }
+}
+
+fn finite_template_keys(
+    parts: &[String],
+    substitutions: &[Type],
+    types: TypeResolver,
+) -> Option<Vec<String>> {
+    let first = parts.first()?;
+    let mut keys = vec![first.clone()];
+    let mut budget = types.limits.budget();
+    for (substitution, suffix) in substitutions.iter().zip(parts.iter().skip(1)) {
+        let values = finite_string_keys(substitution, types)?;
+        let mut expanded = Vec::new();
+        for prefix in &keys {
+            for value in &values {
+                types.limits.ok_or_record(budget.charge(1))?;
+                let length = prefix
+                    .len()
+                    .saturating_add(value.len())
+                    .saturating_add(suffix.len());
+                types
+                    .limits
+                    .ok_or_record(budget.charge_work(length as u64))?;
+                let mut key = prefix.clone();
+                crate::literal_units::push_literal_text(&mut key, value);
+                crate::literal_units::push_literal_text(&mut key, suffix);
+                expanded.push(key);
+            }
+        }
+        keys = expanded;
+    }
+    Some(keys)
+}
+
+fn has_infinite_template_part(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::String | Type::Number | Type::BigInt => true,
+        Type::TemplateLiteral { substitutions, .. } | Type::Union(substitutions) => {
+            substitutions.iter().any(has_infinite_template_part)
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn domain_accepts_numbers(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::String | Type::Number => true,
+        Type::Union(members) => members.iter().any(domain_accepts_numbers),
+        _ => false,
+    }
+}
+
+fn valid_template_substitution(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::String
+        | Type::Number
+        | Type::BigInt
+        | Type::Boolean
+        | Type::Null
+        | Type::Undefined
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BigIntLiteral(_)
+        | Type::BooleanLiteral(_) => true,
+        Type::Union(members) => members.iter().all(valid_template_substitution),
+        Type::TemplateLiteral { substitutions, .. } => {
+            substitutions.iter().all(valid_template_substitution)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

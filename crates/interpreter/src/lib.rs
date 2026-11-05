@@ -27,6 +27,7 @@ pub mod package_config;
 pub mod package_declaration;
 pub mod packages;
 pub mod parser;
+pub mod property_keys;
 pub mod rendering;
 pub mod runtime;
 pub mod shape;

@@ -789,6 +789,29 @@ impl<'a> Inferer<'a> {
                     .collect::<Result<_, _>>()?;
                 Type::union(resolved)
             }
+            TypeAnnotationKind::TemplateLiteral {
+                parts,
+                substitutions,
+            } => {
+                let mut holes = Vec::new();
+                for annotation in substitutions {
+                    let ty = self.resolve_type(annotation)?;
+                    let ty = super::records::finite_string_keys(&ty, self.resolver())
+                        .map_or(ty.clone(), |keys| {
+                            Type::union(keys.into_iter().map(Type::StringLiteral).collect())
+                        });
+                    if !valid_template_hole(&ty) && !matches!(ty.peel(), Type::Error) {
+                        self.error(annotation.span, "template substitution must be string, number, bigint, boolean, null, or undefined".into());
+                    }
+                    holes.push(ty);
+                }
+                let template = Type::TemplateLiteral {
+                    parts: parts.clone(),
+                    substitutions: holes,
+                };
+                crate::property_keys::normalize_template(template, &mut self.type_limits.budget())
+                    .map_err(super::type_limit_at(annot.span))?
+            }
             TypeAnnotationKind::StringLiteral(s) => Type::StringLiteral(s.clone()),
             TypeAnnotationKind::NumberLiteral(v) => Type::NumberLiteral(*v),
             TypeAnnotationKind::BigIntLiteral(digits) => crate::types::bigint_literal_type(digits),
@@ -977,7 +1000,14 @@ impl<'a> Inferer<'a> {
             Type::Object { fields, index } => fields
                 .get(field)
                 .map(crate::types::ObjectField::read_ty)
-                .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty)),
+                .or_else(|| {
+                    index
+                        .as_ref()
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
+                        })
+                        .map(crate::IndexSignature::read_ty)
+                }),
             Type::InterfaceRef { .. } => {
                 let Some((sig, bindings, _, _)) = self.lookup_interface_property(ty, field) else {
                     return Ok(None);
@@ -1004,8 +1034,22 @@ impl<'a> Inferer<'a> {
         if matches!(resolved.peel(), Type::Unknown) {
             return Ok(Type::Never);
         }
-        if self.resolver().index_signature(&resolved).is_some() {
-            return Ok(Type::String);
+        if let Some(index) = self.resolver().index_signature(&resolved) {
+            if matches!(index.key.peel(), Type::String) {
+                return Ok(if index.string_keyof_includes_number {
+                    Type::union(vec![Type::String, Type::Number])
+                } else {
+                    Type::String
+                });
+            }
+            let mut keys = self
+                .member_names_of(&resolved)
+                .unwrap_or_default()
+                .into_iter()
+                .map(Type::StringLiteral)
+                .collect::<Vec<_>>();
+            keys.push(*index.key);
+            return Ok(Type::union(keys));
         }
         let Some(names) = self.member_names_of(&resolved) else {
             if !matches!(resolved.peel(), Type::Error) {
@@ -1774,5 +1818,27 @@ mod invariant_tests {
                 Err(CompilerFailure::Internal { .. })
             ));
         });
+    }
+}
+
+fn valid_template_hole(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::String
+        | Type::StringLiteral(_)
+        | Type::Number
+        | Type::NumberLiteral(_)
+        | Type::BigInt
+        | Type::BigIntLiteral(_)
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::Never => true,
+        Type::TemplateLiteral { substitutions, .. } | Type::Union(substitutions) => {
+            substitutions.iter().all(valid_template_hole)
+        }
+        _ => false,
     }
 }

@@ -996,7 +996,7 @@ impl SymbolTable {
         Ok(match ty {
             Type::Number | Type::NumberLiteral(_) => ValType::F64,
             Type::Boolean | Type::BooleanLiteral(_) => ValType::I32,
-            Type::String | Type::StringLiteral(_) => {
+            Type::String | Type::StringLiteral(_) | Type::TemplateLiteral { .. } => {
                 let idx = self.string_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::String requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
                 ValType::Ref(RefType {
                     nullable: false,
@@ -1299,7 +1299,10 @@ impl SymbolTable {
         &self,
         ty: &Type,
     ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
-        if matches!(ty, Type::String | Type::StringLiteral(_)) {
+        if matches!(
+            ty,
+            Type::String | Type::StringLiteral(_) | Type::TemplateLiteral { .. }
+        ) {
             let idx = self.raw_string_type_idx().ok_or_else(|| crate::codegen::internal_failure("Type::String requires the intrinsic types to be declared (declare_intrinsic_types)"))?;
             return Ok(ValType::Ref(RefType {
                 nullable: false,

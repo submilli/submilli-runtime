@@ -340,7 +340,14 @@ impl<'a> Inferer<'a> {
             Type::Object { fields, index } => fields
                 .get(field)
                 .map(ObjectField::read_ty)
-                .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty))
+                .or_else(|| {
+                    index
+                        .as_ref()
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
+                        })
+                        .map(crate::IndexSignature::read_ty)
+                })
                 .ok_or(MemberFieldMiss::Absent),
             Type::InterfaceRef { .. } => {
                 let Some((sig, bindings, _, dispatch)) =
@@ -350,6 +357,9 @@ impl<'a> Inferer<'a> {
                     return self
                         .resolver()
                         .index_signature(member)
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
+                        })
                         .map(|index| index.read_ty())
                         .ok_or(MemberFieldMiss::Absent);
                 };

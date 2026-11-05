@@ -293,6 +293,7 @@ pub fn cast_info_for(from_ty: Type, narrowed_ty: Type) -> CastInfo {
         // unknown → ref-typed concrete shape uses the same downcast.
         Type::String
         | Type::StringLiteral(_)
+        | Type::TemplateLiteral { .. }
         | Type::Array(_)
         | Type::Tuple(_)
         | Type::Uint8Array
@@ -1186,7 +1187,10 @@ pub fn type_matches_facts(ty: &Type, facts: TypeFacts) -> bool {
     if facts.contains(TypeFacts::IS_STRING) {
         return matches!(
             ty,
-            Type::String | Type::StringLiteral(_) | Type::StringEnum { .. }
+            Type::String
+                | Type::StringLiteral(_)
+                | Type::TemplateLiteral { .. }
+                | Type::StringEnum { .. }
         );
     }
     if facts.contains(TypeFacts::IS_BOOLEAN) {
@@ -1234,7 +1238,7 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::NumberLiteral(_)
         | Type::NumberEnum { .. }
         | Type::String
-        | Type::StringLiteral(_)
+        | Type::StringLiteral(_) | Type::TemplateLiteral { .. }
         | Type::StringEnum { .. }
         | Type::Boolean
         | Type::BooleanLiteral(_)
@@ -1453,6 +1457,7 @@ pub fn subtract_literals(ty: &Type, covered: &BTreeSet<LiteralValue>) -> Type {
             Type::union(remaining)
         }
         single @ (Type::StringLiteral(_)
+        | Type::TemplateLiteral { .. }
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::BigIntLiteral(_)
@@ -1696,7 +1701,7 @@ fn join_flow_types(left: &Type, right: &Type) -> Type {
         .any(|ty| matches!(ty.without_aliases(), Type::String));
     members.retain(|ty| match ty.without_aliases() {
         Type::NumberLiteral(_) => !has_number,
-        Type::StringLiteral(_) => !has_string,
+        Type::StringLiteral(_) | Type::TemplateLiteral { .. } => !has_string,
         _ => true,
     });
     Type::union(members)
@@ -1731,7 +1736,9 @@ pub fn condition_compatible(ty: &Type) -> bool {
 pub fn facts_for_target_type(target: &Type) -> TypeFacts {
     match target.peel() {
         Type::Number | Type::NumberLiteral(_) => TypeFacts::IS_NUMBER,
-        Type::String | Type::StringLiteral(_) => TypeFacts::IS_STRING,
+        Type::String | Type::StringLiteral(_) | Type::TemplateLiteral { .. } => {
+            TypeFacts::IS_STRING
+        }
         Type::Boolean | Type::BooleanLiteral(_) => TypeFacts::IS_BOOLEAN,
         Type::Null => TypeFacts::EQ_NULL,
         Type::Undefined => TypeFacts::EQ_UNDEFINED,

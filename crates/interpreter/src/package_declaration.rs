@@ -616,6 +616,11 @@ impl PackageShapeCollector {
 
     fn collect_type(&mut self, ty: &Type) {
         match ty {
+            Type::TemplateLiteral { substitutions, .. } => {
+                for inner in substitutions {
+                    self.collect_type(inner);
+                }
+            }
             Type::Object { fields, .. } => {
                 self.collect_shape(ty);
                 for field in fields.values() {

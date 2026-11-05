@@ -239,6 +239,11 @@ fn collect_signature_named_types(
     out: &mut BTreeMap<MangledName, String>,
 ) {
     match ty {
+        Type::TemplateLiteral { substitutions, .. } => {
+            for inner in substitutions {
+                collect_signature_named_types(package_name, inner, out);
+            }
+        }
         Type::InterfaceRef {
             mangled,
             package,

@@ -952,6 +952,7 @@ impl Lifter {
                 for member in members.iter_mut() {
                     match member {
                         InterfaceMember::IndexSignature(index) => {
+                            self.walk_type(&mut index.key)?;
                             self.walk_type(&mut index.value)?;
                         }
                         InterfaceMember::Method {
@@ -1218,7 +1219,12 @@ impl Lifter {
             | TypeAnnotationKind::Optional(inner)
             | TypeAnnotationKind::Readonly(inner)
             | TypeAnnotationKind::KeyOf(inner) => self.walk_type(inner)?,
-            TypeAnnotationKind::Tuple(items) | TypeAnnotationKind::Union(items) => {
+            TypeAnnotationKind::TemplateLiteral {
+                substitutions: items,
+                ..
+            }
+            | TypeAnnotationKind::Tuple(items)
+            | TypeAnnotationKind::Union(items) => {
                 for item in items.iter_mut() {
                     self.walk_type(item)?;
                 }
@@ -1228,6 +1234,7 @@ impl Lifter {
                     self.walk_type(&mut field.ty)?;
                 }
                 if let Some(index) = index {
+                    self.walk_type(&mut index.key)?;
                     self.walk_type(&mut index.value)?;
                 }
             }

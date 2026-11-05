@@ -385,6 +385,28 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
         }
+        Type::TemplateLiteral { .. } => {
+            let string = string_idx(ctx)?;
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string)));
+            emitter.emit_if(i32_block);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            let domain = serde_json::to_string(&crate::property_keys::runtime_domain(ty).map_err(
+                |error| error.into_failure(crate::compiler_error::CompilerStage::Codegen, None),
+            )?)
+            .map_err(|error| {
+                crate::codegen::internal_failure(format!("could not encode template type: {error}"))
+            })?;
+            emit_inline_string_checked(emitter, ctx, &domain)?;
+            let helper = ctx
+                .symbols
+                .prelude_func_idx("ObjectConstructor##matchesKeyDomain")
+                .ok_or_else(|| crate::codegen::internal_failure("template matcher imported"))?;
+            emitter.instruction(Instruction::Call(helper));
+            emitter.emit_else();
+            emitter.instruction(Instruction::I32Const(0));
+            emitter.emit_end();
+        }
         Type::StringLiteral(s) => {
             let str_idx = string_idx(ctx)?;
             let intr = ctx
@@ -2325,6 +2347,18 @@ fn emit_index_conformance(
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let domain = serde_json::to_string(&crate::property_keys::runtime_domain(&index.key).map_err(
+        |error| error.into_failure(crate::compiler_error::CompilerStage::Codegen, None),
+    )?)
+    .map_err(|error| {
+        crate::codegen::internal_failure(format!("could not encode index key domain: {error}"))
+    })?;
+    emit_inline_string_checked(emitter, ctx, &domain)?;
+    let domain_local = emitter.add_anonymous_local(ValType::Ref(wasm_encoder::RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(string_idx(ctx)?),
+    }))?;
+    emitter.instruction(Instruction::LocalSet(domain_local));
     emitter.instruction(Instruction::LocalGet(object));
     let Some(symbol) = ctx.require(
         ctx.symbols
@@ -2333,10 +2367,11 @@ fn emit_index_conformance(
     ) else {
         return Ok(());
     };
+    emitter.instruction(Instruction::LocalGet(domain_local));
     emitter.instruction(Instruction::Call(symbol));
     let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(values));
-    let record_keys = diagnostic::record_keys(emitter, ctx, object, values);
+    let record_keys = diagnostic::record_keys(emitter, ctx, object, values, domain_local);
     emit_elements_test(
         emitter,
         ctx,

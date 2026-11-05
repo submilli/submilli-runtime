@@ -752,6 +752,7 @@ impl SyntaxChildren {
                 for member in members {
                     match member {
                         InterfaceMember::IndexSignature(signature) => {
+                            self.annotation(&signature.key);
                             self.annotation(&signature.value);
                         }
                         InterfaceMember::Method {
@@ -850,6 +851,7 @@ struct AnnotationChildren<'a> {
     members: std::slice::Iter<'a, TypeAnnotation>,
     fields: std::slice::Iter<'a, crate::ast::TypeAnnotationField>,
     trailing: Option<&'a TypeAnnotation>,
+    key: Option<&'a TypeAnnotation>,
 }
 
 impl<'a> AnnotationChildren<'a> {
@@ -858,9 +860,14 @@ impl<'a> AnnotationChildren<'a> {
             members: [].iter(),
             fields: [].iter(),
             trailing: None,
+            key: None,
         };
         match &ty.kind {
-            TypeAnnotationKind::Name { args, .. }
+            TypeAnnotationKind::TemplateLiteral {
+                substitutions: args,
+                ..
+            }
+            | TypeAnnotationKind::Name { args, .. }
             | TypeAnnotationKind::Qualified { args, .. }
             | TypeAnnotationKind::Tuple(args)
             | TypeAnnotationKind::Union(args) => {
@@ -878,6 +885,7 @@ impl<'a> AnnotationChildren<'a> {
             TypeAnnotationKind::Object { fields, index } => {
                 children.fields = fields.iter();
                 children.trailing = index.as_ref().map(|index| &index.value);
+                children.key = index.as_ref().map(|index| &index.key);
             }
             TypeAnnotationKind::Function {
                 params,
@@ -897,6 +905,7 @@ impl<'a> Iterator for AnnotationChildren<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         self.trailing
             .take()
+            .or_else(|| self.key.take())
             .or_else(|| self.fields.next_back().map(|field| &field.ty))
             .or_else(|| self.members.next_back())
     }
@@ -1280,6 +1289,13 @@ mod tests {
                 },
                 pair.clone(),
             ),
+            (
+                TypeAnnotationKind::TemplateLiteral {
+                    parts: vec![String::new(), String::new(), String::new()],
+                    substitutions: pair.clone(),
+                },
+                pair.clone(),
+            ),
             (TypeAnnotationKind::Tuple(pair.clone()), pair.clone()),
             (TypeAnnotationKind::Union(pair.clone()), pair.clone()),
             (
@@ -1298,12 +1314,13 @@ mod tests {
                 TypeAnnotationKind::Object {
                     fields: vec![annotation_field(first.clone())],
                     index: Some(Box::new(crate::IndexSignatureAnnotation {
+                        key: first.clone(),
                         value: second.clone(),
                         readonly: false,
                         span: second.span,
                     })),
                 },
-                pair.clone(),
+                vec![first.clone(), first.clone(), second.clone()],
             ),
             (
                 TypeAnnotationKind::Function {
@@ -1398,6 +1415,49 @@ mod tests {
         assert!(!diagnostic.help.is_empty());
         let diagnostic = syntax_limit(&sum(10 * at_limit)).expect("a long chain is rejected");
         assert_eq!(diagnostic.span.start, chain_start);
+    }
+
+    #[test]
+    fn interface_index_keys_count_toward_syntax_height() {
+        // Inject the annotation directly: parser limits can reject this shape
+        // before the syntax validator whose interface traversal is under test.
+        let ast = |depth| {
+            let mut key = annotation(TypeAnnotationKind::StringLiteral("key".into()));
+            for _ in 0..depth {
+                key = annotation(TypeAnnotationKind::Array(Box::new(key)));
+            }
+            let span = key.span;
+            let mut ast = Ast::new();
+            let root = ast
+                .try_push_stmt(crate::Stmt {
+                    span,
+                    kind: StmtKind::InterfaceDecl {
+                        name: crate::Ident {
+                            name: "Keys".into(),
+                            span,
+                        },
+                        generics: vec![],
+                        extends: vec![],
+                        doc: None,
+                        members: vec![InterfaceMember::IndexSignature(
+                            crate::IndexSignatureAnnotation {
+                                key,
+                                value: annotation(TypeAnnotationKind::BooleanLiteral(true)),
+                                readonly: false,
+                                span,
+                            },
+                        )],
+                    },
+                })
+                .unwrap();
+            ast.top_level.push(root);
+            ast
+        };
+        assert!(check_syntax(&ast(MAX_SYNTAX_HEIGHT - 2)).is_ok());
+        assert!(matches!(
+            check_syntax(&ast(MAX_SYNTAX_HEIGHT - 1)),
+            Err(CompilerFailure::Limit { .. })
+        ));
     }
 
     #[test]

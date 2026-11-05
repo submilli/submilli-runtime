@@ -495,7 +495,7 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
     };
 
     if head.eq_ignore_ascii_case("Record") && rest.is_empty() {
-        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | undefined and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
+        return BuiltinLookup::Found("/** Record<K, V> accepts string, number, enum, literal-union, and template-pattern keys. With K = string, reads return V | undefined and writes require V. Finite literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string | number, V> = { [P in K]: V };\n".into());
     }
     if head.eq_ignore_ascii_case(JSON_BUILTIN) {
         let defs = json_package_declaration();
@@ -1795,7 +1795,12 @@ fn render_ts_type(
             );
             if let Some(index) = index {
                 let ro = if index.readonly { "readonly " } else { "" };
-                let _ = writeln!(out, "{inner}{ro}[key: string]: {};", ts_type(&index.value));
+                let _ = writeln!(
+                    out,
+                    "{inner}{ro}[key: {}]: {};",
+                    ts_type(&index.key),
+                    ts_type(&index.value)
+                );
             }
             for (pname, prop) in properties {
                 push_doc(out, &prop.doc, &inner);
@@ -2062,6 +2067,7 @@ fn ts_type(ty: &Type) -> String {
         Type::BigInt => "bigint".to_string(),
         Type::BigIntLiteral(digits) => format!("{digits}n"),
         Type::String => "string".to_string(),
+        Type::TemplateLiteral { .. } => ty.to_string(),
         Type::StringLiteral(s) => format!("\"{}\"", escape_string_literal(s)),
         Type::Uint8Array => "Uint8Array".to_string(),
         Type::Boolean => "boolean".to_string(),
@@ -2115,7 +2121,11 @@ fn ts_type(ty: &Type) -> String {
                 .collect();
             if let Some(index) = index {
                 let ro = if index.readonly { "readonly " } else { "" };
-                members.push(format!("{ro}[key: string]: {}", ts_type(&index.value)));
+                members.push(format!(
+                    "{ro}[key: {}]: {}",
+                    ts_type(&index.key),
+                    ts_type(&index.value)
+                ));
             }
             if members.is_empty() {
                 "{}".into()

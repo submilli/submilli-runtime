@@ -183,24 +183,36 @@ impl ObjectField {
 /// Values available under arbitrary string property names.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct IndexSignature {
+    #[serde(default)]
+    pub string_keyof_includes_number: bool,
+    #[serde(default = "string_index_key")]
+    pub key: Box<Type>,
     pub value: Box<Type>,
     pub readonly: bool,
 }
 
+fn string_index_key() -> Box<Type> {
+    Box::new(Type::String)
+}
+
 impl IndexSignature {
-    pub fn map_value(&self, transform: impl FnOnce(&Type) -> Type) -> Self {
+    pub fn map_types(&self, mut transform: impl FnMut(&Type) -> Type) -> Self {
         Self {
+            string_keyof_includes_number: self.string_keyof_includes_number,
+            key: Box::new(transform(&self.key)),
             value: Box::new(transform(&self.value)),
             readonly: self.readonly,
         }
     }
 
-    /// [`map_value`](Self::map_value) with a transform that can fail.
-    pub fn try_map_value<E>(
+    /// [`map_types`](Self::map_types) with a transform that can fail.
+    pub fn try_map_types<E>(
         &self,
-        transform: impl FnOnce(&Type) -> Result<Type, E>,
+        mut transform: impl FnMut(&Type) -> Result<Type, E>,
     ) -> Result<Self, E> {
         Ok(Self {
+            string_keyof_includes_number: self.string_keyof_includes_number,
+            key: Box::new(transform(&self.key)?),
             value: Box::new(transform(&self.value)?),
             readonly: self.readonly,
         })
@@ -293,6 +305,10 @@ pub enum Type {
     BigIntLiteral(String),
     String,
     StringLiteral(String),
+    TemplateLiteral {
+        parts: Vec<String>,
+        substitutions: Vec<Type>,
+    },
     Uint8Array,
     Boolean,
     /// `true` or `false`. Like the other literal types it has no runtime
@@ -753,6 +769,8 @@ impl Type {
     pub fn any_object() -> Type {
         Type::Object {
             index: Some(IndexSignature {
+                string_keyof_includes_number: false,
+                key: Box::new(crate::Type::String),
                 value: Box::new(Type::Unknown),
                 readonly: false,
             }),
@@ -945,7 +963,7 @@ impl Type {
     pub fn primitive_behavior(&self) -> &Type {
         match self.peel() {
             Type::NumberEnum { .. } => &Type::Number,
-            Type::StringEnum { .. } => &Type::String,
+            Type::StringEnum { .. } | Type::TemplateLiteral { .. } => &Type::String,
             Type::BooleanLiteral(_) => &Type::Boolean,
             Type::BigIntLiteral(_) => &Type::BigInt,
             Type::Union(members)
@@ -1030,7 +1048,10 @@ impl Type {
     /// asks the `any` question.
     pub fn is_string_shaped(&self) -> bool {
         match self.peel() {
-            Type::String | Type::StringLiteral(_) | Type::StringEnum { .. } => true,
+            Type::String
+            | Type::TemplateLiteral { .. }
+            | Type::StringLiteral(_)
+            | Type::StringEnum { .. } => true,
             Type::Union(members) => members.iter().all(Type::is_string_shaped),
             _ => false,
         }
@@ -1041,7 +1062,10 @@ impl Type {
     /// first" help, so `string | null` gets it.
     pub fn contains_string(&self) -> bool {
         match self.peel() {
-            Type::String | Type::StringLiteral(_) | Type::StringEnum { .. } => true,
+            Type::String
+            | Type::TemplateLiteral { .. }
+            | Type::StringLiteral(_)
+            | Type::StringEnum { .. } => true,
             Type::Union(members) => members.iter().any(Type::contains_string),
             _ => false,
         }

@@ -20,6 +20,7 @@ enum ListKind {
 enum Frame<'a> {
     Type(&'a Type, usize),
     Text(&'a str),
+    TemplateText(&'a str),
     List {
         /// The items left to write, last first, so `pop` yields the next.
         remaining: Vec<&'a Type>,
@@ -52,6 +53,11 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
         out.step()?;
         match frame {
             Frame::Text(text) => out.push(text)?,
+            Frame::TemplateText(text) => out.push(
+                &crate::types::escape_string_literal(text)
+                    .replace('`', "\\`")
+                    .replace("${", "\\${"),
+            )?,
             Frame::Type(ty, depth) => {
                 out.depth(depth)?;
                 write_node(out, &mut frames, ty, depth)?;
@@ -166,8 +172,10 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                     if index.readonly {
                         out.push("readonly ")?;
                     }
-                    out.push("[key: string]: ")?;
+                    out.push("[key: ")?;
                     push(&mut frames, Frame::Type(&index.value, depth))?;
+                    push(&mut frames, Frame::Text("]: "))?;
+                    push(&mut frames, Frame::Type(&index.key, depth))?;
                 }
             }
         }
@@ -191,6 +199,24 @@ fn write_node<'a>(
         }
         Type::NumberLiteral(value) => out.push(&crate::runtime::number::format_number_js(value.0)),
         Type::String => out.push("string"),
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => {
+            if parts.len() != substitutions.len().saturating_add(1) {
+                return Err(RenderError::InvalidMetadata("template part count"));
+            }
+            push(frames, Frame::Text("`"))?;
+            for (position, part) in parts.iter().enumerate().rev() {
+                push(frames, Frame::TemplateText(part))?;
+                if let Some(inner) = position.checked_sub(1).and_then(|i| substitutions.get(i)) {
+                    push(frames, Frame::Text("}"))?;
+                    push(frames, Frame::Type(inner, child))?;
+                    push(frames, Frame::Text("${"))?;
+                }
+            }
+            out.push("`")
+        }
         Type::StringLiteral(value) => write_string(out, value),
         Type::Uint8Array => out.push("Uint8Array"),
         Type::Boolean => out.push("boolean"),

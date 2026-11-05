@@ -73,6 +73,11 @@ impl<'a> ShapeCollector<'a> {
 
     fn walk(&mut self, ty: &Type) {
         match ty {
+            Type::TemplateLiteral { substitutions, .. } => {
+                for inner in substitutions {
+                    self.collect(inner);
+                }
+            }
             Type::Object { fields, index } => {
                 if let Some(i) = index {
                     self.collect(&i.value);

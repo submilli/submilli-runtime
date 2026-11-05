@@ -123,6 +123,8 @@ impl Walk<'_> {
         }
         let index = match index {
             Some(index) => Some(IndexSignature {
+                string_keyof_includes_number: index.string_keyof_includes_number,
+                key: index.key.clone(),
                 value: Box::new(self.structural(&index.value)?),
                 readonly: index.readonly,
             }),
