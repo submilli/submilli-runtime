@@ -1,0 +1,24 @@
+kind: blueprint
+name: posthog-read-scope-test
+packages:
+  - '@submilli/posthog'
+default: deny
+permissions:
+  main:
+    - capability: posthog.com/events.list
+      filter: projectId == 602724
+      action: allow
+    # An allowlist: every property a query reads, selected or filtered, must be one of these.
+    - capability: posthog.com/properties.read
+      filter: >-
+        projectId == 602724 and
+        ((scope == "event" and (property == "$host" or property == "path"))
+         or (scope == "person" and property == "first_touch.utm_source")
+         or (scope == "field" and property == "$virt_is_bot"))
+      action: allow
+    - capability: posthog.com/cohorts.get
+      filter: projectId == 602724 and cohortId == 561927
+      action: allow
+  # Deliberate sentinel: an allowed call must reach secrets.get, which is
+  # denied here before a key can be read or a request can be sent.
+  '@submilli/posthog': []

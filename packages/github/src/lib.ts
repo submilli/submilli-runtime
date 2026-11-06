@@ -2,6 +2,28 @@ import { get, post, put, patch, delete, Response } from "submilli:http";
 import { encodeComponent, encodeQuery } from "submilli:url";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
+import {
+    ApiEvent,
+    ApiFork,
+    ApiStargazer,
+    ApiUserOrganization,
+    ApiUserProfile,
+    ApiUserSocialAccount,
+    RepositoryEvent,
+    RepositoryFork,
+    Stargazer,
+    UserOrganization,
+    UserProfile,
+    UserSocialAccount,
+    repositoryEventFrom,
+    repositoryForkFrom,
+    stargazerFrom,
+    userOrganizationFrom,
+    userProfileFrom,
+    userSocialAccountFrom,
+} from "./people";
+
+export { RepositoryEvent, RepositoryFork, Stargazer, UserOrganization, UserProfile, UserSocialAccount } from "./people";
 
 const GITHUB_API = "https://api.github.com/";
 const GRAPHQL_API = GITHUB_API + "graphql";
@@ -13,6 +35,10 @@ const MAX_FILE_BYTES = 10485760;
 // could be read as search syntax or as a second path segment.
 const OWNER_NAME = /^[A-Za-z0-9_-]+$/;
 const REPOSITORY_NAME = /^[A-Za-z0-9._-]+$/;
+// One account name. This stops path syntax rather than enforcing GitHub's sign-up rules: legacy
+// logins can end in or repeat a hyphen, and managed users' logins hold an underscore. `[bot]` is
+// an app's actor.
+const LOGIN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,38}(\[bot\])?$/;
 // Scope names are refused anywhere outside phrases; relying on GitHub's undocumented
 // punctuation/format-character tokenization would leave the repository boundary ambiguous.
 const SEARCH_SCOPE = /repo:|org:|user:|owner:/;
@@ -1400,15 +1426,15 @@ export function listTeamMembers(org: string, teamSlug: string, options: PageOpti
     return pageFrom(response, items);
 }
 
-/** Search repositories visible to the token.
- * @param query Non-empty GitHub search query for repositories, which may use qualifiers such as `language:rust`.
+/** Search repositories visible to the token. `query` in the check is the exact text sent to GitHub.
+ * @param query Non-empty GitHub search query for repositories, which may use qualifiers such as `language:rust`. It is sent as given, without trimming or added qualifiers.
  * @param options Sort field, order, page size and `pageToken`; omit it for best-match order, the first page and 30 items.
  * @returns One page of repository hits, each with a relevance `score`, plus `totalCount` and `incompleteResults`; `nextPageToken` is "" on the last page.
- * @capability github.com/repositories.search {}
+ * @capability github.com/repositories.search { query: string }
  */
 export function searchRepositories(query: string, options: SearchOptions = {}): SearchPageResult<RepositorySearchHit> {
-    check("github.com/repositories.search", {});
     requireText(query, "query");
+    check("github.com/repositories.search", { query: query });
     const response = githubGet("/search/repositories", searchQuery(query, options));
     const data = response.json<ApiSearchRepositories>();
     const items: RepositorySearchHit[] = [];
@@ -2380,6 +2406,107 @@ export function addPullRequestComment(repository: RepositoryRef, number: number,
     return addCommentUnchecked(owner, name, number, body);
 }
 
+/** List a repository's public activity feed, newest first.
+ * @param owner Repository owner login.
+ * @param repo Repository name.
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
+ * @returns One page of events of every type, for the caller to filter by `type`; `nextPageToken` is "" on the last page. A missing repository throws `GitHubError` with code `not_found`.
+ * @capability github.com/events.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
+ */
+export function listRepositoryEvents(owner: string, repo: string, options: PageOptions = {}): PageResult<RepositoryEvent> {
+    const context = checkedRepository(owner, repo);
+    check("github.com/events.list", context);
+    const response = githubGet(repositoryPath(context.owner, context.repo) + "/events", pageQuery(options));
+    const data = response.json() as ApiEvent[];
+    const items: RepositoryEvent[] = [];
+    for (const item of data) items.push(repositoryEventFrom(item));
+    return pageFrom(response, items);
+}
+
+/** List the accounts that starred a repository, with when each did.
+ * @param owner Repository owner login.
+ * @param repo Repository name.
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
+ * @returns One page of stargazers; `nextPageToken` is "" on the last page. GitHub restricts this list to a repository's admins and collaborators, so another token gets a `GitHubError`; use `listRepositoryEvents` then. A missing repository throws with code `not_found`.
+ * @capability github.com/stargazers.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
+ */
+export function listStargazers(owner: string, repo: string, options: PageOptions = {}): PageResult<Stargazer> {
+    const context = checkedRepository(owner, repo);
+    check("github.com/stargazers.list", context);
+    // This media type is what adds `starred_at`, and it nests each account under `user`.
+    const response = githubGet(repositoryPath(context.owner, context.repo) + "/stargazers", pageQuery(options), "application/vnd.github.star+json");
+    const data = response.json() as ApiStargazer[];
+    const items: Stargazer[] = [];
+    for (const item of data) items.push(stargazerFrom(item));
+    return pageFrom(response, items);
+}
+
+/** List a repository's forks, newest first.
+ * @param owner Repository owner login.
+ * @param repo Repository name.
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
+ * @returns One page of forks; `nextPageToken` is "" on the last page. A missing repository throws `GitHubError` with code `not_found`.
+ * @capability github.com/forks.list { owner: string, repo: string, branch: string, path: string, ref: string, treeSha: string, head: string, base: string }
+ */
+export function listForks(owner: string, repo: string, options: PageOptions = {}): PageResult<RepositoryFork> {
+    const context = checkedRepository(owner, repo);
+    check("github.com/forks.list", context);
+    const query = pageQuery(options);
+    query.set("sort", "newest");
+    const response = githubGet(repositoryPath(context.owner, context.repo) + "/forks", query);
+    const data = response.json() as ApiFork[];
+    const items: RepositoryFork[] = [];
+    for (const item of data) items.push(repositoryForkFrom(item));
+    return pageFrom(response, items);
+}
+
+/** Retrieve an account's public GitHub profile.
+ *
+ * GitHub's `email` is reduced to `hasPublicEmail` and the address goes no further. Reading a
+ * profile must not grant personal contact data: an agent could otherwise collect the address of
+ * every account it sees, and a policy has no field to limit that by. There is no raw passthrough.
+ * @param login Account login; `[bot]` is allowed as a suffix. Case does not matter.
+ * @returns The public profile. An unknown login throws `GitHubError` with code `not_found`.
+ * @capability github.com/users.get { login: string }
+ */
+export function getUser(login: string): UserProfile {
+    const canonical = canonicalLogin(login);
+    check("github.com/users.get", { login: canonical });
+    return userProfileFrom(githubGet(userPath(canonical)).json() as ApiUserProfile);
+}
+
+/** List the organizations an account publicly belongs to.
+ * @param login Account login; `[bot]` is allowed as a suffix. Case does not matter.
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
+ * @returns One page of public memberships only; `nextPageToken` is "" on the last page. An unknown login throws `GitHubError` with code `not_found`.
+ * @capability github.com/userOrganizations.list { login: string }
+ */
+export function listUserOrganizations(login: string, options: PageOptions = {}): PageResult<UserOrganization> {
+    const canonical = canonicalLogin(login);
+    check("github.com/userOrganizations.list", { login: canonical });
+    const response = githubGet(userPath(canonical) + "/orgs", pageQuery(options));
+    const data = response.json() as ApiUserOrganization[];
+    const items: UserOrganization[] = [];
+    for (const item of data) items.push(userOrganizationFrom(item));
+    return pageFrom(response, items);
+}
+
+/** List the social accounts linked from an account's public profile.
+ * @param login Account login; `[bot]` is allowed as a suffix. Case does not matter.
+ * @param options Page size and `pageToken`; omit it for the API defaults (first page, 30 items).
+ * @returns One page of social accounts; `nextPageToken` is "" on the last page. An unknown login throws `GitHubError` with code `not_found`.
+ * @capability github.com/userSocialAccounts.list { login: string }
+ */
+export function listUserSocialAccounts(login: string, options: PageOptions = {}): PageResult<UserSocialAccount> {
+    const canonical = canonicalLogin(login);
+    check("github.com/userSocialAccounts.list", { login: canonical });
+    const response = githubGet(userPath(canonical) + "/social_accounts", pageQuery(options));
+    const data = response.json() as ApiUserSocialAccount[];
+    const items: UserSocialAccount[] = [];
+    for (const item of data) items.push(userSocialAccountFrom(item));
+    return pageFrom(response, items);
+}
+
 function getPullRequestUnchecked(owner: string, name: string, number: number): PullRequest | null {
     const response = githubGetNullable(repositoryPath(owner, name) + "/pulls/" + issueNumber(number));
     return response === null ? null : pullRequestFrom(response.json<ApiPullRequest>());
@@ -2823,6 +2950,19 @@ function checkedRepository(owner: string, name: string): RepositoryCapabilityCon
         throw validationError("invalid_input", "repository name may contain only letters, digits, hyphens, underscores, and periods, and cannot be . or ..");
     }
     return { owner: owner.toLowerCase(), repo: name.toLowerCase(), branch: null, path: null, ref: null, treeSha: null, head: null, base: null };
+}
+
+// The login that is checked and sent. Validate before folding, as for a repository identity.
+function canonicalLogin(login: string): string {
+    requireText(login, "login");
+    if (!LOGIN.test(login)) {
+        throw validationError("invalid_input", "login must be at most 39 letters, digits, hyphens, and underscores, starting with a letter or digit, optionally ending in [bot]");
+    }
+    return login.toLowerCase();
+}
+
+function userPath(login: string): string {
+    return "/users/" + encodeComponent(login);
 }
 
 function repositoryContext(owner: string, name: string, field: string, value: string): RepositoryCapabilityContext {

@@ -4,11 +4,16 @@ import {
     RepositoryRef,
     getBranch,
     getRepository,
+    getUser,
     getViewer,
     listBranches,
     listCommits,
+    listForks,
     listIssues,
     listPullRequests,
+    listRepositoryEvents,
+    listUserOrganizations,
+    listUserSocialAccounts,
     readTextFile,
 } from "@submilli/github";
 
@@ -37,4 +42,9 @@ function main(): void {
     listIssues(repository, { limit: 2 });
     listPullRequests(repository, { limit: 2 });
     readTextFile(repository, "README.md", { ref: metadata.defaultBranch });
+    listRepositoryEvents(repository.owner, repository.name, { limit: 2 });
+    listForks(repository.owner, repository.name, { limit: 2 });
+    assert(getUser(viewer.login).login.toLowerCase() === viewer.login.toLowerCase(), "the viewer's profile can be read");
+    listUserOrganizations(viewer.login, { limit: 2 });
+    listUserSocialAccounts(viewer.login, { limit: 2 });
 }

@@ -1,0 +1,13 @@
+kind: blueprint
+name: github-repository-search-query-test
+packages:
+  - '@submilli/github'
+default: deny
+permissions:
+  main:
+    - capability: github.com/repositories.search
+      filter: query == "org:submilli is:public"
+      action: allow
+  # Deliberate sentinel: permitted operations must reach secrets.get, which is
+  # denied here before a token can be read or a network request can happen.
+  '@submilli/github': []

@@ -28,6 +28,7 @@ const PACKAGES: &[&str] = &[
     "google-drive",
     "jina",
     "notion",
+    "posthog",
     "slack-bot",
     "slack-user",
 ];

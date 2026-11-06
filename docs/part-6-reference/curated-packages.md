@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "cf433d888bb1853a3206091bd115f1fa1ddeb8873b4cce5c1a1d8b710f6ff5bd"
+  contentHash: "a2d6bc659f3fe6adaefdae13f9223569affe453edd945ff1ce050c4bb828b64b"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -35,6 +35,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/jina`](#submillijina) | Web pages and search results as Markdown or structured data, through Jina Reader and Search. | `JINA_API_KEY` | `r.jina.ai`, `s.jina.ai` |
 | [`@submilli/linear`](#submillilinear) | Linear issues, comments, teams, projects, users, and agent sessions, through Linear's GraphQL API. | `LINEAR_API_KEY` | `api.linear.app` |
 | [`@submilli/notion`](#submillinotion) | Notion search, pages as enhanced Markdown, databases, data sources, views, comments, users, blocks, and file uploads. | `NOTION_ACCESS_TOKEN` | `api.notion.com` |
+| [`@submilli/posthog`](#submilliposthog) | PostHog Cloud (US) event reads in bounded, fully paged windows, event and property schema, cohort state, and event capture. | `POSTHOG_PERSONAL_API_KEY`, `POSTHOG_PROJECT_API_KEY` | `us.posthog.com`, `us.i.posthog.com` |
 | [`@submilli/sentry`](#submillisentry) | Sentry Cloud organizations, projects, issues, and events, and issue triage. | `SENTRY_AUTH_TOKEN` | `sentry.io` |
 | [`@submilli/slack-bot`](#submillislack-bot) | Slack as the app's bot: bot messages, conversation history and threads, conversations and members, direct messages, users, and reactions. | `SLACK_BOT_TOKEN` | `slack.com` |
 | [`@submilli/slack-user`](#submillislack-user) | Slack as the authenticated user: search, messages and threads, channels, users, files, sending messages, and reactions. | `SLACK_USER_TOKEN` | `files.slack.com`, `slack.com` |
@@ -327,6 +328,26 @@ submilli install submilli/submilli-runtime @submilli/notion
 submilli blueprint add-package @submilli/notion --no-capabilities
 submilli blueprint capability list @submilli/notion
 submilli blueprint capability add submilli/notion.search
+```
+
+## @submilli/posthog
+
+PostHog Cloud (US) event reads in bounded, fully paged windows, event and property schema, cohort state, and event capture.
+
+| | |
+| --- | --- |
+| Secret | `POSTHOG_PERSONAL_API_KEY` for reads; `POSTHOG_PROJECT_API_KEY` for `capture` |
+| Credential | A personal API key with Query Read, Event Definition Read, Property Definition Read and Cohort Read; the project API key (`phc_…`) for capture |
+| Without the secret | Throws `PostHogError` with code `missing_credentials` |
+| HTTP | `us.posthog.com`: GET, POST; `us.i.posthog.com`: POST, path `/i/v0/e/` |
+| Filesystem | None |
+| Readme | [`packages/posthog/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/posthog/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/posthog
+submilli blueprint add-package @submilli/posthog --no-capabilities
+submilli blueprint capability list @submilli/posthog
+submilli blueprint capability add posthog.com/schema.read
 ```
 
 ## @submilli/sentry

@@ -1,8 +1,8 @@
 # @submilli/github
 
 Native synchronous GitHub.com client for Submilli agents. The package exposes curated
-repository, content, commit, issue, pull-request, team, release, and search operations
-without leaking GitHub wire payloads.
+repository, content, commit, issue, pull-request, team, release, search, and public
+profile operations without leaking GitHub wire payloads.
 
 ## Setup
 
@@ -75,6 +75,14 @@ restricted blueprints. Each script has a blueprint of the same name:
   repository the policy approved. The package reads a placeholder token from
   the local secret store, and the blueprint refuses the request with a reason that
   tells the approved repository from any other.
+- `repository-search-query.ts` shows that a rule can pin `searchRepositories` to one
+  exact query, and `repository-search-open.ts` that a grant with no filter still
+  allows any query.
+- `people-scope.ts` shows that events, stargazers and forks are held to a rule on
+  `owner` and `repo`, and the profile reads to a rule on `login`, and that a crafted
+  login is rejected with `invalid_input` even under a prefix rule it would match.
+- `people-requests.ts` shows the same operations request the exact lowercased path
+  that was checked, by the method in `request-values.ts`.
 
 These tests need no real token or network. Run from the repository root in an
 isolated local package store:
@@ -100,6 +108,54 @@ branch/ref and file-path values retain their case. Prefer allow rules for refs:
 `main`, `heads/main`, tags and commit SHAs can name the same history.
 `listCommits` checks its `sha` option as `ref` and its path as `path`; omitted or
 empty values are null and are not sent.
+
+## Repository search
+
+`searchRepositories` needs `github.com/repositories.search`, which checks the exact `query`
+sent to GitHub: nothing is trimmed, folded or added. A grant with no filter allows any query
+over everything the token can see, including `org:other is:private`. Pin it with `==`:
+
+```yaml
+- capability: github.com/repositories.search
+  filter: query == "org:pied-piper is:public"
+  action: allow
+```
+
+Do not scope it with a prefix `glob`: a later qualifier in the same query can widen the search.
+
+## Audience and profile reads
+
+These read-only operations show who starred or forked a repository and what an account
+publishes about itself. Each has its own grant:
+
+| Function | Capability | Filter fields |
+| --- | --- | --- |
+| `listRepositoryEvents` | `github.com/events.list` | `owner`, `repo` |
+| `listStargazers` | `github.com/stargazers.list` | `owner`, `repo` |
+| `listForks` | `github.com/forks.list` | `owner`, `repo` |
+| `getUser` | `github.com/users.get` | `login` |
+| `listUserOrganizations` | `github.com/userOrganizations.list` | `login` |
+| `listUserSocialAccounts` | `github.com/userSocialAccounts.list` | `login` |
+
+The three repository capabilities declare the same fields as `github.com/repositories.get`;
+the fields they do not use are null. `login` is lowercase. It must be one account name: at
+most 39 letters, digits, hyphens and underscores, starting with a letter or digit, with an
+optional `[bot]` suffix. This accepts legacy and managed-user logins that GitHub's sign-up rules
+no longer allow. Any other value, including path syntax, is refused with `invalid_input`.
+
+`getUser` never returns an email address. GitHub's `email` becomes the boolean
+`hasPublicEmail`, so granting a profile read does not grant personal contact data, and there
+is no raw passthrough. Free-text fields such as `bio` and `blog` are returned as the account
+wrote them, and can hold whatever it chose to publish there. These operations do not search
+by name or email or read commits. The keeping of addresses out of an agent's reach also depends
+on its other grants: `github.com/commits.list` and `github.com/commits.get` return
+`authorEmail`, and `github.com/users.search` takes a query that can match on an address.
+
+Unlike the single-resource reads, which return `null` when missing, `getUser` and these list
+calls throw `GitHubError`: code `not_found` for a missing repository or login, and `forbidden`
+when GitHub refuses. GitHub restricts `/stargazers` to a repository's admins and collaborators,
+so read stars from `listRepositoryEvents` when `listStargazers` is refused. The events feed
+covers recent activity only. `listUserOrganizations` returns public memberships only.
 
 ## Research search
 

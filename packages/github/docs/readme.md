@@ -37,6 +37,10 @@ internally; never pass tokens as function arguments.
 <!-- submilli:if capability="github.com/pulls.search" -->
 - Prefer `searchPullRequests` for repository-scoped pull request discovery.
 <!-- submilli:endif -->
+<!-- submilli:if capability="github.com/repositories.search" -->
+- A policy may limit `searchRepositories` to exact queries. It compares the query exactly as
+  written, so a change in spacing or case is a different query.
+<!-- submilli:endif -->
 <!-- submilli:if any="github.com/code.search github.com/issues.search github.com/pulls.search" -->
 - The repository-scoped search functions reject query syntax that could escape the
   repository policy.
@@ -199,6 +203,96 @@ function main(): string {
         const count = hit.issue.reactions?.totalCount ?? null;
         const reactions = count === null ? "unknown" : count.toString();
         lines.push(hit.issue.htmlUrl + " comments=" + hit.issue.comments.toString() + " reactions=" + reactions);
+    }
+    return lines.join("\n");
+}
+```
+
+<!-- submilli:endif -->
+
+<!-- submilli:if any="github.com/events.list github.com/stargazers.list github.com/forks.list" -->
+
+## Who starred or forked a repository
+
+These list calls take the owner and the repository name as two strings. A missing
+repository throws `GitHubError` with code `not_found`, and any other refusal throws too;
+they do not return `null`.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/events.list" -->
+
+- `listRepositoryEvents` returns recent public activity of every type, newest first.
+  Filter by `type`: `WatchEvent` is a star (`action` is `"started"`), and `ForkEvent` is a
+  fork, with the new repository in `forkFullName`. `action` and `forkFullName` are `""`
+  where they do not apply. GitHub keeps only recent events, so this is not a full history.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/stargazers.list" -->
+
+- `listStargazers` returns each account and its `starredAt` time. GitHub restricts this
+  list to a repository's admins and collaborators, and refuses other tokens with a
+  `GitHubError`.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if all="github.com/stargazers.list github.com/events.list" -->
+
+- When `listStargazers` is refused, read stars from `listRepositoryEvents` instead.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/forks.list" -->
+
+- `listForks` returns forks, newest first, with each `ownerLogin` and `createdAt`.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if any="github.com/users.get github.com/userOrganizations.list github.com/userSocialAccounts.list" -->
+
+## Read a person's public profile
+
+Pass one login, optionally ending in `[bot]`. A value that is not a GitHub login throws
+`GitHubError` with code `invalid_input`. An unknown login throws with code `not_found`.
+Logins are lowercase in policy and requests.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/users.get" -->
+
+- `getUser` returns the public profile. Unset text fields are `""`. `hasPublicEmail`
+  reports whether the profile shows an email address; the address itself is not available.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/userOrganizations.list" -->
+
+- `listUserOrganizations` returns public memberships only.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if capability="github.com/userSocialAccounts.list" -->
+
+- `listUserSocialAccounts` returns the accounts linked from the profile, each with its
+  `provider` and `url`.
+
+<!-- submilli:endif -->
+
+<!-- submilli:if all="github.com/events.list github.com/users.get" -->
+
+## Profile recent stargazers and forkers
+
+```ts
+import github from "@submilli/github";
+
+function main(): string {
+    const page = github.listRepositoryEvents("octocat", "Hello-World", { limit: 50 });
+    const lines: string[] = [];
+    for (const event of page.items) {
+        if (event.type !== "WatchEvent" && event.type !== "ForkEvent") continue;
+        const profile = github.getUser(event.actorLogin);
+        lines.push(event.type + " " + profile.login + " " + profile.company);
     }
     return lines.join("\n");
 }

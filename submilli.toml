@@ -116,3 +116,10 @@ version = "0.1.0"
 description = "Native Attio CRM client for object and status discovery, typed record queries, people and company upserts by email and domain, record writes, stage changes, and notes."
 keywords = ["attio", "crm", "records", "deals", "people", "companies", "api"]
 path = "packages/attio"
+
+[[package]]
+name = "@submilli/posthog"
+version = "0.1.0"
+description = "PostHog Cloud (US) client for bounded event queries with keyset pages, event and property schema, cohort state, and event capture."
+keywords = ["posthog", "analytics", "events", "hogql", "cohorts", "capture"]
+path = "packages/posthog"
