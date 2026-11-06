@@ -56,8 +56,13 @@ struct Binding {
 pub(super) fn analyze(ast: &Ast) -> Result<Analysis, crate::compiler_error::CompileError> {
     let mut analysis = Analysis::default();
     for &id in &ast.top_level {
+        // The ordered walk below reports a bad ID after retaining diagnostics
+        // from earlier statements. This lookup pass must not fail ahead of it.
+        let Ok(statement) = ast.try_stmt(id) else {
+            break;
+        };
         if let crate::StmtKind::Let { name, .. } | crate::StmtKind::Const { name, .. } =
-            &ast.try_stmt(id).map_err(super::arena_failure)?.kind
+            &statement.kind
         {
             analysis
                 .global_declarations
@@ -80,7 +85,11 @@ pub(super) fn analyze(ast: &Ast) -> Result<Analysis, crate::compiler_error::Comp
                 .map(|expr| expr.span)
                 .map_err(super::arena_failure)
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, _>>()
+        .map_err(|fatal| crate::compiler_error::CompileError {
+            diagnostics: analysis.diagnostics.clone(),
+            fatal: Some(fatal),
+        })?;
     analysis
         .evolving_bindings
         .retain(|span| analysis.grown_bindings.contains(span) || uninitialized.contains(span));
