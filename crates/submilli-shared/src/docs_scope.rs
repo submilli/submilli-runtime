@@ -212,16 +212,6 @@ pub fn not_loaded_message(name: &str) -> String {
     )
 }
 
-/// Remove generated `@capability` tag lines for MCP and HTTP package docs.
-/// Apply this only to rendered declarations: author-facing docs and readmes
-/// retain their capability metadata, and policy projection still uses the tags.
-pub fn without_capability_tags(declarations: &str) -> String {
-    declarations
-        .split_inclusive('\n')
-        .filter(|line| !line.trim_start().starts_with("* @capability "))
-        .collect()
-}
-
 /// The documentation a reader can use, from one blueprint or none.
 pub struct DocsScope {
     stdlib: StdlibView,
@@ -363,21 +353,6 @@ impl DocsScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn capability_tag_removal_preserves_every_other_line() {
-        let declarations = "/**\r\n * Mentions @capability in prose.\r\n * @capability test/read { path }\r\n * @param path The path.\r\n * @returns A note.\r\n */\r\ninterface Notes {\n  /**\n   * Requires approval.\n   * @capability test/write\n   * @capability test/audit - Log the write.\n   */\n  write(): void;\n}\n";
-        let expected = "/**\r\n * Mentions @capability in prose.\r\n * @param path The path.\r\n * @returns A note.\r\n */\r\ninterface Notes {\n  /**\n   * Requires approval.\n   */\n  write(): void;\n}\n";
-        assert_eq!(without_capability_tags(declarations), expected);
-        for unchanged in [
-            "",
-            "function read(): string;",
-            "type Tag = \"@capability\";",
-        ] {
-            assert_eq!(without_capability_tags(unchanged), unchanged);
-        }
-        assert_eq!(without_capability_tags(" * @capability test/read"), "");
-    }
 
     fn blueprint(yaml: &str) -> Blueprint {
         submilli_blueprint::parse(yaml).expect("blueprint parses")

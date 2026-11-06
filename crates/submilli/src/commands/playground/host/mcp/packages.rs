@@ -8,7 +8,7 @@
 use serde_json::{Value, json};
 use submilli_shared::docs_scope::{self, DocsScope, PackageView};
 
-use interpreter::packages::CatalogEntry;
+use interpreter::packages::{CatalogEntry, DocAudience};
 
 use submilli_shared::mcp::McpCatalog;
 
@@ -84,7 +84,10 @@ pub(crate) fn lookup_with_catalog(name: &str, catalog: &McpCatalog) -> DocLookup
         return match catalog.package(name) {
             Some(pkg) => DocLookup::Mcp {
                 description: pkg.description(),
-                declarations: interpreter::packages::render_declarations(&pkg.defs),
+                declarations: interpreter::packages::render_declarations_for(
+                    &pkg.defs,
+                    DocAudience::Agent,
+                ),
             },
             None => DocLookup::McpUnknown,
         };
@@ -122,10 +125,13 @@ pub(crate) fn lookup_with_blueprint(
 }
 
 fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
-    scope.stdlib().docs(name).map(|doc| DocLookup::Host {
-        description: doc.description,
-        declarations: doc.declarations,
-    })
+    scope
+        .stdlib()
+        .docs_for(name, DocAudience::Agent)
+        .map(|doc| DocLookup::Host {
+            description: doc.description,
+            declarations: doc.declarations,
+        })
 }
 
 /// A bare standard-library tail (`fs` for `submilli:fs`) is that module: serve
@@ -133,7 +139,10 @@ fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
 /// is a miss that lists every full name. `None` when the name is not a tail.
 fn bare_stdlib_lookup(name: &str, extra: &[String], scope: &DocsScope) -> Option<DocLookup> {
     use interpreter::packages::BareNameMatch;
-    match scope.stdlib().match_bare_name(name, extra) {
+    match scope
+        .stdlib()
+        .match_bare_name_for(name, extra, DocAudience::Agent)
+    {
         BareNameMatch::Unique(doc) => Some(DocLookup::CorrectedHost {
             canonical: doc.name,
             description: doc.description,
@@ -202,7 +211,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "name": name,
             "source": "host",
             "description": description,
-            "declarations": docs_scope::without_capability_tags(&declarations),
+            "declarations": declarations,
         }),
         DocLookup::CorrectedHost {
             canonical,
@@ -218,7 +227,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
                 "source": "host",
                 "correction": correction,
                 "description": format!("{correction}\n\n{description}"),
-                "declarations": docs_scope::without_capability_tags(&declarations),
+                "declarations": declarations,
             })
         }
         DocLookup::Mcp {
@@ -228,7 +237,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "name": name,
             "source": "mcp",
             "description": description,
-            "declarations": docs_scope::without_capability_tags(&declarations),
+            "declarations": declarations,
         }),
         DocLookup::Registry {
             description,
@@ -238,7 +247,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "name": name,
             "source": "registry",
             "description": description,
-            "declarations": docs_scope::without_capability_tags(&declarations),
+            "declarations": declarations,
         }),
         DocLookup::Builtin { declarations } => json!({
             "name": name,
@@ -500,7 +509,10 @@ fn registry_lookup(package: &PackageView) -> DocLookup {
     match &package.documentation {
         Ok(documentation) => DocLookup::Registry {
             description: package.summary(),
-            declarations: package.declarations.clone(),
+            declarations: interpreter::packages::render_declarations_for(
+                &package.declaration,
+                DocAudience::Agent,
+            ),
             documentation: documentation.clone(),
         },
         Err(errors) => DocLookup::InvalidDocumentation {
@@ -532,7 +544,7 @@ fn docs_body_markdown(intro: &str, declarations: &str) -> String {
         out.push_str("\n\n");
     }
     out.push_str("## Declarations\n\n```ts\n");
-    out.push_str(docs_scope::without_capability_tags(declarations).trim());
+    out.push_str(declarations.trim());
     out.push_str("\n```\n");
     out
 }
@@ -543,11 +555,27 @@ mod agent_docs_tests {
 
     #[test]
     fn package_docs_omit_capability_tags_in_json_and_markdown() {
-        let lookup = DocLookup::Registry {
+        let declaration = interpreter::compile_package(
+            "@test/notes",
+            interpreter::ModulePath::from("lib"),
+            &[interpreter::PackageSourceModule {
+                path: interpreter::ModulePath::from("lib"),
+                source: "/** Read a note. Requires approval.\n * @capability notes.test/read { path }\n */\nexport function read(path: string): string { return path; }",
+            }],
+            &[],
+        ).unwrap().declaration;
+        let package = PackageView {
+            name: "@test/notes".into(),
+            version: "0.0.0-test".into(),
             description: "Test package.".into(),
-            documentation: "Readme stays unchanged.".into(),
-            declarations: "/**\n * Read a note.\n * Requires approval.\n * @capability notes.test/read { path }\n */\nfunction read(path: string): string;\n".into(),
+            keywords: Vec::new(),
+            declarations: interpreter::packages::render_declarations(&declaration),
+            declaration,
+            documentation: Ok("Readme stays unchanged.".into()),
+            usable: true,
         };
+        assert!(package.declarations.contains("@capability notes.test/read"));
+        let lookup = registry_lookup(&package);
         let markdown = docs_markdown(&lookup).unwrap();
         let json = docs_json("@test/notes", lookup);
         for text in [markdown.as_str(), json["declarations"].as_str().unwrap()] {
@@ -559,6 +587,7 @@ mod agent_docs_tests {
             );
         }
         assert!(markdown.starts_with("Readme stays unchanged.\n\n"));
+        assert!(package.declarations.contains("@capability notes.test/read"));
 
         let host = docs_json("submilli:fs", super::lookup("submilli:fs"));
         assert!(
