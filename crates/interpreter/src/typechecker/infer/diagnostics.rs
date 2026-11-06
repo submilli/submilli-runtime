@@ -801,37 +801,62 @@ impl<'a> Inferer<'a> {
             let rest = rest.trim_start();
             rest.starts_with('.') || rest.starts_with("?.")
         });
-        if used_as_namespace && let Some(import) = self.missing_import(name) {
-            let help = format!("`{name}` is a module; import it first:\n  {import}");
+        let imports = self.package_namespace_import_help(name);
+        if used_as_namespace && !imports.is_empty() {
             // One import fixes every use in the file, so later uses would only
             // repeat it.
-            let already_named = self.diagnostics.iter().any(|d| {
-                d.span.file == span.file && d.message == message && d.help.contains(&help)
-            });
+            let already_named = self
+                .diagnostics
+                .iter()
+                .any(|d| d.span.file == span.file && d.message == message && d.help == imports);
             if !already_named {
-                self.error_with_help(span, message, vec![help]);
+                self.error_with_help(span, message, imports);
             }
             return;
         }
-        let help: Vec<String> = self
+        let mut help: Vec<String> = self
             .closest_local_or_global(name)
             .map(|s| vec![format!("did you mean `{}`?", s)])
             .unwrap_or_default();
+        help.extend(self.package_value_import_help(name));
         self.error_with_help(span, message, help);
     }
 
-    /// The import that would bind `name` to a loaded module, when one is named
-    /// after it: `fs` for `submilli:fs`, `gmail` for `@submilli/gmail`. Models
-    /// write `fs.read(…)` as if the module were a global.
-    fn missing_import(&self, name: &str) -> Option<String> {
-        let stdlib = format!("submilli:{name}");
-        if self.packages_by_name.contains_key(stdlib.as_str()) {
-            return Some(format!("import * as {name} from \"{stdlib}\";"));
-        }
-        let package = format!("@submilli/{name}");
-        self.packages_by_name
-            .contains_key(package.as_str())
-            .then(|| format!("import {name} from \"{package}\";"))
+    fn import_suggestion_packages(&self) -> impl Iterator<Item = &crate::PackageDeclaration> {
+        self.packages_by_name.values().copied().filter(|pkg| {
+            !matches!(
+                pkg.package_name.as_str(),
+                crate::mangle::PRELUDE_PACKAGE
+                    | crate::runtime::NUMBER_MODULE_NAME
+                    | crate::runtime::TEMPORAL_MODULE_NAME
+            )
+        })
+    }
+
+    fn package_value_import_help(&self, name: &str) -> Vec<String> {
+        self.import_suggestion_packages()
+            .filter(|pkg| pkg.values.contains_key(name))
+            .map(|pkg| named_import_help(name, &pkg.package_name))
+            .collect()
+    }
+
+    pub(super) fn package_type_import_help(&self, name: &str) -> Vec<String> {
+        self.import_suggestion_packages()
+            .filter(|pkg| pkg.types.contains_key(name))
+            .map(|pkg| named_import_help(name, &pkg.package_name))
+            .collect()
+    }
+
+    fn package_namespace_import_help(&self, name: &str) -> Vec<String> {
+        self.import_suggestion_packages()
+            .filter(|pkg| pkg.package_name.rsplit(['/', ':']).next() == Some(name))
+            .map(|pkg| {
+                format!(
+                    "`{name}` is a module; import it first:\n  import {name} from \"{}\";",
+                    pkg.package_name
+                )
+            })
+            .collect()
     }
 
     /// Help for `name` missing from `package`: the `submilli:fs` spelling of a
@@ -1735,6 +1760,107 @@ impl<'a> Inferer<'a> {
         } else if !super::narrowing::condition_compatible(ty) {
             self.error_non_condition_type(span, ty);
         }
+    }
+}
+
+fn named_import_help(name: &str, package: &str) -> String {
+    format!("`{name}` is exported by `{package}`\n  add `import {{ {name} }} from \"{package}\";`")
+}
+
+#[cfg(test)]
+mod missing_import_tests {
+    use super::super::test_support::run_with_packages;
+    use crate::{PackageDeclaration, Type, TypeKind, TypeSymbol};
+
+    fn package(name: &str) -> PackageDeclaration {
+        let mut package = crate::stdlib::uuid::package_declaration();
+        package.package_name = name.into();
+        package.types.insert(
+            "Contact".into(),
+            TypeSymbol {
+                name: "Contact".into(),
+                mangled_name: crate::mangle::package_symbol(name, "Contact"),
+                declaration_span: crate::Span::at(crate::FileId(0)),
+                kind: TypeKind::Alias {
+                    generics: Vec::new(),
+                    ty: Type::String,
+                    doc: None,
+                },
+            },
+        );
+        package
+    }
+
+    #[test]
+    fn named_export_imports_are_sorted_and_include_scoped_packages() {
+        let z = package("@appworld/z");
+        let a = package("@appworld/a");
+        let (_, diagnostics) = run_with_packages("function main(): void { v4(); }", &[&z, &a]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let help = &diagnostics[0].help;
+        assert_eq!(help.len(), 2, "{help:?}");
+        assert!(help[0].contains("import { v4 } from \"@appworld/a\";"));
+        assert!(help[1].contains("import { v4 } from \"@appworld/z\";"));
+    }
+
+    #[test]
+    fn type_exports_suggest_imports_and_the_suggested_import_resolves() {
+        let package = package("@appworld/phone");
+        let (_, diagnostics) =
+            run_with_packages("function main(value: Contact): void {}", &[&package]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].message, "unknown type `Contact`");
+        assert!(
+            diagnostics[0]
+                .help
+                .iter()
+                .any(|h| h.contains("import { Contact } from \"@appworld/phone\";"))
+        );
+        let (_, diagnostics) = run_with_packages(
+            "import { Contact } from \"@appworld/phone\"; function main(value: Contact): void {}",
+            &[&package],
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn namespace_imports_match_any_scope_in_sorted_order() {
+        let z = package("@z/phone");
+        let a = package("@appworld/phone");
+        let (_, diagnostics) = run_with_packages(
+            "function main(): void { phone.v4(); phone.v4(); }",
+            &[&z, &a],
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let help = &diagnostics[0].help;
+        assert_eq!(help.len(), 2, "{help:?}");
+        assert!(help[0].contains("import phone from \"@appworld/phone\";"));
+        assert!(help[1].contains("import phone from \"@z/phone\";"));
+    }
+
+    #[test]
+    fn value_and_type_spaces_do_not_suggest_each_others_exports() {
+        let package = package("@appworld/phone");
+        let (_, diagnostics) =
+            run_with_packages("function main(value: v4): void { Contact(); }", &[&package]);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.help.iter().all(|h| !h.contains("@appworld/phone")))
+        );
+    }
+
+    #[test]
+    fn existing_typo_help_precedes_an_exact_export_match() {
+        let package = package("@appworld/phone");
+        let (_, diagnostics) = run_with_packages(
+            "function main(): void { const v44 = 1; v4(); }",
+            &[&package],
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].help[0], "did you mean `v44`?");
+        assert!(diagnostics[0].help[1].contains("import { v4 }"));
     }
 }
 
