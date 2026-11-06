@@ -7334,6 +7334,29 @@ impl Inferer<'_> {
                                         ),
                                         already_errored,
                                     );
+                                } else if !already_errored
+                                    && spread_element_type(source_ty.peel()).is_some()
+                                {
+                                    let expected_source = Type::Readonly(Box::new(Type::Array(
+                                        Box::new(running.clone()),
+                                    )));
+                                    let help = self.render_help_list(
+                                        super::type_diff::type_mismatch_help(
+                                            &expected_source,
+                                            &source_ty,
+                                        ),
+                                    );
+                                    self.error_with_help(
+                                        self.ast
+                                            .try_expr(value)
+                                            .map_err(super::arena_failure)?
+                                            .span,
+                                        super::diagnostics::mismatch_message(
+                                            expected_source.peel(),
+                                            &source_ty,
+                                        ),
+                                        help,
+                                    );
                                 } else if !already_errored {
                                     self.error(
                                         spread_span,
@@ -15564,6 +15587,52 @@ mod tests {
             diags[0].message,
             "`+` not defined for `string` and `{ a: number }`"
         );
+    }
+
+    #[test]
+    fn array_spread_mismatch_keeps_the_source_type_and_span() {
+        for source_type in [
+            "string[]",
+            "readonly string[]",
+            "[string, string]",
+            "string[] | boolean[]",
+        ] {
+            let source =
+                format!("function f(source: {source_type}): number[] {{ return [...source]; }}");
+            let (_, diagnostics) = run(&source);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(
+                diagnostics[0]
+                    .message
+                    .starts_with("expected `number[]`, got `"),
+                "{diagnostics:?}"
+            );
+            let span = diagnostics[0].span;
+            assert_eq!(&source[span.start as usize..span.end as usize], "source");
+        }
+    }
+
+    #[test]
+    fn array_spread_mismatch_names_the_structured_array_types() {
+        let (_, diagnostics) = run(
+            "function f(source: { value: string }[]): { value: number }[] { return [...source]; }",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].message,
+            "expected `{ value: number }[]`, got `{ value: string }[]`"
+        );
+        assert!(diagnostics[0].help.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn iterable_spread_mismatch_reports_the_element_type() {
+        let source = "function f(source: Set<string>): number[] { return [...source]; }";
+        let (_, diagnostics) = run(source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].message, "expected `number`, got `string`");
+        let span = diagnostics[0].span;
+        assert_eq!(&source[span.start as usize..span.end as usize], "...source");
     }
 
     #[test]
