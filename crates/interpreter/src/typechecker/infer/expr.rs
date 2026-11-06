@@ -1104,7 +1104,7 @@ impl Inferer<'_> {
             && !self.top_symbols.contains_key("undefined")
     }
 
-    fn resolve_ident(
+    pub(super) fn resolve_ident(
         &mut self,
         ident: Ident,
         span: Span,
@@ -2216,6 +2216,18 @@ impl Inferer<'_> {
         {
             self.check_nested_function_use(index, span)?;
         }
+        let evolving = self.evolving_binding_path(&ident);
+        if evolving.as_ref().is_some_and(|path| {
+            !self.reads_ruled_out_as_never(path)
+                && self.lookup_narrowed_view(path).is_none_or(|view| {
+                    view.evolving == Some(narrowing::EvolvingType::UnresolvedArray)
+                        || (view.evolving == Some(narrowing::EvolvingType::Array)
+                            && super::evolving::array_element(&view.narrowed_ty)
+                                == Some(Type::Never))
+                })
+        }) {
+            self.report_evolving_read(&ident, span);
+        }
         let (kind, ty) = self.resolve_ident(ident, span)?;
         let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
             self.scopes
@@ -2779,6 +2791,21 @@ impl Inferer<'_> {
         // (infer_to_string_call, infer_array_join_call,
         // console.log special case).
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind {
+            if matches!(name.name.as_str(), "push" | "unshift")
+                && let Some(binding) = self.evolving_array_receiver(*receiver)?
+            {
+                return self.infer_evolving_array_call(
+                    *receiver,
+                    binding,
+                    MethodCallSite {
+                        name: name.clone(),
+                        type_args,
+                        args,
+                        expected,
+                        span,
+                    },
+                );
+            }
             let diags_before = self.diagnostics.len();
             let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
             // A generic receiver inferred in isolation can't resolve its own type
@@ -8453,7 +8480,11 @@ impl Inferer<'_> {
         name: Ident,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) = if name.name == "length" {
+            self.infer_array_operation_receiver(receiver)?
+        } else {
+            self.infer_expr(receiver, None)?
+        };
         // Plan 75.17: in-region rewrite for field-path
         // narrowings. If the candidate path `<receiver>.<name>` has an
         // active `NarrowedView`, return a `LocalNarrowRef` to the
@@ -8729,7 +8760,7 @@ impl Inferer<'_> {
     }
 
     /// `receiver.name(args)` for the `method` `find_method` found on `recv_ty`.
-    fn infer_found_method_call(
+    pub(super) fn infer_found_method_call(
         &mut self,
         typed_receiver: ExprId,
         recv_ty: &Type,
@@ -8981,7 +9012,7 @@ impl Inferer<'_> {
 
     /// Runs `infer` with `held` (source argument to its temporary) in
     /// [`Self::held_arguments`], removing them again whether or not it fails.
-    fn with_held_arguments<T>(
+    pub(super) fn with_held_arguments<T>(
         &mut self,
         held: BTreeMap<ExprId, ExprId>,
         infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
@@ -11034,7 +11065,7 @@ impl Inferer<'_> {
         if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
             self.error(span, super::diagnostics::mismatch_message(&ty, &result_ty));
         }
-        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
+        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone(), None)?;
         Ok((
             TypedExprKind::PostfixUnary {
                 op,
@@ -11524,13 +11555,21 @@ impl Inferer<'_> {
     /// closure-typed receiver; `Call` directly after a `Field` resolving to an
     /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
     /// `asserts_tail`: a `!` follows the chain's last step.
-    fn infer_chain_steps(
+    pub(super) fn infer_chain_steps(
         &mut self,
         base: ExprId,
         parts: Vec<ChainPart>,
         asserts_tail: bool,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_base, base_ty) = self.infer_expr(base, None)?;
+        if let Some(inferred) = self.infer_evolving_chain(base, &parts, asserts_tail)? {
+            return Ok(inferred);
+        }
+        let (typed_base, base_ty) = if matches!(parts.first(), Some(ChainPart::Field { name, .. }) if name.name == "length")
+        {
+            self.infer_array_operation_receiver(base)?
+        } else {
+            self.infer_expr(base, None)?
+        };
         // The namespace rejection subsumes the redundancy warning — a namespace
         // receiver is non-nullable too, and two diagnostics for one `?` is noise.
         if !self.reported_namespace_chain_base(base, &base_ty, &parts)? {
@@ -14148,12 +14187,12 @@ struct StringOrArrayMethods {
 /// A method call's parts after its callee: what dispatch needs once the
 /// receiver is typed.
 #[derive(Clone)]
-struct MethodCallSite<'a> {
-    name: Ident,
-    type_args: Option<Vec<TypeAnnotation>>,
-    args: Vec<ExprId>,
-    expected: Option<&'a Type>,
-    span: Span,
+pub(super) struct MethodCallSite<'a> {
+    pub(super) name: Ident,
+    pub(super) type_args: Option<Vec<TypeAnnotation>>,
+    pub(super) args: Vec<ExprId>,
+    pub(super) expected: Option<&'a Type>,
+    pub(super) span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -16121,14 +16160,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_array_that_grows_without_hint_diagnoses() {
-        let (_, d) = run("function main(): void { let xs = []; xs.push(1); }");
-        assert!(
-            d.iter().any(|x| x
-                .message
-                .contains("cannot infer the element type of `xs` from an empty array")),
-            "expected empty-array diag, got: {d:?}"
-        );
+    fn empty_array_that_grows_infers_its_element_type() {
+        let (_, d) =
+            run("function main(): void { let xs = []; xs.push(1); const value: number = xs[0]; }");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
     }
 
     #[test]

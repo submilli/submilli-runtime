@@ -239,8 +239,44 @@ pub enum PendingJoinKind {
     Switch,
 }
 
+/// Writes a clause can complete before it throws, including inferred values.
+#[derive(Clone, Default)]
+pub(in crate::typechecker) struct ClauseWrites {
+    pub paths: BTreeSet<ReferencePath>,
+    pub evolving: NarrowEnv,
+}
+
+impl ClauseWrites {
+    pub(super) fn record_evolving(&mut self, path: ReferencePath, view: NarrowedView) {
+        let mut joined = view;
+        if let Some(previous) = self.evolving.get(&path) {
+            let evolving = join_view_inference(previous, &joined);
+            joined.narrowed_ty = join_views(previous, &joined).unwrap_or(Type::Unknown);
+            joined.evolving = evolving;
+        }
+        self.evolving.insert(path, joined);
+    }
+
+    pub(super) fn extend(&mut self, other: Self) {
+        self.paths.extend(other.paths);
+        for (path, view) in other.evolving {
+            self.record_evolving(path, view);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EvolvingType {
+    Value,
+    Array,
+    /// An undetermined empty-array path joined with a concrete assignment.
+    UnresolvedArray,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NarrowedView {
+    /// Empty-array inference remains open until an ordinary array is assigned.
+    pub evolving: Option<EvolvingType>,
     pub narrowed_ty: Type,
     pub facts: TypeFacts,
     /// Literal values excluded by negative predicates (e.g., `s.kind !== "circle"`
@@ -1591,8 +1627,7 @@ pub fn union_envs(
     let mut joined_narrowings = NarrowEnv::new();
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
-            let Some(joined_ty) = join_narrowed_types(&a_view.narrowed_ty, &b_view.narrowed_ty)
-            else {
+            let Some(joined_ty) = join_views(a_view, b_view) else {
                 continue;
             };
             // A ruled-out view has no shadow, so the join reads through the other.
@@ -1604,6 +1639,7 @@ pub fn union_envs(
             joined_narrowings.insert(
                 path.clone(),
                 NarrowedView {
+                    evolving: join_view_inference(a_view, b_view),
                     narrowed_ty: joined_ty,
                     // Facts are per-branch; the join can't preserve
                     // them precisely. The downstream slim-slice
@@ -1668,6 +1704,57 @@ pub const RULED_OUT: Type = Type::Error;
 /// Whether a narrowed type is [`RULED_OUT`].
 pub fn is_ruled_out(ty: &Type) -> bool {
     matches!(ty, Type::Error)
+}
+
+/// Evolving arrays join their elements. An inferred unknown value remains a
+/// view: it records that a write determined the type, even though storage is unknown.
+pub(super) fn join_views(left: &NarrowedView, right: &NarrowedView) -> Option<Type> {
+    if is_ruled_out(&left.narrowed_ty) {
+        return Some(right.narrowed_ty.clone());
+    }
+    if is_ruled_out(&right.narrowed_ty) {
+        return Some(left.narrowed_ty.clone());
+    }
+    if join_view_inference(left, right) == Some(EvolvingType::Array) {
+        let element = Type::union(vec![
+            super::evolving::array_element(&left.narrowed_ty)?,
+            super::evolving::array_element(&right.narrowed_ty)?,
+        ]);
+        return Some(Type::Array(Box::new(element)));
+    }
+    if left.evolving.is_some() && right.evolving.is_some() {
+        return Some(join_flow_types(&left.narrowed_ty, &right.narrowed_ty));
+    }
+    join_narrowed_types(&left.narrowed_ty, &right.narrowed_ty)
+}
+
+pub(super) fn join_view_inference(
+    left: &NarrowedView,
+    right: &NarrowedView,
+) -> Option<EvolvingType> {
+    if is_ruled_out(&left.narrowed_ty) {
+        return right.evolving;
+    }
+    if is_ruled_out(&right.narrowed_ty) {
+        return left.evolving;
+    }
+    match (left.evolving?, right.evolving?) {
+        (EvolvingType::Array, EvolvingType::Array) => Some(EvolvingType::Array),
+        (EvolvingType::UnresolvedArray, _) | (_, EvolvingType::UnresolvedArray) => {
+            Some(EvolvingType::UnresolvedArray)
+        }
+        (EvolvingType::Array, _)
+            if super::evolving::array_element(&left.narrowed_ty) == Some(Type::Never) =>
+        {
+            Some(EvolvingType::UnresolvedArray)
+        }
+        (_, EvolvingType::Array)
+            if super::evolving::array_element(&right.narrowed_ty) == Some(Type::Never) =>
+        {
+            Some(EvolvingType::UnresolvedArray)
+        }
+        _ => Some(EvolvingType::Value),
+    }
 }
 
 /// The join of two narrowings of one path, or `None` when it holds every
@@ -1979,6 +2066,7 @@ mod tests {
     #[test]
     fn narrowed_view_construction() {
         let view = NarrowedView {
+            evolving: None,
             narrowed_ty: Type::String,
             facts: TypeFacts::NE_NULL,
             excluded_literals: BTreeSet::new(),

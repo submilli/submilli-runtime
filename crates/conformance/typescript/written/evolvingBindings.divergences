@@ -1,0 +1,93 @@
+types: 69 of 108 tsc entries compared, 23 differ
+
+line 5: loop
+  tsc:  any[]
+  ours: unknown[]
+
+line 6: loop
+  tsc:  any[]
+  ours: string[]
+
+line 8: mixed
+  tsc:  any[]
+  ours: unknown[]
+
+line 9: mixed
+  tsc:  any[]
+  ours: never[]
+
+line 11: mixed
+  tsc:  any[]
+  ours: number[]
+
+line 13: branch
+  tsc:  any[]
+  ours: unknown[]
+
+line 14: branch
+  tsc:  any[]
+  ours: never[]
+
+line 16: reassigned
+  tsc:  any[]
+  ours: unknown[]
+
+line 17: reassigned
+  tsc:  any[]
+  ours: unknown[]
+
+line 19: indexed
+  tsc:  any[]
+  ours: unknown[]
+
+line 20: indexed
+  tsc:  any[]
+  ours: number[]
+
+line 22: empty
+  tsc:  any[]
+  ours: never[]
+
+line 23: empty
+  tsc:  any[]
+  ours: never[]
+
+line 26: result
+  tsc:  any
+  ours: unknown
+
+line 27: result
+  tsc:  any
+  ours: unknown
+
+line 29: mixed
+  tsc:  any
+  ours: unknown
+
+line 30: mixed
+  tsc:  any
+  ours: unknown
+
+line 30: mixed
+  tsc:  any
+  ours: unknown
+
+line 32: maybe
+  tsc:  any
+  ours: unknown
+
+line 33: maybe
+  tsc:  any
+  ours: unknown
+
+line 37: values
+  tsc:  any[]
+  ours: unknown[]
+
+line 38: values
+  tsc:  any[]
+  ours: unknown[]
+
+line 39: values
+  tsc:  any[]
+  ours: never[]
