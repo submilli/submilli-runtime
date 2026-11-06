@@ -672,11 +672,30 @@ impl Inferer<'_> {
     /// Whether `expr` writes nothing, so inferring it early can't make the
     /// code before it see a narrowing that only holds after it. A call may
     /// still drop narrowings of what its callee writes; seen early, that only
-    /// makes the code before it narrow less.
+    /// makes the code before it narrow less. Growing an evolving array is not
+    /// counted, although seen early it widens an earlier read of the array:
+    /// these callers stop at a write, and stopping at a later `xs.push(v)`
+    /// would lose the type parameter it binds (SUB-2121).
+    /// [`Self::changes_no_flow`] counts it.
     pub(super) fn writes_nothing(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        self.writes_nothing_counting(expr, false)
+    }
+
+    /// Whether inferring `expr` changes no flow that a second inference of it
+    /// reads: it writes nothing and calls no method that may grow an evolving
+    /// array.
+    pub(super) fn changes_no_flow(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        self.writes_nothing_counting(expr, true)
+    }
+
+    fn writes_nothing_counting(
+        &self,
+        expr: ExprId,
+        growth_writes: bool,
+    ) -> Result<bool, CompilerFailure> {
         let all = |this: &Self, exprs: &[ExprId]| -> Result<bool, CompilerFailure> {
             for &expr in exprs {
-                if !this.writes_nothing(expr)? {
+                if !this.writes_nothing_counting(expr, growth_writes)? {
                     return Ok(false);
                 }
             }
@@ -699,7 +718,9 @@ impl Inferer<'_> {
                 | ExprKind::Void { operand: inner }
                 | ExprKind::As { expr: inner, .. }
                 | ExprKind::InstanceOf { value: inner, .. }
-                | ExprKind::PostfixUnary { operand: inner, .. } => self.writes_nothing(*inner)?,
+                | ExprKind::PostfixUnary { operand: inner, .. } => {
+                    self.writes_nothing_counting(*inner, growth_writes)?
+                }
                 ExprKind::Binary { lhs, rhs, .. }
                 | ExprKind::IndexAccess {
                     receiver: lhs,
@@ -714,8 +735,14 @@ impl Inferer<'_> {
                 {
                     false
                 }
+                // Growing an evolving array widens its type after the call.
+                ExprKind::Call { .. } | ExprKind::OptionalChain { .. }
+                    if growth_writes && super::evolving::calls_growth_method(self.ast, expr)? =>
+                {
+                    false
+                }
                 ExprKind::Call { callee, args, .. } | ExprKind::New { callee, args, .. } => {
-                    self.writes_nothing(*callee)? && all(self, args)?
+                    self.writes_nothing_counting(*callee, growth_writes)? && all(self, args)?
                 }
                 ExprKind::OptionalChain { base, parts } => {
                     let mut exprs = vec![*base];

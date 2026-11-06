@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use super::expr::MethodCallSite;
 use super::{Inferer, narrowing};
 use crate::compiler_error::CompilerFailure;
-use crate::{ExprId, ExprKind, Ident, Type, TypedExprKind};
+use crate::{ChainPart, ExprId, ExprKind, Ident, Type, TypedExprKind};
 
 impl Inferer<'_> {
     pub(super) fn report_evolving_read(&mut self, ident: &Ident, span: crate::Span) {
@@ -225,7 +225,6 @@ impl Inferer<'_> {
         parts: &[crate::ChainPart],
         asserts_tail: bool,
     ) -> Result<Option<(TypedExprKind, Type)>, CompilerFailure> {
-        use crate::ChainPart;
         let [
             ChainPart::Field { name, .. },
             ChainPart::Call {
@@ -239,9 +238,7 @@ impl Inferer<'_> {
         else {
             return Ok(None);
         };
-        if !matches!(name.name.as_str(), "push" | "unshift")
-            || self.held_arguments.contains_key(&base)
-        {
+        if !is_growth_method(name) || self.held_arguments.contains_key(&base) {
             return Ok(None);
         }
         let Some(binding) = self.evolving_array_receiver(base)? else {
@@ -326,6 +323,37 @@ impl Inferer<'_> {
             },
             ty,
         ))
+    }
+}
+
+/// Whether calling `name` on an evolving array grows it.
+pub(super) fn is_growth_method(name: &Ident) -> bool {
+    matches!(name.name.as_str(), "push" | "unshift")
+}
+
+/// Whether `expr` calls a growth method in a form inference sends to
+/// [`Inferer::infer_evolving_array_call`] when its receiver is an evolving
+/// array: `xs.push(v)`, `xs["push"](v)`, `xs?.push(v)`, `xs.push?.(v)` or
+/// `xs["push"]?.(v)`. [`Inferer::changes_no_flow`] relies on it covering every
+/// such form. It does not look at the receiver: a call that grows nothing only
+/// costs that caller a snapshot.
+pub(super) fn calls_growth_method(ast: &crate::Ast, expr: ExprId) -> Result<bool, CompilerFailure> {
+    let calls_method = |callee: ExprId| -> Result<bool, CompilerFailure> {
+        Ok(matches!(
+            super::expr::string_key_callee_as_field(ast, callee)?,
+            ExprKind::FieldAccess { name, .. } if is_growth_method(&name)
+        ))
+    };
+    match &ast.try_expr(expr).map_err(super::arena_failure)?.kind {
+        ExprKind::Call { callee, .. } => calls_method(*callee),
+        ExprKind::OptionalChain { base, parts } => match parts.as_slice() {
+            [ChainPart::Field { name, .. }, ChainPart::Call { .. }, ..] => {
+                Ok(is_growth_method(name))
+            }
+            [ChainPart::Call { optional: true, .. }, ..] => calls_method(*base),
+            _ => Ok(false),
+        },
+        _ => Ok(false),
     }
 }
 

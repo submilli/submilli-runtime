@@ -2791,7 +2791,7 @@ impl Inferer<'_> {
         // (infer_to_string_call, infer_array_join_call,
         // console.log special case).
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind {
-            if matches!(name.name.as_str(), "push" | "unshift")
+            if super::evolving::is_growth_method(name)
                 && let Some(binding) = self.evolving_array_receiver(*receiver)?
             {
                 return self.infer_evolving_array_call(
@@ -7175,9 +7175,10 @@ impl Inferer<'_> {
             None
         };
         let mut saw_never = false;
-        // Unless a hint pins it, the element type stays open: an element that types
-        // itself takes no hint from the elements before it, as in tsc, and the
-        // elements join by type afterwards.
+        // Unless a hint pins it, the element type stays open, and the elements join
+        // by type, as their union where no one type fits them all. An element that
+        // can be typed alone takes no hint from the elements before it, as in tsc,
+        // and one that can't takes their type only as a guide.
         let open_element_type = !hint_pins_element_ty;
         let normalization = if open_element_type {
             object_normalization::array_normalization(self.ast, &elements)?
@@ -7190,9 +7191,6 @@ impl Inferer<'_> {
         let arrays_of_object_literals = open_element_type
             && normalization.is_none()
             && object_normalization::every_array_of_object_literals(self.ast, &elements)?;
-        // Whether the running element type is still the first element's, which
-        // mismatch messages name.
-        let mut running_is_first = true;
         // Under a pinning hint the literal still has a type of its own, as in tsc:
         // `["a"]` checked against `(string | number)[]` is `string[]`.
         let mut own_element_types = Vec::new();
@@ -7204,7 +7202,13 @@ impl Inferer<'_> {
                         .try_expr(elem_id)
                         .map_err(super::arena_failure)?
                         .span;
-                    let types_itself = self.types_itself(elem_id)?;
+                    // An empty array's `never[]` says nothing of what later elements
+                    // hold, so it hints none: `[[], [1]]` holds `number[]`. Nor does
+                    // a running type of only `null`/`undefined`: the element widens
+                    // the type instead (`[undefined, { a: 1 }]`).
+                    let sibling_hint = element_ty
+                        .as_ref()
+                        .filter(|t| !t.holds_no_element() && !is_nullish_only(t));
                     // A literal that will normalize takes a hint only from a running
                     // type of its own shape, which one with other fields can't match.
                     let lacks_running_shape = normalization.is_some()
@@ -7213,28 +7217,30 @@ impl Inferer<'_> {
                             elem_id,
                             element_ty.as_ref(),
                         )?;
-                    // Such a literal still takes the expected element type, which only
-                    // reaches here when it holds an unbound type parameter: its empty
-                    // arrays and callbacks need that context, as in tsc.
-                    // An empty array's `never[]` says nothing of what later elements
-                    // hold, so it hints none: `[[], [1]]` holds `number[]`. Nor does
-                    // a running type of only `null`/`undefined`, unless a hint pins
-                    // it: the element widens the type instead (`[undefined, { a: 1 }]`).
-                    let running_hint = element_ty.as_ref().filter(|t| {
-                        !t.holds_no_element() && (hint_pins_element_ty || !is_nullish_only(t))
-                    });
-                    let hint = if open_element_type && (types_itself || arrays_of_object_literals) {
-                        None
-                    } else if open_element_type && lacks_running_shape {
-                        expected_elem
-                    } else {
-                        running_hint.or(expected_elem)
-                    };
                     let ValueOperand {
                         typed_expr: typed_id,
                         ty: elem_ty,
                         already_errored,
-                    } = self.infer_value_operand(elem_id, hint, None)?;
+                    } = if hint_pins_element_ty {
+                        self.infer_value_operand(elem_id, expected_elem, None)?
+                    } else if self.types_itself(elem_id)? || arrays_of_object_literals {
+                        self.infer_value_operand(elem_id, None, None)?
+                    } else if let Some(sibling) = sibling_hint
+                        && !lacks_running_shape
+                        && self.tries_sibling_hint(elem_id)?
+                    {
+                        self.infer_with_sibling_hint(
+                            elem_id,
+                            sibling,
+                            expected_elem,
+                            |this, hint| this.infer_value_operand(elem_id, hint, None),
+                        )?
+                    } else {
+                        // The expected element type reaches here only when it holds
+                        // an unbound type parameter: empty arrays and callbacks need
+                        // that context, as in tsc.
+                        self.infer_value_operand(elem_id, expected_elem, None)?
+                    };
                     // A `never` element holds no value (it is read in code no value
                     // reaches), so it neither seeds nor narrows the element type.
                     if matches!(elem_ty.peel(), Type::Never) {
@@ -7260,22 +7266,17 @@ impl Inferer<'_> {
                     };
                     let join = ElementJoin {
                         widens: open_element_type && !already_errored,
-                        joins_as_union: normalization.is_some() || arrays_of_object_literals,
+                        joins_errored_element: normalization.is_some() || arrays_of_object_literals,
                     };
                     match self.joined_element_type(running, &elem_ty, join) {
-                        Some(joined) => {
-                            running_is_first &= joined == *running;
-                            element_ty = Some(joined);
-                        }
-                        None => self.report_array_element_mismatch(
+                        Some(joined) => element_ty = Some(joined),
+                        // An element that reported an error isn't reported again.
+                        None if already_errored => {}
+                        // Only a pinned element type is left here, for an element
+                        // its own check didn't report.
+                        None => self.error(
                             elem_span,
-                            running,
-                            &elem_ty,
-                            ElementMismatch {
-                                hint_pins_element_ty,
-                                running_is_first,
-                                already_errored,
-                            },
+                            super::diagnostics::mismatch_message(running, &elem_ty),
                         ),
                     }
                     typed_elements.push(crate::TypedArrayElement::Value(typed_id));
@@ -7285,34 +7286,48 @@ impl Inferer<'_> {
                     span: spread_span,
                 } => {
                     // A spread only reads its source, so a readonly one qualifies.
-                    // Only `null`/`undefined` so far is no context for a source
-                    // that types itself: the spread widens the element type
-                    // instead (`[undefined, ...xs]`). An annotation, or a source
-                    // like `[]` that needs one, still takes it.
+                    // An annotation's element type is the context of an array
+                    // literal source, or of a source like `[]` that needs one.
                     let source_needs_context = cannot_be_typed_alone(self.ast, value)?;
-                    let source_takes_array_context = source_needs_context
+                    let source = peel_parens(self.ast, value)?;
+                    let takes_array_context = source_needs_context
                         || matches!(
                             self.ast
-                                .try_expr(peel_parens(self.ast, value)?)
+                                .try_expr(source)
                                 .map_err(super::arena_failure)?
                                 .kind,
                             ExprKind::ArrayLiteral { .. }
                         );
-                    let source_hint = element_ty
+                    let readonly_array =
+                        |t: &Type| Type::Readonly(Box::new(Type::Array(Box::new(t.clone()))));
+                    let pinned_hint = element_ty
                         .as_ref()
-                        .filter(|_| source_takes_array_context)
+                        .filter(|_| hint_pins_element_ty && takes_array_context)
+                        .map(readonly_array);
+                    // Without an annotation, the elements' type is a hint as it is
+                    // for a value element. Only `null`/`undefined` so far is no
+                    // context for a source that types itself: the spread widens
+                    // the element type instead (`[undefined, ...xs]`).
+                    let sibling_hint = element_ty
+                        .as_ref()
                         .filter(|running| {
-                            hint_pins_element_ty
-                                || source_needs_context
-                                || !is_nullish_only(running)
+                            !hint_pins_element_ty
+                                && takes_array_context
+                                && (source_needs_context || !is_nullish_only(running))
                         })
-                        .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
+                        .map(readonly_array);
                     let errors_before = self.error_count();
-                    let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref())?;
+                    let (typed_source, source_ty) = match &sibling_hint {
+                        Some(sibling) if self.tries_sibling_hint(source)? => self
+                            .infer_with_sibling_hint(source, sibling, None, |this, hint| {
+                                this.infer_expr(value, hint)
+                            })?,
+                        _ => self.infer_expr(value, pinned_hint.as_ref())?,
+                    };
                     let typed_source =
                         self.materialize_spread_source(typed_source, &source_ty, spread_span)?;
                     let already_errored = self.error_count() > errors_before;
-                    if let Some(hint) = &source_hint {
+                    if let Some(hint) = &pinned_hint {
                         self.drop_readonly_from_hint_mismatch(value, hint, &source_ty)?;
                     }
                     // Non-array iterables are collected before codegen copies the
@@ -7341,31 +7356,24 @@ impl Inferer<'_> {
                         Some(elem_t) => match &element_ty {
                             // Widens for the same reason as the value seed above.
                             None => element_ty = Some(elem_t.widen_literal()),
-                            Some(running)
-                                if !hint_pins_element_ty
-                                    && let Some(widened) =
-                                        Self::widen_nullish_seed(running, &elem_t) =>
-                            {
-                                element_ty = Some(widened);
-                            }
-                            Some(running) if !assignable(&elem_t, running, self.resolver()) => {
-                                if !hint_pins_element_ty {
-                                    self.report_contextual_mismatch(
-                                        self.ast
-                                            .try_expr(value)
-                                            .map_err(super::arena_failure)?
-                                            .span,
-                                        &Type::Array(Box::new(running.clone())),
-                                        &source_ty,
-                                        format!(
-                                            "expected `{running}` ({}), got `{elem_t}`",
-                                            matched_elements(running_is_first),
-                                        ),
-                                        already_errored,
-                                    );
-                                } else if !already_errored
-                                    && spread_element_type(source_ty.peel()).is_some()
+                            // Joins as a value element would. A source that reported
+                            // an error and fits no common type isn't reported again.
+                            Some(running) if open_element_type => {
+                                let join = ElementJoin {
+                                    widens: !already_errored,
+                                    joins_errored_element: false,
+                                };
+                                if let Some(joined) =
+                                    self.joined_element_type(running, &elem_t, join)
                                 {
+                                    element_ty = Some(joined);
+                                }
+                            }
+                            Some(running)
+                                if !already_errored
+                                    && !assignable(&elem_t, running, self.resolver()) =>
+                            {
+                                if spread_element_type(source_ty.peel()).is_some() {
                                     let expected_source = Type::Readonly(Box::new(Type::Array(
                                         Box::new(running.clone()),
                                     )));
@@ -7386,7 +7394,7 @@ impl Inferer<'_> {
                                         ),
                                         help,
                                     );
-                                } else if !already_errored {
+                                } else {
                                     self.error(
                                         spread_span,
                                         super::diagnostics::mismatch_message(&running, &elem_t),
@@ -7602,8 +7610,7 @@ impl Inferer<'_> {
     }
 
     /// The element type of an array literal that so far held only `null` or
-    /// `undefined`, once a value with a type of its own arrives. A spread
-    /// widens only this way: its source's elements are already one type.
+    /// `undefined`, once a value with a type of its own arrives.
     fn widen_nullish_seed(running: &Type, elem: &Type) -> Option<Type> {
         if is_nullish_only(running) && !is_nullish_only(elem) {
             let undefined_as_value = |ty: &Type| match ty.peel() {
@@ -7630,7 +7637,7 @@ impl Inferer<'_> {
 
     /// The running element type widened by `null`/`undefined`: an element that
     /// is the running type plus a nullish member, or a nullish seed followed by
-    /// a value. Arrays stay homogeneous otherwise.
+    /// a value.
     fn widen_by_nullish(&self, running: &Type, elem: &Type) -> Option<Type> {
         if let Some(widened) = Self::widen_nullish_seed(running, elem) {
             return Some(widened);
@@ -7650,27 +7657,6 @@ impl Inferer<'_> {
             members.push(Type::Undefined);
         }
         Some(Type::union(members))
-    }
-
-    fn report_array_element_mismatch(
-        &mut self,
-        span: Span,
-        expected: &Type,
-        actual: &Type,
-        mismatch: ElementMismatch,
-    ) {
-        if !mismatch.hint_pins_element_ty || !mismatch.already_errored {
-            self.report_contextual_mismatch(
-                span,
-                expected,
-                actual,
-                format!(
-                    "expected `{expected}` ({}), got `{actual}`",
-                    matched_elements(mismatch.running_is_first)
-                ),
-                mismatch.already_errored,
-            );
-        }
     }
 
     /// The element type once `elem_ty` joins the `running` one, or `None` when
@@ -7697,8 +7683,69 @@ impl Inferer<'_> {
         if join.widens && assignable(running, elem_ty, self.resolver()) {
             return Some(elem_ty.widen_literal());
         }
-        join.joins_as_union
-            .then(|| Type::union(vec![running.clone(), elem_ty.widen_literal()]))
+        if !join.widens && !join.joins_errored_element {
+            return None;
+        }
+        // Elements no one type fits hold their union, as in tsc: `[1, "x"]` is
+        // `(number | string)[]`. Each join copies the union so far, so it draws
+        // on the type work allowance; past it the element type is an error and
+        // the literal is reported as too large. The union takes `running`'s
+        // place, its members flattening in, and `elem_ty` joins as a member.
+        let mut budget = self.type_limits.budget();
+        let joined = budget
+            .charge_copy(running, 1)
+            .and_then(|()| budget.charge_copy(elem_ty, 2))
+            .map(|()| Type::union(vec![running.clone(), elem_ty.widen_literal()]));
+        Some(self.type_limits.type_or_error(joined))
+    }
+
+    /// Whether an array element, or a spread source, that no annotation pins
+    /// is inferred first with the type of the elements before it as its hint
+    /// (see [`Self::infer_with_sibling_hint`]): one that needs a hint, unless
+    /// it is inside an element inferred again alone.
+    fn tries_sibling_hint(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
+        Ok(!self.array_elements_typed_alone && self.needs_hint(expr)?)
+    }
+
+    /// Infers an array element, or a spread source, with `sibling`, the type
+    /// of the elements before it, as its hint, and keeps that result when it
+    /// reports no error. Otherwise the element is inferred again with only
+    /// `alone` as its hint, as tsc infers every element, and that result
+    /// stands, errors included, so the elements' type never adds an error.
+    fn infer_with_sibling_hint<R>(
+        &mut self,
+        element: ExprId,
+        sibling: &Type,
+        alone: Option<&Type>,
+        mut infer: impl FnMut(&mut Self, Option<&Type>) -> Result<R, CompilerFailure>,
+    ) -> Result<R, CompilerFailure> {
+        let diagnostics_before = self.diagnostics.len();
+        let errors_before = self.error_count();
+        // A discarded attempt must not leave the element's writes behind: a
+        // read before a write would see the write's narrowing, and a read
+        // before a `push` the array's wider type. An element that changes no
+        // flow needs no snapshot: a call drops narrowings only by running a
+        // function literal on the spot, which is a write.
+        let flow = if self.changes_no_flow(element)? {
+            None
+        } else {
+            Some(self.copy_flow())
+        };
+        let hinted = infer(self, Some(sibling))?;
+        if self.error_count() == errors_before {
+            return Ok(hinted);
+        }
+        self.diagnostics.truncate(diagnostics_before);
+        if let Some(flow) = flow {
+            self.restore_flow(flow);
+        }
+        // The array literals inside an element inferred alone are inferred alone
+        // too, so the work grows with their nesting depth rather than doubling
+        // at each level.
+        let enclosing = std::mem::replace(&mut self.array_elements_typed_alone, true);
+        let inferred = infer(self, alone);
+        self.array_elements_typed_alone = enclosing;
+        inferred
     }
 
     /// Whether an expression reads a variable, a field or `this`.
@@ -7710,10 +7757,10 @@ impl Inferer<'_> {
         ))
     }
 
-    /// Whether an array element is typed on its own rather than against the
-    /// elements before it: an identifier or field read, `null`, a fully
-    /// annotated function, or an object literal none of whose fields needs a
-    /// hint.
+    /// Whether an array element is typed on its own rather than with the type
+    /// of the elements before it as its hint: an identifier or field read,
+    /// `null`, a fully annotated function, or an object literal none of whose
+    /// fields needs a hint.
     fn types_itself(&self, expr: ExprId) -> Result<bool, CompilerFailure> {
         let id = peel_parens(self.ast, expr)?;
         Ok(
@@ -14055,7 +14102,7 @@ pub(super) fn string_key_name(
 
 /// `o["m"](…)` calls method `m`, exactly as `o.m(…)` does: every call path in
 /// `infer_call` dispatches on a `FieldAccess` callee.
-fn string_key_callee_as_field(
+pub(super) fn string_key_callee_as_field(
     ast: &crate::Ast,
     callee: ExprId,
 ) -> Result<ExprKind, CompilerFailure> {
@@ -14253,15 +14300,6 @@ fn empty_array_cast_hint(ty: &Type) -> Option<&Type> {
     }
 }
 
-/// How a mismatch message names the elements a later one failed to match.
-fn matched_elements(running_is_first: bool) -> &'static str {
-    if running_is_first {
-        "matching first element"
-    } else {
-        "matching the elements before it"
-    }
-}
-
 /// Where a function literal's context comes from (see
 /// [`Inferer::arrow_context`]).
 struct ArrowContext {
@@ -14277,12 +14315,13 @@ struct ArrowContext {
 
 #[derive(Clone, Copy)]
 struct ElementJoin {
-    /// Whether a later element may widen the element type to its own, or by
-    /// the `null`/`undefined` it adds.
+    /// Whether a later element may widen the element type: to its own, by the
+    /// `null`/`undefined` it adds, or to the union of both.
     widens: bool,
-    /// Whether elements that don't fit one another join as a union, which
-    /// the literal reduces and normalizes once every element is typed.
-    joins_as_union: bool,
+    /// Whether an element that reported an error still joins as a union with
+    /// elements it doesn't fit, as in an array of object literals or of arrays
+    /// of them, which settles its type once every element is typed.
+    joins_errored_element: bool,
 }
 
 /// A method `find_method` found: its signature, the receiver's type arguments,
@@ -14311,13 +14350,6 @@ pub(super) struct MethodCallSite<'a> {
     pub(super) args: Vec<ExprId>,
     pub(super) expected: Option<&'a Type>,
     pub(super) span: Span,
-}
-
-#[derive(Clone, Copy)]
-struct ElementMismatch {
-    hint_pins_element_ty: bool,
-    running_is_first: bool,
-    already_errored: bool,
 }
 
 /// For each member of an object literal, the names of the fields a later
@@ -16308,13 +16340,17 @@ mod tests {
     }
 
     #[test]
-    fn array_literal_unification_failure_diagnoses() {
-        let (_, d) = run(r#"function main(): void { let xs = [1, "two"]; }"#);
-        assert!(
-            d.iter()
-                .any(|x| x.message.contains("matching first element")),
-            "expected unification diag, got: {d:?}"
-        );
+    fn array_literal_of_mixed_elements_infers_their_union() {
+        let ta = run_clean(r#"function main(): void { let xs = [1, "two"]; }"#);
+        let body = ta.functions[0].body;
+        let TypedStmtKind::Block(stmts) = &ta.try_stmt(body).unwrap().kind else {
+            panic!("expected Block");
+        };
+        let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[0]).unwrap().kind else {
+            panic!("expected Let");
+        };
+        let element = Type::union(vec![Type::Number, Type::String]);
+        assert_eq!(*ty, Type::Array(Box::new(element)));
     }
 
     #[test]

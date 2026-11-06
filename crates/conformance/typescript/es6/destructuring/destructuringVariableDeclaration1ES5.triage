@@ -1,6 +1,3 @@
-line 18 extra: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
-line 30 extra: by-design spec §1.2 tuples have no rest elements, so an array literal that spreads an array is an array, whose elements must share one type
-line 18 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
-line 30 type: by-design spec §1.2 tuples have no rest elements, so an array literal that spreads an array is an array, whose elements must share one type
+line 30 type: by-design spec §1.2 tuples have no rest elements, so an array literal that spreads an array is an array, and each binding reads the union of its elements
 line 11 type: artifact the runner reads a module-level pattern binding from its global slot, which is typed before the default applies; reads and writes use the defaulted type; also bug SUB-1713 a literal a pattern takes apart widens its property literals, where tsc keeps them for a literal default
 line 12 type: artifact the runner reads a module-level pattern binding from its global slot, which is typed before the default applies; reads and writes use the defaulted type

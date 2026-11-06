@@ -503,10 +503,9 @@ impl Inferer<'_> {
         Ok(regular)
     }
 
-    /// The element type of an array literal whose elements were checked
-    /// against `seed`, their first element's type with every literal type
-    /// widened: the union of the elements' own types with only their fresh
-    /// literal types widened.
+    /// The element type of an array literal whose elements joined as `seed`,
+    /// with every literal type widened: the union of the elements' own types
+    /// with only their fresh literal types widened.
     ///
     /// Only an array of primitives narrows, and only when every element that
     /// holds a value fits `seed`, so the result names no type `seed` doesn't.

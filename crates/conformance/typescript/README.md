@@ -159,7 +159,7 @@ artifact of how the case was ported. A case's `.triage` gives it, one entry per 
 of the case, for one kind of divergence on it:
 
 ```text
-line 12 type: by-design spec §1.2 arrays are homogeneous, so an array literal's elements must share one type
+line 12 type: by-design spec §Excluded-Features there is no `any`, so an unannotated `let x = []` is `never[]`, where tsc makes it an evolving `any[]`
 line 14, 17 missed: bug SUB-1358 `readonly` is accepted on a method
 line 30 missed: artifact pruning removed the assignment that narrowed `x`
 ```

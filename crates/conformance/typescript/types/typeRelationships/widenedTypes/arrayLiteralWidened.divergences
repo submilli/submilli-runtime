@@ -1,20 +1,5 @@
-types: 40 of 41 tsc entries compared, 4 differ
+types: 40 of 41 tsc entries compared, 1 differ
 
 line 5: a
   tsc:  any[]
   ours: never[]
-
-line 16: c_2
-  tsc:  (undefined[] | null[][])[]
-  ours: null[][][]
-
-line 16: [[[null]],[undefined]]
-  tsc:  (undefined[] | null[][])[]
-  ours: null[][][]
-
-line 16: [undefined]
-  tsc:  undefined[]
-  ours: null[][]
-
-errors:
-line 16: ours: expected `null[]`, got `undefined` (tsc accepts)

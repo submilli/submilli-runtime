@@ -1,16 +1,1 @@
-types: 20 of 37 tsc entries compared, 3 differ
-
-line 11: r4
-  tsc:  (string | number)[]
-  ours: number[]
-
-line 11: foo([1, ''])
-  tsc:  (string | number)[]
-  ours: number[]
-
-line 11: [1, '']
-  tsc:  (string | number)[]
-  ours: number[]
-
-errors:
-line 11: ours: expected `number` (matching first element), got `string` (tsc accepts)
+types: 20 of 37 tsc entries compared, 0 differ

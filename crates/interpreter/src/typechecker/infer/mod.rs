@@ -240,6 +240,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         held_arguments: BTreeMap::new(),
         pending_static_receiver: None,
         values_widening_candidates: BTreeSet::new(),
+        array_elements_typed_alone: false,
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
@@ -542,6 +543,7 @@ pub fn infer_package_checked<'a>(
         held_arguments: BTreeMap::new(),
         pending_static_receiver: None,
         values_widening_candidates: BTreeSet::new(),
+        array_elements_typed_alone: false,
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
@@ -1092,6 +1094,12 @@ pub(super) struct Inferer<'a> {
     /// value bound to a candidate: one the candidate fits widens it rather
     /// than mismatching it (`{ v: new Dog(), w: new Animal() }`).
     pub(super) values_widening_candidates: BTreeSet<crate::ExprId>,
+    /// Whether array literal elements are inferred without the type of the
+    /// elements before them as a hint, as tsc infers them: set while an element
+    /// whose inference with that type reported an error is inferred again
+    /// alone (see `Inferer::infer_with_sibling_hint`), so the literals inside it
+    /// are inferred once each.
+    pub(super) array_elements_typed_alone: bool,
     /// The object or tuple literal argument whose slots a generic call is
     /// inferring one at a time; see [`generic::LiteralArgumentInference`].
     pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,

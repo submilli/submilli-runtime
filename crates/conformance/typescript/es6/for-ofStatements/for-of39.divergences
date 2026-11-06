@@ -1,13 +1,29 @@
-types: 11 of 16 tsc entries compared, 3 differ
+types: 9 of 16 tsc entries compared, 7 differ
 
 line 3: [["", true], ["", 0]]
   tsc:  ([string, number] | [string, true])[]
-  ours: [string, boolean][]
+  ours: ([string, number] | [string, boolean])[]
 
 line 3: ["", true]
   tsc:  [string, true]
   ours: [string, boolean]
 
-line 3: ["", 0]
-  tsc:  [string, number]
-  ours: [string, boolean]
+line 4: k
+  tsc:  string
+  ours: <error>
+
+line 4: v
+  tsc:  boolean
+  ours: <error>
+
+line 4: map
+  tsc:  Map<string, boolean>
+  ours: Map<<error>, <error>>
+
+line 5: k
+  tsc:  string
+  ours: <error>
+
+line 6: v
+  tsc:  boolean
+  ours: <error>

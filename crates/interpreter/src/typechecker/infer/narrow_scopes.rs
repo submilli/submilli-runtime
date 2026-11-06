@@ -45,6 +45,17 @@ pub(in crate::typechecker) struct SuspendedNarrowing {
     pending_materializations: Vec<narrowing::PendingPostIfMaterialization>,
 }
 
+/// The flow an expression's writes change and a second inference of the
+/// expression must not see: the narrowing, the read types of the parameters it
+/// assigns, reachability, and where each path was last written. Bindings the
+/// expression declares live in scopes it pops itself.
+pub(super) struct FlowSnapshot {
+    narrowing: SuspendedNarrowing,
+    scopes: super::scopes::Scopes,
+    reachable: bool,
+    last_write_spans: BTreeMap<narrowing::ReferencePath, Span>,
+}
+
 impl<'a> Inferer<'a> {
     /// A closure starts with fresh narrowing state, retaining bare bindings
     /// whose last assignment precedes its creation. Nested-function writes
@@ -156,6 +167,24 @@ impl<'a> Inferer<'a> {
         self.clause_write_scopes = saved.clause_write_scopes;
         self.tombstone_scopes = saved.tombstone_scopes;
         self.pending_post_if_materializations = saved.pending_materializations;
+    }
+
+    /// A copy of the flow, for a discarded inference to put back with
+    /// [`Self::restore_flow`].
+    pub(super) fn copy_flow(&self) -> FlowSnapshot {
+        FlowSnapshot {
+            narrowing: self.copy_narrowing(),
+            scopes: self.scopes.clone(),
+            reachable: self.reachable,
+            last_write_spans: self.last_write_spans.clone(),
+        }
+    }
+
+    pub(super) fn restore_flow(&mut self, saved: FlowSnapshot) {
+        self.restore_narrowing(saved.narrowing);
+        self.scopes.restore(saved.scopes);
+        self.reachable = saved.reachable;
+        self.last_write_spans = saved.last_write_spans;
     }
 
     fn suspend_narrow_scopes(&mut self) {

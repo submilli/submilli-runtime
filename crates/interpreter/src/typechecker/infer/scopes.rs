@@ -50,6 +50,13 @@ impl ScopeEntry {
 }
 
 impl Scopes {
+    /// Puts back the bindings of `saved`, a copy taken earlier. Scope ids
+    /// handed out since stay used, so nothing recorded under one of them can
+    /// match a later scope.
+    pub(super) fn restore(&mut self, saved: Scopes) {
+        self.stack = saved.stack;
+    }
+
     pub(super) fn push(&mut self) {
         let id = narrowing::ScopeId(self.next_id);
         self.next_id += 1;
