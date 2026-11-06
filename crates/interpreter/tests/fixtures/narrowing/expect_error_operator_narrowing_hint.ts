@@ -2,8 +2,8 @@
 // narrowing didn't reach the closure, exactly as the field-access error does.
 //
 // Each hint needle names its own binding: a needle that only said "closure
-// boundary" would be satisfied by any one of the five cases, pinning none of them.
-// expect-error: `+` not defined for `string | null` and `string`
+// boundary" would be satisfied by any one of the four cases, pinning none of them.
+// expect-error: `+` not defined for `number | null` and `number`
 // expect-error: narrowing on `s` does not cross a closure boundary
 // expect-error: `+` not defined for `string | null` and `string | null`
 // expect-error: narrowing on `d` does not cross a closure boundary
@@ -12,9 +12,9 @@
 // expect-error: cannot index into non-array type `number[] | null`
 // expect-error: narrowing on `a` does not cross a closure boundary
 function main(): void {
-  let s: string | null = "x";
+  let s: number | null = 1;
   if (s !== null) {
-    const f = (): string => s + "!";
+    const f = (): number => s + 1;
     s = null;
     console.log(f());
   }

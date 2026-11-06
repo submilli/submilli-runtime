@@ -15415,14 +15415,23 @@ mod tests {
     #[test]
     fn narrowing_hint_fires_when_a_guard_would_fix_the_operator() {
         let src = "function main(): void { \
-                   let v: string | null = \"a\"; \
-                   if (v !== null) { const f = (): string => v + \"!\"; v = null; } }";
+                   let v: number | null = 1; \
+                   if (v !== null) { const f = (): number => v + 1; v = null; } }";
         let (_, diags) = run(src);
         assert!(
             diags
                 .iter()
                 .any(|d| d.help.iter().any(|h| h.contains("closure boundary"))),
             "expected the narrowing hint, got: {diags:?}",
+        );
+    }
+
+    #[test]
+    fn nullable_string_concatenation_needs_no_guard_across_a_closure() {
+        run_clean(
+            "function main(): void { \
+             let v: string | null = \"a\"; \
+             if (v !== null) { const f = (): string => v + \"!\"; v = null; } }",
         );
     }
 
