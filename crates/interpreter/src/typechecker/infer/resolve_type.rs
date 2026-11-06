@@ -559,10 +559,11 @@ impl<'a> Inferer<'a> {
                 if let Some(member_ty) = self.enum_member_type(text, args, annot.span) {
                     return Ok(member_ty);
                 }
-                let help: Vec<String> = self
+                let mut help: Vec<String> = self
                     .closest_type_name(name)
                     .map(|s| vec![format!("did you mean `{}`?", s)])
                     .unwrap_or_default();
+                help.extend(self.package_type_import_help(text));
                 self.error_with_help(annot.span, format!("unknown type `{text}`"), help);
                 Type::Error
             }

@@ -7115,8 +7115,7 @@ impl Inferer<'_> {
 
         // Walk elements in source order. The first resolved element
         // (Value or Spread source) seeds the running element type unless
-        // an expected concrete hint pins it. For Spread,
-        // the source must peel to `Type::Array(T)` and `T`
+        // an expected concrete hint pins it. A spread's iterable element type
         // participates in unification.
         //
         // The hint informs assignability, but a concrete inferred
@@ -7262,8 +7261,17 @@ impl Inferer<'_> {
                     // instead (`[undefined, ...xs]`). An annotation, or a source
                     // like `[]` that needs one, still takes it.
                     let source_needs_context = cannot_be_typed_alone(self.ast, value)?;
+                    let source_takes_array_context = source_needs_context
+                        || matches!(
+                            self.ast
+                                .try_expr(peel_parens(self.ast, value)?)
+                                .map_err(super::arena_failure)?
+                                .kind,
+                            ExprKind::ArrayLiteral { .. }
+                        );
                     let source_hint = element_ty
                         .as_ref()
+                        .filter(|_| source_takes_array_context)
                         .filter(|running| {
                             hint_pins_element_ty
                                 || source_needs_context
@@ -7272,15 +7280,21 @@ impl Inferer<'_> {
                         .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref())?;
+                    let typed_source =
+                        self.materialize_spread_source(typed_source, &source_ty, spread_span)?;
                     let already_errored = self.error_count() > errors_before;
                     if let Some(hint) = &source_hint {
                         self.drop_readonly_from_hint_mismatch(value, hint, &source_ty)?;
                     }
-                    // The spread source must be an array, or a tuple or a union of
-                    // arrays and tuples, which are arrays at runtime. Reject other
-                    // shapes (primitive, object, unknown, other unions, function)
-                    // with a typed diagnostic. Aliases peel first.
-                    let peeled_source = source_ty.peel().clone();
+                    // Non-array iterables are collected before codegen copies the
+                    // chunk. Every downstream literal-type pass sees an array.
+                    let peeled_source = self
+                        .typed_ast
+                        .try_expr(typed_source)
+                        .map_err(super::arena_failure)?
+                        .ty
+                        .peel()
+                        .clone();
                     if hint_pins_element_ty {
                         own_element_types.extend(spread_element_type(&peeled_source));
                     }
@@ -7291,7 +7305,9 @@ impl Inferer<'_> {
                         Some(Type::Never) => saw_never = true,
                         None => self.error(
                             spread_span,
-                            format!("expected an array to spread, got `{peeled_source}`"),
+                            format!(
+                                "expected an array to spread or an iterable, got `{peeled_source}`"
+                            ),
                         ),
                         Some(elem_t) => match &element_ty {
                             // Widens for the same reason as the value seed above.
@@ -7379,6 +7395,72 @@ impl Inferer<'_> {
             },
             Type::Array(Box::new(element_ty)),
         ))
+    }
+
+    /// Keep arrays on their direct-copy path; collect other iterables through
+    /// the same bounded, fuel-charged host operation as `Array.from`. The fixed
+    /// prelude reference cannot be redirected by a local binding named `Array`.
+    fn materialize_spread_source(
+        &mut self,
+        source: ExprId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        if spread_element_type(ty.peel()).is_some() {
+            return Ok(source);
+        }
+        let Some(element) = self.spread_iterable_element(ty) else {
+            return Ok(source);
+        };
+        let receiver = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::GlobalRef {
+                    mangled: crate::mangle::prelude("Array"),
+                    name: Ident {
+                        name: "Array".into(),
+                        span,
+                    },
+                },
+                ty: Type::prelude_interface("ArrayConstructor", Vec::new()),
+                span,
+            })
+            .map_err(super::arena_failure)?;
+        let mapper = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Undefined,
+                ty: Type::Undefined,
+                span,
+            })
+            .map_err(super::arena_failure)?;
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::MethodCall {
+                    receiver,
+                    iface: crate::mangle::prelude("ArrayConstructor"),
+                    name: Ident {
+                        name: "from".into(),
+                        span,
+                    },
+                    args: vec![source, mapper],
+                    type_predicate: None,
+                },
+                ty: Type::Array(Box::new(element)),
+                span,
+            })
+            .map_err(super::arena_failure)
+    }
+
+    fn spread_iterable_element(&mut self, ty: &Type) -> Option<Type> {
+        if let Type::Union(members) = ty.peel() {
+            let elements = members
+                .iter()
+                .map(|member| self.spread_iterable_element(member))
+                .collect::<Option<Vec<_>>>()?;
+            return Some(Type::union(elements));
+        }
+        self.classify_for_of_source(ty).map(|(element, _)| element)
     }
 
     /// An array literal expected as a union of array types, as tsc types it: each
@@ -7849,6 +7931,17 @@ impl Inferer<'_> {
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
                     let (id, ty) = self.infer_expr(value, None)?;
+                    let id = if allows_array {
+                        self.materialize_spread_source(id, &ty, span)?
+                    } else {
+                        id
+                    };
+                    let ty = self
+                        .typed_ast
+                        .try_expr(id)
+                        .map_err(super::arena_failure)?
+                        .ty
+                        .clone();
                     match ty.peel() {
                         Type::Tuple(types) => {
                             slots = append_tuple_literal_types(slots, types, &self.type_limits)
@@ -15484,7 +15577,7 @@ mod tests {
         assert_eq!(diags[0].message, "unresolved identifier `fs`");
         assert_eq!(
             diags[0].help,
-            vec!["`fs` is a module; import it first:\n  import * as fs from \"submilli:fs\";"]
+            vec!["`fs` is a module; import it first:\n  import fs from \"submilli:fs\";"]
         );
     }
 
@@ -15506,7 +15599,7 @@ mod tests {
             "function main(): boolean { const a = fs; const b = fs?.exists(\"/\"); return fs.exists(\"/\"); }",
             &[&fs],
         );
-        let import = "`fs` is a module; import it first:\n  import * as fs from \"submilli:fs\";";
+        let import = "`fs` is a module; import it first:\n  import fs from \"submilli:fs\";";
         assert_eq!(
             diags
                 .iter()
