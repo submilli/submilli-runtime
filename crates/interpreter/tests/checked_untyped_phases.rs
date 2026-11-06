@@ -95,18 +95,25 @@ fn inference_rejects_a_block_type_that_was_not_lifted() {
 #[test]
 fn binding_failure_retains_earlier_language_diagnostics() {
     let source = "function main(): number { let value = value; return 1; }";
-    let mut ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
-    ast.top_level.push(StmtId(u32::MAX));
-    let error = infer(source, &ast).unwrap_err();
-    assert_internal(&error);
-    assert!(
-        error
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("before")),
-        "{:?}",
-        error.diagnostics
-    );
+    let ast = submilli_engine::lower_patterns(parse(source, FileId(0))).unwrap();
+    for invalid_initializer in [false, true] {
+        let mut corrupted = ast.clone();
+        if invalid_initializer {
+            corrupted.implicit_initializers.insert(ExprId(u32::MAX));
+        } else {
+            corrupted.top_level.push(StmtId(u32::MAX));
+        }
+        let error = infer(source, &corrupted).unwrap_err();
+        assert_internal(&error);
+        assert!(
+            error
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("before")),
+            "{:?}",
+            error.diagnostics
+        );
+    }
 }
 
 #[test]

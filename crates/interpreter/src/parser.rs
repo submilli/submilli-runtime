@@ -423,9 +423,8 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let implicit = !is_const
-            && ty.is_some()
-            && matches!(self.peek().kind, TokenKind::Semicolon | TokenKind::Comma);
+        let implicit =
+            !is_const && matches!(self.peek().kind, TokenKind::Semicolon | TokenKind::Comma);
         let value = if let (true, Some(name)) = (implicit, &name) {
             // `let x: T;` starts as `undefined`; the typechecker requires `T` to allow it.
             let value = parse_arena_result(
@@ -9090,14 +9089,11 @@ mod tests {
     }
 
     #[test]
-    fn let_missing_initializer_diagnoses() {
+    fn let_missing_initializer_starts_undefined() {
         let (ast, diags) = parse_str("let x;");
-        assert_eq!(diags.len(), 1);
-        assert_eq!(
-            diags[0].message,
-            "`let` declaration requires an initializer"
-        );
-        assert!(ast.top_level.is_empty());
+        assert!(diags.is_empty());
+        assert_eq!(ast.implicit_initializers.len(), 1);
+        assert_eq!(ast.top_level.len(), 1);
     }
 
     #[test]

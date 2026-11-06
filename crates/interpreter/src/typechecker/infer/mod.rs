@@ -11,6 +11,7 @@ mod comparable;
 mod comparison_operand;
 mod diagnostics;
 mod enums;
+mod evolving;
 mod exports;
 pub mod expr;
 mod format_definition;
@@ -198,7 +199,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         arithmetic_targets: bindings.arithmetic_targets,
         arithmetic_written_globals: bindings.arithmetic_written_globals,
         last_assignments: bindings.last_assignments,
-        grown_bindings: bindings.grown_bindings,
+        evolving_bindings: bindings.evolving_bindings,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -500,7 +501,7 @@ pub fn infer_package_checked<'a>(
         arithmetic_targets: Default::default(),
         arithmetic_written_globals: Default::default(),
         last_assignments: Default::default(),
-        grown_bindings: Default::default(),
+        evolving_bindings: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -939,8 +940,7 @@ pub(super) struct Inferer<'a> {
     pub(super) arithmetic_targets: std::collections::HashSet<(String, Span)>,
     pub(super) arithmetic_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
-    /// See `binding_analysis::Analysis::grown_bindings`.
-    pub(super) grown_bindings: std::collections::HashSet<Span>,
+    pub(super) evolving_bindings: std::collections::HashSet<Span>,
     /// From the binding analysis: nested functions that capture a local of
     /// their block, by name span, with the last declared of those locals. See
     /// [`nested_functions`].
@@ -958,7 +958,7 @@ pub(super) struct Inferer<'a> {
     /// a `!` narrowed to `null`, which TypeScript types by its declaration.
     pub(super) declared_read: Option<narrowing::ReferencePath>,
     /// All clause writes, including terminating branches, for exceptional entry.
-    pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
+    pub(super) clause_write_scopes: Vec<narrowing::ClauseWrites>,
     /// Writes carried by normal flow and used when joining branch exits.
     pub(super) assigned_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     pub(super) tombstone_scopes:
@@ -1241,7 +1241,7 @@ impl<'a> Inferer<'a> {
         self.arithmetic_targets = bindings.arithmetic_targets;
         self.arithmetic_written_globals = bindings.arithmetic_written_globals;
         self.last_assignments = bindings.last_assignments;
-        self.grown_bindings = bindings.grown_bindings;
+        self.evolving_bindings = bindings.evolving_bindings;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();
         self.diagnostics.extend(local_type_diagnostics(ast));

@@ -177,6 +177,7 @@ impl Inferer<'_> {
         true_env.insert(
             path.clone(),
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: true_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: exclusions.clone(),
@@ -187,6 +188,7 @@ impl Inferer<'_> {
         false_env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: exclusions,
