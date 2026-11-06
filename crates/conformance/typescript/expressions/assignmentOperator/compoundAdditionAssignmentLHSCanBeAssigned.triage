@@ -1,1 +1,1 @@
-line 25, 26, 27, 48 extra: by-design spec §1.6 `+` concatenates a string only with a string, a number, a boolean, or an `Error`, and converts no other operand (`+=`)
+line 25, 48 extra: by-design spec §1.6 string concatenation does not convert plain object operands (`+=`)
