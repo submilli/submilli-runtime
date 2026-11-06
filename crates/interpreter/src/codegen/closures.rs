@@ -352,6 +352,11 @@ pub(crate) fn walk_type(
     out: &mut Vec<ClosureSig>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     match ty {
+        Type::TemplateLiteral { substitutions, .. } => {
+            for inner in substitutions {
+                walk_type(inner, out)?;
+            }
+        }
         Type::Refined { ty, .. } | Type::Readonly(ty) => walk_type(ty, out)?,
         Type::Function { params, ret, .. } => {
             out.push(classify(ty)?);

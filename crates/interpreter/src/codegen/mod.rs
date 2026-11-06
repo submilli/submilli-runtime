@@ -10,7 +10,7 @@ mod argument_defaults;
 pub mod bigint_pool;
 pub mod bounds;
 pub mod box_types;
-mod call_arguments;
+pub(crate) mod call_arguments;
 pub mod cast_check;
 mod cast_diagnostics;
 pub mod classes;
@@ -18,6 +18,7 @@ mod closure_coercions;
 pub(crate) use closure_coercions::ADAPTER_ORIGINAL_FIELD;
 pub mod closures;
 pub mod dependency_usage;
+pub(crate) mod descriptor_schema;
 pub mod dwarf;
 mod field_guards;
 mod field_lookup;
@@ -844,7 +845,7 @@ fn codegen_inner(
     let dependencies: Vec<_> = lowered_dependencies.iter().collect();
     let dependencies = dependencies.as_slice();
     let analysis = CodegenAnalysis::collect(ta, dependencies)?;
-    let pool = analysis.string_pool;
+    let mut pool = analysis.string_pool;
     let bigint_pool = analysis.bigint_pool;
     let dependency_usage = analysis.dependency_usage.finish(dependencies);
 
@@ -1041,6 +1042,7 @@ fn codegen_inner(
         (crate::runtime::prelude::MODULE_NAME, "array_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "closure_vtable"),
         (crate::runtime::prelude::MODULE_NAME, "object_vtable"),
+        (crate::runtime::prelude::MODULE_NAME, "opaque_vtable"),
     ] {
         let mangled = crate::mangle::prelude(name);
         import_section.import(
@@ -1264,17 +1266,6 @@ fn codegen_inner(
             if !dependency_usage.is_interface_member_used(ty_sym, method_name) {
                 continue;
             }
-            // TODO(reified generics): `Response#json` is recognised by the typechecker
-            // and lowered to `JSON.parse(body)`; it has no host export, so skip its
-            // import (declaring it would import an unresolvable symbol and fail link).
-            // Remove once reified generics let the shim host a real per-call validator
-            // (SUB-363).
-            if defs.package_name.as_str() == crate::stdlib::http::MODULE_NAME
-                && iface_name == "Response"
-                && method_name == "json"
-            {
-                continue;
-            }
             let mangled = crate::mangle::extend(&ty_sym.mangled_name, method_name);
             // Recorded above the host-implemented `continue` below, not after it:
             // the methods that take that branch are precisely the ones whose call
@@ -1285,7 +1276,7 @@ fn codegen_inner(
             // earlier value-symbol loop is host-implemented (every prelude
             // method is — its value symbol is declared beside the Rust impl in
             // `runtime::prelude`); only interface members without one
-            // (stdlib shim exports like `File#close`) import here.
+            // (stdlib host methods like `File#close`) import here.
             // The receiver, when the method has one, is a Wasm parameter
             // without a default.
             let host_defaults = is_host_package(&defs.package_name).then(|| {
@@ -1304,6 +1295,13 @@ fn codegen_inner(
                 params.push(recv);
             }
             params.extend(abi.params.iter().copied());
+            // A runtime-generic method takes its type arguments' descriptors
+            // after the declared parameters; kept out of `abi.params`, which
+            // a call fills one slot per argument.
+            if defs.runtime_generics.contains(&mangled) {
+                symbols.runtime_generic_functions.insert(mangled.clone());
+                params.push(runtime_descriptors::environment_type(&symbols)?);
+            }
             if let Some(defaults) = host_defaults {
                 symbols.record_host_parameter_defaults(next_func_idx, defaults);
             }
@@ -1496,6 +1494,7 @@ fn codegen_inner(
         &mut symbols,
         &mut next_func_idx,
     )?;
+    runtime_descriptors::prepare_descriptor_data(&mut pool, ta, &mut symbols);
 
     let field_lookup_signature = field_lookup::allocate(
         &mut types,
@@ -2350,7 +2349,7 @@ pub(crate) mod tests {
         super::tests::compile("function main(): number { return 42; }");
     }
 
-    fn type_check(source: &str) -> TypedAst {
+    pub(crate) fn type_check(source: &str) -> TypedAst {
         type_check_with_packages(source, &[])
     }
 
@@ -2552,6 +2551,7 @@ function main(): string {
             vtable: 1,
             object: 2,
             undefined: 51,
+            type_descriptor: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -4377,16 +4377,16 @@ function main(): number { return counter + max_iterations; }"#,
                    assert(ni.epochMilliseconds > 0 && ntz.length > 0 && nz.timeZoneId === \"UTC\"); \
                    const re: RegExp = new RegExp(\"a\", \"g\"); \
                    assert(re.test(\"a\") && re.global && re.source === \"a\" && re.flags === \"g\" && re.lastIndex >= 0); \
-                   const rmatch: RegExpMatch | null = re.exec(\"a\"); \
+                   const rmatch: RegExpExecArray | null = re.exec(\"a\"); \
                    assert(rmatch !== null); \
-                   if (rmatch !== null) { const gg = rmatch.groups; const ng = rmatch.namedGroups; \
-                     assert(rmatch.match === \"a\" && rmatch.index === 0 && rmatch.input === \"a\" && gg.length >= 0 && ng.size >= 0); } \
-                   const sm: RegExpMatch | null = \"a\".match(re); \
+                   if (rmatch !== null) { const gg = rmatch.groups; \
+                     assert(rmatch[0] === \"a\" && rmatch.index === 0 && rmatch.input === \"a\" && gg === undefined && rmatch.length >= 1); } \
+                   const sm: RegExpMatchArray | null = \"a\".match(re); \
                    const marr = \"aa\".matchAll(re); \
                    const rep: string = \"a\".replace(\"a\", \"b\"); \
                    const repall: string = \"aa\".replaceAll(\"a\", \"b\"); \
                    const sp = \"a,b\".split(\",\"); \
-                   assert(sm === sm && \"a\".search(re) >= -1 && marr.length >= 0 && rep.length >= 0 && repall.length >= 0 && sp.length === 2); \
+                   assert(sm === sm && \"a\".search(re) >= -1 && marr.next().done === false && rep.length >= 0 && repall.length >= 0 && sp.length === 2); \
                    assert(isNaN(NaN) && !isFinite(Infinity)); \
                    const oo = { a: 1 }; \
                    assert(Object.keys(oo).length === 1 && Object.values(oo).length === 1); \
@@ -4437,12 +4437,9 @@ function main(): number { return counter + max_iterations; }"#,
             ("RegExp", "flags"),
             ("RegExp", "lastIndex"),
             ("RegExp", "global"),
-            // RegExpMatch accessors, including the Array/Map-building ones.
-            ("RegExpMatch", "match"),
-            ("RegExpMatch", "index"),
-            ("RegExpMatch", "input"),
-            ("RegExpMatch", "groups"),
-            ("RegExpMatch", "namedGroups"),
+            ("RegExpExecArray", "index"),
+            ("RegExpExecArray", "input"),
+            ("RegExpExecArray", "groups"),
             // String regex-arm methods (subsumes the SUB-605 string arm).
             ("String", "match"),
             ("String", "search"),
@@ -6417,6 +6414,7 @@ function main(): void {
             vtable: 1,
             object: 2,
             undefined: 51,
+            type_descriptor: 52,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

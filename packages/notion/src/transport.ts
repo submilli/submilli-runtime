@@ -303,7 +303,7 @@ export function requireOk(response: Response): Response {
     let message = "Notion request failed: HTTP " + response.status.toString() + " " + response.statusText;
     let requestId = header(response, "x-request-id");
     if (response.body.startsWith("{")) {
-        const envelope = response.json() as ApiErrorEnvelope;
+        const envelope = response.json<ApiErrorEnvelope>();
         code = envelope.code ?? code;
         message = envelope.message ?? message;
         requestId = envelope.request_id ?? requestId;
@@ -353,7 +353,7 @@ export function putQuery(query: Map<string, string>, key: string, value: string 
 }
 
 export function listFrom(response: Response): PageResult<unknown> {
-    const data = response.json() as ApiList;
+    const data = response.json<ApiList>();
     return {
         results: data.results,
         hasMore: data.has_more,

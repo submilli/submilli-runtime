@@ -20,6 +20,26 @@ export interface Status {
   model_keys?: ModelKey[];
   /** The variables the blueprint in force declares. */
   declared_variables: DeclaredVariable[];
+  /** Whether the developer's own Claude Code can answer chat, and who it bills; absent until first checked. */
+  claude_code?: ClaudeCodeStatus;
+}
+
+/** The developer's Claude Code, as the playground last found it. */
+export interface ClaudeCodeStatus {
+  state: "available" | "missing" | "too-old" | "signed-out" | "failed";
+  version?: string;
+  /** Who it bills, as `claude auth status` names it: `claude.ai`, `api_key`, … */
+  source?: string;
+  /** Where it sends requests, when `ANTHROPIC_BASE_URL` sets an address. */
+  base_url?: string;
+  /** Who it bills in plain words, with the address when one is set. */
+  billed?: string;
+  /** It bills the developer's Claude subscription, so nothing needs confirming. */
+  subscription: boolean;
+  /** What a message confirms, with `confirm_billing`, to bill anything else. */
+  confirmation?: string;
+  /** Why it can't answer, and what to do. */
+  reason?: string;
 }
 
 export interface SessionBlueprint {
@@ -92,6 +112,8 @@ export interface ChatSettings {
   effort?: string;
   max_output?: number;
   provider?: Record<string, unknown>;
+  /** Claude Code's spending limit for each message, in dollars. */
+  max_budget_usd?: number;
 }
 
 /** `GET /api/runs`. */

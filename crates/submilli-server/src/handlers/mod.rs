@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod approvals;
 pub mod blueprint;
 pub mod capabilities;
 pub mod execute;

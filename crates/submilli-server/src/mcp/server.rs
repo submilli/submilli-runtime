@@ -8,14 +8,14 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
-use interpreter::runtime::{CheckOutcome, SecurityCheck, Vfs, VfsInfo};
+use interpreter::runtime::{ApprovalRequest, CheckOutcome, SecurityCheck, Unasked, Vfs, VfsInfo};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, ErrorCode, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResult, ErrorCode, ListToolsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
@@ -26,6 +26,7 @@ use submilli_shared::PolicyCheck;
 use crate::app::AppState;
 use crate::error::ExecuteError;
 use crate::handlers::execute::{ExecuteInputs, VfsSource, blueprint_miss_message, execute_core};
+use crate::metrics::SentryMetricsSink;
 use crate::packages;
 use crate::session_manager::{attach_limits, build_vfs, vfs_info};
 
@@ -41,8 +42,8 @@ struct ExecuteArgs {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct PackageDocsArgs {
-    /// Package name, e.g. `submilli:crypto`.
-    name: String,
+    /// Package or built-in names to read before writing the program.
+    names: Vec<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -370,7 +371,7 @@ impl SubmilliMcp {
                     vfs_source: VfsSource::Rest,
                     run_entry: "mcp",
                     idempotency_key: None,
-                    tools: None,
+                    suspension: None,
                 },
             )
             .await
@@ -411,7 +412,7 @@ impl SubmilliMcp {
                 run_entry: "mcp",
                 idempotency_key: None,
                 // MCP's `tools/call` cannot suspend: no application tools here.
-                tools: None,
+                suspension: None,
             },
         )
         .await;
@@ -477,28 +478,32 @@ impl SubmilliMcp {
         &self,
         Parameters(args): Parameters<PackageDocsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let lookup = match self
+        let scoped = self
             .state
             .docs_scope(&self.blueprint_name)
             .await
-            .map_err(crate::docs_scopes::DocsScopeError::tool_error)?
-        {
-            Some((blueprint, scope)) => {
-                let catalog = self
-                    .state
-                    .mcp_catalog(&self.blueprint_name, &blueprint)
-                    .await
-                    .map_err(mcp_discovery_error)?;
-                packages::lookup_with_blueprint(&args.name, &catalog, &scope)
+            .map_err(crate::docs_scopes::DocsScopeError::tool_error)?;
+        let mut results = Vec::new();
+        if let Some((blueprint, scope)) = scoped {
+            let catalog = self
+                .state
+                .mcp_catalog(&self.blueprint_name, &blueprint)
+                .await
+                .map_err(mcp_discovery_error)?;
+            for name in &args.names {
+                results.push(packages::batch_docs_entry(
+                    name,
+                    packages::lookup_with_blueprint(name, &catalog, &scope),
+                ));
             }
-            None => packages::lookup(&args.name),
-        };
-        if let Some(markdown) = packages::docs_markdown(&lookup) {
-            Ok(CallToolResult::success(vec![Content::text(markdown)]))
         } else {
-            let value = packages::docs_json(&args.name, lookup);
-            Ok(CallToolResult::structured(value))
+            for name in &args.names {
+                results.push(packages::batch_docs_entry(name, packages::lookup(name)));
+            }
         }
+        Ok(CallToolResult::structured(
+            serde_json::json!({ "results": results }),
+        ))
     }
 
     // Description is served from `submilli_shared::prompt::tools` via
@@ -739,8 +744,25 @@ impl SubmilliMcp {
         guest_normalize(config.cwd(), path)
             .map_err(|error| FileToolError::file(path, error.into()))?;
         let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
-        let outcome = policy.check_with_cwd("main", capability, &context, config.cwd());
         let audit_context = policy.audit_context(capability, &context, config.cwd());
+        let outcome = match policy.check_with_cwd("main", capability, &context, config.cwd()) {
+            // A file tool can't wait for an approver, so it denies as a deny rule would.
+            CheckOutcome::Ask { approver, rule } => {
+                let request = ApprovalRequest {
+                    approver,
+                    caller: "main".to_owned(),
+                    capability: capability.to_owned(),
+                    context: audit_context.clone().into_owned(),
+                    rule,
+                };
+                request.report_unasked(Unasked::NoProvider, None, &SentryMetricsSink);
+                CheckOutcome::Deny {
+                    reason: request.denial(),
+                    rule: Some(request.rule.index),
+                }
+            }
+            outcome => outcome,
+        };
         self.state.audit().file_decision(
             parts,
             blueprint,

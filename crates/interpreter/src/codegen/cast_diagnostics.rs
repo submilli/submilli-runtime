@@ -49,7 +49,6 @@ const PATH_UNITS_PER_STEP: usize = 64;
 pub(super) struct Locals {
     current: u32,
     failure: Failure,
-    key: Option<u32>,
     path: Vec<Segment>,
     /// Union locals by nesting depth: sibling unions reuse them, so a large
     /// type does not cost locals for each union it contains.
@@ -119,6 +118,7 @@ enum Segment {
 /// later failures in the same record do not walk it again.
 #[derive(Clone, Copy)]
 pub(super) struct RecordKeys {
+    domain: u32,
     object: u32,
     values: u32,
     cache: u32,
@@ -173,7 +173,6 @@ pub(super) fn begin(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) -> Option<L
     emitter.cast_diagnostic = Some(Locals {
         current,
         failure,
-        key: None,
         path: Vec::new(),
         unions: Vec::new(),
         open_unions: Vec::new(),
@@ -202,12 +201,6 @@ fn copy_failure(emitter: &mut FunctionEmitter, from: Failure, to: Failure) {
     ] {
         emitter.instruction(Instruction::LocalGet(from));
         emitter.instruction(Instruction::LocalSet(to));
-    }
-}
-
-pub(super) fn session_key(emitter: &mut FunctionEmitter, key: Option<u32>) {
-    if let Some(state) = &mut emitter.cast_diagnostic {
-        state.key = key;
     }
 }
 
@@ -702,6 +695,7 @@ pub(super) fn record_keys(
     ctx: &CodegenCtx,
     object: u32,
     values: u32,
+    domain: u32,
 ) -> Option<RecordKeys> {
     emitter.cast_diagnostic.as_ref()?;
     let array = ctx.require(ctx.symbols.array_type_idx(), "$Array intrinsic registered")?;
@@ -712,6 +706,7 @@ pub(super) fn record_keys(
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(array)));
     emitter.instruction(Instruction::LocalSet(cache));
     Some(RecordKeys {
+        domain,
         object,
         values,
         cache,
@@ -824,6 +819,7 @@ fn emit_record_key(
         field_index: 2,
     });
     emitter.instruction(Instruction::F64ConvertI32U);
+    emitter.instruction(Instruction::LocalGet(keys.domain));
     emitter.instruction(Instruction::Call(quoted_keys));
     emitter.instruction(Instruction::RefCastNullable(HeapType::Concrete(array)));
     emitter.instruction(Instruction::LocalSet(keys.cache));
@@ -881,12 +877,6 @@ fn append_failure_checked(
     emitter.instruction(Instruction::LocalGet(message));
     emitter.emit_end();
     emitter.instruction(Instruction::RefAsNonNull);
-    if let Some(key) = state.key {
-        super::cast_check::emit_inline_string(emitter, ctx, " for session key ");
-        concat(emitter, ctx);
-        emitter.instruction(Instruction::LocalGet(key));
-        concat(emitter, ctx);
-    }
 
     Ok(())
 }

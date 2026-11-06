@@ -1,4 +1,5 @@
 //! Iterative type spelling; frames borrow the input and never clone recursive types.
+use crate::lower_local_types::{display_type_name, written_type_args};
 use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
 use crate::{IndexSignature, ObjectField, Type};
 
@@ -19,6 +20,7 @@ enum ListKind {
 enum Frame<'a> {
     Type(&'a Type, usize),
     Text(&'a str),
+    TemplateText(&'a str),
     List {
         /// The items left to write, last first, so `pop` yields the next.
         remaining: Vec<&'a Type>,
@@ -51,6 +53,11 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
         out.step()?;
         match frame {
             Frame::Text(text) => out.push(text)?,
+            Frame::TemplateText(text) => out.push(
+                &crate::types::escape_string_literal(text)
+                    .replace('`', "\\`")
+                    .replace("${", "\\${"),
+            )?,
             Frame::Type(ty, depth) => {
                 out.depth(depth)?;
                 write_node(out, &mut frames, ty, depth)?;
@@ -165,8 +172,10 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                     if index.readonly {
                         out.push("readonly ")?;
                     }
-                    out.push("[key: string]: ")?;
+                    out.push("[key: ")?;
                     push(&mut frames, Frame::Type(&index.value, depth))?;
+                    push(&mut frames, Frame::Text("]: "))?;
+                    push(&mut frames, Frame::Type(&index.key, depth))?;
                 }
             }
         }
@@ -190,6 +199,24 @@ fn write_node<'a>(
         }
         Type::NumberLiteral(value) => out.push(&crate::runtime::number::format_number_js(value.0)),
         Type::String => out.push("string"),
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => {
+            if parts.len() != substitutions.len().saturating_add(1) {
+                return Err(RenderError::InvalidMetadata("template part count"));
+            }
+            push(frames, Frame::Text("`"))?;
+            for (position, part) in parts.iter().enumerate().rev() {
+                push(frames, Frame::TemplateText(part))?;
+                if let Some(inner) = position.checked_sub(1).and_then(|i| substitutions.get(i)) {
+                    push(frames, Frame::Text("}"))?;
+                    push(frames, Frame::Type(inner, child))?;
+                    push(frames, Frame::Text("${"))?;
+                }
+            }
+            out.push("`")
+        }
         Type::StringLiteral(value) => write_string(out, value),
         Type::Uint8Array => out.push("Uint8Array"),
         Type::Boolean => out.push("boolean"),
@@ -201,9 +228,9 @@ fn write_node<'a>(
         Type::NonPrimitive => out.push("object"),
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
-        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(name),
+        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(display_type_name(name)),
         Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
-            out.push(name)?;
+            out.push(display_type_name(name))?;
             match ty.enum_member_name() {
                 Some((_, member, _)) => {
                     out.push(".")?;
@@ -310,7 +337,8 @@ fn write_node<'a>(
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. }
         | Type::AliasRef { name, args, .. } => {
-            out.push(name)?;
+            out.push(display_type_name(name))?;
+            let args = written_type_args(name, args);
             if args.is_empty() {
                 return Ok(());
             }
@@ -484,7 +512,7 @@ impl CopyBudget {
                 continue;
             }
             validate_function_metadata(ty)?;
-            let children = child_count(ty);
+            let children = crate::type_size::child_count(ty);
             let frontier = children
                 .checked_add(pending.len())
                 .ok_or(RenderError::Truncated)?;
@@ -597,45 +625,6 @@ fn copied_text_bytes(ty: &Type) -> Result<usize, RenderError> {
         _ => {}
     }
     Ok(bytes)
-}
-
-fn child_count(ty: &Type) -> usize {
-    match ty {
-        Type::Function {
-            params, predicate, ..
-        } => params
-            .len()
-            .saturating_add(1 + usize::from(predicate.is_some())),
-        Type::Object { fields, index } => fields.len().saturating_add(usize::from(index.is_some())),
-        Type::Array(_) | Type::Readonly(_) => 1,
-        Type::Tuple(tuple) => tuple.elements.len(),
-        Type::Union(members) => members.len(),
-        Type::Refined { .. } => 2,
-        Type::InterfaceRef { args, .. }
-        | Type::ClassRef { args, .. }
-        | Type::AliasRef { args, .. } => args.len(),
-        Type::Alias { args, .. } => args.len().saturating_add(1),
-        Type::Number
-        | Type::NumberLiteral(_)
-        | Type::BigInt
-        | Type::BigIntLiteral(_)
-        | Type::String
-        | Type::StringLiteral(_)
-        | Type::Uint8Array
-        | Type::Boolean
-        | Type::BooleanLiteral(_)
-        | Type::Null
-        | Type::Undefined
-        | Type::Void
-        | Type::Unknown
-        | Type::NonPrimitive
-        | Type::Error
-        | Type::Never
-        | Type::TypeVar(_)
-        | Type::GenericParam { .. }
-        | Type::NumberEnum { .. }
-        | Type::StringEnum { .. } => 0,
-    }
 }
 
 #[cfg(test)]

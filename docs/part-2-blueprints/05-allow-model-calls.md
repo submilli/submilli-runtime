@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "32c2f58fb183e16d8ded8d92bf843b4773f071eac2911f2f0804db7f34f3e6a8"
+  contentHash: "a84cad7932b8b6d7c34e741f2b884f9a6e39844c5d9f5232323d3598b24e7b3b"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -95,8 +95,8 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[], schema?: string): T;
-function call<T>(model: string, prompt: string, schema?: string): T;
+function batch<T>(model: string, prompts: string[]): Completion<T>[];
+function call<T>(model: string, prompt: string): Completion<T>;
 function models(): Model[];
 …
 ```
@@ -111,7 +111,7 @@ submilli blueprint capability list submilli:llm
 
 ```text
 submilli:llm
-  llm.call — Call a model (call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time
+  llm.call — Call a model (text, texts, call, batch) and enumerate the models it may call (models). Narrowing `model` also narrows what `models()` reveals: every candidate is filtered through this same rule, so a listing never offers a model the caller would be denied at call time
       fields: model: string, prompt_count: number
       example filter: model glob "claude-*"
 ```
@@ -139,9 +139,9 @@ error: PermissionDeniedError: permission denied: caller=main capability=llm.call
 
 ## Run a program
 
-Create `triage.ts`. It asks the cheap model about each ticket, keeps
-the ones that report a billing bug, and asks the stronger model for one
-typed verdict on those:
+Create `triage.ts`. It asks the cheap model about each ticket as text,
+keeps the ones that report a billing bug, and asks the stronger model
+for one typed verdict on those:
 
 ```typescript title="triage.ts"
 import * as llm from "submilli:llm";
@@ -157,21 +157,23 @@ function main(): Verdict {
         "Can I change the dashboard to dark mode?",
         "My card was declined but the order still shows as paid.",
     ];
-    const answers = llm.batch(
+    const answers = llm.texts(
         "claude-haiku-4-5",
         tickets.map((ticket) => `Does this ticket report a billing bug? Answer yes or no.\n\n${ticket}`),
     );
     const billing: string[] = [];
     for (let i = 0; i < answers.length; i++) {
-        const text = answers[i].text;
-        if (text !== undefined && text.trim().toLowerCase().startsWith("yes")) {
+        const answer = answers[i];
+        if (answer.ok && answer.value.trim().toLowerCase().startsWith("yes")) {
             billing.push(tickets[i]);
         }
     }
-    return llm.call<Verdict>(
+    const verdict = llm.call<Verdict>(
         "claude-sonnet-5",
         `Rate the overall severity of these billing tickets:\n\n${billing.join("\n---\n")}`,
     );
+    if (!verdict.ok) throw new Error(`no verdict: ${verdict.reason}: ${verdict.message}`);
+    return verdict.value;
 }
 ```
 
@@ -189,8 +191,11 @@ submilli run --blueprint blueprint.yaml triage.ts
 Haiku said yes to the two billing tickets and no to the dark-mode
 request, so Sonnet saw two. The three prompts and their answers stayed
 inside the program. The verdict alone came out, in the shape the
-program declared. A completion cut off at the output limit or stopped by
-a content filter has `ok: false` and still carries its text, and one
+program declared: `call<Verdict>` checks the response against `Verdict`
+field by field, and a response that is not JSON or does not fit is
+`ok: false` with `reason: "invalid-output"`. `texts` returns each
+answer as text; a text completion cut off at the output limit or stopped
+by a content filter has `ok: false` and still carries its `text`, and one
 failed prompt never fails the batch.
 
 ## The result

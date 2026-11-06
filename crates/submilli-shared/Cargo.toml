@@ -1,10 +1,14 @@
 [package]
 name = "submilli-shared"
+description = "Shared embedding, MCP, authentication and tooling support for the Submilli runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+publish = true
+readme = "README.md"
+# Tests and their snapshots stay in the repository; the package is the library.
+exclude = ["tests/**", "**/snapshots/**"]
 
 [lints]
 workspace = true
@@ -14,8 +18,8 @@ path = "src/lib.rs"
 
 [dependencies]
 interpreter = { workspace = true }
-submilli-blueprint = { path = "../submilli-blueprint" }
-submilli-build = { path = "../submilli-build" }
+submilli-blueprint.workspace = true
+submilli-build.workspace = true
 submilli-policy = { workspace = true, features = ["engine"] }
 anyhow = { workspace = true }
 sha2 = "0.10"
@@ -26,7 +30,7 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 futures = { workspace = true }
-sse-stream = "=0.2.3"
+sse-stream = "=0.2.6"
 chacha20poly1305 = { workspace = true }
 url = { workspace = true }
 http = { workspace = true }

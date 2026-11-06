@@ -336,10 +336,18 @@ impl Proof<'_> {
             return true;
         };
         source_form
-            .values()
-            .all(|field| self.comparable_to(&field.ty, &target_index.value))
-            && source_index
-                .is_none_or(|source| self.comparable_to(&source.value, &target_index.value))
+            .iter()
+            .filter(|(name, _)| {
+                crate::property_keys::matches_name(&target_index.key, name, self.types.limits)
+            })
+            .all(|(_, field)| self.comparable_to(&field.ty, &target_index.value))
+            && source_index.is_none_or(|source| {
+                !super::assignable::index_domains_related(
+                    &source.key,
+                    &target_index.key,
+                    self.types,
+                ) || self.comparable_to(&source.value, &target_index.value)
+            })
     }
 
     /// A member's types compared, a function type's parameters by `variance`.
@@ -686,7 +694,7 @@ impl InstanceShape {
                             (name, ObjectField { ty, ..field })
                         })
                         .collect();
-                    (members, index.map(|index| index.map_value(replace)))
+                    (members, index.map(|index| index.map_types(replace)))
                 }),
                 private.map(|private| {
                     private

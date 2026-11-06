@@ -40,11 +40,11 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # The engine, policy and build crates are published to crates.io.
+      # The engine, policy, build, blueprint, shared and durable crates go to crates.io.
       # Packaging builds each from its packaged files alone, so a source file
       # left out of a package fails here rather than at release.
       - name: Package for crates.io
-        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy -p submilli-build
+        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy -p submilli-build -p submilli-blueprint -p submilli-shared -p submilli-durable
 
       # The workspace build always turns on `submilli-policy`'s `engine`
       # feature; embedders may not, so lint and test it without the feature too.
@@ -100,11 +100,16 @@ jobs:
   # release workflow ships `x86_64-pc-windows-msvc`, so the platform where escape
   # classification is least certain would otherwise be the one nothing exercises.
   # A divergence here is a stop condition, not something to work around.
+  #
+  # macOS is off while GitHub has no hosted macOS runner for this repository: the
+  # job waited for one and was cancelled. To restore it, add `macos-latest` back to
+  # the matrix and `containment (macos-latest)` back to the required checks in the
+  # `main` and `main2` rulesets.
   containment:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

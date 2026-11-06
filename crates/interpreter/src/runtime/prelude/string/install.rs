@@ -277,6 +277,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// `String(value)`'s parameter: an omitted argument is `""`, while an explicit
+/// `undefined` converts to `"undefined"`, as in JavaScript.
+fn call_value() -> Param {
+    Param::with_default(
+        "value",
+        Type::Unknown,
+        crate::DefaultValue::OmittedString(String::new()),
+    )
+}
+
 pub fn declare(defs: &mut PackageDeclaration) {
     let m = |defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Type| {
         declare_method(defs, name, method_key(name), params, ret);
@@ -480,7 +490,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "@call",
         crate::mangle::extend(&crate::mangle::prelude("StringConstructor"), "@call"),
-        vec![Param::new("value", Type::Unknown)],
+        vec![call_value()],
         Type::String,
     );
 
@@ -1457,6 +1467,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
+                    ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::String)),
                     (
                         "toString".to_string(),
                         MethodSig {
@@ -1961,12 +1972,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 ]),
                             )],
                             ret: Type::Union(vec![
-                                Type::prelude_interface("RegExpMatch".to_string(), Vec::new()),
+                                Type::prelude_interface("RegExpMatchArray".to_string(), Vec::new()),
                                 Type::Null,
                             ]),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Find the next match of `re` in this string. Equivalent to `re.exec(this)` (v1; the `g`-flag array shape is a follow-up).\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
+                                "/**\n * Find the next match of `re` in this string. Global patterns return full-match strings; other patterns return the full match and captures.\n * @param re The pattern to search for; a string is compiled as a pattern, as `new RegExp(re)` does.\n */",
                             ),
                         },
                     ),
@@ -2072,9 +2083,9 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new(
                                 "re",
-                                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                                Type::Union(vec![Type::String, Type::prelude_interface("RegExp".to_string(), Vec::new())]),
                             )],
-                            ret: Type::Array(Box::new(Type::prelude_interface("RegExpMatch".to_string(), Vec::new()))),
+                            ret: Type::prelude_interface("Iterator".to_string(), vec![Type::prelude_interface("RegExpExecArray".to_string(), Vec::new())]),
                             predicate: None,
                             doc: doc(
                                 "/**\n * Find every non-overlapping match of `re` in this string. Zero-length matches advance by one to avoid infinite loops, per ECMA-262.\n * @param re The pattern to match.\n */",
@@ -2111,11 +2122,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new("value", Type::Unknown)],
+                            params: vec![call_value()],
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Convert any value to its string representation: `\"null\"` and `\"undefined\"` for those values, otherwise the value's `toString()` method.\n */",
+                                "/**\n * Convert any value to its string representation: `\"null\"` and `\"undefined\"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `\"\"`.\n */",
                             ),
                         },
                     ),

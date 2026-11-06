@@ -108,6 +108,8 @@ fn every_route_declares_the_access_it_requires() {
         ("/v1/runs/{run_id}/recover", User),
         ("/v1/runs/{run_id}", User),
         ("/v1/runs/{run_id}/resume", User),
+        ("/v1/approvals", Admin),
+        ("/v1/approvals/{call_id}", Admin),
         ("/v1/blueprints", Admin),
         ("/v1/blueprints/{name}", Admin),
         ("/v1/blueprints/{name}/prompt", User),

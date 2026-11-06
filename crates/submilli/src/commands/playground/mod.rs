@@ -27,7 +27,7 @@ mod bridge;
 #[cfg(unix)]
 mod chat;
 #[cfg(unix)]
-mod claude_code;
+mod claude_runner;
 #[cfg(unix)]
 mod client;
 #[cfg(unix)]
@@ -201,27 +201,23 @@ pub enum PlaygroundCmd {
     /// after the run it is to follow has started, or pass `--follow`.
     #[command(about = "Follow session events as JSON lines", long_about)]
     Watch(WatchArgs),
-    /// Set Claude Code up in this project to try tasks through the playground on your
-    /// Claude subscription: writes the `submilli-standin` subagent, which has only the
-    /// playground's tools, and adds to your own `.claude/settings.local.json` the hooks
-    /// that show its chat on the page and a rule that lets it use those tools without
-    /// asking, so your blueprint decides its calls. Run it again to check; it changes
-    /// only what's missing.
-    #[command(about = "Connect Claude Code to this playground", long_about)]
-    ClaudeCode(ClaudeCodeArgs),
     /// Serve the running playground's tools over stdio, for a coding assistant's
     /// stand-in subagent to launch. Uses the binding and the development secrets; its
     /// runs are labeled `stand-in`.
     #[command(about = "Serve playground tools to a coding assistant", long_about)]
-    Mcp,
-    /// Chat with an agent using your own model key, the way a production agent runs: it uses
-    /// the playground's tools and prints its answer. Each chat starts a session; send the
-    /// next message in it with `--session`. The session stays open until it sits idle past
-    /// the blueprint's idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY,
-    /// OPENAI_API_KEY, or GEMINI_API_KEY) comes from the playground's environment, else the
-    /// project's `.env`, else `submilli secret put <NAME>`; the model from `--model` or
-    /// SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
-    #[command(about = "Give an agent a task using your model key", long_about)]
+    Mcp(McpArgs),
+    /// Chat with an agent using your own model key or your own Claude Code, the way a
+    /// production agent runs: it uses the playground's tools and prints its answer. Each chat
+    /// starts a session; send the next message in it with `--session`. The session stays
+    /// open until it sits idle past the blueprint's idle timeout or `session end` ends it.
+    /// The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the
+    /// playground's environment, else the project's `.env`, else `submilli secret put
+    /// <NAME>`; Claude Code (`--model claude-code:<model>`) needs none. The model comes from
+    /// `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+    #[command(
+        about = "Give an agent a task using your model key or Claude Code",
+        long_about
+    )]
     Chat(ChatArgs),
     /// Copy a coding assistant's stand-in conversation to the running playground: a
     /// Claude Code hook reads the hook's JSON from stdin. Only the stand-in's own hooks
@@ -315,13 +311,26 @@ pub struct ChatArgs {
     #[arg(long, value_name = "ID")]
     session: Option<String>,
     /// The model for a new session, as `<provider>:<model>`, from a provider whose key the
-    /// playground started with. Default: the playground's configured model. A session
-    /// carried on keeps its own.
+    /// playground started with, or `claude-code:<model>` to answer with your own Claude
+    /// Code, where the model is a full name such as claude-sonnet-5-5, claude-opus-5-5,
+    /// claude-fable-5-1, or claude-haiku-5-5.
+    /// Default: the playground's configured model. A session carried on keeps its own.
     #[arg(long, value_name = "PROVIDER:MODEL", conflicts_with = "session")]
     model: Option<String>,
-    /// How hard a new session's model reasons. OpenAI models only, for now.
-    #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high"], conflicts_with = "session")]
+    /// How hard a new session's model reasons: OpenAI models take low, medium, or high;
+    /// Claude Code also takes xhigh and max.
+    #[arg(long, value_name = "LEVEL", value_parser = ["low", "medium", "high", "xhigh", "max"], conflicts_with = "session")]
     effort: Option<String>,
+    /// The most a new Claude Code session may spend on one message, in US dollars, above 0
+    /// and at most 100. Default: 1.00. On a subscription it measures usage, not billing.
+    /// Claude Code checks it between steps, so a message's last step can go a little over.
+    #[arg(long, value_name = "USD", conflicts_with = "session")]
+    max_budget_usd: Option<f64>,
+    /// Let Claude Code bill what isn't your Claude subscription, such as an API key or an
+    /// `ANTHROPIC_BASE_URL` address, in this session: the value the refusal names, such
+    /// as `api_key` or `claude.ai via https://proxy.example`.
+    #[arg(long, value_name = "BILLING")]
+    confirm_billing: Option<String>,
     /// The most tokens one answer of a new session's model may take. Default: 4096.
     #[arg(long, value_name = "TOKENS", value_parser = clap::value_parser!(u64).range(1..=1_000_000), conflicts_with = "session")]
     max_output: Option<u64>,
@@ -331,6 +340,7 @@ pub struct ChatArgs {
     #[arg(long, value_name = "JSON", value_parser = parse_provider_settings, conflicts_with = "session")]
     provider_settings: Option<serde_json::Map<String, serde_json::Value>>,
     /// The most tool calls run for one answer of the model; the rest are refused to it.
+    /// Claude Code counts them across the whole message, and stops at the limit.
     #[arg(
         long,
         value_name = "N",
@@ -556,14 +566,23 @@ pub struct EgressArgs {
     allow_ip: Vec<IpNet>,
 }
 
-#[derive(ClapArgs, Clone, Copy)]
-pub struct ClaudeCodeArgs {
-    /// Replace a `submilli-standin` subagent file that differs from the playground's.
-    #[arg(long)]
-    force: bool,
-    /// Print JSON.
-    #[arg(long)]
-    json: bool,
+/// How chat on Claude Code starts the bridge: joined to an MCP session the playground
+/// already started. Only the playground passes these.
+#[derive(ClapArgs)]
+pub struct McpArgs {
+    #[arg(long, value_name = "SESSION", hide = true,
+        requires_all = ["root", "token", "blueprint", "protocol", "max_calls"])]
+    join: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    root: Option<PathBuf>,
+    #[arg(long, hide = true, requires = "join")]
+    token: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    blueprint: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    protocol: Option<String>,
+    #[arg(long, hide = true, requires = "join")]
+    max_calls: Option<usize>,
 }
 
 #[derive(ClapArgs)]
@@ -671,8 +690,7 @@ impl Args {
             Some(PlaygroundCmd::Clear(_)) => "playground.clear",
             Some(PlaygroundCmd::Cancel(_)) => "playground.cancel",
             Some(PlaygroundCmd::Watch(_)) => "playground.watch",
-            Some(PlaygroundCmd::ClaudeCode(_)) => "playground.claude-code",
-            Some(PlaygroundCmd::Mcp) => "playground.mcp",
+            Some(PlaygroundCmd::Mcp(_)) => "playground.mcp",
             Some(PlaygroundCmd::Chat(_)) => "playground.chat",
             Some(PlaygroundCmd::ChatHook) => "playground.chat-hook",
         }
@@ -763,8 +781,14 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
         PlaygroundCmd::Watch(args) => {
             execute_watch(args.session, args.follow, Output::from_json(args.json))
         }
-        PlaygroundCmd::ClaudeCode(args) => unix::claude_code(&args),
-        PlaygroundCmd::Mcp => bridge::execute(),
+        PlaygroundCmd::Mcp(args) => bridge::execute(args.join.map(|session| bridge::Join {
+            session,
+            root: args.root.unwrap_or_default(),
+            token: args.token.unwrap_or_default(),
+            blueprint: args.blueprint.unwrap_or_default(),
+            protocol: args.protocol.unwrap_or_default(),
+            max_calls: args.max_calls.unwrap_or_default(),
+        })),
         PlaygroundCmd::Chat(args) => act(
             ActionRequest::Chat(controls::act::ChatRequest {
                 blueprint: None,
@@ -775,6 +799,8 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
                 max_output: args.max_output,
                 provider_settings: args.provider_settings,
                 max_calls_per_answer: Some(args.max_calls_per_answer),
+                max_budget_usd: args.max_budget_usd,
+                confirm_billing: args.confirm_billing,
                 variables: std::collections::BTreeMap::new(),
             }),
             args.json,
@@ -1278,7 +1304,7 @@ fn print_description(description: &host::Description, packages_error: Option<&st
             }
             if !description.chat_models.is_empty() {
                 println!(
-                    "  chat:       {} (another: chat --model <provider>:<model>)",
+                    "  chat:       {} (another: chat --model <provider>:<model>, or claude-code:claude-sonnet-5-5)",
                     description.chat_models.join(", ")
                 );
             }
@@ -1544,109 +1570,6 @@ mod unix {
 
     /// The variable the starter's example runs under, and a customer in its data.
     const STARTER_VARIABLE: (&str, &str) = ("customerId", "pied_piper");
-
-    pub(super) fn claude_code(args: &super::ClaudeCodeArgs) -> Result<ExitCode> {
-        use super::claude_code::{Outcome, set_up};
-        let cwd = std::env::current_dir().context("reading the current directory")?;
-        let Some(root) = project::find_project_root(&cwd) else {
-            eprintln!(
-                "No Submilli project here; create one with `submilli playground init-demo`, \
-                 then set Claude Code up in it"
-            );
-            return Ok(ExitCode::from(EXIT_NO_PROJECT));
-        };
-        let setup = match set_up(&root, args.force) {
-            Ok(setup) => setup,
-            Err(error) => {
-                eprintln!("{error}");
-                return Ok(ExitCode::from(1));
-            }
-        };
-        let (agent, agent_outcome) = &setup.agent;
-        let (settings, settings_outcome) = &setup.settings;
-        // A stand-in that differs was kept: it isn't the playground's, so not ready.
-        let ready = *agent_outcome != Outcome::Kept;
-        if args.json {
-            println!(
-                "{}",
-                json!({
-                    "project": root,
-                    "agent": { "path": agent, "outcome": agent_outcome.word() },
-                    "hooks": { "path": settings, "outcome": settings_outcome.word() },
-                    "ready": ready,
-                })
-            );
-        } else {
-            print_claude_code_report(&setup, &root, &cwd);
-        }
-        Ok(ExitCode::from(if ready { 0 } else { 1 }))
-    }
-
-    /// What `claude-code` did, in sentences, with paths under the project root, and how
-    /// to start: in the project root, named when it isn't the folder the command ran in.
-    fn print_claude_code_report(
-        setup: &super::claude_code::Setup,
-        root: &std::path::Path,
-        cwd: &std::path::Path,
-    ) {
-        use super::claude_code::Outcome;
-        let relative = |path: &std::path::Path| {
-            path.strip_prefix(root)
-                .unwrap_or(path)
-                .display()
-                .to_string()
-        };
-        let (agent, agent_outcome) = (relative(&setup.agent.0), setup.agent.1);
-        let (settings, settings_outcome) = (relative(&setup.settings.0), setup.settings.1);
-        println!("Stand-in subagent: {}", agent_line(agent_outcome, &agent));
-        println!(
-            "Chat hooks, and permission for its playground tools: {}",
-            settings_line(settings_outcome, &settings)
-        );
-        if agent_outcome == Outcome::Kept {
-            return;
-        }
-        let folder = if cwd == root {
-            "in this folder".to_owned()
-        } else {
-            format!("in {}", root.display())
-        };
-        let changed = [agent_outcome, settings_outcome]
-            .iter()
-            .any(|outcome| matches!(outcome, Outcome::Written | Outcome::Updated));
-        let restart = if changed {
-            " If Claude Code is already running there, restart it first."
-        } else {
-            ""
-        };
-        println!(
-            "Start `claude` {folder}, signed in with your Claude subscription, and ask: \
-             \"Use the {} agent to <your task>.\" Its session shows on the playground page.\
-             {restart}",
-            super::chat::STAND_IN_AGENT
-        );
-    }
-
-    fn agent_line(outcome: super::claude_code::Outcome, agent: &str) -> String {
-        use super::claude_code::Outcome;
-        match outcome {
-            Outcome::Written => format!("wrote {agent}"),
-            Outcome::Updated => format!("replaced {agent}"),
-            Outcome::Unchanged => format!("{agent} is in place"),
-            Outcome::Kept => format!(
-                "{agent} is different from the playground's, so it was left alone; \
-                 --force replaces it"
-            ),
-        }
-    }
-
-    fn settings_line(outcome: super::claude_code::Outcome, settings: &str) -> String {
-        use super::claude_code::Outcome;
-        match outcome {
-            Outcome::Written | Outcome::Updated => format!("added to {settings}"),
-            Outcome::Unchanged | Outcome::Kept => format!("in place in {settings}"),
-        }
-    }
 
     pub(super) fn init(output: Output) -> Result<ExitCode> {
         let cwd = std::env::current_dir().context("reading the current directory")?;

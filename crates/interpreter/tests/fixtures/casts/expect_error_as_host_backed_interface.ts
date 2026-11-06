@@ -10,7 +10,7 @@
 // expect-error: `as` can't produce a `W`
 // expect-error: `as` can't produce a `{ [key: string]: Stat }`
 // expect-error: `as` can't produce a `Entry`
-// expect-error: `session.get<Stat | undefined>` cannot be verified at runtime: only the standard library builds values of a host-backed interface
+// expect-error: `session.get<Stat>` cannot be verified at runtime: only the standard library builds values of a host-backed interface
 // expect-error: expected `Stat`, got `{ kind: string; modifiedAt: number; size: number }`
 // expect-error: expected `Stat`, got `S`
 // expect-error: expected `Stat`, got `Mine`

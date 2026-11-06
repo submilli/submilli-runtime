@@ -474,6 +474,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                     | crate::InterfaceCarrier::SetAny
                     | crate::InterfaceCarrier::RegExp
                     | crate::InterfaceCarrier::RegExpMatch
+                    | crate::InterfaceCarrier::RegExpMatchArray
                     | crate::InterfaceCarrier::TemporalInstant
                     | crate::InterfaceCarrier::TemporalDuration
                     | crate::InterfaceCarrier::TemporalZonedDateTime
@@ -615,6 +616,11 @@ impl PackageShapeCollector {
 
     fn collect_type(&mut self, ty: &Type) {
         match ty {
+            Type::TemplateLiteral { substitutions, .. } => {
+                for inner in substitutions {
+                    self.collect_type(inner);
+                }
+            }
             Type::Object { fields, .. } => {
                 self.collect_shape(ty);
                 for field in fields.values() {
@@ -807,6 +813,10 @@ pub enum DefaultValue {
         #[serde(with = "crate::artifact_f64")]
         undefined: f64,
     },
+    /// A string for an omitted argument only: an explicit `undefined` is passed
+    /// as it is, as JavaScript's `String()` is `""` while `String(undefined)`
+    /// is `"undefined"`.
+    OmittedString(String),
     String(String),
     Boolean(bool),
     Null,
@@ -825,6 +835,15 @@ pub enum DefaultValue {
         variant: String,
         value: EnumVariantValue,
     },
+}
+
+impl DefaultValue {
+    /// Whether an explicit `undefined` argument is replaced too: by the default,
+    /// as for a JavaScript default parameter, or by `OmittedNumber`'s
+    /// `undefined` value.
+    pub fn replaces_undefined(&self) -> bool {
+        !matches!(self, Self::OmittedString(_))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

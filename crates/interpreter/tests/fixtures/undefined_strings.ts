@@ -11,11 +11,11 @@ function main(): void {
   const match = /(?<first>a)|(?<second>b)/.exec("a");
   assert(match !== null, "regex matched");
   if (match !== null) {
-    assert(match.groups[0] === "a", "participating capture");
-    assert(match.groups[1] === undefined, "unmatched capture");
-    assert(match.namedGroups.has("second"), "unmatched named capture is present");
-    assert(match.namedGroups.get("second") === undefined, "unmatched named capture value");
-    assert(match.namedGroups.get("first") === "a", "participating named capture");
+    assert(match[1] === "a", "participating capture");
+    assert(match[2] === undefined, "unmatched capture");
+    assert(Object.keys(match.groups ?? {}).includes("second"), "unmatched named capture is present");
+    assert(match.groups!["second"] === undefined, "unmatched named capture value");
+    assert(match.groups!["first"] === "a", "participating named capture");
   }
   assert(/z/.exec("a") === null, "regex failed match keeps null");
   assert("a".match(/z/) === null, "string failed match keeps null");

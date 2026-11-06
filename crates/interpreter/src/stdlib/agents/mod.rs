@@ -32,11 +32,13 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::stdlib::abi::{
-    self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
+    self, HostView, backing_struct, install_field_getters, nullable_object_field,
+    read_type_argument, string_field,
 };
+use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
-    check_security_call, permitted_candidates, preflight_listing, running_package,
-    sanitize_description, truncated,
+    check_and_approve_call, check_candidate, permitted_candidates, preflight_listing,
+    running_package, sanitize_description, truncated,
 };
 
 pub use declaration::package_declaration;
@@ -76,13 +78,48 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
 
+    // `runText` takes what a program writes, the optional `schema` arriving
+    // as `string | undefined`.
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "runText"),
+        FuncType::new(
+            &engine,
+            [string.clone(), string.clone(), nullable_object.clone()],
+            [string.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let agent =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.runText (agent)")?;
+                let input =
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.runText (input)")?;
+                let schema = json_schema::read_written_schema(
+                    caller,
+                    abi_arg(params, 2)?,
+                    "agents.runText",
+                )?;
+                let answer = run(caller, "runText", &agent, input, schema).await?;
+                let text = write_submilli_string_struct(caller, &answer)?;
+                Ok(Val::AnyRef(Some(text.to_anyref())))
+            })
+        },
+    )?;
+    // `run<T>` is generic: after what a program writes comes the `$types`
+    // environment every generic call passes, holding the `$TypeDescriptor` for
+    // `T`, whose schema the call sends.
+    let types = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteArray(intr.object_fields.clone()),
+    ));
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "run"),
         FuncType::new(
             &engine,
-            [string.clone(), string.clone(), nullable_object.clone()],
+            [string.clone(), string.clone(), types],
             // `run` is generic, so its result travels in the erased `T` slot.
             [nullable_object.clone()],
         ),
@@ -92,8 +129,27 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "agents.run (agent)")?;
                 let input =
                     read_string_arg(&mut *caller, abi_arg(params, 1)?, "agents.run (input)")?;
-                let schema = read_optional_string(caller, abi_arg(params, 2)?)?;
-                run(caller, agent, input, schema).await
+                let descriptor = read_type_argument(caller, abi_arg(params, 2)?, 0)?;
+                let schema = descriptor.schema_for("agents.run")?.to_string();
+                let answer = run(caller, "run", &agent, input, Some(schema)).await?;
+                let value = crate::runtime::json::parse_json_as_unknown(
+                    caller,
+                    &answer,
+                    &format!(
+                        "agents.run(\"{}\"): the agent's result is not JSON",
+                        truncated(&agent)
+                    ),
+                )?;
+                // The descriptor's predicate checks the answer against `T`. The
+                // message names the type, never the answer or a key in it.
+                if descriptor.accepts(caller, value).await? {
+                    return Ok(value);
+                }
+                Err(crate::runtime::host::type_error(format!(
+                    "agents.run(\"{}\"): the agent's answer does not match `{}`",
+                    truncated(&agent),
+                    descriptor.name
+                )))
             })
         },
     )?;
@@ -113,15 +169,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     install_field_getters(linker, &engine, &receiver, &AGENT_INFO_VIEW)
 }
 
-/// One run: gate, charge, record what is sent, dispatch, then build the result
-/// without refusing for fuel, because the run has already happened.
+/// One run: gate, charge, record what is sent, dispatch, and return the
+/// agent's answer text. Each caller builds its result from it without
+/// refusing for fuel, because the run has already happened. `api` (`run` or
+/// `runText`) names the errors; the call log and the replay history record
+/// the run as `agents.run` whichever function made it.
 async fn run(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    agent: String,
+    api: &'static str,
+    agent: &str,
     input: String,
     schema: Option<String>,
-) -> wasmtime::Result<Val> {
-    let ticket = gate(caller, &agent)?;
+) -> wasmtime::Result<String> {
+    let ticket = gate(caller, agent).await?;
     let principal = running_package(caller).map_err(|error| error.into_denial(CAPABILITY))?;
     let sent = (input.len() + schema.as_deref().map_or(0, str::len)) as u64;
     record_payload(&*caller, ticket, Side::Request, || {
@@ -129,9 +189,8 @@ async fn run(
             .with_owned_body(input.clone().into_bytes())
             .with_size(sent)
     });
-    let typed = schema.is_some();
     let request = AgentRequest {
-        agent: agent.clone(),
+        agent: agent.to_string(),
         input,
         schema,
         caller: principal,
@@ -139,30 +198,18 @@ async fn run(
     let outcome = effects::execute(caller, "agents.run", request, move |caller, _, request| {
         Box::pin(async move {
             fuel::charge(&mut *caller, fuel::IO, sent)?;
-            let provider = provider(caller).map_err(|error| fail(caller, ticket, "run", &error))?;
+            let provider = provider(caller).map_err(|error| fail(caller, ticket, api, &error))?;
             let outcome = provider
                 .run(request)
                 .await
-                .map_err(|error| fail(caller, ticket, "run", &error))?;
+                .map_err(|error| fail(caller, ticket, api, &error))?;
             record_outcome(caller, ticket, &outcome);
             fuel::settle(&mut *caller, fuel::IO, outcome.text.len() as u64)?;
             Ok(outcome)
         })
     })
     .await?;
-    if typed {
-        crate::runtime::json::parse_json_as_unknown(
-            caller,
-            &outcome.text,
-            &format!(
-                "agents.run(\"{}\"): the agent's result is not JSON",
-                truncated(&agent)
-            ),
-        )
-    } else {
-        let text = write_submilli_string_struct(caller, &outcome.text)?;
-        Ok(Val::AnyRef(Some(text.to_anyref())))
-    }
+    Ok(outcome.text)
 }
 
 /// Record `error` as the call's response and turn it into the guest's error.
@@ -207,11 +254,15 @@ fn record_outcome(
 /// The capability check, run before anything reaches the harness. The context
 /// is the agent name only: a policy can choose which agents a caller reaches,
 /// not read the task.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     agent: &str,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(caller, CAPABILITY, serde_json::json!({ "agent": agent }))
+    check_and_approve_call(caller, CAPABILITY, gate_context(agent)).await
+}
+
+fn gate_context(agent: &str) -> serde_json::Value {
+    serde_json::json!({ "agent": agent })
 }
 
 /// `list()`: every agent the harness offers that the caller may run. A denied
@@ -233,7 +284,7 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
         caller,
         candidates,
         |agent| agent.name.as_str(),
-        |caller, name| gate(caller, name).map(|_| ()),
+        |caller, name| check_candidate(caller, CAPABILITY, gate_context(name)),
     )?;
     let mut built = Vec::with_capacity(visible.len());
     for agent in visible {
@@ -273,17 +324,6 @@ fn call_error_record(error: &AgentCallError) -> serde_json::Value {
             serde_json::json!({ "kind": "cancelled", "agent": agent })
         }
     }
-}
-
-/// Read the compiler-filled `schema` argument. Undefined means an untyped call.
-fn read_optional_string(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    val: &Val,
-) -> wasmtime::Result<Option<String>> {
-    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
-        return Ok(None);
-    }
-    read_string_arg(caller, val, "agents.run (schema)").map(Some)
 }
 
 fn agent_info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {

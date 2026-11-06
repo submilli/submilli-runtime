@@ -11,6 +11,7 @@ mod comparable;
 mod comparison_operand;
 mod diagnostics;
 mod enums;
+mod evolving;
 mod exports;
 pub mod expr;
 mod format_definition;
@@ -133,6 +134,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
     crate::tree_height::check_syntax(ast)
         .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
     validate_lowered_patterns(ast)?;
+    validate_lowered_local_types(ast)?;
     check_declaration_types(packages.iter().chain(transitive).copied())?;
     let visible: Vec<_> = packages
         .iter()
@@ -157,7 +159,9 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         package_name,
         ast,
         typed_ast: TypedAst::with_package(package_name),
-        diagnostics: bindings.diagnostics,
+        diagnostics: local_type_diagnostics(ast)
+            .chain(bindings.diagnostics)
+            .collect(),
         top_symbols: BTreeMap::new(),
         imported_values: std::collections::HashSet::new(),
         types: TypeNamespace::new(),
@@ -195,7 +199,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         arithmetic_targets: bindings.arithmetic_targets,
         arithmetic_written_globals: bindings.arithmetic_written_globals,
         last_assignments: bindings.last_assignments,
-        grown_bindings: bindings.grown_bindings,
+        evolving_bindings: bindings.evolving_bindings,
         nested_function_creation_points: bindings.nested_function_creation_points,
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -497,7 +501,7 @@ pub fn infer_package_checked<'a>(
         arithmetic_targets: Default::default(),
         arithmetic_written_globals: Default::default(),
         last_assignments: Default::default(),
-        grown_bindings: Default::default(),
+        evolving_bindings: Default::default(),
         nested_function_creation_points: Default::default(),
         nested_functions: Vec::new(),
         nested_function_bodies: Vec::new(),
@@ -936,8 +940,7 @@ pub(super) struct Inferer<'a> {
     pub(super) arithmetic_targets: std::collections::HashSet<(String, Span)>,
     pub(super) arithmetic_written_globals: std::collections::HashSet<String>,
     pub(super) last_assignments: std::collections::HashMap<Span, u32>,
-    /// See `binding_analysis::Analysis::grown_bindings`.
-    pub(super) grown_bindings: std::collections::HashSet<Span>,
+    pub(super) evolving_bindings: std::collections::HashSet<Span>,
     /// From the binding analysis: nested functions that capture a local of
     /// their block, by name span, with the last declared of those locals. See
     /// [`nested_functions`].
@@ -955,7 +958,7 @@ pub(super) struct Inferer<'a> {
     /// a `!` narrowed to `null`, which TypeScript types by its declaration.
     pub(super) declared_read: Option<narrowing::ReferencePath>,
     /// All clause writes, including terminating branches, for exceptional entry.
-    pub(super) clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
+    pub(super) clause_write_scopes: Vec<narrowing::ClauseWrites>,
     /// Writes carried by normal flow and used when joining branch exits.
     pub(super) assigned_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     pub(super) tombstone_scopes:
@@ -1206,6 +1209,7 @@ impl<'a> Inferer<'a> {
         crate::tree_height::check_syntax(ast)
             .map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
         validate_lowered_patterns(ast)?;
+        validate_lowered_local_types(ast)?;
         self.source = source;
         self.ast = ast;
         self.module = module;
@@ -1237,9 +1241,10 @@ impl<'a> Inferer<'a> {
         self.arithmetic_targets = bindings.arithmetic_targets;
         self.arithmetic_written_globals = bindings.arithmetic_written_globals;
         self.last_assignments = bindings.last_assignments;
-        self.grown_bindings = bindings.grown_bindings;
+        self.evolving_bindings = bindings.evolving_bindings;
         self.nested_function_creation_points = bindings.nested_function_creation_points;
         self.nested_functions.clear();
+        self.diagnostics.extend(local_type_diagnostics(ast));
         self.diagnostics.extend(bindings.diagnostics);
         self.reachable = true;
         self.unreachable_by_exhaustive_switch = false;
@@ -1401,6 +1406,33 @@ fn inference_failure(message: &str) -> CompilerFailure {
         span: None,
         message: message.into(),
     }
+}
+
+/// Inference registers named types from the module's top level only, so a
+/// type declared in a block must have been lifted there first.
+fn validate_lowered_local_types(ast: &Ast) -> Result<(), CompileError> {
+    // Once lowered, a type declaration left outside the top level is one no
+    // statement reaches, such as a nested `export` the parser reported and
+    // dropped.
+    if ast.lowered_local_types.is_some() {
+        return Ok(());
+    }
+    match crate::lower_local_types::first_unlifted_type_decl(ast)? {
+        None => Ok(()),
+        Some(span) => Err(CompilerFailure::Internal {
+            stage: CompilerStage::Infer,
+            span: Some(span),
+            message: "a type declared in a block was not lifted to module scope".into(),
+        }
+        .into()),
+    }
+}
+
+/// The diagnostics lifting the module's local types reported.
+fn local_type_diagnostics(ast: &Ast) -> impl Iterator<Item = Diagnostic> + '_ {
+    ast.lowered_local_types
+        .iter()
+        .flat_map(|lowered| lowered.diagnostics.iter().cloned())
 }
 
 fn validate_lowered_patterns(ast: &Ast) -> Result<(), CompileError> {

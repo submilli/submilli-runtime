@@ -50,7 +50,6 @@ pub(crate) struct HostVtables {
     pub bigint: Global,
     pub closure: Global,
     pub regex: Global,
-    pub regex_match_box: Global,
     /// The identity vtable for host-only backing structs (stdlib `URL`,
     /// `Response`, fs `Stat`, …): `toString` → "[object Object]", `toJson` →
     /// the value's properties, reference-identity equality, hash 0.
@@ -76,7 +75,6 @@ pub fn install_vtable_module(
     let bigint_vt = build_bigint_vtable(store, &intr)?;
     let closure_vt = build_closure_vtable(store, &intr)?;
     let regex_vt = build_regex_vtable(store, &intr)?;
-    let regex_match_box_vt = build_regex_match_box_vtable(store, &intr)?;
     let opaque_vt = build_opaque_vtable(store, &intr)?;
     Ok(HostVtables {
         opaque: define_vtable(linker, store, &intr, "opaque_vtable", opaque_vt)?,
@@ -95,13 +93,6 @@ pub fn install_vtable_module(
         bigint: define_vtable(linker, store, &intr, "bigint_vtable", bigint_vt)?,
         closure: define_vtable(linker, store, &intr, "closure_vtable", closure_vt)?,
         regex: define_vtable(linker, store, &intr, "regex_vtable", regex_vt)?,
-        regex_match_box: define_vtable(
-            linker,
-            store,
-            &intr,
-            "regex_match_box_vtable",
-            regex_match_box_vt,
-        )?,
     })
 }
 
@@ -552,7 +543,7 @@ async fn array_equals(
     let Some(other_st) = as_opt_struct(caller, other)? else {
         return Ok(false);
     };
-    if !StructType::eq(&other_st.ty(&caller)?, array_ty) {
+    if !other_st.matches_ty(&*caller, array_ty)? {
         return Ok(false);
     }
     if let (Val::AnyRef(Some(a)), Val::AnyRef(Some(b))) = (recv, other)
@@ -1428,28 +1419,6 @@ fn build_regex_vtable(
         |caller, params, results| {
             Box::new(async move {
                 *abi_result(results, 0)? = regex_to_string(&mut *caller, abi_arg(params, 0)?)?;
-                Ok(())
-            })
-        },
-    );
-    let to_json = empty_object_json_slot(store, intr);
-    let equals = ref_identity_equals_slot(store, intr);
-    let hash = identity_hash_slot(store, intr);
-    Ok([to_string, to_json, equals, hash])
-}
-
-fn build_regex_match_box_vtable(
-    store: &mut Store<StoreData>,
-    intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
-    let to_string = host_vtable_func(
-        &mut *store,
-        intr.to_string_fn.clone(),
-        |caller, params, results| {
-            Box::new(async move {
-                // The match text ($string) sits in field 1 — hand it back as-is.
-                let st = as_struct(&mut *caller, abi_arg(params, 0)?, "RegExpMatch#toString")?;
-                *abi_result(results, 0)? = st.field(&mut *caller, 1)?;
                 Ok(())
             })
         },

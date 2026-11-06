@@ -23,6 +23,8 @@ pub(super) struct Analysis {
     /// adds elements to (`x = …`, `x.push(…)`, `x[i] = …`). An unannotated
     /// `[]` bound to one is an array tsc types from those writes.
     pub(super) grown_bindings: HashSet<Span>,
+    /// Unannotated empty arrays and declarations without an initializer.
+    pub(super) evolving_bindings: HashSet<Span>,
     /// Nested function declarations, by name span, whose bodies read or write a
     /// `let`/`const` of the block they are declared in, with the last declared
     /// of those. Their closure can exist only once it is declared; any other is
@@ -31,6 +33,7 @@ pub(super) struct Analysis {
     pub(super) diagnostics: Vec<Diagnostic>,
     scopes: Vec<BTreeMap<String, Binding>>,
     function_depth: usize,
+    global_declarations: HashMap<String, Span>,
     /// Function frames entered by direct invocation, rather than deferred closure creation.
     immediate_function_depths: Vec<usize>,
     assignment_regions: Vec<Span>,
@@ -53,6 +56,20 @@ struct Binding {
 pub(super) fn analyze(ast: &Ast) -> Result<Analysis, crate::compiler_error::CompileError> {
     let mut analysis = Analysis::default();
     for &id in &ast.top_level {
+        // The ordered walk below reports a bad ID after retaining diagnostics
+        // from earlier statements. This lookup pass must not fail ahead of it.
+        let Ok(statement) = ast.try_stmt(id) else {
+            break;
+        };
+        if let crate::StmtKind::Let { name, .. } | crate::StmtKind::Const { name, .. } =
+            &statement.kind
+        {
+            analysis
+                .global_declarations
+                .insert(name.name.clone(), name.span);
+        }
+    }
+    for &id in &ast.top_level {
         visit_stmt(ast, id, &mut analysis).map_err(|fatal| {
             crate::compiler_error::CompileError {
                 diagnostics: analysis.diagnostics.clone(),
@@ -60,6 +77,22 @@ pub(super) fn analyze(ast: &Ast) -> Result<Analysis, crate::compiler_error::Comp
             }
         })?;
     }
+    let uninitialized: HashSet<_> = ast
+        .implicit_initializers
+        .iter()
+        .map(|id| {
+            ast.try_expr(*id)
+                .map(|expr| expr.span)
+                .map_err(super::arena_failure)
+        })
+        .collect::<Result<_, _>>()
+        .map_err(|fatal| crate::compiler_error::CompileError {
+            diagnostics: analysis.diagnostics.clone(),
+            fatal: Some(fatal),
+        })?;
+    analysis
+        .evolving_bindings
+        .retain(|span| analysis.grown_bindings.contains(span) || uninitialized.contains(span));
     Ok(analysis)
 }
 
@@ -110,7 +143,19 @@ fn visit_stmt(ast: &Ast, id: StmtId, out: &mut Analysis) -> Result<(), CompilerF
             }
             visit_expr(ast, *value, out)?;
         }
-        StmtKind::Let { name, value, .. } | StmtKind::Const { name, value, .. } => {
+        StmtKind::Let {
+            name, ty, value, ..
+        }
+        | StmtKind::Const {
+            name, ty, value, ..
+        } => {
+            if ty.is_none()
+                && (ast.implicit_initializers.contains(value)
+                    || matches!(&ast.try_expr(*value).map_err(super::arena_failure)?.kind,
+                    crate::ExprKind::ArrayLiteral { elements } if elements.is_empty()))
+            {
+                out.evolving_bindings.insert(name.span);
+            }
             visit_expr(ast, *value, out)?;
             out.initialize(name);
             out.write(name);
@@ -424,6 +469,22 @@ fn visit_expr(ast: &Ast, id: ExprId, out: &mut Analysis) -> Result<(), CompilerF
             }
         }
         ExprKind::OptionalChain { base, parts } => {
+            match parts.as_slice() {
+                [ChainPart::Field { name, .. }, ChainPart::Call { .. }, ..]
+                    if matches!(name.name.as_str(), "push" | "unshift") =>
+                {
+                    out.grow(ast, *base)?;
+                }
+                [ChainPart::Call { .. }, ..] => {
+                    if let ExprKind::FieldAccess { receiver, name } =
+                        &ast.try_expr(*base).map_err(super::arena_failure)?.kind
+                        && matches!(name.name.as_str(), "push" | "unshift")
+                    {
+                        out.grow(ast, *receiver)?;
+                    }
+                }
+                _ => {}
+            }
             visit_expr(ast, *base, out)?;
             for part in parts {
                 match part {
@@ -669,6 +730,8 @@ impl Analysis {
     fn grow_binding(&mut self, ident: &Ident) {
         if let Some((_, binding)) = self.lookup(&ident.name) {
             self.grown_bindings.insert(binding.span);
+        } else if let Some(span) = self.global_declarations.get(&ident.name) {
+            self.grown_bindings.insert(*span);
         }
     }
 

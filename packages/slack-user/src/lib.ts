@@ -414,7 +414,7 @@ interface ApiSearchUser { user_id: string; name?: string | null; display_name?: 
  */
 export function getIdentity(): SlackIdentity {
     check("slack.com/user/getIdentity", {});
-    const data = slackPost("auth.test", {}).json() as IdentityResponse;
+    const data = slackPost("auth.test", {}).json<IdentityResponse>();
     requireOk(data, 200);
     return { userId: data.user_id, user: data.user, teamId: data.team_id, team: data.team, url: data.url };
 }
@@ -467,7 +467,7 @@ export function search(query: string, options: SearchOptions = {}): SearchPage {
         sort: sort,
         sort_dir: sortDir,
     };
-    const data = slackPost("assistant.search.context", body).json() as SearchResponse;
+    const data = slackPost("assistant.search.context", body).json<SearchResponse>();
     requireOk(data, 200);
     const results = data.results;
     const foundMessages: SearchMessage[] = [];
@@ -606,7 +606,7 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
     if (threadTs !== undefined) body.thread_ts = threadTs;
     if (unfurlLinks !== undefined) body.unfurl_links = unfurlLinks;
     if (unfurlMedia !== undefined) body.unfurl_media = unfurlMedia;
-    const data = slackPost("chat.postMessage", body).json() as MessageResponse;
+    const data = slackPost("chat.postMessage", body).json<MessageResponse>();
     requireOk(data, 200);
     return messageFrom(data.message);
 }
@@ -624,9 +624,9 @@ export function sendMessage(input: SendMessageInput): SlackMessage {
 export function sendDirectMessage(userId: string, text: string): SlackMessage {
     const recipientId = singleUserId(userId);
     check("slack.com/user/sendDirectMessage", { userId: recipientId });
-    const opened = slackPost("conversations.open", { users: recipientId }).json() as ChannelResponse;
+    const opened = slackPost("conversations.open", { users: recipientId }).json<ChannelResponse>();
     requireOk(opened, 200);
-    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
+    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json<MessageResponse>();
     requireOk(data, 200);
     return messageFrom(data.message);
 }
@@ -645,9 +645,9 @@ export function sendGroupDirectMessage(userIds: string[], text: string): SlackMe
     const participantIds: string[] = [];
     for (const userId of userIds) participantIds.push(singleUserId(userId));
     check("slack.com/user/sendGroupDirectMessage", { userIds: participantIds });
-    const opened = slackPost("conversations.open", { users: participantIds.join(",") }).json() as ChannelResponse;
+    const opened = slackPost("conversations.open", { users: participantIds.join(",") }).json<ChannelResponse>();
     requireOk(opened, 200);
-    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json() as MessageResponse;
+    const data = slackPost("chat.postMessage", { channel: opened.channel.id, text: text }).json<MessageResponse>();
     requireOk(data, 200);
     return messageFrom(data.message);
 }
@@ -663,7 +663,7 @@ interface SendRequest { channel: string; text: string; thread_ts?: string; unfur
 export function addReaction(ref: MessageRef, emoji: string): void {
     const { channelId, ts } = ref;
     check("slack.com/user/addReaction", { channelId: channelId });
-    const data = slackPost("reactions.add", { channel: channelId, timestamp: ts, name: emoji }).json() as SlackEnvelope;
+    const data = slackPost("reactions.add", { channel: channelId, timestamp: ts, name: emoji }).json<SlackEnvelope>();
     requireOk(data, 200);
 }
 
@@ -677,7 +677,7 @@ export function getChannel(channelId: string): SlackChannel {
     check("slack.com/user/getChannel", { channelId: channelId });
     const query = new Map<string, string>();
     query.set("channel", channelId);
-    const data = slackGet("conversations.info", query).json() as ChannelResponse;
+    const data = slackGet("conversations.info", query).json<ChannelResponse>();
     requireOk(data, 200);
     return channelFrom(data.channel);
 }
@@ -692,7 +692,7 @@ export function listChannels(page: PageOptions = {}): ChannelPage {
     const { limit, cursor } = page;
     check("slack.com/user/listChannels", {});
     const body: PageRequest = { types: "public_channel,private_channel,mpim,im", limit: limit, cursor: cursor };
-    const data = slackGet("conversations.list", pageQuery(body)).json() as ChannelsResponse;
+    const data = slackGet("conversations.list", pageQuery(body)).json<ChannelsResponse>();
     requireOk(data, 200);
     const channels: SlackChannel[] = [];
     for (const item of data.channels) channels.push(channelFrom(item));
@@ -709,7 +709,7 @@ export function getUser(userId: string): SlackUser {
     check("slack.com/user/getUser", { userId: userId });
     const query = new Map<string, string>();
     query.set("user", userId);
-    const data = slackGet("users.info", query).json() as UserResponse;
+    const data = slackGet("users.info", query).json<UserResponse>();
     requireOk(data, 200);
     return userFrom(data.user);
 }
@@ -724,7 +724,7 @@ export function getUser(userId: string): SlackUser {
 export function listUsers(page: PageOptions = {}): UserPage {
     const { limit, cursor } = page;
     check("slack.com/user/listUsers", {});
-    const data = slackGet("users.list", pageQuery({ limit: limit, cursor: cursor })).json() as UsersResponse;
+    const data = slackGet("users.list", pageQuery({ limit: limit, cursor: cursor })).json<UsersResponse>();
     requireOk(data, 200);
     const users: SlackUser[] = [];
     for (const item of data.members) users.push(userFrom(item));
@@ -742,7 +742,7 @@ export function findUserByEmail(email: string): SlackUser {
     check("slack.com/user/findUserByEmail", { email: email });
     const query = new Map<string, string>();
     query.set("email", email);
-    const data = slackGet("users.lookupByEmail", query).json() as UserResponse;
+    const data = slackGet("users.lookupByEmail", query).json<UserResponse>();
     requireOk(data, 200);
     return userFrom(data.user);
 }
@@ -785,7 +785,7 @@ export function downloadFile(fileId: string, path: string): DownloadResult {
 function fetchFile(fileId: string): SlackFile {
     const query = new Map<string, string>();
     query.set("file", fileId);
-    const data = slackGet("files.info", query).json() as FileResponse;
+    const data = slackGet("files.info", query).json<FileResponse>();
     requireOk(data, 200);
     return fileFrom(data.file);
 }
@@ -804,7 +804,7 @@ function messages(method: string, body: HistoryRequest): MessagesResponse {
     if (oldest !== undefined) query.set("oldest", oldest);
     if (latest !== undefined) query.set("latest", latest);
     if (inclusive !== undefined) query.set("inclusive", inclusive.toString());
-    const data = slackGet(method, query).json() as MessagesResponse;
+    const data = slackGet(method, query).json<MessagesResponse>();
     requireOk(data, 200);
     return data;
 }
@@ -831,7 +831,7 @@ function requireHttpOk(response: Response): Response {
     if (!response.ok) {
         throw new SlackError("http_error", `Slack request failed: HTTP ${response.status} ${response.statusText}`, response.status);
     }
-    requireOk(response.json() as SlackEnvelope, response.status);
+    requireOk(response.json<SlackEnvelope>(), response.status);
     return response;
 }
 

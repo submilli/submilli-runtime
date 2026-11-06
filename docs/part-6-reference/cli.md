@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1d6fcfd3993978c83d0b10084defe2e1a53ae0979736e43d77335978efd5df40"
+  contentHash: "c23cd973b67d39b71a910032b5a4aa19d7c1d74e0871a5acab02900eb45a260c"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -402,7 +402,8 @@ Options:
           Maximum wasm stack in bytes
 
       --timeout <TIMEOUT>
-          Wall-clock deadline in milliseconds. Omit for no deadline
+          Wall-clock deadline in milliseconds. Time spent waiting at an approval prompt doesn't
+          count. Omit for no deadline
 
       --vfs <VFS>
           Directory to expose as the script's VFS root. The future `submilli:fs.*` host functions
@@ -413,7 +414,9 @@ Options:
           Apply a blueprint's policy (capability gating, deny-by-default) and `auth_proxy:` secret
           injection to this local run. Without it, the run is unrestricted (allow-all). `store:`
           secrets resolve from the local secret store, and authenticated `@mcp/<server>` servers are
-          called in-process — no running server needed
+          called in-process — no running server needed. A call an `ask-human` or `ask-admin` rule
+          matches is asked about on the terminal: `y` approves, anything else denies. Without a
+          terminal to ask on, it is denied
 
       --var <NAME=VALUE>
           Bind a blueprint variable for this run, `NAME=VALUE` (repeatable), the way an application
@@ -429,7 +432,7 @@ Options:
           1000000] Env: `$SUBMILLI_MAX_EXECUTION_LLM_TOKENS`.
 
       --max-llm-concurrency <PROMPTS>
-          Prompts one `llm.batch` dispatches at once. [default: 4] Env:
+          Prompts one `llm.batch` or `llm.texts` dispatches at once. [default: 4] Env:
           `$SUBMILLI_MAX_LLM_CONCURRENCY`
 
       --max-execution-embedding-tokens <TOKENS>
@@ -1191,7 +1194,7 @@ Arguments:
 Options:
       --action <ACTION>        The rule's action. Adding a capability under `default: deny` grants
                                it, so the default is `allow` [default: allow] [possible values:
-                               allow, deny, ask-human]
+                               allow, deny, ask-human, ask-admin]
       --filter <FILTER>        Filter expression constraining the rule, e.g. 'path glob "*.csv"'
       --caller <CALLER>        Caller id the rule applies to (`main` is the user script; a package
                                name gates that package's own calls) [default: main]
@@ -1492,6 +1495,7 @@ Usage: submilli server <COMMAND>
 
 Commands:
   runs       Inspect executions and resume stuck runs
+  approval   Decide calls waiting for approval (`ask-admin`, `ask-human`)
   apply      Apply blueprint YAML documents to a running submilli-server
   trust      Manage approved HTTPS server public keys
   docs       Read package declarations, including a blueprint's MCP tools
@@ -1581,6 +1585,113 @@ Arguments:
   <RUN_ID>
 
 Options:
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+### `submilli server approval`
+
+```text
+Decide calls waiting for approval (`ask-admin`, `ask-human`)
+
+Usage: submilli server approval <COMMAND>
+
+Commands:
+  list     List calls waiting for approval, oldest first
+  show     Show one call waiting for approval: what it does, the rule that asked, and its session
+  approve  Approve a waiting call: it runs, and the program carries on
+  deny     Deny a waiting call: the program's call throws `PermissionDeniedError`
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
+#### `submilli server approval list`
+
+```text
+List calls waiting for approval, oldest first
+
+Usage: submilli server approval list [OPTIONS]
+
+Options:
+      --approver <APPROVER>  Only calls waiting for this approver [possible values: human, admin]
+      --session <SESSION>    Only calls of this session
+      --json
+      --server <URL>         Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                             [default: http://127.0.0.1:8128]
+      --token-file <PATH>    File holding the API token to send. Without it the token is read from
+                             `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                             server started with `--allow-unauthenticated` accepts. There is no flag
+                             taking the token itself, so it never lands in the process list. Env:
+                             `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help                 Print help
+```
+
+#### `submilli server approval show`
+
+```text
+Show one call waiting for approval: what it does, the rule that asked, and its session
+
+Usage: submilli server approval show [OPTIONS] <CALL_ID>
+
+Arguments:
+  <CALL_ID>  The call's id, as `list` shows it
+
+Options:
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server approval approve`
+
+```text
+Approve a waiting call: it runs, and the program carries on
+
+Usage: submilli server approval approve [OPTIONS] <CALL_ID>
+
+Arguments:
+  <CALL_ID>  The call's id, as `list` shows it
+
+Options:
+      --reason <REASON>    Why. A denial's reason reaches the program
+      --json
+      --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
+                           [default: http://127.0.0.1:8128]
+      --token-file <PATH>  File holding the API token to send. Without it the token is read from
+                           `$SUBMILLI_SERVER_TOKEN`; with neither, no token is sent, which only a
+                           server started with `--allow-unauthenticated` accepts. There is no flag
+                           taking the token itself, so it never lands in the process list. Env:
+                           `$SUBMILLI_SERVER_TOKEN_FILE`
+  -h, --help               Print help
+```
+
+#### `submilli server approval deny`
+
+```text
+Deny a waiting call: the program's call throws `PermissionDeniedError`
+
+Usage: submilli server approval deny [OPTIONS] <CALL_ID>
+
+Arguments:
+  <CALL_ID>  The call's id, as `list` shows it
+
+Options:
+      --reason <REASON>    Why. A denial's reason reaches the program
       --json
       --server <URL>       Base URL of the running submilli-server [env: SUBMILLI_SERVER_URL=]
                            [default: http://127.0.0.1:8128]
@@ -2262,7 +2373,8 @@ Commands:
     stop                     Stop the playground and finish active runs
 
   Run from the terminal:
-    chat <MESSAGE>           Give an agent a task using your model key
+    chat <MESSAGE>           Give an agent a task using your model key or
+                             Claude Code
     exec <FILE|--example>    Run a program or the demo example
     bind                     Set variables and development secrets for new
                              runs
@@ -2272,7 +2384,6 @@ Commands:
     watch                    Follow session events as JSON lines
 
   Connect a coding assistant:
-    claude-code              Connect Claude Code to this playground
     mcp                      Serve playground tools to a coding assistant
 
   Advanced inspection and testing:
@@ -2461,12 +2572,13 @@ Options:
 ### `submilli playground chat`
 
 ```text
-Chat with an agent using your own model key, the way a production agent runs: it uses the
-playground's tools and prints its answer. Each chat starts a session; send the next message in it
-with `--session`. The session stays open until it sits idle past the blueprint's idle timeout or
-`session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY) comes from the
-playground's environment, else the project's `.env`, else `submilli secret put <NAME>`; the model
-from `--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
+Chat with an agent using your own model key or your own Claude Code, the way a production agent
+runs: it uses the playground's tools and prints its answer. Each chat starts a session; send the
+next message in it with `--session`. The session stays open until it sits idle past the blueprint's
+idle timeout or `session end` ends it. The key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or
+GEMINI_API_KEY) comes from the playground's environment, else the project's `.env`, else `submilli
+secret put <NAME>`; Claude Code (`--model claude-code:<model>`) needs none. The model comes from
+`--model` or SUBMILLI_PLAYGROUND_MODEL=<provider>:<model>. Its runs are labeled `chat`.
 
 Usage: submilli playground chat [OPTIONS] <MESSAGE>
 
@@ -2481,13 +2593,26 @@ Options:
 
       --model <PROVIDER:MODEL>
           The model for a new session, as `<provider>:<model>`, from a provider whose key the
-          playground started with. Default: the playground's configured model. A session carried on
-          keeps its own
+          playground started with, or `claude-code:<model>` to answer with your own Claude Code,
+          where the model is a full name such as claude-sonnet-5-5, claude-opus-5-5,
+          claude-fable-5-1, or claude-haiku-5-5. Default: the playground's configured model. A
+          session carried on keeps its own
 
       --effort <LEVEL>
-          How hard a new session's model reasons. OpenAI models only, for now
+          How hard a new session's model reasons: OpenAI models take low, medium, or high; Claude
+          Code also takes xhigh and max
 
-          [possible values: low, medium, high]
+          [possible values: low, medium, high, xhigh, max]
+
+      --max-budget-usd <USD>
+          The most a new Claude Code session may spend on one message, in US dollars, above 0 and at
+          most 100. Default: 1.00. On a subscription it measures usage, not billing. Claude Code
+          checks it between steps, so a message's last step can go a little over
+
+      --confirm-billing <BILLING>
+          Let Claude Code bill what isn't your Claude subscription, such as an API key or an
+          `ANTHROPIC_BASE_URL` address, in this session: the value the refusal names, such as
+          `api_key` or `claude.ai via https://proxy.example`
 
       --max-output <TOKENS>
           The most tokens one answer of a new session's model may take. Default: 4096
@@ -2498,7 +2623,8 @@ Options:
           itself (the model, messages, tools, instructions) are refused
 
       --max-calls-per-answer <N>
-          The most tool calls run for one answer of the model; the rest are refused to it
+          The most tool calls run for one answer of the model; the rest are refused to it. Claude
+          Code counts them across the whole message, and stops at the limit
 
           [default: 16]
 
@@ -2673,28 +2799,6 @@ Options:
 
       --json
           Accepted for symmetry; `watch` always prints JSON lines
-
-  -h, --help
-          Print help (see a summary with '-h')
-```
-
-### `submilli playground claude-code`
-
-```text
-Set Claude Code up in this project to try tasks through the playground on your Claude subscription:
-writes the `submilli-standin` subagent, which has only the playground's tools, and adds to your own
-`.claude/settings.local.json` the hooks that show its chat on the page and a rule that lets it use
-those tools without asking, so your blueprint decides its calls. Run it again to check; it changes
-only what's missing.
-
-Usage: submilli playground claude-code [OPTIONS]
-
-Options:
-      --force
-          Replace a `submilli-standin` subagent file that differs from the playground's
-
-      --json
-          Print JSON
 
   -h, --help
           Print help (see a summary with '-h')

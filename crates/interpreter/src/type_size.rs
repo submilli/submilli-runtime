@@ -22,6 +22,7 @@ use crate::span::Span;
 /// A type limit or operational failure encountered while validating a type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeTooLarge {
+    InvalidTemplate,
     /// Temporary traversal storage could not be allocated.
     Allocation,
     Nodes,
@@ -34,7 +35,7 @@ pub enum TypeTooLarge {
 
 impl TypeTooLarge {
     pub fn into_failure(self, stage: CompilerStage, span: Option<Span>) -> CompilerFailure {
-        if self == Self::Allocation {
+        if matches!(self, Self::Allocation | Self::InvalidTemplate) {
             return CompilerFailure::Internal {
                 stage,
                 span,
@@ -42,7 +43,7 @@ impl TypeTooLarge {
             };
         }
         let help = match self {
-            Self::Allocation => Vec::new(),
+            Self::Allocation | Self::InvalidTemplate => Vec::new(),
             Self::NamespaceMetadata => vec![
                 "reduce namespace nesting, exported namespace count, or qualified name lengths".into(),
             ],
@@ -71,6 +72,9 @@ impl TypeTooLarge {
 impl std::fmt::Display for TypeTooLarge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidTemplate => {
+                f.write_str("template type has inconsistent parts and substitutions")
+            }
             Self::Allocation => f.write_str("could not allocate type traversal frames"),
             Self::NamespaceMetadata => write!(
                 f,
@@ -110,8 +114,23 @@ pub struct TypeExtent {
 /// bound; a stopped measurement reports the count that crossed it. Temporary
 /// ancestor-frame allocation failures are returned without a partial extent.
 pub fn measure(ty: &Type, max_nodes: u64, max_depth: u32) -> Result<TypeExtent, TypeTooLarge> {
-    crate::type_walk::measure(ty, max_nodes, max_depth, TypeChildren::new)
-        .map_err(|_| TypeTooLarge::Allocation)
+    let invalid = Cell::new(false);
+    let extent = crate::type_walk::measure(ty, max_nodes, max_depth, |ty| {
+        if let Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } = ty
+            && parts.len() != substitutions.len().saturating_add(1)
+        {
+            invalid.set(true);
+        }
+        TypeChildren::new(ty)
+    })
+    .map_err(|_| TypeTooLarge::Allocation)?;
+    if invalid.get() {
+        return Err(TypeTooLarge::InvalidTemplate);
+    }
+    Ok(extent)
 }
 
 /// Rejects a type beyond [`MAX_TYPE_NODES`] or [`MAX_TYPE_DEPTH`].
@@ -266,6 +285,52 @@ impl TypeLimits {
     }
 }
 
+/// How many types [`for_each_child`] visits directly inside `ty`.
+pub(crate) fn child_count(ty: &Type) -> usize {
+    match ty {
+        Type::Function {
+            params, predicate, ..
+        } => params
+            .len()
+            .saturating_add(1 + usize::from(predicate.is_some())),
+        Type::Object { fields, index } => fields
+            .len()
+            .saturating_add(2 * usize::from(index.is_some())),
+        Type::Array(_) | Type::Readonly(_) => 1,
+        Type::Tuple(tuple) => tuple.elements.len(),
+        Type::TemplateLiteral {
+            substitutions: members,
+            ..
+        }
+        | Type::Union(members) => members.len(),
+        Type::Refined { .. } => 2,
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.len(),
+        Type::Alias { args, .. } => args.len().saturating_add(1),
+        Type::Number
+        | Type::NumberLiteral(_)
+        | Type::BigInt
+        | Type::BigIntLiteral(_)
+        | Type::String
+        | Type::StringLiteral(_)
+        | Type::Uint8Array
+        | Type::Boolean
+        | Type::BooleanLiteral(_)
+        | Type::Null
+        | Type::Undefined
+        | Type::Void
+        | Type::Unknown
+        | Type::NonPrimitive
+        | Type::Error
+        | Type::Never
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::NumberEnum { .. }
+        | Type::StringEnum { .. } => 0,
+    }
+}
+
 /// Calls `visit` on each type directly inside `ty`.
 pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
     match ty {
@@ -284,12 +349,17 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
         Type::Object { fields, index } => {
             fields.values().for_each(|field| visit(&field.ty));
             if let Some(index) = index {
+                visit(&index.key);
                 visit(&index.value);
             }
         }
         Type::Array(inner) | Type::Readonly(inner) => visit(inner),
         Type::Tuple(members) => members.iter().for_each(visit),
-        Type::Union(members) => members.iter().for_each(visit),
+        Type::TemplateLiteral {
+            substitutions: members,
+            ..
+        }
+        | Type::Union(members) => members.iter().for_each(visit),
         Type::Refined { original, ty } => {
             visit(original);
             visit(ty);
@@ -382,7 +452,7 @@ pub fn map_children<E>(
                 .collect::<Result<_, E>>()?,
             index: index
                 .as_ref()
-                .map(|index| index.try_map_value(&mut map))
+                .map(|index| index.try_map_types(&mut map))
                 .transpose()?,
         },
         Type::Array(inner) => Type::Array(Box::new(map(inner)?)),
@@ -391,6 +461,13 @@ pub fn map_children<E>(
             elements: map_all(members)?,
             optional: members.optional,
         }),
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => Type::TemplateLiteral {
+            parts: parts.clone(),
+            substitutions: map_all(substitutions)?,
+        },
         Type::Union(members) => Type::union(map_all(members)?),
         Type::Refined { original, ty } => Type::Refined {
             original: Box::new(map(original)?),
@@ -495,13 +572,18 @@ impl<'a> TypeChildren<'a> {
             }
             Type::Object { fields, index } => {
                 children.fields = Some(fields.values());
-                children.trailing[0] = index.as_ref().map(|index| index.value.as_ref());
+                children.trailing[0] = index.as_ref().map(|index| index.key.as_ref());
+                children.trailing[1] = index.as_ref().map(|index| index.value.as_ref());
             }
             Type::Array(inner) | Type::Readonly(inner) => {
                 children.trailing[0] = Some(inner);
             }
             Type::Tuple(tuple) => children.members = tuple.elements.iter(),
-            Type::Union(members)
+            Type::TemplateLiteral {
+                substitutions: members,
+                ..
+            }
+            | Type::Union(members)
             | Type::InterfaceRef { args: members, .. }
             | Type::ClassRef { args: members, .. }
             | Type::AliasRef { args: members, .. } => children.members = members.iter(),
@@ -581,13 +663,15 @@ pub(crate) mod tests {
 
     /// Runs `test` on a thread of the stack compilation is given: substitution
     /// and drop recurse once per level of a type at the depth limit.
-    pub(crate) fn on_compiler_stack(test: impl FnOnce() + Send + 'static) {
+    pub(crate) fn on_compiler_stack<T: Send + 'static>(
+        test: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
         std::thread::Builder::new()
             .stack_size(crate::compiler_limits::COMPILER_STACK_BYTES)
             .spawn(test)
             .unwrap()
             .join()
-            .unwrap();
+            .unwrap()
     }
 
     #[test]
@@ -765,6 +849,8 @@ pub(crate) mod tests {
         let object = Type::Object {
             fields: BTreeMap::from([("f".into(), ObjectField::required(Type::String))]),
             index: Some(crate::IndexSignature {
+                string_keyof_includes_number: false,
+                key: Box::new(crate::Type::String),
                 value: Box::new(Type::Boolean),
                 readonly: true,
             }),
@@ -784,6 +870,10 @@ pub(crate) mod tests {
         let ty = Type::Tuple(
             vec![
                 function,
+                Type::TemplateLiteral {
+                    parts: vec!["id_".into(), String::new()],
+                    substitutions: vec![Type::String],
+                },
                 Type::Readonly(Box::new(Type::Array(Box::new(Type::Number)))),
                 Type::union(vec![Type::Null, Type::String]),
                 Type::Refined {
@@ -799,7 +889,7 @@ pub(crate) mod tests {
         );
         let mut visited = 0;
         for_each_child(&ty, |_| visited += 1);
-        assert_eq!(visited, 8);
+        assert_eq!(visited, 9);
         check_type_child_order(&ty);
         let rebuilt = map_children(&ty, |child| {
             map_children(child, |grandchild| Ok::<_, ()>(grandchild.clone()))
@@ -810,6 +900,7 @@ pub(crate) mod tests {
     fn check_type_child_order(ty: &Type) {
         let mut expected = Vec::new();
         for_each_child(ty, |child| expected.push(child));
+        assert_eq!(child_count(ty), expected.len());
         expected.reverse();
         let actual: Vec<_> = TypeChildren::new(ty).collect();
         assert_eq!(actual, expected);

@@ -1,6 +1,6 @@
 //! Shared reads for host-side iterable consumption — the `Map`/`Set`
 //! constructors and `Array.from`: structural field lookup, `$string` decoding,
-//! boolean unboxing, and `$Array` element reads. Each consumer drives its
+//! iterator-result reads, and `$Array` element reads. Each consumer drives its
 //! source host-side (an `$Array`, another collection's cursor, or any
 //! iterable's `next()/done/value` protocol) and
 //! need the same primitives to walk it.
@@ -11,6 +11,7 @@ use crate::runtime::StoreData;
 use crate::runtime::host::write_submilli_string_struct_units;
 use crate::runtime::intrinsic_types::intrinsic_types;
 use crate::runtime::prelude::iterator::as_struct;
+use crate::runtime::prelude::keep::KeptValue;
 use crate::runtime::prelude::vtable::read_string_units;
 
 /// Bucket indices are signed in the insertion ledger and use a power-of-two mask.
@@ -75,6 +76,24 @@ pub(crate) fn object_field(
     name: &str,
 ) -> wasmtime::Result<Option<Val>> {
     object_field_kind(caller, obj, name, false, false)
+}
+
+/// The value one `next()` result yields, or `None` once it is done, read as
+/// JavaScript reads them: getters run, `done` counts by its truthiness, and a
+/// missing `done` (`{ value }`) or `value` is `undefined`. A getter's value is
+/// reachable from nothing, so `kept_value` keeps it.
+pub(in crate::runtime::prelude) async fn iterator_result_value(
+    caller: &mut Caller<'_, StoreData>,
+    result: &Val,
+    kept_value: &KeptValue,
+) -> wasmtime::Result<Option<Val>> {
+    let done = super::object::read_property(caller, result, "done").await?;
+    if super::value::truthy(caller, &done)? {
+        return Ok(None);
+    }
+    let value = super::object::read_property(caller, result, "value").await?;
+    kept_value.set(caller, value)?;
+    Ok(Some(value))
 }
 
 pub(crate) fn object_accessor(
@@ -181,11 +200,11 @@ pub(crate) fn string_code_points(
 
 /// Unbox a `$boxed_boolean`'s i32 payload.
 pub(crate) fn unbox_bool(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<bool> {
-    let st = as_struct(caller, val, "iterator result `done` flag")?;
+    let st = as_struct(caller, val, "boxed boolean")?;
     match st.field(&mut *caller, 1)? {
         Val::I32(b) => Ok(b != 0),
         other => Err(wasmtime::Error::msg(format!(
-            "iterator result: `done` is not a boxed boolean {other:?}"
+            "not a boxed boolean {other:?}"
         ))),
     }
 }

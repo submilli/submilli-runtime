@@ -1,0 +1,7 @@
+# A package's generic forwards its type parameter into `llm.call<T>`: the
+# script names the type, so the descriptor the script builds carries that
+# type's schema and predicate across the package boundary, and the package
+# never sees `Label`. One prompt fits the type, the other is prose.
+# name          dir       deps           root
+@test/triage    triage    -
+main            app       @test/triage   root

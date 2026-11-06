@@ -14,10 +14,10 @@ function main(): void {
   const sticky = /x/y;
   assert(sticky.test("x"), "establish sticky lastIndex");
   assert(!sticky.test("😀x") && sticky.lastIndex === 0, "sticky must not round past the requested unit");
-  const bmp = "é".matchAll(/(?:)/g);
+  const bmp = Array.from("é".matchAll(/(?:)/g));
   assert(bmp.length === 2 && bmp[0].index === 0 && bmp[1].index === 1, "empty matches advance past BMP character");
-  const astral = "😀".matchAll(/(?:)/gu);
+  const astral = Array.from("😀".matchAll(/(?:)/gu));
   assert(astral.length === 2 && astral[0].index === 0 && astral[1].index === 2, "unicode empty matches advance past surrogate pair");
-  const tail = "é".matchAll(/$/g);
+  const tail = Array.from("é".matchAll(/$/g));
   assert(tail.length === 1 && tail[0].index === 1, "empty match found later is returned once");
 }

@@ -1,7 +1,8 @@
-//! Backing-struct plumbing shared by the stdlib packages: field constructors,
-//! the vtable-headed `$Object` subtype builder, and the property-getter
-//! registrar. A package describes its backing layout as a field list and its
-//! getter surface as a data table; the mechanism lives here once.
+//! Plumbing shared by the stdlib packages: field constructors, the
+//! vtable-headed `$Object` subtype builder, the property-getter registrar, the
+//! plain-object builder, and the type descriptor a generic host function reads
+//! its type arguments from. A package describes its backing layout as a field
+//! list and its getter surface as a data table; the mechanism lives here once.
 
 use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
@@ -13,6 +14,7 @@ use crate::runtime::StoreData;
 use crate::runtime::gc_singleton::singleton_struct;
 use crate::runtime::host::{fatal_host_error, host_opaque_vtable, register_host_fn};
 use crate::runtime::intrinsic_types::IntrinsicTypes;
+use crate::runtime::prelude::closure::Closure;
 use crate::runtime::prelude::iterator::as_struct;
 
 pub(crate) fn string_field(intr: &IntrinsicTypes) -> FieldType {
@@ -180,4 +182,139 @@ pub(crate) fn backing_receiver(
     val: &Val,
 ) -> wasmtime::Result<Rooted<StructRef>> {
     as_struct(caller, val, "stdlib property receiver")
+}
+
+/// Build a structural object with canonical field ordering. Values are already boxed.
+pub(crate) fn new_object(
+    caller: &mut Caller<'_, StoreData>,
+    fields: std::collections::BTreeMap<String, Val>,
+) -> wasmtime::Result<Val> {
+    use crate::runtime::{fuel, host};
+    use wasmtime::{ArrayRef, ArrayRefPre};
+    let intr = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?;
+    fuel::charge(&mut *caller, fuel::ELEM, fields.len() as u64)?;
+    let mut names = Vec::new();
+    let mut values = Vec::new();
+    names
+        .try_reserve_exact(fields.len())
+        .map_err(host::fatal_host_error)?;
+    values
+        .try_reserve_exact(fields.len())
+        .map_err(host::fatal_host_error)?;
+    for (name, value) in fields {
+        names.push(Val::AnyRef(Some(
+            host::write_submilli_string_struct(caller, &name)?.to_anyref(),
+        )));
+        values.push(value);
+    }
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &names)?;
+    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &values)?;
+    let vtable = host::host_object_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, intr.object_shape.clone());
+    let object = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[
+            vtable,
+            Val::AnyRef(Some(names.to_anyref())),
+            Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
+        ],
+    )?;
+    Ok(Val::AnyRef(Some(object.to_anyref())))
+}
+
+/// A type argument of a generic host function, as the call's trailing
+/// `$types` environment carries it: the `$TypeDescriptor` every generic call
+/// passes per type parameter (`codegen::runtime_descriptors`). Nothing a
+/// program writes is a descriptor; only the compiler builds them.
+pub(crate) struct TypeDescriptor {
+    /// The type's structural predicate, `(value: unknown) => boolean`.
+    test: Closure,
+    /// The type as the program wrote it, for diagnostics.
+    pub name: String,
+    /// The type's JSON Schema, which codegen emits for every type that has one
+    /// (`codegen::descriptor_schema`).
+    pub schema: Option<String>,
+}
+
+impl TypeDescriptor {
+    /// The schema a schema call (`api`, e.g. `llm.call`) sends. A
+    /// direct call's `T` passed the compile-time schema gate, so it has one;
+    /// a `T` forwarded through a generic was named by its caller, and when it
+    /// has no JSON Schema the call is a catchable `TypeError` here.
+    pub(crate) fn schema_for(&self, api: &str) -> wasmtime::Result<&str> {
+        self.schema.as_deref().ok_or_else(|| {
+            crate::runtime::host::type_error(format!(
+                "{api}<{name}>: `{name}` has no JSON Schema to send — it is not a JSON \
+                 data shape (a function, `bigint`, `Uint8Array`, `unknown`, a class, a \
+                 `Map`, an enum, a recursive or method-bearing type), or its schema is \
+                 larger than a request may carry; name an object, array, tuple, union or \
+                 primitive shape instead",
+                name = self.name
+            ))
+        })
+    }
+
+    /// Whether `value`, a boxed `unknown`, is a `T`: the predicate's answer.
+    /// The predicate runs as guest code and pays its own fuel; this charges
+    /// the host's flat call cost.
+    pub(crate) async fn accepts(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        value: Val,
+    ) -> wasmtime::Result<bool> {
+        crate::runtime::fuel::charge_call(&mut *caller)?;
+        let verdict = self.test.call(caller, &[value]).await?;
+        let boxed =
+            as_struct(caller, &verdict, "type descriptor verdict").map_err(fatal_host_error)?;
+        match boxed.field(&mut *caller, 1)? {
+            Val::I32(bit) => Ok(bit != 0),
+            other => Err(fatal_host_error(format!(
+                "type descriptor verdict is not a boxed boolean: {other:?}"
+            ))),
+        }
+    }
+}
+
+/// The descriptor of type parameter `slot` in `env`, the `$types` argument of a
+/// generic host call. Only the compiler builds environments, so anything but
+/// a well-formed descriptor is a fatal host error rather than a guest throw.
+pub(crate) fn read_type_argument(
+    caller: &mut Caller<'_, StoreData>,
+    env: &Val,
+    slot: usize,
+) -> wasmtime::Result<TypeDescriptor> {
+    decode_type_argument(caller, env, slot).map_err(fatal_host_error)
+}
+
+fn decode_type_argument(
+    caller: &mut Caller<'_, StoreData>,
+    env: &Val,
+    slot: usize,
+) -> wasmtime::Result<TypeDescriptor> {
+    let Val::AnyRef(Some(env)) = env else {
+        return Err(wasmtime::Error::msg(
+            "type descriptor environment is not an array",
+        ));
+    };
+    let env = env.unwrap_array(&mut *caller)?;
+    let slot = u32::try_from(slot).map_err(|_| wasmtime::Error::msg("type descriptor slot"))?;
+    let descriptor = env.get(&mut *caller, slot)?;
+    let descriptor = as_struct(caller, &descriptor, "type descriptor")?;
+    let test = descriptor.field(&mut *caller, 1)?;
+    let test = crate::runtime::prelude::closure::read(caller, &test, "type descriptor test")?;
+    let name = descriptor.field(&mut *caller, 2)?;
+    let name = crate::runtime::host::read_string_arg(caller, &name, "type descriptor name")?;
+    let schema = match descriptor.field(&mut *caller, 3)? {
+        Val::AnyRef(None) => None,
+        schema => Some(crate::runtime::host::read_string_arg(
+            caller,
+            &schema,
+            "type descriptor schema",
+        )?),
+    };
+    Ok(TypeDescriptor { test, name, schema })
 }

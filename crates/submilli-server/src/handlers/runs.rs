@@ -1,4 +1,5 @@
-//! Runs that suspend at an application tool call (`@tools`):
+//! Runs that suspend at an application tool call (`@tools`), or at a call a rule
+//! asks an approver about (`ask-human`, `ask-admin`):
 //!
 //! * `POST /v1/runs/{id}/resume` — answer the run's pending call, then wait for
 //!   it to suspend again or finish
@@ -18,8 +19,11 @@ use interpreter::runtime::{McpResponse, ToolCallError};
 use serde::{Deserialize, Serialize};
 
 use crate::app::AppState;
+use crate::auth::AdminCaller;
 use crate::handlers::execute::{self, ExecuteResponse, Finished};
-use crate::runs::{PendingCallView, ResumeRefusal, RunEntry, RunState, ToolAnswer};
+use crate::runs::{
+    Answer, CallAnswer, Decision, PendingCallView, ResumeRefusal, RunEntry, RunState,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,19 +31,31 @@ pub struct ResumeRequest {
     pub results: Vec<CallResult>,
 }
 
-/// The harness's answer to one call.
+/// The harness's answer to one call: `ok` for a tool call, `decision` for an
+/// approval.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CallResult {
     pub call_id: String,
-    pub ok: bool,
+    /// Whether the tool returned a value.
+    #[serde(default)]
+    pub ok: Option<bool>,
     /// The tool's return value, when `ok`.
     #[serde(default)]
     pub value: Option<serde_json::Value>,
     /// Why there is no value, when not `ok`.
     #[serde(default)]
     pub error: Option<CallError>,
+    /// The approver's decision.
+    #[serde(default)]
+    pub decision: Option<Decision>,
+    /// Why, with a decision. A denial's reason reaches the program.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
+
+/// The longest `reason` a decision may give, in bytes.
+pub(crate) const MAX_REASON_BYTES: usize = 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,8 +90,10 @@ pub async fn get(
 pub async fn resume(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
+    caller: Option<axum::Extension<AdminCaller>>,
     request: Result<Json<ResumeRequest>, axum::extract::rejection::JsonRejection>,
 ) -> axum::response::Response {
+    let admin = caller.is_some_and(|axum::Extension(AdminCaller(admin))| admin);
     let request = match request {
         Ok(Json(request)) => request,
         Err(error) => {
@@ -93,44 +111,49 @@ pub async fn resume(
             return refusal(StatusCode::BAD_REQUEST, "invalid_request", &run_id, message);
         }
     };
-    if let Ok(responses) = super::durable_runs::responses(&state) {
-        match responses.observe(&run_id).await {
+    deliver(&state, &run_id, answers, admin).await
+}
+
+/// Deliver `answers` to run `run_id`, then wait for it to suspend again or finish,
+/// and answer with that state. `admin` is whether the caller may decide an
+/// `ask-admin` call.
+pub(crate) async fn deliver(
+    state: &AppState,
+    run_id: &str,
+    answers: Vec<CallAnswer>,
+    admin: bool,
+) -> axum::response::Response {
+    if let Ok(responses) = super::durable_runs::responses(state) {
+        match responses.observe(run_id).await {
             Ok(Some(observed)) if observed.run.is_durable() => {
-                return resume_durable(&state, &run_id, answers).await;
+                return resume_durable(state, run_id, answers, admin).await;
             }
             Err(error) => {
                 return refusal(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "run_unavailable",
-                    &run_id,
+                    run_id,
                     error.to_string(),
                 );
             }
             _ => {}
         }
     }
-    let Some(entry) = state.session_manager().runs().get(&run_id) else {
-        return unknown_run(&run_id);
+    let Some(entry) = state.session_manager().runs().get(run_id) else {
+        return unknown_run(run_id);
     };
-    let settled = match entry.resume(answers) {
+    let settled = match entry.resume(answers, admin) {
         Ok(Some(generation)) => entry.settled_after(generation).await,
         Ok(None) => entry.settled().await,
         Err(ResumeRefusal::NotSuspended) => {
             return refusal(
                 StatusCode::CONFLICT,
                 "run_not_suspended",
-                &run_id,
-                "the run is not waiting on a call: it finished, its call timed out, or it was cancelled".to_owned(),
+                run_id,
+                "the run is not waiting on this call: it finished, the call timed out, or the run was cancelled".to_owned(),
             );
         }
-        Err(ResumeRefusal::UnknownCall(call_id)) => {
-            return refusal(
-                StatusCode::BAD_REQUEST,
-                "unknown_call",
-                &run_id,
-                format!("the run is not waiting on call `{call_id}`"),
-            );
-        }
+        Err(other) => return resume_refusal(run_id, other),
     };
     state_response(&entry, settled)
 }
@@ -251,7 +274,7 @@ fn unknown_run(run_id: &str) -> axum::response::Response {
 }
 
 /// The harness's results as answers: at least one, each call named once.
-fn answers(results: Vec<CallResult>) -> Result<Vec<ToolAnswer>, String> {
+fn answers(results: Vec<CallResult>) -> Result<Vec<CallAnswer>, String> {
     if results.is_empty() {
         return Err("`results` names no call; answer the run's pending call".to_owned());
     }
@@ -267,8 +290,31 @@ fn answers(results: Vec<CallResult>) -> Result<Vec<ToolAnswer>, String> {
         .collect()
 }
 
-fn answer(result: CallResult) -> Result<ToolAnswer, String> {
-    let answer = match (result.ok, result.value, result.error) {
+fn answer(result: CallResult) -> Result<CallAnswer, String> {
+    let ok = match (result.ok, result.decision) {
+        (Some(ok), None) => ok,
+        (None, Some(decision)) => return decision_answer(result, decision),
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "call `{}`: a result carries `ok` for a tool call or `decision` for an \
+                 approval, not both",
+                result.call_id
+            ));
+        }
+        (None, None) => {
+            return Err(format!(
+                "call `{}`: a result carries `ok` for a tool call or `decision` for an approval",
+                result.call_id
+            ));
+        }
+    };
+    if result.reason.is_some() {
+        return Err(format!(
+            "call `{}`: `reason` goes with a `decision`; a tool's failure carries `error.message`",
+            result.call_id
+        ));
+    }
+    let answer = match (ok, result.value, result.error) {
         (true, value, None) => {
             let mut value = value.unwrap_or(serde_json::Value::Null);
             Ok(McpResponse::take(&mut value).map_err(|_| {
@@ -299,9 +345,43 @@ fn answer(result: CallResult) -> Result<ToolAnswer, String> {
             ));
         }
     };
-    Ok(ToolAnswer {
+    Ok(CallAnswer {
         call_id: result.call_id,
-        answer,
+        answer: Answer::Tool(answer),
+    })
+}
+
+fn decision_answer(result: CallResult, decision: Decision) -> Result<CallAnswer, String> {
+    if result.value.is_some() || result.error.is_some() {
+        return Err(format!(
+            "call `{}`: a `decision` carries an optional `reason`, not a `value` or an `error`",
+            result.call_id
+        ));
+    }
+    decided(result.call_id, decision, result.reason)
+}
+
+/// The answer deciding the approval call `call_id`, made by this request's token.
+pub(crate) fn decided(
+    call_id: String,
+    decision: Decision,
+    reason: Option<String>,
+) -> Result<CallAnswer, String> {
+    if reason
+        .as_ref()
+        .is_some_and(|reason| reason.len() > MAX_REASON_BYTES)
+    {
+        return Err(format!(
+            "call `{call_id}`: `reason` is longer than {MAX_REASON_BYTES} bytes"
+        ));
+    }
+    Ok(CallAnswer {
+        call_id,
+        answer: Answer::Decision {
+            decision,
+            reason,
+            decided_by: crate::audit::principal(),
+        },
     })
 }
 
@@ -310,11 +390,12 @@ fn answer(result: CallResult) -> Result<ToolAnswer, String> {
 async fn resume_durable(
     state: &AppState,
     id: &str,
-    answers: Vec<ToolAnswer>,
+    answers: Vec<CallAnswer>,
+    admin: bool,
 ) -> axum::response::Response {
     use crate::application::sessions::recovery::RunStatus;
     use crate::runs::durable::Submission;
-    let mut submission = match Submission::new(id, answers) {
+    let mut submission = match Submission::new(id, answers, admin) {
         Ok(submission) => submission,
         Err(error) => return resume_refusal(id, error),
     };
@@ -402,6 +483,23 @@ fn resume_refusal(id: &str, error: ResumeRefusal) -> axum::response::Response {
             "unknown_call",
             id,
             format!("the run is not waiting on call `{call}`"),
+        ),
+        ResumeRefusal::NotAnApproval(call) => refusal(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            id,
+            format!(
+                "call `{call}` is an application tool call: answer it with `ok`, not a `decision`"
+            ),
+        ),
+        ResumeRefusal::RequiresAdmin(call) => refusal(
+            StatusCode::FORBIDDEN,
+            "approval_requires_admin",
+            id,
+            format!(
+                "call `{call}` waits for an administrator's approval (`ask-admin`); only a token \
+                 with the `admin` role can decide it"
+            ),
         ),
     }
 }

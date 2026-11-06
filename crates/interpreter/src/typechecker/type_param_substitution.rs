@@ -468,9 +468,10 @@ impl TypeParamSubstitution {
                 let child = depth.saturating_add(1);
                 // An unbound or re-entered variable stays a leaf. GenericParam is
                 // opaque here: body-form, not substituted.
-                map_children(bound, |inner| {
+                let result = map_children(bound, |inner| {
                     self.apply_rec(inner, child, budget, substituting)
-                })
+                })?;
+                crate::property_keys::normalize_template(result, budget)
             });
         substituting.truncate(open_before);
         applied
@@ -912,6 +913,9 @@ impl<'a> Unifier<'a> {
         }
 
         match (param_ty, arg_ty) {
+            (Type::Array(a), b) if b.is_regexp_match_array() => {
+                self.unify(a, &Type::regexp_element())
+            }
             (Type::Array(a), Type::Array(b)) => self.unify(a, b),
             // A tuple *is* an array at runtime and routes to `Array` for member dispatch
             // (`Type::interface_routing`), so it infers `T[]`'s element as the union of

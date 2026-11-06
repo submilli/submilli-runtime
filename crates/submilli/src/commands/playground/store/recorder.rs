@@ -248,6 +248,18 @@ impl Recorder {
         );
     }
 
+    /// The host execution ids of session `session`'s runs in flight.
+    pub(crate) fn in_flight_in(&self, session: &str) -> Vec<String> {
+        self.shared
+            .tracks()
+            .values()
+            .filter(|track| {
+                track.session.as_deref() == Some(session) && track.finished_at.is_none()
+            })
+            .map(|track| track.execution_id.clone())
+            .collect()
+    }
+
     /// The host's execution id of run `id` while it is in flight: started, and not yet
     /// finished. A run's id is handed out when it starts, so this is how a playground run
     /// id reaches the host's cancellation.
@@ -828,6 +840,10 @@ struct HostRunRecording {
 }
 
 impl host::RecordedRun for HostRunRecording {
+    fn number(&self) -> Option<u64> {
+        Some(self.core.id)
+    }
+
     fn log_config(&self) -> DecisionLogConfig {
         PLAYGROUND_LOG_CONFIG
     }

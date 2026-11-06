@@ -102,25 +102,23 @@ pub fn emit_cast(
     };
 
     let mark = emitter.single_evaluation_mark();
-    let key = capture_session_key(emitter, ctx, value)?;
     emit_expr(emitter, ctx, value)?;
     emitter.end_single_evaluations(mark)?;
     let enclosing = map_cast_span(emitter, cast_span);
     cast::emit_box(emitter, ctx, &source_ty)?;
-    emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape, key)?;
+    emit_shape_cast_on_stack(emitter, ctx, target_ty, check_shape)?;
     restore_span(emitter, enclosing);
     Ok(())
 }
 
 /// The runtime half of `value as target_ty` for the boxed value on the stack:
 /// test it against `check_shape` and narrow it, or throw the cast's
-/// `TypeError`. `session_key` names the `session.get` key in that error.
+/// `TypeError`.
 pub(crate) fn emit_shape_cast_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     target_ty: &Type,
     check_shape: &Type,
-    session_key: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let object_idx = ctx
         .symbols
@@ -134,7 +132,6 @@ pub(crate) fn emit_shape_cast_on_stack(
     let scratch = emitter.add_anonymous_local(scratch_ty)?;
     emitter.instruction(Instruction::LocalSet(scratch));
     let previous_diagnostic = diagnostic::begin(emitter, ctx);
-    diagnostic::session_key(emitter, session_key);
 
     emit_structural_test(emitter, ctx, scratch, check_shape, target_ty)?;
 
@@ -161,41 +158,6 @@ fn restore_span(emitter: &mut FunctionEmitter, enclosing: Option<crate::Span>) {
     if let Some(span) = enclosing {
         emitter.record_span(span);
     }
-}
-
-fn capture_session_key(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-    value: ExprId,
-) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
-    let crate::TypedExprKind::GenericCall { mangled, args, .. } = &ctx
-        .ta
-        .try_expr(value)
-        .map_err(crate::codegen::arena_failure)?
-        .kind
-    else {
-        return Ok(None);
-    };
-    if !crate::stdlib::session::declaration::is_checked_get(mangled) {
-        return Ok(None);
-    }
-    let key = match args.first() {
-        Some(value) => value,
-        None => return Ok(None),
-    }
-    .expr;
-    emit_expr(emitter, ctx, key)?;
-    let slot = emitter.add_anonymous_local(
-        ctx.symbols.value_type(
-            &ctx.ta
-                .try_expr(key)
-                .map_err(crate::codegen::arena_failure)?
-                .ty,
-        )?,
-    )?;
-    emitter.instruction(Instruction::LocalSet(slot));
-    emitter.record_single_evaluation(key, slot)?;
-    Ok(Some(slot))
 }
 
 /// `value!`. Converts a runtime `null` into a catchable `TypeError` instead
@@ -419,6 +381,28 @@ fn emit_structural_test_inner(
             });
             emitter.instruction(Instruction::I32Const(i32::from(*value)));
             emitter.instruction(Instruction::I32Eq);
+            emitter.emit_else();
+            emitter.instruction(Instruction::I32Const(0));
+            emitter.emit_end();
+        }
+        Type::TemplateLiteral { .. } => {
+            let string = string_idx(ctx)?;
+            emitter.instruction(Instruction::LocalGet(value_local));
+            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string)));
+            emitter.emit_if(i32_block);
+            emitter.instruction(Instruction::LocalGet(value_local));
+            let domain = serde_json::to_string(&crate::property_keys::runtime_domain(ty).map_err(
+                |error| error.into_failure(crate::compiler_error::CompilerStage::Codegen, None),
+            )?)
+            .map_err(|error| {
+                crate::codegen::internal_failure(format!("could not encode template type: {error}"))
+            })?;
+            emit_inline_string_checked(emitter, ctx, &domain)?;
+            let helper = ctx
+                .symbols
+                .prelude_func_idx("ObjectConstructor##matchesKeyDomain")
+                .ok_or_else(|| crate::codegen::internal_failure("template matcher imported"))?;
+            emitter.instruction(Instruction::Call(helper));
             emitter.emit_else();
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
@@ -1388,7 +1372,12 @@ fn emit_non_shape_interface_test(
             }
             InterfaceCarrier::RegExp => emit_ref_test(emitter, value_local, intr.regex),
             InterfaceCarrier::RegExpMatch => {
+                emit_regexp_array_test(emitter, ctx, value_local, test, validator_state)?;
                 emit_ref_test(emitter, value_local, intr.regex_match_box);
+                emitter.instruction(Instruction::I32And);
+            }
+            InterfaceCarrier::RegExpMatchArray => {
+                emit_regexp_array_test(emitter, ctx, value_local, test, validator_state)?;
             }
             InterfaceCarrier::TemporalInstant => {
                 emit_ref_test(emitter, value_local, intr.temporal_instant);
@@ -1444,6 +1433,58 @@ fn emit_non_shape_interface_test(
         emitter.instruction(Instruction::LocalSet(matches_any));
     }
     emitter.instruction(Instruction::LocalGet(matches_any));
+    Ok(())
+}
+
+/// Captures and named groups remain mutable through widened aliases, so a
+/// checked cast must validate their current contents even on a branded result.
+fn emit_regexp_array_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value_local: u32,
+    test: &crate::InterfaceNarrowingTest,
+    validator_state: Option<ValidatorState>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_structural_test_inner(
+        emitter,
+        ctx,
+        value_local,
+        &Type::Array(Box::new(Type::regexp_element())),
+        &mut std::collections::BTreeSet::new(),
+        validator_state,
+    )?;
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    emit_ref_test(emitter, value_local, intr.regex_match_box);
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    let groups_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intr.regex_match_box,
+    )));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intr.regex_match_box,
+        field_index: 5,
+    });
+    emitter.instruction(Instruction::LocalSet(groups_local));
+    let groups = test
+        .members
+        .get("groups")
+        .ok_or_else(|| crate::codegen::internal_failure("regex array declares groups"))?;
+    emit_structural_test_inner(
+        emitter,
+        ctx,
+        groups_local,
+        &groups.ty,
+        &mut std::collections::BTreeSet::new(),
+        validator_state,
+    )?;
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(1));
+    emitter.emit_end();
+    emitter.instruction(Instruction::I32And);
     Ok(())
 }
 
@@ -2121,7 +2162,7 @@ fn emit_type_tag(
 }
 
 /// Visited entries pair the value with its effective type arguments. Forwarded
-/// predicates preserve identity; growing arguments construct fresh predicates.
+/// descriptors preserve identity; growing arguments construct fresh ones.
 fn emit_same_validator_environment(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -2139,7 +2180,7 @@ fn emit_same_validator_environment(
     let closure = ctx
         .symbols
         .closure_struct_type_idx(super::field_guards::signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?;
     for slot in 0..count {
         emitter.instruction(Instruction::LocalGet(1));
         emitter.instruction(Instruction::LocalGet(index));
@@ -2178,7 +2219,7 @@ fn emit_store_validator_environment(
     let closure = ctx
         .symbols
         .closure_struct_type_idx(super::field_guards::signature())
-        .ok_or_else(|| crate::codegen::internal_failure("descriptor closure"))?;
+        .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?;
     emitter.instruction(Instruction::LocalGet(1));
     emitter.instruction(Instruction::LocalGet(3));
     emitter.instruction(Instruction::I32Const(2));
@@ -2306,6 +2347,18 @@ fn emit_index_conformance(
     interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let domain = serde_json::to_string(&crate::property_keys::runtime_domain(&index.key).map_err(
+        |error| error.into_failure(crate::compiler_error::CompilerStage::Codegen, None),
+    )?)
+    .map_err(|error| {
+        crate::codegen::internal_failure(format!("could not encode index key domain: {error}"))
+    })?;
+    emit_inline_string_checked(emitter, ctx, &domain)?;
+    let domain_local = emitter.add_anonymous_local(ValType::Ref(wasm_encoder::RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(string_idx(ctx)?),
+    }))?;
+    emitter.instruction(Instruction::LocalSet(domain_local));
     emitter.instruction(Instruction::LocalGet(object));
     let Some(symbol) = ctx.require(
         ctx.symbols
@@ -2314,10 +2367,11 @@ fn emit_index_conformance(
     ) else {
         return Ok(());
     };
+    emitter.instruction(Instruction::LocalGet(domain_local));
     emitter.instruction(Instruction::Call(symbol));
     let values = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::LocalSet(values));
-    let record_keys = diagnostic::record_keys(emitter, ctx, object, values);
+    let record_keys = diagnostic::record_keys(emitter, ctx, object, values, domain_local);
     emit_elements_test(
         emitter,
         ctx,

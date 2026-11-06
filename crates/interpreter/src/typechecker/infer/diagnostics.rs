@@ -5,6 +5,7 @@
 //! delegate to [`crate::did_you_mean`] but need access to `self.types`
 //! and `self.scopes`, so the helper sits here on the `Inferer`.
 
+use crate::lower_local_types::{display_type_name, is_local_type_name};
 use crate::{Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, ValueKind};
 
 use super::format_signature::SignatureKind;
@@ -347,6 +348,32 @@ impl<'a> Inferer<'a> {
         culprit: Option<ExprId>,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let mut notes = Vec::new();
+        if let Some(id) = culprit {
+            let expr = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(crate::typechecker::arena_failure)?;
+            let source = self.rewritable_snippet(expr.span);
+            if matches!(&expr.kind, crate::TypedExprKind::MethodCall { iface, name, .. }
+                | crate::TypedExprKind::GenericMethodCall { iface, name, .. }
+                if *iface == crate::mangle::prelude("Map") && name.name == "get")
+            {
+                help.push("`Map.get` returns undefined for a missing key".to_string());
+            }
+            let non_null = super::narrow_scopes::non_null_form(expr.ty.clone());
+            if matches!(
+                non_null.as_ref().map(Type::peel),
+                Some(Type::Number | Type::NumberLiteral(_))
+            ) {
+                help.push(format!(
+                    "may be undefined: use `({source} ?? 0)` or check it first"
+                ));
+            } else {
+                help.push(format!(
+                    "may be null or undefined: check `{source}` before using it"
+                ));
+            }
+        }
         if let Some((extra_help, extra_notes)) = culprit
             .map(|e| self.narrowing_invalidation_hint(e))
             .transpose()?
@@ -755,7 +782,8 @@ impl<'a> Inferer<'a> {
             );
             return;
         }
-        let message = format!("unresolved identifier `{name}`");
+        // An assignment to a local enum names it by its key.
+        let message = format!("unresolved identifier `{}`", display_type_name(name));
         if name == "await" {
             self.error_with_help(
                 span,
@@ -773,37 +801,62 @@ impl<'a> Inferer<'a> {
             let rest = rest.trim_start();
             rest.starts_with('.') || rest.starts_with("?.")
         });
-        if used_as_namespace && let Some(import) = self.missing_import(name) {
-            let help = format!("`{name}` is a module; import it first:\n  {import}");
+        let imports = self.package_namespace_import_help(name);
+        if used_as_namespace && !imports.is_empty() {
             // One import fixes every use in the file, so later uses would only
             // repeat it.
-            let already_named = self.diagnostics.iter().any(|d| {
-                d.span.file == span.file && d.message == message && d.help.contains(&help)
-            });
+            let already_named = self
+                .diagnostics
+                .iter()
+                .any(|d| d.span.file == span.file && d.message == message && d.help == imports);
             if !already_named {
-                self.error_with_help(span, message, vec![help]);
+                self.error_with_help(span, message, imports);
             }
             return;
         }
-        let help: Vec<String> = self
+        let mut help: Vec<String> = self
             .closest_local_or_global(name)
             .map(|s| vec![format!("did you mean `{}`?", s)])
             .unwrap_or_default();
+        help.extend(self.package_value_import_help(name));
         self.error_with_help(span, message, help);
     }
 
-    /// The import that would bind `name` to a loaded module, when one is named
-    /// after it: `fs` for `submilli:fs`, `gmail` for `@submilli/gmail`. Models
-    /// write `fs.read(…)` as if the module were a global.
-    fn missing_import(&self, name: &str) -> Option<String> {
-        let stdlib = format!("submilli:{name}");
-        if self.packages_by_name.contains_key(stdlib.as_str()) {
-            return Some(format!("import * as {name} from \"{stdlib}\";"));
-        }
-        let package = format!("@submilli/{name}");
-        self.packages_by_name
-            .contains_key(package.as_str())
-            .then(|| format!("import {name} from \"{package}\";"))
+    fn import_suggestion_packages(&self) -> impl Iterator<Item = &crate::PackageDeclaration> {
+        self.packages_by_name.values().copied().filter(|pkg| {
+            !matches!(
+                pkg.package_name.as_str(),
+                crate::mangle::PRELUDE_PACKAGE
+                    | crate::runtime::NUMBER_MODULE_NAME
+                    | crate::runtime::TEMPORAL_MODULE_NAME
+            )
+        })
+    }
+
+    fn package_value_import_help(&self, name: &str) -> Vec<String> {
+        self.import_suggestion_packages()
+            .filter(|pkg| pkg.values.contains_key(name))
+            .map(|pkg| named_import_help(name, &pkg.package_name))
+            .collect()
+    }
+
+    pub(super) fn package_type_import_help(&self, name: &str) -> Vec<String> {
+        self.import_suggestion_packages()
+            .filter(|pkg| pkg.types.contains_key(name))
+            .map(|pkg| named_import_help(name, &pkg.package_name))
+            .collect()
+    }
+
+    fn package_namespace_import_help(&self, name: &str) -> Vec<String> {
+        self.import_suggestion_packages()
+            .filter(|pkg| pkg.package_name.rsplit(['/', ':']).next() == Some(name))
+            .map(|pkg| {
+                format!(
+                    "`{name}` is a module; import it first:\n  import {name} from \"{}\";",
+                    pkg.package_name
+                )
+            })
+            .collect()
     }
 
     /// Help for `name` missing from `package`: the `submilli:fs` spelling of a
@@ -814,20 +867,60 @@ impl<'a> Inferer<'a> {
         name: &str,
         exports_help: Vec<String>,
     ) -> Vec<String> {
-        node_fs_equivalent(package, name)
-            .map(|equivalent| format!("did you mean `{equivalent}`?"))
+        let namespace_hint = package
+            .strip_prefix("submilli:")
+            .filter(|module| *module == name)
+            .map(|_| {
+                format!("import the module namespace with `import {name} from \"{package}\";`")
+            });
+        namespace_hint
             .into_iter()
+            .chain(
+                node_fs_equivalent(package, name)
+                    .map(|equivalent| format!("did you mean `{equivalent}`?")),
+            )
             .chain(exports_help)
             .collect()
     }
 
-    /// Suggest the closest type name to `query` from the four
-    /// primitive keywords + every name in `self.types`. Used by B3's
-    /// "unknown type" diagnostic.
-    pub(super) fn closest_type_name(&self, query: &str) -> Option<String> {
+    /// The key of the innermost type declared in a block under the source
+    /// name `name` whose scope encloses `name`.
+    pub(super) fn local_type_in_scope(&self, name: &crate::Ident) -> Option<&'a str> {
+        let lowered = self.ast.lowered_local_types.as_ref()?;
+        lowered
+            .scopes
+            .iter()
+            .filter(|(key, scope)| display_type_name(key) == name.name && scope.encloses(name.span))
+            .max_by_key(|(_, scope)| scope.start)
+            .map(|(key, _)| key.as_str())
+    }
+
+    /// The type to suggest for the unknown type `name`: the closest of the
+    /// primitive keywords and the types in scope where `name` is written. A
+    /// type declared in a block is in scope only in that block, and goes by
+    /// its source name.
+    pub(super) fn closest_type_name(&self, name: &crate::Ident) -> Option<String> {
         const BUILTINS: [&str; 5] = ["number", "string", "boolean", "void", "never"];
-        let user_types: Vec<&str> = self.types.iter_names().collect();
-        did_you_mean::closest_match(query, BUILTINS.into_iter().chain(user_types)).map(String::from)
+        let scopes = self
+            .ast
+            .lowered_local_types
+            .as_ref()
+            .map(|lowered| &lowered.scopes);
+        let user_types: Vec<&str> = self
+            .types
+            .iter_names()
+            .filter_map(|type_name| {
+                if !is_local_type_name(type_name) {
+                    return Some(type_name);
+                }
+                let scope = scopes?.get(type_name)?;
+                scope
+                    .encloses(name.span)
+                    .then(|| display_type_name(type_name))
+            })
+            .collect();
+        did_you_mean::closest_match(&name.name, BUILTINS.into_iter().chain(user_types))
+            .map(String::from)
     }
 
     /// Report a field that does not exist on `receiver_ty` — the single place
@@ -1667,6 +1760,107 @@ impl<'a> Inferer<'a> {
         } else if !super::narrowing::condition_compatible(ty) {
             self.error_non_condition_type(span, ty);
         }
+    }
+}
+
+fn named_import_help(name: &str, package: &str) -> String {
+    format!("`{name}` is exported by `{package}`\n  add `import {{ {name} }} from \"{package}\";`")
+}
+
+#[cfg(test)]
+mod missing_import_tests {
+    use super::super::test_support::run_with_packages;
+    use crate::{PackageDeclaration, Type, TypeKind, TypeSymbol};
+
+    fn package(name: &str) -> PackageDeclaration {
+        let mut package = crate::stdlib::uuid::package_declaration();
+        package.package_name = name.into();
+        package.types.insert(
+            "Contact".into(),
+            TypeSymbol {
+                name: "Contact".into(),
+                mangled_name: crate::mangle::package_symbol(name, "Contact"),
+                declaration_span: crate::Span::at(crate::FileId(0)),
+                kind: TypeKind::Alias {
+                    generics: Vec::new(),
+                    ty: Type::String,
+                    doc: None,
+                },
+            },
+        );
+        package
+    }
+
+    #[test]
+    fn named_export_imports_are_sorted_and_include_scoped_packages() {
+        let z = package("@appworld/z");
+        let a = package("@appworld/a");
+        let (_, diagnostics) = run_with_packages("function main(): void { v4(); }", &[&z, &a]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let help = &diagnostics[0].help;
+        assert_eq!(help.len(), 2, "{help:?}");
+        assert!(help[0].contains("import { v4 } from \"@appworld/a\";"));
+        assert!(help[1].contains("import { v4 } from \"@appworld/z\";"));
+    }
+
+    #[test]
+    fn type_exports_suggest_imports_and_the_suggested_import_resolves() {
+        let package = package("@appworld/phone");
+        let (_, diagnostics) =
+            run_with_packages("function main(value: Contact): void {}", &[&package]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].message, "unknown type `Contact`");
+        assert!(
+            diagnostics[0]
+                .help
+                .iter()
+                .any(|h| h.contains("import { Contact } from \"@appworld/phone\";"))
+        );
+        let (_, diagnostics) = run_with_packages(
+            "import { Contact } from \"@appworld/phone\"; function main(value: Contact): void {}",
+            &[&package],
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn namespace_imports_match_any_scope_in_sorted_order() {
+        let z = package("@z/phone");
+        let a = package("@appworld/phone");
+        let (_, diagnostics) = run_with_packages(
+            "function main(): void { phone.v4(); phone.v4(); }",
+            &[&z, &a],
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let help = &diagnostics[0].help;
+        assert_eq!(help.len(), 2, "{help:?}");
+        assert!(help[0].contains("import phone from \"@appworld/phone\";"));
+        assert!(help[1].contains("import phone from \"@z/phone\";"));
+    }
+
+    #[test]
+    fn value_and_type_spaces_do_not_suggest_each_others_exports() {
+        let package = package("@appworld/phone");
+        let (_, diagnostics) =
+            run_with_packages("function main(value: v4): void { Contact(); }", &[&package]);
+        assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.help.iter().all(|h| !h.contains("@appworld/phone")))
+        );
+    }
+
+    #[test]
+    fn existing_typo_help_precedes_an_exact_export_match() {
+        let package = package("@appworld/phone");
+        let (_, diagnostics) = run_with_packages(
+            "function main(): void { const v44 = 1; v4(); }",
+            &[&package],
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].help[0], "did you mean `v44`?");
+        assert!(diagnostics[0].help[1].contains("import { v4 }"));
     }
 }
 

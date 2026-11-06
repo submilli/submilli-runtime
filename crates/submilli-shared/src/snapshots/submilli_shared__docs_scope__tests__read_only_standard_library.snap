@@ -46,15 +46,15 @@ function isEmpty(path: string): boolean;
 function lines(path: string): Iterator<string>;
 
 /**
- * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `recursive=true` walks descendants as well; `recursive=false` yields only direct children. Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted. Symlinks surface as `kind="symlink"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.
+ * List the children of the directory at `path` as a constant-memory iterator of `DirEntry`. `options.recursive=true` walks descendants as well; `options.recursive=false` yields only direct children. Order: a directory is always yielded before its contents, and a directory's whole subtree is yielded as one consecutive run — no entry from outside a subtree is interleaved into it. Down to 32 levels of nesting that is exactly depth-first (matching `find` / `os.walk`); deeper than that the walk runs out of directory handles and a subdirectory's contents follow the rest of its parent's entries instead of coming directly after it, so don't depend on strict depth-first order past that depth. Siblings come in whatever order the filesystem reports — not sorted. Symlinks surface as `kind="symlink"` and are not followed. A recursive walk is best-effort: a subdirectory it cannot read — or, past a fixed ceiling on how many postponed descents one walk holds, cannot afford to remember — is skipped and the walk continues, so a listing is not proof that a path is absent.
  * @param path Directory path under the VFS root.
- * @param recursive Whether to walk descendants recursively.
+ * @param options Whether to walk descendants recursively.
  * @capability fs.list { path, recursive }
  */
-function list(path: string, recursive: boolean): Iterator<DirEntry>;
+function list(path: string, options?: RecursiveOptions): Iterator<DirEntry>;
 
 /**
- * Maximum number of bytes `read` / `readText` will load whole; past this they return `undefined`. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.
+ * Maximum number of bytes `read` / `readText` will load whole; past this they throw. Also the upper bound on `readBytes(path, offset, length)`'s `length`. Configured by the harness per Store; defaults to the 50 MB tier memory cap.
  */
 function maxReadSize(): number;
 
@@ -66,11 +66,11 @@ function maxReadSize(): number;
 function peek(path: string): Peek;
 
 /**
- * Read the whole file as a `Uint8Array`. Returns `undefined` when the file is larger than `maxReadSize()` — the typechecker forces narrowing before use. Traps on missing paths or directories.
+ * Read the whole file as a `Uint8Array`. Throws when the file is larger than `maxReadSize()`. Traps on missing paths or directories.
  * @param path File path under the VFS root.
  * @capability fs.read { path }
  */
-function read(path: string): Uint8Array | undefined;
+function read(path: string): Uint8Array;
 
 /**
  * Random-access byte-range read. Traps if `length > maxReadSize()`, if `offset` is negative, or on I/O errors. The returned `Uint8Array` may be shorter than `length` if the request runs past EOF.
@@ -82,11 +82,11 @@ function read(path: string): Uint8Array | undefined;
 function readBytes(path: string, offset: number, length: number): Uint8Array;
 
 /**
- * Read the whole file as a UTF-8 string. Returns `undefined` when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.
+ * Read the whole file as a UTF-8 string. Throws when the file is larger than `maxReadSize()`. Strips a leading UTF-8 BOM by default; invalid bytes are replaced by U+FFFD.
  * @param path File path under the VFS root.
  * @capability fs.read { path }
  */
-function readText(path: string): string | undefined;
+function readText(path: string): string;
 
 /**
  * File size in bytes. Traps on directories or missing paths — call `exists(path)` first or use `stat(path)` if you need to handle absence.
@@ -96,21 +96,21 @@ function readText(path: string): string | undefined;
 function size(path: string): number;
 
 /**
- * Metadata about an entry under the VFS root. Returns `undefined` when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.
+ * Metadata about an entry under the VFS root. Throws when the path does not exist; otherwise returns a `Stat` carrying `kind` / `size` / `modifiedAt`.
  * @param path File path under the VFS root.
  * @capability fs.stat { path }
  */
-function stat(path: string): Stat | undefined;
+function stat(path: string): Stat;
 
 /**
- * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path, false)` to visit all of them.
+ * Describe `path` in a few lines of text, for a program that needs to see what is there before deciding what to read. A directory lists its direct children — directories first, then by name — each with its kind, size and modification time, under a count line; an empty directory says `empty directory`. A file reports its size and modification time, and a missing path says `does not exist` rather than throwing. Shows at most 100 entries and counts the rest; iterate `list(path)` to visit all of them.
  * @param path File or directory path under the VFS root.
  * @capability fs.list { path, recursive }
  */
 function summary(path: string): string;
 
 /**
- * Directory entry yielded by `list(path, recursive)`. Properties: `kind` / `name` / `path` / `size`. Constructed only by the iterator.
+ * Directory entry yielded by `list(path, options)`. Properties: `kind` / `name` / `path` / `size`. Constructed only by the iterator.
  */
 interface DirEntry {
   /**
@@ -206,6 +206,16 @@ interface Peek {
 }
 
 /**
+ * Options for mkdir, remove and list.
+ */
+interface RecursiveOptions {
+  /**
+   * Include descendants or create missing parents. Defaults to false.
+   */
+  recursive?: boolean;
+}
+
+/**
  * Filesystem metadata returned by `stat(path)`. Constructed only by `stat`; user code reads `kind` / `size` / `modifiedAt` via property access.
  */
 interface Stat {
@@ -226,7 +236,7 @@ interface Stat {
 # submilli:session
 
 /**
- * Read a session value, checked against `T`. The stored value is tested structurally — every field, element, and union arm — and a mismatch throws a catchable `TypeError` rather than handing back a wrongly-typed value, so `get<Progress>("progress")` returns a real `Progress`, `undefined` for a missing key, or throws. Returns `T | undefined`: a missing key returns `undefined`; a stored `null` is preserved when `T` permits it and otherwise throws a `TypeError`. `T` must be a type the runtime can verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a generic parameter of the calling function, a class, or an interface with methods is rejected at compile time.
+ * Read a session value, checked against `T`. The stored value is tested structurally — every field, element, and union arm — and a mismatch throws a catchable `TypeError` rather than handing back a wrongly-typed value, so `get<Progress>("progress")` returns a real `Progress`, `undefined` for a missing key, or throws. Returns `T | undefined`: a missing key returns `undefined`; a stored `null` is preserved when `T` permits it and otherwise throws a `TypeError`. `T` must be a type the runtime can verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a class, or an interface with methods is rejected at compile time. A generic may pass its own type parameter, or a type built from it (`get<T>` or `get<T[]>` inside `function load<T>`): the stored value is checked against the type its caller names.
  * @param key Session key. Exact UTF-16 code units; no normalization, no path semantics.
  * @capability session.read { key }
  */

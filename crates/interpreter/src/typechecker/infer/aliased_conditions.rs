@@ -184,6 +184,7 @@ impl Inferer<'_> {
             })
             .map_err(crate::typechecker::arena_failure)?;
         Ok(Some(narrowing::NarrowedView {
+            evolving: None,
             narrowed_ty: field_ty,
             facts: narrowing::TypeFacts::EMPTY,
             excluded_literals: std::collections::BTreeSet::new(),

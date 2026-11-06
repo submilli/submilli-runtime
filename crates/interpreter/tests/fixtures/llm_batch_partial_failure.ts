@@ -12,22 +12,23 @@ import llm from "submilli:llm";
 
 function main(): void {
   const prompts = ["alpha", "beta", "gamma"];
-  const results = llm.batch("claude-haiku-4-5", prompts);
+  const results = llm.texts("claude-haiku-4-5", prompts);
 
   // The batch returns rather than throwing, and keeps its positional shape
   // even though an element inside it failed.
   assert(results.length === 3, "a partial failure still returns one result per prompt");
 
   // The siblings survive, with their own text intact.
-  assert(results[0].ok, "the element before the failure survives");
-  assert((results[0].text as string).indexOf("answer 0") === 0, "and keeps its own answer");
-  assert(results[2].ok, "the element after the failure survives");
-  assert((results[2].text as string).indexOf("answer 2") === 0, "and keeps its own answer");
+  const before = results[0];
+  assert(before.ok && before.value.indexOf("answer 0") === 0, "the element before the failure survives with its own answer");
+  const after = results[2];
+  assert(after.ok && after.value.indexOf("answer 2") === 0, "the element after the failure survives with its own answer");
 
   // The failed element reports why, in the closed kebab-case vocabulary a
   // program branches on.
   const failed = results[1];
   assert(!failed.ok, "the failing element reports a non-natural stop");
+  if (failed.ok) return;
   assert(failed.reason === "truncated", "the reason names the closed-set category");
 
   // The partial text survives the failure — this is the whole point of the
@@ -47,7 +48,7 @@ function main(): void {
   let usableText = 0;
   for (const r of results) {
     if (r.ok) clean = clean + 1;
-    if (r.text !== undefined) usableText = usableText + 1;
+    if (r.ok ? r.value.length > 0 : r.text !== undefined) usableText = usableText + 1;
   }
   assert(clean === 2, "two elements stopped naturally");
   assert(usableText === 3, "but all three produced text worth reading");

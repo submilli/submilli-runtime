@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::lower_local_types::{display_type_name, is_local_type_name};
 use crate::typechecker::infer::module_symbols::ModuleSymbols;
 use crate::{
     Diagnostic, ExportEntry, MangledName, Package, PackageDeclaration, Severity, Type, TypeKind,
@@ -188,6 +189,20 @@ fn diagnose_private_types(
         if exported_types.contains(&mangled) {
             continue;
         }
+        let local = is_local_type_name(&name);
+        let name = display_type_name(&name);
+        let help = if local {
+            format!(
+                "`{name}` is declared in a block: move it to the top level of this {} and \
+                 export it so callers can name the {}'s {}",
+                export_use.level, export_use.noun, export_use.usage,
+            )
+        } else {
+            format!(
+                "export `{name}` from this {} so callers can name the {}'s {}",
+                export_use.level, export_use.noun, export_use.usage,
+            )
+        };
         diagnostics.push(Diagnostic {
             severity: Severity::Error,
             span: export_use.span,
@@ -195,10 +210,7 @@ fn diagnose_private_types(
                 "exported {} `{}` uses private type `{name}` in its {}",
                 export_use.noun, export_use.exported_name, export_use.usage,
             ),
-            help: vec![format!(
-                "export `{name}` from this {} so callers can name the {}'s {}",
-                export_use.level, export_use.noun, export_use.usage,
-            )],
+            help: vec![help],
             notes: Vec::new(),
         });
     }
@@ -227,6 +239,11 @@ fn collect_signature_named_types(
     out: &mut BTreeMap<MangledName, String>,
 ) {
     match ty {
+        Type::TemplateLiteral { substitutions, .. } => {
+            for inner in substitutions {
+                collect_signature_named_types(package_name, inner, out);
+            }
+        }
         Type::InterfaceRef {
             mangled,
             package,

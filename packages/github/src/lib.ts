@@ -1392,7 +1392,7 @@ const ISSUE_QUERY = "query($owner:String!,$name:String!,$first:Int!,$after:Strin
  */
 export function getViewer(): User {
     check("github.com/viewer.get", {});
-    return userFrom(githubGet("/user").json() as ApiUser);
+    return userFrom(githubGet("/user").json<ApiUser>());
 }
 
 /** List teams visible to the authenticated user.
@@ -1403,7 +1403,7 @@ export function getViewer(): User {
 export function listTeams(options: PageOptions = {}): PageResult<Team> {
     check("github.com/teams.list", {});
     const response = githubGet("/user/teams", pageQuery(options));
-    const data = response.json() as ApiTeam[];
+    const data = response.json<ApiTeam[]>();
     const items: Team[] = [];
     for (const item of data) items.push(teamFrom(item));
     return pageFrom(response, items);
@@ -1420,7 +1420,7 @@ export function listTeamMembers(org: string, teamSlug: string, options: PageOpti
     check("github.com/teamMembers.list", { org: org, teamSlug: teamSlug });
     const path = "/orgs/" + segment(org, "organization") + "/teams/" + segment(teamSlug, "team slug") + "/members";
     const response = githubGet(path, pageQuery(options));
-    const data = response.json() as ApiUser[];
+    const data = response.json<ApiUser[]>();
     const items: User[] = [];
     for (const item of data) items.push(userFrom(item));
     return pageFrom(response, items);
@@ -1436,7 +1436,7 @@ export function searchRepositories(query: string, options: SearchOptions = {}): 
     requireText(query, "query");
     check("github.com/repositories.search", { query: query });
     const response = githubGet("/search/repositories", searchQuery(query, options));
-    const data = response.json() as ApiSearchRepositories;
+    const data = response.json<ApiSearchRepositories>();
     const items: RepositorySearchHit[] = [];
     for (const item of array(data.items)) {
         items.push({ score: num(item.score), repository: repositoryFrom(item) });
@@ -1458,7 +1458,7 @@ export function searchCode(repository: RepositoryRef, query: string, options: Se
     check("github.com/code.search", context);
     const scoped = scopedSearch(query, owner, name, "");
     const response = githubGet("/search/code", searchQuery(scoped, options));
-    const data = response.json() as ApiSearchCode;
+    const data = response.json<ApiSearchCode>();
     const items: CodeSearchHit[] = [];
     for (const item of array(data.items)) {
         items.push({
@@ -1482,7 +1482,7 @@ export function searchUsers(query: string, options: SearchOptions = {}): SearchP
     check("github.com/users.search", {});
     requireText(query, "query");
     const response = githubGet("/search/users", searchQuery(query, options));
-    const data = response.json() as ApiSearchUsers;
+    const data = response.json<ApiSearchUsers>();
     const items: UserSearchHit[] = [];
     for (const item of array(data.items)) items.push({ score: num(item.score), user: userFrom(item) });
     return searchPageFrom(response, items, data.total_count, data.incomplete_results);
@@ -1494,7 +1494,7 @@ export function searchUsers(query: string, options: SearchOptions = {}): SearchP
  */
 export function getRateLimit(): RateLimit {
     check("github.com/rateLimit.get", {});
-    const data = githubGet("/rate_limit").json() as ApiRateLimit;
+    const data = githubGet("/rate_limit").json<ApiRateLimit>();
     const resources = required(data.resources, "rate limit resources");
     return {
         core: rateResourceFrom(resources.core),
@@ -1514,7 +1514,7 @@ export function getRepository(repository: RepositoryRef): Repository | null {
     const context = checkedRepository(owner, name);
     check("github.com/repositories.get", context);
     const response = githubGetNullable(repositoryPath(owner, name));
-    return response === null ? null : repositoryFrom(response.json() as ApiRepository);
+    return response === null ? null : repositoryFrom(response.json<ApiRepository>());
 }
 
 /** Retrieve a branch, or null when it does not exist.
@@ -1529,7 +1529,7 @@ export function getBranch(repository: RepositoryRef, branch: string): Branch | n
     const context = repositoryContext(owner, name, "branch", branch);
     check("github.com/branches.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/branches/" + segment(branch, "branch"));
-    return response === null ? null : branchFrom(response.json() as ApiBranch);
+    return response === null ? null : branchFrom(response.json<ApiBranch>());
 }
 
 /** List repository branches.
@@ -1544,7 +1544,7 @@ export function listBranches(repository: RepositoryRef, options: PageOptions = {
     const context = checkedRepository(owner, name);
     check("github.com/branches.list", context);
     const response = githubGet(repositoryPath(owner, name) + "/branches", pageQuery(options));
-    const data = response.json() as ApiBranch[];
+    const data = response.json<ApiBranch[]>();
     const items: Branch[] = [];
     for (const item of data) items.push(branchFrom(item));
     return pageFrom(response, items);
@@ -1571,7 +1571,7 @@ export function listCommits(repository: RepositoryRef, options: ListCommitsOptio
     putQuery(query, "since", since === undefined ? undefined : toRfc3339(since, "since"));
     putQuery(query, "until", until === undefined ? undefined : toRfc3339(until, "until"));
     const response = githubGet(repositoryPath(owner, name) + "/commits", query);
-    const data = response.json() as ApiCommit[];
+    const data = response.json<ApiCommit[]>();
     const items: Commit[] = [];
     for (const item of data) items.push(commitFrom(item, "none"));
     return pageFrom(response, items);
@@ -1590,7 +1590,7 @@ export function getCommit(repository: RepositoryRef, ref: string, detail: Commit
     const context = repositoryContext(owner, name, "ref", ref);
     check("github.com/commits.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + segment(ref, "commit ref"));
-    return response === null ? null : commitFrom(response.json() as ApiCommit, detail);
+    return response === null ? null : commitFrom(response.json<ApiCommit>(), detail);
 }
 
 /** List repository releases.
@@ -1605,7 +1605,7 @@ export function listReleases(repository: RepositoryRef, options: PageOptions = {
     const context = checkedRepository(owner, name);
     check("github.com/releases.list", context);
     const response = githubGet(repositoryPath(owner, name) + "/releases", pageQuery(options));
-    const data = response.json() as ApiRelease[];
+    const data = response.json<ApiRelease[]>();
     const items: Release[] = [];
     for (const item of data) items.push(releaseFrom(item));
     return pageFrom(response, items);
@@ -1622,7 +1622,7 @@ export function getLatestRelease(repository: RepositoryRef): Release | null {
     const context = checkedRepository(owner, name);
     check("github.com/releases.getLatest", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/releases/latest");
-    return response === null ? null : releaseFrom(response.json() as ApiRelease);
+    return response === null ? null : releaseFrom(response.json<ApiRelease>());
 }
 
 /** Read a repository file as bytes. `ref` in the check is the branch, tag, or commit the caller
@@ -1686,7 +1686,7 @@ export function listDirectory(repository: RepositoryRef, path: string, options: 
     const query = new Map<string, string>();
     putQuery(query, "ref", ref);
     const suffix = cleanPath.length === 0 ? "/contents" : "/contents/" + encodedFilePath(cleanPath);
-    const data = githubGet(repositoryPath(owner, name) + suffix, query).json() as ApiContent[];
+    const data = githubGet(repositoryPath(owner, name) + suffix, query).json<ApiContent[]>();
     const items: DirectoryEntry[] = [];
     for (const item of data) {
         items.push({
@@ -1717,7 +1717,7 @@ export function getTree(repository: RepositoryRef, treeSha: string, recursive: b
     if (recursive) query.set("recursive", "1");
     const response = githubGetNullable(repositoryPath(owner, name) + "/git/trees/" + segment(treeSha, "tree SHA"), query);
     if (response === null) return null;
-    const data = response.json() as ApiTree;
+    const data = response.json<ApiTree>();
     const entries: TreeEntry[] = [];
     for (const item of array(data.tree)) {
         entries.push({
@@ -1780,12 +1780,12 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
     requireSha(expectedHeadSha, "expected head SHA");
     requireText(message, "commit message");
     validateChanges(changes);
-    const current = githubGet(repositoryPath(owner, name) + "/git/ref/heads/" + segment(branch, "branch")).json() as ApiGitRef;
+    const current = githubGet(repositoryPath(owner, name) + "/git/ref/heads/" + segment(branch, "branch")).json<ApiGitRef>();
     const currentSha = str(current.object?.sha);
     if (currentSha !== expectedHeadSha) {
         throw validationError("branch_moved", "Branch head no longer matches expectedHeadSha");
     }
-    const parent = githubGet(repositoryPath(owner, name) + "/git/commits/" + segment(expectedHeadSha, "expected head SHA")).json() as ApiGitCommit;
+    const parent = githubGet(repositoryPath(owner, name) + "/git/commits/" + segment(expectedHeadSha, "expected head SHA")).json<ApiGitCommit>();
     const parentTree = str(parent.tree?.sha);
     if (parentTree.length === 0) throw validationError("missing_tree", "Expected commit does not include a tree SHA");
     const treeItems: GitTreeItemBody[] = [];
@@ -1805,14 +1805,14 @@ export function commitFiles(repository: RepositoryRef, input: CommitFilesInput):
                 encoding = "base64";
             }
             const blobBody: GitBlobBody = { content: encoded, encoding: encoding };
-            const created = githubPost(repositoryPath(owner, name) + "/git/blobs", blobBody).json() as ApiCreatedSha;
+            const created = githubPost(repositoryPath(owner, name) + "/git/blobs", blobBody).json<ApiCreatedSha>();
             treeItems.push({ path: path, mode: "100644", type: "blob", sha: str(created.sha) });
         }
     }
     const treeBody: GitTreeBody = { base_tree: parentTree, tree: treeItems };
-    const tree = githubPost(repositoryPath(owner, name) + "/git/trees", treeBody).json() as ApiCreatedSha;
+    const tree = githubPost(repositoryPath(owner, name) + "/git/trees", treeBody).json<ApiCreatedSha>();
     const commitBody: GitCommitBody = { message: message, tree: str(tree.sha), parents: [expectedHeadSha] };
-    const createdCommit = githubPost(repositoryPath(owner, name) + "/git/commits", commitBody).json() as ApiCreatedSha;
+    const createdCommit = githubPost(repositoryPath(owner, name) + "/git/commits", commitBody).json<ApiCreatedSha>();
     const createdSha = str(createdCommit.sha);
     const updateBody: GitUpdateRefBody = { sha: createdSha, force: false };
     const update = githubPatchRaw(repositoryPath(owner, name) + "/git/refs/heads/" + segment(branch, "branch"), updateBody);
@@ -1840,7 +1840,7 @@ export function getIssue(repository: RepositoryRef, number: number): Issue | nul
     check("github.com/issues.get", context);
     const response = githubGetNullable(repositoryPath(owner, name) + "/issues/" + issueNumber(number));
     if (response === null) return null;
-    const data = response.json() as ApiIssue;
+    const data = response.json<ApiIssue>();
     if (data.pull_request !== null && data.pull_request !== undefined) {
         throw validationError("wrong_resource_type", "GitHub number identifies a pull request; use getPullRequest");
     }
@@ -1889,7 +1889,7 @@ export function listIssues(repository: RepositoryRef, options: ListIssuesOptions
         jsonProperty("query", JSON.stringify(ISSUE_QUERY)),
         jsonProperty("variables", jsonObject(variableFields)),
     ]);
-    const envelope = githubPostGraphQl(body).json() as GraphQlEnvelope;
+    const envelope = githubPostGraphQl(body).json<GraphQlEnvelope>();
     const errors = array(envelope.errors);
     if (errors.length > 0) {
         const messages: string[] = [];
@@ -1958,7 +1958,7 @@ export function createIssue(repository: RepositoryRef, input: CreateIssueInput):
     if (labels !== undefined) fields.push(jsonProperty("labels", stringArrayJson(labels)));
     if (milestone !== undefined) fields.push(jsonProperty("milestone", milestone.toString()));
     const body = jsonObject(fields);
-    return issueFrom(githubPost(repositoryPath(owner, name) + "/issues", body).json() as ApiIssue);
+    return issueFrom(githubPost(repositoryPath(owner, name) + "/issues", body).json<ApiIssue>());
 }
 
 /** Update an issue.
@@ -2008,7 +2008,7 @@ export function updateIssue(repository: RepositoryRef, number: number, input: Up
     if (stateReason !== undefined) fields.push(jsonProperty("state_reason", JSON.stringify(stateReason)));
     requireFields(fields);
     const body = jsonObject(fields);
-    return issueFrom(githubPatch(repositoryPath(owner, name) + "/issues/" + issueNumber(number), body).json() as ApiIssue);
+    return issueFrom(githubPatch(repositoryPath(owner, name) + "/issues/" + issueNumber(number), body).json<ApiIssue>());
 }
 
 /** List issue comments.
@@ -2053,7 +2053,7 @@ export function listLabels(repository: RepositoryRef, options: PageOptions = {})
     const context = checkedRepository(owner, name);
     check("github.com/labels.list", context);
     const response = githubGet(repositoryPath(owner, name) + "/labels", pageQuery(options));
-    const data = response.json() as ApiLabel[];
+    const data = response.json<ApiLabel[]>();
     const items: Label[] = [];
     for (const item of data) items.push(labelFrom(item));
     return pageFrom(response, items);
@@ -2092,7 +2092,7 @@ export function listPullRequests(repository: RepositoryRef, options: ListPullReq
     putQuery(query, "sort", sort);
     putQuery(query, "direction", direction);
     const response = githubGet(repositoryPath(owner, name) + "/pulls", query);
-    const data = response.json() as ApiPullRequest[];
+    const data = response.json<ApiPullRequest[]>();
     const items: PullRequest[] = [];
     for (const item of data) items.push(pullRequestFrom(item));
     return pageFrom(response, items);
@@ -2111,7 +2111,7 @@ export function getPullRequestReactions(repository: RepositoryRef, number: numbe
     check("github.com/pulls.getReactions", { owner: owner, repo: name, number: number });
     const response = githubGetNullable(repositoryPath(owner, name) + "/issues/" + issueNumber(number));
     if (response === null) return null;
-    const data = response.json() as ApiIssue;
+    const data = response.json<ApiIssue>();
     if (data.pull_request === null || data.pull_request === undefined) {
         throw validationError("wrong_resource_type", "GitHub number identifies an issue; use getIssue");
     }
@@ -2231,7 +2231,7 @@ export function createPullRequest(repository: RepositoryRef, input: CreatePullRe
         fields.push(jsonProperty("maintainer_can_modify", booleanJson(maintainerCanModify)));
     }
     const body = jsonObject(fields);
-    return pullRequestFrom(githubPost(repositoryPath(owner, name) + "/pulls", body).json() as ApiPullRequest);
+    return pullRequestFrom(githubPost(repositoryPath(owner, name) + "/pulls", body).json<ApiPullRequest>());
 }
 
 /** Update a pull request. `base` in the check is the branch the update retargets the pull
@@ -2260,7 +2260,7 @@ export function updatePullRequest(repository: RepositoryRef, number: number, inp
     }
     requireFields(fields);
     const body = jsonObject(fields);
-    return pullRequestFrom(githubPatch(repositoryPath(owner, name) + "/pulls/" + issueNumber(number), body).json() as ApiPullRequest);
+    return pullRequestFrom(githubPatch(repositoryPath(owner, name) + "/pulls/" + issueNumber(number), body).json<ApiPullRequest>());
 }
 
 /** Merge a pull request without force.
@@ -2282,7 +2282,7 @@ export function mergePullRequest(repository: RepositoryRef, number: number, inpu
     if (method !== undefined) fields.push(jsonProperty("merge_method", JSON.stringify(method)));
     if (expectedHeadSha !== undefined) fields.push(jsonProperty("sha", JSON.stringify(expectedHeadSha)));
     const body = jsonObject(fields);
-    const data = githubPut(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/merge", body).json() as ApiMergeResult;
+    const data = githubPut(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/merge", body).json<ApiMergeResult>();
     return { merged: data.merged === true, message: str(data.message), sha: str(data.sha) };
 }
 
@@ -2314,7 +2314,7 @@ export function listPullRequestFiles(repository: RepositoryRef, number: number, 
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullFiles.list", context);
     const response = githubGet(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/files", pageQuery(options));
-    const data = response.json() as ApiPullFile[];
+    const data = response.json<ApiPullFile[]>();
     const items: PullRequestFile[] = [];
     for (const item of data) items.push(pullFileFrom(item));
     return pageFrom(response, items);
@@ -2333,7 +2333,7 @@ export function listPullRequestReviews(repository: RepositoryRef, number: number
     const context = repositoryNumberContext(owner, name, number);
     check("github.com/pullReviews.list", context);
     const response = githubGet(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/reviews", pageQuery(options));
-    const data = response.json() as ApiReview[];
+    const data = response.json<ApiReview[]>();
     const items: PullRequestReview[] = [];
     for (const item of data) items.push(reviewFrom(item));
     return pageFrom(response, items);
@@ -2373,7 +2373,7 @@ export function createPullRequestReview(repository: RepositoryRef, number: numbe
     if (commitId !== undefined) fields.push(jsonProperty("commit_id", JSON.stringify(commitId)));
     if (comments !== undefined) fields.push(jsonProperty("comments", "[" + serializedComments.join(",") + "]"));
     const body = jsonObject(fields);
-    return reviewFrom(githubPost(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/reviews", body).json() as ApiReview);
+    return reviewFrom(githubPost(repositoryPath(owner, name) + "/pulls/" + issueNumber(number) + "/reviews", body).json<ApiReview>());
 }
 
 /** List general pull request comments.
@@ -2509,7 +2509,7 @@ export function listUserSocialAccounts(login: string, options: PageOptions = {})
 
 function getPullRequestUnchecked(owner: string, name: string, number: number): PullRequest | null {
     const response = githubGetNullable(repositoryPath(owner, name) + "/pulls/" + issueNumber(number));
-    return response === null ? null : pullRequestFrom(response.json() as ApiPullRequest);
+    return response === null ? null : pullRequestFrom(response.json<ApiPullRequest>());
 }
 
 function listCommentsUnchecked(
@@ -2519,7 +2519,7 @@ function listCommentsUnchecked(
     options: PageOptions,
 ): PageResult<Comment> {
     const response = githubGet(repositoryPath(owner, name) + "/issues/" + issueNumber(number) + "/comments", pageQuery(options));
-    const data = response.json() as ApiComment[];
+    const data = response.json<ApiComment[]>();
     const items: Comment[] = [];
     for (const item of data) items.push(commentFrom(item));
     return pageFrom(response, items);
@@ -2528,7 +2528,7 @@ function listCommentsUnchecked(
 function addCommentUnchecked(owner: string, name: string, number: number, body: string): Comment {
     requireText(body, "comment body");
     return commentFrom(
-        githubPost(repositoryPath(owner, name) + "/issues/" + issueNumber(number) + "/comments", { body: body }).json() as ApiComment,
+        githubPost(repositoryPath(owner, name) + "/issues/" + issueNumber(number) + "/comments", { body: body }).json<ApiComment>(),
     );
 }
 
@@ -2625,7 +2625,7 @@ function pullSummaryPage(request: ResearchRequest): ResearchPageResult<PullReque
 }
 
 function researchData(response: Response): ApiSearchIssues {
-    const data = response.json() as ApiSearchIssues;
+    const data = response.json<ApiSearchIssues>();
     if (data.total_count === null || data.total_count === undefined || !Number.isSafeInteger(data.total_count) || data.total_count < 0
         || typeof data.incomplete_results !== "boolean" || !Array.isArray(data.items)) {
         throw validationError("invalid_response", "GitHub search must include items, total_count and incomplete_results");
@@ -2654,7 +2654,7 @@ function searchIssuesOrPulls(
 ): SearchPageResult<Issue> {
     const scoped = scopedSearch(query, owner, name, kind);
     const response = githubGet("/search/issues", searchQuery(scoped, options));
-    const data = response.json() as ApiSearchIssues;
+    const data = response.json<ApiSearchIssues>();
     const items: Issue[] = [];
     for (const item of array(data.items)) {
         if (allowPulls || (item.pull_request === null || item.pull_request === undefined)) items.push(issueFrom(item));
@@ -2673,14 +2673,14 @@ function readFileUnchecked(
     putQuery(query, "ref", options.ref);
     const response = githubGetNullable(repositoryPath(owner, name) + "/contents/" + encodedFilePath(cleanPath), query);
     if (response === null) return null;
-    const data = response.json() as ApiContent;
+    const data = response.json<ApiContent>();
     if (str(data.type) !== "file") throw validationError("not_a_file", cleanPath + " is not a repository file");
     const maxBytes = fileLimit(options.maxBytes);
     const size = num(data.size);
     if (size > maxBytes) throw validationError("file_too_large", "GitHub file exceeds the " + maxBytes.toString() + " byte limit");
     let content = str(data.content);
     if (str(data.encoding) !== "base64" || (content.length === 0 && size > 0)) {
-        const blob = githubGet(repositoryPath(owner, name) + "/git/blobs/" + segment(str(data.sha), "blob SHA")).json() as ApiContent;
+        const blob = githubGet(repositoryPath(owner, name) + "/git/blobs/" + segment(str(data.sha), "blob SHA")).json<ApiContent>();
         if (str(blob.encoding) !== "base64") throw validationError("unsupported_encoding", "GitHub blob is not base64 encoded");
         content = str(blob.content);
     }
@@ -2754,7 +2754,7 @@ function githubError(response: Response, overrideCode: string = "", overrideMess
     let documentationUrl = "";
     const errors: string[] = [];
     if (response.body.startsWith("{")) {
-        const envelope = response.json() as ApiError;
+        const envelope = response.json<ApiError>();
         if (overrideMessage.length === 0) message = envelope.message ?? message;
         documentationUrl = str(envelope.documentation_url);
         for (const rawDetail of array(envelope.errors)) {
@@ -3481,5 +3481,5 @@ function rateResourceFrom(data?: ApiRateResource | null): RateLimitResource {
 
 function getCommitUnchecked(owner: string, name: string, ref: string, detail: CommitDetail): Commit | null {
     const response = githubGetNullable(repositoryPath(owner, name) + "/commits/" + segment(ref, "commit ref"));
-    return response === null ? null : commitFrom(response.json() as ApiCommit, detail);
+    return response === null ? null : commitFrom(response.json<ApiCommit>(), detail);
 }

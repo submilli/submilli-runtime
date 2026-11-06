@@ -2585,6 +2585,34 @@ export function unchecked(): void { get("https://example.com"); }
         assert!(effect.witness[1].target.ends_with("#second"));
     }
 
+    /// The typed `llm.call<T>` and the text form `llm.text` are both tagged
+    /// `@capability llm.call`, and the type argument rides in the call's type
+    /// descriptor rather than in a compiler-only function, so both record the
+    /// same effect.
+    #[test]
+    fn typed_call_and_text_record_the_same_llm_call_capability_effect() {
+        let map = compile(&[(
+            "lib",
+            r#"
+                import llm from "submilli:llm";
+                interface Verdict { label: string; }
+                export function typed(): boolean { return llm.call<Verdict>("m", "p").ok; }
+                export function untyped(): boolean { return llm.text("m", "p").ok; }
+            "#,
+        )]);
+        for name in ["#typed", "#untyped"] {
+            let route = route(&map, name);
+            assert!(
+                route
+                    .effects
+                    .iter()
+                    .any(|effect| effect.effect.capability.as_deref() == Some("llm.call")),
+                "{name} lost its llm.call effect: {:#?}",
+                route.effects
+            );
+        }
+    }
+
     #[test]
     fn root_reexport_is_public_but_unreachable_private_helper_is_not_a_route() {
         let map = compile(&[

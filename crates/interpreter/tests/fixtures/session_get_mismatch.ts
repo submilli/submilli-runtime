@@ -1,8 +1,8 @@
 // A stored value that does not match `T` throws a catchable `TypeError`
 // instead of arriving statically typed and unverified. The message names the
-// expected type and the runtime kind it found, and never echoes the stored
-// value — a session holds a tenant's data, so a type error must not become a
-// disclosure channel.
+// key and the expected type, and never echoes the stored value — a session
+// holds a tenant's data, so a type error must not become a disclosure
+// channel.
 import session from "submilli:session";
 
 interface Progress {
@@ -25,7 +25,8 @@ function main(): void {
     assert(false, "a missing field must not pass the check");
   } catch (e: Error) {
     threw = true;
-    assert(e.message.indexOf("type mismatch") >= 0, "the failure is a type mismatch");
+    assert(e.message.indexOf("does not match `Progress`") >= 0, "the failure names the expected type");
+    assert(e.message.indexOf("m/partial") >= 0, "and the key");
     assert(e.message.indexOf("no done flag") < 0, "the message never echoes the stored value");
   }
   assert(threw, "a missing field throws");

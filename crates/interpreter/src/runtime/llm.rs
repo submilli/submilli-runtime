@@ -206,6 +206,9 @@ pub enum PromptBoundKind {
     PromptCount,
     /// UTF-8 bytes of a single prompt element.
     PromptBytes,
+    /// UTF-8 bytes of the schema sent with every prompt, held to the
+    /// per-prompt bound.
+    SchemaBytes,
 }
 
 impl std::fmt::Display for PromptBoundKind {
@@ -213,23 +216,27 @@ impl std::fmt::Display for PromptBoundKind {
         match self {
             Self::PromptCount => write!(f, "prompts in one batch"),
             Self::PromptBytes => write!(f, "bytes in a single prompt"),
+            Self::SchemaBytes => write!(f, "bytes in the schema"),
         }
     }
 }
 
+/// The model the call named (none for a listing), then the failure and its
+/// fix. The function the program called is not known here; the caller that
+/// knows it prefixes it.
 impl std::fmt::Display for LlmCallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.model().is_empty() {
+            write!(f, "model \"{}\": ", self.model())?;
+        }
         match self {
-            Self::NotConfigured { model } => write!(
+            Self::NotConfigured { .. } => write!(
                 f,
-                "llm.call(\"{model}\"): no model provider is configured for this runtime — the \
-                 operator wires one before model calls can dispatch"
+                "no model provider is configured for this runtime — the operator wires one \
+                 before model calls can dispatch"
             ),
-            Self::UnknownModel { model, available } => {
-                write!(
-                    f,
-                    "llm.call(\"{model}\"): the provider does not serve that model — "
-                )?;
+            Self::UnknownModel { available, .. } => {
+                write!(f, "the provider does not serve that model — ")?;
                 if available.is_empty() {
                     write!(
                         f,
@@ -243,28 +250,37 @@ impl std::fmt::Display for LlmCallError {
                     )
                 }
             }
-            Self::BudgetExceeded { model, limit_kind } => {
-                write!(f, "llm.call(\"{model}\") exceeded the {limit_kind}")
-            }
+            Self::BudgetExceeded { limit_kind, .. } => write!(f, "exceeded the {limit_kind}"),
             Self::PromptBoundsExceeded {
-                model,
+                limit_kind: PromptBoundKind::SchemaBytes,
+                actual,
+                limit,
+                ..
+            } => write!(
+                f,
+                "prompt bound exceeded: {actual} {} exceeds the {limit} allowed — shorten \
+                 the schema",
+                PromptBoundKind::SchemaBytes
+            ),
+            Self::PromptBoundsExceeded {
                 limit_kind,
                 actual,
                 limit,
+                ..
             } => write!(
                 f,
-                "llm.call(\"{model}\"): prompt bound exceeded: {actual} {limit_kind} exceeds the \
-                 {limit} allowed — send fewer prompts per call, or shorten each one"
+                "prompt bound exceeded: {actual} {limit_kind} exceeds the {limit} allowed — \
+                 send fewer prompts per call, or shorten each one"
             ),
-            Self::Unauthorized { model } => write!(
+            Self::Unauthorized { .. } => write!(
                 f,
-                "llm.call(\"{model}\"): the provider rejected the API credential, or none was \
-                 available — the operator sets a valid key for this provider"
+                "the provider rejected the API credential, or none was available — the \
+                 operator sets a valid key for this provider"
             ),
-            Self::Transport { model, detail } => write!(
+            Self::Transport { detail, .. } => write!(
                 f,
-                "llm.call(\"{model}\"): transport error before any prompt ran: {detail} — no \
-                 tokens were billed; retry the call"
+                "transport error before any prompt ran: {detail} — no tokens were billed; \
+                 retry the call"
             ),
         }
     }

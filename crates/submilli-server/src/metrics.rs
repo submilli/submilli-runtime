@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use interpreter::PhaseTimings;
-use interpreter::runtime::{HttpMetric, MetricsSink};
+use interpreter::runtime::{Approver, HttpMetric, MetricsSink, Unasked};
 use sentry::metrics::{counter, distribution};
 use sentry::protocol::Unit;
 
@@ -158,6 +158,16 @@ pub fn http_operation(metric: &HttpMetric) {
         .capture();
 }
 
+/// A call that needed an approval was denied without asking anyone. `approver`
+/// is `human` or `admin`; `why` is the bounded [`Unasked`] class. Blueprints name
+/// callers and capabilities, so neither is sent.
+pub fn approval_unasked(approver: Approver, why: Unasked) {
+    counter("submilli.server.approval.unasked", 1)
+        .attribute("approver", approver.as_str())
+        .attribute("why", why.as_str())
+        .capture();
+}
+
 /// Forwards interpreter runtime metrics to Sentry. Installed on every
 /// per-request `StoreData` so HTTP host operations are observable in production.
 pub struct SentryMetricsSink;
@@ -165,5 +175,9 @@ pub struct SentryMetricsSink;
 impl MetricsSink for SentryMetricsSink {
     fn http_operation(&self, metric: HttpMetric) {
         http_operation(&metric);
+    }
+
+    fn approval_unasked(&self, approver: Approver, why: Unasked) {
+        approval_unasked(approver, why);
     }
 }

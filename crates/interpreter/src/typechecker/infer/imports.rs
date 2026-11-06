@@ -842,14 +842,29 @@ impl<'a> Inferer<'a> {
         if names.is_empty() {
             return Vec::new();
         }
-        vec![format!(
+        let declarations = crate::packages::render_declarations(pkg);
+        let signatures: Vec<_> = declarations
+            .lines()
+            .filter(|line| {
+                line.starts_with("export ")
+                    || line.starts_with("declare ")
+                    || line.starts_with("function ")
+            })
+            .take(8)
+            .collect();
+        let mut help = vec![format!(
             "exports: {}",
             names
                 .iter()
-                .map(|n| format!("`{n}`"))
+                .take(12)
+                .map(|name| format!("`{name}`"))
                 .collect::<Vec<_>>()
-                .join(", "),
-        )]
+                .join(", ")
+        )];
+        if !signatures.is_empty() {
+            help.push(format!("module declarations:\n{}", signatures.join("\n")));
+        }
+        help
     }
 }
 

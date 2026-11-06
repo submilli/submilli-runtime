@@ -1501,7 +1501,7 @@ async fn a_model_token_quota_refusal_continues_the_call_whose_gate_allowed_it() 
     let source = r#"
 import llm from "submilli:llm";
 function main(): string {
-  try { llm.call("open", "hello"); } catch (e: QuotaExceededError) { return "refused"; }
+  try { llm.text("open", "hello"); } catch (e: QuotaExceededError) { return "refused"; }
   return "answered";
 }
 "#;
@@ -1838,7 +1838,7 @@ function main(): string {
 async fn a_model_call_keeps_its_prompts_reply_and_token_usage() {
     let source = r#"
 import llm from "submilli:llm";
-function main(): string { return llm.call("open", "what is two plus two").text ?? ""; }
+function main(): string { const r = llm.text("open", "what is two plus two"); return r.ok ? r.value : ""; }
 "#;
     let outcome = run(
         source,
@@ -1960,7 +1960,7 @@ async fn a_model_batch_keeps_each_outcomes_own_failure_and_usage() {
     let source = r#"
 import llm from "submilli:llm";
 function main(): string {
-  const done = llm.batch("open", ["fine", "refuse me"]);
+  const done = llm.texts("open", ["fine", "refuse me"]);
   return done.map((c) => c.ok ? "ok" : (c.reason ?? "?")).join(",");
 }
 "#;
@@ -2012,7 +2012,7 @@ async fn a_model_call_that_fails_whole_records_its_kind_and_the_fields_to_raise_
     let source = r#"
 import llm from "submilli:llm";
 function main(): string {
-  try { llm.call("open", "transport down"); } catch (e) { return "caught"; }
+  try { llm.text("open", "transport down"); } catch (e) { return "caught"; }
   return "answered";
 }
 "#;
@@ -2242,7 +2242,8 @@ function main(): string {
   const lines = read("/a.txt").lines.length;
   const stored = session.get<string>("k");
   const body = get("https://example.test/x").body;
-  const answer = llm.call("open", "ping").text ?? "";
+  const reply = llm.text("open", "ping");
+  const answer = reply.ok ? reply.value : "";
   run("1");
   return (text ?? "").length.toString() + ":" + lines.toString() + ":" + (stored ?? "") + ":" + body + ":" + answer;
 }

@@ -267,13 +267,23 @@ fn emit_expr_value(
             type_predicate: _,
         } => {
             emit_method_call(
-                emitter, ctx, *receiver, iface, &name.name, args, None, None, &expr.ty,
+                emitter,
+                ctx,
+                *receiver,
+                iface,
+                &name.name,
+                args,
+                None,
+                &[],
+                None,
+                &expr.ty,
             )?;
         }
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
             name,
+            type_args,
             args,
             return_cast,
             type_predicate: _,
@@ -287,6 +297,7 @@ fn emit_expr_value(
                 &name.name,
                 &plain_args,
                 Some(args),
+                type_args,
                 return_cast.as_ref(),
                 &expr.ty,
             )?;
@@ -1129,6 +1140,7 @@ fn emit_generic_call(
         crate::codegen::field_guards::constructor_argument(emitter, ctx, result_ty)?;
     }
     if ctx.symbols.runtime_generic_functions.contains(mangled) {
+        crate::codegen::runtime_descriptors::require_direct_schema(ctx, mangled, type_args)?;
         crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
     }
     emitter.instruction(Instruction::Call(wasm_idx));
@@ -1332,6 +1344,7 @@ fn emit_field_access(
                 &getter,
                 &[],
                 None,
+                &[],
                 None,
                 &ctx.ta
                     .try_expr(id)
@@ -1854,6 +1867,8 @@ fn emit_literal_chunk(
     // A source `runtime_values` widened may no longer hold the array its
     // narrowed type said; `emit_receiver` checks it as a field read's receiver.
     emit_receiver(emitter, ctx, element.expr_id())?;
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array)));
+
     let raw_type = ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(raw),
@@ -2647,6 +2662,7 @@ fn inline_length_struct_idx(
 /// Receiver (concrete `$string`/`$Array`) on stack → its element count as f64.
 fn emit_inline_length(emitter: &mut FunctionEmitter<'_>, ctx: &CodegenCtx<'_>, struct_idx: u32) {
     let is_array = ctx.symbols.array_type_idx() == Some(struct_idx);
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(struct_idx)));
     emitter.instruction(Instruction::StructGet {
         struct_type_index: struct_idx,
         field_index: if is_array { 2 } else { 1 },
@@ -3253,6 +3269,7 @@ fn emit_chain_access(
                 &name.name,
                 args,
                 None,
+                &[],
                 None,
                 result_ty,
             )?;
@@ -5431,6 +5448,7 @@ pub(crate) fn emit_method_call(
     method: &str,
     args: &[ExprId],
     generic_args: Option<&[crate::GenericArgument]>,
+    type_args: &[Type],
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -5450,6 +5468,7 @@ pub(crate) fn emit_method_call(
         method,
         args,
         generic_args,
+        type_args,
         return_cast,
         call_ret_ty,
     )?;
@@ -5502,11 +5521,20 @@ fn emit_method_call_with_receiver_on_stack(
     method: &str,
     args: &[ExprId],
     generic_args: Option<&[crate::GenericArgument]>,
+    type_args: &[Type],
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let concrete_receiver = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
+    if concrete_receiver.primitive_union_members().is_some() {
+        cast::emit_box(emitter, ctx, recv_ty)?;
+        emit_live_member_on_stack(emitter, ctx, iface, method, Some(args))?;
+        return cast::emit_cast_to(emitter, ctx, call_ret_ty);
+    }
     crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver)?;
+    if recv_ty.is_regexp_match_array() && *iface == crate::mangle::prelude("Array") {
+        cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::regexp_element())))?;
+    }
     let direct_key = crate::mangle::extend(iface, method);
     if let Some(func_idx) = ctx.symbols.func_idx(&direct_key) {
         if matches!(recv_ty.primitive_behavior(), Type::Number)
@@ -5567,6 +5595,12 @@ fn emit_method_call_with_receiver_on_stack(
         )?;
         let defaults = ctx.symbols.host_call_defaults(func_idx, args.len());
         emit_args_into_slots_with_defaults(emitter, ctx, args, Some(&abi.params), defaults)?;
+        // A runtime-generic host method (`Response#json<T>`) takes its type
+        // arguments' descriptors after the declared arguments, as a generic
+        // function does.
+        if ctx.symbols.runtime_generic_functions.contains(&direct_key) {
+            crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
+        }
         emitter.instruction(Instruction::Call(func_idx));
         emit_slot_return_cast(emitter, ctx, call_ret_ty, Some(&abi))?;
         return Ok(());
@@ -5605,6 +5639,14 @@ fn emit_method_call_with_receiver_on_stack(
     // function-typed field. Reuses the `$ObjectShape` field-name scan
     // machinery and the closure ABI.
     if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
+        if is_call_signature_call(iface, method) {
+            // A call signature names no member: the value is the function (a
+            // constructor such as `Number` is one), or an object with a quoted
+            // `"@call"` method answers. The runtime member call resolves both.
+            cast::emit_box(emitter, ctx, recv_ty)?;
+            emit_live_member_on_stack(emitter, ctx, iface, method, Some(args))?;
+            return cast::emit_cast_to(emitter, ctx, call_ret_ty);
+        }
         emit_interface_method_via_shape_with_receiver_on_stack(
             emitter,
             ctx,
@@ -5618,6 +5660,13 @@ fn emit_method_call_with_receiver_on_stack(
     Err(crate::codegen::internal_failure(format!(
         "method dispatch was not registered for `{iface}.{method}`"
     )))
+}
+
+/// Whether a call on a user interface goes through its call signature
+/// (`interface F { (v: number): number }`). Codegen analysis notes the runtime
+/// member helpers such a call needs by the same test.
+pub(in crate::codegen) fn is_call_signature_call(iface: &crate::MangledName, method: &str) -> bool {
+    method == "@call" && !crate::codegen::is_host_package(iface.as_str())
 }
 
 fn emit_class_method_value(
@@ -7115,6 +7164,7 @@ mod tests {
                     "missingMethod",
                     &[],
                     None,
+                    &[],
                     None,
                     &Type::Number,
                 )

@@ -8,6 +8,6 @@ function main(): void {
   const r: Response = post("{{BASE}}/echo-json-object", { name: "alice" });
   assert(r.status === 200, "object body auto-encoded with application/json");
   assert(r.headers.get("content-type") === "application/json", "response CT");
-  const parsed = r.json() as { name: string };
+  const parsed = r.json<{ name: string }>();
   assert(parsed.name === "alice", "server echoed the JSON body");
 }

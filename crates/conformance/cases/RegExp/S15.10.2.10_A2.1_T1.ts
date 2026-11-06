@@ -9,7 +9,7 @@ function main(): void {
     if (arr === null) {
       result = false;
     } else {
-      const matched = arr.match;
+      const matched = arr[0];
       if (matched !== str) {
         result = false;
       }

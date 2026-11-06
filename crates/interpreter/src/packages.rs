@@ -413,7 +413,8 @@ const JSON_BUILTIN: &str = "JSON";
 const SUPPORTING_TYPES: &[&str] = &[
     "Console",
     "Base64Options",
-    "RegExpMatch",
+    "RegExpMatchArray",
+    "RegExpExecArray",
     "Iterator",
     "Iterable",
     "IteratorResult",
@@ -494,7 +495,7 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
     };
 
     if head.eq_ignore_ascii_case("Record") && rest.is_empty() {
-        return BuiltinLookup::Found("/** Record<K, V> accepts string keys. With K = string, reads return V | undefined and writes require V. Finite string-literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string, V> = { [P in K]: V };\n".into());
+        return BuiltinLookup::Found("/** Record<K, V> accepts string, number, enum, literal-union, and template-pattern keys. With K = string, reads return V | undefined and writes require V. Finite literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string | number, V> = { [P in K]: V };\n".into());
     }
     if head.eq_ignore_ascii_case(JSON_BUILTIN) {
         let defs = json_package_declaration();
@@ -627,12 +628,12 @@ fn render_namespace_member(out: &mut String, ns: &NamespaceSymbol, canonical: &s
     }
     if let Some(sym) = ns.types.get(canonical) {
         push_doc(out, type_doc(&sym.kind), "");
-        render_type(out, canonical, &sym.kind, "");
+        render_type(out, canonical, sym, "");
     }
     let ctor = format!("{canonical}Constructor");
     if let Some(sym) = ns.types.get(&ctor) {
         push_doc(out, type_doc(&sym.kind), "");
-        render_type(out, &ctor, &sym.kind, "");
+        render_type(out, &ctor, sym, "");
     }
 }
 
@@ -1070,7 +1071,7 @@ fn user_modules(stdlib: Stdlib) -> Vec<PackageDeclaration> {
 fn module_description(name: &str) -> &'static str {
     match name {
         "submilli:agents" => {
-            "Harness sub-agents: run<T>(agent, input), and list() to discover them."
+            "Harness sub-agents: runText(agent, input) and run<T>(agent, input), and list() to discover them."
         }
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:code" => {
@@ -1082,7 +1083,9 @@ fn module_description(name: &str) -> &'static str {
         "submilli:fs" => "Sandbox filesystem: files and directories under the VFS root.",
         "submilli:git" => "Capability-controlled Git repositories in the VFS, with HTTPS remotes.",
         "submilli:http" => "Outbound HTTP requests, and downloads into the filesystem.",
-        "submilli:llm" => "Gated model calls: call/batch, and models() to discover them.",
+        "submilli:llm" => {
+            "Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and models() to discover them."
+        }
         "submilli:secrets" => "Policy-gated access to Blueprint-declared secrets.",
         "submilli:session" => {
             "Session-scoped key-value state and durable package-owned resource cleanup."
@@ -1124,7 +1127,7 @@ pub fn render_declarations(defs: &PackageDeclaration) -> String {
     }
     for (name, sym) in &defs.types {
         push_doc(&mut out, type_doc(&sym.kind), "");
-        render_type(&mut out, name, &sym.kind, "");
+        render_type(&mut out, name, sym, "");
     }
     out.trim_end().to_string()
 }
@@ -1680,7 +1683,7 @@ fn render_ts_declarations(
                 &sym.kind,
                 indent,
                 export_prefix,
-                parent.as_deref(),
+                parent.as_deref().or_else(|| intrinsic_array_parent(sym)),
             );
         }
     }
@@ -1758,7 +1761,13 @@ fn render_ts_value(
     out.push('\n');
 }
 
-/// `parent` is the rendered `extends` target of a class, if it has one.
+fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
+    (sym.mangled_name == crate::mangle::prelude("RegExpMatchArray")
+        || sym.mangled_name == crate::mangle::prelude("RegExpExecArray"))
+    .then_some("Array<string | undefined>")
+}
+
+/// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
     name: &str,
@@ -1778,12 +1787,20 @@ fn render_ts_type(
         } => {
             let _ = writeln!(
                 out,
-                "{indent}{export_prefix}interface {name}{} {{",
-                ts_interface_generics(name, generics, export_prefix)
+                "{indent}{export_prefix}interface {name}{}{} {{",
+                ts_interface_generics(name, generics, export_prefix),
+                parent
+                    .map(|parent| format!(" extends {parent}"))
+                    .unwrap_or_default()
             );
             if let Some(index) = index {
                 let ro = if index.readonly { "readonly " } else { "" };
-                let _ = writeln!(out, "{inner}{ro}[key: string]: {};", ts_type(&index.value));
+                let _ = writeln!(
+                    out,
+                    "{inner}{ro}[key: {}]: {};",
+                    ts_type(&index.key),
+                    ts_type(&index.value)
+                );
             }
             for (pname, prop) in properties {
                 push_doc(out, &prop.doc, &inner);
@@ -2050,6 +2067,7 @@ fn ts_type(ty: &Type) -> String {
         Type::BigInt => "bigint".to_string(),
         Type::BigIntLiteral(digits) => format!("{digits}n"),
         Type::String => "string".to_string(),
+        Type::TemplateLiteral { .. } => ty.to_string(),
         Type::StringLiteral(s) => format!("\"{}\"", escape_string_literal(s)),
         Type::Uint8Array => "Uint8Array".to_string(),
         Type::Boolean => "boolean".to_string(),
@@ -2103,7 +2121,11 @@ fn ts_type(ty: &Type) -> String {
                 .collect();
             if let Some(index) = index {
                 let ro = if index.readonly { "readonly " } else { "" };
-                members.push(format!("{ro}[key: string]: {}", ts_type(&index.value)));
+                members.push(format!(
+                    "{ro}[key: {}]: {}",
+                    ts_type(&index.key),
+                    ts_type(&index.value)
+                ));
             }
             if members.is_empty() {
                 "{}".into()
@@ -2312,16 +2334,23 @@ fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
     }
 }
 
-fn render_type(out: &mut String, name: &str, kind: &TypeKind, indent: &str) {
+fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
     let inner = format!("{indent}  ");
-    match kind {
+    let parent = intrinsic_array_parent(sym)
+        .map(|parent| format!(" extends {parent}"))
+        .unwrap_or_default();
+    match &sym.kind {
         TypeKind::Interface {
             generics,
             methods,
             properties,
             ..
         } => {
-            let _ = writeln!(out, "{indent}interface {name}{} {{", generics_str(generics));
+            let _ = writeln!(
+                out,
+                "{indent}interface {name}{}{parent} {{",
+                generics_str(generics)
+            );
             for (pname, prop) in properties {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
@@ -2457,12 +2486,12 @@ fn render_type_with_ctor(
 ) {
     if let Some(sym) = types.get(name) {
         push_doc(out, type_doc(&sym.kind), indent);
-        render_type(out, name, &sym.kind, indent);
+        render_type(out, name, sym, indent);
     }
     let ctor = format!("{name}Constructor");
     if let Some(sym) = types.get(&ctor) {
         push_doc(out, type_doc(&sym.kind), indent);
-        render_type(out, &ctor, &sym.kind, indent);
+        render_type(out, &ctor, sym, indent);
         let _ = writeln!(out, "{indent}const {name}: {ctor};\n");
     }
 }
@@ -2478,7 +2507,7 @@ fn render_namespace(out: &mut String, name: &str, ns: &NamespaceSymbol, indent: 
         // The namespace's own values already bind each `XConstructor` to `X`,
         // so render every type (constructors included) plainly — no merge.
         push_doc(out, type_doc(&sym.kind), &inner);
-        render_type(out, tname, &sym.kind, &inner);
+        render_type(out, tname, sym, &inner);
     }
     for (nname, sub) in &ns.namespaces {
         render_namespace(out, nname, sub, &inner);
@@ -3224,7 +3253,7 @@ mod tests {
     fn builtin_docs_print_a_call_signature_without_a_name() {
         for name in ["Number", "Number.@call"] {
             let docs = builtin_docs(name).expect("Number built-in");
-            assert!(docs.contains("  (value: "), "{docs}");
+            assert!(docs.contains("  (value?: "), "{docs}");
             assert!(!docs.contains("@call"), "{docs}");
         }
     }
@@ -3839,6 +3868,8 @@ mod tests {
     fn lib_submilli_d_ts_renders_ambient_builtins() {
         let docs = render_lib_submilli_d_ts();
         assert!(docs.contains("interface Array<"));
+        assert!(docs.contains("interface RegExpMatchArray extends Array<string | undefined>"));
+        assert!(docs.contains("interface RegExpExecArray extends Array<string | undefined>"));
         assert!(docs.contains("interface ArrayConstructor"));
         assert!(docs.contains("declare const Array: ArrayConstructor;"));
         assert_eq!(
@@ -3865,7 +3896,7 @@ mod tests {
     #[test]
     fn d_ts_renderer_uses_typescript_call_and_predicate_signatures() {
         let docs = render_lib_submilli_d_ts();
-        assert!(docs.contains("(value: string | bigint | undefined): number;"));
+        assert!(docs.contains("(value?: number | bigint | string): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
         assert!(!docs.contains("@call"));
     }

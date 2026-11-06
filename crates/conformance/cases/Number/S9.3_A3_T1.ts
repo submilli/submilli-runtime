@@ -1,7 +1,7 @@
 // test262: test/built-ins/Number/S9.3_A3_T1.js
-// expect-error: expected `string | bigint | undefined`
+// expect-error: expected `number | bigint | string | undefined`
 //
-// ToNumber(boolean) does not exist: `Number(x)` takes `string | bigint |
+// ToNumber(boolean) does not exist: `Number(x)` takes `number | string | bigint |
 // undefined` (spec.md "Numeric globals"), so the standard's
 // `Number(false) === +0` is a compile error.
 

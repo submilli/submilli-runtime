@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c6605a4104600cd7d24064ba48faa24fb3c970d35f8fa493f4221d72d3bed64a"
+  contentHash: "579e5b1eb06b9b76403d633ba4ae7774730f3541448c063318fe90a5c3ab0b4c"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -100,7 +100,7 @@ function main(): string {
     headers.set("User-Agent", "submilli");
     const response = http.get("https://api.github.com/rate_limit", headers);
     response.throwForStatus();
-    const core = (response.json() as RateLimit).resources.core;
+    const core = response.json<RateLimit>().resources.core;
     return `${core.remaining} of ${core.limit} requests left this hour`;
 }
 ```

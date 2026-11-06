@@ -13,6 +13,13 @@ pub const COMPILER_STACK_BYTES: usize = if cfg!(debug_assertions) {
     16 * 1024 * 1024
 };
 
+/// Type arguments a module's local types may have added to their references. A
+/// type declared in a block that uses its function's type parameters takes them
+/// as leading parameters of its own, and each reference passes them, so `K`
+/// parameters and `R` references add `K × R` annotations the source doesn't
+/// write. Programs in the fixture suites add fewer than 100.
+pub const MAX_LIFTED_TYPE_ARGUMENTS: usize = 1 << 16;
+
 /// Number of declared argument slots in the closure ABI. Defaults keep their
 /// slots and a packed rest array occupies one slot. The environment/receiver
 /// and captured generic descriptors are carried separately.

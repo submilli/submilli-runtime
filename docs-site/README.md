@@ -2,7 +2,7 @@
 
 The user book is Markdown in `../docs/`. This Astro/Starlight application reads
 those files directly; no private repository or runtime build is needed.
-`../llm-prompt.md` is a runtime build input and is not part of the book.
+`../crates/submilli-shared/llm-prompt.md` is a runtime build input and is not part of the book.
 
 ## Build and preview
 
@@ -97,8 +97,45 @@ To keep the public URL on the marketing domain, its static service can rewrite
 `/docs/*` to `https://YOUR-DOCS-SERVICE.onrender.com/docs/*`, preserving the prefix.
 
 The `Documentation` workflow checks and builds the site and uploads a
-`documentation-site` artifact. It does not deploy. Connect the docs output to
+`documentation-site` artifact. It does not deploy; hosted previews are
+described under "Pull request previews" below. Connect the docs output to
 hosting before deploying the marketing site without its former book pages.
+
+The Compose journey uses the release and image pins in the guide. Documentation
+records a deferral when the current workspace release's image is not published
+yet. The Release workflow requires the journey after publishing that image.
+Missing older images, inconsistent pins, and registry failures fail the check.
+Release retries use the workflow's verification tools against the selected tag's
+guide, so that older tags do not need to contain those tools.
+
+### Pull request previews
+
+Render's Pull Request Previews feature builds the pull request branch of the
+`submilli-docs` service at `https://submilli-docs-pr-<n>[-<suffix>].onrender.com/docs/`,
+rebuilds it on each push, and deletes it when the pull request closes. Render
+records each build as a GitHub deployment named `<branch> - submilli-docs PR #<n>`.
+`.github/workflows/preview-link.yml` (the `Hosted preview link` workflow)
+listens for the `deployment_status` event, validates the deployment against
+the open pull request, and posts or updates a sticky "Documentation preview"
+comment with the link. When the pull request closes, it rewrites that comment
+to say the preview was removed. It never checks out or runs pull request code;
+the preview is built by Render from the same branch. On pull requests, the
+`Documentation` workflow's last step reports whether a Render preview
+deployment exists for the commit.
+
+One-time setup, in the Render dashboard: open the `submilli-docs` static site,
+Previews, Pull Request Previews, and choose Automatic. Nothing in this
+repository can enable it.
+
+Optional build filters, in the same service's build settings on Render, limit
+previews and `main` autodeploys to the paths the book build reads: `docs/**`,
+`docs-site/**`, `examples/quickstart/**`, and the root `tsconfig.json` (the
+build stubs its `.submilli/` extends target). The build does not read
+`packages/`, `crates/`, or root Markdown files.
+
+Pull requests from forks get no hosted preview; reviewers download the
+`documentation-site` artifact from the `Documentation` run instead. Previews
+on `*.onrender.com` do not initialize analytics (see "Analytics" below).
 
 ### Retired documentation URLs
 

@@ -38,7 +38,7 @@ function request(method: string, url: string, body?: string | Uint8Array | { [ke
 type Headers = Map<string, string>;
 
 /**
- * Result of an HTTP call — status, headers, body, and the final URL after any redirects. Constructed only by the verb-form helpers; user code reads fields via property access and calls `throwForStatus()` / `toString()`.
+ * Result of an HTTP call — status, headers, body, and the final URL after any redirects. Constructed only by the verb-form helpers; user code reads fields via property access and calls `json<T>()`, `throwForStatus()` and `toString()`.
  */
 interface Response {
   /**
@@ -66,9 +66,9 @@ interface Response {
    */
   readonly url: string;
   /**
-   * Parse the response body as JSON into `unknown`. Validate with `as`, for example `r.json() as User`.
+   * Parse the response body as JSON and check it against `T`, for example `r.json<User>()`. The check covers every field, element, and union arm; a body that does not match throws a catchable `TypeError` naming the type, a body that is not JSON throws a `SyntaxError`, and a number past the `number` range throws a `RangeError`. The expected type supplies `T` when none is written (`const user: User = r.json()`); with neither, the result is an unchecked `unknown`.
    */
-  json(): unknown;
+  json<T>(): T;
   /**
    * Throw if `ok` is `false`. The error message includes the status code, reason phrase, and final URL; catch it with `try`/`catch` like any other `Error`.
    */

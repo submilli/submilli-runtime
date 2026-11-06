@@ -23,7 +23,7 @@ pub(super) enum StaticWrite {
 
 /// `ty` with its literal types widened to their base types, through aliases.
 /// A type with none keeps its spelling.
-fn widen_literal_members(ty: Type) -> Type {
+pub(super) fn widen_literal_members(ty: Type) -> Type {
     fn widen(ty: &Type) -> Type {
         match ty.peel() {
             Type::Union(members) => Type::union(members.iter().map(widen).collect()),
@@ -244,7 +244,9 @@ impl Inferer<'_> {
             | StmtKind::ClassDecl { .. }
             | StmtKind::EnumDecl { .. }
             | StmtKind::TypeAliasDecl { .. } => {
-                // Classes are bound in `signatures()?` and checked in `infer_classes`.
+                // Bound in `signatures()?`; classes are checked in `infer_classes`.
+                // Lowering lifts block-local interfaces, aliases and enums to the
+                // top level, and a nested class is a parse error.
                 return Ok(None);
             }
             StmtKind::Import { .. } => {
@@ -511,7 +513,6 @@ impl Inferer<'_> {
             true,
         )?;
         self.drop_selected_default_mismatch(component_hint.as_ref(), value, &value_ty)?;
-        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -529,6 +530,7 @@ impl Inferer<'_> {
             (None, None) if keeps_literals => value_ty.clone(),
             (None, None) => self.widen_fresh_literals(typed_value, &value_ty)?,
         };
+        let bound = self.evolving_storage_type(&name, bound);
         let bound = self.pattern_binding_storage_type(value, bound)?;
         let bound = self.local_storage_ty(&name, bound);
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &bound)?;
@@ -567,9 +569,7 @@ impl Inferer<'_> {
         value: ExprId,
         doc: Option<crate::DocComment>,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let declared = declared.ok_or_else(|| {
-            super::inference_failure("an implicit initializer has no type").with_span(name.span)
-        })?;
+        let declared = declared.unwrap_or(Type::Unknown);
         if !super::assignable::assignable(&Type::Undefined, &declared, self.resolver()) {
             self.error_with_help(
                 name.span,
@@ -713,9 +713,9 @@ impl Inferer<'_> {
             hint.is_none(),
         )?;
         self.drop_selected_default_mismatch(component_hint.as_ref(), value, &value_ty)?;
-        let value_ty = self.reject_evolving_empty_array(&name, hint.is_some(), value, value_ty)?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
+        let bound = self.evolving_storage_type(&name, bound);
         let bound = self.pattern_binding_storage_type(value, bound)?;
         self.scopes.insert_with_literal_origin(
             name.name.clone(),
@@ -741,41 +741,6 @@ impl Inferer<'_> {
             value: typed_value,
             doc,
         })
-    }
-
-    /// An unannotated `[]` bound to a variable the code later reassigns or adds
-    /// elements to is, in tsc, an array typed by those writes. Submilli types
-    /// a value where it is declared, so it asks for the element type there.
-    /// Any other unannotated `[]` holds nothing, as its `never[]` says.
-    fn reject_evolving_empty_array(
-        &mut self,
-        name: &Ident,
-        annotated: bool,
-        value: ExprId,
-        value_ty: Type,
-    ) -> Result<Type, CompilerFailure> {
-        if annotated || !self.grown_bindings.contains(&name.span) {
-            return Ok(value_ty);
-        }
-        let value = self.ast.try_expr(value).map_err(super::arena_failure)?;
-        let crate::ExprKind::ArrayLiteral { elements } = &value.kind else {
-            return Ok(value_ty);
-        };
-        if !elements.is_empty() {
-            return Ok(value_ty);
-        }
-        self.error_with_help(
-            value.span,
-            format!(
-                "cannot infer the element type of `{}` from an empty array",
-                name.name
-            ),
-            vec![format!(
-                "`{}` is reassigned or gains elements later; annotate its element type, as in `{}: T[] = []`",
-                name.name, name.name
-            )],
-        );
-        Ok(Type::Array(Box::new(Type::Error)))
     }
 
     fn infer_if_statement(
@@ -1084,7 +1049,7 @@ impl Inferer<'_> {
             .flatten();
         self.in_super_handler = prev_super_handler;
         self.reachable = entry_reachable && post.is_some();
-        self.merge_assigned_into_outer(all_assigned, span);
+        self.merge_assigned_into_outer(all_assigned.paths, span);
         if let Some(post) = post {
             self.install_joined_narrowings(post, span)?;
         }
@@ -1410,7 +1375,7 @@ impl Inferer<'_> {
                 ty: result_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        self.renarrow_global_after_write(&ident, &mangled, &ty, result_ty)?;
+        self.renarrow_global_after_write(&ident, &mangled, &ty, result_ty, None)?;
         Ok(TypedStmtKind::AssignGlobal {
             ident,
             mangled,
@@ -1429,18 +1394,29 @@ impl Inferer<'_> {
         mangled: &crate::MangledName,
         declared_ty: &Type,
         written_ty: Type,
+        source: Option<ExprId>,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         if matches!(written_ty, Type::Error) {
             return Ok(());
         }
         let path = narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone()));
-        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
+        let written_ty = if self.evolving_binding_path(ident).is_some() {
+            written_ty
+        } else {
+            self.assignment_narrowed_ty(declared_ty, written_ty)
+        };
         // A rejected write narrows to nothing it wrote, as in TypeScript.
-        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
+        if (written_ty == *declared_ty && self.evolving_binding_path(ident).is_none())
+            || !assignable(&written_ty, declared_ty, self.resolver())
+        {
             self.invalidate_for_reassignment(path, ident.span);
             return Ok(());
         }
-        self.install_assignment_narrowing(path, ident.clone(), written_ty, ident.span)?;
+        let evolving = self.evolving_assignment_type(ident, source)?;
+        self.install_assignment_narrowing(path.clone(), ident.clone(), written_ty, ident.span)?;
+        if let Some(evolving) = evolving {
+            self.record_evolving_type(&path, evolving);
+        }
         Ok(())
     }
 
@@ -1653,6 +1629,13 @@ impl Inferer<'_> {
             let field_lookup = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
                     .index_signature(&receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
                     .map(|i| crate::ObjectField {
                         ty: *i.value,
                         optional: false,
@@ -1770,6 +1753,7 @@ impl Inferer<'_> {
             })
             .map_err(crate::typechecker::arena_failure)?;
         let view = narrowing::NarrowedView {
+            evolving: None,
             narrowed_ty,
             facts: narrowing::TypeFacts::EMPTY,
             excluded_literals: Default::default(),
@@ -1817,12 +1801,14 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let evolving = self.evolving_array_receiver(receiver)?;
+        let (mut typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
+        let evolving = evolving.filter(|_| super::evolving::array_element(&receiver_ty).is_some());
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))?
+            self.infer_numeric_index(index)?
         };
         let targets = if object {
             self.object_index_write_targets(
@@ -1833,10 +1819,11 @@ impl Inferer<'_> {
         } else {
             vec![self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span)]
         };
-        let elem_ty = self.common_index_write_type(&targets);
-        let hint = (!matches!(elem_ty, Type::Never)).then_some(&elem_ty);
+        let mut elem_ty = self.common_index_write_type(&targets);
+        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never)).then_some(&elem_ty);
         let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint)?;
-        if !reported
+        if evolving.is_none()
+            && !reported
             && !matches!(value_ty, Type::Error)
             && let Some(target) = targets.iter().find(|target| {
                 !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
@@ -1850,6 +1837,27 @@ impl Inferer<'_> {
                 help,
             );
         }
+        let current_element = evolving
+            .as_ref()
+            .and_then(|name| self.evolving_array_element(name));
+        if evolving.is_some() {
+            let added = widen_literal_members(value_ty.clone());
+            elem_ty = Type::union(vec![
+                elem_ty,
+                current_element.clone().unwrap_or(Type::Never),
+                added,
+            ]);
+            let grown = Type::Array(Box::new(elem_ty.clone()));
+            typed_receiver = self.push_synthetic_expr(
+                TypedExprKind::Cast {
+                    value: typed_receiver,
+                    target_ty: grown.clone(),
+                    check: None,
+                },
+                grown,
+                recv_span,
+            )?;
+        }
         let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
         self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
         self.narrow_keyed_field_after_write(
@@ -1859,6 +1867,11 @@ impl Inferer<'_> {
             typed_value,
             index_span,
         )?;
+        if let Some(name) = evolving.filter(|_| current_element.is_some()) {
+            let added = widen_literal_members(value_ty);
+            let element = Type::union(vec![current_element.unwrap_or(Type::Never), added]);
+            self.record_evolving_array_growth(&name, Type::Array(Box::new(element)))?;
+        }
         Ok(TypedStmtKind::AssignIndex {
             receiver: typed_receiver,
             index: typed_index,
@@ -2072,6 +2085,9 @@ impl Inferer<'_> {
         declared: &Type,
         value: Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if self.evolving_bindings.contains(&name.span) {
+            return self.narrow_evolving_binding(name, value);
+        }
         if !initializer_may_narrow(declared, &value) {
             return Ok(());
         }
@@ -2088,7 +2104,7 @@ impl Inferer<'_> {
             return Ok(());
         }
         let narrowed = self.initializer_narrowed_ty(declared, value);
-        self.renarrow_local_after_write(name, scope, declared, narrowed)?;
+        self.renarrow_local_after_write(name, scope, declared, narrowed, None)?;
         Ok(())
     }
 
@@ -2104,6 +2120,7 @@ impl Inferer<'_> {
         decl_scope: narrowing::ScopeId,
         declared_ty: &Type,
         written_ty: Type,
+        source: Option<ExprId>,
     ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
         // A poisoned RHS leaves the narrowing exactly as it was: the diagnostic for
         // whatever went wrong upstream already stands, and adding "re-narrow after
@@ -2115,13 +2132,28 @@ impl Inferer<'_> {
             name: target.name.clone(),
             decl_scope,
         });
-        let written_ty = self.assignment_narrowed_ty(declared_ty, written_ty);
+        let written_ty = if self.evolving_binding_path(target).is_some() {
+            written_ty
+        } else {
+            self.assignment_narrowed_ty(declared_ty, written_ty)
+        };
         // A rejected write narrows to nothing it wrote, as in TypeScript.
-        if written_ty == *declared_ty || !assignable(&written_ty, declared_ty, self.resolver()) {
+        if (written_ty == *declared_ty && self.evolving_binding_path(target).is_none())
+            || !assignable(&written_ty, declared_ty, self.resolver())
+        {
             self.invalidate_for_reassignment(path, target.span);
             return Ok(None);
         }
-        self.install_assignment_narrowing(path, target.clone(), written_ty.clone(), target.span)?;
+        let evolving = self.evolving_assignment_type(target, source)?;
+        self.install_assignment_narrowing(
+            path.clone(),
+            target.clone(),
+            written_ty.clone(),
+            target.span,
+        )?;
+        if let Some(evolving) = evolving {
+            self.record_evolving_type(&path, evolving);
+        }
         Ok(Some(written_ty))
     }
 
@@ -2157,7 +2189,8 @@ impl Inferer<'_> {
             // since an unannotated const's type is its own initializer's literal, which
             // no new value can match. Infer unhinted; nested errors still surface.
             // Paired with the `is_const` guard on the re-check below: both must stay.
-            let hint = (!entry.is_const).then(|| entry.write_type().clone());
+            let hint = (!entry.is_const && self.evolving_binding_path(&target).is_none())
+                .then(|| entry.write_type().clone());
             let (typed_value, value_ty, reported) =
                 self.infer_assigned_value(value, hint.as_ref())?;
             if !entry.is_const
@@ -2178,6 +2211,7 @@ impl Inferer<'_> {
                 entry.decl_scope,
                 entry.write_type(),
                 flow_ty,
+                Some(value),
             )?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
@@ -2199,8 +2233,9 @@ impl Inferer<'_> {
             match kind_clone {
                 ValueKind::Let { ty, .. } => {
                     let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+                    let hint = self.evolving_binding_path(&target).is_none().then_some(&ty);
                     let (typed_value, value_ty, reported) =
-                        self.infer_assigned_value(value, Some(&ty))?;
+                        self.infer_assigned_value(value, hint)?;
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(
                             value_span,
@@ -2209,7 +2244,7 @@ impl Inferer<'_> {
                     }
                     let annotated = self.is_global_annotated(&mangled);
                     let flow_ty = self.assigned_flow_type(&ty, annotated, typed_value, value_ty)?;
-                    self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty)?;
+                    self.renarrow_global_after_write(&target, &mangled, &ty, flow_ty, Some(value))?;
                     TypedStmtKind::AssignGlobal {
                         ident: target,
                         mangled,
@@ -2381,6 +2416,7 @@ impl Inferer<'_> {
                 entry.decl_scope,
                 entry.write_type(),
                 result_ty,
+                None,
             )?;
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
@@ -2570,6 +2606,13 @@ impl Inferer<'_> {
             if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
                     .index_signature(&receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
                         optional: true,
@@ -2737,7 +2780,7 @@ impl Inferer<'_> {
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))?
+            self.infer_numeric_index(index)?
         };
         let elem_ty = if object {
             self.object_index_write_type(
@@ -2974,7 +3017,7 @@ fn assignment_narrowings(
 }
 
 struct ClauseOutcome {
-    all_writes: std::collections::BTreeSet<narrowing::ReferencePath>,
+    all_writes: narrowing::ClauseWrites,
     body: Option<StmtId>,
     exit: Option<narrowing::NarrowEnv>,
     assigned: std::collections::BTreeSet<narrowing::ReferencePath>,
@@ -2983,7 +3026,13 @@ struct ClauseOutcome {
 fn apply_finally_to_exit(post: &mut Option<narrowing::NarrowEnv>, outcome: &ClauseOutcome) {
     match (&outcome.exit, post.as_mut()) {
         (Some(final_post), Some(post)) => {
-            post.retain(|path, _| !outcome.all_writes.iter().any(|p| p.is_prefix_of(path)));
+            post.retain(|path, _| {
+                !outcome
+                    .all_writes
+                    .paths
+                    .iter()
+                    .any(|p| p.is_prefix_of(path))
+            });
             post.extend(assignment_narrowings(final_post, &outcome.assigned));
         }
         (None, _) => *post = None,
@@ -3016,7 +3065,7 @@ fn apply_finally_to_transfers(
         apply_finally_to_exit(&mut post, outcome);
         *env =
             post.ok_or_else(|| super::inference_failure("reachable finally lost its transfer"))?;
-        assigned.extend(outcome.all_writes.iter().cloned());
+        assigned.extend(outcome.all_writes.paths.iter().cloned());
     }
     Ok(())
 }
@@ -3184,7 +3233,7 @@ fn next_pass_falsifies(
     // A literal the entry view rules out that the next pass doesn't rule
     // out disproves it too, though its type may hold the same members.
     post.is_none_or(|post| {
-        Type::union(vec![view.narrowed_ty.clone(), post.narrowed_ty.clone()]) != view.narrowed_ty
+        narrowing::join_views(view, post).as_ref() != Some(&view.narrowed_ty)
             || !post.excluded_literals.is_superset(&view.excluded_literals)
     })
 }
@@ -3271,7 +3320,7 @@ impl Inferer<'_> {
         &mut self,
         clause: StmtId,
         entry_reachable: bool,
-        uncertain_writes: &std::collections::BTreeSet<narrowing::ReferencePath>,
+        uncertain_writes: &narrowing::ClauseWrites,
     ) -> Result<ClauseOutcome, CompilerFailure> {
         self.push_narrow_frame(narrowing::NarrowEnv::new());
         let span = self
@@ -3279,11 +3328,25 @@ impl Inferer<'_> {
             .try_stmt(clause)
             .map_err(super::arena_failure)?
             .span;
-        for path in uncertain_writes {
+        for path in &uncertain_writes.paths {
             self.drop_narrowings_under(path, narrowing::InvalidationReason::Write { span });
+            if let Some(view) = uncertain_writes.evolving.get(path) {
+                let mut possible = narrowing::NarrowEnv::new();
+                possible.insert(path.clone(), view.clone());
+                self.install_joined_narrowings(possible, span)?;
+            }
         }
         self.reachable = entry_reachable;
-        self.clause_write_scopes.push(Default::default());
+        let evolving = self
+            .snapshot_active_narrowings(0)
+            .0
+            .into_iter()
+            .filter(|(_, view)| view.evolving.is_some())
+            .collect();
+        self.clause_write_scopes.push(narrowing::ClauseWrites {
+            evolving,
+            ..Default::default()
+        });
         let body = self.infer_stmt(clause)?;
         let all_writes = self
             .clause_write_scopes
@@ -3326,14 +3389,13 @@ impl Inferer<'_> {
                 .try_expr(view.source)
                 .map_err(super::arena_failure)?
                 .span;
-            let Some(narrowed_ty) =
-                narrowing::join_narrowed_types(&view.narrowed_ty, &post.narrowed_ty)
-            else {
+            let Some(narrowed_ty) = narrowing::join_views(&view, post) else {
                 continue;
             };
             entry_env.insert(
                 path,
                 narrowing::NarrowedView {
+                    evolving: narrowing::join_view_inference(&view, post),
                     narrowed_ty,
                     facts: narrowing::TypeFacts::EMPTY,
                     excluded_literals: std::collections::BTreeSet::new(),
@@ -3647,7 +3709,7 @@ impl Inferer<'_> {
         Ok(FirstConditionCheck {
             condition,
             true_env,
-            writes,
+            writes: writes.paths,
             diagnostic_range: diagnostics_from..self.diagnostics.len(),
         })
     }
@@ -3835,6 +3897,9 @@ impl Inferer<'_> {
         iter_ty: &Type,
     ) -> Option<(Type, crate::ForOfKind)> {
         match iter_ty.peel() {
+            ty if ty.is_regexp_match_array() => {
+                Some((Type::regexp_element(), crate::ForOfKind::Array))
+            }
             Type::Array(elem) => Some(((**elem).clone(), crate::ForOfKind::Array)),
             // Tuples are `$Array` at runtime, so the array desugar reads them
             // directly; the positions' union is what each element can be.

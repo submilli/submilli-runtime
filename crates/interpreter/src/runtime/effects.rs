@@ -182,7 +182,7 @@ impl Write for FingerprintWriter<'_, '_> {
     }
 }
 
-fn encode<T: Serialize>(value: &T) -> wasmtime::Result<Vec<u8>> {
+pub(crate) fn encode<T: Serialize>(value: &T) -> wasmtime::Result<Vec<u8>> {
     let mut writer = OutcomeWriter { bytes: Vec::new() };
     value
         .serialize(&mut rmp_serde::Serializer::new(&mut writer).with_struct_map())
@@ -224,7 +224,7 @@ fn validate_outcome(bytes: &[u8]) -> wasmtime::Result<()> {
     Ok(())
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8]) -> wasmtime::Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> wasmtime::Result<T> {
     validate_outcome(bytes)?;
     let mut decoder = rmp_serde::Deserializer::new(std::io::Cursor::new(bytes));
     decoder.set_max_depth(128);

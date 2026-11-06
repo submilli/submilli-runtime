@@ -27,7 +27,7 @@ use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::fuel;
 use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host_fn_async};
 use crate::runtime::mcp::McpResponse;
-use crate::stdlib::shared::{audit_denial_in, check_security_call, running_package};
+use crate::stdlib::shared::{audit_denial_in, check_and_approve_call, running_package};
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 /// The internal host module every `@tools` call dispatches through.
@@ -117,11 +117,12 @@ pub fn install_tools_async(linker: &mut Linker<StoreData>) -> wasmtime::Result<(
 
                 // Deny before the harness hears of the call. The tool is in the
                 // filter context so a policy can choose which tools a program reaches.
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     TOOLS_CAPABILITY,
                     serde_json::json!({ "tool": tool }),
-                )?;
+                )
+                .await?;
                 record_payload(&*caller, ticket, Side::Request, || {
                     Payload::meta(serde_json::json!({ "tool": tool }))
                         .with_body(args_json.as_bytes())

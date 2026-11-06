@@ -3,7 +3,7 @@
 // the record; the wording in `../model` turns it and the store's data into what shows.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import type { DeclaredVariable, Draft, Show } from "../api/types";
+import type { AgentResult, DeclaredVariable, Draft, Show, Status } from "../api/types";
 import { sourceKey } from "../api/types";
 import { packageRules, blueprintDialog } from "../model/blueprint";
 import { askBox, chatEmptyText, chatItems, noChat, runWord, selectedRun, type ChatItem } from "../model/chat";
@@ -11,7 +11,7 @@ import { codePane } from "../model/code";
 import { capitalize, copyNotice, end, executionLabel, outcomeLabel, plainBy, sourceRunOf } from "../model/format";
 import { expandAll, logPane, type Action, type RuleSpot } from "../model/log";
 import { actionBlock, footer, keptValues, sessionBar, sessionRows, wayBack } from "../model/sessions";
-import { checkSetup, initialSetup, INITIAL_SETUP, selectedSetupStatus, type SetupForm } from "../model/setup";
+import { billedName, checkSetup, initialSetup, INITIAL_SETUP, selectedSetupStatus, type SetupForm } from "../model/setup";
 import { AT_START, byAgent, frame, nextKey, playFrom, prevKey, runsInFlight } from "../model/steps";
 import { summary } from "../model/summary";
 import { INITIAL_UI, type Dialog, type UiState } from "../model/ui";
@@ -35,6 +35,8 @@ import {
   SOURCE_LOADING,
   WAITING,
   answering,
+  BILLING_CANCELLED,
+  billingAsk,
   blueprintRefused,
   chatFailed,
   chatStopped,
@@ -101,6 +103,8 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
     setFailureState(f);
     keep(FAILURE_KEY, f);
   };
+  // What Claude Code would bill, waiting for the reader to confirm before the message goes.
+  const [billing, setBilling] = useState<BillingAsk | null>(null);
   useEffect(() => {
     // A link or another session can be inspected without discarding the unsent setup.
     if (ui.mode === "fresh" && ui.fresh) keep(FRESH_KEY, ui.fresh.messages.length === 0 ? ui.fresh : null);
@@ -564,12 +568,14 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   const keepToSendAgain = (text: string) =>
     setChatText((now) => (!now.trim() ? text : now.trim() === text ? now : `${text}\n\n${now}`));
 
-  const send = async () => {
+  /** Sends the box's message; `confirmBilling` confirms what Claude Code bills, once asked. */
+  const send = async (confirmBilling?: string) => {
     const text = chatText.trim();
     // One message at a time: a second while the first is unanswered would start another chat.
     if (!text || snap.pendingChat) return;
     setChatText("");
     setFailure(null);
+    setBilling(null);
     const fresh = ui.mode === "fresh" ? ui.fresh : null;
     if (fresh) {
       const sentFrom = freshBox(fresh.started);
@@ -580,14 +586,15 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
         variables: fresh.variables,
         effort: fresh.settings?.effort,
         max_output: fresh.settings?.max_output,
+        max_budget_usd: fresh.settings?.max_budget_usd,
         provider_settings: fresh.settings?.provider,
       };
-      const { outcome, session } = await store.chat(text, settings);
+      const { outcome, session } = await store.chat(text, settings, confirmBilling);
       if (!outcome.ok) {
         // The failure shows where the message went: in the session the playground made
         // for it, or, when none was made, in the new session still being set up.
         const stopped = outcome.kind === STOPPED;
-        setFailure({ session, message: outcome.message, kind: outcome.kind, started: session !== null, stopped });
+        notAnswered(outcome, session, session !== null);
         if (session === null) setUi((u) => (u.mode === "fresh" && u.fresh ? { ...u, fresh: { ...u.fresh, messages: u.fresh.messages.filter((m) => m !== text) } } : u));
         // Kept to send again in the box it was sent from, or in the session it started,
         // unless it was stopped there, which has it already.
@@ -598,16 +605,30 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       }
       // The answer can come before the session is listed; it is shown now either way.
       setUi((u) => (u.mode === "fresh" ? { ...INITIAL_UI, summaryOpen: u.summaryOpen, dlg: u.dlg } : u));
+      stoppedShort(outcome.result);
       return;
     }
-    const { outcome, session } = await store.chat(text);
-    if (!outcome.ok) {
+    const { outcome, session } = await store.chat(text, undefined, confirmBilling);
+    if (outcome.ok) stoppedShort(outcome.result);
+    else {
       const stopped = outcome.kind === STOPPED;
-      setFailure({ session, message: outcome.message, kind: outcome.kind, started: true, stopped });
+      notAnswered(outcome, session, true);
       // Kept for the reader to send again, in the session it was written for; a stopped
       // message is already in the session.
       if (session === askingIn.current && !stopped) keepToSendAgain(text);
     }
+  };
+
+  // A message not answered asks to confirm billing, or says why, where it was sent.
+  const notAnswered = (outcome: { kind: string; message: string }, session: string | null, started: boolean) => {
+    const asked = billingAsked(outcome, status);
+    if (asked) setBilling({ ...asked, session });
+    else setFailure({ session, message: outcome.message, kind: outcome.kind, started, stopped: outcome.kind === STOPPED });
+  };
+
+  // An answer cut short by a limit says so, in the session it stopped in.
+  const stoppedShort = (result: AgentResult) => {
+    if (result.stopped && result.stopped !== "answered") setFailure({ session: result.session, message: "", started: true, stopped: true, reason: result.stopped });
   };
 
   // ---- the keyboard
@@ -656,7 +677,8 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
   if (waitingHere && !f.stepping) chat.push({ kind: "wait", text: WAITING });
   const failedHere = failure && (ui.mode === "fresh" ? failure.session === null : ui.mode === "open" && failure.session === data.sessionId);
   if (failure && failedHere && !f.stepping)
-    chat.push(failure.stopped ? { kind: "stopped", ...chatStopped(failure.started) } : { kind: "failed", ...chatFailed(failure.message, failure.started, failure.kind) });
+    chat.push(failure.stopped ? { kind: "stopped", ...chatStopped(failure.started, failure.reason) } : { kind: "failed", ...chatFailed(failure.message, failure.started, failure.kind) });
+  const billingHere = billing && (ui.mode === "fresh" ? billing.session === null : ui.mode === "open" && billing.session === data.sessionId) && !f.stepping ? billing : null;
   const box = askBox(f);
   const backTo = stepping && stepping.from && stepping.from !== data.sessionId && data.sessionId === stepping.to ? stepping.from.slice(0, 8) : "";
   const askState = backTo && box.none ? { ...box, none: { ...box.none, back: backTo } } : snap.unreachable
@@ -846,6 +868,12 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
           onScroll={chatFollow.onScroll}
           onText={setChatText}
           onSend={() => void send()}
+          confirm={billingHere ? {
+            ...(billingHere.cancelled ? { text: BILLING_CANCELLED, note: "" } : billingAsk(billingHere.billed, billingHere.changed)),
+            open: !billingHere.cancelled,
+            onConfirm: () => void send(billingHere.confirmation),
+            onCancel: () => setBilling({ ...billingHere, cancelled: true }),
+          } : undefined}
           onStop={() => store.stopChat(f.running.filter((n) => byAgent(f, n)))}
           onBack={stepBack}
           onPick={(run) => pickRun("r" + run, "log")}
@@ -874,7 +902,7 @@ export function Page({ store, snap }: { store: PageStore; snap: Snapshot }) {
       </main>}
 
       {!hideWorkbench && <footer className="pg-foot">
-        <span>{failedHere && !f.stepping && !waitingHere ? "Live session · the agent couldn’t answer the last message" : snap.feedError ? "Live updates stopped" : footer(f, waitingHere)}</span>
+        <span>{failedHere && !failure?.reason && !f.stepping && !waitingHere ? "Live session · the agent couldn’t answer the last message" : snap.feedError ? "Live updates stopped" : footer(f, waitingHere)}</span>
         <span>{feedLine}</span>
       </footer>}
 
@@ -963,6 +991,31 @@ interface Failure {
   started: boolean;
   /** Stopped from the page rather than failed. */
   stopped?: boolean;
+  /** Stopped by a limit the agent reached, as `AgentResult.stopped` names it. */
+  reason?: string;
+}
+
+/** A message Claude Code refused until what it bills is confirmed, in the session it was sent in. */
+interface BillingAsk {
+  session: string | null;
+  /** What the resend confirms, word for word. */
+  confirmation: string;
+  /** How the page names it. */
+  billed: string;
+  /** What a session confirmed has changed since. */
+  changed: boolean;
+  /** Cancel was pressed: the message stays unsent. */
+  cancelled: boolean;
+}
+
+/** What a billing refusal asks to confirm, or `null` for any other outcome. */
+function billingAsked(outcome: { kind: string; message: string }, status: Status | null): Omit<BillingAsk, "session"> | null {
+  if (outcome.kind !== "billing-unconfirmed" && outcome.kind !== "billing-changed") return null;
+  // The refusal names what to confirm as it is now; the status may be older.
+  const cc = status?.claude_code;
+  const confirmation = /--confirm-billing "([^"]*)"/.exec(outcome.message)?.[1] ?? cc?.confirmation ?? "";
+  const billed = cc?.state === "available" && cc.confirmation === confirmation ? billedName(cc) : confirmation;
+  return { confirmation, billed, changed: outcome.kind === "billing-changed", cancelled: false };
 }
 
 const FAILURE_KEY = "submilli-playground-chat-failure";

@@ -1,6 +1,7 @@
+use crate::lower_local_types::display_type_name;
 use crate::rendering::{RenderError, RenderLimits, Writer};
 use crate::type_rendering::write_type;
-use crate::{ObjectField, Type};
+use crate::{MangledName, ObjectField, Type};
 use std::collections::BTreeMap;
 #[cfg(test)]
 thread_local! {
@@ -9,7 +10,7 @@ thread_local! {
 
 pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<String>, RenderError> {
     let mut help = Vec::new();
-    help.try_reserve(2).map_err(|_| RenderError::Allocation)?;
+    help.try_reserve(4).map_err(|_| RenderError::Allocation)?;
     if let Some(diff) = format_type_diff(expected, got)? {
         help.push(diff);
     }
@@ -19,7 +20,69 @@ pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<Stri
     if let Some(note) = weak_type_note(expected, got)? {
         help.push(note);
     }
+    if let Some(note) = same_name_note(expected, got)? {
+        help.push(note);
+    }
     Ok(help)
+}
+
+/// Two different types can share a name when they are declared in different
+/// scopes or modules, and then their spelling alone can't tell them apart.
+fn same_name_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
+    let mut identity_of: BTreeMap<&str, &MangledName> = BTreeMap::new();
+    let mut pending = vec![expected, got];
+    let mut visited = 0u64;
+    while let Some(ty) = pending.pop() {
+        visited += 1;
+        // The note is a hint: a type this large goes without one.
+        if visited > crate::compiler_limits::MAX_TYPE_NODES {
+            break;
+        }
+        if let Some((name, identity)) = named_identity(ty) {
+            let shown = display_type_name(name);
+            if *identity_of.entry(shown).or_insert(identity) != identity {
+                return Ok(Some(format!(
+                    "two different types here are named `{shown}`, declared in different scopes"
+                )));
+            }
+        }
+        pending
+            .try_reserve(crate::type_size::child_count(ty))
+            .map_err(|_| RenderError::Allocation)?;
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    Ok(None)
+}
+
+/// A named type's name, and the declaration it stands for: an alias of a
+/// class, interface or enum stands for that type, so it and the type it names
+/// are one.
+fn named_identity(ty: &Type) -> Option<(&str, &MangledName)> {
+    match ty {
+        Type::Alias {
+            name, mangled, ty, ..
+        } => Some((name, nominal_body(ty).unwrap_or(mangled))),
+        Type::InterfaceRef { name, mangled, .. }
+        | Type::ClassRef { name, mangled, .. }
+        | Type::AliasRef { name, mangled, .. }
+        | Type::NumberEnum { name, mangled, .. }
+        | Type::StringEnum { name, mangled, .. } => Some((name, mangled)),
+        _ => None,
+    }
+}
+
+/// The class, interface or enum an alias body names, through any aliases.
+fn nominal_body(mut ty: &Type) -> Option<&MangledName> {
+    loop {
+        match ty {
+            Type::Alias { ty: body, .. } => ty = body,
+            Type::InterfaceRef { mangled, .. }
+            | Type::ClassRef { mangled, .. }
+            | Type::NumberEnum { mangled, .. }
+            | Type::StringEnum { mangled, .. } => return Some(mangled),
+            _ => return None,
+        }
+    }
 }
 
 /// Explains a rejection by the weak-type rule: an object type whose fields are
@@ -323,6 +386,64 @@ fn write_function_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The help lines of every diagnostic compiling `source` reports.
+    fn help_lines(source: &'static str) -> Vec<String> {
+        crate::type_size::tests::on_compiler_stack(move || {
+            let error = crate::compile::compile_script_checked(
+                source,
+                "names.ts",
+                crate::FileId(0),
+                &[],
+                &[],
+            )
+            .unwrap_err();
+            error
+                .diagnostics
+                .iter()
+                .flat_map(|diag| diag.help.clone())
+                .collect()
+        })
+    }
+
+    fn notes_same_name(help: &[String]) -> bool {
+        help.iter()
+            .any(|line| line.contains("declared in different scopes"))
+    }
+
+    #[test]
+    fn notes_two_types_of_one_name_at_any_depth() {
+        let help = help_lines(
+            "interface Row { a: string }\n\
+             function f(top: Row[]): void { interface Row { a: number } const r: Row[] = top; }\n\
+             function main(): void {}\n",
+        );
+        assert!(notes_same_name(&help), "{help:?}");
+    }
+
+    #[test]
+    fn does_not_note_one_type_at_two_instantiations() {
+        let help = help_lines(
+            "function f(): void {\n\
+               interface Box<U> { v: U }\n\
+               const a: Box<number> = { v: 1 };\n\
+               const b: Box<string> = a;\n\
+             }\n\
+             function main(): void {}\n",
+        );
+        assert!(!notes_same_name(&help), "{help:?}");
+    }
+
+    #[test]
+    fn does_not_note_an_alias_of_the_type_of_its_name() {
+        let help = help_lines(
+            "interface Row { a: number }\n\
+             type Base = Row;\n\
+             function f(): void { type Row = Base; const r: Row = 1; }\n\
+             function main(): void {}\n",
+        );
+        assert!(!notes_same_name(&help), "{help:?}");
+    }
     fn format_type_diff(a: &Type, b: &Type) -> Option<String> {
         super::format_type_diff(a, b).unwrap()
     }

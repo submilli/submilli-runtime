@@ -32,9 +32,12 @@ use crate::runtime::session_kv::{
     CursorKeys, SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore,
 };
 use crate::stdlib::abi::{
-    self, HostView, backing_struct, f64_field, install_field_getters, string_field,
+    self, HostView, TypeDescriptor, backing_struct, f64_field, install_field_getters,
+    read_type_argument, string_field,
 };
-use crate::stdlib::shared::check_security_call;
+use crate::stdlib::shared::{
+    check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
+};
 
 pub const MODULE_NAME: &str = "submilli:session";
 
@@ -90,33 +93,41 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         true,
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
+    // `get<T>` is generic: after the key comes the `$types` environment every
+    // generic call passes, holding the `$TypeDescriptor` for `T`.
+    let types = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteArray(intr.object_fields.clone()),
+    ));
 
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "get"),
-        FuncType::new(&engine, [string.clone()], [unknown.clone()]),
+        FuncType::new(&engine, [string.clone(), types], [unknown.clone()]),
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "get")?;
-                let ticket = gate(caller, "session.read", &key)?;
-                let found = effects::execute(caller, "session.get", key, |caller, _, key| {
-                    Box::pin(async move {
-                        let found = provider(caller, "get")?
-                            .get(&key)
-                            .await
-                            .map_err(|e| trap(caller, None, &e))?;
-                        if let Some(payload) = &found {
-                            fuel::settle(
-                                &mut *caller,
-                                fuel::IO,
-                                (payload.len() as u64).saturating_mul(2),
-                            )?;
-                        }
-                        Ok(found)
+                let descriptor = read_type_argument(caller, abi_arg(params, 1)?, 0)?;
+                let ticket = gate(caller, "session.read", &key).await?;
+                let found =
+                    effects::execute(caller, "session.get", key.clone(), |caller, _, key| {
+                        Box::pin(async move {
+                            let found = provider(caller, "get")?
+                                .get(&key)
+                                .await
+                                .map_err(|e| trap(caller, None, &e))?;
+                            if let Some(payload) = &found {
+                                fuel::settle(
+                                    &mut *caller,
+                                    fuel::IO,
+                                    (payload.len() as u64).saturating_mul(2),
+                                )?;
+                            }
+                            Ok(found)
+                        })
                     })
-                })
-                .await?;
+                    .await?;
                 record_payload(&*caller, ticket, Side::Response, || match &found {
                     // The size is of the copy and digest's encoding: UTF-8 bytes.
                     Some(payload) => Payload::meta(serde_json::Value::Null)
@@ -127,7 +138,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                     return crate::runtime::prelude::undefined::value(caller);
                 };
                 fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
-                value::deserialize(caller, payload)
+                let value = value::deserialize(caller, payload)?;
+                accept_or_throw(caller, &key, &descriptor, value).await
             })
         },
     )?;
@@ -140,7 +152,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "has")?;
-                let ticket = gate(caller, "session.read", &key)?;
+                let ticket = gate(caller, "session.read", &key).await?;
                 let found = effects::execute(caller, "session.has", key, |caller, _, key| {
                     Box::pin(async move {
                         provider(caller, "has")?
@@ -166,7 +178,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params, _results| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "set")?;
-                let ticket = gate(caller, "session.write", &key)?;
+                let ticket = gate(caller, "session.write", &key).await?;
                 // Serialization runs before the provider is consulted: a value
                 // with no JSON form must leave the previous entry intact.
                 let payload = value::serialize(caller, abi_arg(params, 1)?).await?;
@@ -198,7 +210,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let key = read_key(caller, abi_arg(params, 0)?, "remove")?;
-                gate(caller, "session.remove", &key)?;
+                gate(caller, "session.remove", &key).await?;
                 let removed = effects::execute(caller, "session.remove", key, |caller, _, key| {
                     Box::pin(async move {
                         provider(caller, "remove")?
@@ -313,11 +325,12 @@ async fn list(
 ) -> wasmtime::Result<Val> {
     let prefix = value::read_units(caller, prefix_val, "session.list (prefix)")?;
     let limit = read_limit(limit_val)?;
-    let ticket = check_security_call(
+    let ticket = check_and_approve_call(
         &mut *caller,
         "session.list",
         serde_json::json!({ "prefix": String::from_utf16_lossy(&prefix) }),
-    )?;
+    )
+    .await?;
     let cursor = if crate::runtime::prelude::undefined::is_undefined(caller, cursor_val)? {
         None
     } else {
@@ -433,19 +446,15 @@ fn read_limit(val: &Val) -> wasmtime::Result<usize> {
 /// failing the call: a listing that threw on the first forbidden key would
 /// itself disclose that the key exists.
 fn may_read(caller: &mut wasmtime::Caller<'_, StoreData>, key: &[u16]) -> wasmtime::Result<bool> {
-    let Err(err) = gate(caller, "session.read", key) else {
-        return Ok(true);
-    };
-    // Only the policy's own answer filters. An invariant denial means the check
-    // could not be made at all, and swallowing it would turn a runtime refusal
-    // into a silently short listing.
-    match err.downcast_ref::<crate::runtime::host::PermissionDenied>() {
-        Some(denial) if denial.is_policy() => {
-            crate::stdlib::shared::mark_filtered(&*caller);
-            Ok(false)
-        }
-        _ => Err(err),
+    let keeps = filters_candidate(check_candidate(
+        &mut *caller,
+        "session.read",
+        key_context(key),
+    ))?;
+    if !keeps {
+        mark_filtered(&*caller);
     }
+    Ok(keeps)
 }
 
 fn build_page(
@@ -479,6 +488,29 @@ fn build_page(
     abi::new_backing(caller, page_ty, &[array, cursor])
 }
 
+/// The stored `value` of `key` once the descriptor for `T` accepts it, or the
+/// catchable `TypeError` a mismatch throws. The message names the key and the
+/// expected type and never the value: a session holds a tenant's data. A bare
+/// `get(key)` binds `T` to `unknown`, whose descriptor accepts every value.
+async fn accept_or_throw(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    key: &[u16],
+    descriptor: &TypeDescriptor,
+    value: Val,
+) -> wasmtime::Result<Val> {
+    if descriptor.accepts(caller, value).await? {
+        return Ok(value);
+    }
+    // The key is quoted as a JSON string, so a quote or a newline in it
+    // cannot run into the rest of the message.
+    let key = serde_json::to_string(&String::from_utf16_lossy(key))
+        .map_err(crate::runtime::host::fatal_host_error)?;
+    Err(crate::runtime::host::type_error(format!(
+        "session.get({key}): the stored value does not match `{}`",
+        descriptor.name
+    )))
+}
+
 fn read_key(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
@@ -490,16 +522,16 @@ fn read_key(
 /// The policy sees the key as text. A lone surrogate is not expressible in a
 /// JSON string, so the context renders it lossily — matching on such a key is
 /// not something a rule can express, and the store keeps the exact units.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     capability: &str,
     key: &[u16],
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(
-        caller,
-        capability,
-        serde_json::json!({ "key": String::from_utf16_lossy(key) }),
-    )
+    check_and_approve_call(caller, capability, key_context(key)).await
+}
+
+fn key_context(key: &[u16]) -> serde_json::Value {
+    serde_json::json!({ "key": String::from_utf16_lossy(key) })
 }
 
 /// Clone the provider out of the store before any `await` or guest re-entry:
@@ -695,6 +727,58 @@ mod tests {
                 "items": [1, null, null],
             })
         );
+    }
+
+    /// A typed read tests the stored value against `T` on the host — the
+    /// descriptor's predicate, the same structural test `x as T` gets — and a
+    /// mismatch throws a catchable `TypeError` naming the key and the type and
+    /// never the value: a session holds a tenant's data.
+    #[tokio::test]
+    async fn a_typed_read_of_a_mismatched_value_throws_a_catchable_type_error() {
+        let out = run_returning(
+            r#"
+            import session from "submilli:session";
+            interface Progress { step: number; }
+            function main(): string {
+                session.set("p", { step: "SECRET-STEP" });
+                try {
+                    session.get<Progress>("p");
+                    return "passed";
+                } catch (e) {
+                    return (e instanceof TypeError ? "TypeError:" : "other:") + e.message;
+                }
+            }
+            "#,
+            Some(Arc::new(InMemorySessionKv::default())),
+            None,
+        )
+        .await
+        .expect("a mismatch is caught by the program");
+        assert_eq!(
+            out,
+            "TypeError:session.get(\"p\"): the stored value does not match `Progress`"
+        );
+    }
+
+    /// A bare `get(key)` binds `T` to `unknown`, whose descriptor accepts every
+    /// value: whatever is stored comes back.
+    #[tokio::test]
+    async fn an_untyped_read_accepts_every_stored_value() {
+        let out = run_returning(
+            r#"
+            import session from "submilli:session";
+            function main(): string {
+                session.set("p", { step: "one" });
+                const v = session.get("p");
+                return typeof v;
+            }
+            "#,
+            Some(Arc::new(InMemorySessionKv::default())),
+            None,
+        )
+        .await
+        .expect("program completes");
+        assert_eq!(out, "object");
     }
 
     #[tokio::test]

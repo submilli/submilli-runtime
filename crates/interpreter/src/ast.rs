@@ -789,6 +789,10 @@ pub enum TypeAnnotationKind {
         args: Vec<TypeAnnotation>,
     },
     StringLiteral(String),
+    TemplateLiteral {
+        parts: Vec<String>,
+        substitutions: Vec<TypeAnnotation>,
+    },
     /// Parser canonicalizes `-0.0` to `0.0`.
     NumberLiteral(crate::types::LiteralF64),
     /// Decimal digits with a leading `-` when negative, as in [`crate::Type::BigIntLiteral`].
@@ -934,6 +938,22 @@ pub struct Ast {
     /// A top-level `function main` the parser reported and dropped, so the
     /// program is not also told it has no `main`.
     pub unparsed_main: bool,
+    /// What lifting block-local type declarations to module scope recorded
+    /// (`lower_local_types`); `None` before it runs. Inference registers named
+    /// types from the top level only, so it rejects an AST that declares a
+    /// type in a block without this.
+    pub lowered_local_types: Option<LoweredLocalTypes>,
+}
+
+/// What lifting block-local type declarations to module scope recorded.
+#[derive(Default, Clone, Debug)]
+pub struct LoweredLocalTypes {
+    /// Errors for local types that can't be lifted or clash with another name,
+    /// reported by inference.
+    pub diagnostics: Vec<crate::Diagnostic>,
+    /// The block, or a switch's arms from its first label, each lifted type is
+    /// visible in, by its key.
+    pub scopes: std::collections::BTreeMap<String, Span>,
 }
 
 impl Ast {
@@ -1132,6 +1152,7 @@ mod tests {
 /// A string index signature; the parameter name is documentation only.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexSignatureAnnotation {
+    pub key: TypeAnnotation,
     pub value: TypeAnnotation,
     pub readonly: bool,
     pub span: Span,

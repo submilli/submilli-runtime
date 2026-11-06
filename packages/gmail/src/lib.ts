@@ -1,6 +1,6 @@
 import { get, post, delete, Response } from "submilli:http";
 import { decodeComponent, encodeComponent, encodeQuery } from "submilli:url";
-import { read, stat, write } from "submilli:fs";
+import { exists, read, stat, write } from "submilli:fs";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 
@@ -370,7 +370,7 @@ interface GoogleErrorDetail {
  */
 export function getProfile(): Profile {
     check("submilli/gmail.getProfile", {});
-    const data = gmailGet("/profile", new Map<string, string>()).json() as ApiProfile;
+    const data = gmailGet("/profile", new Map<string, string>()).json<ApiProfile>();
     return {
         emailAddress: data.emailAddress,
         messagesTotal: data.messagesTotal,
@@ -394,7 +394,7 @@ export function searchThreads(query: string, options: SearchOptions = {}): Page<
     params.set("maxResults", bounded(limit, 20, 1, 100).toString());
     putQuery(params, "pageToken", pageToken);
     putBool(params, "includeSpamTrash", includeSpamTrash);
-    const data = gmailGet("/threads", params).json() as ThreadListResponse;
+    const data = gmailGet("/threads", params).json<ThreadListResponse>();
     const items: ThreadRef[] = [];
     const threads = data.threads;
     if (threads) {
@@ -429,7 +429,7 @@ export function getThread(threadId: string): Thread | null {
     const response = gmailRawGet("/threads/" + encodeComponent(threadId), formatFull());
     if (response.status === 404) return null;
     requireOk(response);
-    return threadFrom(response.json() as ApiThread);
+    return threadFrom(response.json<ApiThread>());
 }
 
 /**
@@ -454,7 +454,7 @@ export function listDrafts(page: PageOptions = {}): Page<Draft> {
     check("submilli/gmail.listDrafts", {});
     const query = new Map<string, string>();
     applyPage(query, limit, pageToken, 20, 100);
-    const data = gmailGet("/drafts", query).json() as DraftListResponse;
+    const data = gmailGet("/drafts", query).json<DraftListResponse>();
     const items: Draft[] = [];
     const drafts = data.drafts;
     if (drafts) {
@@ -510,7 +510,7 @@ export function createDraft(input: EmailInput): Draft {
     const raw = composeEmail(mail, attachments);
     const response = post(API + "/drafts", { message: { raw: raw } }, authHeaders());
     requireOk(response);
-    const draft = response.json() as ApiDraft;
+    const draft = response.json<ApiDraft>();
     return { id: draft.id, message: messageFrom(draft.message) };
 }
 
@@ -534,7 +534,7 @@ export function createReplyDraft(input: ReplyInput): Draft {
     const request: DraftRequest = { message: { raw: raw, threadId: resolved.threadId } };
     const response = post(API + "/drafts", request, authHeaders());
     requireOk(response);
-    const draft = response.json() as ApiDraft;
+    const draft = response.json<ApiDraft>();
     return { id: draft.id, message: messageFrom(draft.message) };
 }
 
@@ -582,7 +582,7 @@ export function sendEmail(input: EmailInput): Message {
     check("submilli/gmail.sendEmail", { recipients: messageRecipients(mail), from: mail.from ?? null });
     const response = post(API + "/messages/send", { raw: composeEmail(mail, attachments) }, authHeaders());
     requireOk(response);
-    return messageFrom(response.json() as ApiMessage);
+    return messageFrom(response.json<ApiMessage>());
 }
 
 /**
@@ -604,7 +604,7 @@ export function reply(input: ReplyInput): Message {
     const request: RawMessageRequest = { raw: composeEmail(resolved.mail, attachments), threadId: resolved.threadId };
     const response = post(API + "/messages/send", request, authHeaders());
     requireOk(response);
-    return messageFrom(response.json() as ApiMessage);
+    return messageFrom(response.json<ApiMessage>());
 }
 
 /**
@@ -622,7 +622,7 @@ export function sendDraft(draftId: string): Message {
     check("submilli/gmail.sendDraft", { recipients: recipients, from: from });
     const response = post(API + "/drafts/send", { id: draftId }, authHeaders());
     requireOk(response);
-    return messageFrom(response.json() as ApiMessage);
+    return messageFrom(response.json<ApiMessage>());
 }
 
 /**
@@ -632,7 +632,7 @@ export function sendDraft(draftId: string): Message {
  */
 export function listLabels(): Label[] {
     check("submilli/gmail.listLabels", {});
-    const data = gmailGet("/labels", new Map<string, string>()).json() as LabelListResponse;
+    const data = gmailGet("/labels", new Map<string, string>()).json<LabelListResponse>();
     const labels: Label[] = [];
     const items = data.labels;
     if (items) for (const item of items) labels.push(labelFrom(item));
@@ -654,7 +654,7 @@ export function createLabel(name: string): Label {
     };
     const response = post(API + "/labels", body, authHeaders());
     requireOk(response);
-    return labelFrom(response.json() as ApiLabel);
+    return labelFrom(response.json<ApiLabel>());
 }
 
 /**
@@ -682,7 +682,7 @@ export function modifyThreadLabels(threadId: string, changes: LabelChanges): Thr
         authHeaders(),
     );
     requireOk(response);
-    return threadFrom(response.json() as ApiThread);
+    return threadFrom(response.json<ApiThread>());
 }
 
 /**
@@ -710,7 +710,7 @@ export function modifyMessageLabels(messageId: string, changes: LabelChanges): M
         authHeaders(),
     );
     requireOk(response);
-    return messageFrom(response.json() as ApiMessage);
+    return messageFrom(response.json<ApiMessage>());
 }
 
 /**
@@ -727,7 +727,7 @@ export function downloadAttachment(messageId: string, attachmentId: string, path
     check("submilli/gmail.downloadAttachment", { path: path });
     check("fs.write", { path: path, max_bytes: DOWNLOAD_MAX_BYTES });
     const endpoint = "/messages/" + encodeComponent(messageId) + "/attachments/" + encodeComponent(attachmentId);
-    const data = gmailGet(endpoint, new Map<string, string>()).json() as AttachmentResponse;
+    const data = gmailGet(endpoint, new Map<string, string>()).json<AttachmentResponse>();
     if (data.data.length > DOWNLOAD_MAX_ENCODED_LENGTH) {
         throw new GmailError("attachment_too_large", "attachment download exceeds 20 MB", 0);
     }
@@ -903,17 +903,25 @@ function composeEmail(input: ComposeInput, attachments: OutgoingAttachment[] = [
         const mimeType = attachment.mimeType ?? "application/octet-stream";
         validateFilename(filename);
         validateHeader(mimeType);
-        const metadata = stat(path);
+        const metadata = exists(path) ? stat(path) : undefined;
         if (metadata === undefined || metadata.kind !== "file") throw new GmailError("attachment_not_found", "attachment is not a VFS file: " + path, 0);
         total += metadata.size;
         if (total > MAX_ATTACHMENT_BYTES) throw new GmailError("attachments_too_large", "combined attachment contents exceed 10 MiB", 0);
-        const bytes = read(path);
-        if (bytes === undefined) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
+        const bytes = readAttachment(path);
         mime += "--" + boundary + "\r\nContent-Type: " + mimeType + "; name=\"" + filename + "\"\r\n";
         mime += "Content-Disposition: attachment; filename=\"" + filename + "\"\r\nContent-Transfer-Encoding: base64\r\n\r\n";
         mime += bytes.toBase64() + "\r\n";
     }
     return encodeRawMessage(mime + "--" + boundary + "--\r\n");
+}
+
+function readAttachment(path: string): Uint8Array {
+    try {
+        return read(path);
+    } catch (error) {
+        if (error instanceof RangeError) throw new GmailError("attachment_unreadable", "attachment exceeds the VFS whole-read limit", 0);
+        throw error;
+    }
 }
 
 // Refuses rather than repairs: the caller's check has already read these addresses.
@@ -932,14 +940,14 @@ function fetchApiMessage(messageId: string): ApiMessage | null {
     const response = gmailRawGet("/messages/" + encodeComponent(messageId), formatFull());
     if (response.status === 404) return null;
     requireOk(response);
-    return response.json() as ApiMessage;
+    return response.json<ApiMessage>();
 }
 
 function fetchDraft(draftId: string, query: Map<string, string>): ApiDraft | null {
     const response = gmailRawGet("/drafts/" + encodeComponent(draftId), query);
     if (response.status === 404) return null;
     requireOk(response);
-    return response.json() as ApiDraft;
+    return response.json<ApiDraft>();
 }
 
 function messageFrom(item: ApiMessage): Message {
@@ -1353,7 +1361,7 @@ function requireOk(response: Response): Response {
     let code = response.status === 401 ? "unauthorized" : "http_error";
     let message = "Gmail request failed: HTTP " + response.status.toString() + " " + response.statusText;
     if (response.body.startsWith("{")) {
-        const envelope = response.json() as GoogleErrorEnvelope;
+        const envelope = response.json<GoogleErrorEnvelope>();
         const body = envelope.error;
         if (body !== undefined) {
             const errors = body.errors;

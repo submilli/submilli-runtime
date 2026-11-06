@@ -120,7 +120,7 @@ fn b2_intrinsic_arity_lifts_signature() {
 
 #[test]
 fn b2_number_coercion_type_mismatch_lifts_signature() {
-    insta::assert_snapshot!(render_inside_main("  let x = Number(42);"));
+    insta::assert_snapshot!(render_inside_main("  let x = Number(true);"));
 }
 
 #[test]

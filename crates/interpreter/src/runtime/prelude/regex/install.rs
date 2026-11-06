@@ -4,6 +4,7 @@
 //! parent module; matching itself stays in `submilli:regex`.
 
 use crate::runtime::host::{abi_arg, abi_result};
+use std::collections::BTreeMap;
 use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
@@ -16,10 +17,6 @@ use crate::{MangledName, PackageDeclaration, Param, Type};
 
 fn regex_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("RegExp"), method)
-}
-
-fn match_key(method: &str) -> MangledName {
-    crate::mangle::extend(&crate::mangle::prelude("RegExpMatch"), method)
 }
 
 fn ctor_key(method: &str) -> MangledName {
@@ -167,51 +164,33 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
-    // --- RegExpMatch accessors (receiver: $Object) ------------------------
-    for (name, field) in [("match", 1usize), ("input", 3usize)] {
-        register_host_fn(
-            linker,
-            m,
-            match_key(name),
-            ft(vec![obj.clone()], vec![string.clone()]),
-            move |caller, params, results| {
-                *abi_result(results, 0)? = super::match_field(caller, params, field)?;
-                Ok(())
-            },
-        )?;
+    for interface in ["RegExpMatchArray", "RegExpExecArray"] {
+        for name in ["index", "input", "groups"] {
+            let required = interface == "RegExpExecArray" && name != "groups";
+            let result = if required && name == "index" {
+                num.clone()
+            } else if required {
+                string.clone()
+            } else {
+                obj.clone()
+            };
+            register_host_fn(
+                linker,
+                m,
+                crate::mangle::extend(&crate::mangle::prelude(interface), name),
+                ft(vec![obj.clone()], vec![result]),
+                move |caller, params, results| {
+                    let value = super::match_metadata(caller, params, name)?;
+                    *abi_result(results, 0)? = if required && name == "index" {
+                        Val::F64(crate::runtime::json::boxed_number(caller, value)?.to_bits())
+                    } else {
+                        value
+                    };
+                    Ok(())
+                },
+            )?;
+        }
     }
-    register_host_fn(
-        linker,
-        m,
-        match_key("index"),
-        ft(vec![obj.clone()], vec![num.clone()]),
-        |caller, params, results| {
-            *abi_result(results, 0)? = Val::F64(super::match_index(caller, params)?.to_bits());
-            Ok(())
-        },
-    )?;
-    register_host_fn(
-        linker,
-        m,
-        match_key("groups"),
-        ft(vec![obj.clone()], vec![array.clone()]),
-        |caller, params, results| {
-            *abi_result(results, 0)? = super::groups(caller, params)?;
-            Ok(())
-        },
-    )?;
-    register_host_fn_async(
-        linker,
-        m,
-        match_key("namedGroups"),
-        ft(vec![obj.clone()], vec![obj.clone()]),
-        |caller, params, results| {
-            Box::pin(async move {
-                *abi_result(results, 0)? = super::named_groups(caller, params).await?;
-                Ok(())
-            })
-        },
-    )?;
 
     // --- String regex-arm methods (receiver: $string) ---------------------
     register_host_fn(
@@ -238,7 +217,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         m,
         string_key("matchAll"),
-        ft(vec![string.clone(), obj.clone()], vec![array.clone()]),
+        ft(vec![string.clone(), obj.clone()], vec![obj.clone()]),
         |caller, params, results| {
             *abi_result(results, 0)? = super::string_match_all(caller, params)?;
             Ok(())
@@ -295,10 +274,9 @@ pub fn declare(defs: &mut PackageDeclaration) {
     // containing one) → `(ref null $Object)`, `Type::String` → `(ref $string)`,
     // `Type::Array` → `(ref $Array)`.
     let regexp = || Type::prelude_interface("RegExp".to_string(), Vec::new());
-    let regexp_match = || Type::prelude_interface("RegExpMatch".to_string(), Vec::new());
+    let regexp_match = || Type::prelude_interface("RegExpMatchArray".to_string(), Vec::new());
     let match_or_null = || Type::Union(vec![regexp_match(), Type::Null]);
     let re_self = || Param::new("self", regexp());
-    let match_self = || Param::new("self", regexp_match());
 
     declare_method(
         defs,
@@ -336,7 +314,10 @@ pub fn declare(defs: &mut PackageDeclaration) {
         "exec",
         regex_key("exec"),
         vec![re_self(), Param::new("input", Type::String)],
-        match_or_null(),
+        Type::union(vec![
+            Type::prelude_interface("RegExpExecArray".to_string(), Vec::new()),
+            Type::Null,
+        ]),
     );
     for name in ["source", "flags"] {
         declare_method(defs, name, regex_key(name), vec![re_self()], Type::String);
@@ -360,47 +341,30 @@ pub fn declare(defs: &mut PackageDeclaration) {
         declare_method(defs, name, regex_key(name), vec![re_self()], Type::Boolean);
     }
 
-    // RegExpMatch
-    for name in ["match", "input"] {
-        declare_method(
-            defs,
-            name,
-            match_key(name),
-            vec![match_self()],
-            Type::String,
-        );
+    for interface in ["RegExpMatchArray", "RegExpExecArray"] {
+        let receiver = Type::prelude_interface(interface.to_string(), Vec::new());
+        for (name, base) in [
+            ("index", Type::Number),
+            ("input", Type::String),
+            ("groups", groups_type()),
+        ] {
+            let ty = if interface == "RegExpMatchArray" && name != "groups" {
+                Type::union(vec![base, Type::Undefined])
+            } else {
+                base
+            };
+            declare_method(
+                defs,
+                name,
+                crate::mangle::extend(&crate::mangle::prelude(interface), name),
+                vec![Param::new("self", receiver.clone())],
+                ty,
+            );
+        }
     }
-    declare_method(
-        defs,
-        "index",
-        match_key("index"),
-        vec![match_self()],
-        Type::Number,
-    );
-    declare_method(
-        defs,
-        "groups",
-        match_key("groups"),
-        vec![match_self()],
-        Type::Array(Box::new(Type::Union(vec![Type::String, Type::Undefined]))),
-    );
-    declare_method(
-        defs,
-        "namedGroups",
-        match_key("namedGroups"),
-        vec![match_self()],
-        Type::prelude_interface(
-            "Map".to_string(),
-            vec![
-                Type::String,
-                Type::Union(vec![Type::String, Type::Undefined]),
-            ],
-        ),
-    );
 
     // String regex-arm methods
     let s = || Param::new("s", Type::String);
-    let re = || Param::new("re", regexp());
     let string_or_regexp = || Type::Union(vec![Type::String, regexp()]);
     declare_method(
         defs,
@@ -420,8 +384,14 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "matchAll",
         string_key("matchAll"),
-        vec![s(), re()],
-        Type::Array(Box::new(regexp_match())),
+        vec![s(), Param::new("re", string_or_regexp())],
+        Type::prelude_interface(
+            "Iterator".to_string(),
+            vec![Type::prelude_interface(
+                "RegExpExecArray".to_string(),
+                Vec::new(),
+            )],
+        ),
     );
     for name in ["replace", "replaceAll"] {
         declare_method(
@@ -507,7 +477,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Vec::new(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Union(vec![
-                                Type::prelude_interface("RegExpMatch".to_string(), Vec::new()),
+                                Type::prelude_interface("RegExpExecArray".to_string(), Vec::new()),
                                 Type::Null,
                             ]),
                             predicate: None,
@@ -569,83 +539,33 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         },
     );
 
-    defs.types.insert(
-        "RegExpMatch".to_string(),
-        TypeSymbol {
-            name: "RegExpMatch".to_string(),
-            mangled_name: crate::mangle::prelude("RegExpMatch"),
+    for interface in ["RegExpMatchArray", "RegExpExecArray"] {
+        let optional = interface == "RegExpMatchArray";
+        let property = |ty, optional| PropertySig {
+            ty: if optional {
+                Type::union(vec![ty, Type::Undefined])
+            } else {
+                ty
+            },
+            readonly: true,
+            intrinsic: false,
+            optional: false,
+            doc: None,
+        };
+        defs.types.insert(interface.to_string(), TypeSymbol {
+            name: interface.to_string(), mangled_name: crate::mangle::prelude(interface),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
-                methods: BTreeMap::new(),
+            kind: TypeKind::Interface { index: None, generics: Vec::new(), methods: BTreeMap::new(),
                 properties: BTreeMap::from([
-                    (
-                        "match".to_string(),
-                        PropertySig {
-                            ty: Type::String,
-                            readonly: true,
-                            intrinsic: false,
-                            optional: false,
-                            doc: doc("/** The full match text. */"),
-                        },
-                    ),
-                    (
-                        "index".to_string(),
-                        PropertySig {
-                            ty: Type::Number,
-                            readonly: true,
-                            intrinsic: false,
-                            optional: false,
-                            doc: doc(
-                                "/** Offset of the match's first code unit within `input`. */",
-                            ),
-                        },
-                    ),
-                    (
-                        "input".to_string(),
-                        PropertySig {
-                            ty: Type::String,
-                            readonly: true,
-                            intrinsic: false,
-                            optional: false,
-                            doc: doc("/** The full string the match ran against. */"),
-                        },
-                    ),
-                    (
-                        "groups".to_string(),
-                        PropertySig {
-                            ty: Type::Array(Box::new(Type::Union(vec![
-                                Type::String,
-                                Type::Undefined,
-                            ]))),
-                            readonly: true,
-                            intrinsic: false,
-                            optional: false,
-                            doc: doc(
-                                "/** Numbered capture groups (1..n). `undefined` entries represent groups that did not participate in the match (e.g. alternation arms). */",
-                            ),
-                        },
-                    ),
-                    (
-                        "namedGroups".to_string(),
-                        PropertySig {
-                            ty: Type::prelude_interface("Map".to_string(), vec![Type::String, Type::Union(vec![Type::String, Type::Undefined])]),
-                            readonly: true,
-                            intrinsic: false,
-                            optional: false,
-                            doc: doc(
-                                "/** Named capture groups as a `Map<string, string | undefined>`. Unmatched named captures have an undefined value. */",
-                            ),
-                        },
-                    ),
+                    ("index".to_string(), property(Type::Number, optional)),
+                    ("input".to_string(), property(Type::String, optional)),
+                    ("groups".to_string(), property(groups_type(), false)),
                 ]),
                 dispatch: Dispatch::Direct,
-                doc: doc(
-                    "/** Result of a successful `RegExp.exec`. Properties only. */",
-                ),
+                doc: doc("/** Array of matches: [0] is the full match, followed by captures. Unmatched captures are undefined. */"),
             },
-        },
-    );
+        });
+    }
 
     defs.types.insert(
         "RegExpConstructor".to_string(),
@@ -726,5 +646,20 @@ pub(crate) fn replacement_type() -> Type {
             predicate: None,
             has_rest: false,
         },
+    ])
+}
+
+fn groups_type() -> Type {
+    Type::union(vec![
+        Type::Object {
+            fields: BTreeMap::new(),
+            index: Some(crate::IndexSignature {
+                string_keyof_includes_number: false,
+                key: Box::new(crate::Type::String),
+                value: Box::new(Type::regexp_element()),
+                readonly: false,
+            }),
+        },
+        Type::Undefined,
     ])
 }

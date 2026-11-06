@@ -1,27 +1,27 @@
 function main(): void {
   const cap: RegExp = new RegExp("(\\w+)@(\\w+)", "");
-  const m: RegExpMatch | null = cap.exec("user@example");
+  const m: RegExpExecArray | null = cap.exec("user@example");
   assert(m !== null, "match found");
   if (m !== null) {
-    assert(m.match === "user@example", "full match");
-    assert(m.groups.length === 2, "two captures");
-    assert(m.groups[0] === "user", "capture 1");
-    assert(m.groups[1] === "example", "capture 2");
+    assert(m[0] === "user@example", "full match");
+    assert(m.length === 3, "two captures");
+    assert(m[1] === "user", "capture 1");
+    assert(m[2] === "example", "capture 2");
   }
 
   const re: RegExp = new RegExp("hello", "");
-  const m2: RegExpMatch | null = re.exec("hello");
+  const m2: RegExpExecArray | null = re.exec("hello");
   assert(m2 !== null, "match found");
   if (m2 !== null) {
-    assert(m2.groups.length === 0, "no captures");
+    assert(m2.length === 1, "no captures");
   }
 
   const alt: RegExp = new RegExp("(a)|(b)", "");
-  const m3: RegExpMatch | null = alt.exec("a");
+  const m3: RegExpExecArray | null = alt.exec("a");
   assert(m3 !== null, "match found");
   if (m3 !== null) {
-    assert(m3.groups.length === 2, "two capture groups");
-    assert(m3.groups[0] === "a", "first arm matched");
-    assert(m3.groups[1] === undefined, "second arm did NOT match → undefined");
+    assert(m3.length === 3, "two capture groups");
+    assert(m3[1] === "a", "first arm matched");
+    assert(m3[2] === undefined, "second arm did NOT match → undefined");
   }
 }

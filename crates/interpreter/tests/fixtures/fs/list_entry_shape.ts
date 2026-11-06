@@ -6,7 +6,7 @@ import { mkdir, writeText, list, DirEntry } from "submilli:fs";
 
 function joined(path: string, recursive: boolean): string {
   const paths: string[] = [];
-  for (const entry of list(path, recursive)) {
+  for (const entry of list(path, { recursive })) {
     paths.push(entry.path);
   }
   paths.sort();
@@ -14,13 +14,13 @@ function joined(path: string, recursive: boolean): string {
 }
 
 function main(): void {
-  mkdir("/tree/sub", true);
+  mkdir("/tree/sub", { recursive: true });
   writeText("/tree/a.txt", "alpha");
   writeText("/tree/sub/b.txt", "bravo");
 
   let files = 0;
   let dirs = 0;
-  for (const entry of list("/tree", true)) {
+  for (const entry of list("/tree", { recursive: true })) {
     if (entry.kind === "file") {
       files = files + 1;
       assert(entry.size === 5, "file entries carry their size");

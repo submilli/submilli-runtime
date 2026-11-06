@@ -8,6 +8,10 @@ on:
       - "docs-site/**"
       - "examples/quickstart/**"
       - "scripts/docker-compose-e2e.sh"
+      - "scripts/check_compose_release.py"
+      - "scripts/publish_chart.py"
+      - "scripts/tests/test_check_compose_release.py"
+      - "scripts/tests/test_publish_chart.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
@@ -15,6 +19,10 @@ on:
       - "docs-site/**"
       - "examples/quickstart/**"
       - "scripts/docker-compose-e2e.sh"
+      - "scripts/check_compose_release.py"
+      - "scripts/publish_chart.py"
+      - "scripts/tests/test_check_compose_release.py"
+      - "scripts/tests/test_publish_chart.py"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
@@ -28,11 +36,22 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Check Compose release gating
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_check_compose_release.py'
+          python3 -m unittest discover -s scripts/tests -p 'test_publish_chart.py'
+      - name: Check the documented runtime image
+        id: image
+        run: python3 scripts/check_compose_release.py
       - name: Replay the published Compose deployment
+        if: steps.image.outputs.available == 'true'
         run: scripts/docker-compose-e2e.sh
 
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: read
     defaults:
       run:
         working-directory: docs-site
@@ -71,3 +90,29 @@ jobs:
           name: documentation-site
           path: docs-site/dist/
           if-no-files-found: error
+      - name: Report the hosted preview
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+        run: |
+          notice() {
+            echo "::notice::$1"
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+          if [ "$IS_FORK" = "true" ]; then
+            notice "Hosted previews are only posted for branches in this repository. Reviewers can download the documentation-site artifact from this run instead."
+            exit 0
+          fi
+          suffix=" - submilli-docs PR #${PR_NUMBER}"
+          if ! deployments=$(gh api "repos/${REPOSITORY}/deployments?sha=${HEAD_SHA}&per_page=100"); then
+            notice "Could not list this commit's deployments, so the hosted preview state is unknown. The Hosted preview link workflow posts the link on the pull request when Render finishes."
+          elif jq -e --arg suffix "$suffix" 'any(.environment // "" | endswith($suffix))' <<< "$deployments" >/dev/null; then
+            notice "Render has a preview deployment for this commit; the Hosted preview link workflow posts the link on the pull request when it succeeds."
+          else
+            notice "No Render preview deployment was found for this commit. If Pull Request Previews are not enabled on the submilli-docs service on Render, see docs-site/README.md, section 'Pull request previews', for the one-time setup. Until a preview exists, download the documentation-site artifact from this run."
+          fi

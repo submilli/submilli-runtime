@@ -385,7 +385,7 @@ async fn queued_admission_and_rebind_leave_stuck_runs_files_untouched() {
         )
         .unwrap(),
     );
-    let source = r#"import { remove } from "submilli:fs"; function main(): void { remove("/work", false); while (true) {} }"#;
+    let source = r#"import { remove } from "submilli:fs"; function main(): void { remove("/work", { recursive: false }); while (true) {} }"#;
     let id = accept_with_blueprint(&state, "s", source, None, blueprint.clone()).await;
     state.boot().await.unwrap();
     until(&state, &id, "stuck").await;
@@ -471,7 +471,7 @@ async fn entirely_readonly_filesystem_is_refused_before_admission() {
             vfs_source: execute::VfsSource::Rest,
             run_entry: "session",
             idempotency_key: None,
-            tools: None,
+            suspension: None,
         },
     )
     .await;

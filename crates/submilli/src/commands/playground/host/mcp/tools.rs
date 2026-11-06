@@ -14,14 +14,14 @@ use std::sync::Arc;
 
 use interpreter::runtime::fs::{ContainError, ContentPath, guest_normalize, resolve_content};
 use interpreter::runtime::security::AuditDecision;
-use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs};
+use interpreter::runtime::{CallSite, CheckOutcome, EntryPath, SecurityCheck, Vfs, denial_reason};
 use interpreter::stdlib::fs::handles::kind_of;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::{Extension, ToolCallContext};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Content, ErrorCode, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParams, CallToolResult, ErrorCode, ListToolsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, schemars, tool, tool_router};
@@ -53,8 +53,8 @@ struct ExecuteArgs {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 struct PackageDocsArgs {
-    /// Package name, e.g. `submilli:crypto`.
-    name: String,
+    /// Package or built-in names to read before writing the program.
+    names: Vec<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -140,9 +140,13 @@ struct BuiltinsDocsArgs {
     names: Vec<String>,
 }
 
-/// The `{ result, console, error }` shape of `execute`.
+/// The `{ run, result, console, error }` shape of `execute`.
 #[derive(Serialize)]
 struct ExecuteOutput {
+    /// The run's number, as the developer's page and CLI name it; absent when the run
+    /// wasn't recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<u64>,
     result: Option<String>,
     console: Vec<String>,
     error: Option<ExecuteError>,
@@ -332,6 +336,7 @@ impl SubmilliMcp {
         }
         with_execution_id(
             structured_result(ExecuteOutput {
+                run: output.run_number,
                 result: response.result,
                 console: response.console,
                 error: response.error,
@@ -378,25 +383,31 @@ impl SubmilliMcp {
         &self,
         Parameters(args): Parameters<PackageDocsArgs>,
     ) -> Result<CallToolResult, ErrorData> {
-        let lookup = match self.shared.blueprint(&self.blueprint_name).await {
-            Some(applied) => {
+        let mut results = Vec::new();
+        if let Some(applied) = self.shared.blueprint(&self.blueprint_name).await {
+            for name in &args.names {
                 self.shared
                     .run
-                    .refresh_package_discovery(&applied.blueprint, Some(&args.name))
+                    .refresh_package_discovery(&applied.blueprint, Some(name))
                     .await
                     .map_err(|message| ErrorData::internal_error(message, None))?;
-                let catalog = self.catalog(&applied.blueprint).await?;
-                let scope = self.docs_scope(&applied.blueprint);
-                packages::lookup_with_blueprint(&args.name, &catalog, &scope)
             }
-            None => packages::lookup(&args.name),
-        };
-        if let Some(markdown) = packages::docs_markdown(&lookup) {
-            Ok(CallToolResult::success(vec![Content::text(markdown)]))
+            let catalog = self.catalog(&applied.blueprint).await?;
+            let scope = self.docs_scope(&applied.blueprint);
+            for name in &args.names {
+                results.push(packages::batch_docs_entry(
+                    name,
+                    packages::lookup_with_blueprint(name, &catalog, &scope),
+                ));
+            }
         } else {
-            let value = packages::docs_json(&args.name, lookup);
-            Ok(CallToolResult::structured(value))
+            for name in &args.names {
+                results.push(packages::batch_docs_entry(name, packages::lookup(name)));
+            }
         }
+        Ok(CallToolResult::structured(
+            serde_json::json!({ "results": results }),
+        ))
     }
 
     // Description is served from `submilli_shared::prompt::tools` via `list_tools`.
@@ -639,6 +650,12 @@ impl SubmilliMcp {
         let (allowed, rule, refusal) = match outcome {
             CheckOutcome::Allow { rule } => (true, rule, None),
             CheckOutcome::Deny { reason, rule } => (false, rule, Some(reason)),
+            // A file tool cannot wait for an approver, so it denies as a deny rule would.
+            CheckOutcome::Ask { rule, .. } => (
+                false,
+                Some(rule.index),
+                Some(denial_reason("main", capability, audit_context.as_ref())),
+            ),
             _ => (false, None, Some("unrecognized policy outcome".to_string())),
         };
         if let (Some(recording), Some(log), Some((marker, ticket))) = (recording, log, call) {

@@ -81,7 +81,8 @@ impl<'a> Inferer<'a> {
                 path: narrowing::ReferencePath::root(narrowing::BindingId::Global(mangled.clone())),
                 contains_getter: false,
             }),
-            TypedExprKind::FieldAccess { receiver, name } => {
+            TypedExprKind::FieldAccess { receiver, name }
+            | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => {
                 let receiver_expr = self
                     .typed_ast
                     .try_expr(*receiver)
@@ -813,6 +814,7 @@ impl<'a> Inferer<'a> {
             eq_env.insert(
                 path.clone(),
                 narrowing::NarrowedView {
+                    evolving: None,
                     narrowed_ty: if can_be_compared {
                         with_type_parameters_of(&path_ty, compared_ty.clone())
                     } else {
@@ -848,6 +850,7 @@ impl<'a> Inferer<'a> {
         neq_env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: unequal_ty,
                 facts: neq_fact,
                 excluded_literals: exclusions.clone(),
@@ -1254,6 +1257,7 @@ impl<'a> Inferer<'a> {
         true_env.insert(
             path.clone(),
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: true_ty.clone(),
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -1265,6 +1269,7 @@ impl<'a> Inferer<'a> {
         false_env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -1327,6 +1332,7 @@ impl<'a> Inferer<'a> {
         env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -1588,6 +1594,7 @@ impl<'a> Inferer<'a> {
         env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: narrowing::with_source_refinement(&path_ty, equal_ty),
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -1981,6 +1988,7 @@ impl<'a> Inferer<'a> {
         true_env.insert(
             root_path.clone(),
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: true_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -1991,6 +1999,7 @@ impl<'a> Inferer<'a> {
         false_env.insert(
             root_path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: false_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -2249,6 +2258,7 @@ impl<'a> Inferer<'a> {
         true_env.insert(
             path.clone(),
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: true_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: true_excluded,
@@ -2259,6 +2269,7 @@ impl<'a> Inferer<'a> {
         false_env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: false_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: false_excluded,
@@ -2500,6 +2511,7 @@ impl<'a> Inferer<'a> {
         true_env.insert(
             root_path.clone(),
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: true_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -2510,6 +2522,7 @@ impl<'a> Inferer<'a> {
         false_env.insert(
             root_path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: false_root_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals: std::collections::BTreeSet::new(),
@@ -2573,6 +2586,7 @@ impl<'a> Inferer<'a> {
         true_env.insert(
             path.clone(),
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: true_ty,
                 facts: true_facts,
                 excluded_literals: exclusions.clone(),
@@ -2583,6 +2597,7 @@ impl<'a> Inferer<'a> {
         false_env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty: false_ty,
                 facts: false_facts,
                 excluded_literals: exclusions.clone(),
@@ -2790,6 +2805,7 @@ impl<'a> Inferer<'a> {
             env.insert(
                 path.clone(),
                 narrowing::NarrowedView {
+                    evolving: None,
                     narrowed_ty: ty,
                     facts,
                     excluded_literals: self.known_exclusions(&path),
@@ -2937,35 +2953,28 @@ impl<'a> Inferer<'a> {
         let Some(receiver_ty) = self.derive_type_for_reference_path(&receiver_path) else {
             return Ok(None);
         };
-        // Bail when the field can't be resolved on the receiver's shape: without
-        // a source we can reconstruct from declared types, the view would fall
-        // back to an already-narrowed expression whose shadow is scoped to an
-        // inner region.
-        match self.narrow_source_field_ty(&receiver_ty, &field_name) {
-            Some(value) => value,
-            None => return Ok(None),
-        };
         let receiver_id = self
             .typed_ast
             .try_push_expr(TypedExpr {
                 kind: receiver_kind,
                 span: path_span,
-                ty: receiver_ty,
+                ty: receiver_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        Ok(Some(crate::TypedExprKind::FieldAccess {
-            receiver: receiver_id,
-            name: Ident {
-                name: field_name,
-                span: path_span,
-            },
-        }))
+        Ok(self
+            .synthesize_path_step(
+                receiver_id,
+                &receiver_ty,
+                &narrowing::PathElem::Field(field_name),
+                path_span,
+            )?
+            .map(|(kind, _)| kind))
     }
 
     /// Receiver type for a synthesized narrow source, rebuilt from declared
     /// types. Each hop drops `null`: the guard has already proved every prefix
-    /// non-null wherever this source runs, and the type is stamped onto a
-    /// `FieldAccess` that codegen lowers by receiver shape.
+    /// non-null wherever this source runs. Rebuilt reads retain the receiver's
+    /// structural field access or direct host-property dispatch.
     fn derive_type_for_reference_path(&self, path: &narrowing::ReferencePath) -> Option<Type> {
         let root_ty = match &path.root {
             narrowing::BindingId::Local { name, .. } => self.scopes.get(name)?.ty.clone(),
@@ -3109,8 +3118,17 @@ impl<'a> Inferer<'a> {
     /// `never`. A type parameter or `unknown` hides values a guard can't see
     /// ruled out, so `typeof x === "object"` on a `T` is not a contradiction.
     fn reads_as_never(&self, path: &narrowing::ReferencePath) -> bool {
+        let declared = if self.is_evolving_path(path) {
+            // Auto bindings erase storage, not the type the guard actually tested.
+            // Every view's source was inserted into this typed arena at construction.
+            self.innermost_narrowing(path)
+                .and_then(|view| self.typed_ast.try_expr(view.source).ok())
+                .map(|source| source.ty.clone())
+        } else {
+            self.declared_root_ty(path)
+        };
         self.rules_out_to_never(path)
-            && self.declared_root_ty(path).is_some_and(|declared| {
+            && declared.is_some_and(|declared| {
                 !narrowing::has_erased_member(&declared)
                     && !matches!(declared.peel(), Type::Unknown)
             })

@@ -223,6 +223,71 @@ function main(): void {
 }
 
 #[tokio::test]
+async fn an_approved_call_names_who_decided_and_keeps_its_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.log");
+    // `allows: none` leaves other allowed operations out of the trail.
+    let router = app(configured(
+        path.clone(),
+        Allows::None,
+        "name: test\npermissions:\n  main:\n    - capability: test.refund\n      action: ask-human\n",
+    ));
+    let (_, opened) = request(
+        router.clone(),
+        "POST",
+        "/v1/sessions",
+        json!({"blueprint": "test"}),
+    )
+    .await;
+    let session = opened["session_id"].as_str().unwrap();
+    let code = r#"import { check } from "submilli:security";
+function main(): string { check("test.refund", { amount: 250 }); return "refunded"; }"#;
+    let (_, suspended) = request(
+        router.clone(),
+        "POST",
+        &format!("/v1/sessions/{session}/execute"),
+        json!({"code": code}),
+    )
+    .await;
+    let run = suspended["execution_id"].as_str().unwrap();
+    let call_id = suspended["calls"][0]["call_id"].as_str().unwrap();
+    let (_, finished) = request(
+        router,
+        "POST",
+        &format!("/v1/runs/{run}/resume"),
+        json!({"results": [{"call_id": call_id, "decision": "approve", "reason": "a regular"}]}),
+    )
+    .await;
+    assert_eq!(finished["result"], "refunded", "{finished}");
+
+    let rows = records(&path);
+    let approvals: Vec<_> = rows
+        .iter()
+        .filter(|row| row["type"] == "approval")
+        .collect();
+    let events: Vec<_> = approvals.iter().map(|row| row["event"].as_str()).collect();
+    assert_eq!(events, ["requested", "concluded"]);
+    let concluded = approvals[1];
+    assert_eq!(concluded["call_id"], call_id);
+    assert_eq!(concluded["approver"], "human");
+    assert_eq!(concluded["decision"], "approved");
+    assert_eq!(concluded["decided_by"], "unauthenticated");
+    assert_eq!(concluded["reason"], "a regular");
+    assert_eq!(concluded["rule.index"], "0");
+    let decision = rows
+        .iter()
+        .find(|row| {
+            row["type"] == "decision"
+                && row.get("capability").map(String::as_str) == Some("test.refund")
+        })
+        .expect("the approved call's decision record");
+    assert_eq!(decision["decision"], "allow");
+    assert_eq!(decision["source"], "human");
+    let context: Value = serde_json::from_str(&decision["context.payload_json"]).unwrap();
+    assert_eq!(context, json!({"amount": 250}));
+}
+
+#[tokio::test]
 async fn allow_modes_keep_denials_and_attribute_rules_without_charging_fuel() {
     let mut fuel = Vec::new();
     for allows in [Allows::All, Allows::Summary, Allows::None] {

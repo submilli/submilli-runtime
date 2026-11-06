@@ -37,7 +37,7 @@ const MAX_OUTPUT_TOKENS: u64 = 4096;
 /// The largest JSON of provider settings taken.
 const MAX_PROVIDER_SETTINGS_BYTES: usize = 16 * 1024;
 /// The MCP protocol version chat speaks.
-const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The most of a tool's result handed back to the model.
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 
@@ -68,14 +68,17 @@ const SYSTEM: &str = "You are helping a developer try out Submilli in its local 
     without evidence or claim that your own refusal proves runtime enforcement. \
     For normal tasks, answer directly without turning every answer into a tutorial. \
     Follow the tool instructions: write TypeScript-subset programs and run them when \
-    needed for the requested task. When the playground refuses something, report the \
+    needed for the requested task. Every named function and method other than a \
+    constructor, `main` included, declares its return type, such as \
+    `function main(): object`, with `void` when it returns nothing. To point the developer at a run, use the \
+    run number a tool result gives, such as run 12, not its execution id. When the playground refuses something, report the \
     refusal; do not look for another way to get it. A refusal stands only under the \
     blueprint that made it, and the developer may change the blueprint between messages, \
     so when asked to try again, call the tool again rather than repeating an earlier \
     answer. Finish with a short answer.";
 
 /// [`SYSTEM`], and what the session's variables are.
-fn system_prompt(variables: &BTreeMap<String, String>) -> String {
+pub(crate) fn system_prompt(variables: &BTreeMap<String, String>) -> String {
     match super::variables_note(variables) {
         Some(note) => format!("{SYSTEM} {note}"),
         None => SYSTEM.to_owned(),
@@ -363,6 +366,9 @@ pub(crate) struct Settings {
     /// Fields added to every request to the provider, as its API names them.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub(crate) provider: serde_json::Map<String, Value>,
+    /// The most, in US dollars, Claude Code may spend on one message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_budget_usd: Option<f64>,
 }
 
 impl Settings {
@@ -381,6 +387,12 @@ pub(crate) fn check_settings(choice: &Choice, settings: &Settings) -> Result<(),
     }
     if settings.max_output == Some(0) {
         return Err("the most output tokens is at least 1".to_owned());
+    }
+    if settings.max_budget_usd.is_some() {
+        return Err(format!(
+            "a spending limit applies to Claude Code only; {} counts tool calls instead",
+            choice.provider
+        ));
     }
     let size = serde_json::to_string(&settings.provider).map_or(0, |json| json.len());
     if size > MAX_PROVIDER_SETTINGS_BYTES {
@@ -663,6 +675,12 @@ pub(crate) enum Stopped {
     OutputLimit,
     /// The provider stopped the answer: a refusal, a safety filter.
     Provider,
+    /// Claude Code spent the message's spending limit.
+    SpendingLimit,
+    /// The message made as many tool calls as its limit allows.
+    CallLimit,
+    /// The subscription has no usage left for now.
+    UsageLimit,
 }
 
 /// Runs `task` to the model's answer or the turn limit. Blocking. Errors are the
@@ -897,6 +915,24 @@ fn chat_failure(failure: Failure) -> String {
     }
 }
 
+/// Starts an MCP session under the binding for a chat that is not run here: its id.
+pub(crate) fn open_session(
+    server_port: u16,
+    blueprint: &str,
+    token: &str,
+    secrets: &BTreeMap<String, String>,
+    variables: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let http = McpHttp::new(server_port, blueprint, token, secrets);
+    let mcp = McpConversation {
+        http: &http,
+        next_id: Cell::new(1),
+    };
+    connect(&mcp, variables)?;
+    http.session()
+        .ok_or_else(|| "the playground started no MCP session".to_owned())
+}
+
 /// Starts the MCP session under the binding and lists its tools.
 fn connect(
     mcp: &McpConversation<'_>,
@@ -1024,19 +1060,19 @@ fn ask(
 }
 
 /// The chat's turns, into its session's log.
-struct Log<'a> {
-    recorder: &'a Recorder,
-    session: Option<&'a str>,
-    agent: &'a str,
+pub(crate) struct Log<'a> {
+    pub(crate) recorder: &'a Recorder,
+    pub(crate) session: Option<&'a str>,
+    pub(crate) agent: &'a str,
     /// The model answering, named on its messages.
-    model: &'a str,
+    pub(crate) model: &'a str,
     /// How many messages the session held before this chat's, numbered after them.
-    earlier: usize,
+    pub(crate) earlier: usize,
 }
 
 impl Log<'_> {
     /// Logs one message; `cut` when the model's output cap cut it.
-    fn say(&self, n: usize, role: ChatRole, text: &str, cut: bool) {
+    pub(crate) fn say(&self, n: usize, role: ChatRole, text: &str, cut: bool) {
         let Some(session) = self.session else {
             return;
         };
@@ -1056,7 +1092,7 @@ impl Log<'_> {
 
     /// Logs the tools answer `turn` called and what they returned, each capped as the
     /// model was handed it.
-    fn tools(&self, turn: usize, calls: &[ToolCall], results: &[ToolResult]) {
+    pub(crate) fn tools(&self, turn: usize, calls: &[ToolCall], results: &[ToolResult]) {
         let Some(session) = self.session else {
             return;
         };
@@ -1415,6 +1451,7 @@ mod tests {
             effort: effort.map(str::to_owned),
             max_output,
             provider: provider.as_object().cloned().unwrap_or_default(),
+            max_budget_usd: None,
         }
     }
 

@@ -3,7 +3,7 @@
 import { mkdir, writeText, copy, readText, exists } from "submilli:fs";
 
 function main(): void {
-  mkdir("/src/inner", true);
+  mkdir("/src/inner", { recursive: true });
   writeText("/src/inner/a.txt", "alpha");
 
   copy("/src", "/out/build/dest", true);

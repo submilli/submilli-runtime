@@ -14,5 +14,5 @@ function main(): void {
   assert(visits === 3, "iterator yields each entry once");
 
   const r2 = it.next();
-  assert(r2.done, "subsequent next() after exhaustion stays done");
+  assert(r2.done === true, "subsequent next() after exhaustion stays done");
 }

@@ -127,13 +127,7 @@ pub(super) async fn set(
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
-        let marker = super::super::iterator::as_struct(caller, &property.name, "field name")?;
-        if marker.ty(&*caller)?.fields().count() > 3
-            && matches!(marker.field(&mut *caller, 3)?, Val::I32(0))
-        {
-            marker.set_field(&mut *caller, 3, Val::I32(1))?;
-        }
-        return Ok(());
+        return super::mark_field_present(caller, &property.name);
     }
     if let Some(property) = find(caller, object, &accessor_key("set ", &key)?, true)? {
         super::super::closure::read(caller, &property.value, "property setter")?
@@ -201,6 +195,7 @@ pub(super) fn has(
 
 /// How a slot appears among a record's values; `None` when it has no entry
 /// (a private field, an absent optional field, or a setter alone).
+#[derive(Clone, Copy)]
 enum RecordEntry {
     Getter,
     Data,
@@ -224,18 +219,85 @@ fn record_entry(
     Ok(field_is_present(caller, name, value)?.then_some(RecordEntry::Data))
 }
 
-async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::Result<Val> {
+fn key_matcher(caller: &mut Caller<'_, StoreData>, domain: &Val) -> wasmtime::Result<Type> {
+    let json = crate::runtime::host::read_string_arg(caller, domain, "key domain")?;
+    fuel::charge(&mut *caller, fuel::PARSE, json.len() as u64)?;
+    let key: Type = serde_json::from_str(&json).map_err(|error| {
+        crate::runtime::host::fatal_host_error(format!("invalid key domain: {error}"))
+    })?;
+    crate::type_size::check(&key)
+        .map_err(|error| crate::runtime::host::fatal_host_error(error.to_string()))?;
+    Ok(key)
+}
+
+fn match_key(
+    caller: &mut Caller<'_, StoreData>,
+    domain: &Type,
+    units: &[u16],
+) -> wasmtime::Result<bool> {
+    crate::property_keys::matches_units(domain, units, false, &mut |work| {
+        fuel::charge(&mut *caller, fuel::SCAN, work)
+    })
+    .map_err(|error| match error {
+        crate::property_keys::MatchError::Work(error) => error,
+        crate::property_keys::MatchError::Allocation => {
+            crate::runtime::host::fatal_host_error("could not allocate key matcher state")
+        }
+    })
+}
+
+fn matches_entry(
+    caller: &mut Caller<'_, StoreData>,
+    matcher: &Type,
+    name: &Val,
+    entry: &Option<RecordEntry>,
+    had_effect: bool,
+) -> wasmtime::Result<bool> {
+    if had_effect {
+        return fuel::settle_result(caller, |caller| {
+            matches_entry(caller, matcher, name, entry, false)
+        });
+    }
+    let Some(entry) = entry else {
+        return Ok(false);
+    };
+    let units = read_string_units(caller, name, FIELD_NAME)?;
+    let units = match entry {
+        RecordEntry::Getter => units
+            .get(GETTER_PREFIX.len()..)
+            .ok_or_else(|| crate::runtime::host::fatal_host_error("getter name prefix missing"))?,
+        RecordEntry::Data => &units,
+    };
+    match_key(caller, matcher, units)
+}
+
+async fn values(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    domain: &Val,
+) -> wasmtime::Result<Val> {
     let Some((names, fields)) = shape_arrays(caller, object)? else {
         return Ok(Val::AnyRef(None));
     };
+    let matcher = key_matcher(caller, domain)?;
     let count = super::field_count(caller, object)?;
+    let mut had_effect = false;
     // A getter's result is held by nothing while the next getter runs.
     let mut result = KeptValues::with_capacity(caller, count as usize)?;
     for slot in 0..count {
         let name = names.get(&mut *caller, slot)?;
         let value = fields.get(&mut *caller, slot)?;
-        match record_entry(caller, &name, &value)? {
+        let entry = if had_effect {
+            fuel::settle_result(caller, |caller| record_entry(caller, &name, &value))?
+        } else {
+            record_entry(caller, &name, &value)?
+        };
+        if !matches_entry(caller, &matcher, &name, &entry, had_effect)? {
+            continue;
+        }
+        match entry {
             Some(RecordEntry::Getter) => {
+                had_effect = true;
                 let got = super::super::closure::read(caller, &value, "record getter")?
                     .call_with_receiver(caller, *object, &[])
                     .await?;
@@ -248,9 +310,14 @@ async fn values(caller: &mut Caller<'_, StoreData>, object: &Val) -> wasmtime::R
             None => {}
         }
     }
-    Ok(Val::AnyRef(Some(
-        write_submilli_array_struct(caller, result.values())?.to_anyref(),
-    )))
+    let array = if had_effect {
+        fuel::settle_result(caller, |caller| {
+            write_submilli_array_struct(caller, result.values())
+        })?
+    } else {
+        write_submilli_array_struct(caller, result.values())?
+    };
+    Ok(Val::AnyRef(Some(array.to_anyref())))
 }
 
 /// The JSON-quoted keys of the first `count` values `#recordValues` returned,
@@ -267,7 +334,9 @@ fn quoted_keys(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
     count: f64,
+    domain: &Val,
 ) -> wasmtime::Result<Val> {
+    let matcher = key_matcher(caller, domain)?;
     let Some((names, fields)) = shape_arrays(caller, object)? else {
         return Err(crate::runtime::host::fatal_host_error(
             "record keys of a value that is not an object",
@@ -288,6 +357,9 @@ fn quoted_keys(
         let Some(entry) = record_entry(caller, &name, &value)? else {
             continue;
         };
+        if !matches_entry(caller, &matcher, &name, &Some(entry), false)? {
+            continue;
+        }
         let units = read_string_units(caller, &name, FIELD_NAME)?;
         let key = match entry {
             RecordEntry::Getter => units.get(GETTER_PREFIX.len()..).unwrap_or_default(),
@@ -313,9 +385,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let string = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(intr.string)));
     for name in ["#getField", "#setField", "#recordValues"] {
         let mut params = vec![object.clone()];
-        if name != "#recordValues" {
-            params.push(string.clone());
-        }
+        params.push(string.clone());
         if name == "#setField" {
             params.push(object.clone());
         }
@@ -338,8 +408,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         ("#setField", [object, key, value], []) => {
                             set(caller, object, key, value).await?;
                         }
-                        ("#recordValues", [object], [result]) => {
-                            *result = values(caller, object).await?;
+                        ("#recordValues", [object, domain], [result]) => {
+                            *result = values(caller, object, domain).await?;
                         }
                         _ => {
                             return Err(crate::runtime::host::fatal_host_error(
@@ -356,14 +426,35 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         ctor_key("#quotedRecordKeys"),
-        FuncType::new(&engine, [object.clone(), ValType::F64], [object.clone()]),
+        FuncType::new(
+            &engine,
+            [object.clone(), ValType::F64, string.clone()],
+            [object.clone()],
+        ),
         |caller, params, results| {
-            let ([object, Val::F64(count)], [result]) = (params, results) else {
+            let ([object, Val::F64(count), domain], [result]) = (params, results) else {
                 return Err(crate::runtime::host::fatal_host_error(
                     "invalid record keys host ABI",
                 ));
             };
-            *result = quoted_keys(caller, object, f64::from_bits(*count))?;
+            *result = quoted_keys(caller, object, f64::from_bits(*count), domain)?;
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        ctor_key("#matchesKeyDomain"),
+        FuncType::new(&engine, [object.clone(), string.clone()], [ValType::I32]),
+        |caller, params, results| {
+            let ([value, domain], [result]) = (params, results) else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid key matching host ABI",
+                ));
+            };
+            let matcher = key_matcher(caller, domain)?;
+            let units = read_string_units(caller, value, "template value")?;
+            *result = Val::I32(i32::from(match_key(caller, &matcher, &units)?));
             Ok(())
         },
     )?;
@@ -385,17 +476,21 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub(super) fn declare(defs: &mut PackageDeclaration) {
-    for name in ["#getField", "#setField", "#recordValues", "#hasField"] {
+    for name in [
+        "#getField",
+        "#setField",
+        "#recordValues",
+        "#hasField",
+        "#matchesKeyDomain",
+    ] {
         let mut params = vec![Param::new("object", Type::Unknown)];
-        if name != "#recordValues" {
-            params.push(Param::new("key", Type::String));
-        }
+        params.push(Param::new("key", Type::String));
         if name == "#setField" {
             params.push(Param::new("value", Type::Unknown));
         }
         let ret = match name {
             "#setField" => Type::Void,
-            "#hasField" => Type::Boolean,
+            "#hasField" | "#matchesKeyDomain" => Type::Boolean,
             _ => Type::Unknown,
         };
         declare_method(defs, name, ctor_key(name), params, ret);
@@ -407,6 +502,7 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
         vec![
             Param::new("object", Type::Unknown),
             Param::new("count", Type::Number),
+            Param::new("domain", Type::String),
         ],
         Type::Unknown,
     );

@@ -78,7 +78,7 @@ impl Inferer<'_> {
             .try_stmt(last)
             .map_err(crate::typechecker::arena_failure)?
             .kind;
-        let (declared, value, annotated) = match statement {
+        let (declared, value, annotated, evolving) = match statement {
             TypedStmtKind::AssignLocal {
                 ident,
                 target_ty,
@@ -90,16 +90,27 @@ impl Inferer<'_> {
                     .map_or(target_ty, |entry| &entry.ty),
                 value,
                 self.is_local_annotated(&ident.name),
+                self.evolving_binding_path(ident).is_some(),
             ),
             TypedStmtKind::AssignGlobal {
                 mangled,
                 target_ty,
                 value,
                 ..
-            } => (target_ty, value, self.is_global_annotated(mangled)),
+            } => (
+                target_ty,
+                value,
+                self.is_global_annotated(mangled),
+                self.is_evolving_path(&narrowing::ReferencePath::root(
+                    narrowing::BindingId::Global(mangled.clone()),
+                )),
+            ),
             _ => return Ok(value_ty),
         };
         let flow_ty = self.assigned_flow_type(declared, annotated, *value, value_ty)?;
+        if evolving {
+            return Ok(flow_ty);
+        }
         Ok(self.assignment_narrowed_ty(declared, flow_ty))
     }
 

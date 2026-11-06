@@ -13,6 +13,6 @@ function main(): void {
   assert(exists("/dst.txt"), "source preserved after copy");
   assert(exists("/copy.txt"), "destination created by copy");
 
-  remove("/copy.txt", false);
+  remove("/copy.txt", { recursive: false });
   assert(exists("/copy.txt") === false, "removed file gone");
 }

@@ -1,5 +1,6 @@
 use crate::compiler_error::CompilerFailure;
 
+use crate::lower_local_types::display_type_name;
 use crate::{Diagnostic, Ident, Severity, Span, TypeKind, TypeSymbol};
 
 use super::Inferer;
@@ -19,7 +20,10 @@ impl<'a> Inferer<'a> {
             self.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 span: name.span,
-                message: format!("duplicate declaration of type `{}`", name.name),
+                message: format!(
+                    "duplicate declaration of type `{}`",
+                    display_type_name(&name.name)
+                ),
                 help: Vec::new(),
                 notes: vec![(prev_span, "previously declared here".into())],
             });
@@ -56,7 +60,8 @@ impl<'a> Inferer<'a> {
                     span: member.name.span,
                     message: format!(
                         "duplicate variant `{}` on enum `{}`",
-                        member.name.name, name.name,
+                        member.name.name,
+                        display_type_name(&name.name),
                     ),
                     help: Vec::new(),
                     notes: vec![(prev, "previously declared here".into())],
@@ -123,7 +128,8 @@ impl<'a> Inferer<'a> {
                     span: member.name.span,
                     message: format!(
                         "duplicate variant `{}` on enum `{}`",
-                        member.name.name, name.name,
+                        member.name.name,
+                        display_type_name(&name.name),
                     ),
                     help: Vec::new(),
                     notes: vec![(prev, "previously declared here".into())],

@@ -30,7 +30,8 @@ use crate::stdlib::abi::{
     self, HostView, backing_struct, install_field_getters, nullable_object_field, string_field,
 };
 use crate::stdlib::shared::{
-    check_security_call, permitted_candidates, preflight_listing, sanitize_description, truncated,
+    check_and_approve_call, check_candidate, permitted_candidates, preflight_listing,
+    sanitize_description, truncated,
 };
 
 pub use declaration::package_declaration;
@@ -144,11 +145,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 /// The capability check, run before anything reaches the harness.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     name: &str,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(caller, CAPABILITY, serde_json::json!({ "name": name }))
+    check_and_approve_call(caller, CAPABILITY, gate_context(name)).await
+}
+
+fn gate_context(name: &str) -> serde_json::Value {
+    serde_json::json!({ "name": name })
 }
 
 /// `list()`: every skill the harness offers that the caller may load. A denied
@@ -175,7 +180,7 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
         caller,
         loadable,
         |skill| skill.name.as_str(),
-        |caller, name| gate(caller, name).map(|_| ()),
+        |caller, name| check_candidate(caller, CAPABILITY, gate_context(name)),
     )?;
     let mut built = Vec::with_capacity(visible.len());
     for skill in visible {
@@ -188,7 +193,7 @@ async fn list(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Result<
 /// the provider. A refusal before the provider is asked is recorded as the
 /// call's error, with no request.
 async fn load(caller: &mut wasmtime::Caller<'_, StoreData>, name: String) -> wasmtime::Result<Val> {
-    let ticket = gate(caller, &name)?;
+    let ticket = gate(caller, &name).await?;
     if !is_skill_name(&name) {
         return Err(fail(
             caller,
@@ -255,7 +260,7 @@ async fn read_file(
     name: String,
     path: String,
 ) -> wasmtime::Result<Val> {
-    let ticket = gate(caller, &name)?;
+    let ticket = gate(caller, &name).await?;
     if !is_skill_name(&name) {
         return Err(fail(
             caller,

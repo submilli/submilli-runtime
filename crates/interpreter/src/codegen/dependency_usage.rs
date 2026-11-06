@@ -8,12 +8,13 @@ use crate::{
 
 /// The `ObjectConstructor` helpers that reading, writing and checking a value
 /// with an index signature call.
-pub(super) const RECORD_HELPERS: [&str; 5] = [
+pub(super) const RECORD_HELPERS: [&str; 6] = [
     "#getField",
     "#setField",
     "#recordValues",
     "#hasField",
     "#quotedRecordKeys",
+    "#matchesKeyDomain",
 ];
 
 pub struct DependencyValue<'a> {
@@ -414,6 +415,15 @@ impl DependencyUsage {
             self.shapes.insert(shape);
         }
         match ty.peel() {
+            Type::TemplateLiteral { substitutions, .. } => {
+                self.note_member(crate::mangle::extend(
+                    &crate::mangle::prelude("ObjectConstructor"),
+                    "#matchesKeyDomain",
+                ));
+                for inner in substitutions {
+                    self.collect_type(inner);
+                }
+            }
             Type::Object { fields, index } => {
                 if let Some(index) = index {
                     self.collect_type(&index.value);
@@ -515,8 +525,7 @@ impl DependencyUsage {
         ));
     }
 
-    /// The string→number parse `+s` lowers to — the same host fn `Number(s)`
-    /// calls.
+    /// The string→number parse `+s` lowers to.
     pub(crate) fn collect_number_coercion_host_value(&mut self) {
         self.values.insert(crate::mangle::host(
             crate::runtime::NUMBER_MODULE_NAME,

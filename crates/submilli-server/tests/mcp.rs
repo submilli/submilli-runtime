@@ -1059,7 +1059,7 @@ async fn files_read_rejects_path_escape() {
 const WRITE_TREE: &str = r#"import { writeText, mkdir } from "submilli:fs";
 function main(): void {
     writeText("/a.txt", "aaa");
-    mkdir("/sub", true);
+    mkdir("/sub", { recursive: true });
     writeText("/sub/b.txt", "bb");
 }"#;
 
@@ -1813,13 +1813,13 @@ async fn packages_docs_host_module() {
             rpc_call(
                 1,
                 "submilli__typescript__packages__docs",
-                json!({"name": "submilli:http"}),
+                json!({"names": ["submilli:http"]}),
             ),
             Some(&session),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    let out = output(&rpc);
+    let out = package_docs_output(&rpc);
     assert_eq!(out["source"], json!("host"));
     assert!(!out["description"].as_str().unwrap().is_empty());
     let decls = out["declarations"].as_str().unwrap_or("");
@@ -1838,24 +1838,27 @@ async fn packages_docs_structured_errors() {
         rpc_call(
             id,
             "submilli__typescript__packages__docs",
-            json!({ "name": name }),
+            json!({ "names": [name] }),
         )
     };
 
     // Unknown name → structured error, HTTP 200 (not a trap).
     let (status, _, r) = h.post(EPH, docs(1, "nope"), Some(&session)).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(output(&r)["error"], json!("unknown_package"));
+    assert_eq!(package_docs_output(&r)["error"], json!("unknown_package"));
 
     // Internal `submilli:security` is excluded → unknown.
     let (_, _, r2) = h
         .post(EPH, docs(2, "submilli:security"), Some(&session))
         .await;
-    assert_eq!(output(&r2)["error"], json!("unknown_package"));
+    assert_eq!(package_docs_output(&r2)["error"], json!("unknown_package"));
 
     // `@mcp/<server>` for a server this blueprint doesn't declare → unknown.
     let (_, _, r3) = h.post(EPH, docs(3, "@mcp/linear"), Some(&session)).await;
-    assert_eq!(output(&r3)["error"], json!("unknown_mcp_server"));
+    assert_eq!(
+        package_docs_output(&r3)["error"],
+        json!("unknown_mcp_server")
+    );
 }
 
 #[tokio::test]
@@ -1918,7 +1921,7 @@ async fn packages_docs_and_search_include_blueprint_registry_packages() {
     let docs = rpc_call(
         1,
         "submilli__typescript__packages__docs",
-        json!({ "name": PKG }),
+        json!({ "names": [PKG] }),
     );
     let (_, _, docs_response) = h.post(EPH, docs, Some(&session)).await;
     let docs = text_output(&docs_response);
@@ -2035,7 +2038,7 @@ async fn builtins_docs_names_the_packages_docs_call_for_a_package_name() {
     );
     let message = package["message"].as_str().unwrap_or("");
     assert!(
-        message.contains("submilli__typescript__packages__docs(\"submilli:crypto\")"),
+        message.contains("submilli__typescript__packages__docs({\"names\":[\"submilli:crypto\"]})"),
         "got: {message}"
     );
     assert!(message.contains("import"), "got: {message}");
@@ -2102,7 +2105,7 @@ async fn builtins_docs_recognizes_only_the_mcp_servers_the_blueprint_declares() 
         declared["message"]
             .as_str()
             .unwrap_or("")
-            .contains("submilli__typescript__packages__docs(\"@mcp/up\")"),
+            .contains("submilli__typescript__packages__docs({\"names\":[\"@mcp/up\"]})"),
         "got: {declared}"
     );
 
@@ -2323,7 +2326,7 @@ async fn mcp_virtual_package_discovers_typechecks_and_calls() {
     let docs = rpc_call(
         1,
         "submilli__typescript__packages__docs",
-        json!({ "name": "@mcp/up" }),
+        json!({ "names": ["@mcp/up"] }),
     );
     let (status, _, r) = h.post("up-bp", docs, Some(&session)).await;
     assert_eq!(status, StatusCode::OK);
@@ -2587,7 +2590,8 @@ async fn policy_hides_libraries_from_mcp_discovery() {
         ]);
         let session = h.handshake(EPH).await;
         let (_, _, tools) = h.post(EPH, tools_list(1), Some(&session)).await;
-        let visible = default != "deny";
+        // `default: ask-human` is a deprecated spelling of `deny`.
+        let visible = default == "allow";
         for name in [
             "submilli:http",
             "submilli:fs",
@@ -2638,14 +2642,18 @@ async fn policy_hides_libraries_from_mcp_discovery() {
                     rpc_call(
                         3,
                         "submilli__typescript__packages__docs",
-                        json!({"name": name}),
+                        json!({"names": [name]}),
                     ),
                     Some(&session),
                 )
                 .await;
-            assert_eq!(output(&response)["source"] == "host", visible, "{response}");
+            assert_eq!(
+                package_docs_output(&response)["source"] == "host",
+                visible,
+                "{response}"
+            );
             if !visible {
-                assert_eq!(output(&response)["error"], "unknown_package");
+                assert_eq!(package_docs_output(&response)["error"], "unknown_package");
             }
         }
     }
@@ -2701,14 +2709,18 @@ async fn llm_discovery_requires_models_and_permission() {
                 rpc_call(
                     3,
                     "submilli__typescript__packages__docs",
-                    json!({"name": "submilli:llm"}),
+                    json!({"names": ["submilli:llm"]}),
                 ),
                 Some(&session),
             )
             .await;
-        assert_eq!(output(&response)["source"] == "host", visible, "{response}");
+        assert_eq!(
+            package_docs_output(&response)["source"] == "host",
+            visible,
+            "{response}"
+        );
         if !visible {
-            assert_eq!(output(&response)["error"], "unknown_package");
+            assert_eq!(package_docs_output(&response)["error"], "unknown_package");
         }
         let (_, _, response) = h
             .post(
@@ -2788,14 +2800,18 @@ async fn embedding_discovery_requires_aliases_and_permission() {
                 rpc_call(
                     3,
                     "submilli__typescript__packages__docs",
-                    json!({"name": "submilli:embedding"}),
+                    json!({"names": ["submilli:embedding"]}),
                 ),
                 Some(&session),
             )
             .await;
-        assert_eq!(output(&response)["source"] == "host", visible, "{response}");
+        assert_eq!(
+            package_docs_output(&response)["source"] == "host",
+            visible,
+            "{response}"
+        );
         if !visible {
-            assert_eq!(output(&response)["error"], "unknown_package");
+            assert_eq!(package_docs_output(&response)["error"], "unknown_package");
         }
         let (_, _, response) = h
             .post(
@@ -3018,10 +3034,10 @@ permissions:
         "fs.bytes('/ada/../grace/secret.txt', 1)",
         "fs.exists('/ada/../grace/secret.txt')",
         "fs.stat('/ada/../grace/secret.txt')",
-        "fs.list('/ada/../grace', true)",
+        "fs.list('/ada/../grace', { recursive: true })",
         "fs.writeText('/ada/../grace/new.txt', 'wrong')",
-        "fs.mkdir('/ada/../grace/new', false)",
-        "fs.remove('/ada/../grace/secret.txt', false)",
+        "fs.mkdir('/ada/../grace/new', { recursive: false })",
+        "fs.remove('/ada/../grace/secret.txt', { recursive: false })",
         "fs.copy('/ada/../grace/secret.txt', '/ada/copy.txt', false)",
         "fs.copy('/ada/secret.txt', '/ada/../grace/copy.txt', false)",
         "fs.move('/ada/../grace/secret.txt', '/ada/moved.txt')",
@@ -3440,4 +3456,36 @@ async fn durable_session_execute_retains_an_observable_run() {
     assert_eq!(observed["session_id"], session);
     assert_eq!(observed["status"], "completed");
     assert_eq!(observed["response"]["result"], "2");
+}
+
+fn package_docs_output(rpc: &Value) -> Value {
+    let batch = output(rpc);
+    serde_json::from_str(batch["results"][0]["text"].as_str().expect("docs text"))
+        .expect("structured package docs")
+}
+
+#[tokio::test]
+async fn packages_docs_batch_keeps_each_requested_name() {
+    let h = Harness::from_blueprints(vec![
+        submilli_blueprint::parse("name: eph\ndefault: allow\n").unwrap(),
+    ]);
+    let session = h.handshake(EPH).await;
+    let (_, _, rpc) = h
+        .post(
+            EPH,
+            rpc_call(
+                1,
+                "submilli__typescript__packages__docs",
+                json!({"names": ["fs", "not-a-module", "fs"]}),
+            ),
+            Some(&session),
+        )
+        .await;
+    let out = output(&rpc);
+    let results = out["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0]["name"], "fs");
+    assert_eq!(results[0]["found"], true);
+    assert_eq!(results[1]["found"], false);
+    assert_eq!(results[0], results[2]);
 }

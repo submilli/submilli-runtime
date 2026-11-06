@@ -395,8 +395,26 @@ pub fn typecheck_package_to_typed_ast(
     }
 }
 
-/// Registers and parses each module, adding its diagnostics, errors included, to
-/// `diagnostics`. `None` when one fails fatally, so nothing can be checked.
+/// Lower a parsed module that has syntax errors: `parse_package_module` leaves
+/// such a module unlowered, but inference past syntax errors assumes lowering.
+fn lower_recovered_module(
+    (ast, diagnostics): (Ast, Vec<Diagnostic>),
+) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
+    if ast.lowered_local_types.is_some() {
+        return Ok((ast, diagnostics));
+    }
+    match lower_patterns(ast) {
+        Ok(ast) => Ok((ast, diagnostics)),
+        Err(fatal) => Err(CompileError {
+            diagnostics,
+            fatal: Some(fatal),
+        }),
+    }
+}
+
+/// Registers, parses and lowers each module, adding its diagnostics, errors
+/// included, to `diagnostics`. `None` when one fails fatally, so nothing can be
+/// checked.
 fn parse_modules_past_errors(
     sources: &mut Sources,
     modules: &[PackageSourceModule<'_>],
@@ -412,10 +430,11 @@ fn parse_modules_past_errors(
                 return None;
             }
         };
+        // A config module has no blocks to lower.
         let (ast, mut module_diagnostics) = match if module.path.as_str() == "config" {
             parse_config_module(module.source, file, &BTreeMap::new())
         } else {
-            parse_package_module(module.source, file)
+            parse_package_module(module.source, file).and_then(lower_recovered_module)
         } {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -1244,6 +1263,73 @@ pub fn compile_package_with_transitive(
 #[cfg(test)]
 mod parsed_script_tests {
     use super::*;
+
+    #[test]
+    fn a_package_build_reports_every_module_syntax_error() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            // A module with syntax errors isn't lowered for a build: a recovered
+            // parse can leave nodes lowering would trip on, and the build
+            // stops before inference anyway.
+            let modules = [
+                PackageSourceModule {
+                    path: ModulePath::from("lib"),
+                    source: "export function f(): void {\n  \
+                             const x = g<number>(({ a }: { a: number }) => a;\n}\n",
+                },
+                PackageSourceModule {
+                    path: ModulePath::from("other"),
+                    source: "export const y = ;\n",
+                },
+            ];
+            let error = compile_package_checked("test", ModulePath::from("lib"), &modules, &[])
+                .expect_err("syntax errors");
+            assert!(error.fatal.is_none(), "{error:?}");
+            let files: std::collections::BTreeSet<u32> =
+                error.diagnostics.iter().map(|d| d.span.file.0).collect();
+            assert_eq!(files.len(), 2, "{:?}", error.diagnostics);
+        });
+    }
+
+    #[test]
+    fn package_inference_past_syntax_errors_sees_lowered_modules() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            // Inference runs past `lib`'s syntax error, so `lib` is lowered
+            // anyway: its local interface is lifted and its destructured
+            // parameter lowered, and the other module's type error is still
+            // reported.
+            let modules = [
+                PackageSourceModule {
+                    path: ModulePath::from("lib"),
+                    source: "export function f([n]: number[]): number {\n  \
+                             interface Row { n: number }\n  const r: Row = { n };\n  \
+                             return r.n;\n}\nconst broken = ;\n",
+                },
+                PackageSourceModule {
+                    path: ModulePath::from("other"),
+                    source: "const text: string = 1;\n",
+                },
+            ];
+            let (_, diagnostics) =
+                typecheck_package_to_typed_ast("test", ModulePath::from("lib"), &modules);
+            let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+            assert!(
+                messages.iter().any(|m| m.contains("expected expression")),
+                "{messages:?}"
+            );
+            assert!(
+                messages.iter().any(|m| m.contains("expected `string`")),
+                "{messages:?}"
+            );
+            // An unlowered module fails inference as an internal compiler
+            // failure.
+            assert!(
+                !messages
+                    .iter()
+                    .any(|m| m.contains("internal compiler failure")),
+                "{messages:?}"
+            );
+        });
+    }
 
     #[test]
     fn typed_compile_errors_distinguish_source_limits_and_internal_failures() {

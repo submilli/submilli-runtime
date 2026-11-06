@@ -1033,6 +1033,18 @@ pub(crate) fn chat_text(result: &ChatResult) -> String {
                 "stopped at the model's output limit; its answer may be cut short"
             );
         }
+        Stopped::SpendingLimit => {
+            let _ = writeln!(out, "stopped at the message's spending limit");
+        }
+        Stopped::CallLimit => {
+            let _ = writeln!(out, "stopped at the message's tool-call limit");
+        }
+        Stopped::UsageLimit => {
+            let _ = writeln!(
+                out,
+                "stopped: the Claude subscription has no usage left for now"
+            );
+        }
         Stopped::Provider => {
             let reason = result.stop_reason.as_deref().unwrap_or("no reason given");
             let _ = writeln!(

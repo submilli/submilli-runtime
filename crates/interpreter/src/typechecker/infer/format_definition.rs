@@ -3,6 +3,7 @@ use super::format_signature::{substituted, write_generic_list, write_named_param
 use super::{type_namespace::TypeNamespace, type_registry::TypeRegistry};
 #[cfg(test)]
 use crate::Param;
+use crate::lower_local_types::{display_type_name, written_type_args};
 use crate::rendering::{RenderError, RenderLimits, Writer};
 use crate::type_rendering::CopyBudget;
 use crate::type_rendering::write_type;
@@ -132,6 +133,8 @@ fn resolve<'a>(
 }
 
 fn write_name(out: &mut Writer, kind: &str, name: &str, args: &[Type]) -> Result<(), RenderError> {
+    let args = written_type_args(name, args);
+    let name = display_type_name(name);
     out.format(format_args!("{kind} {name}"))?;
     if !args.is_empty() {
         out.push("<")?;
@@ -155,7 +158,7 @@ fn write_enum(
 ) -> Result<(), RenderError> {
     let symbol = resolve(types, registry, mangled, name)
         .ok_or(RenderError::InvalidMetadata("enum definition is absent"))?;
-    out.format(format_args!("enum {name} {{"))?;
+    out.format(format_args!("enum {} {{", display_type_name(name)))?;
     match &symbol.kind {
         TypeKind::NumberEnum { variants, .. } => {
             if !variants.is_empty() {

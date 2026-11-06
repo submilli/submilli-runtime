@@ -1,9 +1,9 @@
 // Run through `submilli run --blueprint request-values.yaml`, not the allow-all build test runner.
 import { RepositoryRef, getPullRequest, getRepository, listBranches, readFile } from "@submilli/github";
 
-// The reason of the blueprint's `ask-human` rule, which matches a request for allowed-org/repo.js only.
-const APPROVED_REQUEST = "@submilli/github: policy requires human approval for http.get (caller @submilli/github); "
-    + "ask-human is deferred and treated as deny";
+// The blueprint denies the package every request, so one that passes main's check stops
+// at its HTTP call, and nothing is sent.
+const SENT_REQUEST = "@submilli/github: policy denied http.get for @submilli/github";
 
 // `owner` answers "allowed-org" to its first read and "victim-org" to every later
 // one. The package here holds a token, so it builds the whole request, and the
@@ -44,10 +44,12 @@ function requestValuesHold(capability: string, call: (repository: RepositoryRef)
             && refused.includes("owner = \"victim-org\"") && refused.endsWith(" for main"),
         "expected main's refusal of victim-org for " + capability + ", got " + refused,
     );
-    assertOutcome(APPROVED_REQUEST, () => { call({ owner: "allowed-org", name: "repo.js" }); });
+    assertOutcome(SENT_REQUEST, () => { call({ owner: "allowed-org", name: "repo.js" }); });
 
+    // Main's check saw allowed-org, and the package read each field once, so the request
+    // it built names the repository main's check allowed.
     const flipping = new FlippingRepository();
-    assertOutcome(APPROVED_REQUEST, () => { call(flipping); });
+    assertOutcome(SENT_REQUEST, () => { call(flipping); });
     assert(flipping.ownerReads() === 1, capability + " read owner " + flipping.ownerReads().toString() + " times, expected 1");
     assert(flipping.nameReads() === 1, capability + " read name " + flipping.nameReads().toString() + " times, expected 1");
 }

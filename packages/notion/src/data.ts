@@ -158,7 +158,7 @@ export function listDataSourceTemplates(
     putQuery(query, "name", name);
     putQuery(query, "start_cursor", startCursor);
     query.set("page_size", pageSize(requestedSize).toString());
-    const data = notionGet("/data_sources/" + pathId(dataSourceId) + "/templates", query).json() as ApiTemplateList;
+    const data = notionGet("/data_sources/" + pathId(dataSourceId) + "/templates", query).json<ApiTemplateList>();
     const results: DataSourceTemplate[] = [];
     for (const item of data.templates) results.push({ id: item.id, name: item.name, isDefault: item.is_default });
     return {

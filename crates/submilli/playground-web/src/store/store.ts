@@ -39,6 +39,8 @@ export interface NewSessionSettings {
   model: string;
   effort?: string;
   max_output?: number;
+  /** Claude Code's spending limit for each message, in dollars. */
+  max_budget_usd?: number;
   provider_settings?: Record<string, unknown>;
   variables: Record<string, string>;
 }
@@ -708,11 +710,13 @@ export function createStore(options: StoreOptions = {}) {
    * Sends a chat message: a reply to the shown session, or the first message of a new
    * session with `settings`. The answer comes only after the agent's last reply, so a
    * new session is looked for in the session list meanwhile and followed live.
+   * `confirmBilling` confirms what Claude Code bills, when it isn't the subscription.
    */
-  const chat = async (message: string, settings?: NewSessionSettings) => {
+  const chat = async (message: string, settings?: NewSessionSettings, confirmBilling?: string) => {
     const shown = snap.data.sessionId;
     const starting = settings !== undefined || shown === null;
     const body: Record<string, unknown> = { task: message };
+    if (confirmBilling !== undefined) body.confirm_billing = confirmBilling;
     if (settings) {
       for (const [key, value] of Object.entries(settings)) if (value !== undefined) body[key] = value;
     } else if (shown !== null) {

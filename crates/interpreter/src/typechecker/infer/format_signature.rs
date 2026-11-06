@@ -1,3 +1,4 @@
+use crate::lower_local_types::display_type_name;
 use crate::rendering::{RenderError, RenderLimits, Writer};
 use crate::type_rendering::write_type;
 
@@ -227,7 +228,9 @@ pub(super) fn write_default_value(
         DefaultValue::Number(n) | DefaultValue::OmittedNumber { omitted: n, .. } => {
             out.push(&crate::runtime::number::format_number_js(*n))
         }
-        DefaultValue::String(s) => out.format(format_args!("{s:?}")),
+        DefaultValue::String(s) | DefaultValue::OmittedString(s) => {
+            out.format(format_args!("{s:?}"))
+        }
         DefaultValue::Boolean(b) => out.format(format_args!("{b}")),
         DefaultValue::Undefined => out.push("undefined"),
         DefaultValue::Null => out.push("null"),
@@ -240,7 +243,7 @@ pub(super) fn write_default_value(
             ..
         } => out.format(format_args!(
             "{}.{variant}",
-            short_symbol(enum_mangled.as_str())
+            display_type_name(short_symbol(enum_mangled.as_str()))
         )),
     }
 }

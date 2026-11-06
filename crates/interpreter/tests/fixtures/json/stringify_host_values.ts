@@ -19,7 +19,7 @@ function main(): void {
     "Peek",
   );
   const entries: string[] = [];
-  for (const entry of fs.list("/", false)) entries.push(JSON.stringify(entry)!);
+  for (const entry of fs.list("/", { recursive: false })) entries.push(JSON.stringify(entry)!);
   assert(entries.includes(`{"kind":"file","name":"a.txt","path":"/a.txt","size":2}`), entries.join());
   const info = JSON.parse(JSON.stringify(fs.info())!) as { mode: string; sizeLimit: number; mounts: unknown[] };
   assert(info.mode === fs.info().mode && info.sizeLimit === fs.info().sizeLimit, "Info");

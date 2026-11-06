@@ -2,8 +2,8 @@
 
 Sources: `test/built-ins/Number/**` (340 files), `test/built-ins/parseInt/**`
 (55), `test/built-ins/parseFloat/**` (54), `test/built-ins/isNaN/**` (15),
-`test/built-ins/isFinite/**` (15). 47 ported (42 passing, 2 `expect-fail`,
-3 `expect-error` pins), under `cases/Number/`, `cases/parseInt/`,
+`test/built-ins/isFinite/**` (15). 47 ported (43 passing, 2 `expect-fail`,
+2 `expect-error` pins), under `cases/Number/`, `cases/parseInt/`,
 `cases/parseFloat/`, `cases/isNaN/`, `cases/isFinite/`. Representative
 rejected originals under `rejected/Number/`, `rejected/parseInt/`,
 `rejected/parseFloat/`, `rejected/isNaN/`.
@@ -33,8 +33,7 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 
 | Case | Divergence |
 |:--|:--|
-| `Number/S9.3_A3_T1` | `Number(true)` — `Number(x)` takes `string \| bigint \| undefined`; ToNumber(boolean) does not exist (spec.md "Numeric globals"). |
-| `Number/S9.3_A4.1_T1` | `Number(13)` — a number argument is rejected by the same `string \| bigint \| undefined` parameter. |
+| `Number/S9.3_A3_T1` | `Number(true)` — `Number(x)` takes `number \| string \| bigint \| undefined`; ToNumber(boolean) does not exist (spec.md "Numeric globals"). |
 | `parseInt/S15.1.2.2_A1_T1` | `parseInt(true)` — the argument is typed `string`; no ToString coercion. |
 
 ## Rejected (design decisions)
@@ -44,13 +43,14 @@ constant-descriptor write tests (`MAX_VALUE`/`MIN_VALUE` `S15.7.3.x_A2-A4`,
 | `new Number(...)` receivers and `Number.prototype` receivers (`S15.7.2.1_A*`, `S15.7.4_A*`, `S15.7.5_A1_T*`, `S9.3_A5_T1`, `S9.1_A1_T1`, the `(new Number(x)).toString/toFixed/...` arms of `prototype/*` cases) | No primitive wrapper objects; `Number` is a call signature, not a constructor. Copied: `rejected/Number/S15.7.2.1_A1.js`. Ports of mixed cases keep only the plain-value arms. |
 | `prototype/valueOf/**` | No boxing. Copied: `rejected/Number/prototype/valueOf/S15.7.4.4_A1_T01.js`. |
 | `prototype/toLocaleString/**` | No locale/ICU. Copied: `rejected/Number/prototype/toLocaleString/prop-desc.js`. |
-| ToNumber/ToString coercion of non-number/non-string arguments (`S9.3_A1-A4.2`, `isInteger`/`isSafeInteger`/`isNaN`/`isFinite` `arg-is-not-number.js`, `isNaN`/`isFinite` `tonumber-operations.js`, `parseInt` `S15.1.2.2_A1_T2-T7` and radix coercion `S15.1.2.2_A3.1_T1-T7`, `parseFloat` `S15.1.2.3_A1_T*` and `15.1.2.3-2-1`-adjacent object cases) | Arguments are statically typed; the coercing calls are compile errors. Two are pinned as `expect-error` (above); representatives copied: `rejected/parseInt/S15.1.2.2_A3.1_T1.js`, `rejected/parseFloat/S15.1.2.3_A1_T1.js`, `rejected/isNaN/tonumber-operations.js`. |
+| ToNumber/ToString coercion of non-number/non-string arguments (`S9.3_A2-A3`, `isInteger`/`isSafeInteger`/`isNaN`/`isFinite` `arg-is-not-number.js`, `isNaN`/`isFinite` `tonumber-operations.js`, `parseInt` `S15.1.2.2_A1_T2-T7` and radix coercion `S15.1.2.2_A3.1_T1-T7`, `parseFloat` `S15.1.2.3_A1_T*` and `15.1.2.3-2-1`-adjacent object cases) | Arguments are statically typed; the coercing calls are compile errors. Two are pinned as `expect-error` (above); representatives copied: `rejected/parseInt/S15.1.2.2_A3.1_T1.js`, `rejected/parseFloat/S15.1.2.3_A1_T1.js`, `rejected/isNaN/tonumber-operations.js`. |
 | Constant property-descriptor tests (`MAX_SAFE_INTEGER.js`, `MIN_SAFE_INTEGER.js`, `EPSILON.js`/`NaN.js` `verifyProperty` arms) | No descriptors. The value assertions are ported (`cases/Number/NaN.ts`, `EPSILON.ts`); the descriptor-only constants are covered by the fixture `number_static_constants.subm`. Copied: `rejected/Number/MAX_SAFE_INTEGER.js`, `rejected/Number/prop-desc.js`. |
 
 ## Not ported (below the curation bar)
 
 | Pattern | Reason |
 |:--|:--|
+| `Number/S9.3_A1_T1`, `S9.3_A4.2_T1` | `Number(undefined)` and the identity conversions of `NaN`, ±0, ±`Infinity`, `MAX_VALUE` and `MIN_VALUE`: variants of the ported `S9.3_A4.1_T1`, covered by the fixture `number_call_converts_numbers.ts`. |
 | `Number/S9.3.1_A1`, `S9.3.1_A4_T1/T2`, `S9.3.1_A5_T2/T3`, `S9.3.1_A6_T1/T2`, `S9.3.1_A3_T2`, `S9.3.1_A7-A31` | Empty-string, plus-sign, `dynaString`, and single-hex-digit variants of the ported `S9.3.1_A2`/`A3_T1`/`A5_T1`/`A32` grammar vectors; `Number("Infinity")`/sign handling is exercised by the ported `A3_T1` and `parseFloat/S15.1.2.3_A5_T1`, hex by `string-hex-literal-invalid` plus the fixture `number_radix_strings.subm`. |
 | `Number/S9.3.1_A2_U180E`, `S9.3.1_A3_T1/T2_U180E`, `parseInt/S15.1.2.2_A2_T10_U180E`, `parseFloat/S15.1.2.3_A2_T10_U180E` | U+180E is whitespace only in pre-6.3 Unicode; test262 keeps these as historical pins. Not meaningful to port. |
 | `Number/string-binary-literal.js`, `string-octal-literal.js`, `string-binary-literal-invalid.js`, `string-octal-literal-invald.js` | Same grammar shape as the ported `string-hex-literal-invalid`; the valid prefixes and `0b12`/`0o8`-style rejections are covered by the fixture `number_radix_strings.subm`. |

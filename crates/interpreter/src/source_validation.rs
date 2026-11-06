@@ -1,5 +1,6 @@
 //! Validates source metadata before inference consumes a caller-supplied AST.
 
+use crate::lower_local_types::display_type_name;
 use crate::{FileId, Span, ast::*, source::SourceError};
 
 pub(crate) fn validate(ast: &Ast, source: &str, file: FileId) -> Result<(), SourceError> {
@@ -421,7 +422,8 @@ impl<'a> Validator<'a> {
 
     fn name(&self, name: &Ident) -> Result<(), SourceError> {
         let text = name.span.text(self.source, self.file)?;
-        if text != name.name {
+        // A lifted local type keeps its source name before its block suffix.
+        if text != display_type_name(&name.name) {
             return Err(SourceError::InvalidSpan {
                 span: name.span,
                 reason: "type name does not match its source",
@@ -474,7 +476,10 @@ impl<'a> Validator<'a> {
     fn interface_member(&mut self, member: &'a InterfaceMember) -> Result<(), SourceError> {
         self.interface_metadata(member)?;
         match member {
-            InterfaceMember::IndexSignature(index) => self.annotation(&index.value)?,
+            InterfaceMember::IndexSignature(index) => {
+                self.annotation(&index.key)?;
+                self.annotation(&index.value)?;
+            }
             InterfaceMember::Method {
                 params,
                 return_type,
@@ -551,6 +556,20 @@ impl<'a> Validator<'a> {
                 | TypeAnnotationKind::Optional(inner)
                 | TypeAnnotationKind::Readonly(inner)
                 | TypeAnnotationKind::KeyOf(inner) => self.annotation(inner)?,
+                TypeAnnotationKind::TemplateLiteral {
+                    parts,
+                    substitutions,
+                } => {
+                    if parts.len() != substitutions.len().saturating_add(1) {
+                        return Err(SourceError::InvalidSpan {
+                            span: annotation.span,
+                            reason: "template type has inconsistent parts and substitutions",
+                        });
+                    }
+                    for substitution in substitutions {
+                        self.annotation(substitution)?;
+                    }
+                }
                 TypeAnnotationKind::Tuple(members) | TypeAnnotationKind::Union(members) => {
                     for member in members {
                         self.annotation(member)?;
@@ -563,6 +582,7 @@ impl<'a> Validator<'a> {
                     }
                     if let Some(index) = index {
                         self.span(index.span)?;
+                        self.annotation(&index.key)?;
                         self.annotation(&index.value)?;
                     }
                 }

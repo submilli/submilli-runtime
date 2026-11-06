@@ -3,8 +3,6 @@
 //! The compute lives in [`crate::runtime::number`] (Ryū-backed formatting,
 //! Eisel-Lemire parsing); this module is the wasmtime boundary that marshals
 //! `f64` ↔ `$string` across it and registers each method under its dispatch key.
-//! It also hosts `toNumber` — the string→number coercion `Number(x)` calls — the
-//! former `submilli:number` module, folded into the prelude-host surface.
 
 use crate::runtime::host::{abi_arg, abi_result};
 use wasmtime::{
@@ -46,9 +44,11 @@ const NUMBER_CONSTANTS: [(&str, f64); 8] = [
 /// prelude name (not the `NumberConstructor#` prefix the statics use).
 const GLOBAL_CONSTANTS: [(&str, f64); 2] = [("NaN", f64::NAN), ("Infinity", f64::INFINITY)];
 
-/// `Number(value)`: a `$string` parses with JS `Number(...)` semantics; a
-/// `$bigint` converts to f64 (∞ on overflow); `undefined` is `NaN`. Anything
-/// else mirrors the Wasm wrapper's failed cast as a catchable error.
+/// `Number(value)`: a boxed `number` is returned as it is; a `$string` parses
+/// with JS `Number(...)` semantics; a `$bigint` converts to f64 (∞ on
+/// overflow); `undefined` is `NaN`. A string may be a `$string` subtype, such
+/// as a key `Object.keys` returns. Anything else mirrors the Wasm wrapper's
+/// failed cast as a catchable error.
 fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<f64> {
     if super::undefined::is_undefined(caller, value)? {
         return Ok(f64::NAN);
@@ -64,7 +64,15 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
             "Number(value): not a struct value",
         ));
     };
-    if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.string) {
+    if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.boxed_number) {
+        let Val::F64(bits) = st.field(&mut *caller, 1)? else {
+            return Err(crate::runtime::host::fatal_host_error(
+                "Number(value): boxed number payload is not an f64",
+            ));
+        };
+        return Ok(f64::from_bits(bits));
+    }
+    if st.matches_ty(&*caller, &intr.string)? {
         let s = read_string_arg(caller, value, "Number(string)")?;
         return Ok(crate::runtime::number::string_to_number_js(&s));
     }
@@ -82,8 +90,28 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
         );
     }
     Err(crate::runtime::host::type_error(
-        "Number(value): expected a string, bigint, or undefined",
+        "Number(value): expected a number, string, bigint, or undefined",
     ))
+}
+
+/// `Number(value)`'s parameter. Booleans, `null` and objects stay out: their
+/// JavaScript conversions surprise (`Number(null)` and `Number([])` are 0).
+/// An omitted argument is 0 and an explicit `undefined` is `NaN`, as in
+/// JavaScript.
+fn call_value() -> Param {
+    Param::with_default(
+        "value",
+        Type::Union(vec![
+            Type::Number,
+            Type::String,
+            Type::BigInt,
+            Type::Undefined,
+        ]),
+        crate::DefaultValue::OmittedNumber {
+            omitted: 0.0,
+            undefined: f64::NAN,
+        },
+    )
 }
 
 fn constant_key(name: &str) -> MangledName {
@@ -195,10 +223,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    // `Number(value: string | bigint | undefined)` — the conversion call-signature
-    // (`Dispatch::Static`, only the boxed value arrives). Strings parse with JS
-    // `Number(...)` semantics; bigints convert to f64 (∞ on overflow);
-    // `undefined` is `NaN`.
+    // `Number(value)` — the conversion call-signature (`Dispatch::Static`, only
+    // the boxed value arrives); see `number_ctor_call`. An omitted argument
+    // arrives as `0` (see `call_value`).
     // Undefined-containing unions use the nullable erased object ABI.
     let obj_param = ValType::Ref(RefType::new(
         true,
@@ -239,10 +266,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "@call",
         ctor_key("@call"),
-        vec![Param::new(
-            "value",
-            Type::Union(vec![Type::String, Type::BigInt, Type::Undefined]),
-        )],
+        vec![call_value()],
         Type::Number,
     );
 
@@ -481,6 +505,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
+                    ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Number)),
                     (
                         "toString".to_string(),
                         MethodSig {
@@ -583,14 +608,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new(
-                                "value",
-                                Type::Union(vec![Type::String, Type::BigInt, Type::Undefined]),
-                            )],
+                            params: vec![call_value()],
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Convert a `string`, `bigint`, or `undefined` to a `number`.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
+                                "/**\n * Convert a `number`, `string`, `bigint`, or `undefined` to a `number`.\n * - A number is returned as it is; called with no argument, the result is 0.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
                             ),
                         },
                     ),
@@ -776,7 +798,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: ValueKind::Const {
                 ty: Type::prelude_interface("NumberConstructor".to_string(), Vec::new()),
                 doc: doc(
-                    "/** The `Number` constructor — call `Number(x)` to convert a `string` or `bigint` to a number. */",
+                    "/** The `Number` constructor — call `Number(x)` to convert a `number`, `string` or `bigint` to a number. */",
                 ),
             },
         },

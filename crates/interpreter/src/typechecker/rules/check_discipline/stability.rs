@@ -10,7 +10,7 @@ pub(super) fn is_primitive(ty: &Type) -> bool {
         | Type::BigInt
         | Type::BigIntLiteral(_)
         | Type::String
-        | Type::StringLiteral(_)
+        | Type::StringLiteral(_) | Type::TemplateLiteral { .. }
         | Type::Boolean
         | Type::BooleanLiteral(_)
         | Type::Null

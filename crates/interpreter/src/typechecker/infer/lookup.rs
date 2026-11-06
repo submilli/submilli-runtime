@@ -125,6 +125,12 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        if let Some(members) = recv_ty.primitive_union_members() {
+            return self.find_primitive_union_method(&members, name);
+        }
+        if recv_ty.is_regexp_match_array() {
+            return self.find_method(&Type::Array(Box::new(Type::regexp_element())), name);
+        }
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
         let (mangled, _package, interface_name, args) = recv_ty.interface_routing()?;
@@ -193,6 +199,43 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// Primitive methods with a common parameter prefix share the longest
+    /// signature: members with fewer parameters ignore trailing arguments.
+    /// Runtime member lookup dispatches to the actual primitive receiver.
+    fn find_primitive_union_method(
+        &self,
+        members: &[Type],
+        name: &str,
+    ) -> Option<(
+        MethodSig,
+        BTreeMap<String, Type>,
+        crate::MangledName,
+        crate::Dispatch,
+    )> {
+        let methods = members
+            .iter()
+            .map(|member| self.find_method(member, name))
+            .collect::<Option<Vec<_>>>()?;
+        let mut combined = methods
+            .iter()
+            .max_by_key(|method| method.0.params.len())?
+            .clone();
+        if methods.iter().any(|method| {
+            !method.0.generics.is_empty()
+                || method.0.params.iter().any(|param| param.rest)
+                || method
+                    .0
+                    .params
+                    .iter()
+                    .zip(&combined.0.params)
+                    .any(|(own, common)| own.ty != common.ty)
+        }) {
+            return None;
+        }
+        combined.0.ret = Type::union(methods.iter().map(|method| method.0.ret.clone()).collect());
+        Some(combined)
+    }
+
     /// `toString` on a value of a program-declared interface that doesn't declare it.
     ///
     /// Every non-null value answers `toString` (spec §1.6). Such a value is an
@@ -245,6 +288,10 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
+        if recv_ty.is_regexp_match_array() && name == "length" {
+            return self
+                .lookup_interface_property(&Type::Array(Box::new(Type::regexp_element())), name);
+        }
         let original_recv_ty = recv_ty;
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
@@ -293,7 +340,14 @@ impl<'a> Inferer<'a> {
             Type::Object { fields, index } => fields
                 .get(field)
                 .map(ObjectField::read_ty)
-                .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty))
+                .or_else(|| {
+                    index
+                        .as_ref()
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
+                        })
+                        .map(crate::IndexSignature::read_ty)
+                })
                 .ok_or(MemberFieldMiss::Absent),
             Type::InterfaceRef { .. } => {
                 let Some((sig, bindings, _, dispatch)) =
@@ -303,6 +357,9 @@ impl<'a> Inferer<'a> {
                     return self
                         .resolver()
                         .index_signature(member)
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
+                        })
                         .map(|index| index.read_ty())
                         .ok_or(MemberFieldMiss::Absent);
                 };

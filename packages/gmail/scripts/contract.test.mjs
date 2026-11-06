@@ -5,6 +5,27 @@ const host = contractHost();
 const gmail = await loadPackage(new URL('../src/lib.ts', import.meta.url), host);
 function draft(headers) { host.response(() => ({ data: { message: { payload: { headers } } } })); }
 
+test('attachment reads translate size failures and preserve other errors', async () => {
+    const originalTemporal = globalThis.Temporal;
+    globalThis.Temporal = { Now: { instant: () => ({ epochMilliseconds: 0 }) } };
+    try {
+        for (const failure of [new RangeError('file exceeds fs.maxReadSize()'), new Error('Capability denied')]) {
+            const readHost = contractHost();
+            readHost.read = () => { throw failure; };
+            const reader = await loadPackage(new URL('../src/lib.ts', import.meta.url), readHost);
+            assert.throws(() => reader.sendEmail({
+                to: ['dana@example.com'], subject: 'report', text: '', attachments: [{ path: '/report.txt' }],
+            }), (error) => failure instanceof RangeError
+                ? error instanceof reader.GmailError && error.code === 'attachment_unreadable'
+                : error === failure);
+            assert.equal(readHost.requests.length, 0);
+        }
+    } finally {
+        if (originalTemporal === undefined) delete globalThis.Temporal;
+        else globalThis.Temporal = originalTemporal;
+    }
+});
+
 test('stored From and every recipient are checked before sending a draft', () => {
     host.reset(); draft([{ name: 'From', value: 'Alias <BLOCKED@Example.Com.>' }, { name: 'To', value: 'allowed@example.com' }, { name: 'Bcc', value: 'hidden@example.com' }]);
     host.denial((cap, context) => cap.endsWith('sendDraft') && context.from === 'blocked@example.com');

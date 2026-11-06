@@ -6,6 +6,16 @@ const drive = await loadPackage(new URL('../src/lib.ts', import.meta.url), host)
 const options = (value = {}) => ({ name: 'report.txt', mimeType: 'text/plain', ...value });
 const folder = { id: 'parent', mimeType: 'application/vnd.google-apps.folder', driveId: 'actual-drive' };
 
+test('a missing upload source keeps its package error without creating an upload', async () => {
+    const missingHost = contractHost();
+    missingHost.exists = () => false;
+    missingHost.stat = () => { throw new Error('missing file must not be statted'); };
+    missingHost.response(() => ({ data: folder }));
+    const missingDrive = await loadPackage(new URL('../src/lib.ts', import.meta.url), missingHost);
+    assert.throws(() => missingDrive.uploadFile('/absent.txt', options()), (error) => error instanceof missingDrive.DriveError && error.code === 'source_not_found');
+    assert.deepEqual(missingHost.requests.map((request) => request.method), ['get']);
+});
+
 test('upload authorization uses the resolved destination even without a drive hint', () => {
     host.reset(); host.response(() => ({ data: folder }));
     host.denial((cap, ctx) => ctx.driveId === 'actual-drive');

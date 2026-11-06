@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "2806850b7331d9063fc7d4e038779cf89e89c5dbdb815f2630e8b671301437ea"
+  contentHash: "e28d91c562bca75076f6ffad2a0f62f665bf951cacd557b45c53a5eaeed31761"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -255,6 +255,7 @@ Arbitrary-precision integer.
 | --- | --- |
 | `toJson(): string` | Returns the canonical decimal representation — JSON has no native bigint literal, so this matches `toString`. |
 | `toString(radix?: number): string` | Returns this bigint formatted in the given base. |
+| `valueOf(): bigint` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -276,6 +277,7 @@ The boolean type — `true` or `false`.
 | --- | --- |
 | `toJson(): string` | Returns `"true"` or `"false"` — same as `toString` (booleans are JSON-native). |
 | `toString(): string` | Returns `"true"` or `"false"`. |
+| `valueOf(): boolean` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -351,6 +353,7 @@ The IEEE-754 double-precision number type.
 | `toJson(): string` | Returns the JSON representation of this number. |
 | `toPrecision(precision?: number): string` | Formats to `precision` significant digits, switching to exponential form for very large or small values. |
 | `toString(radix?: number): string` | Returns this number formatted in the given base. |
+| `valueOf(): number` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -370,7 +373,7 @@ Constructor object for `number`.
 | `readonly NEGATIVE_INFINITY: number` | Same value as `-Infinity`. |
 | `readonly NaN: number` | Same value as the global `NaN`. |
 | `readonly POSITIVE_INFINITY: number` | Same value as the global `Infinity`. |
-| `(value: string \| bigint \| undefined): number` | Convert a `string`, `bigint`, or `undefined` to a `number`. |
+| `(value?: number \| bigint \| string): number` | Convert a `number`, `string`, `bigint`, or `undefined` to a `number`. |
 | `isFinite(value: unknown): boolean` | Returns `true` when `value` is neither `NaN` nor ±`Infinity`. |
 | `isInteger(value: unknown): boolean` | Returns `true` when `value` is a finite whole number. |
 | `isNaN(value: unknown): boolean` | Returns `true` when `value` is `NaN`. |
@@ -486,7 +489,7 @@ Compiled regular expression.
 | `readonly source: string` | The original JS-source pattern (without the leading/trailing `/`). |
 | `readonly sticky: boolean` | `true` if the regex was constructed with the `y` flag (sticky / anchored at `lastIndex`). |
 | `readonly unicode: boolean` | `true` if the regex was constructed with the `u` flag. |
-| `exec(s: string): RegExpMatch \| null` | Find the next match in `s`. |
+| `exec(s: string): RegExpExecArray \| null` | Find the next match in `s`. |
 | `test(s: string): boolean` | Returns `true` if the pattern matches anywhere in `s`. |
 
 | Constant | Description |
@@ -558,8 +561,8 @@ The UTF-16 string type.
 | `iterator(): Iterator<string>` | Returns an `Iterator<string>` of CODE POINTS — surrogate pairs arrive as one two-unit string. |
 | `lastIndexOf(search: string, fromIndex?: number): number` | Returns the index of the last occurrence of `search` at or before `fromIndex`, or `-1` if none. |
 | `localeCompare(other: string): number` | Compares this string with `other` in UTF-16 code-unit order. |
-| `match(re: string \| RegExp): RegExpMatch \| null` | Find the next match of `re` in this string. |
-| `matchAll(re: RegExp): RegExpMatch[]` | Find every non-overlapping match of `re` in this string. |
+| `match(re: string \| RegExp): RegExpMatchArray \| null` | Find the next match of `re` in this string. |
+| `matchAll(re: string \| RegExp): Iterator<RegExpExecArray>` | Find every non-overlapping match of `re` in this string. |
 | `normalize(form?: string): string` | Returns a new string in the specified Unicode normalization form. |
 | `padEnd(targetLength: number, padString?: string): string` | Pads this string with `padString` on the right until the result reaches `targetLength` code units. |
 | `padStart(targetLength: number, padString?: string): string` | Pads this string with `padString` on the left until the result reaches `targetLength` code units. |
@@ -582,6 +585,7 @@ The UTF-16 string type.
 | `trimLeft(): string` | The older name of `trimStart`: returns a new string with Unicode whitespace removed from the start. |
 | `trimRight(): string` | The older name of `trimEnd`: returns a new string with Unicode whitespace removed from the end. |
 | `trimStart(): string` | Returns a new string with Unicode whitespace removed from the start. |
+| `valueOf(): string` | Returns this primitive value unchanged. |
 
 | Constant | Description |
 | --- | --- |
@@ -593,7 +597,7 @@ Constructor object for `string`.
 
 | Member | Description |
 | --- | --- |
-| `(value: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. |
+| `(value?: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `""`. |
 | `fromCharCode(...codes: number[]): string` | Builds a string from UTF-16 code units — one unit per argument. |
 | `fromCodePoint(...codePoints: number[]): string` | Builds a string from Unicode code points; astral code points (> U+FFFF) encode as surrogate pairs. |
 

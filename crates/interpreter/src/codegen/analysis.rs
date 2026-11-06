@@ -1268,15 +1268,29 @@ impl CodegenAnalysis {
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        self.string_pool.intern_text(iface.as_str());
+        self.string_pool.intern_text(&name.name);
         self.dependency_usage
             .note_member(crate::mangle::extend(iface, &name.name));
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         self.extra_field_names.push(name.name.clone());
+        if crate::codegen::function_emitter::expr::is_call_signature_call(iface, &name.name) {
+            self.note_live_member_call();
+        }
         self.note_shape_dispatch(receiver_ty, arity, ret)?;
 
         Ok(())
+    }
+
+    /// The prelude helpers a method call through `emit_live_member_on_stack`
+    /// calls: the member lookup, then the invocation.
+    fn note_live_member_call(&mut self) {
+        for helper in ["__value_member", "__value_invoke"] {
+            self.dependency_usage
+                .note_value(crate::mangle::prelude(helper));
+        }
     }
 
     /// A method reached through an `$ObjectShape` receiver dispatches as a
@@ -1295,6 +1309,12 @@ impl CodegenAnalysis {
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if crate::typechecker::infer::narrowing::strip_nullish(receiver_ty)
+            .primitive_union_members()
+            .is_some()
+        {
+            self.note_live_member_call();
+        }
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
@@ -1355,10 +1375,7 @@ impl CodegenAnalysis {
                     if ta.authored_call_arguments(*span).is_some()
                         && !crate::codegen::is_host_package(iface.as_str())
                     {
-                        for helper in ["__value_member", "__value_invoke"] {
-                            self.dependency_usage
-                                .note_value(crate::mangle::prelude(helper));
-                        }
+                        self.note_live_member_call();
                     }
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
@@ -1397,13 +1414,13 @@ impl CodegenAnalysis {
                     span,
                     ..
                 } => {
-                    if ta.authored_call_arguments(*span).is_some()
-                        && !crate::codegen::is_host_package(iface.as_str())
+                    if (ta.authored_call_arguments(*span).is_some()
+                        && !crate::codegen::is_host_package(iface.as_str()))
+                        || crate::codegen::function_emitter::expr::is_call_signature_call(
+                            iface, &name.name,
+                        )
                     {
-                        for helper in ["__value_member", "__value_invoke"] {
-                            self.dependency_usage
-                                .note_value(crate::mangle::prelude(helper));
-                        }
+                        self.note_live_member_call();
                     }
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage

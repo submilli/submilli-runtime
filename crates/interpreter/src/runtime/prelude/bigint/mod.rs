@@ -104,16 +104,21 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
 /// `BigInt(value)`: a `$string` parses as a decimal literal (trimmed; invalid
 /// text throws); a `$boxed_number` must be a finite integer (matching JS
-/// `BigInt(n)`), converted exactly for safe-range integers.
+/// `BigInt(n)`), converted exactly for safe-range integers. A string may be a
+/// `$string` subtype, such as a key `Object.keys` returns.
 fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<Val> {
     let Val::AnyRef(Some(any)) = value else {
-        return Err(wasmtime::Error::msg("BigInt(value): value is null"));
+        return Err(crate::runtime::host::type_error(
+            "BigInt(value): value is null",
+        ));
     };
     let intr = intrinsic_types(&mut *caller)?;
     let Some(st) = any.as_struct(&mut *caller)? else {
-        return Err(wasmtime::Error::msg("BigInt(value): not a struct value"));
+        return Err(crate::runtime::host::type_error(
+            "BigInt(value): not a struct value",
+        ));
     };
-    if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.string) {
+    if st.matches_ty(&*caller, &intr.string)? {
         let s = crate::runtime::host::read_string_arg(caller, value, "BigInt(string)")?;
         let parsed = ops::parse_decimal(caller, &s, "BigInt(string)")?;
         return crate::runtime::prelude::bigint::ops::make_bigint_struct(caller, parsed);
@@ -126,7 +131,7 @@ fn bigint_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
         let parsed = ops::integer_number(n, "BigInt(number)")?;
         return ops::make_bigint_struct(caller, parsed);
     }
-    Err(wasmtime::Error::msg(
+    Err(crate::runtime::host::type_error(
         "BigInt(value): expected a string or number",
     ))
 }
@@ -185,6 +190,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
                 methods: BTreeMap::from([
+                    ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::BigInt)),
                     (
                         "toString".to_string(),
                         MethodSig {

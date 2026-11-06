@@ -1,5 +1,4 @@
 // test262: test/built-ins/RegExp/S15.10.2.6_A6_T1.js
-// RegExpExecArray shape adapted to RegExpMatch (.match/.index/.input/.groups).
 
 function main(): void {
   const m = /^.*?$/.exec("Hello World");
@@ -7,7 +6,7 @@ function main(): void {
   if (m === null) {
     return;
   }
-  const matched = m.match;
+  const matched = m[0];
   const index = m.index;
   assertSameValue(matched, "Hello World", "lazy .*? runs to the end because of $");
   assertSameValue(index, 0, "match offset");

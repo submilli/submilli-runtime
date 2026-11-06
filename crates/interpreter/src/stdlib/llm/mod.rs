@@ -31,24 +31,24 @@ pub mod declaration;
 
 use std::sync::Arc;
 
-use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
+use std::collections::BTreeMap;
+
+use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::ModelCallUsage;
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{ModelUsage, Payload, Side, record_payload, record_usage};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::llm::{
-    ExecutionTokenBudget, LlmCallError, LlmLimits, LlmModel, LlmOutcome, LlmProvider,
-    PromptBoundKind,
+    ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel, LlmOutcome,
+    LlmProvider, PromptBoundKind,
 };
-use crate::stdlib::abi::{
-    self, HostView, backing_struct, i32_field, install_field_getters, nullable_object_field,
-    string_field,
-};
+use crate::stdlib::abi;
+use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
-    audit_quota_denial, check_security_call, filters_candidate, mark_filtered, optional_number,
+    audit_quota_denial, check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
     preflight_models, sanitize_description,
 };
 
@@ -61,22 +61,6 @@ pub const CAPABILITY: &str = "llm.call";
 
 const QUOTA_REASON: &str = "model-token budget exceeded";
 
-// `$CompletionBacking` field indices (0 is the vtable).
-const C_OK: usize = 1;
-const C_TEXT: usize = 2;
-const C_REASON: usize = 3;
-const C_MESSAGE: usize = 4;
-const C_RETRYABLE: usize = 5;
-const C_STATUS: usize = 6;
-const C_FINISH_REASON: usize = 7;
-const C_INPUT_TOKENS: usize = 8;
-const C_OUTPUT_TOKENS: usize = 9;
-
-// `$ModelBacking` field indices (0 is the vtable).
-const M_NAME: usize = 1;
-const M_DESCRIPTION: usize = 2;
-const M_CONTEXT_WINDOW: usize = 3;
-
 pub use declaration::package_declaration;
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -86,22 +70,32 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         false,
         HeapType::ConcreteStruct(intr.string.clone()),
     ));
-    // `Completion`, `Model`, `Completion[]`, and the optional `schema` argument
-    // all cross the boundary as the universal `(ref null $Object)` lowering.
+    // `Completion<T>` is a union of two object shapes and crosses the boundary
+    // as the universal `(ref null $Object)` lowering.
     let nullable_object = ValType::Ref(RefType::new(
         true,
         HeapType::ConcreteStruct(intr.object.clone()),
     ));
-    // `prompts: string[]` arrives as the non-null `$Array` struct.
+    // `prompts: string[]` arrives, and `Completion<T>[]` leaves, as the
+    // non-null `$Array` struct.
     let array = ValType::Ref(RefType::new(
         false,
         HeapType::ConcreteStruct(intr.array.clone()),
     ));
+    // `call<T>` and `batch<T>` are generic: after what a program writes comes
+    // the `$types` environment every generic call passes, holding the
+    // `$TypeDescriptor` for `T`.
+    let types = ValType::Ref(RefType::new(
+        false,
+        HeapType::ConcreteArray(intr.object_fields.clone()),
+    ));
 
+    // `text` and `texts` take what a program writes, the optional `schema`
+    // arriving as `string | undefined`.
     register_host_value_async(
         linker,
         MODULE_NAME,
-        crate::mangle::package_symbol(MODULE_NAME, "call"),
+        crate::mangle::package_symbol(MODULE_NAME, "text"),
         FuncType::new(
             &engine,
             [string.clone(), string.clone(), nullable_object.clone()],
@@ -109,59 +103,73 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         |caller, params| {
             Box::pin(async move {
-                let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
+                let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.text (model)")?;
                 let prompt =
-                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.text (prompt)")?;
                 let schema =
-                    read_optional_string(caller, abi_arg(params, 2)?, "llm.call (schema)")?;
-                let typed = schema.is_some();
-                let outcomes = dispatch(caller, "call", &model, vec![prompt], schema).await?;
-                let outcome = first_outcome(&model, outcomes)?;
-                if typed {
-                    structured_value(caller, "llm.call", outcome)
-                } else {
-                    build_completion(caller, outcome)
-                }
+                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.text")?;
+                text(caller, model, prompt, schema).await
             })
         },
     )?;
-
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "texts"),
+        FuncType::new(
+            &engine,
+            [string.clone(), array.clone(), nullable_object.clone()],
+            [array.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let model =
+                    read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.texts (model)")?;
+                let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.texts (prompts)")?;
+                let schema =
+                    json_schema::read_written_schema(caller, abi_arg(params, 2)?, "llm.texts")?;
+                texts(caller, model, prompts, schema).await
+            })
+        },
+    )?;
+    register_host_value_async(
+        linker,
+        MODULE_NAME,
+        crate::mangle::package_symbol(MODULE_NAME, "call"),
+        FuncType::new(
+            &engine,
+            [string.clone(), string.clone(), types.clone()],
+            [nullable_object.clone()],
+        ),
+        |caller, params| {
+            Box::pin(async move {
+                let model = read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.call (model)")?;
+                let prompt =
+                    read_string_arg(&mut *caller, abi_arg(params, 1)?, "llm.call (prompt)")?;
+                let descriptor = abi::read_type_argument(caller, abi_arg(params, 2)?, 0)?;
+                call(caller, model, prompt, &descriptor).await
+            })
+        },
+    )?;
     register_host_value_async(
         linker,
         MODULE_NAME,
         crate::mangle::package_symbol(MODULE_NAME, "batch"),
         FuncType::new(
             &engine,
-            [string.clone(), array.clone(), nullable_object.clone()],
-            // `batch` is declared generic (`T`, defaulting to `Completion[]`),
-            // so codegen types the guest import from the erased `TypeVar` slot
-            // — the universal `(ref null $Object)` — exactly as it does for
-            // `session.get`. The array this builds is still an `$Array`; only
-            // the declared slot it travels in is wider.
-            [nullable_object.clone()],
+            [string.clone(), array.clone(), types],
+            [array.clone()],
         ),
         |caller, params| {
             Box::pin(async move {
                 let model =
                     read_string_arg(&mut *caller, abi_arg(params, 0)?, "llm.batch (model)")?;
-                let prompts = read_prompts(caller, abi_arg(params, 1)?)?;
-                let schema =
-                    read_optional_string(caller, abi_arg(params, 2)?, "llm.batch (schema)")?;
-                let typed = schema.is_some();
-                let outcomes = dispatch(caller, "batch", &model, prompts, schema).await?;
-                let mut built = Vec::with_capacity(outcomes.len());
-                for outcome in outcomes {
-                    built.push(if typed {
-                        structured_value(caller, "llm.batch", outcome)?
-                    } else {
-                        build_completion(caller, outcome)?
-                    });
-                }
-                build_array(caller, built)
+                let prompts = read_prompts(caller, abi_arg(params, 1)?, "llm.batch (prompts)")?;
+                let descriptor = abi::read_type_argument(caller, abi_arg(params, 2)?, 0)?;
+                batch(caller, model, prompts, &descriptor).await
             })
         },
     )?;
-
     register_host_value_async(
         linker,
         MODULE_NAME,
@@ -170,60 +178,54 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, _params| Box::pin(async move { models(caller).await }),
     )?;
 
-    install_getters(linker, &engine, &intr)
-}
-
-const COMPLETION_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Completion",
-    backing: completion_backing_struct,
-    properties: &[
-        ("ok", C_OK),
-        ("text", C_TEXT),
-        ("reason", C_REASON),
-        ("message", C_MESSAGE),
-        ("retryable", C_RETRYABLE),
-        ("status", C_STATUS),
-        ("finishReason", C_FINISH_REASON),
-        ("inputTokens", C_INPUT_TOKENS),
-        ("outputTokens", C_OUTPUT_TOKENS),
-    ],
-};
-
-const MODEL_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Model",
-    backing: model_backing_struct,
-    properties: &[
-        ("name", M_NAME),
-        ("description", M_DESCRIPTION),
-        ("contextWindow", M_CONTEXT_WINDOW),
-    ],
-};
-
-/// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[&COMPLETION_VIEW, &MODEL_VIEW];
-
-/// `Completion` and `Model` are `Dispatch::Direct`, so each property is a host
-/// getter under `submilli:llm#<Iface>#<prop>`.
-fn install_getters(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-) -> wasmtime::Result<()> {
-    // A Direct receiver is the non-null `(ref $Object)`; the guest holds these
-    // backings as the nullable `unknown` lowering and codegen bridges the two.
-    let receiver = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    for view in HOST_VIEWS {
-        install_field_getters(linker, engine, &receiver, view)?;
-    }
     Ok(())
 }
 
-/// One `call` or `batch`: gate, bound, reserve, dispatch, reconcile.
+/// The function a program called, which a provider request answers for.
+#[derive(Clone, Copy)]
+enum Api {
+    Text,
+    Texts,
+    Call,
+    Batch,
+}
+
+impl Api {
+    /// The function's name, which its errors carry.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Texts => "texts",
+            Self::Call => "call",
+            Self::Batch => "batch",
+        }
+    }
+
+    /// The provider operation the call log, the request digest and the
+    /// replay history record: one prompt or many, whatever the form.
+    fn op(self) -> &'static str {
+        match self {
+            Self::Text | Self::Call => "call",
+            Self::Texts | Self::Batch => "batch",
+        }
+    }
+
+    /// The effect the replay history records the request under.
+    fn effect(self) -> &'static str {
+        match self {
+            Self::Text | Self::Call => "llm.call",
+            Self::Texts | Self::Batch => "llm.batch",
+        }
+    }
+}
+
+/// The function as a program names it, `llm.call`.
+fn api_name(api: Api) -> String {
+    format!("llm.{}", api.name())
+}
+
+/// One provider request for `text`, `texts`, `call` or `batch`: gate, bound,
+/// reserve, dispatch, reconcile.
 ///
 /// The ordering is the point and is load-bearing at every step.
 ///
@@ -242,14 +244,19 @@ fn install_getters(
 /// 4. **Reconcile after.** Reported usage commits, unreported usage is held —
 ///    `undefined` means indeterminate, not free — and a dispatch that never ran
 ///    releases its whole reservation.
+///
+/// `api` is the function the program called, which names its errors. The
+/// call log, the request digest and the replay history record its provider
+/// operation instead (`Api::op`), the same for the text and the typed form.
 async fn dispatch(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    op: &'static str,
+    api: Api,
     model: &str,
     prompts: Vec<String>,
     schema: Option<String>,
 ) -> wasmtime::Result<Vec<LlmOutcome>> {
-    let ticket = gate(caller, model, prompts.len())?;
+    let op = api.op();
+    let ticket = gate(caller, model, prompts.len()).await?;
     record_payload(&*caller, ticket, Side::Request, || {
         request_payload(op, model, &prompts, schema.as_deref())
     });
@@ -259,13 +266,9 @@ async fn dispatch(
         prompts,
         schema,
     };
-    let operation = if op == "call" {
-        "llm.call"
-    } else {
-        "llm.batch"
-    };
+    let operation = api.effect();
     let mut response = effects::execute(caller, operation, request, move |caller, _, request| {
-        Box::pin(call_provider(caller, op, ticket, request))
+        Box::pin(call_provider(caller, api, ticket, request))
     })
     .await?;
     // The live reservation is settled once; replay restores only this run's spend.
@@ -311,7 +314,7 @@ impl Drop for LlmSettlement {
 
 async fn call_provider(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    op: &'static str,
+    api: Api,
     ticket: Option<CallTicket>,
     request: LlmRequest,
 ) -> wasmtime::Result<LlmResponse> {
@@ -325,24 +328,32 @@ async fn call_provider(
     let limits = budget
         .as_ref()
         .map_or_else(LlmLimits::default, |b| b.limits());
-    check_prompt_bounds(model, &prompts, &limits).map_err(|e| throw(op, e))?;
+    check_prompt_bounds(model, &prompts, schema.as_deref(), &limits)
+        .map_err(|e| throw(api.name(), e))?;
 
     // Clone the provider out of the store before any `await`: the borrow on
     // `caller.data()` cannot be held across one.
-    let provider = provider(caller, op, model)?;
+    let provider = provider(caller, api.name(), model)?;
     let sent = sent_bytes(&prompts, schema.as_deref());
     fuel::charge(&mut *caller, fuel::IO, sent)?;
 
     // The model's own cap, not the default: KTD3b makes the reservation an upper
     // bound by reserving the same cap the request is sent with.
     let output_reserve = provider.output_reserve(model);
-    let reservation =
-        reserve(budget.as_deref(), op, model, &prompts, output_reserve).map_err(|error| {
-            match audit_quota_denial(caller, ticket, CAPABILITY, model, QUOTA_REASON) {
-                Ok(()) => error,
-                Err(denial) => denial,
-            }
-        })?;
+    let reservation = reserve(
+        budget.as_deref(),
+        api.name(),
+        model,
+        &prompts,
+        schema.as_deref(),
+        output_reserve,
+    )
+    .map_err(|error| {
+        match audit_quota_denial(caller, ticket, CAPABILITY, model, QUOTA_REASON) {
+            Ok(()) => error,
+            Err(denial) => denial,
+        }
+    })?;
     let dispatched = provider.call(model, &prompts, schema.as_deref()).await;
 
     match dispatched {
@@ -409,7 +420,7 @@ async fn call_provider(
             {
                 return Err(denial);
             }
-            Err(throw(op, error))
+            Err(throw(api.name(), error))
         }
     }
 }
@@ -481,9 +492,15 @@ fn failure_record(failure: &crate::runtime::llm::LlmFailure) -> serde_json::Valu
     })
 }
 
-/// The bytes a dispatch sends: its prompts and schema.
+/// The bytes a dispatch sends: each prompt, and the schema with every one of
+/// them, since each prompt is its own request.
 fn sent_bytes(prompts: &[String], schema: Option<&str>) -> u64 {
-    (prompts.iter().map(String::len).sum::<usize>() + schema.map_or(0, str::len)) as u64
+    let schema = schema.map_or(0, str::len) as u64;
+    prompts.iter().fold(0u64, |total, prompt| {
+        total
+            .saturating_add(prompt.len() as u64)
+            .saturating_add(schema)
+    })
 }
 
 /// The token counts the provider reported, summed over the dispatch's prompts. A count
@@ -506,16 +523,16 @@ fn reported_usage(outcomes: &[LlmOutcome]) -> ModelUsage {
 /// constrain which models a caller reaches and how wide a fan-out it may
 /// request; it cannot see what is being asked, because prompt text is what this
 /// boundary exists to keep in.
-fn gate(
+async fn gate(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: &str,
     prompt_count: usize,
 ) -> wasmtime::Result<Option<CallTicket>> {
-    check_security_call(
-        caller,
-        CAPABILITY,
-        serde_json::json!({ "model": model, "prompt_count": prompt_count }),
-    )
+    check_and_approve_call(caller, CAPABILITY, gate_context(model, prompt_count)).await
+}
+
+fn gate_context(model: &str, prompt_count: usize) -> serde_json::Value {
+    serde_json::json!({ "model": model, "prompt_count": prompt_count })
 }
 
 /// `models()`: check runtime invariants, then gate each candidate with the same
@@ -543,7 +560,7 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
     let mut built = Vec::new();
     for candidate in candidates {
         if may_call(caller, &candidate.name)? {
-            built.push(build_model(caller, candidate)?);
+            built.push(model_value(caller, candidate)?);
         }
     }
     build_array(caller, built)
@@ -553,7 +570,11 @@ async fn models(caller: &mut wasmtime::Caller<'_, StoreData>) -> wasmtime::Resul
 /// than failing the call: a listing that threw on the first forbidden model
 /// would itself disclose that the operator configured it.
 fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmtime::Result<bool> {
-    let keeps = filters_candidate(gate(caller, model, 0).map(|_| ()))?;
+    let keeps = filters_candidate(check_candidate(
+        &mut *caller,
+        CAPABILITY,
+        gate_context(model, 0),
+    ))?;
     if !keeps {
         mark_filtered(&*caller);
     }
@@ -564,10 +585,13 @@ fn may_call(caller: &mut wasmtime::Caller<'_, StoreData>, model: &str) -> wasmti
 ///
 /// Two bounds rather than one because they fail differently: a thousand tiny
 /// prompts and one enormous prompt are both pathological, and neither is caught
-/// by the other's limit. Both are counted, never quoted.
+/// by the other's limit. Both are counted, never quoted. A schema travels with
+/// every prompt and may be the program's own, so it is held to the same byte
+/// bound as a prompt.
 fn check_prompt_bounds(
     model: &str,
     prompts: &[String],
+    schema: Option<&str>,
     limits: &LlmLimits,
 ) -> Result<(), LlmCallError> {
     let count = prompts.len() as u64;
@@ -579,12 +603,16 @@ fn check_prompt_bounds(
             limit: limits.max_prompt_count,
         });
     }
-    for prompt in prompts {
-        let bytes = prompt.len() as u64;
+    let elements = prompts
+        .iter()
+        .map(|prompt| (prompt.as_str(), PromptBoundKind::PromptBytes))
+        .chain(schema.map(|schema| (schema, PromptBoundKind::SchemaBytes)));
+    for (text, limit_kind) in elements {
+        let bytes = text.len() as u64;
         if bytes > limits.max_prompt_bytes {
             return Err(LlmCallError::PromptBoundsExceeded {
                 model: model.to_string(),
-                limit_kind: PromptBoundKind::PromptBytes,
+                limit_kind,
                 actual: bytes,
                 limit: limits.max_prompt_bytes,
             });
@@ -601,9 +629,10 @@ fn check_prompt_bounds(
 /// against [`LlmLimits::default`] rather than being skipped with the budget.
 fn reserve(
     budget: Option<&ExecutionTokenBudget>,
-    op: &str,
+    api: &str,
     model: &str,
     prompts: &[String],
+    schema: Option<&str>,
     output_reserve: Option<u64>,
 ) -> wasmtime::Result<u64> {
     let Some(budget) = budget else {
@@ -615,13 +644,13 @@ fn reserve(
     // declaring a larger reserve would under-reserve, and under-reserving is the
     // direction that lets real spend past the ceiling.
     let reservation = budget.reservation_for(
-        estimated_input_tokens(prompts),
+        estimated_input_tokens(prompts, schema),
         prompts.len() as u64,
         output_reserve,
     );
     budget
         .reserve(model, reservation)
-        .map_err(|e| throw(op, e))?;
+        .map_err(|e| throw(api, e))?;
     Ok(reservation)
 }
 
@@ -631,11 +660,13 @@ fn reserve(
 /// It only has to be an estimate, because it is not what enforces the ceiling —
 /// the output cap in the reservation is, and reconciliation replaces this with
 /// reported usage the moment the provider answers. Rounding up rather than down
-/// keeps a refusal early rather than after the bill.
-fn estimated_input_tokens(prompts: &[String]) -> u64 {
+/// keeps a refusal early rather than after the bill. A schema is input to
+/// every prompt it travels with.
+fn estimated_input_tokens(prompts: &[String], schema: Option<&str>) -> u64 {
+    let schema = schema.map_or(0, str::len) as u64;
     prompts
         .iter()
-        .map(|p| (p.len() as u64).div_ceil(4))
+        .map(|p| (p.len() as u64).saturating_add(schema).div_ceil(4))
         .fold(0u64, u64::saturating_add)
 }
 
@@ -688,11 +719,12 @@ fn usage(outcomes: &[LlmOutcome], reservation: u64, prompt_count: usize) -> (u64
 /// `call` asked for one prompt, so the provider owes exactly one outcome. A
 /// provider that returns none broke the positional-ordering obligation, and
 /// inventing an empty completion here would hide that from the caller.
-fn first_outcome(model: &str, outcomes: Vec<LlmOutcome>) -> wasmtime::Result<LlmOutcome> {
+fn first_outcome(api: Api, model: &str, outcomes: Vec<LlmOutcome>) -> wasmtime::Result<LlmOutcome> {
     outcomes.into_iter().next().ok_or_else(|| {
         type_error(format!(
-            "llm.call(\"{model}\"): the provider returned no outcome for the prompt — this is a \
-             provider defect, not a program error; report it to the operator"
+            "llm.{}: model \"{model}\": the provider returned no outcome for the prompt — \
+             this is a provider defect, not a program error; report it to the operator",
+            api.name()
         ))
     })
 }
@@ -703,12 +735,12 @@ fn first_outcome(model: &str, outcomes: Vec<LlmOutcome>) -> wasmtime::Result<Llm
 /// Runs *after* the capability check, deliberately. See [`dispatch`].
 fn provider(
     caller: &wasmtime::Caller<'_, StoreData>,
-    op: &str,
+    api: &str,
     model: &str,
 ) -> wasmtime::Result<Arc<dyn LlmProvider>> {
     caller.data().llm_provider.clone().ok_or_else(|| {
         throw(
-            op,
+            api,
             LlmCallError::NotConfigured {
                 model: model.to_string(),
             },
@@ -727,8 +759,10 @@ fn budget(caller: &wasmtime::Caller<'_, StoreData>) -> Option<Arc<ExecutionToken
 ///
 /// Token budgets are quota errors; prompt size/count bounds are argument range
 /// errors. Other failures retain their base error type.
-fn throw(op: &str, error: LlmCallError) -> wasmtime::Error {
-    let message = format!("llm.{op}: {error}");
+/// The guest error for a failed dispatch, naming the function the program
+/// called: `llm.text: model "m": no model provider is configured …`.
+fn throw(api: &str, error: LlmCallError) -> wasmtime::Error {
+    let message = format!("llm.{api}: {error}");
     if error.is_budget_exceeded() {
         quota_exceeded_error(message)
     } else if matches!(error, LlmCallError::PromptBoundsExceeded { .. }) {
@@ -738,175 +772,295 @@ fn throw(op: &str, error: LlmCallError) -> wasmtime::Error {
     }
 }
 
-/// Read the optional `schema` argument. Undefined means no schema was emitted.
-fn read_optional_string(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    val: &Val,
-    name: &str,
-) -> wasmtime::Result<Option<String>> {
-    if crate::runtime::prelude::undefined::is_undefined(caller, val)? {
-        return Ok(None);
-    }
-    read_string_arg(caller, val, name).map(Some)
-}
-
 fn read_prompts(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
+    name: &str,
 ) -> wasmtime::Result<Vec<String>> {
     let elements = crate::runtime::prelude::collection::read_array_vals(caller, val)?;
     let mut prompts = Vec::with_capacity(elements.len());
     for element in &elements {
-        prompts.push(read_string_arg(caller, element, "llm.batch (prompts)")?);
+        prompts.push(read_string_arg(caller, element, name)?);
     }
     Ok(prompts)
 }
 
-fn completion_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            i32_field(),                  // ok
-            nullable_object_field(&intr), // text
-            nullable_object_field(&intr), // reason
-            nullable_object_field(&intr), // message
-            i32_field(),                  // retryable
-            nullable_object_field(&intr), // status
-            nullable_object_field(&intr), // finishReason
-            nullable_object_field(&intr), // inputTokens
-            nullable_object_field(&intr), // outputTokens
-        ],
-    )
-}
-
-fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr),          // name
-            nullable_object_field(&intr), // description
-            nullable_object_field(&intr), // contextWindow
-        ],
-    )
-}
-
-/// The value a *typed* `call<T>`/`batch<T>` hands back: the completion text
-/// parsed as JSON, not the `Completion` envelope.
-///
-/// The typed form trades the envelope for the checked value, so the envelope's
-/// fields have no place to go — which is also why a failed element cannot be
-/// represented here and throws instead. The structural check the typechecker
-/// wrapped around this call then verifies the parsed value really is a `T`; a
-/// provider that ignored the schema and answered in prose fails at the parse
-/// below, and one that answered with well-formed JSON of the wrong shape fails
-/// at that check. Both are catchable, and neither coerces.
-fn structured_value(
+/// One prompt, answered as text.
+async fn text(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    op: &str,
-    outcome: LlmOutcome,
+    model: String,
+    prompt: String,
+    schema: Option<String>,
 ) -> wasmtime::Result<Val> {
-    // A truncated or filtered completion has no complete JSON value to check,
-    // and the typed form has no `ok` for the program to branch on — so it is an
-    // error here rather than a value that would fail the structural check for a
-    // second, less informative reason. The reason is named; the text is not.
-    if let Some(failure) = &outcome.failure {
-        return Err(crate::runtime::host::type_error(format!(
-            "{op}: the model did not return a usable completion ({}) — a typed call has \
-             no `ok` to branch on, so call it without a type argument to inspect the \
-             `Completion` envelope instead",
-            failure.reason,
-        )));
+    let outcomes = dispatch(caller, Api::Text, &model, vec![prompt], schema).await?;
+    let outcome = first_outcome(Api::Text, &model, outcomes)?;
+    text_envelope(caller, outcome)
+}
+
+/// Many prompts, each answered as text, in order.
+async fn texts(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: String,
+    prompts: Vec<String>,
+    schema: Option<String>,
+) -> wasmtime::Result<Val> {
+    let outcomes = dispatch(caller, Api::Texts, &model, prompts, schema).await?;
+    let mut built = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        built.push(text_envelope(caller, outcome)?);
     }
-    let Some(text) = outcome.text.as_deref() else {
-        return Err(crate::runtime::host::type_error(format!(
-            "{op}: the model returned no text to check against the requested type",
-        )));
-    };
-    crate::runtime::json::parse_json_as_unknown(
-        caller,
-        text,
-        &format!("{op}: the model's response is not JSON"),
-    )
+    build_array(caller, built)
 }
 
-fn build_completion(
+/// One prompt, answered as a checked `T`.
+async fn call(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: String,
+    prompt: String,
+    descriptor: &abi::TypeDescriptor,
+) -> wasmtime::Result<Val> {
+    let schema = descriptor.schema_for(&api_name(Api::Call))?.to_string();
+    let outcomes = dispatch(caller, Api::Call, &model, vec![prompt], Some(schema)).await?;
+    let outcome = first_outcome(Api::Call, &model, outcomes)?;
+    envelope(caller, outcome, descriptor).await
+}
+
+/// Many prompts, each answered as a checked `T`, in order.
+async fn batch(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: String,
+    prompts: Vec<String>,
+    descriptor: &abi::TypeDescriptor,
+) -> wasmtime::Result<Val> {
+    let schema = descriptor.schema_for(&api_name(Api::Batch))?.to_string();
+    let outcomes = dispatch(caller, Api::Batch, &model, prompts, Some(schema)).await?;
+    let mut built = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        built.push(envelope(caller, outcome, descriptor).await?);
+    }
+    build_array(caller, built)
+}
+
+/// The token counts an outcome reports, carried onto both arms.
+#[derive(Clone, Copy)]
+struct Usage {
+    input: Option<u64>,
+    output: Option<u64>,
+}
+
+impl Usage {
+    fn of(outcome: &LlmOutcome) -> Self {
+        Self {
+            input: outcome.input_tokens,
+            output: outcome.output_tokens,
+        }
+    }
+}
+
+/// One text outcome as the program sees it: `{ ok: true, value: text }`, or a
+/// `Failure` that keeps the partial text of a truncated or filtered answer.
+fn text_envelope(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     outcome: LlmOutcome,
 ) -> wasmtime::Result<Val> {
-    let failure = outcome.failure;
-    let text = optional_string(caller, outcome.text.as_deref())?;
-    let reason = optional_string(caller, failure.as_ref().map(|f| f.reason.as_str()))?;
-    let message = optional_string(caller, failure.as_ref().map(|f| f.message.as_str()))?;
-    let retryable = failure.as_ref().is_some_and(|f| f.retryable);
-    let status = optional_number(
-        caller,
-        failure.as_ref().and_then(|f| f.status).map(f64::from),
-    )?;
-    let finish_reason = optional_string(
-        caller,
-        failure.as_ref().and_then(|f| f.finish_reason.as_deref()),
-    )?;
-    let input_tokens = optional_number(caller, outcome.input_tokens.map(|n| n as f64))?;
-    let output_tokens = optional_number(caller, outcome.output_tokens.map(|n| n as f64))?;
-
-    let ty = completion_backing_struct(caller.engine())?;
-    abi::new_backing(
-        caller,
-        ty,
-        &[
-            Val::I32(i32::from(outcome.ok)),
-            text,
-            reason,
-            message,
-            Val::I32(i32::from(retryable)),
-            status,
-            finish_reason,
-            input_tokens,
-            output_tokens,
-        ],
-    )
+    let usage = Usage::of(&outcome);
+    let text = match answer_text(caller, &outcome, usage, outcome.text.as_deref())? {
+        Ok(text) => text,
+        Err(failure) => return Ok(failure),
+    };
+    let text = string_value(caller, text)?;
+    success_value(caller, text, usage)
 }
 
-fn build_model(
+/// The text a successful `outcome` answered, or the `Failure` entry a failed
+/// one is, carrying `partial` as its text.
+fn answer_text<'o>(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    outcome: &'o LlmOutcome,
+    usage: Usage,
+    partial: Option<&str>,
+) -> wasmtime::Result<Result<&'o str, Val>> {
+    if let Some(failure) = &outcome.failure {
+        return failure_value(caller, failure, partial, usage).map(Err);
+    }
+    // `LlmOutcome` promises text on the success arm; a provider adapter that
+    // breaks that is an embedder bug, not a model failure.
+    outcome.text.as_deref().map(Ok).ok_or_else(|| {
+        crate::runtime::host::fatal_host_error("llm: a successful outcome carries no text")
+    })
+}
+
+/// One typed outcome as the program sees it: a `Success<T>` or a `Failure`.
+///
+/// The response is parsed as JSON and tested by the descriptor's predicate
+/// for `T`: a value it accepts is `value`, and one it rejects is an
+/// `invalid-output` failure for this element alone, naming the expected type
+/// and never the text. The predicate runs after the recorded effect
+/// completed, so a replay re-runs it over the decoded outcome and never the
+/// provider. Anything the predicate raises (a trap, exhausted fuel or
+/// memory, a fatal host error) leaves as it would from any host function.
+async fn envelope(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    outcome: LlmOutcome,
+    descriptor: &abi::TypeDescriptor,
+) -> wasmtime::Result<Val> {
+    let usage = Usage::of(&outcome);
+    // A partial completion is not a whole JSON value, and a checked `value`
+    // never holds text, so a failed typed entry carries no text.
+    let text = match answer_text(caller, &outcome, usage, None)? {
+        Ok(text) => text,
+        Err(failure) => return Ok(failure),
+    };
+    // The parser's own message can quote the offending input, so it is
+    // discarded for a fixed one; only its error class is read, which tells
+    // syntax from range.
+    let parsed = match crate::runtime::json::parse_json_as_unknown(caller, text, "llm") {
+        Ok(parsed) => parsed,
+        Err(err) if err.is::<crate::runtime::host::SyntaxError>() => {
+            return invalid_output(caller, "the model's response is not JSON", usage);
+        }
+        Err(err) if err.is::<crate::runtime::host::RangeError>() => {
+            return invalid_output(
+                caller,
+                "a number in the model's response is out of range",
+                usage,
+            );
+        }
+        Err(err) => return Err(err),
+    };
+    if descriptor.accepts(caller, parsed).await? {
+        success_value(caller, parsed, usage)
+    } else {
+        let message = format!("the model's response does not match `{}`", descriptor.name);
+        invalid_output(caller, &message, usage)
+    }
+}
+
+fn invalid_output(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    message: &str,
+    usage: Usage,
+) -> wasmtime::Result<Val> {
+    let failure = LlmFailure::new(FailureReason::InvalidOutput, message);
+    failure_value(caller, &failure, None, usage)
+}
+
+/// `{ ok: true, value, inputTokens?, outputTokens? }`.
+fn success_value(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    value: Val,
+    usage: Usage,
+) -> wasmtime::Result<Val> {
+    let mut fields = BTreeMap::new();
+    fields.insert("ok".to_string(), boxed_boolean(caller, true)?);
+    fields.insert("value".to_string(), value);
+    insert_usage(caller, &mut fields, usage)?;
+    abi::new_object(caller, fields)
+}
+
+/// `{ ok: false, reason, message, retryable, status?, finishReason?, text?,
+/// inputTokens?, outputTokens? }`. An optional field with nothing to say is
+/// an absent key, so `Object.keys` lists what `JSON.stringify` writes.
+fn failure_value(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    failure: &LlmFailure,
+    text: Option<&str>,
+    usage: Usage,
+) -> wasmtime::Result<Val> {
+    let mut fields = BTreeMap::new();
+    fields.insert("ok".to_string(), boxed_boolean(caller, false)?);
+    fields.insert(
+        "reason".to_string(),
+        string_value(caller, failure.reason.as_str())?,
+    );
+    fields.insert(
+        "message".to_string(),
+        string_value(caller, &failure.message)?,
+    );
+    fields.insert(
+        "retryable".to_string(),
+        boxed_boolean(caller, failure.retryable)?,
+    );
+    if let Some(status) = failure.status {
+        fields.insert(
+            "status".to_string(),
+            boxed_number(caller, f64::from(status))?,
+        );
+    }
+    if let Some(finish_reason) = &failure.finish_reason {
+        fields.insert(
+            "finishReason".to_string(),
+            string_value(caller, finish_reason)?,
+        );
+    }
+    if let Some(text) = text {
+        fields.insert("text".to_string(), string_value(caller, text)?);
+    }
+    insert_usage(caller, &mut fields, usage)?;
+    abi::new_object(caller, fields)
+}
+
+fn insert_usage(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    fields: &mut BTreeMap<String, Val>,
+    usage: Usage,
+) -> wasmtime::Result<()> {
+    if let Some(input) = usage.input {
+        fields.insert(
+            "inputTokens".to_string(),
+            boxed_number(caller, input as f64)?,
+        );
+    }
+    if let Some(output) = usage.output {
+        fields.insert(
+            "outputTokens".to_string(),
+            boxed_number(caller, output as f64)?,
+        );
+    }
+    Ok(())
+}
+
+/// `{ name, description?, contextWindow? }`.
+fn model_value(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     model: LlmModel,
 ) -> wasmtime::Result<Val> {
-    let name = write_submilli_string_struct(caller, &model.name)?;
-    let description = optional_string(
-        caller,
-        model
-            .description
-            .as_deref()
-            .and_then(sanitize_description)
-            .as_deref(),
-    )?;
-    let context_window = optional_number(caller, model.context_window.map(|n| n as f64))?;
-    let ty = model_backing_struct(caller.engine())?;
-    abi::new_backing(
-        caller,
-        ty,
-        &[
-            Val::AnyRef(Some(name.to_anyref())),
-            description,
-            context_window,
-        ],
-    )
+    let mut fields = BTreeMap::new();
+    fields.insert("name".to_string(), string_value(caller, &model.name)?);
+    if let Some(description) = model.description.as_deref().and_then(sanitize_description) {
+        fields.insert(
+            "description".to_string(),
+            string_value(caller, &description)?,
+        );
+    }
+    if let Some(context_window) = model.context_window {
+        fields.insert(
+            "contextWindow".to_string(),
+            boxed_number(caller, context_window as f64)?,
+        );
+    }
+    abi::new_object(caller, fields)
 }
 
-fn optional_string(
+fn string_value(caller: &mut wasmtime::Caller<'_, StoreData>, text: &str) -> wasmtime::Result<Val> {
+    Ok(Val::AnyRef(Some(
+        write_submilli_string_struct(caller, text)?.to_anyref(),
+    )))
+}
+
+fn boxed_number(caller: &mut wasmtime::Caller<'_, StoreData>, n: f64) -> wasmtime::Result<Val> {
+    Ok(Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, n)?.to_anyref(),
+    )))
+}
+
+fn boxed_boolean(
     caller: &mut wasmtime::Caller<'_, StoreData>,
-    text: Option<&str>,
+    value: bool,
 ) -> wasmtime::Result<Val> {
-    match text {
-        Some(text) => Ok(Val::AnyRef(Some(
-            write_submilli_string_struct(caller, text)?.to_anyref(),
-        ))),
-        None => crate::runtime::prelude::undefined::value(caller),
-    }
+    Ok(Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_boolean_struct(caller, value)?.to_anyref(),
+    )))
 }
 
 fn build_array(
@@ -1084,6 +1238,7 @@ mod tests {
         budget: Option<Arc<ExecutionTokenBudget>>,
         policy: Option<Arc<dyn SecurityCheck>>,
         effects: Option<Arc<dyn crate::runtime::effects::EffectHistory>>,
+        fuel: Option<u64>,
     }
 
     struct Observed {
@@ -1098,7 +1253,13 @@ mod tests {
                 budget: None,
                 policy: None,
                 effects: None,
+                fuel: None,
             }
+        }
+
+        fn fuel(mut self, fuel: u64) -> Self {
+            self.fuel = Some(fuel);
+            self
         }
 
         fn provider(mut self, provider: Arc<dyn LlmProvider>) -> Self {
@@ -1133,7 +1294,10 @@ mod tests {
         async fn observe(self, source: &str) -> Observed {
             let compiled = crate::compile_script(source, "test.ts", crate::FileId(0), &[], &[])
                 .expect("compile clean");
-            let cfg = RuntimeConfig::default();
+            let mut cfg = RuntimeConfig::default();
+            if let Some(fuel) = self.fuel {
+                cfg.fuel = fuel;
+            }
             let engine = cfg.engine().expect("engine");
             let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
             data.install_type_info(compiled.type_info.clone());
@@ -1179,7 +1343,7 @@ mod tests {
             .run(&format!(
                 r#"import llm from "submilli:llm";
                    function main(): void {{
-                     const r = llm.call("claude-haiku-4-5", "{SECRET}");
+                     const r = llm.text("claude-haiku-4-5", "{SECRET}");
                      assert(r.ok, "the call succeeds");
                    }}"#
             ))
@@ -1220,8 +1384,8 @@ mod tests {
             .run(
                 r#"import llm from "submilli:llm";
                    function main(): void {
-                     llm.call("claude-haiku-4-5", "one");
-                     llm.batch("claude-haiku-4-5", ["a", "b", "c"]);
+                     llm.text("claude-haiku-4-5", "one");
+                     llm.texts("claude-haiku-4-5", ["a", "b", "c"]);
                      llm.models();
                    }"#,
             )
@@ -1249,8 +1413,8 @@ mod tests {
     #[tokio::test]
     async fn a_runtime_without_a_provider_refuses_every_op() {
         for op in [
-            r#"llm.call("m", "p")"#,
-            r#"llm.batch("m", ["p"])"#,
+            r#"llm.text("m", "p")"#,
+            r#"llm.texts("m", ["p"])"#,
             r#"llm.models()"#,
         ] {
             let err = Harness::new()
@@ -1282,7 +1446,7 @@ mod tests {
                    function main(): void {
                      let caught = false;
                      try {
-                       llm.call("m", "p");
+                       llm.text("m", "p");
                      } catch (e: Error) {
                        caught = true;
                      }
@@ -1307,11 +1471,11 @@ mod tests {
 
         for (source, needle) in [
             (
-                r#"llm.batch("m", ["a", "b", "c"])"#,
+                r#"llm.texts("m", ["a", "b", "c"])"#,
                 "3 prompts in one batch exceeds the 2 allowed",
             ),
             (
-                r#"llm.call("m", "SECRET_PROMPT_LONGER_THAN_SIXTEEN_BYTES")"#,
+                r#"llm.text("m", "SECRET_PROMPT_LONGER_THAN_SIXTEEN_BYTES")"#,
                 "bytes in a single prompt",
             ),
         ] {
@@ -1365,7 +1529,7 @@ mod tests {
                 r#"import llm from "submilli:llm";
                    function main(): string {
                      try {
-                       llm.call("m", "p");
+                       llm.text("m", "p");
                        return "no refusal";
                      } catch (e: QuotaExceededError) {
                        return "quota: " + e.message;
@@ -1401,7 +1565,7 @@ mod tests {
                 r#"import llm from "submilli:llm";
                    function main(): string {
                      try {
-                       llm.batch("m", ["a", "b"]);
+                       llm.texts("m", ["a", "b"]);
                        return "no refusal";
                      } catch (e: RangeError) {
                        return "range";
@@ -1439,7 +1603,7 @@ mod tests {
                 .policy(policy)
                 .run(&format!(
                     "import llm from \"submilli:llm\";\n\
-                     function main(): void {{ llm.call(\"{model}\", \"p\"); }}\n"
+                     function main(): void {{ llm.text(\"{model}\", \"p\"); }}\n"
                 ))
                 .await
                 .expect_err("denied");
@@ -1708,26 +1872,53 @@ mod tests {
             .run(
                 r#"import llm from "submilli:llm";
                    function main(): string {
-                     return JSON.stringify(llm.call("m", "p")) + "|" + JSON.stringify(llm.models());
+                     return JSON.stringify(llm.text("m", "p")) + "|" + JSON.stringify(llm.models());
                    }"#,
             )
             .await
             .expect("program completes");
         let (completion, models) = out.split_once('|').expect("two values");
         let completion: serde_json::Value = serde_json::from_str(completion).expect("JSON");
-        assert_eq!(completion["ok"], true, "{completion}");
-        assert_eq!(completion["text"], "hi", "{completion}");
-        assert_eq!(completion["retryable"], false, "{completion}");
-        assert_eq!(completion["inputTokens"], 3, "{completion}");
-        assert_eq!(completion["outputTokens"], 4, "{completion}");
-        assert!(
-            completion.get("reason").is_none(),
-            "undefined is left out: {completion}"
+        assert_eq!(
+            completion,
+            serde_json::json!({"ok": true, "value": "hi", "inputTokens": 3, "outputTokens": 4}),
+            "a success carries exactly its arm's fields"
         );
+        let models: serde_json::Value = serde_json::from_str(models).expect("JSON");
         assert_eq!(
             models,
-            r#"[{"name":"m","description":"Fast.","contextWindow":1000}]"#
+            serde_json::json!([{"name": "m", "description": "Fast.", "contextWindow": 1000}])
         );
+    }
+
+    /// A completion is an ordinary object: `Object.keys` lists its fields,
+    /// `as Record<string, unknown>` views it without copying, an absent
+    /// optional is an absent key, and a structural cast to a declared subset
+    /// of its fields passes.
+    #[tokio::test]
+    async fn completions_are_plain_objects() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success("hi").with_usage(Some(3), None)],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Brief { ok: boolean; inputTokens?: number; }
+                   function main(): string {
+                     const raw = llm.texts("m", ["p"]);
+                     const item = raw[0] as Record<string, unknown>;
+                     const same = item === (raw[0] as unknown as Record<string, unknown>);
+                     const brief = raw as Brief[];
+                     return Object.keys(item).join(",") + "|" + String(item["value"])
+                       + "|" + String(same) + "|" + String(brief[0].inputTokens)
+                       + "|" + String("outputTokens" in item);
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "inputTokens,ok,value|hi|true|3|false");
     }
 
     /// R2/R3: `batch` fans out host-side and hands back one outcome per prompt,
@@ -1756,12 +1947,12 @@ mod tests {
             .run(
                 r#"import llm from "submilli:llm";
                    function main(): string {
-                     const rs = llm.batch("m", ["a", "b", "c"]);
+                     const rs = llm.texts("m", ["a", "b", "c"]);
                      let out = "";
                      for (const r of rs) {
                        out = out + (r.ok
-                         ? "ok:" + String(r.text)
-                         : "no:" + String(r.reason) + ":" + String(r.status)) + "|";
+                         ? "ok:" + r.value
+                         : "no:" + r.reason + ":" + String(r.status)) + "|";
                      }
                      return out + "n=" + String(rs.length)
                        + " in=" + String(rs[2].inputTokens)
@@ -1809,7 +2000,7 @@ mod tests {
         harness
             .run(
                 r#"import llm from "submilli:llm";
-                   function main(): void { llm.batch("m", ["a", "b"]); }"#,
+                   function main(): void { llm.texts("m", ["a", "b"]); }"#,
             )
             .await
             .expect("program completes");
@@ -1857,7 +2048,7 @@ mod tests {
         harness
             .run(
                 r#"import llm from "submilli:llm";
-                   function main(): void { llm.call("m", "a"); }"#,
+                   function main(): void { llm.text("m", "a"); }"#,
             )
             .await
             .expect("program completes");
@@ -1877,21 +2068,217 @@ mod tests {
         );
     }
 
-    /// The schema slot is not part of the arity a program writes: two arguments
-    /// means no schema reached the provider. The typed lowering fills it, and
-    /// until it does, an untyped call must not send one.
+    /// `text` without a schema sends none, and with one sends it unchanged:
+    /// the program's own schema constrains the provider and never checks the
+    /// answer, so prose comes back as the text, not as an `invalid-output`.
     #[tokio::test]
-    async fn an_untyped_call_sends_no_schema() {
-        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
-        Harness::new()
+    async fn text_sends_a_written_schema_unchanged_and_returns_the_text() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success("not json".to_string())],
+            Vec::new(),
+        );
+        let out = Harness::new()
             .provider(provider)
             .run(
                 r#"import llm from "submilli:llm";
-                   function main(): void { llm.call("m", "p"); }"#,
+                   function main(): string {
+                     const a = llm.text("m", "p");
+                     const b = llm.text("m", "p", "{\"type\":\"object\"}");
+                     return (a.ok ? a.value : a.reason) + "|" + (b.ok ? b.value : b.reason);
+                   }"#,
             )
             .await
             .expect("program completes");
-        assert_eq!(recorder.dispatches()[0].schema, None);
+        assert_eq!(out, "not json|not json");
+        let schemas: Vec<Option<String>> = recorder
+            .dispatches()
+            .iter()
+            .map(|dispatch| dispatch.schema.clone())
+            .collect();
+        assert_eq!(
+            schemas,
+            vec![None, Some("{\"type\":\"object\"}".to_string())]
+        );
+    }
+
+    /// A written schema must be a JSON document, or it would be dropped on the
+    /// way to the provider: a catchable `TypeError` names the function. It is
+    /// also held to the prompt byte bound, since it travels with every prompt.
+    #[tokio::test]
+    async fn a_written_schema_must_be_json_and_within_the_prompt_bound() {
+        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     try { llm.text("m", "p", "true"); return "sent a boolean schema"; }
+                     catch (e) { if (!(e instanceof TypeError)) { return "boolean: " + e.message; } }
+                     try { llm.texts("m", ["p"], "{not json"); return "sent"; }
+                     catch (e) { return (e instanceof TypeError ? "TypeError:" : "other:") + e.message; }
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(
+            out,
+            "TypeError:llm.texts: `schema` is not a JSON Schema: write a JSON object"
+        );
+        assert!(recorder.dispatches().is_empty(), "nothing was sent");
+
+        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const schema = "{\"description\":\"" + "x".repeat(300000) + "\"}";
+                     try { llm.text("m", "p", schema); return "sent"; }
+                     catch (e) { return (e instanceof RangeError ? "RangeError:" : "other:") + e.message; }
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert!(
+            out.starts_with("RangeError:llm.text: model \"m\": prompt bound exceeded")
+                && out.contains("bytes in the schema"),
+            "{out}"
+        );
+        assert!(recorder.dispatches().is_empty(), "nothing was sent");
+    }
+
+    /// SUB-2084: an `invalid-output` entry names the type, never a key the
+    /// model wrote, so model text does not reach the message.
+    #[tokio::test]
+    async fn a_mismatched_response_never_names_a_key_of_the_answer() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"sk-live-SECRET":"high"}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const r = llm.call<Record<string, number>>("m", "p");
+                     return r.ok ? "accepted" : r.message;
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert!(!out.contains("sk-live"), "{out}");
+        assert_eq!(
+            out,
+            "the model's response does not match `{ [key: string]: number }`"
+        );
+    }
+
+    /// A generic forwards its own `T` into `llm.call<T>` and `llm.batch<T>`,
+    /// through a second generic layer too: each call sends the schema of the
+    /// type its caller named and checks against it.
+    #[tokio::test]
+    async fn a_generic_forwards_its_type_to_call_and_batch() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":1}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Severity { level: string; score: number; }
+                   interface Tag { name: string; }
+                   function classify<T>(p: string): llm.Completion<T> { return llm.call<T>("m", p); }
+                   function outer<T>(p: string): llm.Completion<T> { return classify<T>(p); }
+                   function each<T>(ps: string[]): llm.Completion<T>[] { return llm.batch<T>("m", ps); }
+                   function main(): string {
+                     const s = outer<Severity>("p");
+                     const t = classify<Tag>("p");
+                     const b = each<Severity>(["p"]);
+                     return (s.ok ? s.value.level : s.reason) + "|"
+                       + (t.ok ? t.value.name : t.message) + "|"
+                       + (b[0].ok ? String(b[0].value.score) : b[0].reason);
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "high|the model's response does not match `Tag`|1");
+        let schemas: Vec<String> = recorder
+            .dispatches()
+            .iter()
+            .map(|dispatch| {
+                dispatch
+                    .schema
+                    .clone()
+                    .expect("a forwarded call sends a schema")
+            })
+            .collect();
+        assert!(schemas[0].contains("\"level\""), "{schemas:?}");
+        assert!(schemas[1].contains("\"name\""), "{schemas:?}");
+        assert_eq!(schemas[0], schemas[2], "one type, one schema: {schemas:?}");
+    }
+
+    /// A forwarded type with no JSON Schema is refused when the call runs,
+    /// before anything is sent: only the caller knew the type.
+    #[tokio::test]
+    async fn a_forwarded_type_without_a_schema_is_a_catchable_type_error() {
+        let (provider, recorder) = MockProvider::new(Vec::new(), Vec::new());
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function classify<T>(p: string): llm.Completion<T> { return llm.call<T>("m", p); }
+                   function main(): string {
+                     try { classify<Uint8Array>("p"); return "sent"; }
+                     catch (e) { return (e instanceof TypeError ? "TypeError:" : "other:") + e.message; }
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert!(
+            out.starts_with("TypeError:llm.call<Uint8Array>: `Uint8Array` has no JSON Schema"),
+            "{out}"
+        );
+        assert!(recorder.dispatches().is_empty(), "nothing was sent");
+    }
+
+    /// One type is one descriptor: a user generic and a typed model call at
+    /// the same `T` in one module share it, and the model call still sends the
+    /// schema and checks the answer.
+    #[tokio::test]
+    async fn a_user_generic_and_a_typed_call_share_the_type_descriptor() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":1}"#.to_string(),
+            )],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Severity { level: string; score: number; }
+                   function same<T>(value: T): T { return value; }
+                   function main(): string {
+                     const fallback = same<Severity>({ level: "none", score: 0 });
+                     const s = llm.call<Severity>("m", "p");
+                     return (s.ok ? s.value.level : s.reason) + "|" + fallback.level;
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "high|none");
+        assert!(
+            recorder.dispatches()[0]
+                .schema
+                .as_deref()
+                .is_some_and(|schema| schema.contains("\"level\"")),
+            "the typed call sends the schema of `Severity`"
+        );
     }
 
     /// A program declaring `Severity` and returning one field of a typed call,
@@ -1900,12 +2287,12 @@ mod tests {
            interface Severity { level: string; score: number; }
            function main(): string {
              const s = llm.call<Severity>("m", "p");
-             return s.level;
+             return s.ok ? s.value.level : "failed:" + s.reason + ":" + s.message;
            }"#;
 
     /// R5, end to end: the schema emitted from `T` reaches the provider fully
-    /// inlined, and a conforming response comes back as `T` itself — the
-    /// checked value, not the `Completion` envelope.
+    /// inlined, and a conforming response comes back as the checked `T` in
+    /// `value`.
     #[tokio::test]
     async fn a_typed_call_sends_the_schema_and_returns_the_checked_value() {
         let (provider, recorder) = MockProvider::new(
@@ -1919,7 +2306,7 @@ mod tests {
             .run(TYPED_PROGRAM)
             .await
             .expect("a conforming response must not throw");
-        assert_eq!(out, "high", "the typed call must return `T` itself");
+        assert_eq!(out, "high", "the typed call must hold `T` in `value`");
 
         let schema = recorder.dispatches()[0]
             .schema
@@ -1934,63 +2321,53 @@ mod tests {
         assert_eq!(parsed["properties"]["score"]["type"], "number");
     }
 
-    /// R6: a well-formed response of the *wrong shape* throws a catchable
-    /// `TypeError` rather than coercing. `score` is a string here, which a
+    /// R6: a well-formed response of the *wrong shape* is an `invalid-output`
+    /// entry rather than a coerced value. `score` is a string here, which a
     /// coercing implementation would happily accept.
     #[tokio::test]
-    async fn a_schema_violating_response_throws_a_type_error() {
+    async fn a_schema_violating_response_is_an_invalid_output_entry() {
         let (provider, _) = MockProvider::new(
             vec![LlmOutcome::success(
                 r#"{"level":"high","score":"three"}"#.to_string(),
             )],
             Vec::new(),
         );
-        let err = Harness::new()
+        let out = Harness::new()
             .provider(provider)
             .run(TYPED_PROGRAM)
             .await
-            .expect_err("a wrong-shaped response must throw");
-        let message = format!("{err}");
-        assert!(
-            message.contains("TypeError"),
-            "must be a TypeError, got: {message}",
-        );
-        assert!(
-            message.contains("Severity"),
-            "the error must name the expected type: {message}",
+            .expect("a wrong-shaped response is an entry, not a throw");
+        assert_eq!(
+            out, "failed:invalid-output:the model's response does not match `Severity`",
+            "an invalid-output entry whose message names the expected type",
         );
     }
 
     /// R6: a provider that ignores the schema entirely and answers in prose
-    /// throws too. This is the failure the whole double construction exists for
-    /// — the schema is advisory, and only our own check is not.
+    /// is an `invalid-output` entry too, with a fixed message. This is the
+    /// failure the whole double construction exists for — the schema is
+    /// advisory, and only our own check is not.
     #[tokio::test]
-    async fn a_provider_that_ignores_the_schema_throws() {
+    async fn a_provider_that_ignores_the_schema_is_an_invalid_output_entry() {
         let (provider, _) = MockProvider::new(
             vec![LlmOutcome::success(
                 "Sure! This ticket looks pretty severe to me.".to_string(),
             )],
             Vec::new(),
         );
-        let err = Harness::new()
+        let out = Harness::new()
             .provider(provider)
             .run(TYPED_PROGRAM)
             .await
-            .expect_err("prose must throw");
-        let message = format!("{err}");
-        assert!(
-            message.contains("not JSON"),
-            "the error must say the response was not JSON: {message}",
-        );
-        // And it must be catchable, not a trap.
-        assert!(
-            message.contains("SyntaxError") || message.contains("llm.call"),
-            "must be a catchable, attributed error: {message}",
+            .expect("prose is an entry, not a throw");
+        assert_eq!(
+            out,
+            "failed:invalid-output:the model's response is not JSON"
         );
     }
 
-    /// The thrown error must carry no completion text. A model that
-    /// answered with a secret must not leak it through the type error.
+    /// R13: a mismatch must not become a disclosure channel. The message names
+    /// the expected type, never the completion.
     #[tokio::test]
     async fn a_failed_check_never_quotes_the_completion() {
         let (provider, _) = MockProvider::new(
@@ -1999,79 +2376,344 @@ mod tests {
             )],
             Vec::new(),
         );
-        let err = Harness::new()
+        let out = Harness::new()
             .provider(provider)
             .run(TYPED_PROGRAM)
             .await
-            .expect_err("must throw");
-        let message = format!("{err}");
+            .expect("program completes");
+        assert!(out.starts_with("failed:invalid-output:"), "{out}");
         assert!(
-            !message.contains("SUPERSECRETVALUE"),
-            "the completion must never reach the error: {message}",
+            !out.contains("SUPERSECRETVALUE"),
+            "the completion must never reach the message: {out}",
         );
     }
 
-    /// A truncated completion has no complete JSON value and the typed form has
-    /// no `ok` to branch on, so it throws — naming the reason, never the text,
-    /// and pointing at the untyped form as the way to inspect it.
+    /// R13 for an index-signature `T`: a record's keys are model output. The
+    /// message names the expected type and nothing of the value, so no key can
+    /// reach it.
     #[tokio::test]
-    async fn a_typed_call_on_a_failed_completion_throws_naming_the_reason() {
+    async fn a_failed_check_never_quotes_a_model_authored_record_key() {
         let (provider, _) = MockProvider::new(
-            vec![LlmOutcome::failed(
+            vec![LlmOutcome::success(r#"{"SUPERSECRETKEY":"x"}"#.to_string())],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const r = llm.call<Record<string, number>>("m", "p");
+                     return r.ok ? "ok" : r.reason + ":" + r.message;
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert!(
+            out.starts_with("invalid-output:the model's response does not match `"),
+            "{out}"
+        );
+        assert!(
+            !out.contains("SUPERSECRETKEY"),
+            "a model-authored key must never reach the message: {out}",
+        );
+    }
+
+    /// The two forms in one module: `text(m, p)` sends no schema and returns
+    /// the text, while `call<string>(m, p)` sends the schema of a JSON string
+    /// and returns the parsed string.
+    #[tokio::test]
+    async fn text_and_call_string_in_one_module_differ_by_the_schema() {
+        let (provider, recorder) = MockProvider::new(
+            vec![LlmOutcome::success(r#""hello""#.to_string())],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const text = llm.text("m", "p");
+                     const json = llm.call<string>("m", "p");
+                     return (text.ok ? text.value : text.reason) + "|"
+                       + (json.ok ? json.value : json.reason);
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "\"hello\"|hello");
+        let schemas: Vec<Option<String>> = recorder
+            .dispatches()
+            .iter()
+            .map(|dispatch| dispatch.schema.clone())
+            .collect();
+        assert_eq!(
+            schemas,
+            vec![None, Some("{\"type\":\"string\"}".to_string())],
+            "only the typed call asks for JSON",
+        );
+    }
+
+    /// Any type argument asks for JSON, `string` included: prose is invalid
+    /// output, and a JSON string is the value.
+    #[tokio::test]
+    async fn a_string_type_argument_asks_for_a_json_string() {
+        let (provider, recorder) = MockProvider::new(
+            vec![
+                LlmOutcome::success("Sure, here you go.".to_string()),
+                LlmOutcome::success(r#""quoted""#.to_string()),
+                LlmOutcome::success("42".to_string()),
+                LlmOutcome::success("null".to_string()),
+            ],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const rs = llm.batch<string>("m", ["a", "b", "c", "d"]);
+                     return rs.map((r) => r.ok ? r.value : r.reason).join("|");
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "invalid-output|quoted|invalid-output|invalid-output");
+        assert!(
+            recorder.dispatches()[0].schema.is_some(),
+            "a string type argument sends a schema"
+        );
+    }
+
+    /// The failure arm is a plain object too: an empty partial text is a
+    /// present key, no text is an absent one, and the absent optionals never
+    /// appear in `Object.keys`.
+    #[tokio::test]
+    async fn failure_entries_carry_exactly_their_present_fields() {
+        let truncated = |text: Option<&str>| {
+            LlmOutcome::failed(
                 LlmFailure::new(
                     FailureReason::Truncated,
                     FailureReason::Truncated.default_message(),
                 ),
-                Some(r#"{"level":"hi"#.to_string()),
+                text.map(str::to_string),
+            )
+        };
+        let (provider, _) =
+            MockProvider::new(vec![truncated(Some("")), truncated(None)], Vec::new());
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const rs = llm.texts("m", ["a", "b"]);
+                     const empty = rs[0];
+                     const none = rs[1];
+                     if (empty.ok || none.ok) return "ok?";
+                     return String("text" in empty) + ":" + String(empty.text === "") + "|"
+                       + String("text" in none) + "|" + Object.keys(none).join(",");
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "true:true|false|message,ok,reason,retryable");
+    }
+
+    /// A number the parser refuses is an `invalid-output` entry with a fixed
+    /// message, not a `RangeError` escaping the batch.
+    #[tokio::test]
+    async fn an_out_of_range_number_is_an_invalid_output_entry() {
+        let (provider, _) = MockProvider::new(
+            vec![LlmOutcome::success(
+                r#"{"level":"high","score":1e999}"#.to_string(),
             )],
             Vec::new(),
         );
-        let err = Harness::new()
+        let out = Harness::new()
             .provider(provider)
             .run(TYPED_PROGRAM)
             .await
-            .expect_err("a failed completion must throw on the typed path");
-        let message = format!("{err}");
-        assert!(
-            message.contains("truncated"),
-            "must name the reason: {message}",
-        );
-        assert!(
-            message.contains("without a type argument"),
-            "must point at the untyped form: {message}",
+            .expect("program completes");
+        assert_eq!(
+            out,
+            "failed:invalid-output:a number in the model's response is out of range"
         );
     }
 
-    /// The typed `batch` checks every element, so one bad element throws for
-    /// the batch rather than yielding a wrongly-typed element.
+    /// A truncated completion has no complete JSON value, so the typed form
+    /// reports it as its own failure entry — with the reason and the token
+    /// counts, and without the partial text a typed `value` could never hold.
     #[tokio::test]
-    async fn a_typed_batch_checks_every_element() {
-        let (provider, recorder) = MockProvider::new(
+    async fn a_typed_call_on_a_failed_completion_is_a_failure_entry_without_text() {
+        let (provider, _) = MockProvider::new(
             vec![
-                LlmOutcome::success(r#"{"level":"high","score":1}"#.to_string()),
-                LlmOutcome::success(r#"{"level":"low","score":"two"}"#.to_string()),
+                LlmOutcome::failed(
+                    LlmFailure::new(
+                        FailureReason::Truncated,
+                        FailureReason::Truncated.default_message(),
+                    ),
+                    Some(r#"{"level":"hi"#.to_string()),
+                )
+                .with_usage(Some(5), Some(6)),
             ],
             Vec::new(),
         );
-        let err = Harness::new()
+        let out = Harness::new()
             .provider(provider)
             .run(
                 r#"import llm from "submilli:llm";
                    interface Severity { level: string; score: number; }
                    function main(): string {
-                     const s = llm.batch<Severity[]>("m", ["a", "b"]);
-                     return s[0].level;
+                     const s = llm.call<Severity>("m", "p");
+                     if (s.ok) return "ok";
+                     return s.reason + ":" + String(s.text) + ":" + String(s.inputTokens)
+                       + ":" + String(s.outputTokens);
                    }"#,
             )
             .await
-            .expect_err("a wrong-shaped element must throw");
-        assert!(
-            format!("{err}").contains("TypeError"),
-            "must be a TypeError, got: {err}",
+            .expect("program completes");
+        assert_eq!(out, "truncated:undefined:5:6");
+    }
+
+    /// The typed `batch` checks each element on its own: a wrong-shaped
+    /// element is its own `invalid-output` entry, its siblings keep their
+    /// values, and the schema sent names one response, not the array.
+    #[tokio::test]
+    async fn a_typed_batch_checks_each_element_on_its_own() {
+        let (provider, recorder) = MockProvider::new(
+            vec![
+                LlmOutcome::success(r#"{"level":"high","score":1}"#.to_string())
+                    .with_usage(Some(1), Some(2)),
+                LlmOutcome::success(r#"{"level":"low","score":"two"}"#.to_string())
+                    .with_usage(Some(3), Some(4)),
+                LlmOutcome::success(r#"{"level":"mid","score":3}"#.to_string()),
+            ],
+            Vec::new(),
         );
-        assert!(
-            recorder.dispatches()[0].schema.is_some(),
-            "a typed batch must send a schema",
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Severity { level: string; score: number; }
+                   function main(): string {
+                     const rs = llm.batch<Severity>("m", ["a", "b", "c"]);
+                     let out = "";
+                     for (const r of rs) {
+                       out = out + (r.ok ? r.value.level : r.reason) + ":"
+                         + String(r.inputTokens) + ":" + String(r.outputTokens) + "|";
+                     }
+                     return out;
+                   }"#,
+            )
+            .await
+            .expect("a wrong-shaped element is an entry, not a throw");
+        assert_eq!(
+            out, "high:1:2|invalid-output:3:4|mid:undefined:undefined|",
+            "the mismatch keeps its position and its token counts"
+        );
+        let schema = recorder.dispatches()[0]
+            .schema
+            .clone()
+            .expect("a typed batch must send a schema");
+        let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
+        assert_eq!(
+            parsed["type"], "object",
+            "one response, not the array: {schema}"
+        );
+    }
+
+    /// An empty batch is an empty result, typed or not: nothing is sent and
+    /// nothing is checked.
+    #[tokio::test]
+    async fn an_empty_typed_batch_is_empty() {
+        let (provider, _) = MockProvider::new(Vec::new(), Vec::new());
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     return String(llm.batch<number>("m", []).length);
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "0");
+    }
+
+    /// Primitive, nullable and array-valued `T` ride the same check: the host
+    /// boxes whatever the closure hands back.
+    #[tokio::test]
+    async fn typed_values_may_be_primitives_null_or_arrays() {
+        let (provider, _) = MockProvider::new(
+            vec![
+                LlmOutcome::success("42".to_string()),
+                LlmOutcome::success("null".to_string()),
+                LlmOutcome::success(r#"["a","b"]"#.to_string()),
+                LlmOutcome::success("true".to_string()),
+            ],
+            Vec::new(),
+        );
+        let out = Harness::new()
+            .provider(provider)
+            .run(
+                r#"import llm from "submilli:llm";
+                   function main(): string {
+                     const rs = llm.batch<number | null | string[] | boolean>("m", ["a", "b", "c", "d"]);
+                     let out = "";
+                     for (const r of rs) {
+                       if (!r.ok) { out = out + r.reason + "|"; continue; }
+                       const v = r.value;
+                       out = out + (Array.isArray(v) ? v.join("+") : String(v)) + "|";
+                     }
+                     return out;
+                   }"#,
+            )
+            .await
+            .expect("program completes");
+        assert_eq!(out, "42|null|a+b|true|");
+    }
+
+    /// The check runs in the guest after the recorded effect: fuel it exhausts
+    /// ends the run rather than becoming an entry, the model call stays billed,
+    /// and a replay with enough fuel re-runs the check over the recorded
+    /// outcome without a second request.
+    #[tokio::test]
+    async fn check_fuel_exhaustion_propagates_and_replay_keeps_the_model_effect() {
+        let text = format!("[{}]", vec!["1"; 20_000].join(","));
+        let provider = QueuedProvider::new(vec![vec![
+            LlmOutcome::success(text).with_usage(Some(3), Some(4)),
+        ]]);
+        let history = Arc::new(MemoryHistory::new());
+        let source = r#"import llm from "submilli:llm";
+            function main(): string {
+                try {
+                    const result = llm.batch<number[]>("m", ["a"])[0];
+                    if (!result.ok) { return "item failure"; }
+                    return String(result.value.length);
+                } catch (e: Error) { return "caught"; }
+            }"#;
+        let first = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(Arc::clone(&history) as Arc<dyn EffectHistory>)
+            .fuel(20_000)
+            .observe(source)
+            .await;
+        let error = first
+            .result
+            .expect_err("fuel exhaustion must escape item results and guest catches");
+        assert!(format!("{error:?}").contains("fuel"), "{error:?}");
+        assert_eq!(first.model_calls, vec![llm_call("m", Some(3), Some(4))]);
+        history.replay();
+        let replay = Harness::new()
+            .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)
+            .effects(history)
+            .observe(source)
+            .await;
+        assert_eq!(replay.result.expect("replay with sufficient fuel"), "20000");
+        assert!(replay.model_calls.is_empty());
+        assert_eq!(
+            provider.invoked(),
+            1,
+            "replay must not repeat a completed request"
         );
     }
 
@@ -2092,8 +2734,8 @@ mod tests {
             .observe(
                 r#"import llm from "submilli:llm";
                    function main(): void {
-                     llm.batch("haiku", ["a", "b", "c"]);
-                     llm.batch("sonnet", ["x"]);
+                     llm.texts("haiku", ["a", "b", "c"]);
+                     llm.texts("sonnet", ["x"]);
                    }"#,
             )
             .await;
@@ -2123,7 +2765,7 @@ mod tests {
             .observe(
                 r#"import llm from "submilli:llm";
                    function main(): void {
-                     llm.batch("haiku", ["a", "b", "c"]);
+                     llm.texts("haiku", ["a", "b", "c"]);
                    }"#,
             )
             .await;
@@ -2145,7 +2787,7 @@ mod tests {
             .observe(
                 r#"import llm from "submilli:llm";
                    function main(): void {
-                     llm.call("haiku", "hi");
+                     llm.text("haiku", "hi");
                      throw new Error("after");
                    }"#,
             )
@@ -2170,8 +2812,8 @@ mod tests {
             .observe(
                 r#"import llm from "submilli:llm";
                    function main(): void {
-                     llm.call("haiku", "one");
-                     llm.call("haiku", "two");
+                     llm.text("haiku", "one");
+                     llm.text("haiku", "two");
                    }"#,
             )
             .await;
@@ -2192,7 +2834,7 @@ mod tests {
                 r#"import llm from "submilli:llm";
                    function main(): string {
                      try {
-                       llm.call("haiku", "hi");
+                       llm.text("haiku", "hi");
                        return "ran";
                      } catch (e: Error) {
                        return "caught";
@@ -2219,7 +2861,7 @@ mod tests {
         let history = Arc::new(MemoryHistory::new());
         let source = r#"import llm from "submilli:llm";
             function main(): string {
-              return String(llm.batch("haiku", ["a", "b", "c"]).length);
+              return String(llm.texts("haiku", ["a", "b", "c"]).length);
             }"#;
         let first = Harness::new()
             .provider(Arc::clone(&provider) as Arc<dyn LlmProvider>)

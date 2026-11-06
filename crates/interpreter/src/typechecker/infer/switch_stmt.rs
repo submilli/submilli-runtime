@@ -1304,6 +1304,7 @@ impl Inferer<'_> {
         env.insert(
             path,
             narrowing::NarrowedView {
+                evolving: None,
                 narrowed_ty,
                 facts: narrowing::TypeFacts::EMPTY,
                 excluded_literals,

@@ -254,6 +254,18 @@ impl StateDir {
         Ok(upgraded.then_some(SESSIONS_LEFT_BEHIND))
     }
 
+    /// Claude Code's directories for chat on it, created 0700: its own, holding each
+    /// message's MCP config; its config directory, where it saves conversations; and an
+    /// empty directory it runs in.
+    pub(crate) fn claude_code_dirs(&self) -> Result<[PathBuf; 3]> {
+        let root = self.root.join("claude-code");
+        let dirs = [root.clone(), root.join("config"), root.join("cwd")];
+        for dir in &dirs {
+            owned_private_dir(dir)?;
+        }
+        Ok(dirs)
+    }
+
     /// The volume root: managed volumes.
     pub(crate) fn volume_root(&self) -> PathBuf {
         self.root.join("volumes")

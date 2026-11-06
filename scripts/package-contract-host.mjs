@@ -5,7 +5,7 @@ import { stripTypeScriptTypes } from 'node:module';
 // `modules` lists the package's other `src/` files. A generated module cannot resolve relative
 // imports, so they are merged in after the root, which uses them only from function bodies.
 export async function loadPackage(sourceUrl, host, modules = []) {
-    const bindings = 'get, post, put, patch, delete: remove, download, read, readBytes, stat, write, encodeComponent, decodeComponent, encodeQuery, parse, secrets, check';
+    const bindings = 'get, post, put, patch, delete: remove, download, exists, read, readBytes, stat, write, encodeComponent, decodeComponent, encodeQuery, parse, secrets, check';
     const files = await Promise.all([sourceUrl, ...modules].map((url) => readFile(url, 'utf8')));
     const source = files.join('\n')
         .replace(/import\s+[\s\S]*?from "submilli:[^"]+";\n/g, '')
@@ -56,6 +56,7 @@ export function contractHost() {
             checks.push({ capability, context });
             if (deny(capability, context)) throw new Error('Capability denied');
         },
+        exists: () => true,
         stat: () => ({ kind: 'file', size: 0 }),
         parse: (url) => {
             const value = new URL(url);

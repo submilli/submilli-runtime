@@ -2,7 +2,7 @@ import { writeText, mkdir, stat, Stat } from "submilli:fs";
 
 function main(): void {
   writeText("/file.txt", "hello");
-  mkdir("/dir", false);
+  mkdir("/dir", { recursive: false });
 
   const f: Stat | undefined = stat("/file.txt");
   if (f === undefined) {
@@ -20,6 +20,7 @@ function main(): void {
   assert(d.kind === "directory", "directory kind");
   assert(d.size === 0, "non-file size is 0");
 
-  const missing: Stat | undefined = stat("/nope");
-  assert(missing === undefined, "stat returns undefined on missing path");
+  let missing = false;
+  try { stat("/nope"); } catch (e) { missing = e.message.includes("does not exist"); }
+  assert(missing, "stat throws on a missing path");
 }

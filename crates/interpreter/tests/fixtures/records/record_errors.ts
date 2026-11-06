@@ -8,7 +8,7 @@ interface BadMethods {
   read(): number;
 }
 function main(): void {
-  const invalid: Record<number, string> = {};
+  const invalid: Record<{ id: number }, string> = {};
   const arity: Record<string> = {};
   const mixed: { [key: string]: number; label: string } = { label: "wrong" };
   const fixed: { readonly [key: string]: number } = {};

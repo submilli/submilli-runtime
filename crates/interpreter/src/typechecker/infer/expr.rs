@@ -6,6 +6,7 @@
 //! `.toString()` and `String(x)` paths.
 
 use crate::compiler_error::CompilerFailure;
+use crate::lower_local_types::display_type_name;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -518,6 +519,7 @@ fn sole_array_like_member(hint: &Type) -> Option<&Type> {
 /// arrays and tuples as any member's element: both are arrays at runtime.
 pub(super) fn spread_element_type(peeled_source: &Type) -> Option<Type> {
     match peeled_source {
+        ty if ty.is_regexp_match_array() => Some(Type::regexp_element()),
         Type::Array(elem) => Some((**elem).clone()),
         Type::Tuple(elements) => Some(Type::union(elements.to_vec())),
         Type::Union(_) => peeled_source.array_like_union_element(),
@@ -540,6 +542,36 @@ pub(crate) fn type_contains_type_var(ty: &Type) -> bool {
 /// `Map<string, number>`.
 pub(super) fn is_type_parameter_position(hint: &Type) -> bool {
     matches!(hint.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
+}
+
+/// Whether a type parameter occurs anywhere in `ty`. Unlike
+/// [`mentions_type_var`], it also counts body-internal `GenericParam`s and
+/// looks through refinements: a type argument written inside a generic is
+/// built from either.
+fn holds_type_parameter(ty: &Type) -> bool {
+    match ty {
+        Type::TypeVar(_) | Type::GenericParam { .. } => true,
+        Type::Array(inner) | Type::Readonly(inner) => holds_type_parameter(inner),
+        Type::Refined { ty: inner, .. } => holds_type_parameter(inner),
+        Type::Tuple(elements) => elements.iter().any(holds_type_parameter),
+        Type::Function { params, ret, .. } => {
+            params.iter().any(holds_type_parameter) || holds_type_parameter(ret)
+        }
+        Type::Object { fields, index } => {
+            index
+                .as_ref()
+                .is_some_and(|i| holds_type_parameter(&i.value))
+                || fields.values().any(|f| holds_type_parameter(&f.ty))
+        }
+        Type::InterfaceRef { args, .. }
+        | Type::ClassRef { args, .. }
+        | Type::AliasRef { args, .. } => args.iter().any(holds_type_parameter),
+        Type::Alias {
+            args, ty: inner, ..
+        } => args.iter().any(holds_type_parameter) || holds_type_parameter(inner),
+        Type::Union(members) => members.iter().any(holds_type_parameter),
+        _ => false,
+    }
 }
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
@@ -591,7 +623,7 @@ fn wildcard_undetermined_args(ty: &Type) -> Type {
     }
 }
 
-/// Whether `kind` is `JSON.parse(…)`, or `r.json()`, which lowers to it.
+/// Whether `kind` is `JSON.parse(…)`.
 fn parses_json(kind: &TypedExprKind) -> bool {
     matches!(
         kind,
@@ -950,7 +982,7 @@ impl Inferer<'_> {
             // checked cast, which is the usual fix, when `as` accepts the target.
             if matches!(ty.peel(), Type::Unknown) && self.is_legal_cast_target(&ty, want) {
                 if parses_json(&kind) {
-                    help.extend(self.parsed_json_cast_help(expr_id, span, want)?);
+                    help.extend(self.parsed_json_cast_help(span, want)?);
                 } else {
                     help.push(self.checked_cast_help(expr_id, span, want)?);
                 }
@@ -1072,7 +1104,7 @@ impl Inferer<'_> {
             && !self.top_symbols.contains_key("undefined")
     }
 
-    fn resolve_ident(
+    pub(super) fn resolve_ident(
         &mut self,
         ident: Ident,
         span: Span,
@@ -1238,17 +1270,18 @@ impl Inferer<'_> {
         // but is not a first-class value. The common LLM misuse is
         // forgetting to qualify; point at the right syntax.
         if let Some(sym) = self.lookup_named_type(&ident.name) {
+            let shown = display_type_name(&ident.name);
             let variant_names: Option<Vec<String>> = match &sym.kind {
                 crate::TypeKind::NumberEnum { variants, .. } => Some(
                     variants
                         .iter()
-                        .map(|(v, _)| format!("`{}.{}`", ident.name, v))
+                        .map(|(v, _)| format!("`{shown}.{v}`"))
                         .collect(),
                 ),
                 crate::TypeKind::StringEnum { variants, .. } => Some(
                     variants
                         .iter()
-                        .map(|(v, _)| format!("`{}.{}`", ident.name, v))
+                        .map(|(v, _)| format!("`{shown}.{v}`"))
                         .collect(),
                 ),
                 _ => None,
@@ -1261,10 +1294,7 @@ impl Inferer<'_> {
                 };
                 self.error_with_help(
                     span,
-                    format!(
-                        "`{}` is an enum type, not a value; use `{}.<variant>`",
-                        ident.name, ident.name,
-                    ),
+                    format!("`{shown}` is an enum type, not a value; use `{shown}.<variant>`"),
                     help,
                 );
                 return Ok(unresolved_ref(ident));
@@ -1459,7 +1489,7 @@ impl Inferer<'_> {
     }
 
     /// Which operand a string concatenation converts: a number or an `Error`
-    /// beside a string. Other types stay rejected (booleans, bigints, nullish
+    /// beside a string. Other types stay rejected (bigints, nullish
     /// values and plain objects), as the help on their error explains.
     fn concatenation_converts(&self, lt: &Type, rt: &Type) -> Option<ConcatOperand> {
         let is_error = |ty: &Type| match ty.peel() {
@@ -1469,7 +1499,7 @@ impl Inferer<'_> {
             _ => false,
         };
         let converts = |ty: &Type| match ty.primitive_behavior() {
-            Type::Number | Type::NumberLiteral(_) => true,
+            Type::Number | Type::NumberLiteral(_) | Type::Boolean | Type::BooleanLiteral(_) => true,
             Type::Union(members) => members.iter().all(is_error),
             other => is_error(other),
         };
@@ -1540,13 +1570,12 @@ impl Inferer<'_> {
         ))
     }
 
-    /// [`Self::checked_cast_help`] for `JSON.parse(…)` or `r.json()` itself,
+    /// [`Self::checked_cast_help`] for `JSON.parse(…)` itself,
     /// which says why the value is `unknown` and what the cast does. `None` when
     /// a parsed value could never pass the cast, or would pass it only to fail
     /// on the first read.
     fn parsed_json_cast_help(
         &self,
-        expr_id: ExprId,
         span: Span,
         want: &Type,
     ) -> Result<Option<String>, CompilerFailure> {
@@ -1557,29 +1586,12 @@ impl Inferer<'_> {
         // A call binds tighter than `as`, so it needs no parentheses.
         let call = match self.short_source(span) {
             Some(call) => call.to_string(),
-            None if self.calls_json_method(expr_id)? => "….json()".to_string(),
             None => "JSON.parse(…)".to_string(),
         };
         Ok(Some(format!(
             "`{call}` returns `unknown`. Cast it to the type you expect, which checks the value at \
              run time and throws a `TypeError` if it doesn't match: `{call} as {want}`"
         )))
-    }
-
-    /// Whether `expr_id` is a `….json()` call, as an http response's is.
-    fn calls_json_method(&self, expr_id: ExprId) -> Result<bool, CompilerFailure> {
-        let ExprKind::Call { callee, .. } = self
-            .ast
-            .try_expr(expr_id)
-            .map_err(super::arena_failure)?
-            .kind
-        else {
-            return Ok(false);
-        };
-        Ok(matches!(
-            &self.ast.try_expr(callee).map_err(super::arena_failure)?.kind,
-            ExprKind::FieldAccess { name, .. } if name.name == "json"
-        ))
     }
 
     /// Whether `ty` holds a host type anywhere, interface properties and index
@@ -1689,7 +1701,7 @@ impl Inferer<'_> {
         Some((
             span,
             format!(
-                "`+` converts only a number or an `Error` onto a string; {rewrite} to concatenate"
+                "`+` converts a number, boolean or an `Error` onto a string; {rewrite} to concatenate"
             ),
         ))
     }
@@ -2204,6 +2216,18 @@ impl Inferer<'_> {
         {
             self.check_nested_function_use(index, span)?;
         }
+        let evolving = self.evolving_binding_path(&ident);
+        if evolving.as_ref().is_some_and(|path| {
+            !self.reads_ruled_out_as_never(path)
+                && self.lookup_narrowed_view(path).is_none_or(|view| {
+                    view.evolving == Some(narrowing::EvolvingType::UnresolvedArray)
+                        || (view.evolving == Some(narrowing::EvolvingType::Array)
+                            && super::evolving::array_element(&view.narrowed_ty)
+                                == Some(Type::Never))
+                })
+        }) {
+            self.report_evolving_read(&ident, span);
+        }
         let (kind, ty) = self.resolve_ident(ident, span)?;
         let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
             self.scopes
@@ -2668,8 +2692,11 @@ impl Inferer<'_> {
                     span,
                 );
             }
-            let help =
-                Self::missing_export_help(&package_name, &name.name, ns.members.exports_help());
+            let help = Self::missing_export_help(
+                &package_name,
+                &name.name,
+                ns.members.missing_value_help(&name.name),
+            );
             self.error_with_help(
                 name.span,
                 format!("package `{package_name}` does not export `{}`", name.name),
@@ -2764,24 +2791,23 @@ impl Inferer<'_> {
         // (infer_to_string_call, infer_array_join_call,
         // console.log special case).
         if let ExprKind::FieldAccess { receiver, name } = &callee_kind {
-            let diags_before = self.diagnostics.len();
-            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
-            // `r.json()` on an http `Response` has no host backing, so the
-            // typechecker lowers it to `JSON.parse(r.body)`. This must run before `find_method`: the `json`
-            // method is declared on `Response` only for the LLM-facing type surface and
-            // must never be dispatched as a real (importless) interface method.
-            if name.name == "json"
-                && matches!(&recv_ty, Type::InterfaceRef { name: iface, .. } if iface == "Response")
+            if matches!(name.name.as_str(), "push" | "unshift")
+                && let Some(binding) = self.evolving_array_receiver(*receiver)?
             {
-                return self.infer_response_json_call(
-                    typed_receiver,
-                    &recv_ty,
-                    type_args,
-                    args,
-                    expected,
-                    span,
+                return self.infer_evolving_array_call(
+                    *receiver,
+                    binding,
+                    MethodCallSite {
+                        name: name.clone(),
+                        type_args,
+                        args,
+                        expected,
+                        span,
+                    },
                 );
             }
+            let diags_before = self.diagnostics.len();
+            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
             // A generic receiver inferred in isolation can't resolve its own type
             // parameters and reports a premature "cannot infer" error — e.g.
             // `new Map()` in `new Map().set(k, v)`. The enclosing call resolves
@@ -3456,6 +3482,7 @@ impl Inferer<'_> {
                     receiver: typed_receiver,
                     iface: iface_mangled,
                     name,
+                    type_args: Vec::new(),
                     args: generic_args,
                     return_cast,
                     type_predicate,
@@ -3504,7 +3531,9 @@ impl Inferer<'_> {
             | crate::DefaultValue::OmittedNumber { omitted: n, .. } => {
                 (TypedExprKind::Number(*n), Type::Number)
             }
-            crate::DefaultValue::String(s) => (TypedExprKind::String(s.clone()), Type::String),
+            crate::DefaultValue::String(s) | crate::DefaultValue::OmittedString(s) => {
+                (TypedExprKind::String(s.clone()), Type::String)
+            }
             crate::DefaultValue::Boolean(b) => (TypedExprKind::Boolean(*b), Type::Boolean),
             crate::DefaultValue::Null => (TypedExprKind::Null, Type::Null),
             crate::DefaultValue::Undefined => (TypedExprKind::Undefined, Type::Undefined),
@@ -3923,167 +3952,94 @@ impl Inferer<'_> {
         })
     }
 
-    /// Rewrite `session.get<T>(key)` into a runtime-checked cast.
+    /// The gate of a checked host call (`session.get<T>`, `llm.call<T>`,
+    /// `r.json<T>()`, …; [`crate::stdlib::checked_call::checked_call`]):
+    /// whether `T` is a type the host's descriptor check can verify and, for
+    /// a call that sends a JSON Schema, one a request can carry. The host
+    /// tests what it hands back against the descriptor's predicate — the same
+    /// structural test `x as T` gets — and throws a catchable `TypeError` on a
+    /// mismatch; codegen emits the schema. What neither can do is rejected
+    /// here.
     ///
-    /// `get` is declared generic so callers can name the shape they expect, but
-    /// the ordinary generic lowering would satisfy that `T` with `return_cast`,
-    /// a Wasm representation cast that tests nothing — stored data of the wrong
-    /// shape would arrive statically typed as `T` and never be verified. So the
-    /// call node is pushed typed `unknown` and wrapped in a `Cast` carrying the
-    /// reduced check shape, exactly as an MCP call with a known return type is
-    /// (see [`Self::static_call_expr`]). Codegen then emits the same structural
-    /// test `x as T` gets, and a mismatch throws a catchable `TypeError`.
-    ///
-    /// Call only for a [`crate::stdlib::session::declaration::is_checked_get`]
-    /// mangled name; `call` is the `GenericCall` node the ordinary path would
-    /// have returned. `type_args_written` separates an explicit `get<unknown>`
-    /// from a bare `get(key)`, whose `T` defaulted to `unknown` and keeps its
-    /// pre-generic unchecked-read meaning.
-    pub(super) fn checked_session_get(
+    /// `target_ty` is the instantiated `T`. `type_args_written` separates an
+    /// explicit `<unknown>` from a call whose `T` defaulted to `unknown`,
+    /// which is an unchecked read where the call allows one. `Err(())` means
+    /// a diagnostic was reported (or deliberately suppressed) and the call is
+    /// an error.
+    pub(super) fn checked_call_gate(
         &mut self,
-        call: TypedExprKind,
-        result_ty: &Type,
+        checked: &crate::stdlib::checked_call::CheckedCall,
+        target_ty: &Type,
         type_args_written: bool,
         span: Span,
-    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
-        Ok({
-            // An `unknown` target admits every value, and the cast machinery treats
-            // it as a no-op widen that emits no test at all. As the *default* that
-            // is the honest reading of `get(key)` — an unchecked read. Written out,
-            // it asks for a check that cannot exist, so only that form is an error.
-            if matches!(result_ty.peel(), Type::Unknown) && !type_args_written {
-                return Ok((call, result_ty.clone()));
-            }
-            if matches!(result_ty.peel(), Type::Unknown) {
-                self.error_with_help(
-                    span,
-                    "`session.get<unknown>` would not verify anything: `unknown` admits \
-                 every value, so no runtime check is possible"
-                        .to_string(),
-                    vec![
-                        "name the shape you expect — `session.get<Progress>(key)` — or drop \
-                     the type argument and narrow the result yourself with a \
-                     runtime-checked `as`: `session.get(key) as Progress`. Use \
-                     `session.get<Progress>(key)` returns undefined when the key is absent."
-                            .to_string(),
-                    ],
-                );
-                return Ok((TypedExprKind::Null, Type::Error));
-            }
-
-            match self.checked_cast_around(call, result_ty, span)? {
-                Ok(checked) => checked,
-                Err(reason) => {
-                    self.error_with_help(
-                        span,
-                        format!(
-                            "`session.get<{result_ty}>` cannot be verified at runtime: {reason}"
-                        ),
-                        cast_gate_help(
-                            reason,
-                            format!(
-                                "`session.get` checks the stored value against its type argument, so \
-                         that argument must be one the runtime can test: an object, array, \
-                         tuple, union, or primitive shape, optionally `| null`. Call it at a \
-                         concrete type instead of `{result_ty}` — `session.get<Progress>(key)` \
-                         — or drop the type argument and narrow the result yourself with a \
-                         runtime-checked `as`."
-                            ),
-                        ),
-                    );
-                    (TypedExprKind::Null, Type::Error)
-                }
-            }
-        })
-    }
-
-    /// Rewrite a schema-checked call such as `llm.call<T>(model, prompt)` into a
-    /// runtime-checked cast, and emit the JSON Schema for `T` that rides along
-    /// to the provider.
-    ///
-    /// Mirrors [`Self::checked_session_get`] — same soundness argument, same
-    /// `checked_cast_around` — with one addition: the schema gate. A typed call
-    /// must pass **both** gates, because the schema surface is strictly
-    /// narrower than what the cast machinery can test (KTD5). `Function`,
-    /// `bigint`, `Uint8Array`, and `unknown` are all castable and none has a
-    /// JSON Schema in the safe subset, so a type that cleared only the cast
-    /// gate would reach a provider as a schema that constrained nothing.
-    ///
-    /// Both gates run here rather than at the wrap, because the emitted schema
-    /// has to replace the trailing `schema` argument before the call node's
-    /// argument list is frozen. `Ok(None)` is the untyped form, which sends no
-    /// schema and gets no check; `Ok(Some(schema))` means both gates passed and
-    /// the caller must wrap the call in [`Self::schema_checked_cast`]; `Err(())`
-    /// means a diagnostic was reported (or deliberately suppressed) and the
-    /// call is an error.
-    ///
-    /// `checked` describes the call, from [`crate::stdlib::schema_checked_call`].
-    /// `type_args_written` separates an explicit `call<unknown>` from a bare
-    /// `call(...)`, whose result is the untyped default and needs no check.
-    pub(super) fn schema_checked_call_schema(
-        &mut self,
-        checked: &crate::stdlib::SchemaCheckedCall,
-        result_ty: &Type,
-        type_args_written: bool,
-        span: Span,
-    ) -> Result<Option<String>, ()> {
-        let crate::stdlib::SchemaCheckedCall {
+    ) -> Result<(), ()> {
+        let crate::stdlib::checked_call::CheckedCall {
             callee,
             example,
-            checks,
+            alternative,
             answerer,
-            untyped_hint,
-            untyped_hint_for_unknown,
-            untyped_hint_for_no_schema,
             ..
         } = checked;
-        // No type argument: the call keeps its pre-generic meaning and returns
-        // the `Completion` envelope, which the declaration already typed. There
-        // is nothing to check and no schema to send.
-        if !type_args_written {
-            return Ok(None);
-        }
-        // Written `<unknown>` asks for a check that cannot exist. Unlike
-        // `session.get`, there is no honest unchecked reading to fall back on —
-        // the untyped form is a different, fully-typed result — so this is
-        // caught here as well as by the schema gate, which would also reject it.
-        if matches!(result_ty.peel(), Type::Unknown) {
-            self.error_with_help(
+        // An `unknown` target admits every value, so its descriptor accepts
+        // everything. As a predicate call's *default* that is the honest
+        // reading — an unchecked read. Written out, or for a schema call,
+        // whose text form is the unchecked reading, it asks for a check that
+        // cannot exist.
+        if matches!(target_ty.peel(), Type::Unknown) {
+            if !type_args_written && !checked.sends_schema() {
+                return Ok(());
+            }
+            let schema = match answerer {
+                Some(answerer) => format!(
+                    " and its JSON Schema could only be `{{}}`, which constrains {answerer} to \
+                     nothing"
+                ),
+                None => String::new(),
+            };
+            self.checked_call_error(
+                type_args_written,
+                target_ty,
                 span,
                 format!(
                     "`{callee}<unknown>` would not verify anything: `unknown` admits every \
-                     value, so no runtime check is possible and its JSON Schema could only \
-                     be `{{}}`, which constrains {answerer} to nothing"
+                     value, so no runtime check is possible{schema}"
                 ),
                 vec![format!(
-                    "name the shape you expect — `{example}` — or drop the type argument \
-                     and {untyped_hint_for_unknown}."
+                    "name the shape you expect — `{example}` — or {alternative}."
                 )],
             );
             return Err(());
         }
 
-        // An erased `T` — a type parameter of the *calling* function — is
-        // reported against the cast gate rather than the schema gate. Both
-        // reject it, but only this diagnostic says what to do about it, and it
-        // is the wording `as` and MCP already use for the same mistake
-        // (`unsupported_cast_target_reason`'s `TypeVar | GenericParam` arm), so
-        // a program hitting it under `llm.call` reads the same advice it would
-        // hit under `as`.
-        let shape = self.reduce_cast_target(result_ty);
-        if matches!(shape.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
-            && let Some(reason) =
-                unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
-        {
-            self.error_with_help(
+        // A bare type parameter of the calling generic forwards the caller's
+        // descriptor: the caller named the type, and its descriptor carries
+        // the predicate and, when the type has one, the schema. Whether it
+        // has one is known only there, so a forwarded type without one is
+        // the host's catchable `TypeError`, not a diagnostic here.
+        if is_type_parameter_position(target_ty) {
+            return Ok(());
+        }
+        // A type built from a type parameter (`T[]`, `{ item: T }`) gets a
+        // descriptor assembled here, whose predicate tests through the
+        // caller's. That is enough for a call that only checks; a schema
+        // cannot be described where `T` is unknown.
+        if holds_type_parameter(target_ty) {
+            if !checked.sends_schema() {
+                return Ok(());
+            }
+            self.checked_call_error(
+                type_args_written,
+                target_ty,
                 span,
-                format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
+                format!(
+                    "`{callee}<{target_ty}>` cannot send a JSON Schema: `{target_ty}` is \
+                     built from a type parameter, and its schema would only be known where \
+                     the parameter is"
+                ),
                 vec![format!(
-                    "`{callee}` checks {checks} against its type argument, so \
-                     that argument must be one the runtime can test, and the schema is \
-                     emitted at compile time where `{result_ty}` is not yet known. Call it \
-                     at a concrete type — `{example}` — inside the \
-                     generic function, or drop the type argument and {untyped_hint}."
+                    "pass the type parameter itself (`{callee}<T>`) and let the caller \
+                     name the whole type, call it at a concrete type — `{example}` — or \
+                     {alternative}."
                 )],
             );
             return Err(());
@@ -4091,118 +4047,128 @@ impl Inferer<'_> {
 
         // The schema gate runs before the cast gate, because it is strictly
         // narrower (KTD5) *and* its rejections name the offending field. A
-        // recursive type fails both; the schema reason points at the field that
-        // closes the cycle, which is the one the author has to change.
-        match self.json_schema_for(result_ty) {
-            Ok(schema) => {
-                // The cast gate still has to pass: it is what `checked_cast_around`
-                // will re-run, and the two surfaces agree everywhere except the
-                // arms handled above.
-                if let Some(reason) =
-                    unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
-                {
-                    self.error_with_help(
+        // recursive type fails both; the schema reason points at the field
+        // that closes the cycle, which is the one the author has to change.
+        // `Function`, `bigint`, `Uint8Array` and `unknown` are castable and
+        // have no schema, so a type that cleared only the cast gate would
+        // reach the answerer as a schema that constrained nothing.
+        if let Some(answerer) = answerer {
+            match self.json_schema_for(target_ty) {
+                Ok(schema) if schema.len() > crate::stdlib::json_schema::MAX_SCHEMA_BYTES => {
+                    self.checked_call_error(
+                        type_args_written,
+                        target_ty,
                         span,
-                        format!("`{callee}<{result_ty}>` cannot be verified at runtime: {reason}"),
-                        cast_gate_help(
-                            reason,
-                            format!(
-                                "`{callee}` checks {checks} against its type \
-                                 argument, so that argument must be one the runtime can test: \
-                                 an object, array, tuple, union, or primitive shape. Call it \
-                                 at a concrete type instead of `{result_ty}` — \
-                                 `{example}` — or drop the type \
-                                 argument and {untyped_hint}."
-                            ),
+                        format!(
+                            "`{callee}<{target_ty}>` has a JSON Schema of {} bytes, more than \
+                             the {} a request may carry",
+                            schema.len(),
+                            crate::stdlib::json_schema::MAX_SCHEMA_BYTES
                         ),
+                        vec![format!(
+                            "name a smaller shape — `{example}` — or {alternative}."
+                        )],
                     );
                     return Err(());
                 }
-                Ok(Some(schema))
-            }
-            Err(reject) => {
-                // A `Type::Error` already reported its own diagnostic; a second
-                // one here would blame the same mistake twice.
-                if !reject.cascading {
-                    self.error_with_help(
-                        span,
-                        format!(
-                            "`{callee}<{result_ty}>` has no JSON Schema: {}",
-                            reject.describe()
-                        ),
-                        vec![format!(
-                            "the schema sent to {answerer} is fully inlined and carries no \
-                             `$ref`, so every field must be an object, array, tuple, union, \
-                             enum, or primitive shape. Replace that field with one — a \
-                             `string` for bytes or a big number, a named shape in place of \
-                             `unknown` — or drop the type argument and {untyped_hint_for_no_schema}."
-                        )],
-                    );
+                Ok(_) => {}
+                Err(reject) => {
+                    // A `Type::Error` already reported its own diagnostic; a
+                    // second one here would blame the same mistake twice.
+                    if !reject.cascading {
+                        self.checked_call_error(
+                            type_args_written,
+                            target_ty,
+                            span,
+                            format!(
+                                "`{callee}<{target_ty}>` has no JSON Schema: {}",
+                                reject.describe()
+                            ),
+                            vec![format!(
+                                "the schema sent to {answerer} is fully inlined and carries \
+                                 no `$ref`, so every field must be an object, array, tuple, \
+                                 union, enum, or primitive shape. Replace that field with one \
+                                 — a `string` for bytes or a big number, a named shape in \
+                                 place of `unknown` — or {alternative}."
+                            )],
+                        );
+                    }
+                    return Err(());
                 }
-                Err(())
             }
         }
-    }
 
-    /// Wrap a gated schema-checked call in its checked cast. Split from
-    /// [`Self::schema_checked_call_schema`] because the gates must run before the
-    /// call node's arguments are frozen and this must run after.
-    /// `checked_cast_around` cannot fail here: `schema_checked_call_schema`
-    /// already ran the same cast gate on the same type, and passing it is what
-    /// produced the schema that got us here.
-    pub(super) fn schema_checked_cast(
-        &mut self,
-        call: TypedExprKind,
-        result_ty: &Type,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
-        Ok({
-            match self.checked_cast_around(call, result_ty, span)? {
-                Ok(checked) => checked,
-                Err(reason) => {
-                    return Err(super::inference_failure(&format!(
-                        "schema-checked result cast rejected a previously validated schema: {reason}"
-                    ))
-                    .with_span(span));
-                }
-            }
-        })
-    }
-
-    /// Replace the trailing `schema` argument — which the declaration's `null`
-    /// default just filled — with the compile-time schema string, the way
-    /// `VirtualCall` carries its target and `tool` as constants.
-    ///
-    /// The slot is found by name rather than by index so the declaration can
-    /// grow a parameter without silently overwriting the wrong argument; a
-    /// program that passed a schema by hand has it replaced, which is why the
-    /// parameter is documented as not being surface a program writes.
-    pub(super) fn substitute_schema_argument(
-        &mut self,
-        params: &[crate::Param],
-        typed_args: &mut [ExprId],
-        schema: &str,
-        span: Span,
-    ) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let Some(slot) = params.iter().position(|p| p.name == "schema") else {
+        // The cast gate: the descriptor's predicate, which the host runs, is
+        // the structural test the cast gate admits.
+        let shape = self.reduce_cast_target(target_ty);
+        let Some(reason) = unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
+        else {
             return Ok(());
         };
-        let Some(arg) = typed_args.get_mut(slot) else {
-            return Ok(());
-        };
-        *arg = self
-            .typed_ast
-            .try_push_expr(TypedExpr {
-                kind: TypedExprKind::String(schema.to_string()),
-                span,
-                ty: Type::String,
-            })
-            .map_err(crate::typechecker::arena_failure)?;
-        Ok(())
+        self.cast_gate_rejection(checked, target_ty, type_args_written, reason, span);
+        Err(())
     }
 
-    /// The inlined JSON Schema for `target_ty`, as the compact string the host
-    /// function takes.
+    /// The diagnostic for a checked call whose `T` the runtime cannot test,
+    /// worded as the cast gate words it.
+    fn cast_gate_rejection(
+        &mut self,
+        checked: &crate::stdlib::checked_call::CheckedCall,
+        target_ty: &Type,
+        type_args_written: bool,
+        reason: &'static str,
+        span: Span,
+    ) {
+        let crate::stdlib::checked_call::CheckedCall {
+            callee,
+            example,
+            checks,
+            alternative,
+            ..
+        } = checked;
+        let help = cast_gate_help(
+            reason,
+            format!(
+                "`{callee}` checks {checks} against its type argument, so that argument \
+                 must be one the runtime can test: an object, array, tuple, union, or \
+                 primitive shape. Call it at a concrete type instead of `{target_ty}` — \
+                 `{example}` — or {alternative}."
+            ),
+        );
+        self.checked_call_error(
+            type_args_written,
+            target_ty,
+            span,
+            format!("`{callee}<{target_ty}>` cannot be verified at runtime: {reason}"),
+            help,
+        );
+    }
+
+    /// Report a checked call's gate rejection. When no type argument is
+    /// written, the expected type supplied `T`, so the diagnostic names a
+    /// type the program never wrote as one: say where it came from.
+    fn checked_call_error(
+        &mut self,
+        type_args_written: bool,
+        target_ty: &Type,
+        span: Span,
+        message: String,
+        mut help: Vec<String>,
+    ) {
+        if !type_args_written {
+            help.push(format!(
+                "no type argument is written, so the expected type supplies \
+                 `{target_ty}`: change the type the result is assigned, returned or \
+                 passed to, or write the type argument."
+            ));
+        }
+        self.error_with_help(span, message, help);
+    }
+
+    /// The inlined JSON Schema for `target_ty`, for the gate to judge: whether
+    /// it exists (a rejection names the field that has none) and how large it
+    /// is. Codegen emits the schema a descriptor carries
+    /// (`codegen::descriptor_schema`).
     ///
     /// Reduces interfaces to their structural shapes first, since a schema
     /// describes fields, not names; the cast gate that also runs rejects what
@@ -4227,9 +4193,9 @@ impl Inferer<'_> {
     /// giving the same structural test `x as T` gets.
     ///
     /// This is the soundness-critical construction behind every "the host
-    /// handed us data, prove it matches" call — an MCP tool with a declared
-    /// return type and `session.get<T>` — so both go through here rather than
-    /// building the `Cast` themselves. `Err` carries the reason `target_ty`
+    /// handed us data, prove it matches" call that the guest verifies — an MCP
+    /// tool with a declared return type — so it goes
+    /// through here rather than building the `Cast` itself. `Err` carries the reason `target_ty`
     /// cannot be verified; the caller words its own diagnostic around it.
     fn checked_cast_around(
         &mut self,
@@ -5187,76 +5153,6 @@ impl Inferer<'_> {
         ))
     }
 
-    fn infer_response_json_call(
-        &mut self,
-        typed_receiver: ExprId,
-        recv_ty: &Type,
-        type_args: Option<Vec<crate::TypeAnnotation>>,
-        args: Vec<ExprId>,
-        _expected: Option<&Type>,
-        span: Span,
-    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        // `r.json()` takes no value arguments — the body is the implicit source.
-        if !args.is_empty() {
-            self.error_with_help(
-                span,
-                format!("`r.json()` takes no value arguments, got {}", args.len()),
-                vec![
-                    "the response body is parsed automatically; validate the \
-                     result with `as`, for example `r.json() as User`"
-                        .to_string(),
-                ],
-            );
-            for &arg in &args {
-                let _ = self.infer_expr(arg, None)?;
-            }
-        }
-        if let Some(targs) = &type_args {
-            self.error_with_help(
-                span,
-                format!("`r.json` does not take type arguments, got {}", targs.len()),
-                vec!["parse first, then validate with `as`: `r.json() as User`".to_string()],
-            );
-        }
-
-        // Synthesize the `r.body` argument — a `string` property on `Response`.
-        let Some((body_prop, _bindings, iface_mangled, _dispatch)) =
-            self.find_property(recv_ty, "body")
-        else {
-            // `Response` always declares `body`; unreachable in practice.
-            return Ok((
-                TypedExprKind::IntrinsicCall {
-                    kind: Intrinsic::JsonParse,
-                    args: Vec::new(),
-                },
-                Type::Error,
-            ));
-        };
-        let body = self
-            .typed_ast
-            .try_push_expr(TypedExpr {
-                kind: TypedExprKind::InterfacePropertyAccess {
-                    receiver: typed_receiver,
-                    iface: iface_mangled,
-                    name: Ident {
-                        name: "body".to_string(),
-                        span,
-                    },
-                },
-                span,
-                ty: body_prop.ty,
-            })
-            .map_err(crate::typechecker::arena_failure)?;
-
-        Ok((
-            TypedExprKind::IntrinsicCall {
-                kind: Intrinsic::JsonParse,
-                args: vec![body],
-            },
-            Type::Unknown,
-        ))
-    }
-
     /// Walk a `JSON.parse` target type and reject forbidden shapes.
     /// Infer an intrinsic call. The intrinsic's signature is fixed
     /// (see [`Intrinsic::params`] / [`Intrinsic::ret`]); we typecheck
@@ -5512,7 +5408,7 @@ impl Inferer<'_> {
     /// Diagnostics point at the interpolated expression. The conversion node
     /// spans the whole `${…}`: it is not the source expression, and sharing that
     /// expression's span would make the conversion's `string` read as its type.
-    fn wrap_interpolation_in_to_string(
+    pub(super) fn wrap_interpolation_in_to_string(
         &mut self,
         expr_id: ExprId,
         ty: &Type,
@@ -6107,8 +6003,7 @@ impl Inferer<'_> {
         };
         let expected_index = expected.and_then(|ty| self.resolver().index_signature(ty));
         if let Some(want) = expected_fields.as_ref()
-            && expected_index.is_none()
-            && !want.is_empty()
+            && (!want.is_empty() || expected_index.is_some())
             && checks_unknown_fields
         {
             // Against a type whose fields are all optional, an unknown field
@@ -6118,6 +6013,13 @@ impl Inferer<'_> {
             for member in &members {
                 if let crate::ObjectLiteralMember::Field(field) = member
                     && !want.contains_key(&field.name.name)
+                    && !expected_index.as_ref().is_some_and(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &field.name.name,
+                            &self.type_limits,
+                        )
+                    })
                 {
                     self.report_unknown_field(field, want);
                     if is_weak_target {
@@ -6148,6 +6050,7 @@ impl Inferer<'_> {
         let mut object_members: Vec<crate::TypedObjectMember> = Vec::new();
         let mut spread_count = 0;
         let mut spread_index_values = Vec::new();
+        let mut spread_index_keys = Vec::new();
         let mut merged: std::collections::BTreeMap<
             String,
             (crate::ObjectField, crate::TypedObjectFieldSource),
@@ -6361,11 +6264,26 @@ impl Inferer<'_> {
                                 &overwritten,
                             )?
                         };
-                    if let Some(value) = self.spread_source_index(typed_source, &source_ty)? {
-                        for (field, _) in merged.values_mut() {
-                            field.ty = Type::union(vec![field.ty.clone(), value.clone()]);
+                    if let Some(index) = self.spread_source_signature(typed_source, &source_ty)? {
+                        self.check_index_composition(
+                            &spread_index_keys,
+                            &spread_index_values,
+                            &index.key,
+                            &index.value,
+                            spread_span,
+                        );
+                        for (name, (field, _)) in &mut merged {
+                            if crate::property_keys::matches_name(
+                                &index.key,
+                                name,
+                                &self.type_limits,
+                            ) {
+                                field.ty =
+                                    Type::union(vec![field.ty.clone(), (*index.value).clone()]);
+                            }
                         }
-                        spread_index_values.push(value);
+                        spread_index_values.push(*index.value);
+                        spread_index_keys.push(*index.key);
                     }
                     let Some(SpreadFields { fields, by_name }) =
                         self.spread_source_fields(typed_source, &source_ty, spread_span)?
@@ -6443,7 +6361,8 @@ impl Inferer<'_> {
                     self.error_with_help(
                         span,
                         format!(
-                            "object literal is missing required {noun} {list} of type `{name}`"
+                            "object literal is missing required {noun} {list} of type `{}`",
+                            display_type_name(name)
                         ),
                         vec![self.format_definition(&ty)],
                     );
@@ -6451,7 +6370,10 @@ impl Inferer<'_> {
                     let of_type = self
                         .literal_hint_interfaces
                         .get(&literal)
-                        .map(|name| format!(" of type `{name}`"))
+                        .map(|name| {
+                            let name = display_type_name(name);
+                            format!(" of type `{name}`")
+                        })
                         .unwrap_or_default();
                     self.error(
                         span,
@@ -6468,6 +6390,7 @@ impl Inferer<'_> {
                 self.own_object_literal_type(
                     &merged,
                     &spread_index_values,
+                    &spread_index_keys,
                     expected,
                     expected_fields.as_ref(),
                     interface_target.is_some(),
@@ -6595,8 +6518,18 @@ impl Inferer<'_> {
                 index: if spread_index_values.is_empty() {
                     None
                 } else {
-                    spread_index_values.extend(resolved.values().map(|f| f.ty.clone()));
+                    let key = Type::union(spread_index_keys);
+                    spread_index_values.extend(
+                        resolved
+                            .iter()
+                            .filter(|(name, _)| {
+                                crate::property_keys::matches_name(&key, name, &self.type_limits)
+                            })
+                            .map(|(_, field)| field.ty.clone()),
+                    );
                     Some(crate::IndexSignature {
+                        string_keyof_includes_number: false,
+                        key: Box::new(key),
                         value: Box::new(Type::union(spread_index_values)),
                         readonly: false,
                     })
@@ -6674,6 +6607,7 @@ impl Inferer<'_> {
             (crate::ObjectField, crate::TypedObjectFieldSource),
         >,
         spread_index_values: &[Type],
+        spread_index_keys: &[Type],
         expected: Option<&Type>,
         expected_fields: Option<&std::collections::BTreeMap<String, crate::ObjectField>>,
         against_interface: bool,
@@ -6689,12 +6623,22 @@ impl Inferer<'_> {
         }
         // A spread record's index signature holds the named fields too, as the
         // literal's type below has it.
+        let key = Type::union(spread_index_keys.to_vec());
         let index = (!spread_index_values.is_empty()).then(|| crate::IndexSignature {
+            string_keyof_includes_number: false,
+            key: Box::new(key.clone()),
             value: Box::new(Type::union(
                 spread_index_values
                     .iter()
                     .cloned()
-                    .chain(merged.values().map(|(field, _)| field.ty.clone()))
+                    .chain(
+                        merged
+                            .iter()
+                            .filter(|(name, _)| {
+                                crate::property_keys::matches_name(&key, name, &self.type_limits)
+                            })
+                            .map(|(_, (field, _))| field.ty.clone()),
+                    )
                     .collect(),
             )),
             readonly: false,
@@ -6722,14 +6666,11 @@ impl Inferer<'_> {
         if !self.has_index_signature_member(members) {
             return None;
         }
-        let shapes: Vec<(ObjectFields, Option<Type>)> = members
+        let shapes: Vec<(ObjectFields, Option<crate::IndexSignature>)> = members
             .iter()
             .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined))
             .map(|member| {
-                let index = self
-                    .resolver()
-                    .index_signature(member)
-                    .map(|index| *index.value);
+                let index = self.resolver().index_signature(member);
                 (self.member_shape(member).unwrap_or_default(), index)
             })
             .collect();
@@ -6746,7 +6687,18 @@ impl Inferer<'_> {
                         fields
                             .get(name)
                             .map(crate::ObjectField::read_ty)
-                            .or_else(|| index.clone())
+                            .or_else(|| {
+                                index
+                                    .as_ref()
+                                    .filter(|index| {
+                                        crate::property_keys::matches_name(
+                                            &index.key,
+                                            name,
+                                            &self.type_limits,
+                                        )
+                                    })
+                                    .map(|index| (*index.value).clone())
+                            })
                     })
                     .collect();
                 (!types.is_empty()).then(|| {
@@ -6881,10 +6833,7 @@ impl Inferer<'_> {
         }
         let mut objects: Vec<SpreadAlternative> = Vec::new();
         for alternative in alternatives {
-            let index_value = self
-                .resolver()
-                .index_signature(&alternative)
-                .map(|index| *index.value);
+            let index_value = self.resolver().index_signature(&alternative);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
                 // Like `{}`, `object` names no field to copy.
@@ -6910,7 +6859,8 @@ impl Inferer<'_> {
                     self.error(
                         span,
                         format!(
-                            "cannot spread interface `{name}` into an object literal — only structural object types are accepted",
+                            "cannot spread interface `{}` into an object literal — only structural object types are accepted",
+                            display_type_name(&name)
                         ),
                     );
                     return Ok(None);
@@ -6939,7 +6889,7 @@ impl Inferer<'_> {
                 by_name: false,
             }));
         }
-        let fields = merge_spread_alternatives(&objects);
+        let fields = merge_spread_alternatives(&objects, &self.type_limits);
         self.typed_ast.spread_mask_fields.insert(
             typed_source,
             fields
@@ -6968,7 +6918,7 @@ impl Inferer<'_> {
         if !self.spreads_as_rest_source(typed_source, source_ty)? {
             return Ok(None);
         }
-        let index_value = self.spread_source_index(typed_source, source_ty)?;
+        let index_value = self.spread_source_signature(typed_source, source_ty)?;
         let Some(SpreadFields { mut fields, .. }) =
             self.spread_source_fields(typed_source, source_ty, span)?
         else {
@@ -7009,13 +6959,9 @@ impl Inferer<'_> {
                 ty: field.ty.clone(),
             })
             .collect();
-        let index = index_value.map(|value| crate::IndexSignature {
-            value: Box::new(Type::union(
-                std::iter::once(value)
-                    .chain(fields.values().map(|field| field.ty.clone()))
-                    .collect(),
-            )),
+        let index = index_value.map(|index| crate::IndexSignature {
             readonly: false,
+            ..index
         });
         let ty = Type::Object { index, fields };
         let rest = self.push_synthetic_expr(
@@ -7049,18 +6995,42 @@ impl Inferer<'_> {
             }))
     }
 
-    pub(super) fn spread_source_index(
-        &self,
+    pub(super) fn spread_source_signature(
+        &mut self,
         source: ExprId,
         ty: &Type,
-    ) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
+    ) -> Result<Option<crate::IndexSignature>, crate::compiler_error::CompilerFailure> {
         let mut alternatives = Vec::new();
         self.collect_spread_alternatives(source, ty, &mut alternatives)?;
-        let values: Vec<Type> = alternatives
+        let indexes: Vec<_> = alternatives
             .iter()
-            .filter_map(|ty| self.resolver().index_signature(ty).map(|i| *i.value))
+            .filter_map(|ty| self.resolver().index_signature(ty))
             .collect();
-        Ok((!values.is_empty()).then(|| Type::union(values)))
+        if indexes.is_empty() {
+            return Ok(None);
+        }
+        let keys: Vec<_> = indexes.iter().map(|index| (*index.key).clone()).collect();
+        let values: Vec<_> = indexes.iter().map(|index| (*index.value).clone()).collect();
+        let span = self
+            .typed_ast
+            .try_expr(source)
+            .map_err(super::arena_failure)?
+            .span;
+        for index in &indexes {
+            self.check_index_composition(&keys, &values, &index.key, &index.value, span);
+        }
+        Ok(Some(crate::IndexSignature {
+            string_keyof_includes_number: indexes
+                .iter()
+                .any(|index| index.string_keyof_includes_number),
+            key: Box::new(Type::union(
+                indexes.iter().map(|index| (*index.key).clone()).collect(),
+            )),
+            value: Box::new(Type::union(
+                indexes.into_iter().map(|index| *index.value).collect(),
+            )),
+            readonly: false,
+        }))
     }
 
     fn collect_spread_alternatives(
@@ -7174,8 +7144,7 @@ impl Inferer<'_> {
 
         // Walk elements in source order. The first resolved element
         // (Value or Spread source) seeds the running element type unless
-        // an expected concrete hint pins it. For Spread,
-        // the source must peel to `Type::Array(T)` and `T`
+        // an expected concrete hint pins it. A spread's iterable element type
         // participates in unification.
         //
         // The hint informs assignability, but a concrete inferred
@@ -7321,8 +7290,17 @@ impl Inferer<'_> {
                     // instead (`[undefined, ...xs]`). An annotation, or a source
                     // like `[]` that needs one, still takes it.
                     let source_needs_context = cannot_be_typed_alone(self.ast, value)?;
+                    let source_takes_array_context = source_needs_context
+                        || matches!(
+                            self.ast
+                                .try_expr(peel_parens(self.ast, value)?)
+                                .map_err(super::arena_failure)?
+                                .kind,
+                            ExprKind::ArrayLiteral { .. }
+                        );
                     let source_hint = element_ty
                         .as_ref()
+                        .filter(|_| source_takes_array_context)
                         .filter(|running| {
                             hint_pins_element_ty
                                 || source_needs_context
@@ -7331,15 +7309,21 @@ impl Inferer<'_> {
                         .map(|t| Type::Readonly(Box::new(Type::Array(Box::new(t.clone())))));
                     let errors_before = self.error_count();
                     let (typed_source, source_ty) = self.infer_expr(value, source_hint.as_ref())?;
+                    let typed_source =
+                        self.materialize_spread_source(typed_source, &source_ty, spread_span)?;
                     let already_errored = self.error_count() > errors_before;
                     if let Some(hint) = &source_hint {
                         self.drop_readonly_from_hint_mismatch(value, hint, &source_ty)?;
                     }
-                    // The spread source must be an array, or a tuple or a union of
-                    // arrays and tuples, which are arrays at runtime. Reject other
-                    // shapes (primitive, object, unknown, other unions, function)
-                    // with a typed diagnostic. Aliases peel first.
-                    let peeled_source = source_ty.peel().clone();
+                    // Non-array iterables are collected before codegen copies the
+                    // chunk. Every downstream literal-type pass sees an array.
+                    let peeled_source = self
+                        .typed_ast
+                        .try_expr(typed_source)
+                        .map_err(super::arena_failure)?
+                        .ty
+                        .peel()
+                        .clone();
                     if hint_pins_element_ty {
                         own_element_types.extend(spread_element_type(&peeled_source));
                     }
@@ -7350,7 +7334,9 @@ impl Inferer<'_> {
                         Some(Type::Never) => saw_never = true,
                         None => self.error(
                             spread_span,
-                            format!("expected an array to spread, got `{peeled_source}`"),
+                            format!(
+                                "expected an array to spread or an iterable, got `{peeled_source}`"
+                            ),
                         ),
                         Some(elem_t) => match &element_ty {
                             // Widens for the same reason as the value seed above.
@@ -7376,6 +7362,29 @@ impl Inferer<'_> {
                                             matched_elements(running_is_first),
                                         ),
                                         already_errored,
+                                    );
+                                } else if !already_errored
+                                    && spread_element_type(source_ty.peel()).is_some()
+                                {
+                                    let expected_source = Type::Readonly(Box::new(Type::Array(
+                                        Box::new(running.clone()),
+                                    )));
+                                    let help = self.render_help_list(
+                                        super::type_diff::type_mismatch_help(
+                                            &expected_source,
+                                            &source_ty,
+                                        ),
+                                    );
+                                    self.error_with_help(
+                                        self.ast
+                                            .try_expr(value)
+                                            .map_err(super::arena_failure)?
+                                            .span,
+                                        super::diagnostics::mismatch_message(
+                                            expected_source.peel(),
+                                            &source_ty,
+                                        ),
+                                        help,
                                     );
                                 } else if !already_errored {
                                     self.error(
@@ -7438,6 +7447,72 @@ impl Inferer<'_> {
             },
             Type::Array(Box::new(element_ty)),
         ))
+    }
+
+    /// Keep arrays on their direct-copy path; collect other iterables through
+    /// the same bounded, fuel-charged host operation as `Array.from`. The fixed
+    /// prelude reference cannot be redirected by a local binding named `Array`.
+    fn materialize_spread_source(
+        &mut self,
+        source: ExprId,
+        ty: &Type,
+        span: Span,
+    ) -> Result<ExprId, CompilerFailure> {
+        if spread_element_type(ty.peel()).is_some() {
+            return Ok(source);
+        }
+        let Some(element) = self.spread_iterable_element(ty) else {
+            return Ok(source);
+        };
+        let receiver = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::GlobalRef {
+                    mangled: crate::mangle::prelude("Array"),
+                    name: Ident {
+                        name: "Array".into(),
+                        span,
+                    },
+                },
+                ty: Type::prelude_interface("ArrayConstructor", Vec::new()),
+                span,
+            })
+            .map_err(super::arena_failure)?;
+        let mapper = self
+            .typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::Undefined,
+                ty: Type::Undefined,
+                span,
+            })
+            .map_err(super::arena_failure)?;
+        self.typed_ast
+            .try_push_expr(TypedExpr {
+                kind: TypedExprKind::MethodCall {
+                    receiver,
+                    iface: crate::mangle::prelude("ArrayConstructor"),
+                    name: Ident {
+                        name: "from".into(),
+                        span,
+                    },
+                    args: vec![source, mapper],
+                    type_predicate: None,
+                },
+                ty: Type::Array(Box::new(element)),
+                span,
+            })
+            .map_err(super::arena_failure)
+    }
+
+    fn spread_iterable_element(&mut self, ty: &Type) -> Option<Type> {
+        if let Type::Union(members) = ty.peel() {
+            let elements = members
+                .iter()
+                .map(|member| self.spread_iterable_element(member))
+                .collect::<Option<Vec<_>>>()?;
+            return Some(Type::union(elements));
+        }
+        self.classify_for_of_source(ty).map(|(element, _)| element)
     }
 
     /// An array literal expected as a union of array types, as tsc types it: each
@@ -7908,6 +7983,17 @@ impl Inferer<'_> {
                 }
                 crate::ArrayLiteralElement::Spread { value, span } => {
                     let (id, ty) = self.infer_expr(value, None)?;
+                    let id = if allows_array {
+                        self.materialize_spread_source(id, &ty, span)?
+                    } else {
+                        id
+                    };
+                    let ty = self
+                        .typed_ast
+                        .try_expr(id)
+                        .map_err(super::arena_failure)?
+                        .ty
+                        .clone();
                     match ty.peel() {
                         Type::Tuple(types) => {
                             slots = append_tuple_literal_types(slots, types, &self.type_limits)
@@ -8422,7 +8508,11 @@ impl Inferer<'_> {
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
                         self.error_with_help(
                             name.span,
-                            format!("no variant `{}` on enum `{}`", name.name, recv_name,),
+                            format!(
+                                "no variant `{}` on enum `{}`",
+                                name.name,
+                                display_type_name(&recv_name),
+                            ),
                             help,
                         );
                         return Ok((
@@ -8458,7 +8548,11 @@ impl Inferer<'_> {
                         let help = enum_variant_help(&recv_name, variants.iter().map(|(v, _)| v));
                         self.error_with_help(
                             name.span,
-                            format!("no variant `{}` on enum `{}`", name.name, recv_name,),
+                            format!(
+                                "no variant `{}` on enum `{}`",
+                                name.name,
+                                display_type_name(&recv_name),
+                            ),
                             help,
                         );
                         return Ok((
@@ -8504,7 +8598,11 @@ impl Inferer<'_> {
         name: Ident,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) = if name.name == "length" {
+            self.infer_array_operation_receiver(receiver)?
+        } else {
+            self.infer_expr(receiver, None)?
+        };
         // Plan 75.17: in-region rewrite for field-path
         // narrowings. If the candidate path `<receiver>.<name>` has an
         // active `NarrowedView`, return a `LocalNarrowRef` to the
@@ -8638,6 +8736,7 @@ impl Inferer<'_> {
         }
         if matches!(receiver_ty.peel(), Type::InterfaceRef { .. })
             && let Some(index) = self.resolver().index_signature(&receiver_ty)
+            && crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
         {
             return Ok((
                 TypedExprKind::FieldAccess {
@@ -8667,7 +8766,9 @@ impl Inferer<'_> {
             Type::Object { fields, index } => {
                 if let Some(field) = fields.get(&name.name) {
                     field.read_ty()
-                } else if let Some(index) = index {
+                } else if let Some(index) = index.as_ref().filter(|index| {
+                    crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
+                }) {
                     index.read_ty()
                 } else {
                     // An object literal still resolves the prelude `Object`
@@ -8777,7 +8878,7 @@ impl Inferer<'_> {
     }
 
     /// `receiver.name(args)` for the `method` `find_method` found on `recv_ty`.
-    fn infer_found_method_call(
+    pub(super) fn infer_found_method_call(
         &mut self,
         typed_receiver: ExprId,
         recv_ty: &Type,
@@ -9029,7 +9130,7 @@ impl Inferer<'_> {
 
     /// Runs `infer` with `held` (source argument to its temporary) in
     /// [`Self::held_arguments`], removing them again whether or not it fails.
-    fn with_held_arguments<T>(
+    pub(super) fn with_held_arguments<T>(
         &mut self,
         held: BTreeMap<ExprId, ExprId>,
         infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
@@ -9135,43 +9236,8 @@ impl Inferer<'_> {
         let Some(index) = array_index_key(&name.name) else {
             return Ok(None);
         };
-        let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
-        let elem_ty = match receiver_ty.peel() {
-            _ if receiver_ty.is_string_shaped() => Type::String,
-            Type::Array(elem) => (**elem).clone(),
-            Type::Uint8Array => Type::Number,
-            // A tuple has no element at a key that names no slot, as tsc
-            // reports.
-            Type::Tuple(tuple) => match slot.and_then(|slot| tuple.elements.get(slot)) {
-                Some(elem) => elem.clone(),
-                None => return Ok(None),
-            },
-            // A union of arrays and tuples reads each member's element, as
-            // `infer_index_access` does with a numeric literal. With an
-            // array among them, a key that names no slot reads the number
-            // index every member has.
-            Type::Union(members) if receiver_ty.is_array_like_union() => {
-                if slot.is_none()
-                    && !members
-                        .iter()
-                        .any(|member| matches!(member.peel(), Type::Array(_)))
-                {
-                    return Ok(None);
-                }
-                let elements: Option<Vec<Type>> = members
-                    .iter()
-                    .map(|member| match member.peel() {
-                        Type::Array(elem) => Some((**elem).clone()),
-                        Type::Tuple(tuple) => tuple_key_element(tuple, slot),
-                        _ => None,
-                    })
-                    .collect();
-                match elements {
-                    Some(elements) => Type::union(elements),
-                    None => return Ok(None),
-                }
-            }
-            _ => return Ok(None),
+        let Some(elem_ty) = numeric_key_element(receiver_ty, index) else {
+            return Ok(None);
         };
         let typed_index =
             self.push_synthetic_expr(TypedExprKind::Number(index), Type::Number, name.span)?;
@@ -9180,6 +9246,20 @@ impl Inferer<'_> {
             index: typed_index,
         };
         self.narrowed_index_read(kind, elem_ty).map(Some)
+    }
+
+    pub(super) fn infer_numeric_index(
+        &mut self,
+        index: ExprId,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        if let Some(key) = string_key_name(self.ast, index)?
+            && let Some(number) = array_index_key(&key.name)
+        {
+            let index =
+                self.push_synthetic_expr(TypedExprKind::Number(number), Type::Number, key.span)?;
+            return Ok((index, Type::Number));
+        }
+        self.infer_expr(index, Some(&Type::Number))
     }
 
     fn infer_index_access(
@@ -9215,6 +9295,7 @@ impl Inferer<'_> {
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
         let elem_ty = match receiver_ty.peel() {
+            ty if ty.is_regexp_match_array() => Type::regexp_element(),
             Type::Array(elem) => (**elem).clone(),
             // tuple indexing must be a non-negative integer
             // literal that's in range. Out-of-range or non-literal
@@ -9376,7 +9457,7 @@ impl Inferer<'_> {
                 Type::Error
             }
         };
-        let (typed_index, _) = self.infer_expr(index, Some(&Type::Number))?;
+        let (typed_index, _) = self.infer_numeric_index(index)?;
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -10752,6 +10833,19 @@ impl Inferer<'_> {
         Ok(declared_holds_more.then_some(path))
     }
 
+    fn report_invalid_update(&mut self, span: Span, operator: &str, ty: &Type) {
+        let help = if ty.spells_null() || ty.spells_undefined() {
+            vec!["the value may be null or undefined: for an optional number use `value = value ?? 0`, or check the value before updating".to_string()]
+        } else {
+            Vec::new()
+        };
+        self.error_with_help(
+            span,
+            format!("postfix `{operator}` expects `number` or `bigint`, found `{ty}`"),
+            help,
+        );
+    }
+
     /// Whether `++`/`--` may write its result back to a slot of `target`. A
     /// `never` slot takes it, as in tsc: it holds no value unless an alias
     /// filled a `never[]`, and then the result is the number it would be.
@@ -10780,12 +10874,7 @@ impl Inferer<'_> {
                 .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
             self.record_postfix_operand(&target, &operand_ty);
             if !takes_postfix(&operand_ty) {
-                self.error(
-                    target.span,
-                    format!(
-                        "postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",
-                    ),
-                );
+                self.report_invalid_update(target.span, op_symbol, &operand_ty);
             }
             // the increment writes back a value of the same
             // numeric kind as the operand — `BigInt` for bigint
@@ -10967,6 +11056,13 @@ impl Inferer<'_> {
             if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
                     .index_signature(&receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
                         optional: true,
@@ -11020,10 +11116,7 @@ impl Inferer<'_> {
             Type::Error
         };
         if !takes_postfix(&target_ty) {
-            self.error(
-                name.span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{target_ty}`",),
-            );
+            self.report_invalid_update(name.span, op_symbol, &target_ty);
         }
         let result_ty = postfix_result_ty(&target_ty);
         if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
@@ -11084,18 +11177,13 @@ impl Inferer<'_> {
             .map_or_else(|| ty.clone(), |view| view.narrowed_ty.clone());
         self.record_postfix_operand(&name, &operand_ty);
         if !takes_postfix(&operand_ty) {
-            self.error(
-                    name.span,
-                    format!(
-                        "postfix `{op_symbol}` expects `number` or `bigint`, found `{operand_ty}`",
-                    ),
-                );
+            self.report_invalid_update(name.span, op_symbol, &operand_ty);
         }
         let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
             self.error(span, super::diagnostics::mismatch_message(&ty, &result_ty));
         }
-        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone())?;
+        self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone(), None)?;
         Ok((
             TypedExprKind::PostfixUnary {
                 op,
@@ -11166,7 +11254,7 @@ impl Inferer<'_> {
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
-            self.infer_expr(index, Some(&Type::Number))?
+            self.infer_numeric_index(index)?
         };
         let elem_ty = if object {
             self.object_index_write_type(
@@ -11188,10 +11276,7 @@ impl Inferer<'_> {
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
         if !takes_postfix(&read_ty) {
-            self.error(
-                span,
-                format!("postfix `{op_symbol}` expects `number` or `bigint`, found `{read_ty}`",),
-            );
+            self.report_invalid_update(span, op_symbol, &read_ty);
         }
         let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
@@ -11588,13 +11673,21 @@ impl Inferer<'_> {
     /// closure-typed receiver; `Call` directly after a `Field` resolving to an
     /// interface method (lowered to `MethodCall`); `NonNull` anywhere.
     /// `asserts_tail`: a `!` follows the chain's last step.
-    fn infer_chain_steps(
+    pub(super) fn infer_chain_steps(
         &mut self,
         base: ExprId,
         parts: Vec<ChainPart>,
         asserts_tail: bool,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let (typed_base, base_ty) = self.infer_expr(base, None)?;
+        if let Some(inferred) = self.infer_evolving_chain(base, &parts, asserts_tail)? {
+            return Ok(inferred);
+        }
+        let (typed_base, base_ty) = if matches!(parts.first(), Some(ChainPart::Field { name, .. }) if name.name == "length")
+        {
+            self.infer_array_operation_receiver(base)?
+        } else {
+            self.infer_expr(base, None)?
+        };
         // The namespace rejection subsumes the redundancy warning — a namespace
         // receiver is non-nullable too, and two diagnostics for one `?` is noise.
         if !self.reported_namespace_chain_base(base, &base_ty, &parts)? {
@@ -11762,6 +11855,25 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
+                if let Some(index) = array_index_key(&name.name)
+                    && let Some(ty) = numeric_key_element(receiver_ty, index)
+                {
+                    let idx = self.push_synthetic_expr(
+                        TypedExprKind::Number(index),
+                        Type::Number,
+                        name.span,
+                    )?;
+                    *pending_method = None;
+                    return Ok((
+                        TypedChainPart::Index {
+                            idx,
+                            optional,
+                            result_ty: ty.clone(),
+                            span,
+                        },
+                        ty,
+                    ));
+                }
                 if self.reject_unsupported_array_call(receiver_ty, &name) {
                     *pending_method = None;
                     let typed_part = TypedChainPart::Field {
@@ -11826,6 +11938,7 @@ impl Inferer<'_> {
                     );
                 }
                 let elem_ty = match receiver_ty.peel() {
+                    ty if ty.is_regexp_match_array() => Type::regexp_element(),
                     Type::Array(elem) => *elem.clone(),
                     Type::Uint8Array => Type::Number,
                     Type::Tuple(elements) => {
@@ -12467,7 +12580,9 @@ impl Inferer<'_> {
                     };
                     return ChainField::plain(ty);
                 }
-                if let Some(index) = index {
+                if let Some(index) = index.as_ref().filter(|index| {
+                    crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
+                }) {
                     return ChainField::plain(index.read_ty());
                 }
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
@@ -12550,7 +12665,17 @@ impl Inferer<'_> {
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
                     return found;
                 }
-                if let Some(index) = self.resolver().index_signature(receiver_ty) {
+                if let Some(index) = self
+                    .resolver()
+                    .index_signature(receiver_ty)
+                    .filter(|index| {
+                        crate::property_keys::matches_name(
+                            &index.key,
+                            &name.name,
+                            &self.type_limits,
+                        )
+                    })
+                {
                     return ChainField::plain(index.read_ty());
                 }
                 self.report_missing_field(span, receiver_ty, &name.name);
@@ -13019,10 +13144,55 @@ impl Inferer<'_> {
     /// Explicit arguments are rejected however they are spelled: directly,
     /// through a namespace, or behind an alias. Accepting them would narrow a
     /// value to an instantiation the test never checked.
+    /// A class test names a class, which is a value, so lowering leaves a
+    /// local interface or alias there under its source name: a class of the
+    /// name wins. With no type of the name at module level, the local type in
+    /// scope is what the name means, renamed to its key.
+    fn local_class_test_target(&self, ty: &TypeAnnotation) -> Option<TypeAnnotation> {
+        let crate::TypeAnnotationKind::Name { name, args } = &ty.kind else {
+            return None;
+        };
+        if self.lookup_named_type(&name.name).is_some() {
+            return None;
+        }
+        let key = self.local_type_in_scope(name)?;
+        // The pass passes a local type its lifted parameters, the leading ones
+        // of its declaration, by their own names.
+        let generics = match &self.lookup_named_type(key)?.kind {
+            crate::TypeKind::Interface { generics, .. }
+            | crate::TypeKind::Alias { generics, .. } => generics.clone(),
+            _ => Vec::new(),
+        };
+        let written = crate::lower_local_types::written_type_args(key, &generics).len();
+        let lifted = generics.len().saturating_sub(written);
+        let lifted_args = generics.iter().take(lifted).map(|param| TypeAnnotation {
+            kind: crate::TypeAnnotationKind::Name {
+                name: crate::Ident {
+                    name: param.clone(),
+                    span: name.span,
+                },
+                args: Vec::new(),
+            },
+            span: name.span,
+        });
+        Some(TypeAnnotation {
+            kind: crate::TypeAnnotationKind::Name {
+                name: crate::Ident {
+                    name: key.to_string(),
+                    span: name.span,
+                },
+                args: lifted_args.chain(args.iter().cloned()).collect(),
+            },
+            span: ty.span,
+        })
+    }
+
     pub(super) fn resolve_runtime_class_test(
         &mut self,
         ty: &TypeAnnotation,
     ) -> Result<Type, CompilerFailure> {
+        let local_target = self.local_class_test_target(ty);
+        let ty = local_target.as_ref().unwrap_or(ty);
         // The bare form is resolved first because `resolve_class_reference`
         // would reject its arity before this function saw it.
         if let Some((package, name, mangled, arity)) = self.bare_generic_class_target(ty) {
@@ -13304,7 +13474,9 @@ impl Inferer<'_> {
                 args,
             } => {
                 let data_shape = if seen.iter().any(|n| n == name)
-                    || (cast_target && assignable::is_host_backed_interface(interface))
+                    || (cast_target
+                        && (assignable::is_host_backed_interface(interface)
+                            || interface.is_regexp_match_array()))
                 {
                     None
                 } else {
@@ -13340,7 +13512,7 @@ impl Inferer<'_> {
                     .resolver()
                     .index_signature(ty)
                     .map(|i| {
-                        i.try_map_value(|value| {
+                        i.try_map_types(|value| {
                             self.reduce_interfaces_rec(value, cast_target, seen, child, budget)
                         })
                     })
@@ -13638,6 +13810,7 @@ fn unsupported_cast_target_reason(
 ) -> Option<&'static str> {
     let peeled = target_ty.peel();
     match peeled {
+        Type::TemplateLiteral { .. } => None,
         Type::Number
         | Type::NumberLiteral(_)
         | Type::BigInt
@@ -13669,7 +13842,9 @@ fn unsupported_cast_target_reason(
             .iter()
             .find_map(|m| unsupported_cast_target_reason(m, types, seen)),
         Type::InterfaceRef { mangled, name, .. } => {
-            if assignable::is_host_backed_interface(peeled) {
+            if peeled.is_regexp_match_array() {
+                None
+            } else if assignable::is_host_backed_interface(peeled) {
                 Some(HOST_BACKED_TARGET)
             } else if types.interface_has_methods(mangled, name) {
                 Some(
@@ -13719,6 +13894,7 @@ pub(super) fn enum_variant_help<'a>(
     enum_name: &str,
     variant_names: impl Iterator<Item = &'a String>,
 ) -> Vec<String> {
+    let enum_name = display_type_name(enum_name);
     let list: Vec<String> = variant_names
         .map(|v| format!("`{enum_name}.{v}`"))
         .collect();
@@ -13815,6 +13991,43 @@ fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Op
         elements.push(Type::Undefined);
     }
     Some(Type::union(elements))
+}
+
+fn numeric_key_element(receiver_ty: &Type, index: f64) -> Option<Type> {
+    let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
+    let elem_ty = match receiver_ty.peel() {
+        _ if receiver_ty.is_string_shaped() => Type::String,
+        _ if receiver_ty.is_regexp_match_array() => Type::regexp_element(),
+        Type::Array(elem) => (**elem).clone(),
+        Type::Uint8Array => Type::Number,
+        // A tuple has no element at a key that names no slot, as tsc
+        // reports.
+        Type::Tuple(tuple) => slot.and_then(|slot| tuple.elements.get(slot))?.clone(),
+        // A union of arrays and tuples reads each member's element, as
+        // `infer_index_access` does with a numeric literal. With an
+        // array among them, a key that names no slot reads the number
+        // index every member has.
+        Type::Union(members) if receiver_ty.is_array_like_union() => {
+            if slot.is_none()
+                && !members
+                    .iter()
+                    .any(|member| matches!(member.peel(), Type::Array(_)))
+            {
+                return None;
+            }
+            let elements: Option<Vec<Type>> = members
+                .iter()
+                .map(|member| match member.peel() {
+                    Type::Array(elem) => Some((**elem).clone()),
+                    Type::Tuple(tuple) => tuple_key_element(tuple, slot),
+                    _ => None,
+                })
+                .collect();
+            Type::union(elements?)
+        }
+        _ => return None,
+    };
+    Some(elem_ty)
 }
 
 /// The number a numeric key names, as tsc reads one: a key that is a
@@ -14092,12 +14305,12 @@ struct StringOrArrayMethods {
 /// A method call's parts after its callee: what dispatch needs once the
 /// receiver is typed.
 #[derive(Clone)]
-struct MethodCallSite<'a> {
-    name: Ident,
-    type_args: Option<Vec<TypeAnnotation>>,
-    args: Vec<ExprId>,
-    expected: Option<&'a Type>,
-    span: Span,
+pub(super) struct MethodCallSite<'a> {
+    pub(super) name: Ident,
+    pub(super) type_args: Option<Vec<TypeAnnotation>>,
+    pub(super) args: Vec<ExprId>,
+    pub(super) expected: Option<&'a Type>,
+    pub(super) span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -14869,14 +15082,17 @@ fn collect_union_members(ty: &Type, out: &mut Vec<Type>) {
 #[derive(PartialEq)]
 struct SpreadAlternative {
     fields: ObjectFields,
-    index_value: Option<Type>,
+    index_value: Option<crate::IndexSignature>,
 }
 
 /// The fields of a spread whose source is one of several object types: every
 /// field any of them has, optional where some lack it or have it optional. An
 /// alternative with an index signature can hold a field it doesn't name, so
 /// that field may also hold the index signature's value type.
-fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields {
+fn merge_spread_alternatives(
+    alternatives: &[SpreadAlternative],
+    limits: &crate::type_size::TypeLimits,
+) -> ObjectFields {
     let names: std::collections::BTreeSet<&String> = alternatives
         .iter()
         .flat_map(|alternative| alternative.fields.keys())
@@ -14893,7 +15109,15 @@ fn merge_spread_alternatives(alternatives: &[SpreadAlternative]) -> ObjectFields
             let index_values = alternatives
                 .iter()
                 .filter(|alternative| !alternative.fields.contains_key(name))
-                .filter_map(|alternative| alternative.index_value.clone());
+                .filter_map(|alternative| {
+                    alternative
+                        .index_value
+                        .as_ref()
+                        .filter(|index| {
+                            crate::property_keys::matches_name(&index.key, name, limits)
+                        })
+                        .map(|index| (*index.value).clone())
+                });
             let ty = Type::union(
                 present
                     .iter()
@@ -15036,55 +15260,76 @@ mod tests {
         run_with_packages(source, &[&session])
     }
 
-    /// Every `session.get` call in `ta`, as (has a structural `check`, the
-    /// inner call's `return_cast`).
-    fn session_get_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
+    /// Every `session.get` call in `ta`, as (is wrapped in a `Cast`, its type
+    /// arguments, its `return_cast`).
+    fn session_get_calls(ta: &TypedAst) -> Vec<(bool, Vec<Type>, Option<Type>)> {
+        let mut wrapped = std::collections::BTreeSet::new();
+        for i in 0..ta.exprs_len() {
+            if let TypedExprKind::Cast { value, .. } =
+                &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind
+            {
+                wrapped.insert(*value);
+            }
+        }
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
-            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
-                continue;
-            };
+            let id = crate::ExprId(i as u32);
+            let expr = ta.try_expr(id).unwrap();
             let TypedExprKind::GenericCall {
                 mangled,
+                type_args,
                 return_cast,
                 ..
-            } = &ta.try_expr(*value).unwrap().kind
+            } = &expr.kind
             else {
                 continue;
             };
             if crate::stdlib::session::declaration::is_checked_get(mangled) {
-                out.push((check.is_some(), return_cast.clone()));
+                out.push((
+                    wrapped.contains(&id),
+                    type_args.clone(),
+                    return_cast.clone(),
+                ));
             }
         }
         out
     }
 
-    /// The soundness invariant of the checked read: a `get<T>` must lower to a
-    /// `Cast` that carries a structural check, and the call it wraps must NOT
-    /// carry a `return_cast` — that is a `ref.cast`, a representation-only
-    /// narrow that verifies nothing and traps uncatchably on a stored `null`.
+    /// The soundness invariant of the checked read: a `get<T>` is a plain
+    /// generic call whose type argument is `T` — its descriptor's predicate is
+    /// what the host tests the stored value against — with no `Cast` around
+    /// it, since the host throws before a mismatch reaches the guest, and its
+    /// `return_cast` is the `T | undefined` slot the host returns into.
     #[test]
-    fn typed_session_get_is_a_checked_cast_and_never_a_return_cast() {
+    fn typed_session_get_passes_t_and_is_not_wrapped_in_a_cast() {
         let src = "import session from \"submilli:session\"; \
                    interface P { step: number; } \
                    function main(): void { const p = session.get<P>(\"k\"); }";
         let (ta, diags) = run_with_session(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = session_get_shapes(&ta);
-        assert_eq!(shapes.len(), 1, "expected one wrapped get, got {shapes:?}");
-        assert!(shapes[0].0, "get<P> lost its structural check: {shapes:?}");
-        assert_eq!(
-            shapes[0].1, None,
-            "get<P> kept an unsound return_cast: {shapes:?}",
+        let shapes = session_get_calls(&ta);
+        assert_eq!(shapes.len(), 1, "expected one get, got {shapes:?}");
+        let (wrapped, type_args, return_cast) = &shapes[0];
+        assert!(
+            !wrapped,
+            "get<P> is verified by the host, not by a cast around it"
+        );
+        assert!(
+            matches!(type_args.as_slice(), [Type::InterfaceRef { name, .. }] if name == "P"),
+            "get<P> passes `P` as its one type argument: {type_args:?}",
+        );
+        assert!(
+            matches!(return_cast, Some(Type::Union(_))),
+            "get<P> returns into its `P | undefined` slot: {return_cast:?}",
         );
     }
 
-    /// No raw `GenericCall` on `session.get` may survive with a `return_cast`,
-    /// whichever import form produced it.
+    /// The same invariant across every import form: the gate matches the
+    /// package-export mangled name, so an alias, a named import, and a
+    /// namespace import all land on the checked path.
     #[test]
-    fn no_import_form_of_session_get_keeps_a_return_cast() {
+    fn every_import_form_of_session_get_is_a_checked_read() {
         let src = "import session from \"submilli:session\"; \
                    import kv from \"submilli:session\"; \
                    import { get } from \"submilli:session\"; \
@@ -15095,26 +15340,11 @@ mod tests {
                      const c = get<P>(\"k\"); }";
         let (ta, diags) = run_with_session(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert_eq!(
-            session_get_shapes(&ta),
-            vec![(true, None), (true, None), (true, None)],
-            "every import form must produce a checked, uncast get",
-        );
-
-        for i in 0..ta.exprs_len() {
-            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            if let TypedExprKind::GenericCall {
-                mangled,
-                return_cast,
-                ..
-            } = &expr.kind
-                && crate::stdlib::session::declaration::is_checked_get(mangled)
-            {
-                assert_eq!(
-                    *return_cast, None,
-                    "a session.get GenericCall kept a return_cast",
-                );
-            }
+        let shapes = session_get_calls(&ta);
+        assert_eq!(shapes.len(), 3, "{shapes:?}");
+        for (wrapped, type_args, _) in &shapes {
+            assert!(!wrapped, "{shapes:?}");
+            assert_eq!(type_args.len(), 1, "{shapes:?}");
         }
     }
 
@@ -15142,19 +15372,15 @@ mod tests {
         );
     }
 
-    /// A user generic parameter is erased, so it cannot be a check target.
+    /// A generic forwards its own `T`: the call passes the caller's descriptor,
+    /// whose predicate tests the type the caller named.
     #[test]
-    fn erased_type_parameter_is_rejected() {
+    fn a_generic_forwards_its_type_parameter_to_session_get() {
         let src = "import session from \"submilli:session\"; \
-                   function load<T>(k: string): T { return session.get<T>(k); } \
+                   function load<T>(k: string): T | undefined { return session.get<T>(k); } \
                    function main(): void { const n = load<number>(\"k\"); }";
         let (_, diags) = run_with_session(src);
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("erased at runtime")),
-            "expected the erasure rejection, got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
     }
 
     /// The narrowing hint may only fire when dropping `null` actually makes the
@@ -15378,42 +15604,13 @@ mod tests {
     }
 
     #[test]
-    fn string_plus_boolean_points_at_the_boolean_in_a_chain() {
-        let source = r#"
-            interface Entry { path: string; dir: boolean; }
-            function line(e: Entry): string { return e.path + " " + e.dir; }
-        "#;
-        let (_, diags) = run(source);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            diags[0].message,
-            "`+` not defined for `string` and `boolean`"
-        );
-        let span = diags[0].span;
-        assert_eq!(&source[span.start as usize..span.end as usize], "e.dir");
-        assert_eq!(
-            diags[0].help,
-            vec![
-                "`+` converts only a number or an `Error` onto a string; write `String(e.dir)` to concatenate"
-            ]
-        );
-    }
-
-    #[test]
-    fn string_plus_assign_boolean_names_the_fix() {
-        let (_, diags) =
-            run(r#"function f(s: string, flag: boolean): string { s += flag; return s; }"#);
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert_eq!(
-            diags[0].message,
-            "`+=` not defined for `string` and `boolean`"
-        );
-        assert_eq!(
-            diags[0].help,
-            vec![
-                "`+` converts only a number or an `Error` onto a string; write `String(flag)` to concatenate"
-            ]
-        );
+    fn string_plus_boolean_and_compound_assignment() {
+        let (_, diags) = run(r#"function f(flag: boolean): string {
+            let s = "seen: " + flag;
+            s += flag;
+            return flag + s;
+        }"#);
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     #[test]
@@ -15434,6 +15631,52 @@ mod tests {
     }
 
     #[test]
+    fn array_spread_mismatch_keeps_the_source_type_and_span() {
+        for source_type in [
+            "string[]",
+            "readonly string[]",
+            "[string, string]",
+            "string[] | boolean[]",
+        ] {
+            let source =
+                format!("function f(source: {source_type}): number[] {{ return [...source]; }}");
+            let (_, diagnostics) = run(&source);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(
+                diagnostics[0]
+                    .message
+                    .starts_with("expected `number[]`, got `"),
+                "{diagnostics:?}"
+            );
+            let span = diagnostics[0].span;
+            assert_eq!(&source[span.start as usize..span.end as usize], "source");
+        }
+    }
+
+    #[test]
+    fn array_spread_mismatch_names_the_structured_array_types() {
+        let (_, diagnostics) = run(
+            "function f(source: { value: string }[]): { value: number }[] { return [...source]; }",
+        );
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].message,
+            "expected `{ value: number }[]`, got `{ value: string }[]`"
+        );
+        assert!(diagnostics[0].help.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn iterable_spread_mismatch_reports_the_element_type() {
+        let source = "function f(source: Set<string>): number[] { return [...source]; }";
+        let (_, diagnostics) = run(source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].message, "expected `number`, got `string`");
+        let span = diagnostics[0].span;
+        assert_eq!(&source[span.start as usize..span.end as usize], "...source");
+    }
+
+    #[test]
     fn module_used_without_import_names_the_import_once() {
         let fs = crate::stdlib::fs::package_declaration();
         let (_, diags) = run_with_packages(
@@ -15444,7 +15687,7 @@ mod tests {
         assert_eq!(diags[0].message, "unresolved identifier `fs`");
         assert_eq!(
             diags[0].help,
-            vec!["`fs` is a module; import it first:\n  import * as fs from \"submilli:fs\";"]
+            vec!["`fs` is a module; import it first:\n  import fs from \"submilli:fs\";"]
         );
     }
 
@@ -15466,7 +15709,7 @@ mod tests {
             "function main(): boolean { const a = fs; const b = fs?.exists(\"/\"); return fs.exists(\"/\"); }",
             &[&fs],
         );
-        let import = "`fs` is a module; import it first:\n  import * as fs from \"submilli:fs\";";
+        let import = "`fs` is a module; import it first:\n  import fs from \"submilli:fs\";";
         assert_eq!(
             diags
                 .iter()
@@ -15562,26 +15805,135 @@ mod tests {
         );
     }
 
+    /// `r.json()` takes `T` from the expected type, so assigning it to a
+    /// declared type is a checked read rather than an `unknown` mismatch; a
+    /// call with neither reads `unknown`.
     #[test]
-    fn response_json_names_the_checked_cast() {
+    fn response_json_takes_its_type_from_the_expected_type() {
         let http = crate::stdlib::http::package_declaration();
         let src = "import * as http from \"submilli:http\"; \
                    interface User { name: string; } \
                    function main(): void { \
                      const r = http.get(\"https://example.com\"); \
                      const u: User = r.json(); \
-                     const v: User[] = http.get(\"https://example.com/a/rather/long/path/that/is/long\").json(); }";
-        let (_, diags) = run_with_packages(src, &[&http]);
-        let casts: Vec<_> = diags
-            .iter()
-            .filter_map(|d| d.help.last())
-            .map(|h| h.rsplit(": ").next().unwrap_or_default())
-            .collect();
+                     const v: User[] = http.get(\"https://example.com/a\").json(); \
+                     const w = r.json(); \
+                     const x = r.json<User>(); }";
+        let (ta, diags) = run_with_packages(src, &[&http]);
+        assert!(diags.is_empty(), "{diags:?}");
+        let mut type_args = Vec::new();
+        for i in 0..ta.exprs_len() {
+            if let TypedExprKind::GenericMethodCall {
+                name,
+                type_args: args,
+                ..
+            } = &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind
+                && name.name == "json"
+            {
+                type_args.push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
+            }
+        }
         assert_eq!(
-            casts,
-            vec!["`r.json() as User`", "`….json() as User[]`"],
+            type_args,
+            vec![vec!["User"], vec!["User[]"], vec!["unknown"], vec!["User"]],
+        );
+    }
+
+    /// `r.json<T>()` is gated like every checked call: a written `<unknown>`
+    /// and a type the runtime cannot test are errors, and a generic forwards
+    /// its own `T` or a type built from it.
+    #[test]
+    fn response_json_is_gated_like_a_checked_call() {
+        let http = crate::stdlib::http::package_declaration();
+        let (_, diags) = run_with_packages(
+            "import * as http from \"submilli:http\"; \
+             class C { n: number = 0; } \
+             function main(): void { \
+               const r = http.get(\"https://example.com\"); \
+               r.json<unknown>(); r.json<C>(); }",
+            &[&http],
+        );
+        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(
+            messages[0].starts_with("`r.json<unknown>` would not verify anything"),
+            "{messages:?}"
+        );
+        assert!(
+            messages[1].starts_with("`r.json<C>` cannot be verified at runtime"),
+            "{messages:?}"
+        );
+        let (_, diags) = run_with_packages(
+            "import * as http from \"submilli:http\"; \
+             function one<T>(r: http.Response): T { return r.json<T>(); } \
+             function all<T>(r: http.Response): T[] { return r.json<T[]>(); } \
+             function main(): void { \
+               const r = http.get(\"https://example.com\"); \
+               const n: number = one<number>(r); const s: string[] = all<string>(r); }",
+            &[&http],
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+    }
+
+    /// A `T` the expected type supplied is gated like a written one, and the
+    /// diagnostic says where it came from.
+    #[test]
+    fn an_expected_type_the_gate_rejects_says_it_supplied_the_type() {
+        let http = crate::stdlib::http::package_declaration();
+        let (_, diags) = run_with_packages(
+            "import * as http from \"submilli:http\"; \
+             class C { n: number = 0; } \
+             function main(): void { const c: C = http.get(\"https://example.com\").json(); }",
+            &[&http],
+        );
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`r.json<C>` cannot be verified at runtime"),
             "{diags:?}"
         );
+        assert!(
+            diags[0]
+                .help
+                .iter()
+                .any(|h| h
+                    .starts_with("no type argument is written, so the expected type supplies `C`")),
+            "{diags:?}"
+        );
+    }
+
+    /// A schema call's `T` from the expected type gets the same note when the
+    /// schema gate rejects it.
+    #[test]
+    fn an_expected_type_a_schema_call_rejects_says_it_supplied_the_type() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const c: llm.Completion<Uint8Array> = llm.call(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(
+            diags[0]
+                .message
+                .starts_with("`llm.call<Uint8Array>` has no JSON Schema"),
+            "{diags:?}"
+        );
+        assert!(
+            diags[0].help.iter().any(|h| h.starts_with(
+                "no type argument is written, so the expected type supplies `Uint8Array`"
+            )),
+            "{diags:?}"
+        );
+    }
+
+    /// A program's own `Response` interface keeps its own `json` method: only
+    /// the http package's `Response#json` is the checked host method.
+    #[test]
+    fn a_user_response_interface_keeps_its_own_json_method() {
+        let (_, diags) = run("interface Response { json(): number; } \
+             function main(): void { \
+               const r: Response = { json: () => 7 }; \
+               const n: number = r.json(); }");
+        assert!(diags.is_empty(), "{diags:?}");
     }
 
     /// No cast is offered for a parsed value where it could never pass, or
@@ -15972,14 +16324,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_array_that_grows_without_hint_diagnoses() {
-        let (_, d) = run("function main(): void { let xs = []; xs.push(1); }");
-        assert!(
-            d.iter().any(|x| x
-                .message
-                .contains("cannot infer the element type of `xs` from an empty array")),
-            "expected empty-array diag, got: {d:?}"
-        );
+    fn empty_array_that_grows_infers_its_element_type() {
+        let (_, d) =
+            run("function main(): void { let xs = []; xs.push(1); const value: number = xs[0]; }");
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
     }
 
     #[test]
@@ -16097,9 +16445,9 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    // `Number(boolean)` now goes through the standard
-    // call-signature dispatch — the union parameter `string | bigint`
-    // rejects `boolean` via the standard assignability diagnostic.
+    // `Number(boolean)` goes through the standard call-signature dispatch —
+    // the union parameter `number | string | bigint | undefined` rejects
+    // `boolean` via the standard assignability diagnostic.
     #[test]
     fn number_call_with_wrong_type_diagnoses() {
         let (_, diags) = run("function main(): void { let n = Number(true); }");
@@ -16975,61 +17323,99 @@ function main(): void { if (result < 10) { } }
         run_with_packages(source, &[&llm])
     }
 
-    /// Every `llm.call`/`llm.batch` in `ta` that was wrapped in a `Cast`, as
-    /// (has a structural `check`, the inner call's `return_cast`). Mirrors
-    /// `session_get_shapes`.
-    fn llm_call_shapes(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
+    /// Every `llm.call`/`llm.batch` in `ta`, as (it passes one type argument,
+    /// the call's `return_cast`). Mirrors `session_get_calls`.
+    fn llm_calls(ta: &TypedAst) -> Vec<(bool, Option<Type>)> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            let TypedExprKind::Cast { value, check, .. } = &expr.kind else {
-                continue;
-            };
             let TypedExprKind::GenericCall {
                 mangled,
+                type_args,
                 return_cast,
                 ..
-            } = &ta.try_expr(*value).unwrap().kind
+            } = &expr.kind
             else {
                 continue;
             };
-            if crate::stdlib::llm::declaration::is_checked_call(mangled) {
-                out.push((check.is_some(), return_cast.clone()));
+            if !is_llm_call(mangled) {
+                continue;
+            }
+            out.push((type_args.len() == 1, return_cast.clone()));
+        }
+        out
+    }
+
+    /// How many llm calls sit directly under a `Cast`: the old lowering,
+    /// which the envelope made unnecessary.
+    fn llm_calls_wrapped_in_cast(ta: &TypedAst) -> usize {
+        let mut count = 0;
+        for i in 0..ta.exprs_len() {
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
+            let TypedExprKind::Cast { value, .. } = &expr.kind else {
+                continue;
+            };
+            if let TypedExprKind::GenericCall { mangled, .. } = &ta.try_expr(*value).unwrap().kind
+                && is_llm_call(mangled)
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// A typed llm call: the declared `call`/`batch`.
+    fn is_llm_call(mangled: &crate::MangledName) -> bool {
+        crate::stdlib::llm::declaration::is_checked_call(mangled)
+            || crate::stdlib::llm::declaration::is_checked_batch(mangled)
+    }
+
+    /// The argument count of every typed llm call, in call order: the public
+    /// parameters are all a call carries.
+    fn llm_argument_counts(ta: &TypedAst) -> Vec<usize> {
+        let mut out = Vec::new();
+        for i in 0..ta.exprs_len() {
+            let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
+            if let TypedExprKind::GenericCall { mangled, args, .. } = &expr.kind
+                && is_llm_call(mangled)
+            {
+                out.push(args.len());
             }
         }
         out
     }
 
-    /// Every schema string that reached an `llm.call`/`llm.batch` argument
-    /// list, in call order. The schema rides in the trailing `schema` slot,
-    /// which the untyped form leaves as the `null` default.
+    /// The schema each `llm.call`/`llm.batch` in `ta` sends, in call order:
+    /// the one recorded for its `T`, which every descriptor of that type
+    /// carries.
     fn llm_schemas(ta: &TypedAst) -> Vec<Option<String>> {
         let mut out = Vec::new();
         for i in 0..ta.exprs_len() {
             let expr = ta.try_expr(crate::ExprId(i as u32)).unwrap();
-            let TypedExprKind::GenericCall { mangled, args, .. } = &expr.kind else {
+            let TypedExprKind::GenericCall {
+                mangled, type_args, ..
+            } = &expr.kind
+            else {
                 continue;
             };
-            if !crate::stdlib::llm::declaration::is_checked_call(mangled) {
+            if !is_llm_call(mangled) {
                 continue;
             }
-            let schema = args
-                .last()
-                .and_then(|a| match &ta.try_expr(a.expr).unwrap().kind {
-                    TypedExprKind::String(s) => Some(s.clone()),
-                    _ => None,
-                });
-            out.push(schema);
+            out.push(
+                type_args
+                    .first()
+                    .and_then(|ty| crate::codegen::descriptor_schema::schema_of(ta, ty)),
+            );
         }
         out
     }
 
     const SEVERITY: &str = "interface Severity { level: string; score: number; }";
 
-    /// R5: a typed call emits a structural test, and the schema for `T` reaches
-    /// the argument list as a compile-time constant.
+    /// R5: a typed call passes `T`, and the schema codegen emits for `T` is a
+    /// fully inlined compile-time constant.
     #[test]
-    fn typed_llm_call_emits_a_structural_test_and_a_schema() {
+    fn typed_llm_call_passes_t_and_its_type_has_a_schema() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
@@ -17037,9 +17423,9 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = llm_call_shapes(&ta);
-        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
-        assert!(shapes[0].0, "call<Severity> lost its structural check");
+        let shapes = llm_calls(&ta);
+        assert_eq!(shapes.len(), 1, "expected one call, got {shapes:?}");
+        assert!(shapes[0].0, "call<Severity> passes its type argument");
 
         let schemas = llm_schemas(&ta);
         assert_eq!(schemas.len(), 1, "expected one call, got {schemas:?}");
@@ -17086,20 +17472,19 @@ function main(): void { if (result < 10) { } }
             "an optional field must not be required: {schema}",
         );
 
-        // And the check walks the same nested shape rather than stopping at the
-        // outer object.
-        let shapes = llm_call_shapes(&ta);
+        let shapes = llm_calls(&ta);
         assert_eq!(shapes, vec![(true, None)], "shapes: {shapes:?}");
     }
 
     /// The soundness invariant, and the one most at risk of silently
-    /// regressing: a `call<T>` must lower to a `Cast` carrying a structural
-    /// check, and the call it wraps must NOT carry a `return_cast` — that is a
-    /// `ref.cast`, a representation-only narrow that verifies nothing and traps
-    /// uncatchably on a null response. A shape mismatch throws either way, so
-    /// only this assertion distinguishes them.
+    /// regressing: a `call<T>` keeps the declared `call` as its callee with
+    /// exactly the written arguments — the descriptor is the call's environment,
+    /// never a parameter — the call must NOT carry a `return_cast` (a
+    /// `ref.cast`, a representation-only narrow that verifies nothing), and
+    /// no `Cast` wraps the call, since the host stores in `value` only what
+    /// the descriptor accepted.
     #[test]
-    fn typed_llm_call_is_a_checked_cast_and_never_a_return_cast() {
+    fn typed_llm_call_keeps_its_declared_arguments_and_never_a_return_cast() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
              function main(): void {{ const s = llm.call<Severity>(\"m\", \"p\"); }}"
@@ -17107,16 +17492,26 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
 
-        let shapes = llm_call_shapes(&ta);
-        assert_eq!(shapes.len(), 1, "expected one wrapped call, got {shapes:?}");
-        assert!(shapes[0].0, "call<Severity> lost its structural check");
+        let shapes = llm_calls(&ta);
+        assert_eq!(shapes.len(), 1, "expected one checked call, got {shapes:?}");
+        assert!(shapes[0].0, "call<Severity> passes its type argument");
         assert_eq!(
             shapes[0].1, None,
             "call<Severity> kept an unsound return_cast: {shapes:?}",
         );
+        assert_eq!(
+            llm_argument_counts(&ta),
+            vec![2],
+            "a typed call carries only the model and the prompt"
+        );
+        assert_eq!(
+            llm_calls_wrapped_in_cast(&ta),
+            0,
+            "an envelope call needs no cast around it"
+        );
     }
 
-    /// The same invariant across every import form. Interception matches the
+    /// The same invariant across every import form. The gate matches the
     /// package-export mangled name, so an alias, a named import, and a
     /// namespace import must all land on the checked path identically —
     /// mirroring `fixtures/imports/session_*`.
@@ -17136,7 +17531,7 @@ function main(): void { if (result < 10) { } }
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
         assert_eq!(
-            llm_call_shapes(&ta),
+            llm_calls(&ta),
             vec![(true, None), (true, None), (true, None), (true, None)],
             "every import form must produce a checked, uncast call",
         );
@@ -17150,14 +17545,14 @@ function main(): void { if (result < 10) { } }
                 return_cast,
                 ..
             } = &expr.kind
-                && crate::stdlib::llm::declaration::is_checked_call(mangled)
+                && is_llm_call(mangled)
             {
                 assert_eq!(*return_cast, None, "an llm call kept a return_cast");
             }
         }
     }
 
-    /// Every import form also emits the same schema — the interception is not
+    /// Every import form also records the same schema — the gate is not
     /// keyed on the receiver, so an aliased or namespace import must not
     /// silently fall through to the untyped path.
     #[test]
@@ -17188,51 +17583,167 @@ function main(): void { if (result < 10) { } }
         }
     }
 
-    /// `batch<T[]>` takes the same path: a checked cast, no `return_cast`, and
-    /// a schema for the whole result.
+    /// `batch<T>` takes the same path: `T` passed, no `return_cast`, and a
+    /// schema for one response rather than for the array.
     #[test]
-    fn typed_llm_batch_is_a_checked_cast_too() {
+    fn typed_llm_batch_passes_t_and_sends_one_response_schema() {
         let src = format!(
             "import llm from \"submilli:llm\"; {SEVERITY} \
-             function main(): void {{ const s = llm.batch<Severity[]>(\"m\", [\"p\"]); }}"
+             function main(): void {{ const s = llm.batch<Severity>(\"m\", [\"p\"]); }}"
         );
         let (ta, diags) = run_with_llm(&src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert_eq!(llm_call_shapes(&ta), vec![(true, None)]);
+        assert_eq!(llm_calls(&ta), vec![(true, None)]);
+        assert_eq!(llm_calls_wrapped_in_cast(&ta), 0);
 
         let schema = llm_schemas(&ta)[0].clone().expect("schema emitted");
         let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
-        assert_eq!(parsed["type"], "array", "schema: {schema}");
-        assert_eq!(parsed["items"]["properties"]["level"]["type"], "string");
+        assert_eq!(parsed["type"], "object", "schema: {schema}");
+        assert_eq!(parsed["properties"]["level"]["type"], "string");
     }
 
-    /// R7, and the distinction the `type_args_written` flag exists for: a bare
-    /// `call(...)` is not an error — it keeps its pre-generic meaning and
-    /// returns the `Completion` envelope, unwrapped and unschema'd.
+    /// `T` has no default. With nothing to supply it, the call is an error
+    /// whose help names the text form, rather than a silent `unknown`.
     #[test]
-    fn untyped_llm_call_returns_the_completion_envelope_without_erroring() {
+    fn an_llm_call_without_its_type_argument_is_an_error_naming_the_text_form() {
         let src = "import llm from \"submilli:llm\"; \
-                   function main(): void { const c = llm.call(\"m\", \"p\"); \
-                                           const t = c.text; }";
+                   function main(): void { const c = llm.call(\"m\", \"p\"); }";
+        let (ta, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("`llm.call` needs its type argument"))
+            .unwrap_or_else(|| panic!("expected the missing-T error, got: {diags:?}"));
+        assert!(
+            d.help.iter().any(|h| h.contains("llm.text(model, prompt)")),
+            "{:?}",
+            d.help
+        );
+        assert!(llm_schemas(&ta).is_empty(), "the call is not built");
+    }
+
+    /// `llm.batch` names itself and its own text form, `llm.texts`.
+    #[test]
+    fn an_llm_batch_without_its_type_argument_names_texts() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const c = llm.batch(\"m\", [\"p\"]); }";
+        let (_, diags) = run_with_llm(src);
+        let d = diags
+            .iter()
+            .find(|d| d.message.contains("`llm.batch` needs its type argument"))
+            .unwrap_or_else(|| panic!("expected the missing-T error, got: {diags:?}"));
+        assert!(
+            d.help
+                .iter()
+                .any(|h| h.contains("llm.texts(model, prompts)")),
+            "{:?}",
+            d.help
+        );
+    }
+
+    /// A call already reported for its arguments is not reported again for
+    /// its type argument.
+    #[test]
+    fn a_wrong_argument_count_is_the_only_diagnostic() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const c = llm.call(\"m\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("argument(s)"), "{diags:?}");
+    }
+
+    /// `Completion<T>` is a generic alias: a binding expected as
+    /// `Completion<V>` supplies `T = V` argument to argument, so `call` is
+    /// typed the way `batch` is under `Completion<V>[]`.
+    #[test]
+    fn a_completion_annotation_supplies_the_type_argument_of_call() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface V { label: string; } \
+                   function main(): void { \
+                     const c: llm.Completion<V> = llm.call(\"m\", \"p\"); }";
         let (ta, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        let schema = llm_schemas(&ta)[0]
+            .clone()
+            .expect("the annotation supplies `T` and the call sends its schema");
+        assert!(schema.contains("\"label\""), "{schema}");
+    }
+
+    /// A union flattens the alias into its members, so an optional binding,
+    /// `Completion<V> | undefined`, does not supply `T`: the program writes it.
+    #[test]
+    fn an_optional_completion_annotation_needs_a_written_type_argument() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface V { label: string; } \
+                   function main(): void { \
+                     let c: llm.Completion<V> | undefined = llm.call(\"m\", \"p\"); \
+                     let d: llm.Completion<V> | undefined = llm.call<V>(\"m\", \"p\"); }";
+        let (_, diags) = run_with_llm(src);
+        assert_eq!(diags.len(), 1, "{diags:?}");
         assert!(
-            llm_call_shapes(&ta).is_empty(),
-            "an untyped call must not be wrapped in a checked cast",
-        );
-        assert_eq!(
-            llm_schemas(&ta),
-            vec![None],
-            "an untyped call must send no schema",
+            diags[0].message.contains("needs its type argument"),
+            "{diags:?}"
         );
     }
 
-    /// The untyped `batch` likewise keeps its `Completion[]` envelope, so a
-    /// per-element `ok` is still readable.
+    /// An expected type supplies `T` whatever it is, `string` included: a
+    /// call whose result is expected as `Completion<string>` is the typed
+    /// `call<string>`, asking for a JSON string. The text is `llm.text`.
     #[test]
-    fn untyped_llm_batch_returns_completion_array() {
+    fn an_expected_string_type_argument_is_still_a_typed_call() {
         let src = "import llm from \"submilli:llm\"; \
-                   function main(): void { const r = llm.batch(\"m\", [\"p\"]); \
+                   function main(): void { \
+                     const xs: llm.Completion<string>[] = llm.batch(\"m\", [\"p\"]); }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(
+            llm_schemas(&ta),
+            vec![Some("{\"type\":\"string\"}".to_string())]
+        );
+    }
+
+    /// An expected type that supplies `T` makes the call typed: the schema of
+    /// `V` is recorded and sent, and each response is checked against it.
+    /// Array element unification is what lets `batch` take `T` from the
+    /// binding's annotation.
+    #[test]
+    fn a_type_argument_supplied_by_the_expected_type_is_a_typed_call() {
+        let src = "import llm from \"submilli:llm\"; \
+                   interface V { label: string; } \
+                   function main(): void { \
+                     const arr: llm.Completion<V>[] = llm.batch(\"m\", [\"p\"]); }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        let schema = llm_schemas(&ta)[0]
+            .clone()
+            .expect("the pinned `T` sends a schema");
+        let parsed: serde_json::Value = serde_json::from_str(&schema).expect("schema is JSON");
+        assert_eq!(parsed["properties"]["label"]["type"], "string", "{schema}");
+    }
+
+    /// The schema is a function of the type: `call<string>` records the
+    /// schema of a JSON string under `string`, and the text form records
+    /// nothing at all.
+    #[test]
+    fn the_text_form_records_no_descriptor_and_call_string_asks_for_json() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const a = llm.text(\"m\", \"p\"); \
+                                           const b = llm.call<string>(\"m\", \"p\"); \
+                                           if (a.ok) { const t: string = a.value; } }";
+        let (ta, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+        assert_eq!(
+            llm_schemas(&ta),
+            vec![Some("{\"type\":\"string\"}".to_string())],
+            "only the typed call is a generic call with a schema",
+        );
+    }
+
+    /// `texts` returns `Completion<string>[]`, so a per-element `ok` is
+    /// readable, and its optional `schema` is the program's own argument.
+    #[test]
+    fn llm_texts_returns_completion_array_and_takes_a_written_schema() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function main(): void { const r = llm.texts(\"m\", [\"p\"], \"{}\"); \
                                            const ok = r[0].ok; }";
         let (_, diags) = run_with_llm(src);
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
@@ -17261,30 +17772,48 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    /// R7: `call<T>` inside a user generic. The reason is
-    /// `unsupported_cast_target_reason`'s erasure arm verbatim — the same text
-    /// `as` and MCP produce — and the `help:` names the fix.
+    /// A generic forwards its own `T` into `llm.call<T>` and `llm.batch<T>`:
+    /// the schema is the caller's type's, carried by the descriptor the caller
+    /// built, so nothing is gated here.
     #[test]
-    fn type_argument_erased_by_a_user_generic_is_rejected() {
+    fn a_generic_forwards_its_type_parameter_to_llm_calls() {
         let src = "import llm from \"submilli:llm\"; \
-                   function pick<T>(): T { return llm.call<T>(\"m\", \"p\"); } \
-                   function main(): void { const n = pick<number>(); }";
+                   function classify<T>(p: string): llm.Completion<T> { return llm.call<T>(\"m\", p); } \
+                   function each<T>(ps: string[]): llm.Completion<T>[] { return llm.batch<T>(\"m\", ps); } \
+                   interface V { label: string; } \
+                   function main(): void { const c = classify<V>(\"p\"); const d = each<V>([\"p\"]); }";
+        let (_, diags) = run_with_llm(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    /// `session.get` needs only a predicate, and a descriptor built from a
+    /// forwarded parameter tests through it, so `session.get<T[]>` inside a
+    /// generic checks against the array of whatever its caller names.
+    #[test]
+    fn session_get_accepts_a_type_built_from_a_type_parameter() {
+        let src = "import session from \"submilli:session\"; \
+                   function loadAll<T>(k: string): T[] | undefined { return session.get<T[]>(k); } \
+                   function main(): void { const n = loadAll<number>(\"k\"); }";
+        let (_, diags) = run_with_session(src);
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
+    }
+
+    /// A type built from a type parameter has no schema anywhere: its
+    /// descriptor is assembled where the parameter is unknown. The error says
+    /// to forward the parameter itself.
+    #[test]
+    fn a_type_built_from_a_type_parameter_is_rejected() {
+        let src = "import llm from \"submilli:llm\"; \
+                   function many<T>(p: string): llm.Completion<T[]> { return llm.call<T[]>(\"m\", p); } \
+                   function main(): void { const c = many<number>(\"p\"); }";
         let (_, diags) = run_with_llm(src);
         let d = diags
             .iter()
-            .find(|d| d.message.contains("cannot be verified at runtime"))
-            .unwrap_or_else(|| panic!("expected an erasure rejection, got: {diags:?}"));
+            .find(|d| d.message.contains("built from a type parameter"))
+            .unwrap_or_else(|| panic!("expected the open-type rejection, got: {diags:?}"));
         assert!(
-            d.message
-                .contains("generic type parameters are erased at runtime"),
-            "must reuse the shared erasure reason verbatim: {}",
-            d.message,
-        );
-        assert!(
-            d.help
-                .iter()
-                .any(|h| h.contains("emitted at compile time") && h.contains("llm.call<Severity>")),
-            "help must explain the erasure and name the fix: {:?}",
+            d.help.iter().any(|h| h.contains("`llm.call<T>`")),
+            "help names the forwarding form: {:?}",
             d.help,
         );
     }

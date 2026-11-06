@@ -1,0 +1,174 @@
+name: Hosted preview link
+
+on:
+  deployment_status:
+  pull_request:
+    types: [closed]
+
+# Render builds the docs preview for each pull request and records it as a
+# GitHub deployment (see docs-site/README.md#pull-request-previews). This
+# workflow never checks out or runs code from a pull request. The deployment
+# details come from the event payload; the token only reads the pull request
+# and creates or updates its comment.
+permissions:
+  pull-requests: write
+
+jobs:
+  comment:
+    if: github.event_name == 'deployment_status' && github.event.deployment_status.state == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Serializes runs for one pull request, so two Render successes in a row
+    # cannot both create a comment. Keyed per Render environment (one per pull
+    # request): GitHub keeps a single pending run per group and replaces it when
+    # a newer run arrives, so a repository-wide group would let another pull
+    # request's event drop this one's pending run.
+    concurrency:
+      group: preview-link-${{ github.event.deployment.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const marker = '<!-- submilli-docs-preview -->';
+            const expectedEnvironment = /^.+ - submilli-docs PR #([1-9]\d*)$/;
+            const environment = context.payload.deployment?.environment;
+            const environmentMatch = typeof environment === 'string'
+              ? expectedEnvironment.exec(environment)
+              : null;
+
+            if (!environmentMatch) {
+              core.info(`Ignoring a deployment outside the Render submilli-docs preview environment (environment: ${JSON.stringify(environment)}).`);
+              return;
+            }
+
+            const pullNumber = Number(environmentMatch[1]);
+            const { owner, repo } = context.repo;
+            const deploymentSha = context.payload.deployment?.sha;
+            const environmentUrl = context.payload.deployment_status?.environment_url;
+            const { data: pull } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+
+            if (
+              pull.state !== 'open' ||
+              pull.head.sha !== deploymentSha ||
+              pull.head.repo?.full_name !== `${owner}/${repo}`
+            ) {
+              core.info('Ignoring a stale, fork, or unrelated deployment.');
+              return;
+            }
+
+            let previewUrl;
+            try {
+              previewUrl = new URL(environmentUrl);
+            } catch {
+              core.warning('Ignoring deployment with an invalid environment URL.');
+              return;
+            }
+
+            const allowedHost = new RegExp(`^submilli-docs-pr-${pullNumber}(-[a-z0-9-]+)?[.]onrender[.]com$`);
+            if (
+              previewUrl.protocol !== 'https:' ||
+              previewUrl.username ||
+              previewUrl.password ||
+              previewUrl.port ||
+              previewUrl.search ||
+              previewUrl.hash ||
+              previewUrl.pathname !== '/' ||
+              !allowedHost.test(previewUrl.hostname)
+            ) {
+              core.warning('Ignoring deployment with an untrusted Render preview URL.');
+              return;
+            }
+
+            const docsUrl = `${previewUrl.origin}/docs/`;
+            const body = [
+              marker,
+              '### Documentation preview',
+              `[Open the docs preview](${docsUrl})`,
+              '',
+              `Commit: ${deploymentSha.slice(0, 7)}`,
+              '',
+              'Updated on each push. Render removes the preview when the pull request closes.',
+            ].join('\n');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pullNumber,
+              per_page: 100,
+            });
+            const { data: currentPull } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
+            if (
+              currentPull.state !== 'open' ||
+              currentPull.head.sha !== deploymentSha ||
+              currentPull.head.repo?.full_name !== `${owner}/${repo}`
+            ) {
+              core.info('Ignoring a pull request that changed while the deployment was handled.');
+              return;
+            }
+            const managedComments = comments.filter(
+              (comment) => comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+            if (managedComments.length === 0) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pullNumber,
+                body,
+              });
+              return;
+            }
+            const [comment] = managedComments;
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: comment.id,
+              body,
+            });
+
+  closed:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: preview-link-closed-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const marker = '<!-- submilli-docs-preview -->';
+            const { owner, repo } = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pullNumber,
+              per_page: 100,
+            });
+            const managedComments = comments.filter(
+              (comment) => comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+            if (managedComments.length === 0) {
+              core.info('No managed preview comment to update.');
+              return;
+            }
+            const body = [
+              marker,
+              '### Documentation preview',
+              'The preview for this pull request was removed when it closed.',
+            ].join('\n');
+            const [comment] = managedComments;
+            await github.rest.issues.updateComment({
+              owner,
+              repo,
+              comment_id: comment.id,
+              body,
+            });

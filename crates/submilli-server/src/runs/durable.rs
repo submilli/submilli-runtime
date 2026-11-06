@@ -1,5 +1,7 @@
-//! In-memory tool decisions rebuilt from the ordinary effect history.
+//! In-memory tool and approval decisions rebuilt from the ordinary effect history.
 use super::*;
+use interpreter::runtime::APPROVAL_OPERATION;
+use interpreter::runtime::approvals::recorded_outcome;
 use interpreter::runtime::effects::{
     EffectCall, EffectHistory, HistoryError, NativeError, RecordedOutcome,
 };
@@ -8,11 +10,17 @@ use interpreter::runtime::effects::{
 /// Dropping the transport before delivery leaves no server-side mailbox.
 pub(crate) struct Submission {
     ids: Vec<String>,
-    answers: Vec<ToolAnswer>,
+    answers: Vec<CallAnswer>,
+    /// Whether the submitter may decide an `ask-admin` call.
+    admin: bool,
 }
 
 impl Submission {
-    pub(crate) fn new(run: &str, answers: Vec<ToolAnswer>) -> Result<Self, ResumeRefusal> {
+    pub(crate) fn new(
+        run: &str,
+        answers: Vec<CallAnswer>,
+        admin: bool,
+    ) -> Result<Self, ResumeRefusal> {
         for answer in &answers {
             let valid = answer
                 .call_id
@@ -30,6 +38,7 @@ impl Submission {
                 .map(|answer| answer.call_id.clone())
                 .collect(),
             answers,
+            admin,
         })
     }
 }
@@ -71,26 +80,27 @@ impl RunEntry {
             // the first live suspension, or return the terminal run result.
             return Ok(false);
         };
-        if let Some(other) = fresh.iter().find(|id| **id != &pending.view.call_id) {
+        if let Some(other) = fresh.iter().find(|id| ***id != pending.view.call_id()) {
             return Err(ResumeRefusal::UnknownCall((*other).clone()));
         }
         let Some(index) = submission
             .answers
             .iter()
-            .position(|answer| answer.call_id == pending.view.call_id)
+            .position(|answer| answer.call_id == pending.view.call_id())
         else {
             // An earlier attempt consumed this request's answer but did not
             // commit it. Require a fresh client retry after that interruption.
             return Err(ResumeRefusal::NotSuspended);
         };
+        pending.admits(&submission.answers[index], submission.admin)?;
         let answer = submission.answers.swap_remove(index);
         let Some(pending) = inner.pending.take() else {
             return Err(ResumeRefusal::NotSuspended);
         };
-        inner.delivered = Some(pending.view.call_id);
+        inner.delivered = Some(pending.view.call_id().to_owned());
         self.slots.give_back();
         self.publish(RunState::Running);
-        let _ = pending.reply.send(answer.answer);
+        pending.deliver(answer.answer);
         Ok(false)
     }
 
@@ -129,15 +139,42 @@ impl RunEntry {
 #[derive(Clone, Copy)]
 enum ToolResolution {
     Answered,
+    /// A tool call the harness did not answer in time.
     TimedOut,
+    /// A call that got no answer and won't: refused for capacity, or an approval
+    /// no one decided in time, which unlike a tool's timeout says nothing about
+    /// whether the harness is there.
     Refused,
 }
-impl From<&RecordedOutcome> for ToolResolution {
-    fn from(outcome: &RecordedOutcome) -> Self {
-        match outcome {
-            Err(NativeError::Timeout(_)) => Self::TimedOut,
-            Err(NativeError::QuotaExceeded(_)) => Self::Refused,
+
+impl ToolResolution {
+    fn of(kind: Waiting, outcome: &RecordedOutcome) -> Self {
+        match (kind, outcome) {
+            (_, Err(NativeError::QuotaExceeded(_))) => Self::Refused,
+            (Waiting::Tool, Err(NativeError::Timeout(_))) => Self::TimedOut,
+            (Waiting::Approval, Ok(bytes))
+                if matches!(recorded_outcome(bytes), Some(ApprovalOutcome::Expired)) =>
+            {
+                Self::Refused
+            }
             _ => Self::Answered,
+        }
+    }
+}
+
+/// What kind of effect waits on an answer from outside the run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Waiting {
+    Tool,
+    Approval,
+}
+
+impl Waiting {
+    fn of(operation: &str) -> Option<Self> {
+        match operation {
+            "tools.call" => Some(Self::Tool),
+            APPROVAL_OPERATION => Some(Self::Approval),
+            _ => None,
         }
     }
 }
@@ -149,7 +186,7 @@ pub(crate) struct ToolHistory {
     entry: Arc<RunEntry>,
     // EffectHistory serializes calls. Poisoning can leave this bookkeeping
     // inconsistent, so poisoned-lock access propagates the panic.
-    pending: Mutex<Option<EffectId>>,
+    pending: Mutex<Option<(EffectId, Waiting)>>,
 }
 
 impl ToolHistory {
@@ -177,12 +214,13 @@ impl EffectHistory for ToolHistory {
         fingerprint: [u8; 32],
     ) -> Result<EffectCall, HistoryError> {
         let call = self.history.begin(operation, fingerprint).await?;
-        if operation == "tools.call" {
+        if let Some(kind) = Waiting::of(operation) {
             if let Some(outcome) = &call.recorded {
                 self.entry
-                    .committed(&call.id, ToolResolution::from(outcome));
+                    .committed(&call.id, ToolResolution::of(kind, outcome));
             } else {
-                *self.pending.lock().expect("tool history lock poisoned") = Some(call.id.clone());
+                *self.pending.lock().expect("tool history lock poisoned") =
+                    Some((call.id.clone(), kind));
             }
         }
         Ok(call)
@@ -193,24 +231,24 @@ impl EffectHistory for ToolHistory {
         call: &EffectCall,
         outcome: RecordedOutcome,
     ) -> Result<(), HistoryError> {
-        let is_tool = self
+        let waiting = self
             .pending
             .lock()
             .expect("tool history lock poisoned")
             .as_ref()
-            == Some(&call.id);
-        let decision = ToolResolution::from(&outcome);
+            .and_then(|(id, kind)| (id == &call.id).then_some(*kind));
+        let resolution = waiting.map(|kind| ToolResolution::of(kind, &outcome));
         #[cfg(all(test, not(windows)))]
-        if is_tool {
+        if resolution.is_some() {
             crate::recovery::tool_checkpoint("tool-answer");
         }
         self.history.complete(call, outcome).await?;
         #[cfg(all(test, not(windows)))]
-        if is_tool {
+        if resolution.is_some() {
             crate::recovery::tool_checkpoint("tool-committed");
         }
-        if is_tool {
-            self.entry.committed(&call.id, decision);
+        if let Some(resolution) = resolution {
+            self.entry.committed(&call.id, resolution);
             *self.pending.lock().expect("tool history lock poisoned") = None;
         }
         Ok(())
@@ -269,12 +307,57 @@ mod tests {
         })
     }
 
+    /// A history that replays `0` as the recorded outcome of every effect.
+    struct Replayed(RecordedOutcome);
+
+    #[async_trait::async_trait]
+    impl EffectHistory for Replayed {
+        async fn begin(&self, _: &str, _: [u8; 32]) -> Result<EffectCall, HistoryError> {
+            Ok(EffectCall {
+                id: EFFECT.into(),
+                sequence: 0,
+                recorded: Some(self.0.clone()),
+            })
+        }
+        async fn complete(&self, _: &EffectCall, _: RecordedOutcome) -> Result<(), HistoryError> {
+            unreachable!("a replayed effect is not completed again")
+        }
+        async fn ensure_history_consumed(&self) -> Result<(), HistoryError> {
+            Ok(())
+        }
+    }
+
+    /// Replay rebuilds an expiry as the live run left it: a tool's timeout marks the
+    /// harness gone, so later tool calls fail at once; an approval's expiry doesn't.
+    #[tokio::test]
+    async fn a_replayed_expiry_marks_the_harness_gone_only_for_a_tool() {
+        let expired = rmp_serde::to_vec_named(&ApprovalOutcome::Expired).unwrap();
+        for (operation, outcome, gone) in [
+            (
+                "tools.call",
+                Err(NativeError::Timeout("no answer".into())),
+                true,
+            ),
+            (APPROVAL_OPERATION, Ok(OutcomeBytes(expired)), false),
+        ] {
+            let entry = provider().entry.clone();
+            let history = ToolHistory::new(Arc::new(Replayed(outcome)), entry.clone());
+            history.begin(operation, [0; 32]).await.unwrap();
+            let inner = entry.lock();
+            assert_eq!(inner.harness_gone, gone, "{operation}");
+            assert!(
+                inner.rejected.contains(&format!("run:{EFFECT}")),
+                "{operation}"
+            );
+        }
+    }
+
     fn submission(value: &str) -> Submission {
-        let answer = ToolAnswer {
+        let answer = CallAnswer {
             call_id: format!("run:{EFFECT}"),
-            answer: Ok(McpResponse::take(&mut serde_json::json!(value)).unwrap()),
+            answer: Answer::Tool(Ok(McpResponse::take(&mut serde_json::json!(value)).unwrap())),
         };
-        Submission::new("run", vec![answer]).unwrap()
+        Submission::new("run", vec![answer], false).unwrap()
     }
 
     #[tokio::test]

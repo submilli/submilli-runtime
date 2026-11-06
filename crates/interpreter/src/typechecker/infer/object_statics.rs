@@ -7,7 +7,10 @@ use crate::type_size::{TypeBudget, TypeTooLarge};
 use crate::{ExprId, ObjectField, Type};
 
 impl Inferer<'_> {
-    pub(super) fn object_assign_result(&self, args: &[ExprId]) -> Result<Type, CompilerFailure> {
+    pub(super) fn object_assign_result(
+        &mut self,
+        args: &[ExprId],
+    ) -> Result<Type, CompilerFailure> {
         let Some(first) = args.first() else {
             return Ok(Type::Error);
         };
@@ -32,6 +35,15 @@ impl Inferer<'_> {
                 .map_err(super::arena_failure)?
                 .ty;
             let shape = self.assignment_input_shape(ty);
+            if self.index_composition_conflicts(&result, &shape) {
+                let span = self
+                    .typed_ast
+                    .try_expr(id)
+                    .map_err(super::arena_failure)?
+                    .span;
+                self.error(span, "Object.assign cannot combine index signatures with different key and value types".into());
+                return Ok(Type::Error);
+            }
             result = match self.assign_intersection(&result, &shape, 1, &mut budget) {
                 Ok(result) => result,
                 Err(exceeded) => {
@@ -56,6 +68,25 @@ impl Inferer<'_> {
         }
     }
 
+    fn index_composition_conflicts(&self, left: &Type, right: &Type) -> bool {
+        if let Type::Union(members) = left.peel() {
+            return members
+                .iter()
+                .any(|member| self.index_composition_conflicts(member, right));
+        }
+        if let Type::Union(members) = right.peel() {
+            return members
+                .iter()
+                .any(|member| self.index_composition_conflicts(left, member));
+        }
+        self.resolver()
+            .index_signature(left)
+            .zip(self.resolver().index_signature(right))
+            .is_some_and(|(left, right)| {
+                left.key.peel() != right.key.peel() && left.value.peel() != right.value.peel()
+            })
+    }
+
     fn assignment_input_shape(&self, ty: &Type) -> Type {
         match ty.peel() {
             Type::Union(members) => Type::union(
@@ -68,6 +99,8 @@ impl Inferer<'_> {
             Type::String | Type::StringLiteral(_) => Type::Object {
                 fields: BTreeMap::new(),
                 index: Some(crate::types::IndexSignature {
+                    string_keyof_includes_number: false,
+                    key: Box::new(crate::Type::String),
                     value: Box::new(Type::String),
                     readonly: false,
                 }),
@@ -146,6 +179,9 @@ impl Inferer<'_> {
             self.resolver().index_signature(right),
         ) {
             (Some(a), Some(b)) => Some(crate::types::IndexSignature {
+                string_keyof_includes_number: a.string_keyof_includes_number
+                    || b.string_keyof_includes_number,
+                key: Box::new(Type::union(vec![(*a.key).clone(), (*b.key).clone()])),
                 value: Box::new(self.assign_intersection(&a.value, &b.value, depth + 1, budget)?),
                 readonly: a.readonly && b.readonly,
             }),

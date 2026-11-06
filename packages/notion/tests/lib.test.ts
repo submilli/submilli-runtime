@@ -9,6 +9,7 @@ import {
     createDatabase,
     notionId,
     updatePage,
+    uploadFile,
 } from "@submilli/notion";
 
 function main(): void {
@@ -33,6 +34,15 @@ function main(): void {
         }
     }
     assert(invalid, "invalid reference throws a stable validation error");
+
+    label("a missing upload source keeps its package error");
+    let missingSource = false;
+    try {
+        uploadFile("/absent.pdf", { filename: "report.pdf", contentType: "application/pdf" });
+    } catch (error) {
+        if (error instanceof NotionError) missingSource = error.code === "source_not_found" && error.status === 0;
+    }
+    assert(missingSource, "missing file is rejected before any request");
 
     label("typed properties compose with custom dynamic values");
     const values: PropertyValue[] = [

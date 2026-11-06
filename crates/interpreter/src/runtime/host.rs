@@ -112,7 +112,6 @@ fn install_prelude(
         bigint_vtable: vtables.bigint,
         closure_vtable: vtables.closure,
         regex_vtable: vtables.regex,
-        regex_match_box_vtable: vtables.regex_match_box,
         opaque_vtable: vtables.opaque,
         temporal,
         map_tombstone,
@@ -783,7 +782,6 @@ pub struct HostAbi {
     pub(crate) bigint_vtable: Global,
     pub(crate) closure_vtable: Global,
     pub(crate) regex_vtable: Global,
-    pub(crate) regex_match_box_vtable: Global,
     /// Identity vtable for host-only backing structs (stdlib `URL`, `Response`,
     /// fs `Stat`, …) — opaque `toString`/`toJson`, reference equality.
     pub(crate) opaque_vtable: Global,
@@ -924,12 +922,6 @@ pub(crate) fn host_regex_vtable(
     host_vtable(ctx, |abi| abi.regex_vtable)
 }
 
-pub(crate) fn host_regex_match_box_vtable(
-    ctx: &mut impl AsContextMut<Data = StoreData>,
-) -> wasmtime::Result<Val> {
-    host_vtable(ctx, |abi| abi.regex_match_box_vtable)
-}
-
 pub(crate) fn host_opaque_vtable(
     ctx: &mut impl AsContextMut<Data = StoreData>,
 ) -> wasmtime::Result<Val> {
@@ -1029,6 +1021,18 @@ pub(crate) fn read_boxed_number(
             "{context}: boxed-number payload is {other:?}"
         ))),
     }
+}
+
+/// Box a `bool` into a `$boxed_boolean` — the erased-object form of a
+/// `boolean` (e.g. an object field). Requires `StoreData::host_abi`.
+pub(crate) fn write_boxed_boolean_struct(
+    caller: &mut Caller<'_, StoreData>,
+    value: bool,
+) -> wasmtime::Result<Rooted<StructRef>> {
+    let boxed_type = intrinsic_types(&mut *caller)?.boxed_boolean.clone();
+    let vtable = host_boxed_boolean_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, boxed_type);
+    StructRef::new(&mut *caller, &pre, &[vtable, Val::I32(i32::from(value))])
 }
 
 /// Box an `f64` into a `$boxed_number` — the erased-object form of a `number`
@@ -1238,6 +1242,12 @@ pub enum DenialSource {
     ReadOnly,
     /// The harness, or a person it asked, refused an application tool call.
     Harness,
+    /// The person asked for approval (`ask-human`) declined, or did not decide
+    /// in time.
+    Human,
+    /// The administrator asked for approval (`ask-admin`) declined, or did not
+    /// decide in time.
+    Admin,
 }
 
 /// A denial the runtime threw that escaped the program, as the embedder sees it.
@@ -1255,6 +1265,8 @@ impl DenialSource {
             Self::Invariant => "invariant",
             Self::ReadOnly => "read_only",
             Self::Harness => "harness",
+            Self::Human => "human",
+            Self::Admin => "admin",
         }
     }
 }
@@ -1369,6 +1381,16 @@ impl std::fmt::Display for PermissionDenied {
                  (another tool, raw HTTP, or other arguments to reach the same thing); \
                  report it and stop."
             }
+            DenialSource::Human => {
+                " This call needed the person's approval and did not get it — do not \
+                 retry it or work around it (another package, raw HTTP, or other \
+                 arguments to reach the same thing); report it and stop."
+            }
+            DenialSource::Admin => {
+                " This call needed an administrator's approval and did not get it — do \
+                 not retry it or work around it (another package, raw HTTP, or other \
+                 arguments to reach the same thing); report it and stop."
+            }
         })
     }
 }
@@ -1411,6 +1433,16 @@ pub fn permission_denied_by_harness(
     reason: impl Into<String>,
 ) -> wasmtime::Error {
     denied(caller, capability, reason, DenialSource::Harness)
+}
+
+/// A denial from `source`, such as the approver of an asked call.
+pub fn permission_denied_by(
+    source: DenialSource,
+    caller: impl Into<String>,
+    capability: impl Into<String>,
+    reason: impl Into<String>,
+) -> wasmtime::Error {
+    denied(caller, capability, reason, source)
 }
 
 fn denied(
@@ -1589,6 +1621,62 @@ pub(crate) fn throw_host_error(
         .downcast_ref::<PermissionDenied>()
         .map(PermissionDenied::denial);
     throw_error_with(caller, class, &err.to_string(), &own, denial)
+}
+
+/// The `$Error` a thrown exception carries, with its `name` and `message`.
+pub(crate) struct ThrownErrorParts {
+    pub error: Rooted<StructRef>,
+    pub name: String,
+    pub message: String,
+}
+
+/// The parts of the `$Error` a thrown exception carries, for the run's final
+/// error report. `None` when the payload is not an `Error` (a future non-Error
+/// throw).
+pub(crate) fn thrown_error_parts(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    exn: Rooted<wasmtime::ExnRef>,
+) -> Option<ThrownErrorParts> {
+    // The error tag carries a single param: (ref $Error).
+    let Val::AnyRef(Some(error_ref)) = exn.field(&mut ctx, 0).ok()? else {
+        return None;
+    };
+    let error = error_ref.unwrap_struct(&mut ctx).ok()?;
+    // $Error is class-shaped: field 2 is the object-fields payload array.
+    let Val::AnyRef(Some(payload_ref)) = error.field(&mut ctx, 2).ok()? else {
+        return None;
+    };
+    let payload = payload_ref.unwrap_array(&mut ctx).ok()?;
+    let message = payload
+        .get(&mut ctx, super::prelude::error::MESSAGE_SLOT)
+        .ok()?;
+    let name = payload
+        .get(&mut ctx, super::prelude::error::NAME_SLOT)
+        .ok()?;
+    let name = read_string_value(&mut ctx, name)?;
+    let message = read_string_value(&mut ctx, message)?;
+    Some(ThrownErrorParts {
+        error,
+        name,
+        message,
+    })
+}
+
+/// The text of a `$string` value, or `None` for anything else.
+pub(crate) fn read_string_value(
+    mut ctx: impl AsContextMut<Data = StoreData>,
+    value: Val,
+) -> Option<String> {
+    let Val::AnyRef(Some(s_ref)) = value else {
+        return None;
+    };
+    let s_struct = s_ref.unwrap_struct(&mut ctx).ok()?;
+    // Field 1 of `$string` is the packed-UTF-16 `(ref $rawString)` array.
+    let Val::AnyRef(Some(raw_ref)) = s_struct.field(&mut ctx, 1).ok()? else {
+        return None;
+    };
+    let arr = raw_ref.unwrap_array(&mut ctx).ok()?;
+    read_submilli_string(&mut ctx, arr).ok()
 }
 
 /// Whether `err` must reach the embedder as it is instead of becoming a guest
@@ -1910,6 +1998,7 @@ pub fn internal_host_package_declarations() -> Vec<PackageDeclaration> {
         super::json::json_module_definitions(),
         super::mcp::mcp_call_package_declaration(),
         super::tools::tools_call_package_declaration(),
+        number_coercion_definitions(),
     ]
 }
 
@@ -1919,38 +2008,7 @@ pub fn stdlib_package_declarations() -> Vec<PackageDeclaration> {
 
 fn number_module_definitions() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(NUMBER_MODULE_NAME);
-    let insert = |defs: &mut PackageDeclaration,
-                  name: &str,
-                  params: Vec<Param>,
-                  ret: Type,
-                  doc: Option<crate::DocComment>| {
-        defs.values.insert(
-            name.to_string(),
-            ValueSymbol {
-                name: name.to_string(),
-                mangled_name: crate::mangle::host(NUMBER_MODULE_NAME, name),
-                declaration_span: Span::at(crate::FileId::NUMBER),
-                kind: ValueKind::Function {
-                    generics: Vec::new(),
-                    params,
-                    ret,
-                    type_predicate: None,
-                    doc,
-                },
-            },
-        );
-    };
-    insert(
-        &mut defs,
-        "toNumber",
-        vec![Param::new("string", Type::String)],
-        Type::Number,
-        crate::doc(
-            crate::FileId::NUMBER,
-            "/**\n * Strict whole-string decimal parse.\n * Returns `NaN` when `string` is not a valid number.\n * @param string The text to parse.\n */",
-        ),
-    );
-    insert(
+    insert_number_function(
         &mut defs,
         "parseInt",
         vec![Param::new("string", Type::String), parse_int_radix_param()],
@@ -1960,7 +2018,7 @@ fn number_module_definitions() -> PackageDeclaration {
             "/**\n * Parses `string` as an integer in the given `radix`. Stops at the first non-digit character. Returns `NaN` if no digits are found.\n * @param string The text to parse.\n * @param radix The base (2-36). Omitted or `undefined`, a `0x` prefix reads as base 16 and anything else as base 10.\n */",
         ),
     );
-    insert(
+    insert_number_function(
         &mut defs,
         "parseFloat",
         vec![Param::new("string", Type::String)],
@@ -1971,6 +2029,44 @@ fn number_module_definitions() -> PackageDeclaration {
         ),
     );
     defs
+}
+
+/// `toNumber`, the string parse unary `+` lowers to. It is not a global, as
+/// TypeScript has none.
+fn number_coercion_definitions() -> PackageDeclaration {
+    let mut defs = PackageDeclaration::with_package(NUMBER_MODULE_NAME);
+    insert_number_function(
+        &mut defs,
+        "toNumber",
+        vec![Param::new("string", Type::String)],
+        Type::Number,
+        None,
+    );
+    defs
+}
+
+fn insert_number_function(
+    defs: &mut PackageDeclaration,
+    name: &str,
+    params: Vec<Param>,
+    ret: Type,
+    doc: Option<crate::DocComment>,
+) {
+    defs.values.insert(
+        name.to_string(),
+        ValueSymbol {
+            name: name.to_string(),
+            mangled_name: crate::mangle::host(NUMBER_MODULE_NAME, name),
+            declaration_span: Span::at(crate::FileId::NUMBER),
+            kind: ValueKind::Function {
+                generics: Vec::new(),
+                params,
+                ret,
+                type_predicate: None,
+                doc,
+            },
+        },
+    );
 }
 
 /// `parseInt`'s `radix`: omitted or `undefined` passes 0, which

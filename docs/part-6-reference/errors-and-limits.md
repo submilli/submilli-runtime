@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c19aab9ca3585de1916c09f270f9422e4e79dd718c5d95748e06cc72c3b17ba9"
+  contentHash: "808744f00cf1f9ce1025211e760a87241f0fdb3828ab2d2fd1313f94811473da"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -36,12 +36,12 @@ gives all three forms and their precedence. A Blueprint can't raise them.
 | Stack | `max_execution_stack` | 512, at most 16,384 | kibibytes | One run | `call stack exhausted`, `kind` `runtime_error` | No |
 | Model tokens, one run | `max_execution_llm_tokens` | 1,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes, unless `0` |
 | Model tokens, all runs | `max_llm_tokens` | 20,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
-| Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` call | Further prompts wait | — |
+| Prompts in flight | `max_llm_concurrency` | 4 | prompts | One `llm.batch` or `llm.texts` call | Further prompts wait | — |
 | Embedding tokens, one run | `max_execution_embedding_tokens` | 2,000,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Embedding tokens, all runs | `max_embedding_tokens` | 50,000,000 | count, with suffixes | All live runs on the server | `QuotaExceededError` | Yes |
 | Embedding requests, one run | `max_execution_embedding_requests` | 1,000 | count, with suffixes | One run | `QuotaExceededError` | Yes |
 | Embedding requests in flight | `max_embedding_concurrency` | 4 | requests | One `embed` call | Further requests wait | — |
-| Runs waiting on the harness | `max_suspended_runs` | 256, `0` turns tool calls off | runs | All runs on the server | `QuotaExceededError` | Yes |
+| Runs waiting on the harness or an approver | `max_suspended_runs` | 256, `0` turns tool calls and approvals off | runs | All runs on the server | `QuotaExceededError` | Yes |
 | Last run kept | `max_last_run_size` | 64 | megabytes (1,048,576 bytes) | One session's last run | `GET /v1/sessions/{id}/last-run` answers `413` | — |
 | Named volume size | `size_limit` of an entry under `volumes` | none (required) | bytes, or a size such as `1GB` (binary units), or `unlimited` | The volume, across every session and Blueprint that uses it | `QuotaExceededError` | Yes |
 
@@ -125,7 +125,7 @@ lookaround. A pattern with either throws `SyntaxError`.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Returns `undefined` |
+| A whole-file read, `fs.read` or `fs.readText` | 52,428,800 bytes, reported by `fs.maxReadSize()` | Throws `RangeError` |
 | `fs.readBytes` length | `fs.maxReadSize()` | `RangeError` |
 | Entries a recursive `fs.remove` scans | 10,000 | `Error` |
 | Directory depth `fs.list` walks in depth-first order | 32 | Deeper directories follow the rest of their parent's entries |
@@ -180,7 +180,7 @@ volume can undo each other's changes.
 
 | Limit | Value | When passed |
 | --- | --- | --- |
-| Prompts in one `llm.batch` | 128 | `RangeError` |
+| Prompts in one `llm.batch` or `llm.texts` | 128 | `RangeError` |
 | One prompt | 262,144 bytes of UTF-8 | `RangeError` |
 | Output reserved per prompt | 64,000 tokens, or the model's `output_reserve` | Sent as the request's output cap |
 | Reserve held for calls whose usage the provider didn't report | 200,000 tokens per run | `QuotaExceededError` |
@@ -248,7 +248,7 @@ The standard library throws these classes. Each extends `Error` and has
 
 | Class | Thrown when | Example message |
 | --- | --- | --- |
-| `PermissionDeniedError` | The Blueprint refuses an operation, or the application refuses a `@tools` call | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
+| `PermissionDeniedError` | The Blueprint refuses an operation, the application refuses a `@tools` call, or an approver refuses a call an `ask-human` or `ask-admin` rule matches, or doesn't decide in time | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
 | `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
@@ -274,9 +274,11 @@ error: PermissionDeniedError: permission denied: caller=main capability=http.get
 
 | `reason` | Cause |
 | --- | --- |
-| `policy denied <capability> for <caller>` | A `deny` rule, or the Blueprint's `default` |
+| `policy denied <capability> for <caller>` | A `deny` rule, the Blueprint's `default`, or an ask rule for a call that can't be put to its approver, as over MCP or when the harness answered it like a tool call |
 | `secret values are never available to main-module code, and no policy can grant this. …` | `secrets.get` called from the program |
 | `@tools.<tool>: <message>` | The application refused the call, with `capability` `tools.call` |
+| `the person asked declined the call (ask-human)`, `an administrator declined the call (ask-admin)` | The approver refused it, followed by `: <reason>` when they gave one |
+| `the person asked did not decide in time (ask-human)`, `an administrator did not decide in time (ask-admin)` | No decision before the timeout |
 
 For a capability on files, `<capability>` is followed by the path, after
 `.` and `..` are resolved, as in `policy denied fs.write on /big.txt for main`.
@@ -291,7 +293,7 @@ call is decided.
 | Budget | Example message |
 | --- | --- |
 | Filesystem size | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
-| Model tokens, one run | `llm.call: llm.call("claude-haiku-4-5") exceeded the execution token budget: 64006 tokens exceeds the 1000 this execution may spend — use fewer or shorter calls, or split the work across executions` |
+| Model tokens, one run | `llm.call: model "claude-haiku-4-5": exceeded the execution token budget: 64006 tokens exceeds the 1000 this execution may spend — use fewer or shorter calls, or split the work across executions` |
 | Model tokens, all runs | Names the server token budget, says the run's own spend isn't what is in the way, and names `--max-llm-tokens`. |
 | Embedding tokens, one run | Names the execution embedding token budget and `--max-execution-embedding-tokens`. |
 | Embedding tokens, all runs | Names the server embedding token budget and `--max-embedding-tokens`. |
@@ -309,7 +311,7 @@ RangeError: Invalid string length
 RangeError: invalid Uint8Array length 1073741825 — the maximum is 1073741824
 RangeError: object graph is nested deeper than 128 levels, so it cannot be compared, hashed, or serialized — a cycle (an object reachable from itself) reaches this bound too
 RangeError: embedding.embed("notes-embedding"): text 2 exceeds the 96000 bytes this model accepts — shorten or split it
-RangeError: llm.batch: llm.call("claude-haiku-4-5"): prompt bound exceeded: 129 prompts in one batch exceeds the 128 allowed — send fewer prompts per call, or shorten each one
+RangeError: llm.batch: model "claude-haiku-4-5": prompt bound exceeded: 129 prompts in one batch exceeds the 128 allowed — send fewer prompts per call, or shorten each one
 RangeError: session.set("big") exceeded the value size limit: 1200004 serialized bytes exceeds the 1048576 allowed
 SyntaxError: JSON.parse: recursion limit exceeded at line 1 column 128
 SyntaxError: RegExp: invalid regex pattern: Compiled regex exceeds size limit of 1048576 bytes.
@@ -411,7 +413,7 @@ The server reports a failed run as an `error` object with a `kind`, a
 | `fuel_exhausted` | The run used its fuel. | `error: fuel exhausted` and the source excerpt |
 | `timeout` | The run passed `max_execution_time`. | `error: timeout exceeded` and the source excerpt |
 | `memory_exhausted` | The run passed `max_execution_memory`. | `memory exhausted: GC heap out of memory: no capacity for allocation of 2000044 bytes` |
-| `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, `read_only`, or `harness`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
+| `permission_denied` | A gated call was denied and no `catch` handled it. Carries `caller`, `capability`, and `source` (`policy`, `invariant`, `read_only`, `harness`, `human`, or `admin`). The `message` is the same text a `runtime_error` would carry. | `error: PermissionDeniedError: permission denied: caller=main capability=fs.read: …` and the source excerpt |
 | `runtime_error` | An uncaught error, a stack overflow, or a runtime fault. | `error: Error: customer pied_piper not found` and the source excerpt |
 | `blueprint_not_found` | The request names a Blueprint the server doesn't hold. | `unknown blueprint: nope` |
 | `invalid_request` | A required variable is missing from the request, or the request has one the Blueprint doesn't declare. | `invalid variables: variable 'userId' is not declared in the blueprint` |

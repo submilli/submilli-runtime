@@ -12,7 +12,7 @@ use submilli_blueprint::{Action, Blueprint, DefaultAction, FieldMatch, FilterExp
 
 /// The canonical LLM-facing prompt, embedded at build time. We serve its
 /// `## The prompt` section as the `execute` tool description.
-const LLM_PROMPT_DOC: &str = include_str!("../../../llm-prompt.md");
+const LLM_PROMPT_DOC: &str = include_str!("../llm-prompt.md");
 
 /// The caller id of the user's script — the one the prompt describes.
 const MAIN_CALLER: &str = "main";
@@ -33,18 +33,14 @@ pub mod tools {
         available package. A query matching nothing returns the available-package catalog and a \
         pointer to the built-ins tool rather than an empty list.";
 
-    pub const PACKAGES_DOCS: &str = "Return the type declarations (a TypeScript `.d.ts`-style \
-        listing of every exported function and type) plus a one-line description for a package — \
-        an importable stdlib module (e.g. \"submilli:crypto\"), a registry package, or an \
-        @mcp/<server> package. Read these before importing a package: the signatures are the \
-        contract. A name that is a language built-in rather than a package (e.g. \"Temporal\") \
-        is served here too, tagged \"source\": \"builtin\" — use it directly, with no `import`. \
-        A bare standard-library name (e.g. \"fs\") is not a package name. When the blueprint \
-        shows that module, it is served with `name` set to the real package (`submilli:fs`), \
-        `requested_name` to the name you passed, and `correction` saying that name is wrong. \
-        Import `name`, never `requested_name`. A standard-library short name shared by several \
-        packages, or a module the blueprint hides, is a structured { error }. Any other unknown \
-        name also returns a structured { error }, with `did_you_mean` when a close one exists.";
+    pub const PACKAGES_DOCS: &str = "Read documentation and TypeScript declarations for `names: string[]` \
+        in one call. Before your first program, fetch every module or package you will import; \
+        use the returned signatures rather than guessing Node or TypeScript APIs. Returns \
+        { results: [{ name, found, text }] } in request order, retaining duplicates. Unknown \
+        names have found=false and an explanation in text; other entries still succeed. \
+        Accepts stdlib names (e.g. submilli:fs), registry packages, @mcp/<server>, and built-ins \
+        (e.g. Temporal, used without an import). A bare stdlib name such as fs resolves when \
+        visible and its text identifies the canonical import name submilli:fs.";
 
     pub const BUILTINS_LIST: &str = "List the language built-ins that are always in scope without \
         an `import`, returning { types, namespaces }. Use this to discover names before fetching \
@@ -113,7 +109,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
     let http_access = if http_visible {
         format!(
             "Network (`submilli:http`): {}.",
-            http_access_phrase(blueprint, http_visible)
+            http_access_phrase(blueprint, http_visible, surface)
         )
     } else {
         String::new()
@@ -162,6 +158,15 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
                 ""
             },
         )
+        .replace(
+            "{approval_guidance}",
+            // Only a REST session can wait for an approver; MCP refuses the call.
+            if matches!(surface, PromptSurface::Rest) && blueprint.asks() {
+                APPROVAL_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{t_search}", search)
         .replace("{t_docs}", docs)
         .replace("{t_builtins_docs}", builtins)
@@ -181,18 +186,31 @@ signatures, then `import tools from \"@tools\"`. The application answers each ca
 take a while: a call it refuses throws `PermissionDeniedError`, one it fails throws `Error`, \
 and one it does not answer in time throws `TimeoutError`.";
 
+const APPROVAL_GUIDANCE: &str = "\n\nSome calls under this blueprint need approval before \
+they run. In a session, the person you are working for, or an administrator, decides, and the \
+call waits until they do. Approved, it runs as usual. Declined, or not decided in time, it throws \
+`PermissionDeniedError`, and that answer is final like any denial. A one-off execute can't wait, \
+so there such a call throws `PermissionDeniedError` at once.";
+
 const GIT_GUIDANCE: &str = "\n\nGit is available as `submilli:git`. Read its package docs before use; \
     init, clone, fetch/pull, and commit require their respective Git capabilities. \
     Other local operations need no Git capability. Push is not available.";
 
-const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `call(model, prompt)` returns a
-`Completion`; `call<T>` returns a checked `T`. `ok` is not "nothing
-threw" — a truncated or filtered completion is `ok: false` **and still
-carries `text`**, so `if (!r.ok) continue` drops usable output. Token
-counts may be `undefined`: indeterminate, not free. `batch` is
-bounded-concurrent, one result per prompt, positionally. Models are
-operator-declared — `models()` lists them, and `contextWindow` /
-`description` are `undefined` when undeclared, so filtering drops those."#;
+const LLM_GUIDANCE: &str = r#"Model calls (`submilli:llm`): `text(model, prompt)` returns a
+`Completion<string>` — `{ ok: true, value }` or `{ ok: false, reason, message }`
+— so check `ok` before reading `value`; `texts(model, prompts)` returns one per
+prompt. For a checked value write the type: `call<T>(model, prompt)` sends a
+schema for `T` and returns `Completion<T>` with `value` checked field by field;
+a response that is not JSON or does not fit `T` is `ok: false` with
+`reason: "invalid-output"`, never a throw. `call` needs `T`: write it, or let
+the expected type supply it. `batch<T>(model, prompts)` returns one
+`Completion<T>` per prompt, positionally, each checked on its own, at a bounded
+concurrency. `ok` is not "nothing threw": a truncated or filtered text
+completion is `ok: false` **and still carries `text`**, so
+`if (!r.ok) continue` drops usable output. Token counts may be absent:
+indeterminate, not free.
+Models are operator-declared — `models()` lists them, and `contextWindow` /
+`description` are absent when undeclared, so filtering drops those."#;
 
 const EMBEDDING_GUIDANCE: &str = r#"
 
@@ -366,13 +384,14 @@ enum HostScope {
 
 /// Resolve the `{http_access}` placeholder: a terse summary of which hosts the
 /// `main` script may reach with each HTTP method, derived from the blueprint's
-/// `allow` rules. The server treats `ask-human` as deny and is deny-by-default,
-/// so only explicit `allow` rules grant access — and a policy-free blueprint
-/// reaches nothing. Under `default: allow` the posture inverts: every method
+/// `allow` rules. A request an `ask-human` or `ask-admin` rule matches waits for
+/// approval, and the server is deny-by-default, so only explicit `allow` rules
+/// grant access outright — and a policy-free blueprint reaches nothing. Under `default: allow` the posture inverts: every method
 /// reaches any host unless a `deny` rule carves it out, which is too varied to
 /// summarize per-method, so we state the posture instead.
-/// `http_visible` is whether the blueprint's programs see `submilli:http`.
-fn http_access_phrase(blueprint: &Blueprint, http_visible: bool) -> String {
+/// `http_visible` is whether the blueprint's programs see `submilli:http`. Only
+/// the REST surface can ask an approver.
+fn http_access_phrase(blueprint: &Blueprint, http_visible: bool, surface: PromptSurface) -> String {
     if blueprint.default_action == Some(DefaultAction::Allow) {
         return "any host, any method (allow-by-default; specific `deny` rules may \
                 carve out hosts or methods)"
@@ -395,7 +414,14 @@ fn http_access_phrase(blueprint: &Blueprint, http_visible: bool) -> String {
         }
     }
     if groups.is_empty() && http_visible {
-        return "subject to policy; approval rules do not authorize execution automatically".into();
+        return match surface {
+            PromptSurface::Rest => {
+                "only with approval: each request waits for its approver's decision".into()
+            }
+            PromptSurface::Mcp => {
+                "none: requests need approval, which can't be asked for over MCP".into()
+            }
+        };
     }
     if groups.is_empty() {
         return "none — `submilli:http` is blocked by policy".into();
@@ -529,7 +555,7 @@ mod tests {
 
     fn phrase(blueprint: &Blueprint) -> String {
         let http_visible = DocsScope::for_blueprint(blueprint, &[]).allows(HTTP_MODULE);
-        http_access_phrase(blueprint, http_visible)
+        http_access_phrase(blueprint, http_visible, PromptSurface::Rest)
     }
 
     #[test]
@@ -651,7 +677,7 @@ mod tests {
             for text in [
                 "submilli:llm",
                 "Model calls",
-                "call(model, prompt)",
+                "text(model, prompt)",
                 "call<T>",
                 "contextWindow",
                 "models()",
@@ -829,11 +855,15 @@ mod tests {
             phrase(&Blueprint::default()),
             "none — `submilli:http` is blocked by policy"
         );
-        // Approval keeps discovery visible without promising runtime authorization.
+        // Approval keeps discovery visible; a request runs once it is approved.
         let bp = blueprint_with("    - capability: http.get\n      action: ask-human\n");
         assert_eq!(
             phrase(&bp),
-            "subject to policy; approval rules do not authorize execution automatically"
+            "only with approval: each request waits for its approver's decision"
+        );
+        assert_eq!(
+            http_access_phrase(&bp, true, PromptSurface::Mcp),
+            "none: requests need approval, which can't be asked for over MCP"
         );
     }
 

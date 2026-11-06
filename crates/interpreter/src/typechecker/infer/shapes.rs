@@ -73,6 +73,11 @@ impl<'a> ShapeCollector<'a> {
 
     fn walk(&mut self, ty: &Type) {
         match ty {
+            Type::TemplateLiteral { substitutions, .. } => {
+                for inner in substitutions {
+                    self.collect(inner);
+                }
+            }
             Type::Object { fields, index } => {
                 if let Some(i) = index {
                     self.collect(&i.value);
@@ -225,7 +230,7 @@ pub(super) fn collect_from_stmt(
                     let mut fields = std::collections::BTreeMap::new();
                     fields.insert(
                         "done".to_string(),
-                        crate::ObjectField::required(Type::Boolean),
+                        crate::ObjectField::optional(Type::Boolean),
                     );
                     fields.insert(
                         "value".to_string(),

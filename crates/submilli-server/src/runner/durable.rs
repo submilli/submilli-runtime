@@ -41,6 +41,7 @@ pub(crate) fn capture_program(
     RunProgram {
         source,
         tools: None,
+        approvals: false,
         blueprint,
         variables: (*services.variables).clone(),
         limits: limits(config, services),

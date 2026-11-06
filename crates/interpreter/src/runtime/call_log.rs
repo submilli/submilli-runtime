@@ -728,6 +728,9 @@ mod tests {
         let needles = [
             "check_security_call(",
             "check_security(",
+            "check_and_approve_call(",
+            "check_or_ask(",
+            "check_candidate(",
             "begin_call(",
             "begin_recorded_call(",
             "audit_entry_denial(",

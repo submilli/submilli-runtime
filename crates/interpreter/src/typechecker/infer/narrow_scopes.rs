@@ -38,7 +38,7 @@ fn field_member_ty(fields: &BTreeMap<String, ObjectField>, field_name: &str) -> 
 /// narrowed outside reads as its declared type inside.
 pub(in crate::typechecker) struct SuspendedNarrowing {
     narrow_scopes: Vec<narrowing::NarrowEnv>,
-    clause_write_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
+    clause_write_scopes: Vec<narrowing::ClauseWrites>,
     assigned_scopes: Vec<std::collections::BTreeSet<narrowing::ReferencePath>>,
     tombstone_scopes:
         Vec<std::collections::BTreeMap<narrowing::ReferencePath, narrowing::InvalidationReason>>,
@@ -74,7 +74,16 @@ impl<'a> Inferer<'a> {
             } else {
                 self.narrowing_survives_closure(&path, span)
             };
-            if !survives {
+            if !survives
+                || (!immediately_invoked
+                    && matches!(
+                        view.evolving,
+                        Some(
+                            narrowing::EvolvingType::Array
+                                | narrowing::EvolvingType::UnresolvedArray
+                        )
+                    ))
+            {
                 continue;
             }
             let Some(source_kind) = self.synthesize_unnarrowed_source(&path, span)? else {
@@ -250,6 +259,7 @@ impl<'a> Inferer<'a> {
                 .kind
             {
                 crate::TypedExprKind::FieldAccess { receiver, .. }
+                | crate::TypedExprKind::InterfacePropertyAccess { receiver, .. }
                 | crate::TypedExprKind::IndexAccess { receiver, .. } => id = *receiver,
                 crate::TypedExprKind::LocalNarrowRef { binding, .. } => {
                     return Ok(Some(binding.name.clone()));
@@ -421,6 +431,14 @@ impl<'a> Inferer<'a> {
     }
 
     pub(super) fn push_narrow_frame(&mut self, mut env: narrowing::NarrowEnv) {
+        // Guards refine a binding's value without ending its assignment inference.
+        for (path, view) in env.iter_mut() {
+            if view.evolving.is_none() && !narrowing::is_ruled_out(&view.narrowed_ty) {
+                view.evolving = self
+                    .lookup_narrowed_view(path)
+                    .and_then(|active| active.evolving);
+            }
+        }
         let tombstones = std::mem::take(&mut env.dropped)
             .into_iter()
             .map(|(path, narrowed_ty)| {
@@ -1043,6 +1061,7 @@ impl<'a> Inferer<'a> {
             })
             .map_err(crate::typechecker::arena_failure)?;
         let view = narrowing::NarrowedView {
+            evolving: None,
             narrowed_ty,
             facts: narrowing::TypeFacts::EMPTY,
             excluded_literals: std::collections::BTreeSet::new(),
@@ -1127,7 +1146,7 @@ impl<'a> Inferer<'a> {
         reason: narrowing::InvalidationReason,
     ) {
         for writes in &mut self.clause_write_scopes {
-            writes.insert(path.clone());
+            writes.paths.insert(path.clone());
         }
         if let Some(span) = reason.span() {
             self.last_write_spans.insert(path.clone(), span);
@@ -1498,7 +1517,7 @@ impl<'a> Inferer<'a> {
     /// One unnarrowed read of a path element on `receiver`, typed `receiver_ty`:
     /// the read and its declared type. None when the declared types can't
     /// rebuild it.
-    fn synthesize_path_step(
+    pub(super) fn synthesize_path_step(
         &mut self,
         receiver: ExprId,
         receiver_ty: &Type,
@@ -1507,6 +1526,29 @@ impl<'a> Inferer<'a> {
     ) -> Result<Option<(crate::TypedExprKind, Type)>, crate::compiler_error::CompilerFailure> {
         let (index_kind, key_ty) = match elem {
             narrowing::PathElem::Field(field_name) => {
+                // Host properties must keep their getter dispatch when a narrowed
+                // path is rebuilt; their values need not use an object-shape carrier.
+                if let Some((property, bindings, iface, crate::Dispatch::Direct)) =
+                    self.lookup_interface_property(receiver_ty, field_name)
+                {
+                    let ty = super::generic::substitute_typevars(
+                        &property.ty,
+                        &bindings,
+                        &self.type_limits,
+                    )
+                    .map_err(super::type_limit_at(span))?;
+                    return Ok(Some((
+                        crate::TypedExprKind::InterfacePropertyAccess {
+                            receiver,
+                            iface,
+                            name: crate::Ident {
+                                name: field_name.clone(),
+                                span,
+                            },
+                        },
+                        ty,
+                    )));
+                }
                 let Some(field_ty) = self.narrow_source_field_ty(receiver_ty, field_name) else {
                     return Ok(None);
                 };
@@ -1626,7 +1668,9 @@ impl<'a> Inferer<'a> {
         }
         for (path, view) in joined_narrowings {
             if self.lookup_narrowed_view(&path).is_some_and(|active| {
-                active.binding == view.binding && active.narrowed_ty == view.narrowed_ty
+                active.binding == view.binding
+                    && active.narrowed_ty == view.narrowed_ty
+                    && active.evolving == view.evolving
             }) {
                 continue;
             }

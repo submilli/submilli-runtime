@@ -692,7 +692,7 @@ async fn durable_interpreter_passes_distinct_ids_for_each_resource_call() {
             for (const chunk of bytes("/text", 3)) { count += chunk.length; }
             assert(count === 8);
             let entries = 0;
-            for (const entry of list("/", false)) { entries++; }
+            for (const entry of list("/", { recursive: false })) { entries++; }
             assert(entries === 1);
         }
     "#,
@@ -709,8 +709,8 @@ async fn durable_summary_and_is_empty_walk_listings_as_recorded_steps() {
         r#"
         import { mkdir, writeText, summary, isEmpty } from "submilli:fs";
         function main(): void {
-            mkdir("/empty", false);
-            mkdir("/data", false);
+            mkdir("/empty", { recursive: false });
+            mkdir("/data", { recursive: false });
             writeText("/data/a.txt", "abc");
             assert(isEmpty("/empty"));
             assert(!isEmpty("/data"));

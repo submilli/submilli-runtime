@@ -2981,6 +2981,34 @@ fn a_local_made_from_the_callers_object_is_not_the_bodys_own() {
     );
 }
 
+/// `r.json()` parses the body into a new value, as `JSON.parse` does, so a
+/// write into it before `check()` keeps the body simple, written either way.
+#[test]
+fn a_parsed_response_body_is_the_bodys_own() {
+    for parse in ["r.json<Ctx>()", "r.json() as Ctx"] {
+        let found = findings(&[(
+            "lib",
+            &format!(
+                "import * as http from \"submilli:http\";\n{PROBE}\
+                 export function run(input: In): void {{\n\
+                 const r = http.get(\"https://example.test/\" + input.id);\n\
+                 const data = {parse};\n\
+                 data.id = \"seen\";\n\
+                 check(\"x/run\", {{ id: data.id }});\n\
+                 send(input.other);\n\
+                 send(input.other);\n\
+                 }}\n"
+            ),
+        )]);
+        assert!(
+            !found
+                .iter()
+                .any(|diag| diag.message.contains("is read more than once")),
+            "{parse}: {found:?}"
+        );
+    }
+}
+
 #[test]
 fn a_value_made_only_from_primitives_is_the_bodys_own() {
     for body in [

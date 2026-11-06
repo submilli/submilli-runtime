@@ -23,7 +23,7 @@ use crate::runtime::host::{
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
 use crate::stdlib::abi::{HostView, install_field_getters};
-use crate::stdlib::shared::{check_security_call, require_writable};
+use crate::stdlib::shared::{check_and_approve_call, require_writable};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -94,11 +94,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.exists")?;
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
-                )?;
+                )
+                .await?;
                 let filesystem = caller.data().filesystem.clone();
                 // A path the sandbox cannot reach is reported absent, not trapped: that
                 // preserves the documented broken-link behaviour and denies the guest an
@@ -151,11 +152,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.size")?;
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
-                )?;
+                )
+                .await?;
                 let size =
                     runtime_effects::execute(caller, "fs.size", path, |caller, effect_id, path| {
                         Box::pin(async move {
@@ -191,11 +193,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.stat")?;
-                check_security_call(
+                check_and_approve_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
-                )?;
+                )
+                .await?;
                 stat_entry(caller, &path).await
             })
         },
@@ -209,11 +212,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.peek")?;
-                check_security_call(
+                check_and_approve_call(
                     &mut *caller,
                     "fs.stat",
                     serde_json::json!({ "path": &path }),
-                )?;
+                )
+                .await?;
                 peek_file(caller, &path).await
             })
         },
@@ -223,7 +227,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("read"),
-        FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
+        FuncType::new(&engine, [string.clone()], [uint8.clone()]),
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.read")?;
@@ -233,7 +237,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         let arr = write_submilli_uint8array_struct(caller, &bytes.0)?;
                         Ok(Val::AnyRef(Some(arr.to_anyref())))
                     }
-                    None => crate::runtime::prelude::undefined::value(caller),
+                    None => Err(crate::runtime::host::range_error(
+                        "file exceeds fs.maxReadSize()",
+                    )),
                 }
             })
         },
@@ -243,7 +249,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("readText"),
-        FuncType::new(&engine, [string.clone()], [nullable_object.clone()]),
+        FuncType::new(&engine, [string.clone()], [string.clone()]),
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readText")?;
@@ -258,7 +264,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         let st = write_submilli_string_struct(caller, &text)?;
                         Ok(Val::AnyRef(Some(st.to_anyref())))
                     }
-                    None => crate::runtime::prelude::undefined::value(caller),
+                    None => Err(crate::runtime::host::range_error(
+                        "file exceeds fs.maxReadSize()",
+                    )),
                 }
             })
         },
@@ -278,14 +286,15 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.readBytes")?;
                 let offset = f64_arg(abi_arg(params, 1)?, "fs.readBytes (offset)")? as i64;
                 let length = f64_arg(abi_arg(params, 2)?, "fs.readBytes (length)")? as i64;
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.read",
                     serde_json::json!({
                         "path": &path,
                         "length": length,
                     }),
-                )?;
+                )
+                .await?;
                 let bytes = read_byte_range(caller, &path, offset, length).await?;
                 record_payload(&*caller, ticket, Side::Response, || {
                     Payload::meta(serde_json::json!({ "offset": offset })).with_body(&bytes.0)
@@ -356,16 +365,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("mkdir"),
-        FuncType::new(&engine, [string.clone(), ValType::I32], []),
+        FuncType::new(&engine, [string.clone(), nullable_object.clone()], []),
         |caller, params, _results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.mkdir")?;
-                let recursive = i32_flag(abi_arg(params, 1)?, "fs.mkdir (recursive)")?;
-                let ticket = check_security_call(
+                let recursive = recursive_option(caller, abi_arg(params, 1)?).await?;
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.mkdir",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
-                )?;
+                )
+                .await?;
                 let request = effects::PathMutation { path, recursive };
                 runtime_effects::execute(
                     caller,
@@ -407,16 +417,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         fs_fn("remove"),
-        FuncType::new(&engine, [string.clone(), ValType::I32], []),
+        FuncType::new(&engine, [string.clone(), nullable_object.clone()], []),
         |caller, params, _results| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.remove")?;
-                let recursive = i32_flag(abi_arg(params, 1)?, "fs.remove (recursive)")?;
-                let ticket = check_security_call(
+                let recursive = recursive_option(caller, abi_arg(params, 1)?).await?;
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.remove",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
-                )?;
+                )
+                .await?;
                 let request = effects::PathMutation { path, recursive };
                 runtime_effects::execute(
                     caller,
@@ -463,11 +474,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Box::pin(async move {
                 let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.move (from)")?;
                 let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.move (to)")?;
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.move",
                     serde_json::json!({ "from": &from, "to": &to }),
-                )?;
+                )
+                .await?;
                 let request = effects::MoveEntry { from, to };
                 runtime_effects::execute(
                     caller,
@@ -514,7 +526,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 let from = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.copy (from)")?;
                 let to = read_string_arg(&mut *caller, abi_arg(params, 1)?, "fs.copy (to)")?;
                 let recursive = i32_flag(abi_arg(params, 2)?, "fs.copy (recursive)")?;
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.copy",
                     serde_json::json!({
@@ -522,7 +534,8 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         "to": &to,
                         "recursive": recursive,
                     }),
-                )?;
+                )
+                .await?;
                 let request = effects::CopyEntry {
                     from,
                     to,
@@ -577,11 +590,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.writer (path)")?;
-                let ticket = check_security_call(
+                let ticket = check_and_approve_call(
                     &mut *caller,
                     "fs.write",
                     serde_json::json!({ "path": &path }),
-                )?;
+                )
+                .await?;
                 open_writer(caller, ticket, &path).await
             })
         },
@@ -595,11 +609,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.lines (path)")?;
-                check_security_call(
+                check_and_approve_call(
                     &mut *caller,
                     "fs.read",
                     serde_json::json!({ "path": &path }),
-                )?;
+                )
+                .await?;
                 let options = crate::runtime::filesystem::ReaderOptions::Lines {
                     maximum_bytes: caller.data().fs_max_read_size,
                 };
@@ -631,11 +646,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         "fs.bytes: chunkSize must be > 0, got {chunk_size}"
                     )));
                 }
-                check_security_call(
+                check_and_approve_call(
                     &mut *caller,
                     "fs.read",
                     serde_json::json!({ "path": &path, "chunkSize": chunk_size }),
-                )?;
+                )
+                .await?;
                 let options = crate::runtime::filesystem::ReaderOptions::Bytes {
                     chunk_size: chunk_size as usize,
                 };
@@ -655,18 +671,19 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         fs_fn("list"),
         FuncType::new(
             &engine,
-            [string.clone(), ValType::I32],
+            [string.clone(), nullable_object.clone()],
             [nullable_object.clone()],
         ),
         |caller, params| {
             Box::pin(async move {
                 let path = read_string_arg(&mut *caller, abi_arg(params, 0)?, "fs.list (path)")?;
-                let recursive = i32_flag(abi_arg(params, 1)?, "fs.list (recursive)")?;
-                check_security_call(
+                let recursive = recursive_option(caller, abi_arg(params, 1)?).await?;
+                check_and_approve_call(
                     &mut *caller,
                     "fs.list",
                     serde_json::json!({ "path": &path, "recursive": recursive }),
-                )?;
+                )
+                .await?;
                 let walk = effects::open_directory(caller, path.clone(), recursive).await?;
                 let dir = ChargedDirIter::new(walk, &caller.data().tenant_limits)
                     .map_err(|e| wasmtime::Error::new(e).context(format!("fs.list {path}")))?;
@@ -929,4 +946,20 @@ fn install_file_writer_methods(
     )?;
 
     Ok(())
+}
+
+async fn recursive_option(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    options: &Val,
+) -> wasmtime::Result<bool> {
+    use crate::runtime::prelude::{collection, undefined};
+    if undefined::is_undefined(caller, options)? {
+        return Ok(false);
+    }
+    let value =
+        crate::runtime::prelude::object::read_property(caller, options, "recursive").await?;
+    if undefined::is_undefined(caller, &value)? {
+        return Ok(false);
+    }
+    collection::unbox_bool(caller, &value)
 }

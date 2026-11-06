@@ -47,7 +47,7 @@ pub(super) fn body(
     let mut emitter = FunctionEmitter::new(ctx, &params)?;
     let FinalizerArgumentCheck { target, check } = argument.check;
     emitter.instruction(wasm_encoder::Instruction::LocalGet(0));
-    super::cast_check::emit_shape_cast_on_stack(&mut emitter, ctx, target, check, None)?;
+    super::cast_check::emit_shape_cast_on_stack(&mut emitter, ctx, target, check)?;
     super::function_emitter::cast::emit_box(&mut emitter, ctx, target)?;
     emitter.build()
 }

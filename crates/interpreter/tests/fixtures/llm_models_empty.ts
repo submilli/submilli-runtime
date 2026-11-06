@@ -27,7 +27,7 @@ function main(): void {
   // undeclared, and declaration is authoritative.
   let caught = "";
   try {
-    llm.call("claude-haiku-4-5", "Summarize this.");
+    llm.text("claude-haiku-4-5", "Summarize this.");
     assert(false, "no model is callable when the catalog is empty");
   } catch (e: Error) {
     caught = e.message;

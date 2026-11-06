@@ -8,7 +8,7 @@ function main(): void {
   const r: Response = post("{{BASE}}/echo-json-array", [1, 2, 3]);
   assert(r.status === 200, "array body auto-encoded with application/json");
   assert(r.headers.get("content-type") === "application/json", "response CT");
-  const echoed = r.json() as number[];
+  const echoed = r.json<number[]>();
   assert(echoed.length === 3, "server echoed the JSON array");
   assert(echoed[0] === 1 && echoed[2] === 3, "array elements round-tripped");
 }

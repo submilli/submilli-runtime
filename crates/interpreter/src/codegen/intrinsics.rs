@@ -9,6 +9,7 @@ use wasm_encoder::{
 #[derive(Clone, Copy, Debug)]
 pub struct IntrinsicTypeIndices {
     pub undefined: u32,
+    pub type_descriptor: u32,
     pub raw_string: u32,
     pub vtable: u32,
     pub object: u32,
@@ -65,10 +66,11 @@ pub struct IntrinsicTypeIndices {
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 52;
+pub const INTRINSIC_TYPE_COUNT: u32 = 53;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
     let undefined = 51u32;
+    let type_descriptor = 52u32;
     let raw_string = 0u32;
     let vtable = 1u32;
     let object = 2u32;
@@ -527,7 +529,7 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         mutable: false,
                     },
                     FieldType {
-                        element_type: StorageType::Val(ValType::I32),
+                        element_type: StorageType::Val(ValType::F64),
                         mutable: true,
                     },
                     FieldType {
@@ -555,37 +557,30 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         },
     });
 
-    // $RegExpMatchBox: fields 1=match, 2=index, 3=input, 4=numbered captures, 5=alternating name/value array.
+    // Match arrays extend Array with index, input and named groups metadata.
     types.ty().subtype(&SubType {
         is_final: false,
-        supertype_idx: Some(object),
+        supertype_idx: Some(array),
         composite_type: CompositeType {
             inner: CompositeInnerType::Struct(StructType {
                 fields: vec![
                     fieldtype_ref(vtable),
                     FieldType {
-                        element_type: StorageType::Val(ref_to(string)),
-                        mutable: false,
+                        element_type: StorageType::Val(ref_to(raw_array)),
+                        mutable: true,
+                    },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I32),
+                        mutable: true,
                     },
                     FieldType {
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
                     },
+                    fieldtype_ref(string),
                     FieldType {
-                        element_type: StorageType::Val(ref_to(string)),
+                        element_type: StorageType::Val(ref_null(object)),
                         mutable: false,
-                    },
-                    FieldType {
-                        element_type: StorageType::Val(ref_to(regex_capture_array)),
-                        mutable: false,
-                    },
-                    FieldType {
-                        element_type: StorageType::Val(ref_to(regex_capture_array)),
-                        mutable: false,
-                    },
-                    FieldType {
-                        element_type: StorageType::Val(ValType::I64),
-                        mutable: true,
                     },
                 ]
                 .into_boxed_slice(),
@@ -1018,8 +1013,30 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         )
     });
 
+    // `$TypeDescriptor` — what every generic call passes per type argument,
+    // in its `$types` environment: the type's structural predicate (a
+    // `$Closure`), its display name, and its JSON Schema (null when the type
+    // has none). An `$Object` subtype so it fits a `$object_fields` slot. The
+    // host mirrors this in `runtime::intrinsic_types`.
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                fieldtype_ref(closure),
+                fieldtype_ref(string),
+                FieldType {
+                    element_type: StorageType::Val(ref_null(string)),
+                    mutable: false,
+                },
+            ],
+            Some(object),
+        )
+    });
+
     IntrinsicTypeIndices {
         undefined,
+        type_descriptor,
         raw_string,
         vtable,
         object,
@@ -1087,6 +1104,7 @@ pub(crate) fn intrinsic_supertypes(
 ) -> impl IntoIterator<Item = (u32, u32)> {
     [
         (indices.undefined, indices.object),
+        (indices.type_descriptor, indices.object),
         (indices.string, indices.object),
         (indices.boxed_number, indices.object),
         (indices.boxed_boolean, indices.object),
@@ -1099,7 +1117,7 @@ pub(crate) fn intrinsic_supertypes(
         (indices.error, indices.object_shape),
         (indices.bigint, indices.object),
         (indices.regex, indices.object),
-        (indices.regex_match_box, indices.object),
+        (indices.regex_match_box, indices.array),
         (indices.temporal_instant, indices.object),
         (indices.temporal_duration, indices.object),
         (indices.temporal_zdt, indices.object),
@@ -1294,6 +1312,7 @@ mod tests {
         assert_eq!(indices.temporal_plain_month_day, 40);
         assert_eq!(indices.fs_mount_info, 50);
         assert_eq!(indices.undefined, 51);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 52);
+        assert_eq!(indices.type_descriptor, 52);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 53);
     }
 }

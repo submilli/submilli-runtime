@@ -150,7 +150,10 @@ def request_json(url, headers, missing_allowed=False):
     request = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
-            return json.load(response)
+            body = json.load(response)
+            if not isinstance(body, dict):
+                raise ValueError("GHCR returned a JSON response that is not an object")
+            return body
     except urllib.error.HTTPError as error:
         if missing_allowed and error.code == 404:
             body = json.load(error)

@@ -266,7 +266,7 @@ async fn ignored_files_and_metadata_protection() {
             try { fs.writeText("/repo/.git/HEAD", "corrupt"); } catch (e: Error) { refused = true; }
             assert(refused);
             refused = false;
-            try { fs.remove("/repo", true); } catch (e: Error) { refused = true; }
+            try { fs.remove("/repo", { recursive: true }); } catch (e: Error) { refused = true; }
             assert(refused);
             repo.createBranch("topic");
             refused = false;

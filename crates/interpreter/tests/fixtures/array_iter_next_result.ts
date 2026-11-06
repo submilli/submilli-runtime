@@ -21,7 +21,7 @@ function main(): void {
   assert(eCount === 2, "entries: two yields then done");
 
   const empty: number[] = [];
-  assert(empty.values().next().done, "empty values: first next is done");
-  assert(empty.keys().next().done, "empty keys: first next is done");
-  assert(empty.entries().next().done, "empty entries: first next is done");
+  assert(empty.values().next().done === true, "empty values: first next is done");
+  assert(empty.keys().next().done === true, "empty keys: first next is done");
+  assert(empty.entries().next().done === true, "empty entries: first next is done");
 }

@@ -1,0 +1,22 @@
+line 5 type: by-design spec §Excluded-Features excludes `any`; this auto-array declaration has erased `unknown[]` storage, while its post-loop read is checked as `string[]`.
+line 6 type: by-design spec §Excluded-Features excludes `any`; tsc exposes `any[]` on a growth receiver, where the loop fixed point uses its concrete `string[]` element view.
+line 8 type: by-design spec §Excluded-Features excludes `any`; the auto-array declaration uses erased storage, while subsequent reads retain concrete element types.
+line 9 type: by-design spec §Excluded-Features excludes `any`; the first growth receiver is `never[]` before its first element, where tsc exposes `any[]`.
+line 11 type: by-design spec §Excluded-Features excludes `any`; a growth receiver keeps its preceding `number[]` view, where tsc exposes `any[]`; the later read is the element union.
+line 13 type: by-design spec §Excluded-Features excludes `any`; the auto-array declaration uses erased storage, while the branch join is checked as `string[]`.
+line 14 type: by-design spec §Excluded-Features excludes `any`; the growth receiver is still `never[]`, where tsc exposes `any[]`.
+line 16 type: by-design spec §Excluded-Features excludes `any`; the declaration uses erased storage and the read after reassignment is checked as `number[]`.
+line 17 type: by-design spec §Excluded-Features excludes `any`; an auto binding's assignment target names its erased storage, while later reads see the assigned array type.
+line 19 type: by-design spec §Excluded-Features excludes `any`; the auto-array declaration uses erased storage and the subsequent indexed read is checked as `number`.
+line 20 type: by-design spec §Excluded-Features excludes `any`; the indexed-write receiver carries the grown `number[]` type for lowering, where tsc exposes `any[]`.
+line 22 type: by-design spec §1.3 keeps an array never filled as `never[]`, where tsc exposes `any[]` on its declaration.
+line 23 type: by-design spec §1.3 keeps an array never filled as `never[]`; its length can be read without an element type.
+line 26 type: by-design spec §Excluded-Features excludes `any`; an uninitialized auto binding uses erased `unknown` storage, with concrete types at reads.
+line 27 type: by-design spec §Excluded-Features excludes `any`; an auto binding's assignment target names erased storage, while the following read is checked as `string`.
+line 29 type: by-design spec §Excluded-Features excludes `any`; an uninitialized auto binding uses erased storage, while its joined read is checked as `string | number`.
+line 30 type: by-design spec §Excluded-Features excludes `any`; assignment targets on both branches name erased storage, while the joined read retains the assigned types.
+line 32 type: by-design spec §Excluded-Features excludes `any`; an uninitialized auto binding uses erased storage, while its joined read includes `undefined`.
+line 33 type: by-design spec §Excluded-Features excludes `any`; the assignment target names erased storage, while the joined read is checked as `number | undefined`.
+line 37 type: by-design spec §Excluded-Features excludes `any`; the rejected evolving array declaration uses `unknown[]` storage rather than tsc's `any[]` recovery type.
+line 38 type: by-design spec §Excluded-Features excludes `any`; both compilers reject this deferred read, with `unknown[]` versus `any[]` recovery types.
+line 39 type: by-design spec §Excluded-Features excludes `any`; the first growth receiver is `never[]`, where tsc exposes `any[]`.

@@ -68,6 +68,7 @@ impl<'a> Inferer<'a> {
                         (None, Some(component)) => component,
                         (None, None) => self.widen_fresh_literals(typed_value, &value_ty)?,
                     };
+                    let bound = self.evolving_storage_type(&name, bound);
                     let bound = self.pattern_binding_storage_type(value, bound)?;
                     let bound = self.global_storage_ty(&name.name, bound);
                     self.finish_later_global(&name, &bound)?;
@@ -122,6 +123,7 @@ impl<'a> Inferer<'a> {
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let annotated = hint.is_some();
                     let bound = hint.unwrap_or_else(|| value_ty.clone());
+                    let bound = self.evolving_storage_type(&name, bound);
                     let bound = self.pattern_binding_storage_type(value, bound)?;
                     self.finish_later_global(&name, &bound)?;
                     self.bind_top(
@@ -271,11 +273,14 @@ impl<'a> Inferer<'a> {
             Some(flow_ty) => flow_ty,
             None => self.assigned_flow_type(declared, annotated, typed_value, value_ty)?,
         };
+        if self.evolving_bindings.contains(&name.span) {
+            return self.narrow_evolving_binding(name, flow_ty);
+        }
         if !super::stmt::initializer_may_narrow(declared, &flow_ty) {
             return Ok(());
         }
         let narrowed = self.initializer_narrowed_ty(declared, flow_ty);
-        self.renarrow_global_after_write(name, mangled, declared, narrowed)
+        self.renarrow_global_after_write(name, mangled, declared, narrowed, None)
     }
 
     /// Top-level statements are not wrapped in narrowing regions, so only a

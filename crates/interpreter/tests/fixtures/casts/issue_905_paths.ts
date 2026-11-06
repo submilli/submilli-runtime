@@ -12,8 +12,8 @@ function main(): void {
   try { session.get<Progress>(key()); }
   catch (e: Error) {
     caught = true;
-    assert(e instanceof TypeError, "checked casts still throw TypeError");
-    assert(e.message.includes('$["rows"][1]["count"]'), e.message);
+    assert(e instanceof TypeError, "a checked read still throws TypeError");
+    assert(e.message.includes("does not match `Progress`"), e.message);
     assert(e.message.includes("tenant/progress"), "dynamic key is named");
     assert(!e.message.includes("PRIVATE"), "stored values stay private");
   }

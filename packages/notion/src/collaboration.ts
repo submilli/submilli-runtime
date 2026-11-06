@@ -163,7 +163,7 @@ export function queryMeetingNotes(options?: MeetingNotesOptions): MeetingNotesRe
         if (options.sorts !== undefined) fields.push(fieldJson("sort", options.sorts));
         fields.push(fieldJson("limit", pageSize(options.limit, 50, 50)));
     }
-    const data = notionPost("/blocks/meeting_notes/query", objectJson(fields)).json() as ApiMeetingNotes;
+    const data = notionPost("/blocks/meeting_notes/query", objectJson(fields)).json<ApiMeetingNotes>();
     const results: NotionBlock[] = [];
     for (const raw of data.results) results.push(blockFrom(raw));
     return { results: results, hasMore: data.has_more };

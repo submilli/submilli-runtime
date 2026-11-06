@@ -7,7 +7,7 @@ function main(): void {
   if (one === null) {
     return;
   }
-  const t1 = one.match;
+  const t1 = one[0];
   assertSameValue(t1, "\u0009", "single tab");
 
   const two = /\t\t/.exec("a\u0009\u0009b");
@@ -15,6 +15,6 @@ function main(): void {
   if (two === null) {
     return;
   }
-  const t2 = two.match;
+  const t2 = two[0];
   assertSameValue(t2, "\u0009\u0009", "double tab");
 }
