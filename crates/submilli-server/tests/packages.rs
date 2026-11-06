@@ -73,6 +73,12 @@ async fn docs_host_unknown_and_mcp() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(doc["source"], "host");
     assert!(
+        !doc["declarations"]
+            .as_str()
+            .unwrap()
+            .contains("@capability")
+    );
+    assert!(
         doc["declarations"]
             .as_str()
             .unwrap_or("")
@@ -98,6 +104,25 @@ async fn docs_host_unknown_and_mcp() {
     let (status, body) = get("/packages/docs?name=@mcp/linear").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "unknown_mcp_server");
+}
+
+#[tokio::test]
+async fn docs_omit_capability_tags_but_keep_restriction_notes() {
+    for action in ["allow", "ask-human"] {
+        let (status, doc) = get_with(
+            &format!(
+                "name: restricted\npermissions:\n  main:\n    - capability: fs.read\n      filter: 'path == \"/notes.txt\"'\n      action: {action}\n"
+            ),
+            "/packages/docs?name=submilli:fs",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{doc}");
+        let declarations = doc["declarations"].as_str().unwrap();
+        assert!(declarations.contains("function readText("), "{doc}");
+        assert!(!declarations.contains("function writeText("), "{doc}");
+        assert!(declarations.contains("/notes.txt"), "{doc}");
+        assert!(!declarations.contains("@capability"), "{doc}");
+    }
 }
 
 #[tokio::test]

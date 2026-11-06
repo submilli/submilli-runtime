@@ -202,7 +202,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "name": name,
             "source": "host",
             "description": description,
-            "declarations": declarations,
+            "declarations": docs_scope::without_capability_tags(&declarations),
         }),
         DocLookup::CorrectedHost {
             canonical,
@@ -218,7 +218,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
                 "source": "host",
                 "correction": correction,
                 "description": format!("{correction}\n\n{description}"),
-                "declarations": declarations,
+                "declarations": docs_scope::without_capability_tags(&declarations),
             })
         }
         DocLookup::Mcp {
@@ -228,7 +228,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "name": name,
             "source": "mcp",
             "description": description,
-            "declarations": declarations,
+            "declarations": docs_scope::without_capability_tags(&declarations),
         }),
         DocLookup::Registry {
             description,
@@ -238,7 +238,7 @@ pub(crate) fn docs_json(name: &str, lookup: DocLookup) -> Value {
             "name": name,
             "source": "registry",
             "description": description,
-            "declarations": declarations,
+            "declarations": docs_scope::without_capability_tags(&declarations),
         }),
         DocLookup::Builtin { declarations } => json!({
             "name": name,
@@ -532,7 +532,46 @@ fn docs_body_markdown(intro: &str, declarations: &str) -> String {
         out.push_str("\n\n");
     }
     out.push_str("## Declarations\n\n```ts\n");
-    out.push_str(declarations.trim());
+    out.push_str(docs_scope::without_capability_tags(declarations).trim());
     out.push_str("\n```\n");
     out
+}
+
+#[cfg(test)]
+mod agent_docs_tests {
+    use super::*;
+
+    #[test]
+    fn package_docs_omit_capability_tags_in_json_and_markdown() {
+        let lookup = DocLookup::Registry {
+            description: "Test package.".into(),
+            documentation: "Readme stays unchanged.".into(),
+            declarations: "/**\n * Read a note.\n * Requires approval.\n * @capability notes.test/read { path }\n */\nfunction read(path: string): string;\n".into(),
+        };
+        let markdown = docs_markdown(&lookup).unwrap();
+        let json = docs_json("@test/notes", lookup);
+        for text in [markdown.as_str(), json["declarations"].as_str().unwrap()] {
+            assert!(!text.contains("@capability"), "{text}");
+            assert!(text.contains("Requires approval."), "{text}");
+            assert!(
+                text.contains("function read(path: string): string;"),
+                "{text}"
+            );
+        }
+        assert!(markdown.starts_with("Readme stays unchanged.\n\n"));
+
+        let host = docs_json("submilli:fs", super::lookup("submilli:fs"));
+        assert!(
+            host["declarations"]
+                .as_str()
+                .unwrap()
+                .contains("function readText(")
+        );
+        assert!(
+            !host["declarations"]
+                .as_str()
+                .unwrap()
+                .contains("@capability")
+        );
+    }
 }
