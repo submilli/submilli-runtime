@@ -1345,7 +1345,7 @@ impl Inferer<'_> {
         let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
         let (typed_value, value_ty) =
             self.infer_expr(value, compound_value_hint(op, &lhs_ty).as_ref())?;
-        let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
+        let (result_ty, kind) = self.check_compound_arith(
             op,
             (synth_lhs, &lhs_ty),
             (typed_value, &value_ty),
@@ -1366,11 +1366,7 @@ impl Inferer<'_> {
         let synth_binary = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op,
-                    lhs: synth_lhs,
-                    rhs: typed_value,
-                },
+                kind,
                 span,
                 ty: result_ty.clone(),
             })
@@ -2378,7 +2374,7 @@ impl Inferer<'_> {
             let lhs_ty = if reads_never { Type::Never } else { lhs_ty };
             let (typed_value, value_ty) =
                 self.infer_expr(value, compound_value_hint(op, &lhs_ty).as_ref())?;
-            let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
+            let (result_ty, kind) = self.check_compound_arith(
                 op,
                 (synth_lhs, &lhs_ty),
                 (typed_value, &value_ty),
@@ -2401,11 +2397,7 @@ impl Inferer<'_> {
             let synth_binary = self
                 .typed_ast
                 .try_push_expr(TypedExpr {
-                    kind: TypedExprKind::Binary {
-                        op,
-                        lhs: synth_lhs,
-                        rhs: typed_value,
-                    },
+                    kind,
                     span,
                     ty: result_ty.clone(),
                 })
@@ -2719,7 +2711,7 @@ impl Inferer<'_> {
                 ty: rw.read.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
+        let (result_ty, kind) = self.check_compound_arith(
             op,
             (synth_lhs, &rw.read),
             (typed_value, &value_ty),
@@ -2739,11 +2731,7 @@ impl Inferer<'_> {
         let synth_binary = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op,
-                    lhs: synth_lhs,
-                    rhs: typed_value,
-                },
+                kind,
                 span: stmt_span,
                 ty: result_ty,
             })
@@ -2816,7 +2804,7 @@ impl Inferer<'_> {
                 ty: read_ty.clone(),
             })
             .map_err(crate::typechecker::arena_failure)?;
-        let (result_ty, synth_lhs, typed_value) = self.check_compound_arith(
+        let (result_ty, kind) = self.check_compound_arith(
             op,
             (synth_lhs, &read_ty),
             (typed_value, &value_ty),
@@ -2836,11 +2824,7 @@ impl Inferer<'_> {
         let synth_binary = self
             .typed_ast
             .try_push_expr(TypedExpr {
-                kind: TypedExprKind::Binary {
-                    op,
-                    lhs: synth_lhs,
-                    rhs: typed_value,
-                },
+                kind,
                 span: stmt_span,
                 ty: result_ty,
             })
@@ -2871,15 +2855,19 @@ impl Inferer<'_> {
         rhs: (ExprId, &Type),
         op_span: Span,
         span: Span,
-    ) -> Result<(Type, ExprId, ExprId), crate::compiler_error::CompilerFailure> {
+    ) -> Result<(Type, TypedExprKind), crate::compiler_error::CompilerFailure> {
         let (lt, rt) = (lhs.1, rhs.1);
         if let Some(ty) = self.compound_accepts(op, lt, rt) {
-            let (lhs, rhs) = if op == BinOp::Add {
-                self.convert_for_concatenation(lhs, rhs, span)?
+            let kind = if op == BinOp::Add {
+                self.addition_with_conversions(lhs, rhs, span)?
             } else {
-                (lhs.0, rhs.0)
+                TypedExprKind::Binary {
+                    op,
+                    lhs: lhs.0,
+                    rhs: rhs.0,
+                }
             };
-            return Ok((ty, lhs, rhs));
+            return Ok((ty, kind));
         }
         let sym = binary_op_text(op);
         let culprit = self
@@ -2903,7 +2891,14 @@ impl Inferer<'_> {
             help,
             culprit,
         )?;
-        Ok((Type::Error, lhs.0, rhs.0))
+        Ok((
+            Type::Error,
+            TypedExprKind::Binary {
+                op,
+                lhs: lhs.0,
+                rhs: rhs.0,
+            },
+        ))
     }
 
     /// [`compound_arith_result`], with `+=` also concatenating a number or an

@@ -1470,27 +1470,17 @@ impl Inferer<'_> {
                 }
             }
         };
-        let (typed_lhs, typed_rhs) =
-            self.convert_for_concatenation((typed_lhs, &lt), (typed_rhs, &rt), span)?;
-        Ok((
-            TypedExprKind::Binary {
-                op: BinOp::Add,
-                lhs: typed_lhs,
-                rhs: typed_rhs,
-            },
-            result_ty,
-        ))
+        let kind = self.addition_with_conversions((typed_lhs, &lt), (typed_rhs, &rt), span)?;
+        Ok((kind, result_ty))
     }
 
-    /// `+`'s result for an operand pair: [`plus_result`], plus a number or an
-    /// `Error` beside a string, which concatenates as in TypeScript.
+    /// `+`'s result for an operand pair, including supported conversions beside a string.
     pub(super) fn plus_accepts(&self, lt: &Type, rt: &Type) -> Option<Type> {
         plus_result(lt, rt).or_else(|| self.concatenation_converts(lt, rt).map(|_| Type::String))
     }
 
-    /// Which operand a string concatenation converts: a number or an `Error`
-    /// beside a string. Other types stay rejected (bigints, nullish
-    /// values and plain objects), as the help on their error explains.
+    /// Convert supported primitive, nullish and `Error` members beside a string.
+    /// Every union member must qualify; plain objects remain unsupported.
     fn concatenation_converts(&self, lt: &Type, rt: &Type) -> Option<ConcatOperand> {
         let is_error = |ty: &Type| match ty.peel() {
             Type::ClassRef { mangled, .. } => self
@@ -1498,10 +1488,19 @@ impl Inferer<'_> {
                 .is_subclass(mangled, &crate::mangle::prelude("Error")),
             _ => false,
         };
-        let converts = |ty: &Type| match ty.primitive_behavior() {
-            Type::Number | Type::NumberLiteral(_) | Type::Boolean | Type::BooleanLiteral(_) => true,
-            Type::Union(members) => members.iter().all(is_error),
-            other => is_error(other),
+        let converts = |ty: &Type| {
+            ty.all_members(&|member| match member.primitive_behavior() {
+                Type::String
+                | Type::StringLiteral(_)
+                | Type::Number
+                | Type::NumberLiteral(_)
+                | Type::BigInt
+                | Type::Boolean
+                | Type::BooleanLiteral(_)
+                | Type::Null
+                | Type::Undefined => true,
+                other => is_error(other),
+            })
         };
         if lt.is_string_shaped() && converts(rt) {
             Some(ConcatOperand::Rhs)
@@ -1512,31 +1511,39 @@ impl Inferer<'_> {
         }
     }
 
-    /// The operands of an accepted `+`, with a number or an `Error` beside a
-    /// string converted as `String(x)` converts it, so codegen sees two strings.
-    /// The conversion and the nodes it synthesizes (`toString`'s default radix)
-    /// take `span`, the whole concatenation's: at the operand's own span they
-    /// would stand in for the operand.
-    pub(super) fn convert_for_concatenation(
+    /// Evaluate both operands before converting either: an Error's `toString`
+    /// can observe effects from the right operand, or throw after those effects.
+    pub(super) fn addition_with_conversions(
         &mut self,
         lhs: (ExprId, &Type),
         rhs: (ExprId, &Type),
         span: Span,
-    ) -> Result<(ExprId, ExprId), CompilerFailure> {
-        if plus_result(lhs.1, rhs.1).is_some() {
-            return Ok((lhs.0, rhs.0));
+    ) -> Result<TypedExprKind, CompilerFailure> {
+        let mut stmts = Vec::new();
+        let (mut left, mut right) = (lhs.0, rhs.0);
+        if plus_result(lhs.1, rhs.1).is_none() {
+            match self.concatenation_converts(lhs.1, rhs.1) {
+                Some(ConcatOperand::Lhs) => {
+                    left = self.hold_in_temp(left, "concat_left", &mut stmts)?;
+                    right = self.hold_in_temp(right, "concat_right", &mut stmts)?;
+                    left = self.wrap_interpolation_in_to_string(left, lhs.1, span, span)?;
+                }
+                Some(ConcatOperand::Rhs) => {
+                    right = self.wrap_interpolation_in_to_string(right, rhs.1, span, span)?;
+                }
+                None => {}
+            }
         }
-        Ok(match self.concatenation_converts(lhs.1, rhs.1) {
-            Some(ConcatOperand::Lhs) => (
-                self.wrap_interpolation_in_to_string(lhs.0, lhs.1, span, span)?,
-                rhs.0,
-            ),
-            Some(ConcatOperand::Rhs) => (
-                lhs.0,
-                self.wrap_interpolation_in_to_string(rhs.0, rhs.1, span, span)?,
-            ),
-            None => (lhs.0, rhs.0),
-        })
+        let binary = TypedExprKind::Binary {
+            op: BinOp::Add,
+            lhs: left,
+            rhs: right,
+        };
+        if stmts.is_empty() {
+            return Ok(binary);
+        }
+        let result = self.push_synthetic_expr(binary, Type::String, span)?;
+        Ok(TypedExprKind::Sequence { stmts, result })
     }
 
     /// `value as T` written against the expression's source. An operand other
