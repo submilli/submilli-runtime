@@ -256,7 +256,8 @@ fn build_increment(
     )
 }
 
-/// Discrimination by `done: boolean`, not `=== null`, so T can be nullable.
+/// Discrimination by `done`'s truthiness, not `=== null`, so T can be nullable.
+/// A yielded result may leave `done` out, as `IteratorYieldResult` allows.
 #[allow(clippy::too_many_arguments)]
 fn lower_iterator_like(
     ctx: &mut DesugarCtx,
@@ -281,7 +282,7 @@ fn lower_iterator_like(
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(
             "done".to_string(),
-            crate::ObjectField::required(Type::Boolean),
+            crate::ObjectField::optional(Type::Boolean),
         );
         fields.insert(
             "value".to_string(),
@@ -424,7 +425,7 @@ fn lower_iterator_like(
                 },
             },
             span,
-            ty: Type::Boolean,
+            ty: Type::Union(vec![Type::Boolean, Type::Undefined]),
         })
         .map_err(crate::typechecker::arena_failure)?;
     let break_stmt = ctx.push_stmt(TypedStmtKind::Break, span)?;

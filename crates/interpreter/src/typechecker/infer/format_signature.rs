@@ -228,7 +228,9 @@ pub(super) fn write_default_value(
         DefaultValue::Number(n) | DefaultValue::OmittedNumber { omitted: n, .. } => {
             out.push(&crate::runtime::number::format_number_js(*n))
         }
-        DefaultValue::String(s) => out.format(format_args!("{s:?}")),
+        DefaultValue::String(s) | DefaultValue::OmittedString(s) => {
+            out.format(format_args!("{s:?}"))
+        }
         DefaultValue::Boolean(b) => out.format(format_args!("{b}")),
         DefaultValue::Undefined => out.push("undefined"),
         DefaultValue::Null => out.push("null"),

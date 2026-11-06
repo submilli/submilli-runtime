@@ -33,6 +33,6 @@ function main(): void {
     const completed = [1].values();
     assert(!completed.next().done, "iterator yields");
     const end = completed.next();
-    assert(end.done, "iterator completes");
+    assert(end.done === true, "iterator completes");
     assert(end.value === undefined, "iterator completion value");
 }

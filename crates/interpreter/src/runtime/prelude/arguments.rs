@@ -82,6 +82,32 @@ fn build_metadata_type(
     )
 }
 
+/// `env` wrapped with the argument metadata of `parameters`, as codegen wraps
+/// the environment of a function with defaults or a rest parameter
+/// (`codegen::call_arguments::wrap`). Without either, `env` is returned as it is.
+pub(super) fn with_metadata(
+    caller: &mut Caller<'_, StoreData>,
+    env: Val,
+    parameters: &Parameters,
+) -> wasmtime::Result<Val> {
+    let Some(text) = crate::codegen::call_arguments::metadata(
+        parameters
+            .iter()
+            .map(|(default, rest)| (default.as_ref(), *rest)),
+    ) else {
+        return Ok(env);
+    };
+    let text = host::write_submilli_string_struct(caller, &text)?;
+    let ty = metadata_type(caller)?;
+    let pre = wasmtime::StructRefPre::new(&mut *caller, ty);
+    let wrapped = wasmtime::StructRef::new(
+        &mut *caller,
+        &pre,
+        &[env, Val::AnyRef(Some(text.to_anyref())), Val::I64(0)],
+    )?;
+    Ok(Val::AnyRef(Some(wrapped.to_anyref())))
+}
+
 pub(super) fn metadata(
     caller: &mut Caller<'_, StoreData>,
     env: &Val,
@@ -184,9 +210,12 @@ pub(super) fn bind(
                     .to_anyref(),
             ))
         } else {
+            let replaces_undefined = default
+                .as_ref()
+                .is_some_and(DefaultValue::replaces_undefined);
             match args.get(index) {
                 Some(value)
-                    if default.is_none() || !super::undefined::is_undefined(caller, value)? =>
+                    if !replaces_undefined || !super::undefined::is_undefined(caller, value)? =>
                 {
                     *value
                 }
@@ -213,9 +242,9 @@ fn default_value(
             box_result(caller, Val::F64(value.to_bits()))
         }
         Some(DefaultValue::Boolean(value)) => box_result(caller, Val::I32(*value as i32)),
-        Some(DefaultValue::String(value)) => Ok(Val::AnyRef(Some(
-            host::write_submilli_string_struct(caller, value)?.to_anyref(),
-        ))),
+        Some(DefaultValue::String(value) | DefaultValue::OmittedString(value)) => Ok(Val::AnyRef(
+            Some(host::write_submilli_string_struct(caller, value)?.to_anyref()),
+        )),
         Some(DefaultValue::EmptyArray) => Ok(Val::AnyRef(Some(
             host::write_submilli_array_struct(caller, &[])?.to_anyref(),
         ))),

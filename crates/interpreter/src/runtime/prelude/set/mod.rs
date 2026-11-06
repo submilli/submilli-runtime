@@ -35,7 +35,9 @@ use crate::runtime::prelude::closure::{self, Closure};
 use crate::runtime::prelude::collection::{
     both_nan, decode_key, encode_key, is_null_key, probe_capacity, rehash_capacity,
 };
-use crate::runtime::prelude::collection::{is_a, object_field, read_array_vals, unbox_bool};
+use crate::runtime::prelude::collection::{
+    is_a, iterator_result_value, object_field, read_array_vals,
+};
 use crate::runtime::prelude::iterator::{
     IterKind, IteratorSource, build_iterator, iter_done, iter_yield, next_closure_type, shared_next,
 };
@@ -836,9 +838,11 @@ pub(super) async fn construct(
         return Ok(coll);
     }
 
-    // The iterator and each object its `next()` returns come from guest calls.
+    // The iterator, each object its `next()` returns, and a value a getter
+    // yields come from guest calls.
     let kept_iterator = KeptValue::new(caller)?;
     let kept_result = KeptValue::new(caller)?;
+    let kept_value = KeptValue::new(caller)?;
     let it = if is_a(caller, init, &set_backing_struct(caller.engine(), &intr)?)? {
         values(caller, init)?
     } else if let Some(iter_method) = object_field(caller, init, "iterator")? {
@@ -855,13 +859,9 @@ pub(super) async fn construct(
     loop {
         let result = next_closure.call(caller, &[]).await?;
         kept_result.set(caller, result)?;
-        let done = object_field(caller, &result, "done")?
-            .ok_or_else(|| wasmtime::Error::msg("Set ctor: iterator result missing `done`"))?;
-        if unbox_bool(caller, &done)? {
+        let Some(value) = iterator_result_value(caller, &result, &kept_value).await? else {
             break;
-        }
-        let value = object_field(caller, &result, "value")?
-            .ok_or_else(|| wasmtime::Error::msg("Set ctor: iterator result missing `value`"))?;
+        };
         add(caller, &coll, &value).await?;
     }
     Ok(coll)

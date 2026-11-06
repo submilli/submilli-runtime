@@ -628,12 +628,21 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                         payload_array(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
                     let (message, cause, own) =
                         constructor_arguments(caller, class, &params[1..]).await?;
-                    payload.set(&mut *caller, CAUSE_SLOT, cause)?;
+                    payload.set(&mut *caller, CAUSE_SLOT, cause.value)?;
                     payload.set(&mut *caller, MESSAGE_SLOT, message)?;
                     let name = name_string(caller, class)?;
                     payload.set(&mut *caller, NAME_SLOT, name)?;
                     for (i, own) in own.iter().enumerate() {
                         payload.set(&mut *caller, OWN_SLOT_BASE + i as u32, *own)?;
+                    }
+                    if cause.given {
+                        // Codegen gave the instance its own optional `cause`
+                        // name, absent until marked.
+                        let receiver =
+                            as_struct(caller, abi_arg(params, 0)?, "Error#constructor_init")?;
+                        let names = super::object::field_array(caller, &receiver, 1)?;
+                        let name = names.get(&mut *caller, CAUSE_SLOT)?;
+                        super::object::mark_field_present(caller, &name)?;
                     }
                     Ok(())
                 })
@@ -669,19 +678,35 @@ fn ctor_params(class: BuiltinErrorClass, string: &ValType, options: &ValType) ->
     params
 }
 
-/// Split a constructor's arguments into its message, its `cause` (the
-/// options' `cause`, or `undefined`), and its own fields.
+/// An error's `cause` and whether it was given. As in JavaScript, options
+/// with a `cause` property give the error its own `cause`, even one holding
+/// `undefined`; without one, `"cause" in error` is `false`.
+struct Cause {
+    value: Val,
+    given: bool,
+}
+
+impl Cause {
+    fn none(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Self> {
+        Ok(Self {
+            value: super::undefined::value(caller)?,
+            given: false,
+        })
+    }
+}
+
+/// Split a constructor's arguments into its message, its cause (from the
+/// options), and its own fields.
 async fn constructor_arguments<'a>(
     caller: &mut Caller<'_, StoreData>,
     class: BuiltinErrorClass,
     args: &'a [Val],
-) -> wasmtime::Result<(Val, Val, &'a [Val])> {
+) -> wasmtime::Result<(Val, Cause, &'a [Val])> {
     let (message, rest) = args
         .split_first()
         .ok_or_else(|| fatal_host_error("Error construction is missing its message"))?;
     if !class.takes_options() {
-        let cause = super::undefined::value(caller)?;
-        return Ok((*message, cause, rest));
+        return Ok((*message, Cause::none(caller)?, rest));
     }
     let [options] = rest else {
         return Err(fatal_host_error(
@@ -691,13 +716,21 @@ async fn constructor_arguments<'a>(
     Ok((*message, cause_option(caller, options).await?, &[]))
 }
 
-/// `options.cause`, or `undefined` when the options or their `cause` are
-/// absent. A getter runs, as JavaScript reads the option.
-async fn cause_option(caller: &mut Caller<'_, StoreData>, options: &Val) -> wasmtime::Result<Val> {
-    if super::undefined::is_nullish(caller, options)? {
-        return super::undefined::value(caller);
+/// `options.cause` when the options have a `cause` property; a getter runs,
+/// as JavaScript reads the option.
+async fn cause_option(
+    caller: &mut Caller<'_, StoreData>,
+    options: &Val,
+) -> wasmtime::Result<Cause> {
+    if super::undefined::is_nullish(caller, options)?
+        || !super::object::has_property(caller, options, "cause")?
+    {
+        return Cause::none(caller);
     }
-    super::object::read_property(caller, options, "cause").await
+    Ok(Cause {
+        value: super::object::read_property(caller, options, "cause").await?,
+        given: true,
+    })
 }
 
 async fn construct_with_arguments(
@@ -823,7 +856,7 @@ pub(crate) fn construct_from_message(
         let st = write_submilli_string_struct_units(&mut *caller, &units)?;
         vals.push(Val::AnyRef(Some(st.to_anyref())));
     }
-    let cause = super::undefined::value(caller)?;
+    let cause = Cause::none(caller)?;
     construct_struct(
         caller,
         class,
@@ -853,18 +886,18 @@ fn construct_struct(
     caller: &mut Caller<'_, StoreData>,
     class: BuiltinErrorClass,
     message: &Val,
-    cause: Val,
+    cause: Cause,
     own_fields: &[Val],
 ) -> wasmtime::Result<Rooted<StructRef>> {
     validate_own_field_count(class, own_fields.len())?;
     let handles = abi(caller)?;
     let name = name_string(caller, class)?;
-    let mut payload_vals = vec![cause, *message, name];
+    let mut payload_vals = vec![cause.value, *message, name];
     payload_vals.extend_from_slice(own_fields);
     let pre = ArrayRefPre::new(&mut *caller, handles.object_fields_type.clone());
     let payload = ArrayRef::new_fixed(&mut *caller, &pre, &payload_vals)?;
     let vtable = class.vtable(&handles).get(&mut *caller);
-    let field_names = class.field_names(&handles).get(&mut *caller);
+    let field_names = instance_field_names(caller, class, &handles, cause.given)?;
     let pre = StructRefPre::new(&mut *caller, class.struct_type(&handles));
     let st = StructRef::new(
         &mut *caller,
@@ -878,6 +911,40 @@ fn construct_struct(
         ],
     )?;
     Ok(st)
+}
+
+/// An instance's field names: the class's shared names, except for its own
+/// optional `cause` name, present when the options gave a cause and otherwise
+/// absent until a store to `cause` marks it.
+fn instance_field_names(
+    caller: &mut Caller<'_, StoreData>,
+    class: BuiltinErrorClass,
+    handles: &crate::runtime::host::HostAbiHandles,
+    cause_given: bool,
+) -> wasmtime::Result<Val> {
+    let shared = match class.field_names(handles).get(&mut *caller) {
+        Val::AnyRef(Some(any)) => any.unwrap_array(&mut *caller)?,
+        other => {
+            return Err(fatal_host_error(format!(
+                "malformed Error field names global {other:?}"
+            )));
+        }
+    };
+    let mut names = Vec::new();
+    for slot in 0..shared.len(&*caller)? {
+        names.push(shared.get(&mut *caller, slot)?);
+    }
+    let cause = names
+        .get_mut(CAUSE_SLOT as usize)
+        .ok_or_else(|| fatal_host_error("Error field names lack `cause`"))?;
+    *cause = super::object::optional_field_name(caller, cause, cause_given)?;
+    let field_names_type = super::super::intrinsic_types::intrinsic_types(&mut *caller)?
+        .field_names
+        .clone();
+    let pre = ArrayRefPre::new(&mut *caller, field_names_type);
+    Ok(Val::AnyRef(Some(
+        ArrayRef::new_fixed(&mut *caller, &pre, &names)?.to_anyref(),
+    )))
 }
 
 fn name_string(

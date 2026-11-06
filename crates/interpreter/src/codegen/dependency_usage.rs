@@ -525,8 +525,7 @@ impl DependencyUsage {
         ));
     }
 
-    /// The string→number parse `+s` lowers to — the same host fn `Number(s)`
-    /// calls.
+    /// The string→number parse `+s` lowers to.
     pub(crate) fn collect_number_coercion_host_value(&mut self) {
         self.values.insert(crate::mangle::host(
             crate::runtime::NUMBER_MODULE_NAME,

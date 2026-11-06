@@ -230,7 +230,7 @@ pub(super) fn collect_from_stmt(
                     let mut fields = std::collections::BTreeMap::new();
                     fields.insert(
                         "done".to_string(),
-                        crate::ObjectField::required(Type::Boolean),
+                        crate::ObjectField::optional(Type::Boolean),
                     );
                     fields.insert(
                         "value".to_string(),

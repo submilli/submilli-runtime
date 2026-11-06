@@ -530,17 +530,11 @@ pub(super) fn match_metadata(
 // String regex-arm methods
 // ---------------------------------------------------------------------------
 
-/// Distinguish the `string | RegExp` arg: a `$string` receiver takes the literal
-/// arm; anything else is a `$regex`.
+/// Distinguish the `string | RegExp` arg: a `$string`, or a subtype such as a
+/// key `Object.keys` returns, takes the literal arm; anything else is a `$regex`.
 fn arg_is_string(caller: &mut Caller<'_, StoreData>, val: &Val) -> wasmtime::Result<bool> {
     let string_ty = intrinsic_types(&mut *caller)?.string.clone();
-    match val {
-        Val::AnyRef(Some(any)) => match any.as_struct(&mut *caller)? {
-            Some(st) => Ok(wasmtime::StructType::eq(&st.ty(&caller)?, &string_ty)),
-            None => Ok(false),
-        },
-        _ => Ok(false),
-    }
+    crate::runtime::prelude::collection::is_a(caller, val, &string_ty)
 }
 
 /// Global matching collects full matches; non-global matching follows exec,

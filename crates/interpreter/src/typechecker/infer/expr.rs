@@ -3504,7 +3504,9 @@ impl Inferer<'_> {
             | crate::DefaultValue::OmittedNumber { omitted: n, .. } => {
                 (TypedExprKind::Number(*n), Type::Number)
             }
-            crate::DefaultValue::String(s) => (TypedExprKind::String(s.clone()), Type::String),
+            crate::DefaultValue::String(s) | crate::DefaultValue::OmittedString(s) => {
+                (TypedExprKind::String(s.clone()), Type::String)
+            }
             crate::DefaultValue::Boolean(b) => (TypedExprKind::Boolean(*b), Type::Boolean),
             crate::DefaultValue::Null => (TypedExprKind::Null, Type::Null),
             crate::DefaultValue::Undefined => (TypedExprKind::Undefined, Type::Undefined),
@@ -16246,9 +16248,9 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    // `Number(boolean)` now goes through the standard
-    // call-signature dispatch — the union parameter `string | bigint`
-    // rejects `boolean` via the standard assignability diagnostic.
+    // `Number(boolean)` goes through the standard call-signature dispatch —
+    // the union parameter `number | string | bigint | undefined` rejects
+    // `boolean` via the standard assignability diagnostic.
     #[test]
     fn number_call_with_wrong_type_diagnoses() {
         let (_, diags) = run("function main(): void { let n = Number(true); }");

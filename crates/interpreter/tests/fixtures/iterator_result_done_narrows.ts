@@ -1,4 +1,4 @@
-// SUB-543: `IteratorResult` is `{ done: false; value: T } | { done: true; value:
+// SUB-543: `IteratorResult` is `{ done?: false; value: T } | { done: true; value:
 // undefined }`, so testing `done` narrows `value` both ways, as in tsc.
 function main(): void {
   const it = [1, 2].values();

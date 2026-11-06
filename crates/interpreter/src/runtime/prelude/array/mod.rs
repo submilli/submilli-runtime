@@ -871,7 +871,9 @@ pub(super) async fn from(
     map_fn: &Val,
 ) -> wasmtime::Result<Val> {
     use crate::runtime::prelude::closure;
-    use crate::runtime::prelude::collection::{is_a, object_field, string_code_points, unbox_bool};
+    use crate::runtime::prelude::collection::{
+        is_a, iterator_result_value, object_field, string_code_points,
+    };
 
     let map_closure = if super::undefined::is_undefined(caller, map_fn)? {
         None
@@ -914,9 +916,11 @@ pub(super) async fn from(
         return build_array(caller, out.values());
     }
 
-    // The iterator and each object its `next()` returns come from guest calls.
+    // The iterator, each object its `next()` returns, and a value a getter
+    // yields come from guest calls.
     let kept_iterator = KeptValue::new(caller)?;
     let kept_result = KeptValue::new(caller)?;
+    let kept_value = KeptValue::new(caller)?;
     let it = if is_a(
         caller,
         src,
@@ -957,13 +961,9 @@ pub(super) async fn from(
         out.reserve(caller, 1)?;
         let result = next_closure.call_with_receiver(caller, it, &[]).await?;
         kept_result.set(caller, result)?;
-        let done = object_field(caller, &result, "done")?
-            .ok_or_else(|| wasmtime::Error::msg("Array.from: iterator result missing `done`"))?;
-        if unbox_bool(caller, &done)? {
+        let Some(value) = iterator_result_value(caller, &result, &kept_value).await? else {
             break;
-        }
-        let value = object_field(caller, &result, "value")?
-            .ok_or_else(|| wasmtime::Error::msg("Array.from: iterator result missing `value`"))?;
+        };
         let mapped = apply_map(caller, &map_fn, value, out.values().len()).await?;
         out.push(caller, mapped)?;
     }

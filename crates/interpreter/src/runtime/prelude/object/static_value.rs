@@ -2,24 +2,27 @@
 //! `Temporal.Instant`) when one is used as a value rather than as the
 //! receiver of a call. A constructor (`Number`, `Map`) is a closure, so
 //! `typeof` gives "function" and JSON leaves it out as it does a function;
-//! `console` is an object with no fields. Each carries its own vtable whose
-//! `toString` gives the binding's JavaScript string form (`[object console]`,
+//! calling it converts as its call signature does (`Number(value)`), or
+//! throws for a constructor without one (`Map`). `console` is an object with
+//! no fields. Each carries its own vtable whose `toString` gives the binding's
+//! JavaScript string form (`[object console]`,
 //! `function Number() { [native code] }`); the other slots are the closure's
 //! or plain object's. One value is kept per tag, so every read of a binding
 //! is the same value.
 
-use wasmtime::{ArrayRef, ArrayRefPre, Caller, Global, GlobalType, Mutability, StructRef};
+use wasmtime::{ArrayRef, ArrayRefPre, Caller, Func, Global, GlobalType, Mutability, StructRef};
 use wasmtime::{StructRefPre, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel::{host_func, host_func_async};
 use crate::runtime::host::{
-    abi_result, host_closure_vtable, host_object_vtable, throw_host_error, type_error,
-    write_submilli_string_struct,
+    abi_result, host_closure_vtable, host_object_vtable, host_value_async, throw_host_error,
+    type_error, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
-use crate::runtime::prelude::iterator::{iterator_result_struct, next_closure_type};
+use crate::runtime::prelude::iterator::{iterator_result_struct, value_closure_type};
 use crate::runtime::prelude::vtable::read_string_units;
+use crate::{Type, ValueKind};
 
 pub(super) fn static_value(caller: &mut Caller<'_, StoreData>, tag: &Val) -> wasmtime::Result<Val> {
     let key = read_string_units(caller, tag, "static value tag")?;
@@ -48,17 +51,83 @@ fn build_static_value_object(
         let name = signature
             .split_once('(')
             .map_or(signature, |(name, _)| name);
+        if let Some((key, function)) = call_signature_function(caller, name) {
+            return build_converting_closure(caller, &intr, tag, text, key, function);
+        }
         let message = format!("{name} used as a value can't be called");
-        return build_constructor_closure(caller, &intr, tag, text, message);
+        return build_throwing_closure(caller, &intr, tag, text, message);
     }
     build_namespace_object(caller, &intr, text)
 }
 
-/// A closure whose function throws a `TypeError`: the binding's type allows no
-/// call, but a value cast from `unknown` to a function type can still reach
-/// one, and Submilli can't run the constructor's JavaScript conversion there.
-/// The iterator's `next` closure has exactly the zero-argument shape this needs.
-fn build_constructor_closure(
+/// The host function behind the call signature of the constructor bound to
+/// `name` (`NumberConstructor#@call` for `Number`), found through the type
+/// the prelude declares for the binding. `None` for a constructor without one.
+fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option<(String, Func)> {
+    let (prelude, _, _) = crate::runtime::prelude::cached_runtime_package_declarations();
+    let symbol = prelude.first()?.values.get(name)?;
+    let ValueKind::Const {
+        ty: Type::InterfaceRef { mangled, .. },
+        ..
+    } = &symbol.kind
+    else {
+        return None;
+    };
+    let key = crate::mangle::extend(mangled, "@call").as_str().to_owned();
+    let function = caller
+        .data()
+        .host_abi
+        .as_ref()?
+        .member_functions
+        .get(&key)
+        .copied()?;
+    Some((key, function))
+}
+
+/// A closure that converts its arguments as the constructor's call signature
+/// does, so a value typed by an interface with a call signature
+/// (`const f: FromNumber = Number`), or cast from `unknown` to a function type,
+/// calls `Number(v)`. Its environment carries the signature's defaults, so a
+/// call that omits an argument gets the default the signature declares
+/// (`Number()` is 0). A failure, such as `BigInt(null)`, throws a catchable error.
+fn build_converting_closure(
+    caller: &mut Caller<'_, StoreData>,
+    intr: &IntrinsicTypes,
+    tag: Val,
+    text: String,
+    key: String,
+    function: Func,
+) -> wasmtime::Result<Val> {
+    let closure_vtable = host_closure_vtable(caller)?;
+    let vtable = vtable_printing(caller, intr, &closure_vtable, text)?;
+    let arity = function.ty(&*caller).params().len();
+    let env = match super::super::member::builtin_parameters(&key) {
+        Some(parameters) => super::super::arguments::with_metadata(caller, tag, parameters)?,
+        None => tag,
+    };
+    let (function_ty, closure_ty) = value_closure_type(caller.engine(), intr, arity)?;
+    let convert = host_value_async(&mut *caller, function_ty, move |caller, params| {
+        let key = key.clone();
+        Box::new(async move {
+            // The closure ABI passes its environment first.
+            let args = params.get(1..).unwrap_or_default();
+            super::super::member::call_builtin(caller, function, None, args, &key).await
+        })
+    });
+    let closure_pre = StructRefPre::new(&mut *caller, closure_ty);
+    let closure = StructRef::new(
+        &mut *caller,
+        &closure_pre,
+        &[vtable, Val::FuncRef(Some(convert)), env, Val::I64(0)],
+    )?;
+    Ok(Val::AnyRef(Some(closure.to_anyref())))
+}
+
+/// A closure whose function throws a `TypeError`, as JavaScript does when a
+/// constructor without a call signature is called without `new` (`Map()`).
+/// Its type declares no call, but a value cast from `unknown` to a function
+/// type can still reach one.
+fn build_throwing_closure(
     caller: &mut Caller<'_, StoreData>,
     intr: &IntrinsicTypes,
     tag: Val,
@@ -67,7 +136,7 @@ fn build_constructor_closure(
 ) -> wasmtime::Result<Val> {
     let closure_vtable = host_closure_vtable(caller)?;
     let vtable = vtable_printing(caller, intr, &closure_vtable, text)?;
-    let (function_ty, closure_ty) = next_closure_type(caller.engine(), intr)?;
+    let (function_ty, closure_ty) = value_closure_type(caller.engine(), intr, 0)?;
     let function = host_func(&mut *caller, function_ty, move |caller, _, _| {
         Err(throw_host_error(caller, type_error(message.clone())))
     });
