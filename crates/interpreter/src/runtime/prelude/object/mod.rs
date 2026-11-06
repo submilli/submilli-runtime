@@ -598,6 +598,80 @@ fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmti
     )))
 }
 
+/// The type codegen gives an optional field's name
+/// (`codegen::field_names::declare_optional_name_type`): a `$string` subtype
+/// with a mutable presence flag and an immutable privacy flag.
+pub(crate) fn optional_field_name_type(
+    engine: &wasmtime::Engine,
+    intr: &crate::runtime::intrinsic_types::IntrinsicTypes,
+) -> wasmtime::Result<StructType> {
+    use wasmtime::{FieldType, Finality, Mutability, StorageType};
+    let mut fields: Vec<_> = intr.string.fields().collect();
+    fields.push(FieldType::new(
+        Mutability::Var,
+        StorageType::ValType(ValType::I32),
+    ));
+    fields.push(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::I32),
+    ));
+    crate::runtime::gc_singleton::singleton_struct(
+        engine,
+        Finality::Final,
+        Some(intr.string.clone()),
+        fields,
+    )
+}
+
+/// A public optional field's name with `name`'s text, for one instance:
+/// present when `present`, otherwise absent until a store marks it.
+pub(crate) fn optional_field_name(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+    present: bool,
+) -> wasmtime::Result<Val> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let ty = optional_field_name_type(caller.engine(), &intr)?;
+    let name = as_struct(caller, name, "optional field name")?;
+    let values = [
+        name.field(&mut *caller, 0)?,
+        name.field(&mut *caller, 1)?,
+        name.field(&mut *caller, 2)?,
+        Val::I32(i32::from(present)),
+        Val::I32(0),
+    ];
+    let pre = StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &values)?.to_anyref(),
+    )))
+}
+
+/// Mark an optional field's name present, as a store to the field does. A
+/// required name is always present, and an accessor's name has no flag to set.
+pub(crate) fn mark_field_present(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+) -> wasmtime::Result<()> {
+    let marker = as_struct(caller, name, "field name")?;
+    if marker.ty(&*caller)?.fields().count() > 3
+        && matches!(marker.field(&mut *caller, 3)?, Val::I32(0))
+    {
+        marker.set_field(&mut *caller, 3, Val::I32(1))?;
+    }
+    Ok(())
+}
+
+/// Whether `object` has the property `name`, as JavaScript's `in` answers it:
+/// a present data field or an accessor.
+pub(crate) fn has_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<bool> {
+    let key = crate::runtime::host::write_submilli_string_struct(caller, name)?;
+    dynamic::has(caller, object, &Val::AnyRef(Some(key.to_anyref())))
+}
+
 /// `object[name]` as JavaScript reads it: a data field, a getter's result, or
 /// `undefined` when the object has neither.
 pub(crate) async fn read_property(
@@ -1305,7 +1379,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
 
 #[cfg(test)]
 mod tests {
-    use super::same_value_bits;
+    use super::{optional_field_name_type, same_value_bits};
 
     #[test]
     fn same_value_bit_rules() {
@@ -1314,5 +1388,67 @@ mod tests {
         assert!(same_value_bits((-0f64).to_bits(), (-0f64).to_bits()));
         assert!(same_value_bits(1.5f64.to_bits(), 1.5f64.to_bits()));
         assert!(!same_value_bits(1f64.to_bits(), 2f64.to_bits()));
+    }
+
+    /// The host's optional field name must canonically equal the type codegen
+    /// declares, or a guest store would not mark a host-made name present.
+    #[test]
+    fn optional_field_name_type_matches_codegen() {
+        use wasm_encoder::{
+            ConstExpr, ExportKind, ExportSection, GlobalSection, GlobalType, HeapType, Module,
+            RefType, TypeSection, ValType,
+        };
+        let mut config = wasmtime::Config::new();
+        config.wasm_gc(true);
+        config.wasm_function_references(true);
+        let engine = wasmtime::Engine::new(&config).unwrap();
+        let intr = crate::runtime::intrinsic_types::build_intrinsic_types(&engine).unwrap();
+        let host = optional_field_name_type(&engine, &intr).unwrap();
+
+        let mut types = TypeSection::new();
+        let intrinsics = crate::codegen::intrinsics::declare_intrinsic_types(&mut types);
+        let mut symbols = crate::codegen::symbol_table::SymbolTable::default();
+        let mut next_type_idx = crate::codegen::intrinsics::INTRINSIC_TYPE_COUNT;
+        crate::codegen::field_names::declare_optional_name_type(
+            &mut types,
+            &mut symbols,
+            &mut next_type_idx,
+            intrinsics,
+        )
+        .unwrap();
+        let name_type = symbols.optional_field_name_type().unwrap();
+        let mut globals = GlobalSection::new();
+        globals.global(
+            GlobalType {
+                val_type: ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(name_type),
+                }),
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::ref_null(HeapType::Concrete(name_type)),
+        );
+        let mut exports = ExportSection::new();
+        exports.export("name", ExportKind::Global, 0);
+        let mut module = Module::new();
+        module.section(&types);
+        module.section(&globals);
+        module.section(&exports);
+
+        let module = wasmtime::Module::new(&engine, module.finish()).unwrap();
+        let recovered = module
+            .get_export("name")
+            .unwrap()
+            .global()
+            .unwrap()
+            .content()
+            .as_ref()
+            .map(|r| r.heap_type().clone())
+            .unwrap()
+            .as_concrete_struct()
+            .unwrap()
+            .clone();
+        assert!(wasmtime::StructType::eq(&host, &recovered));
     }
 }

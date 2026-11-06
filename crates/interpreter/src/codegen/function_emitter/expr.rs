@@ -5639,6 +5639,14 @@ fn emit_method_call_with_receiver_on_stack(
     // function-typed field. Reuses the `$ObjectShape` field-name scan
     // machinery and the closure ABI.
     if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
+        if is_call_signature_call(iface, method) {
+            // A call signature names no member: the value is the function (a
+            // constructor such as `Number` is one), or an object with a quoted
+            // `"@call"` method answers. The runtime member call resolves both.
+            cast::emit_box(emitter, ctx, recv_ty)?;
+            emit_live_member_on_stack(emitter, ctx, iface, method, Some(args))?;
+            return cast::emit_cast_to(emitter, ctx, call_ret_ty);
+        }
         emit_interface_method_via_shape_with_receiver_on_stack(
             emitter,
             ctx,
@@ -5652,6 +5660,13 @@ fn emit_method_call_with_receiver_on_stack(
     Err(crate::codegen::internal_failure(format!(
         "method dispatch was not registered for `{iface}.{method}`"
     )))
+}
+
+/// Whether a call on a user interface goes through its call signature
+/// (`interface F { (v: number): number }`). Codegen analysis notes the runtime
+/// member helpers such a call needs by the same test.
+pub(in crate::codegen) fn is_call_signature_call(iface: &crate::MangledName, method: &str) -> bool {
+    method == "@call" && !crate::codegen::is_host_package(iface.as_str())
 }
 
 fn emit_class_method_value(

@@ -14,7 +14,9 @@ pub(super) fn emit_argument(
     default: Option<&DefaultValue>,
 ) -> Result<(), CompilerFailure> {
     let source_slot = ctx.symbols.value_type(source)?;
-    let Some(default) = default.filter(|_| matches!(source_slot, ValType::Ref(_))) else {
+    let Some(default) = default
+        .filter(|default| matches!(source_slot, ValType::Ref(_)) && default.replaces_undefined())
+    else {
         return cast::emit_coerce_to_wasm_slot(emitter, ctx, source, slot);
     };
     if matches!(source.peel(), Type::Undefined) {
@@ -47,7 +49,8 @@ fn emit_default(
     value: &DefaultValue,
 ) -> Result<Type, CompilerFailure> {
     Ok(match value {
-        DefaultValue::Undefined => {
+        // An explicit `undefined` passes as it is for an omitted-only default.
+        DefaultValue::Undefined | DefaultValue::OmittedString(_) => {
             expr::emit_undefined(emitter, ctx)?;
             Type::Undefined
         }

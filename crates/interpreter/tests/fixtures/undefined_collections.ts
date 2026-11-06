@@ -39,5 +39,5 @@ function main(): void {
   assert(bytes.toBase64(undefined) === bytes.toBase64(), "optional base64 options");
   assert(bytes.toBase64({ alphabet: undefined, omitPadding: undefined }) === bytes.toBase64(), "optional option fields");
   const completed = empty.values().next();
-  assert(completed.done && completed.value === undefined, "iterator completion");
+  assert(completed.done === true && completed.value === undefined, "iterator completion");
 }

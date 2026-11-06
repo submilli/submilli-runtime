@@ -3253,7 +3253,7 @@ mod tests {
     fn builtin_docs_print_a_call_signature_without_a_name() {
         for name in ["Number", "Number.@call"] {
             let docs = builtin_docs(name).expect("Number built-in");
-            assert!(docs.contains("  (value: "), "{docs}");
+            assert!(docs.contains("  (value?: "), "{docs}");
             assert!(!docs.contains("@call"), "{docs}");
         }
     }
@@ -3896,7 +3896,7 @@ mod tests {
     #[test]
     fn d_ts_renderer_uses_typescript_call_and_predicate_signatures() {
         let docs = render_lib_submilli_d_ts();
-        assert!(docs.contains("(value: string | bigint | undefined): number;"));
+        assert!(docs.contains("(value?: number | bigint | string): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
         assert!(!docs.contains("@call"));
     }

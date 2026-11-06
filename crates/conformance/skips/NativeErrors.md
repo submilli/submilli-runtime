@@ -5,7 +5,7 @@ classes, `RangeError`, `ReferenceError`, `SyntaxError`, `TypeError`, and
 `URIError` exist here as built-in `Error` subclasses. `EvalError` does not. Each class directory has the same 15 files, and most of
 them test constructor and prototype objects.
 
-Ported: 11 (10 passing, 1 `expect-fail` known gap). Representative rejected
+Ported: 11, all passing. Representative rejected
 originals under `rejected/NativeErrors/`.
 
 The restored cause case unrolls the pinned upstream `nativeErrors` list over
@@ -18,7 +18,7 @@ values. `EvalError` is excluded. Older ports cover the original three classes.
 | `{Range,Syntax,Type}Error/instance-proto.js` | ported, passing | "Instance's prototype is `X.prototype`" becomes `instanceof X` on an `unknown`-widened value. |
 | `{Range,Syntax,Type}Error/prototype/proto.js` | ported, passing | "`X.prototype` inherits from `Error.prototype`" becomes `instanceof Error`, plus `catch (e: Error)` binding the subclass. |
 | `{Range,Syntax,Type}Error/prototype/name.js` | ported, passing | The `name` value is read through an instance, with `toString()`. Descriptor checks dropped. |
-| `cause_property_native_error.js` | ported, `expect-fail` (SUB-1830) | Retains own-property and cause-value checks for supplied, omitted, explicit `undefined`, and empty options across the supported constructors. Omitted causes still occupy own fields. Descriptor flags are excluded; object-valued SameValue is structural. |
+| `cause_property_native_error.js` | ported, passing | Retains own-property and cause-value checks for supplied, omitted, explicit `undefined`, and empty options across the supported constructors. Descriptor flags are excluded; object-valued SameValue is structural. |
 | `{Range,Syntax,Type}Error/prototype/message.js` (the prototype's `message` is `""`) | not ported | The empty constructor message is covered by interpreter fixtures; prototype reflection remains excluded. |
 | `{Range,Syntax,Type}Error/is-error-object.js` (`[object Error]` brand) | not ported | The `[[ErrorData]]` brand is `Error.isError` here, already covered by `Error/isError/errors.ts`. |
 | `EvalError/**` | rejected | `EvalError` is unavailable. Representative original remains in `rejected/`. |

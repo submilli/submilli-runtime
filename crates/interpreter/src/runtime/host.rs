@@ -1998,6 +1998,7 @@ pub fn internal_host_package_declarations() -> Vec<PackageDeclaration> {
         super::json::json_module_definitions(),
         super::mcp::mcp_call_package_declaration(),
         super::tools::tools_call_package_declaration(),
+        number_coercion_definitions(),
     ]
 }
 
@@ -2007,38 +2008,7 @@ pub fn stdlib_package_declarations() -> Vec<PackageDeclaration> {
 
 fn number_module_definitions() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(NUMBER_MODULE_NAME);
-    let insert = |defs: &mut PackageDeclaration,
-                  name: &str,
-                  params: Vec<Param>,
-                  ret: Type,
-                  doc: Option<crate::DocComment>| {
-        defs.values.insert(
-            name.to_string(),
-            ValueSymbol {
-                name: name.to_string(),
-                mangled_name: crate::mangle::host(NUMBER_MODULE_NAME, name),
-                declaration_span: Span::at(crate::FileId::NUMBER),
-                kind: ValueKind::Function {
-                    generics: Vec::new(),
-                    params,
-                    ret,
-                    type_predicate: None,
-                    doc,
-                },
-            },
-        );
-    };
-    insert(
-        &mut defs,
-        "toNumber",
-        vec![Param::new("string", Type::String)],
-        Type::Number,
-        crate::doc(
-            crate::FileId::NUMBER,
-            "/**\n * Strict whole-string decimal parse.\n * Returns `NaN` when `string` is not a valid number.\n * @param string The text to parse.\n */",
-        ),
-    );
-    insert(
+    insert_number_function(
         &mut defs,
         "parseInt",
         vec![Param::new("string", Type::String), parse_int_radix_param()],
@@ -2048,7 +2018,7 @@ fn number_module_definitions() -> PackageDeclaration {
             "/**\n * Parses `string` as an integer in the given `radix`. Stops at the first non-digit character. Returns `NaN` if no digits are found.\n * @param string The text to parse.\n * @param radix The base (2-36). Omitted or `undefined`, a `0x` prefix reads as base 16 and anything else as base 10.\n */",
         ),
     );
-    insert(
+    insert_number_function(
         &mut defs,
         "parseFloat",
         vec![Param::new("string", Type::String)],
@@ -2059,6 +2029,44 @@ fn number_module_definitions() -> PackageDeclaration {
         ),
     );
     defs
+}
+
+/// `toNumber`, the string parse unary `+` lowers to. It is not a global, as
+/// TypeScript has none.
+fn number_coercion_definitions() -> PackageDeclaration {
+    let mut defs = PackageDeclaration::with_package(NUMBER_MODULE_NAME);
+    insert_number_function(
+        &mut defs,
+        "toNumber",
+        vec![Param::new("string", Type::String)],
+        Type::Number,
+        None,
+    );
+    defs
+}
+
+fn insert_number_function(
+    defs: &mut PackageDeclaration,
+    name: &str,
+    params: Vec<Param>,
+    ret: Type,
+    doc: Option<crate::DocComment>,
+) {
+    defs.values.insert(
+        name.to_string(),
+        ValueSymbol {
+            name: name.to_string(),
+            mangled_name: crate::mangle::host(NUMBER_MODULE_NAME, name),
+            declaration_span: Span::at(crate::FileId::NUMBER),
+            kind: ValueKind::Function {
+                generics: Vec::new(),
+                params,
+                ret,
+                type_predicate: None,
+                doc,
+            },
+        },
+    );
 }
 
 /// `parseInt`'s `radix`: omitted or `undefined` passes 0, which

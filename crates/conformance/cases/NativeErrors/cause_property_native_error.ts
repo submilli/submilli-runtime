@@ -1,5 +1,4 @@
 // test262: test/built-ins/NativeErrors/cause_property_native_error.js
-// expect-fail: an omitted native-error cause is still an own property (SUB-1830)
 // Source: https://github.com/tc39/test262/blob/d53ebc8b1931d9f1541e43d59650776e4b766248/test/built-ins/NativeErrors/cause_property_native_error.js
 // The nativeErrors loop is unrolled because classes are not values; EvalError
 // is unavailable. verifyProperty becomes own-property and value checks, omitting

@@ -1,5 +1,4 @@
 // test262: test/built-ins/Error/cause_property.js
-// expect-fail: an omitted Error cause is still an own property (SUB-1830)
 // Source: https://github.com/tc39/test262/blob/d53ebc8b1931d9f1541e43d59650776e4b766248/test/built-ins/Error/cause_property.js
 // verifyProperty becomes own-property and value checks; descriptor flags are
 // excluded by the conformance rules. Object-valued SameValue is structural.

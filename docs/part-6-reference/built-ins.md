@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "72432b2354be216b99eff68057f40428e08765d942a86225e2f7fb45d826ae29"
+  contentHash: "e28d91c562bca75076f6ffad2a0f62f665bf951cacd557b45c53a5eaeed31761"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -373,7 +373,7 @@ Constructor object for `number`.
 | `readonly NEGATIVE_INFINITY: number` | Same value as `-Infinity`. |
 | `readonly NaN: number` | Same value as the global `NaN`. |
 | `readonly POSITIVE_INFINITY: number` | Same value as the global `Infinity`. |
-| `(value: string \| bigint \| undefined): number` | Convert a `string`, `bigint`, or `undefined` to a `number`. |
+| `(value?: number \| bigint \| string): number` | Convert a `number`, `string`, `bigint`, or `undefined` to a `number`. |
 | `isFinite(value: unknown): boolean` | Returns `true` when `value` is neither `NaN` nor ±`Infinity`. |
 | `isInteger(value: unknown): boolean` | Returns `true` when `value` is a finite whole number. |
 | `isNaN(value: unknown): boolean` | Returns `true` when `value` is `NaN`. |
@@ -597,7 +597,7 @@ Constructor object for `string`.
 
 | Member | Description |
 | --- | --- |
-| `(value: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. |
+| `(value?: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `""`. |
 | `fromCharCode(...codes: number[]): string` | Builds a string from UTF-16 code units — one unit per argument. |
 | `fromCodePoint(...codePoints: number[]): string` | Builds a string from Unicode code points; astral code points (> U+FFFF) encode as surrogate pairs. |
 

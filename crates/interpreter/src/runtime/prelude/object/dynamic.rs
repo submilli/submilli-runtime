@@ -127,13 +127,7 @@ pub(super) async fn set(
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
-        let marker = super::super::iterator::as_struct(caller, &property.name, "field name")?;
-        if marker.ty(&*caller)?.fields().count() > 3
-            && matches!(marker.field(&mut *caller, 3)?, Val::I32(0))
-        {
-            marker.set_field(&mut *caller, 3, Val::I32(1))?;
-        }
-        return Ok(());
+        return super::mark_field_present(caller, &property.name);
     }
     if let Some(property) = find(caller, object, &accessor_key("set ", &key)?, true)? {
         super::super::closure::read(caller, &property.value, "property setter")?

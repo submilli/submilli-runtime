@@ -87,14 +87,21 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
 async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
     require_receiver(caller, abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "member")?;
-    let fallback = host::read_string_arg(caller, abi_arg(params, 2)?, "interface")?;
-    // An optional conversion field left out has no method; the call then takes
-    // the inherited conversion, as `String(value)` does.
-    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name).await?;
-    let interface = receiver_interface(caller, abi_arg(params, 0)?)?.unwrap_or(fallback);
+    // A call signature (`@call`) names no member: the value itself is the
+    // function. An optional conversion field left out has no method; the call
+    // then takes the inherited conversion, as `String(value)` does.
+    let method = if name == "@call" && value::is_callable(caller, abi_arg(params, 0)?)? {
+        Some(*abi_arg(params, 0)?)
+    } else {
+        value::conversion_method(caller, abi_arg(params, 0)?, &name).await?
+    };
     let key = if method.is_some() {
         String::new()
     } else {
+        let interface = match receiver_interface(caller, abi_arg(params, 0)?)? {
+            Some(interface) => interface,
+            None => host::read_string_arg(caller, abi_arg(params, 2)?, "interface")?,
+        };
         format!("{interface}#{name}")
     };
     let key = Val::AnyRef(Some(
@@ -139,7 +146,7 @@ async fn invoke(
         .and_then(|abi| abi.member_functions.get(&key))
         .copied();
     if let Some(function) = function {
-        return call_builtin(caller, function, *receiver, &args, &key).await;
+        return call_builtin(caller, function, Some(*receiver), &args, &key).await;
     }
     let slot = if key.ends_with("#toString") {
         Some(0)
@@ -195,10 +202,12 @@ async fn invoke_defaults(
         .await
 }
 
-async fn call_builtin(
+/// Call the prelude host function `key` names with `args` bound to its
+/// declared parameters, after `receiver` unless the function is static.
+pub(super) async fn call_builtin(
     caller: &mut Caller<'_, StoreData>,
     function: Func,
-    receiver: Val,
+    receiver: Option<Val>,
     args: &[Val],
     key: &str,
 ) -> wasmtime::Result<Val> {
@@ -208,15 +217,13 @@ async fn call_builtin(
     } else {
         args.to_vec()
     };
+    let values: Vec<Val> = receiver.into_iter().chain(args).collect();
     let signature = function.ty(&*caller);
     let mut inputs = Vec::new();
     for (index, slot) in signature.params().enumerate() {
-        let value = if index == 0 {
-            receiver
-        } else if let Some(value) = args.get(index - 1) {
-            *value
-        } else {
-            super::undefined::value(caller)?
+        let value = match values.get(index) {
+            Some(value) => *value,
+            None => super::undefined::value(caller)?,
         };
         inputs.push(coerce(caller, value, &slot).await?);
     }
@@ -291,7 +298,7 @@ static BUILTIN_PARAMETERS: LazyLock<HashMap<String, Parameters>> = LazyLock::new
     parameters
 });
 
-fn builtin_parameters(key: &str) -> Option<&'static Parameters> {
+pub(super) fn builtin_parameters(key: &str) -> Option<&'static Parameters> {
     BUILTIN_PARAMETERS.get(key)
 }
 

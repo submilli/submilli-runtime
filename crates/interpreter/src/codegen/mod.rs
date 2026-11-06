@@ -10,7 +10,7 @@ mod argument_defaults;
 pub mod bigint_pool;
 pub mod bounds;
 pub mod box_types;
-mod call_arguments;
+pub(crate) mod call_arguments;
 pub mod cast_check;
 mod cast_diagnostics;
 pub mod classes;

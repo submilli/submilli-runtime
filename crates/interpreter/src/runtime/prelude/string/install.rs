@@ -277,6 +277,16 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// `String(value)`'s parameter: an omitted argument is `""`, while an explicit
+/// `undefined` converts to `"undefined"`, as in JavaScript.
+fn call_value() -> Param {
+    Param::with_default(
+        "value",
+        Type::Unknown,
+        crate::DefaultValue::OmittedString(String::new()),
+    )
+}
+
 pub fn declare(defs: &mut PackageDeclaration) {
     let m = |defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret: Type| {
         declare_method(defs, name, method_key(name), params, ret);
@@ -480,7 +490,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "@call",
         crate::mangle::extend(&crate::mangle::prelude("StringConstructor"), "@call"),
-        vec![Param::new("value", Type::Unknown)],
+        vec![call_value()],
         Type::String,
     );
 
@@ -2112,11 +2122,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         MethodSig {
                             optional: false,
                             generics: Vec::new(),
-                            params: vec![Param::new("value", Type::Unknown)],
+                            params: vec![call_value()],
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Convert any value to its string representation: `\"null\"` and `\"undefined\"` for those values, otherwise the value's `toString()` method.\n */",
+                                "/**\n * Convert any value to its string representation: `\"null\"` and `\"undefined\"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `\"\"`.\n */",
                             ),
                         },
                     ),

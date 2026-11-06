@@ -6,7 +6,7 @@ and `ErrorOptions` constructor arguments, `toString()`, `Error.isError`, and use
 `extends`. Most of the area tests prototype objects, property descriptors,
 the `stack` accessor, and realms, which don't exist here.
 
-Ported: 15 (13 passing, 1 `expect-error` pin, and 1 `expect-fail` known gap). Representative rejected
+Ported: 15 (14 passing and 1 `expect-error` pin). Representative rejected
 originals under `rejected/Error/`.
 
 Some older ports spell `new Error()` as `new Error("")`. Both now use the
@@ -17,7 +17,7 @@ empty default message.
 | `message_property.js` | ported, passing | Value check and write kept; descriptor half dropped. |
 | `prototype/toString/15.11.4.4-{6-1,6-2,8-1,8-2,9-1,10-1}.js` | ported, passing | The name/message combinations of `toString`. |
 | `isError/{errors,error-subclass,primitives,bigints,non-error-objects,fake-errors}.js` | ported, passing | Arms for `EvalError`/`ReferenceError`/`URIError`/`AggregateError`/`SuppressedError`, and constructors passed as values are dropped. `fake-errors` becomes an object literal with Error's fields. |
-| `cause_property.js` | ported, `expect-fail` (SUB-1830) | Keeps own-property presence and cause-value checks, including an absent cause and an explicit `undefined` cause. An omitted cause still occupies an own field. Descriptor flags are excluded; object-valued SameValue uses structural equality. |
+| `cause_property.js` | ported, passing | Keeps own-property presence and cause-value checks, including an absent cause and an explicit `undefined` cause. Descriptor flags are excluded; object-valued SameValue uses structural equality. |
 | `the-initial-value-of-errorprototypemessage-is-the-empty-string.js` | ported, `expect-error` | `Error('a')` without `new`: a class isn't callable. Pinned to ``` `Error` is a class, not a value ```. |
 | `prototype/toString/S15.11.4.4_A2.js` (`toString()` is not `undefined`) | not ported | Redundant with `15.11.4.4-6-2`. |
 | `constructor.js`, `cause_abrupt.js` | rejected | Message `toString` coercion and `cause` getter traps. Originals in `rejected/`. |

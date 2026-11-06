@@ -38,14 +38,16 @@ function main(): void {
   if (typeof value === "object" && value !== null) {
     assert(!Object.hasOwn(value, "toString"), "console has no own toString");
   }
-  // Node runs `Number`'s conversion here; a binding value can't be called
-  // in Submilli, so the call throws a catchable TypeError instead.
+  // Called as a function, a constructor converts as its call signature does;
+  // one without a call signature (`Map`) throws a TypeError, as in Node.
+  assert((ctor as (text: string) => number)("3") === 3, "calling a constructor value converts");
+  const mapCtor: unknown = Map;
   let called = "no throw";
   try {
-    (ctor as (text: string) => number)("3");
+    (mapCtor as () => unknown)();
   } catch (e) {
     called = e instanceof TypeError ? "TypeError" : "other";
   }
-  assert(called === "TypeError", "calling a constructor value throws");
+  assert(called === "TypeError", "calling Map without new throws");
   alias.log("calls through an alias still work");
 }

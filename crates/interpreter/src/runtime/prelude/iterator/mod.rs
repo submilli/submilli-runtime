@@ -33,21 +33,32 @@ use crate::runtime::host::{
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
 
 /// The `$closure_0_value` func + struct types: `next: () => IteratorResult<T>`
-/// under the closure ABI — funcref `(ref any) -> (ref null $object)`, struct a
-/// `$closure` subtype `{ vtable, funcref, env }`. Declared to canonicalize with
-/// `codegen::closures`, so the guest's `ref.cast` to its own `$closure_0_value`
-/// during structural dispatch succeeds. The [`next_closure_matches_codegen`] test
-/// pins the agreement; the `array_values` fixture is the runtime backstop.
+/// under the closure ABI. See [`value_closure_type`].
 pub(crate) fn next_closure_type(
     engine: &wasmtime::Engine,
     intr: &IntrinsicTypes,
 ) -> wasmtime::Result<(FuncType, StructType)> {
+    value_closure_type(engine, intr, 0)
+}
+
+/// The func + struct types of a value-returning closure taking `arity`
+/// arguments, `$closure_<arity>_value` — funcref
+/// `(ref any, (ref null $object) × arity) -> (ref null $object)`, struct a
+/// `$closure` subtype `{ vtable, funcref, env }`. Declared to canonicalize with
+/// `codegen::closures`, so the guest's `ref.cast` to its own closure type
+/// succeeds. The [`value_closures_match_codegen`] test pins the agreement; the
+/// `array_values` (arity 0) and `constructor_called_through_call_signature`
+/// (arity 1) fixtures are the runtime backstops.
+pub(crate) fn value_closure_type(
+    engine: &wasmtime::Engine,
+    intr: &IntrinsicTypes,
+    arity: usize,
+) -> wasmtime::Result<(FuncType, StructType)> {
     let imm = Mutability::Const;
-    let func = singleton_func(
-        engine,
-        vec![ValType::Ref(RefType::new(false, HeapType::Any))],
-        vec![ValType::Ref(RefType::new(true, intr.object.clone().into()))],
-    )?;
+    let object = ValType::Ref(RefType::new(true, intr.object.clone().into()));
+    let mut params = vec![ValType::Ref(RefType::new(false, HeapType::Any))];
+    params.extend(std::iter::repeat_n(object.clone(), arity));
+    let func = singleton_func(engine, params, vec![object])?;
     let st = singleton_struct(
         engine,
         Finality::NonFinal,
@@ -634,7 +645,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(
             "done".to_string(),
-            crate::ObjectField::required(Type::BooleanLiteral(false)),
+            crate::ObjectField::optional(Type::BooleanLiteral(false)),
         );
         fields.insert(
             "value".to_string(),
@@ -655,7 +666,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: vec!["T".to_string()],
                 ty: yield_result_body(),
                 doc: doc(
-                    "/** A single yielded element from an `Iterator<T>`: `{ done: false; value: T }`. The non-terminating arm of `IteratorResult<T>`. */",
+                    "/** A single yielded element from an `Iterator<T>`: `{ done?: false; value: T }`. The non-terminating arm of `IteratorResult<T>`. */",
                 ),
             },
         },
@@ -720,7 +731,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: vec!["T".to_string()],
                 ty: iterator_result_body(),
                 doc: doc(
-                    "/** Discriminated-union result of `Iterator<T>.next()`. Discriminate on the `done` boolean: `false` → element in `value`; `true` → end-of-stream. Designed to compose with `for-of`, which handles the discrimination automatically. */",
+                    "/** Discriminated-union result of `Iterator<T>.next()`. Discriminate on `done`: `false` or absent → element in `value`; `true` → end-of-stream. Designed to compose with `for-of`, which handles the discrimination automatically. */",
                 ),
             },
         },
@@ -865,23 +876,30 @@ mod tests {
         }
     }
 
-    /// The `$closure_0_value` struct `next_closure_type` declares must be
+    /// The `$closure_<arity>_value` struct `value_closure_type` declares must be
     /// canonically equal to the one `codegen::closures` emits for `ClosureSig {
-    /// arity: 0, is_void: false }` — otherwise the guest's structural-dispatch
-    /// `ref.cast` of an iterator's `next` field would trap. Mirrors the
+    /// arity, is_void: false }` — otherwise the guest's `ref.cast` of an
+    /// iterator's `next` field (arity 0) or of a constructor called as a
+    /// function (arity 1) would trap. Mirrors the
     /// `unary_void_closure_matches_codegen` backstop in the array port.
     #[test]
-    fn next_closure_matches_codegen() {
+    fn value_closures_match_codegen() {
+        for arity in [0, 1] {
+            assert_value_closure_matches_codegen(arity);
+        }
+    }
+
+    fn assert_value_closure_matches_codegen(arity: u8) {
         let mut config = Config::new();
         config.wasm_gc(true);
         config.wasm_function_references(true);
         let engine = Engine::new(&config).unwrap();
 
         let intr = build_intrinsic_types(&engine).unwrap();
-        let (_func, host) = next_closure_type(&engine, &intr).unwrap();
+        let (_func, host) = value_closure_type(&engine, &intr, usize::from(arity)).unwrap();
 
         let sig = ClosureSig {
-            arity: 0,
+            arity,
             is_void: false,
         };
         let mut module = Module::new();
