@@ -691,7 +691,7 @@ All of these first call `primitive()` (`P/value.rs:286`) on each operand: a boxe
 
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
-| `submilli:prelude#Console#log` | toString hooks, rest-array snapshot, copy display units, UTF-8 conversion, counted write | `CALL + ELEM(rest) + COPY(display units) + SCAN(line units) + IO(bytes actually written)` + hooks | conversion before; IO settles after writing; error marshalling uses normal checks | Server retention is capped at 1 MiB including capacity, with RangeError on further output. Prior content survives. Old implementation omitted SCAN and IO entirely: 128/256 ASCII units cost 48/64 host fuel; corrected costs are 209/385. |
+| `submilli:prelude#Console#log` | toString hooks, argument-array snapshot, copy display units, UTF-8 conversion, counted write | `CALL + ELEM(arguments) + COPY(display units) + SCAN(line units) + IO(bytes actually written)` + hooks | SCAN settles after effectful toString hooks; IO settles after writing; error marshalling uses normal checks | Server retention is capped at 1 MiB including capacity, with RangeError on further output. Prior content survives. Old implementation omitted SCAN and IO entirely: 128/256 ASCII units cost 48/64 host fuel; corrected costs are 209/385. |
 
 ### Boolean
 

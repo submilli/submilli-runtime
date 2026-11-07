@@ -1,7 +1,7 @@
 //! `console.log` — the Rust port of the prelude's `Console#log` wrapper.
 //!
 //! `Console` is `Dispatch::Static`, so the receiver is dropped: the host fn
-//! takes the first argument plus the packed rest-`$Array`. Each value renders
+//! takes the packed rest-`$Array`. Each value renders
 //! through its vtable `toString` slot; the pieces are space-joined and written
 //! to the store's console stream with a trailing newline.
 
@@ -12,7 +12,6 @@ use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
 use crate::runtime::host::{fatal_host_error, intrinsic_array_type, register_host_fn_async};
-use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::prelude::vtable::{dispatch_vtable_slot, read_string_units};
 use crate::runtime::prelude::{MODULE_NAME, declare_method};
 use crate::{MangledName, PackageDeclaration, Param, Type};
@@ -23,11 +22,6 @@ fn log_key() -> MangledName {
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
-    let intr = build_intrinsic_types(&engine)?;
-    let first_ty = ValType::Ref(RefType::new(
-        true,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
     let rest_ty = ValType::Ref(RefType::new(
         false,
         HeapType::ConcreteStruct(intrinsic_array_type(&engine)?),
@@ -36,18 +30,23 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         linker,
         MODULE_NAME,
         log_key(),
-        FuncType::new(&engine, [first_ty, rest_ty], []),
+        FuncType::new(&engine, [rest_ty], []),
         |caller, params, _results| {
             Box::pin(async move {
-                let [first, rest] = params else {
-                    return Err(fatal_host_error("console.log: expected two ABI arguments"));
+                let [rest] = params else {
+                    return Err(fatal_host_error("console.log: expected one ABI argument"));
                 };
-                let mut units = to_string_units(caller, first).await?;
+                let mut units = Vec::new();
+                let mut first = true;
                 for elem in super::array::read_array(caller, rest, "console.log")? {
-                    units.push(u16::from(b' '));
+                    if !first {
+                        units.push(u16::from(b' '));
+                    }
+                    first = false;
                     units.extend(to_string_units(caller, &elem).await?);
                 }
-                fuel::charge(&mut *caller, fuel::SCAN, units.len() as u64)?;
+                // toString hooks may have effects; a fuel stop here must not discard them.
+                fuel::settle(&mut *caller, fuel::SCAN, units.len() as u64)?;
                 let mut line = String::from_utf16_lossy(&units);
                 line.push('\n');
                 let mut output = CountedWriter {
@@ -110,10 +109,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "log",
         log_key(),
-        vec![
-            Param::new("first", Type::Unknown),
-            Param::rest("rest", Type::Array(Box::new(Type::Unknown))),
-        ],
+        vec![Param::rest("rest", Type::Array(Box::new(Type::Unknown)))],
         Type::Void,
     );
 }
@@ -140,14 +136,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     MethodSig {
                         optional: false,
                         generics: Vec::new(),
-                        params: vec![
-                            Param::new("first", Type::Unknown),
-                            Param::rest("rest", Type::Array(Box::new(Type::Unknown))),
-                        ],
+                        params: vec![Param::rest("rest", Type::Array(Box::new(Type::Unknown)))],
                         ret: Type::Void,
                         predicate: None,
                         doc: doc(
-                            "/**\n * Writes one or more values to the console output, separated by spaces and followed by a newline.\n * @param args Values to write; each is coerced as in template interpolation.\n */",
+                            "/**\n * Writes values to the console output, separated by spaces and followed by a newline.\n * @param args Values to write; each is coerced as in template interpolation.\n */",
                         ),
                     },
                 )]),

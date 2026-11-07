@@ -314,7 +314,11 @@ impl<'a> Inferer<'a> {
         let max_args = if has_rest { usize::MAX } else { params.len() };
         let min_args = super::expr::required_parameter_count(&params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
-        if !arity_ok {
+        if !arity_ok
+            && !args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
             let path = path_string(root, segments);
             let msg = if has_rest {
                 format!(
@@ -340,20 +344,78 @@ impl<'a> Inferer<'a> {
             None
         };
         let mut typed_args: Vec<ExprId> = Vec::with_capacity(args.len().max(params.len()));
-        for (i, arg) in args.iter().enumerate() {
+        let mut spread_sources = Vec::with_capacity(args.len());
+        let mut dynamic_tuple = false;
+        let fixed_types = params
+            .iter()
+            .take(fixed_count)
+            .map(super::expr::callable_parameter_type)
+            .collect::<Vec<_>>();
+        let mut invalid_spread = false;
+        for arg in &args {
+            let i = typed_args.len();
+            if i < fixed_count && self.ast.call_spread_args.contains(arg) {
+                let (source, source_ty) = self.infer_expr(*arg, None)?;
+                if let Type::Tuple(tuple) = source_ty.peel() {
+                    spread_sources.push(crate::TypedArrayElement::Spread(source));
+                    dynamic_tuple = true;
+                    typed_args.extend(self.project_checked_tuple_call_spread(
+                        source,
+                        tuple,
+                        &fixed_types,
+                        rest_elem_ty.as_ref(),
+                        i,
+                        span,
+                    )?);
+                    continue;
+                }
+                self.error(span, "A spread argument must either have a tuple type or be passed to a rest parameter".into());
+                invalid_spread = true;
+                spread_sources.push(crate::TypedArrayElement::Spread(source));
+                typed_args.push(source);
+                continue;
+            }
             let hint_owned: Option<Type> = if has_rest && i >= fixed_count {
                 rest_elem_ty.clone()
             } else {
                 params.get(i).map(super::expr::callable_parameter_type)
             };
-            let (typed_arg, _) = self.infer_expr(*arg, hint_owned.as_ref())?;
+            let typed_arg =
+                self.infer_call_argument(*arg, hint_owned.as_ref(), has_rest && i >= fixed_count)?;
+            spread_sources.push(if self.ast.call_spread_args.contains(arg) {
+                crate::TypedArrayElement::Spread(typed_arg)
+            } else {
+                crate::TypedArrayElement::Value(typed_arg)
+            });
             typed_args.push(typed_arg);
         }
-        if arity_ok {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
+        let expanded_arity_ok = typed_args.len() >= min_args && typed_args.len() <= max_args;
+        if !expanded_arity_ok
+            && !invalid_spread
+            && args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
+            self.error(
+                span,
+                format!(
+                    "expected {min_args}-{max_args} argument(s), got {}",
+                    typed_args.len()
+                ),
+            );
         }
-        if arity_ok && let Some(elem_ty) = rest_elem_ty {
+        if expanded_arity_ok && !dynamic_tuple {
+            self.fill_omitted_defaults(&params, typed_args.len(), span, &mut typed_args)?;
+        }
+        if expanded_arity_ok
+            && !dynamic_tuple
+            && let Some(elem_ty) = rest_elem_ty
+        {
             self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
+        }
+        if expanded_arity_ok && dynamic_tuple {
+            let rest = params.get(fixed_count).and_then(|p| p.ty.rest_element());
+            typed_args = self.collect_call_arguments(&spread_sources, &fixed_types, rest, span)?;
         }
         let type_predicate = match &value.kind {
             ValueKind::Function { type_predicate, .. } => type_predicate.clone().map(Box::new),

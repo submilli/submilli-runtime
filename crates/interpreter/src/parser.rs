@@ -5824,7 +5824,14 @@ impl<'a> Parser<'a> {
     fn parse_call_args(&mut self) -> Option<Vec<ExprId>> {
         let mut args = Vec::new();
         loop {
+            let spread = matches!(self.peek().kind, TokenKind::DotDotDot);
+            if spread {
+                self.advance();
+            }
             let arg = self.parse_expression()?;
+            if spread {
+                self.ast.call_spread_args.insert(arg);
+            }
             args.push(arg);
             match self.peek().kind {
                 TokenKind::Comma => {
