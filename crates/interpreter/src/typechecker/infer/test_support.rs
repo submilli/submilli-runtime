@@ -208,6 +208,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         generic_constraints: Default::default(),
+        constraint_literal_scopes: Vec::new(),
         pending_constraint_checks: None,
         next_generic_param_id: 0,
         packages_by_name,

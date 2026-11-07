@@ -9,6 +9,7 @@ mod classes;
 mod closure_arity;
 mod comparable;
 mod comparison_operand;
+mod constraint_literals;
 mod constraints;
 mod diagnostics;
 mod enums;
@@ -247,6 +248,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         generic_constraints: BTreeMap::new(),
+        constraint_literal_scopes: Vec::new(),
         pending_constraint_checks: None,
         next_generic_param_id: 0,
         packages_by_name,
@@ -554,6 +556,7 @@ pub fn infer_package_checked<'a>(
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
         generic_constraints: BTreeMap::new(),
+        constraint_literal_scopes: Vec::new(),
         pending_constraint_checks: None,
         next_generic_param_id: 0,
         packages_by_name,
@@ -1116,6 +1119,7 @@ pub(super) struct Inferer<'a> {
     pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,
     pub(super) generics_in_scope: Vec<crate::GenericParameters>,
     pub(super) generic_constraints: BTreeMap<u32, Type>,
+    constraint_literal_scopes: Vec<constraint_literals::ConstraintLiteralScope>,
     pub(super) pending_constraint_checks: Option<Vec<constraints::PendingConstraintCheck>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
     pub(super) body_instantiations: Vec<BTreeMap<String, Type>>,

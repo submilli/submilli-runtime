@@ -225,7 +225,7 @@ impl Inferer<'_> {
 
     /// Each field of the object shapes of `ty` with the union of its types
     /// in the shapes that have it, or `None` when `ty` has no object shape.
-    fn field_slots(&self, ty: &Type) -> Option<BTreeMap<String, Type>> {
+    pub(super) fn field_slots(&self, ty: &Type) -> Option<BTreeMap<String, Type>> {
         let shapes = self.object_shapes(ty);
         if shapes.is_empty() {
             return None;

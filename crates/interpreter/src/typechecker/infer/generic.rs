@@ -2063,7 +2063,13 @@ impl Inferer<'_> {
                     } else {
                         None
                     };
-                    let (typed, _) = self.infer_expr(arg, hint.as_ref())?;
+                    let (typed, _) = self.with_constraint_literals(
+                        arg,
+                        hint.as_ref().unwrap_or(&Type::Unknown),
+                        constraints,
+                        sub,
+                        |this, _| this.infer_expr(arg, hint.as_ref()),
+                    )?;
                     self.held_arguments.insert(arg, typed);
                 }
                 next_position = next_position.saturating_add(1);
@@ -2479,6 +2485,19 @@ impl Inferer<'_> {
 
     /// [`Self::infer_generic_argument`] against one hint for the argument.
     fn infer_generic_argument_with(
+        &mut self,
+        arg_id: ExprId,
+        param_ty: &Type,
+        hint: Type,
+        arguments: &GenericArguments,
+        sub: &mut TypeParamSubstitution,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        self.with_constraint_literals(arg_id, param_ty, arguments.constraints, sub, |this, sub| {
+            this.infer_generic_argument_hinted(arg_id, param_ty, hint, arguments, sub)
+        })
+    }
+
+    fn infer_generic_argument_hinted(
         &mut self,
         arg_id: ExprId,
         param_ty: &Type,
