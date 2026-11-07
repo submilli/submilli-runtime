@@ -77,8 +77,13 @@ impl<'a> Inferer<'a> {
         immediately_invoked: bool,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let (active, _assigned) = self.snapshot_active_narrowings(0);
-        self.suspend_narrow_scopes();
+        self.suspend_narrow_scopes(if immediately_invoked {
+            narrowing::PendingJoinKind::InvokedFunction
+        } else {
+            narrowing::PendingJoinKind::Function
+        });
         let mut seed = narrowing::NarrowEnv::new();
+        seed.definitely_assigned = active.definitely_assigned.clone();
         for (path, view) in active {
             let survives = if immediately_invoked {
                 self.narrowing_reaches_invoked_body(&path)
@@ -132,7 +137,7 @@ impl<'a> Inferer<'a> {
     /// variables it reads, however they are narrowed where it is declared.
     /// Leave it with [`Self::exit_closure_narrow_boundary`].
     pub(super) fn enter_function_declaration_narrow_boundary(&mut self) {
-        self.suspend_narrow_scopes();
+        self.suspend_narrow_scopes(narrowing::PendingJoinKind::Function);
         self.push_narrow_frame(narrowing::NarrowEnv::new());
     }
 
@@ -187,7 +192,7 @@ impl<'a> Inferer<'a> {
         self.last_write_spans = saved.last_write_spans;
     }
 
-    fn suspend_narrow_scopes(&mut self) {
+    fn suspend_narrow_scopes(&mut self, kind: narrowing::PendingJoinKind) {
         self.suspended_narrow_scopes.push(SuspendedNarrowing {
             narrow_scopes: std::mem::take(&mut self.narrow_scopes),
             assigned_scopes: std::mem::take(&mut self.assigned_scopes),
@@ -195,6 +200,7 @@ impl<'a> Inferer<'a> {
             tombstone_scopes: std::mem::take(&mut self.tombstone_scopes),
             pending_materializations: std::mem::take(&mut self.pending_post_if_materializations),
         });
+        self.push_pending_join_frame(kind);
     }
 
     /// Drops the seed frame and restores the enclosing narrowing state. The
@@ -202,6 +208,7 @@ impl<'a> Inferer<'a> {
     /// inside a closure body says nothing about the enclosing frame's flow.
     pub(super) fn exit_closure_narrow_boundary(&mut self) -> Result<(), CompilerFailure> {
         self.pop_narrow_frame()?;
+        self.pop_pending_join_frame()?;
         let saved = self
             .suspended_narrow_scopes
             .pop()
@@ -309,6 +316,7 @@ impl<'a> Inferer<'a> {
         let doomed: Vec<narrowing::ReferencePath> = match self.narrow_scopes.last() {
             Some(frame) => frame
                 .keys()
+                .chain(frame.definitely_assigned.iter())
                 .filter(|p| !self.path_root_in_scope(p))
                 .cloned()
                 .collect(),
@@ -317,6 +325,7 @@ impl<'a> Inferer<'a> {
         if let Some(frame) = self.narrow_scopes.last_mut() {
             for path in doomed {
                 frame.remove(&path);
+                frame.definitely_assigned.remove(&path);
             }
         }
         let pending = std::mem::take(&mut self.pending_post_if_materializations);
@@ -433,6 +442,12 @@ impl<'a> Inferer<'a> {
         env: &narrowing::NarrowEnv,
     ) -> Result<narrowing::NarrowEnv, crate::compiler_error::CompilerFailure> {
         let mut tail = narrowing::NarrowEnv::new();
+        tail.definitely_assigned = env
+            .definitely_assigned
+            .iter()
+            .filter(|path| self.path_root_in_scope(path))
+            .cloned()
+            .collect();
         tail.dropped = env
             .dropped
             .iter()
@@ -498,17 +513,24 @@ impl<'a> Inferer<'a> {
         operand: ExprId,
         env: &narrowing::NarrowEnv,
         expected: Option<&Type>,
-    ) -> Result<(ExprId, Type), CompilerFailure> {
+    ) -> Result<
+        (
+            ExprId,
+            Type,
+            std::collections::BTreeSet<narrowing::ReferencePath>,
+        ),
+        CompilerFailure,
+    > {
         self.push_narrow_frame(env.clone());
         let inferred = self.infer_expr_keeping_literals(operand, expected, true)?;
-        let (_, assigned) = self.pop_narrow_frame_capture()?;
+        let (outcome, assigned) = self.pop_narrow_frame_capture()?;
         let span = self
             .ast
             .try_expr(operand)
             .map_err(super::arena_failure)?
             .span;
         self.merge_assigned_into_outer(assigned, span);
-        Ok(inferred)
+        Ok((inferred.0, inferred.1, outcome.definitely_assigned))
     }
 
     pub(super) fn pop_narrow_frame_capture(
@@ -555,6 +577,7 @@ impl<'a> Inferer<'a> {
             narrow_depth: self.narrow_scopes.len(),
             breaks: Vec::new(),
             continues: Vec::new(),
+            returns: Vec::new(),
         });
     }
 
@@ -578,6 +601,12 @@ impl<'a> Inferer<'a> {
         let mut env = narrowing::NarrowEnv::new();
         let mut assigned = std::collections::BTreeSet::new();
         for frame_idx in base_depth..self.narrow_scopes.len() {
+            env.definitely_assigned.extend(
+                self.narrow_scopes[frame_idx]
+                    .definitely_assigned
+                    .iter()
+                    .cloned(),
+            );
             if let Some(tombs) = self.tombstone_scopes.get(frame_idx) {
                 env.retain(|path, _| {
                     !tombs
@@ -1683,6 +1712,15 @@ impl<'a> Inferer<'a> {
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         let mut joined_rebound: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> =
             Vec::new();
+        let definitely_assigned: Vec<_> = joined_narrowings
+            .definitely_assigned
+            .iter()
+            .filter(|path| self.path_root_in_scope(path))
+            .cloned()
+            .collect();
+        if let Some(outer) = self.narrow_scopes.last_mut() {
+            outer.definitely_assigned.extend(definitely_assigned);
+        }
         let mut field_path_mats: Vec<(narrowing::ReferencePath, narrowing::NarrowedView)> =
             Vec::new();
         if let Some(tombstones) = self.tombstone_scopes.last_mut() {

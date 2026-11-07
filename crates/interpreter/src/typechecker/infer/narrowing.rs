@@ -216,7 +216,7 @@ impl std::ops::Not for TypeFacts {
     }
 }
 
-/// Pushed on loop/switch entry, popped on exit; collects break and continue narrow-state snapshots.
+/// Collects control transfers until the owning loop, switch or function exits.
 #[derive(Debug)]
 pub struct PendingJoinFrame {
     pub kind: PendingJoinKind,
@@ -229,10 +229,15 @@ pub struct PendingJoinFrame {
     pub narrow_depth: usize,
     pub breaks: Vec<(NarrowEnv, BTreeSet<ReferencePath>)>,
     pub continues: Vec<(NarrowEnv, BTreeSet<ReferencePath>)>,
+    pub returns: Vec<(NarrowEnv, BTreeSet<ReferencePath>)>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PendingJoinKind {
+    /// Return targets this body, independently of its nested loops and switches.
+    Function,
+    /// Its normal return paths contribute assignment facts at the call site.
+    InvokedFunction,
     /// continue targets the innermost frame of this kind.
     Loop,
     /// Transparent to `continue` — search past this frame when finding the continue target.
@@ -901,6 +906,9 @@ pub fn narrow_field_presence(
 #[derive(Clone, Debug, Default)]
 pub struct NarrowEnv {
     views: BTreeMap<ReferencePath, NarrowedView>,
+    /// Non-optional locals assigned on every reaching path. Unlike a value
+    /// narrowing, this fact survives later writes and captured mutations.
+    pub definitely_assigned: BTreeSet<ReferencePath>,
     /// Predicate drops belong to this outcome, never to the condition's parent
     /// scope. A consumer that installs no frame simply discards these records.
     pub dropped: BTreeMap<ReferencePath, Type>,
@@ -917,13 +925,19 @@ impl NarrowEnv {
     }
 
     pub fn extend_env(&mut self, other: Self) {
+        self.definitely_assigned.extend(other.definitely_assigned);
         self.dropped.extend(other.dropped);
         self.extend(other.views);
     }
 
     pub fn clear(&mut self) {
+        self.definitely_assigned.clear();
         self.views.clear();
         self.dropped.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.views.is_empty() && self.definitely_assigned.is_empty()
     }
 }
 
@@ -980,10 +994,10 @@ pub fn wrap_order(a: &ReferencePath, b: &ReferencePath) -> std::cmp::Ordering {
     b.chain.len().cmp(&a.chain.len()).then_with(|| a.cmp(b))
 }
 
-/// Compares only `narrowed_ty` per path — `binding` and `source` differ
-/// across mints even when the narrowing is unchanged.
-pub fn envs_per_path_narrowed_ty_equal(a: &NarrowEnv, b: &NarrowEnv) -> bool {
-    if a.len() != b.len() {
+/// Compares readable types and definite assignment. View bindings, sources and
+/// predicate metadata are excluded: fresh mints do not change these flow facts.
+pub fn env_flow_facts_equal(a: &NarrowEnv, b: &NarrowEnv) -> bool {
+    if a.len() != b.len() || a.definitely_assigned != b.definitely_assigned {
         return false;
     }
     for (path, a_view) in a {
@@ -1625,6 +1639,11 @@ pub fn union_envs(
     b_assigned: BTreeSet<ReferencePath>,
 ) -> (NarrowEnv, BTreeSet<ReferencePath>) {
     let mut joined_narrowings = NarrowEnv::new();
+    joined_narrowings.definitely_assigned = a_narrowings
+        .definitely_assigned
+        .intersection(&b_narrowings.definitely_assigned)
+        .cloned()
+        .collect();
     for (path, a_view) in &a_narrowings {
         if let Some(b_view) = b_narrowings.get(path) {
             let Some(joined_ty) = join_views(a_view, b_view) else {

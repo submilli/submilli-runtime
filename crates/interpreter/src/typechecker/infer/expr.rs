@@ -1121,6 +1121,9 @@ impl Inferer<'_> {
         if self.names_global_undefined(&ident.name) {
             return Ok((TypedExprKind::Undefined, Type::Undefined));
         }
+        if self.report_unassigned_local_read(&ident, span) {
+            return Ok(unresolved_ref(ident));
+        }
         if let Some(entry) = self.scopes.get(&ident.name) {
             // Plan 75.8: consult the active narrow-scope stack. If
             // this binding has been narrowed in an enclosing branch,
@@ -1140,7 +1143,7 @@ impl Inferer<'_> {
                     ident: ident.clone(),
                     boxed: false,
                 },
-                entry.ty.clone(),
+                entry.read_type().clone(),
             ));
         }
         // `JSON` is a compiler-intrinsic namespace
@@ -1957,7 +1960,8 @@ impl Inferer<'_> {
         } else {
             expected
         };
-        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
+        let (typed_rhs, rhs_ty, assigned) =
+            self.infer_conditional_operand(rhs, &rhs_env, rhs_expected)?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let wrapped_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
         let lhs_kept = match op {
@@ -1987,6 +1991,14 @@ impl Inferer<'_> {
                 self.resolver(),
             )
         };
+        let always_runs = match op {
+            BinOp::And => narrowing::is_never_falsy(&lhs_ty),
+            BinOp::Or => matches!(narrowing::truthy_part(&lhs_ty), Type::Never),
+            _ => false,
+        };
+        if always_runs && let Some(env) = self.narrow_scopes.last_mut() {
+            env.definitely_assigned.extend(assigned);
+        }
         Ok((
             TypedExprKind::Binary {
                 op,
@@ -10953,6 +10965,7 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), crate::compiler_error::CompilerFailure> {
         // Function-local first, then top-level (mirrors `infer_assign`).
         if let Some(entry) = self.visible_local(&target.name).cloned() {
+            self.report_unassigned_local_read(&target, target.span);
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
@@ -10960,9 +10973,10 @@ impl Inferer<'_> {
                 name: target.name.clone(),
                 decl_scope: entry.decl_scope,
             });
-            let operand_ty = self
-                .lookup_narrowed_view(&path)
-                .map_or_else(|| entry.ty.clone(), |view| view.narrowed_ty.clone());
+            let operand_ty = self.lookup_narrowed_view(&path).map_or_else(
+                || entry.read_type().clone(),
+                |view| view.narrowed_ty.clone(),
+            );
             self.record_postfix_operand(&target, &operand_ty);
             if !takes_postfix(&operand_ty) {
                 self.report_invalid_update(target.span, op_symbol, &operand_ty);
@@ -11414,13 +11428,30 @@ impl Inferer<'_> {
 
         let (true_env, false_env) = self.predicate_envs(typed_cond)?;
 
-        let (typed_then, then_ty) = self.infer_conditional_operand(then_, &true_env, expected)?;
+        let (typed_then, then_ty, then_assigned) =
+            self.infer_conditional_operand(then_, &true_env, expected)?;
         let wrapped_then = self.wrap_narrow_exprs(typed_then, &true_env, then_span)?;
 
-        let (typed_else, else_ty) = self.infer_conditional_operand(else_, &false_env, expected)?;
+        let (typed_else, else_ty, else_assigned) =
+            self.infer_conditional_operand(else_, &false_env, expected)?;
         let else_span = self.ast.try_expr(else_).map_err(super::arena_failure)?.span;
         let wrapped_else = self.wrap_narrow_exprs(typed_else, &false_env, else_span)?;
 
+        let assigned = if matches!(else_ty, Type::Never) || narrowing::is_never_falsy(&cond_ty) {
+            then_assigned
+        } else if matches!(then_ty, Type::Never)
+            || matches!(narrowing::truthy_part(&cond_ty), Type::Never)
+        {
+            else_assigned
+        } else {
+            then_assigned
+                .intersection(&else_assigned)
+                .cloned()
+                .collect()
+        };
+        if let Some(env) = self.narrow_scopes.last_mut() {
+            env.definitely_assigned.extend(assigned);
+        }
         let result_ty = self.ternary_result_type((then_, then_ty), (else_, else_ty), expected)?;
         Ok((
             TypedExprKind::Ternary {
@@ -11630,13 +11661,18 @@ impl Inferer<'_> {
                 Type::Error | Type::Null | Type::Undefined | Type::Void
             ))
         .then(|| super::narrowing::strip_nullish(&lhs_ty));
-        let (typed_rhs, rhs_ty) = self.infer_conditional_operand(
+        let (typed_rhs, rhs_ty, assigned) = self.infer_conditional_operand(
             rhs,
             &rhs_env,
             rhs_expected.as_ref().or(fallback_hint.as_ref()),
         )?;
         let rhs_span = self.ast.try_expr(rhs).map_err(super::arena_failure)?.span;
         let typed_rhs = self.wrap_narrow_exprs(typed_rhs, &rhs_env, rhs_span)?;
+        if matches!(lhs_ty.peel(), Type::Null | Type::Undefined)
+            && let Some(env) = self.narrow_scopes.last_mut()
+        {
+            env.definitely_assigned.extend(assigned);
+        }
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.

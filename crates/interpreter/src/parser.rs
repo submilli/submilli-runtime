@@ -2717,6 +2717,32 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
+        if matches!(self.peek().kind, TokenKind::Let | TokenKind::Const)
+            && matches!(self.peek_at(1).kind, TokenKind::Identifier)
+            && matches!(self.peek_at(2).kind, TokenKind::In)
+        {
+            self.error_at_with_help(
+                self.peek_at(2).span,
+                "`for…in` is not supported",
+                vec![
+                    "use `for (const k of Object.keys(obj))` to iterate the object's own keys"
+                        .to_string(),
+                ],
+            );
+            // Consume the rejected header and body so recovery does not treat
+            // its `const` as a separate declaration with a missing initializer.
+            for _ in 0..3 {
+                self.advance();
+            }
+            self.parse_expression()?;
+            if !matches!(self.peek().kind, TokenKind::RightParen) {
+                self.error_at_peek("expected `)` after `for…in` object");
+                return None;
+            }
+            self.advance();
+            self.parse_loop_body()?;
+            return None;
+        }
         if self.scan_for_of_shape() {
             self.parse_for_of_tail(kw)
         } else {
