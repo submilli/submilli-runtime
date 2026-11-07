@@ -1986,6 +1986,8 @@ pub(super) fn type_limit_at(
 
 /// A value an unannotated function literal's `return` gives.
 pub(super) struct ReturnedValue {
+    /// Original expression, used to distinguish fresh object literals from typed values.
+    pub(super) source: Option<crate::ExprId>,
     /// The value's type as inferred, its literal types kept.
     pub(super) ty: Type,
     /// The value's type when it is the function's only return, a fresh
@@ -2000,6 +2002,7 @@ impl ReturnedValue {
     /// The `undefined` a bare `return` gives.
     pub(super) fn undefined(span: Span) -> Self {
         Self {
+            source: None,
             ty: Type::Undefined,
             widened: Type::Undefined,
             fresh: BTreeSet::new(),

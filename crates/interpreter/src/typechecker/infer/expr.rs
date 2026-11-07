@@ -10432,7 +10432,24 @@ impl Inferer<'_> {
                         .flat_map(|value| value.fresh.iter().cloned())
                         .collect(),
                 );
-                let collected = returned_value_types(returned);
+                let normalizing = if ret_hint.is_none() {
+                    object_normalization::return_normalization(self.ast, &returned)?
+                } else {
+                    None
+                };
+                let mut collected = returned_value_types(returned);
+                if let Some(normalizing) = normalizing
+                    && let Some((_, return_span)) = collected.first()
+                {
+                    let return_span = *return_span;
+                    let reduced = self.without_fresh_subtypes_preserving_literals(
+                        collected.iter().map(|(ty, _)| ty.clone()).collect(),
+                    );
+                    collected = vec![(
+                        object_normalization::normalized(&reduced, &normalizing),
+                        return_span,
+                    )];
+                }
                 let t = self.block_body_return_type(
                     annotated_ret.as_ref(),
                     collected,
@@ -10607,7 +10624,6 @@ impl Inferer<'_> {
             if self.reachable && !collected.is_empty() {
                 collected.push((Type::Undefined, span));
             }
-            let collected = self.returned_types(collected);
             match self.returns_joined_by_context(&collected, ret_hint) {
                 Some(joined) => joined,
                 None => self.unify_returns(&collected),
@@ -10662,41 +10678,11 @@ impl Inferer<'_> {
         }
     }
 
-    /// The types of a block body's returns to unify. Literal types kept for a
-    /// function literal passed as the sole candidate of a type parameter that
-    /// is the call's result (see `returns_keep_literals`) form their union
-    /// when every return is a literal, as tsc infers (`() => { if (b) return
-    /// 1; return 2; }` returns `1 | 2`), and widen otherwise when no one of
-    /// them covers the rest.
-    fn returned_types(&self, collected: Vec<(Type, Span)>) -> Vec<(Type, Span)> {
-        if !self.returns_keep_literals {
-            return collected;
-        }
-        let covered = collected.iter().any(|(candidate, _)| {
-            collected
-                .iter()
-                .all(|(other, _)| assignable(other, candidate, self.resolver()))
-        });
-        if covered {
-            return collected;
-        }
-        if let Some((_, span)) = collected.first().cloned()
-            && collected.iter().all(|(ty, _)| ty.literal_base().is_some())
-        {
-            let union = Type::union(collected.into_iter().map(|(ty, _)| ty).collect());
-            return vec![(union, span)];
-        }
-        collected
-            .into_iter()
-            .map(|(ty, span)| (ty.widen_literal(), span))
-            .collect()
-    }
-
     /// Reduce the `(Type, Span)` entries collected during a block-body
     /// arrow's walk to a single return type. Empty → `Void`. Otherwise the
     /// return every other one is `assignable` to, in whichever order they
-    /// appear: each returned value has to fit the closure's type. None such →
-    /// a diagnostic, plus `Type::Error` to keep downstream silent.
+    /// appear; otherwise their union. A void value still needs a diagnostic
+    /// because it cannot occupy a value slot.
     fn unify_returns(&mut self, collected: &[(Type, Span)]) -> Type {
         if collected.is_empty() {
             return Type::Void;
@@ -10707,8 +10693,11 @@ impl Inferer<'_> {
         if let Some(widest) = self.widest_return(collected) {
             return widest;
         }
-        self.report_conflicting_return(collected);
-        Type::Error
+        if collected.iter().any(|(ty, _)| ty.carries_void()) {
+            self.report_conflicting_return(collected);
+            return Type::Error;
+        }
+        Type::union(collected.iter().map(|(ty, _)| ty.clone()).collect())
     }
 
     /// The union of returns that share no one type but each fit the closure's
@@ -14552,33 +14541,17 @@ pub(super) fn cannot_be_typed_alone(ast: &crate::Ast, id: ExprId) -> Result<bool
     )
 }
 
-/// The types a block body's returns contribute to its return type, as tsc
-/// infers it from their union. Literals of one primitive form their union
-/// (`if (b) return 1; return 2;` returns `1 | 2`), beside the `null` or
-/// `undefined` a path returns. Every other mix widens each fresh literal, as
-/// does a union that is a single literal type: `if (b) return 1; return 1;`
-/// returns `number`.
+/// Preserve primitive literals in a union of returns (`number | "neg"`),
+/// while a single fresh literal still widens. Object fields retain the
+/// widening determined when their expressions were inferred.
 fn returned_value_types(returned: Vec<super::ReturnedValue>) -> Vec<(Type, Span)> {
     let returned_union = Type::union(returned.iter().map(|value| value.ty.clone()).collect());
-    let is_nullish = |ty: &Type| matches!(ty.peel(), Type::Undefined | Type::Null | Type::Void);
-    let Some(first_value) = returned.iter().find(|value| !is_nullish(&value.ty)) else {
-        return widened_returns(returned);
-    };
-    let span = first_value.span;
-    let shared_literal_base = first_value.ty.literal_base();
-    let literals_of_one_primitive = shared_literal_base.is_some()
-        && returned
-            .iter()
-            .all(|value| is_nullish(&value.ty) || value.ty.literal_base() == shared_literal_base);
-    if returned_union.peel().is_literal_type() || !literals_of_one_primitive {
+    if returned_union.peel().is_literal_type() {
         return widened_returns(returned);
     }
-    let (nullish, values): (Vec<_>, Vec<_>) = returned
+    returned
         .into_iter()
-        .partition(|value| is_nullish(&value.ty));
-    let union = Type::union(values.into_iter().map(|value| value.ty).collect());
-    std::iter::once((union, span))
-        .chain(nullish.into_iter().map(|value| (value.ty, value.span)))
+        .map(|value| (value.ty, value.span))
         .collect()
 }
 
@@ -16798,21 +16771,14 @@ function main(): void { if (result < 10) { } }
     }
 
     #[test]
-    fn arrow_block_body_conflicting_returns_errors() {
-        let (_, diags) = run(
+    fn arrow_block_body_unrelated_returns_infer_union() {
+        let ta = run_clean(
             r#"function main(): void { let f = (x: number) => { if (x > 0) { return x; } return "y"; }; }"#,
         );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("conflicts with earlier return")),
-            "expected conflicting-return diagnostic, got: {diags:?}"
-        );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("annotate the closure's return type")),
-            "expected a fix in the diagnostic, got: {diags:?}"
+        let (_params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(
+            ret,
+            Type::union(vec![Type::Number, Type::StringLiteral("y".into())])
         );
     }
 

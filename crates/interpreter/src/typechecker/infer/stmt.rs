@@ -389,6 +389,7 @@ impl Inferer<'_> {
                 if self.inferred_returns.is_some() {
                     let fresh = self.fresh_literals(id)?;
                     self.record_inferred_return(super::ReturnedValue {
+                        source: Some(v),
                         ty: value_ty,
                         widened,
                         fresh,

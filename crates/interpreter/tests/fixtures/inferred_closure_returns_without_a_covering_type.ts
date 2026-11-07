@@ -1,9 +1,3 @@
-// expect-error-count: 1
-// expect-error: return type `Loose` conflicts with earlier return `Narrow`
-// `Wide` fits `Narrow`, but neither fits `Loose`: `Loose`'s fields are all
-// optional and `Narrow` shares none of them, and `Wide`'s `q` has another
-// type. No return type covers all three, so the closure needs an annotation.
-
 type Wide = { p: number; q: number };
 type Narrow = { p: number };
 type Loose = { q?: string };
@@ -29,5 +23,5 @@ function main(): void {
     }
     return loose();
   };
-  pick();
+  assert("p" in pick(), "the selected return keeps its fields");
 }

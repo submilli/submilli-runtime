@@ -1,8 +1,7 @@
-// A function called on the spot returns its value into the call: a `void`
-// context doesn't let its returns disagree, as a callback's `void` context
-// does, and one that can run off its end after returning a value returns
-// `number | undefined`, which isn't `void`. tsc rejects both.
-// expect-error: conflicts with earlier return
+// An immediately invoked closure returns its value into the enclosing function.
+// Its inferred union must fit that function's `void` return type, unlike a
+// callback whose `void` context discards its result. tsc rejects both calls.
+// expect-error: expected `void`, got `5 | "s"`
 // expect-error: expected `void`, got `number | undefined`
 // expect-error-count: 2
 function g(x: boolean): void {
