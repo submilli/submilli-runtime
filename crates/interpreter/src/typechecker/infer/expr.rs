@@ -3200,6 +3200,9 @@ impl Inferer<'_> {
 
         if let Some(ref params) = param_types
             && !arity_ok
+            && !args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
         {
             // When the callee is a bare identifier resolving to a
             // top-level non-generic function, lift the `Function` form
@@ -3272,7 +3275,38 @@ impl Inferer<'_> {
             .as_ref()
             .map_or(0, |ps| ps.len().saturating_sub(args.len()));
         let mut typed_args = Vec::with_capacity(args.len() + extra);
-        for (i, &arg_id) in args.iter().enumerate() {
+        let mut spread_sources = Vec::with_capacity(args.len());
+        let mut dynamic_tuple = false;
+        let mut invalid_spread = false;
+        for &arg_id in &args {
+            let i = typed_args.len();
+            if i < fixed_count && self.ast.call_spread_args.contains(&arg_id) {
+                let (source, source_ty) = self.infer_expr(arg_id, None)?;
+                if let Type::Tuple(tuple) = source_ty.peel() {
+                    spread_sources.push(crate::TypedArrayElement::Spread(source));
+                    dynamic_tuple = true;
+                    typed_args.extend(
+                        self.project_checked_tuple_call_spread(
+                            source,
+                            tuple,
+                            param_types
+                                .as_deref()
+                                .unwrap_or(&[])
+                                .get(..fixed_count)
+                                .unwrap_or(&[]),
+                            rest_elem_ty.as_ref(),
+                            i,
+                            span,
+                        )?,
+                    );
+                    continue;
+                }
+                self.error(span, "A spread argument must either have a tuple type or be passed to a rest parameter".into());
+                invalid_spread = true;
+                spread_sources.push(crate::TypedArrayElement::Spread(source));
+                typed_args.push(source);
+                continue;
+            }
             let hint = if i < fixed_count {
                 param_types
                     .as_ref()
@@ -3288,12 +3322,37 @@ impl Inferer<'_> {
             } else {
                 rest_elem_ty.clone()
             };
-            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref())?;
+            let typed_id = self.infer_call_argument(
+                arg_id,
+                hint.as_ref(),
+                i >= fixed_count && rest_elem_ty.is_some(),
+            )?;
+            spread_sources.push(if self.ast.call_spread_args.contains(&arg_id) {
+                crate::TypedArrayElement::Spread(typed_id)
+            } else {
+                crate::TypedArrayElement::Value(typed_id)
+            });
             typed_args.push(typed_id);
         }
-        if arity_ok {
+        let expanded_arity_ok =
+            param_types.is_some() && typed_args.len() >= min_args && typed_args.len() <= max_args;
+        if !expanded_arity_ok
+            && !invalid_spread
+            && args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
+            self.error(
+                span,
+                format!(
+                    "expected {min_args}-{max_args} argument(s), got {}",
+                    typed_args.len()
+                ),
+            );
+        }
+        if expanded_arity_ok && !dynamic_tuple {
             if let Some(ps) = &named_params {
-                self.fill_omitted_defaults(ps, args.len(), span, &mut typed_args)?;
+                self.fill_omitted_defaults(ps, typed_args.len(), span, &mut typed_args)?;
             } else {
                 for _ in typed_args.len()..fixed_count {
                     typed_args.push(self.synthesize_default_arg(
@@ -3304,8 +3363,20 @@ impl Inferer<'_> {
                 }
             }
         }
-        if arity_ok && let Some(elem_ty) = rest_elem_ty {
+        if expanded_arity_ok
+            && !dynamic_tuple
+            && let Some(elem_ty) = rest_elem_ty
+        {
             self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
+        }
+        if expanded_arity_ok && dynamic_tuple {
+            let fixed = param_types.as_deref().unwrap_or(&[]);
+            typed_args = self.collect_call_arguments(
+                &spread_sources,
+                &fixed[..fixed_count],
+                fixed.get(fixed_count).and_then(Type::rest_element),
+                span,
+            )?;
         }
 
         // Static dispatch when the callee is a bare top-level
@@ -3722,14 +3793,21 @@ impl Inferer<'_> {
         // The actual per-arg types ride through as elements; `element_ty`
         // carries the rest's declared element type for downstream consumers
         // (e.g. `PackageDeclaration::from_typed_ast`).
-        let elements: Vec<crate::TypedArrayElement> = if typed_args.len() > fixed_count {
-            typed_args
-                .drain(fixed_count..)
-                .map(crate::TypedArrayElement::Value)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let mut elements = Vec::new();
+        for typed_arg in typed_args.drain(fixed_count..) {
+            if self.typed_ast.call_spread_values.contains(&typed_arg) {
+                let source_ty = self
+                    .typed_ast
+                    .try_expr(typed_arg)
+                    .map_err(super::arena_failure)?
+                    .ty
+                    .clone();
+                let source = self.materialize_spread_source(typed_arg, &source_ty, span)?;
+                elements.push(crate::TypedArrayElement::Spread(source));
+            } else {
+                elements.push(crate::TypedArrayElement::Value(typed_arg));
+            }
+        }
         let array_id = self
             .typed_ast
             .try_push_expr(TypedExpr {
@@ -4812,7 +4890,11 @@ impl Inferer<'_> {
         let max_args = if has_rest { usize::MAX } else { params.len() };
         let min_args = required_parameter_count(params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
-        if !arity_ok {
+        if !arity_ok
+            && !args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
             let help = match lift {
                 CallLift::Constructor { class_ty } => {
                     self.format_signature(SignatureKind::Constructor {
@@ -4883,27 +4965,312 @@ impl Inferer<'_> {
         };
 
         let mut typed_args: Vec<ExprId> = Vec::with_capacity(args.len().max(params.len()));
-        for (i, &arg_id) in args.iter().enumerate() {
+        let mut spread_sources = Vec::with_capacity(args.len());
+        let mut dynamic_tuple = false;
+        let mut invalid_spread = false;
+        for &arg_id in args {
+            let i = typed_args.len();
+            if i < fixed_count && self.ast.call_spread_args.contains(&arg_id) {
+                let (source, source_ty) = self.infer_expr(arg_id, None)?;
+                if let Type::Tuple(tuple) = source_ty.peel() {
+                    spread_sources.push(crate::TypedArrayElement::Spread(source));
+                    dynamic_tuple = true;
+                    let fixed = params
+                        .iter()
+                        .take(fixed_count)
+                        .map(callable_parameter_type)
+                        .collect::<Vec<_>>();
+                    typed_args.extend(self.project_checked_tuple_call_spread(
+                        source,
+                        tuple,
+                        &fixed,
+                        rest_elem_ty.as_ref(),
+                        i,
+                        span,
+                    )?);
+                    continue;
+                }
+                self.error(span, "A spread argument must either have a tuple type or be passed to a rest parameter".into());
+                invalid_spread = true;
+                spread_sources.push(crate::TypedArrayElement::Spread(source));
+                typed_args.push(source);
+                continue;
+            }
             let hint = if i < fixed_count {
                 params.get(i).map(callable_parameter_type)
             } else {
                 rest_elem_ty.clone()
             };
-            let (typed_id, _) = self.infer_expr(arg_id, hint.as_ref())?;
+            let typed_id =
+                self.infer_call_argument(arg_id, hint.as_ref(), i >= fixed_count && has_rest)?;
+            spread_sources.push(if self.ast.call_spread_args.contains(&arg_id) {
+                crate::TypedArrayElement::Spread(typed_id)
+            } else {
+                crate::TypedArrayElement::Value(typed_id)
+            });
             typed_args.push(typed_id);
+        }
+
+        let expanded_arity_ok = typed_args.len() >= min_args && typed_args.len() <= max_args;
+        if !expanded_arity_ok
+            && !invalid_spread
+            && args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
+            self.error(
+                span,
+                format!(
+                    "expected {min_args}-{max_args} argument(s), got {}",
+                    typed_args.len()
+                ),
+            );
         }
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
                 .record_authored_arguments(span, typed_args.clone());
         }
-        if arity_ok {
-            self.fill_omitted_defaults(params, args.len(), span, &mut typed_args)?;
+        if expanded_arity_ok && !dynamic_tuple {
+            self.fill_omitted_defaults(params, typed_args.len(), span, &mut typed_args)?;
         }
-        if arity_ok && let Some(elem_ty) = rest_elem_ty {
+        if expanded_arity_ok
+            && !dynamic_tuple
+            && let Some(elem_ty) = rest_elem_ty
+        {
             self.pack_rest_tail(fixed_count, elem_ty, span, &mut typed_args)?;
         }
+        if expanded_arity_ok && dynamic_tuple {
+            let fixed = params
+                .iter()
+                .take(fixed_count)
+                .map(callable_parameter_type)
+                .collect::<Vec<_>>();
+            let rest = params.get(fixed_count).and_then(|p| p.ty.rest_element());
+            typed_args = self.collect_call_arguments(&spread_sources, &fixed, rest, span)?;
+        }
         Ok(typed_args)
+    }
+
+    pub(super) fn infer_call_argument(
+        &mut self,
+        arg: ExprId,
+        expected: Option<&Type>,
+        rest: bool,
+    ) -> Result<ExprId, CompilerFailure> {
+        if !self.ast.call_spread_args.contains(&arg) {
+            return Ok(self.infer_expr(arg, expected)?.0);
+        }
+        let span = self.ast.try_expr(arg).map_err(super::arena_failure)?.span;
+        let (typed, source_ty) = self.infer_expr(arg, None)?;
+        if !rest {
+            self.error(
+                span,
+                "A spread argument must either have a tuple type or be passed to a rest parameter"
+                    .into(),
+            );
+            return Ok(typed);
+        }
+        let element = spread_element_type(source_ty.peel())
+            .or_else(|| self.spread_iterable_element(&source_ty));
+        match element {
+            Some(element) => {
+                if let Some(want) = expected
+                    && !super::assignable(&element, want, self.resolver())
+                {
+                    self.error(span, super::diagnostics::mismatch_message(want, &element));
+                }
+            }
+            None if !matches!(source_ty, Type::Error) => {
+                self.error(
+                    span,
+                    format!("expected an array to spread or an iterable, got `{source_ty}`"),
+                );
+            }
+            _ => {}
+        }
+        if rest {
+            self.typed_ast.call_spread_values.insert(typed);
+        }
+        Ok(typed)
+    }
+
+    pub(super) fn project_tuple_call_spread(
+        &mut self,
+        source: ExprId,
+        tuple: &crate::TupleType,
+        span: Span,
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
+        let mut projected = Vec::with_capacity(tuple.elements.len());
+        for (offset, element_ty) in tuple.elements.iter().enumerate() {
+            let index =
+                self.push_synthetic_expr(TypedExprKind::Number(offset as f64), Type::Number, span)?;
+            let read = self.push_synthetic_expr(
+                TypedExprKind::IndexAccess {
+                    receiver: source,
+                    index,
+                },
+                element_ty.clone(),
+                span,
+            )?;
+            projected.push(read);
+        }
+        self.typed_ast.tuple_call_spread_sources.insert(source);
+        Ok(projected)
+    }
+
+    pub(super) fn project_checked_tuple_call_spread(
+        &mut self,
+        source: ExprId,
+        tuple: &crate::TupleType,
+        fixed: &[Type],
+        rest: Option<&Type>,
+        start: usize,
+        span: Span,
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
+        let projected = self.project_tuple_call_spread(source, tuple, span)?;
+        for (offset, element_ty) in tuple.elements.iter().enumerate() {
+            if let Some(want) = fixed.get(start + offset).or(rest)
+                && !super::assignable(element_ty, want, self.resolver())
+            {
+                self.error(span, super::diagnostics::mismatch_message(want, element_ty));
+            }
+        }
+        Ok(projected)
+    }
+
+    pub(super) fn collect_call_arguments(
+        &mut self,
+        sources: &[crate::TypedArrayElement],
+        fixed: &[Type],
+        rest: Option<&Type>,
+        span: Span,
+    ) -> Result<Vec<ExprId>, CompilerFailure> {
+        let mut elements = Vec::with_capacity(sources.len());
+        for source in sources {
+            if let crate::TypedArrayElement::Spread(source) = source {
+                let source = *source;
+                let ty = self
+                    .typed_ast
+                    .try_expr(source)
+                    .map_err(super::arena_failure)?
+                    .ty
+                    .clone();
+                let source = self.materialize_spread_source(source, &ty, span)?;
+                elements.push(crate::TypedArrayElement::Spread(source));
+            } else {
+                elements.push(source.clone());
+            }
+        }
+        let collected = self.push_synthetic_expr(
+            TypedExprKind::ArrayLiteral {
+                elements,
+                element_ty: Type::Unknown,
+            },
+            Type::Array(Box::new(Type::Unknown)),
+            span,
+        )?;
+        self.typed_ast.tuple_call_spread_sources.insert(collected);
+        let mut arguments = Vec::with_capacity(fixed.len() + usize::from(rest.is_some()));
+        for (position, ty) in fixed.iter().enumerate() {
+            let index = self.push_synthetic_expr(
+                TypedExprKind::Number(position as f64),
+                Type::Number,
+                span,
+            )?;
+            let read = self.push_synthetic_expr(
+                TypedExprKind::IndexAccess {
+                    receiver: collected,
+                    index,
+                },
+                ty.clone(),
+                span,
+            )?;
+            self.typed_ast.call_spread_index_reads.insert(read);
+            arguments.push(read);
+        }
+        if let Some(rest_ty) = rest {
+            let start = self.push_synthetic_expr(
+                TypedExprKind::Number(fixed.len() as f64),
+                Type::Number,
+                span,
+            )?;
+            let end =
+                self.push_synthetic_expr(TypedExprKind::Number(f64::INFINITY), Type::Number, span)?;
+            let tail = self.push_synthetic_expr(
+                TypedExprKind::MethodCall {
+                    receiver: collected,
+                    iface: crate::mangle::prelude("Array"),
+                    name: Ident {
+                        name: "slice".into(),
+                        span,
+                    },
+                    args: vec![start, end],
+                    type_predicate: None,
+                },
+                Type::Array(Box::new(rest_ty.clone())),
+                span,
+            )?;
+            arguments.push(tail);
+        }
+        Ok(arguments)
+    }
+
+    fn infer_fixed_spread_args(
+        &mut self,
+        args: &[ExprId],
+        hints: &[Type],
+        span: Span,
+    ) -> Result<(Vec<ExprId>, Option<Vec<crate::TypedArrayElement>>), CompilerFailure> {
+        let mut typed = Vec::new();
+        let mut sources = Vec::with_capacity(args.len());
+        let mut dynamic_tuple = false;
+        for &arg in args {
+            let position = typed.len();
+            if self.ast.call_spread_args.contains(&arg) {
+                let (source, source_ty) = self.infer_expr(arg, None)?;
+                sources.push(crate::TypedArrayElement::Spread(source));
+                if let Type::Tuple(tuple) = source_ty.peel() {
+                    dynamic_tuple = true;
+                    typed.extend(self.project_checked_tuple_call_spread(
+                        source, tuple, hints, None, position, span,
+                    )?);
+                } else {
+                    self.error(span, "A spread argument must either have a tuple type or be passed to a rest parameter".into());
+                    typed.push(source);
+                }
+            } else {
+                let value = self.infer_expr(arg, hints.get(position))?.0;
+                sources.push(crate::TypedArrayElement::Value(value));
+                typed.push(value);
+            }
+        }
+        Ok((typed, dynamic_tuple.then_some(sources)))
+    }
+
+    fn infer_call_arg_at(
+        &mut self,
+        args: &[ExprId],
+        spread_args: Option<&[ExprId]>,
+        position: usize,
+        hint: Option<&Type>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        if let Some(ids) = spread_args {
+            let id = *ids
+                .get(position)
+                .ok_or_else(|| super::inference_failure("missing expanded call argument"))?;
+            let ty = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(super::arena_failure)?
+                .ty
+                .clone();
+            return Ok((id, ty));
+        }
+        let arg = *args
+            .get(position)
+            .ok_or_else(|| super::inference_failure("missing call argument"))?;
+        self.infer_expr(arg, hint)
     }
 
     /// [`Self::bind_param_call_args`] for a callee known only by its
@@ -4957,21 +5324,18 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         Ok(match name.name.as_str() {
             "fromString" => {
-                if args.len() != 1 {
+                let typed_args = self
+                    .infer_fixed_spread_args(&args, &[Type::String], span)?
+                    .0;
+                if typed_args.len() != 1 {
                     self.error(
                         span,
                         format!(
                             "`BigInt.fromString(s)` takes 1 argument, got {}",
-                            args.len(),
+                            typed_args.len(),
                         ),
                     );
                 }
-                let typed_args: Vec<ExprId> = args
-                    .iter()
-                    .map(|&id| {
-                        Ok::<_, CompilerFailure>(self.infer_expr(id, Some(&Type::String))?.0)
-                    })
-                    .collect::<Result<_, _>>()?;
                 let arg_ty = typed_args
                     .first()
                     .map(|&id| {
@@ -5079,6 +5443,28 @@ impl Inferer<'_> {
         type_args: Option<Vec<crate::TypeAnnotation>>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let spread_args = if args
+            .iter()
+            .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
+            let hints = vec![
+                Type::Unknown,
+                Type::union(vec![Type::Null, Type::Undefined]),
+                Type::union(vec![
+                    Type::Number,
+                    Type::String,
+                    Type::Null,
+                    Type::Undefined,
+                ]),
+            ];
+            Some(self.infer_fixed_spread_args(&args, &hints, span)?)
+        } else {
+            None
+        };
+        let arg_count = spread_args
+            .as_ref()
+            .map_or(args.len(), |(typed, _)| typed.len());
+        let expanded_args = spread_args.as_ref().map(|(typed, _)| typed.as_slice());
         if let Some(targs) = &type_args {
             // Span over the whole call — we don't keep the `<...>`
             // span separately on `Call`, but anchoring on the call
@@ -5096,20 +5482,19 @@ impl Inferer<'_> {
             // Continue typechecking as if the type args weren't
             // there so unrelated errors still surface.
         }
-        if args.is_empty() || args.len() > 3 {
+        if arg_count == 0 || arg_count > 3 {
             let help = self.format_signature(SignatureKind::Intrinsic {
                 kind: Intrinsic::JsonStringify,
             });
             self.error_with_help(
                 span,
-                format!(
-                    "`JSON.stringify(...)` takes 1 to 3 arguments, got {}",
-                    args.len()
-                ),
+                format!("`JSON.stringify(...)` takes 1 to 3 arguments, got {arg_count}"),
                 vec![help],
             );
-            for &arg in &args {
-                let _ = self.infer_expr(arg, None)?;
+            if spread_args.is_none() {
+                for &arg in &args {
+                    let _ = self.infer_expr(arg, None)?;
+                }
             }
             return Ok((
                 TypedExprKind::IntrinsicCall {
@@ -5119,12 +5504,14 @@ impl Inferer<'_> {
                 Type::String,
             ));
         }
-        let (typed_arg, arg_ty) = self.infer_expr(args[0], None)?;
+        let (typed_arg, arg_ty) = self.infer_call_arg_at(&args, expanded_args, 0, None)?;
         let mut typed_args = vec![typed_arg];
 
-        if let Some(&replacer) = args.get(1) {
-            let (typed_replacer, replacer_ty) = self.infer_expr(
-                replacer,
+        if arg_count > 1 {
+            let (typed_replacer, replacer_ty) = self.infer_call_arg_at(
+                &args,
+                expanded_args,
+                1,
                 Some(&Type::union(vec![Type::Null, Type::Undefined])),
             )?;
             if !matches!(
@@ -5132,7 +5519,7 @@ impl Inferer<'_> {
                 Type::Null | Type::Undefined | Type::Error
             ) {
                 self.error_with_help(
-                    self.ast.try_expr(replacer).map_err(super::arena_failure)?.span,
+                    self.typed_ast.try_expr(typed_replacer).map_err(super::arena_failure)?.span,
                     "`JSON.stringify` only accepts `null` or `undefined` as its replacer argument".to_string(),
                     vec![
                         "use `JSON.stringify(value, null, space)`; replacer functions are not supported"
@@ -5143,8 +5530,8 @@ impl Inferer<'_> {
             typed_args.push(typed_replacer);
         }
 
-        if let Some(&space) = args.get(2) {
-            let (typed_space, space_ty) = self.infer_expr(space, None)?;
+        if arg_count > 2 {
+            let (typed_space, space_ty) = self.infer_call_arg_at(&args, expanded_args, 2, None)?;
             if !matches!(
                 space_ty.peel(),
                 Type::Number
@@ -5156,7 +5543,7 @@ impl Inferer<'_> {
                     | Type::Error
             ) {
                 self.error_with_help(
-                    self.ast.try_expr(space).map_err(super::arena_failure)?.span,
+                    self.typed_ast.try_expr(typed_space).map_err(super::arena_failure)?.span,
                     "`JSON.stringify` space argument must be `number`, `string`, `null`, or `undefined`"
                         .to_string(),
                     vec![
@@ -5173,6 +5560,11 @@ impl Inferer<'_> {
         } else {
             Type::String
         };
+        if let Some((_, Some(sources))) = &spread_args {
+            let mut slots = vec![Type::Unknown; typed_args.len()];
+            slots[0] = arg_ty.clone();
+            typed_args = self.collect_call_arguments(sources, &slots, None, span)?;
+        }
         Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonStringify,
@@ -5191,19 +5583,32 @@ impl Inferer<'_> {
         _expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let spread_args = if args
+            .iter()
+            .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
+            Some(self.infer_fixed_spread_args(&args, &[Type::String], span)?)
+        } else {
+            None
+        };
+        let arg_count = spread_args
+            .as_ref()
+            .map_or(args.len(), |(typed, _)| typed.len());
         // Arity first — we want the same arity diagnostic regardless of
         // whether the target resolves.
-        if args.len() != 1 {
+        if arg_count != 1 {
             let help = self.format_signature(SignatureKind::Intrinsic {
                 kind: Intrinsic::JsonParse,
             });
             self.error_with_help(
                 span,
-                format!("`JSON.parse(...)` takes 1 argument, got {}", args.len()),
+                format!("`JSON.parse(...)` takes 1 argument, got {arg_count}"),
                 vec![help],
             );
-            for &arg in &args {
-                let _ = self.infer_expr(arg, None)?;
+            if spread_args.is_none() {
+                for &arg in &args {
+                    let _ = self.infer_expr(arg, None)?;
+                }
             }
             return Ok((
                 TypedExprKind::IntrinsicCall {
@@ -5219,7 +5624,18 @@ impl Inferer<'_> {
         // verify the resolved type is assignable to `string`, as a call's
         // argument is: `string | (T & string)` narrowed from `string | T`
         // passes. Codegen coerces it to the string slot.
-        let (typed_arg, arg_ty) = self.infer_expr(args[0], Some(&Type::String))?;
+        let (typed_arg, arg_ty) = if let Some((typed, _)) = spread_args {
+            let id = typed[0];
+            let ty = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(super::arena_failure)?
+                .ty
+                .clone();
+            (id, ty)
+        } else {
+            self.infer_expr(args[0], Some(&Type::String))?
+        };
         if !matches!(arg_ty.peel(), Type::Error)
             && !super::assignable::assignable(&arg_ty, &Type::String, self.resolver())
         {
@@ -5269,24 +5685,32 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let params = intrinsic.params();
+        let spread = args
+            .iter()
+            .any(|arg| self.ast.call_spread_args.contains(arg));
+        let mut typed_args = if spread {
+            let hints = params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>();
+            self.infer_fixed_spread_args(&args, &hints, span)?.0
+        } else {
+            let mut typed = Vec::with_capacity(params.len());
+            for (i, &arg_id) in args.iter().enumerate() {
+                typed.push(self.infer_expr(arg_id, params.get(i).map(|p| &p.ty))?.0);
+            }
+            typed
+        };
+        let count = typed_args.len();
         let omitted_have_defaults =
-            args.len() < params.len() && params[args.len()..].iter().all(|p| p.default.is_some());
-        if args.len() != params.len() && !omitted_have_defaults {
+            count < params.len() && params[count..].iter().all(|p| p.default.is_some());
+        if count != params.len() && !omitted_have_defaults {
             let help = self.format_signature(SignatureKind::Intrinsic { kind: intrinsic });
             self.error_with_help(
                 span,
-                format!("expected {} argument(s), got {}", params.len(), args.len()),
+                format!("expected {} argument(s), got {}", params.len(), count),
                 vec![help],
             );
         }
-        let mut typed_args = Vec::with_capacity(params.len());
-        for (i, &arg_id) in args.iter().enumerate() {
-            let hint = params.get(i).map(|p| &p.ty);
-            let (typed_id, _) = self.infer_expr(arg_id, hint)?;
-            typed_args.push(typed_id);
-        }
         if omitted_have_defaults {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
+            self.fill_omitted_defaults(&params, count, span, &mut typed_args)?;
         }
         Ok((
             TypedExprKind::IntrinsicCall {
@@ -7622,7 +8046,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)
     }
 
-    fn spread_iterable_element(&mut self, ty: &Type) -> Option<Type> {
+    pub(super) fn spread_iterable_element(&mut self, ty: &Type) -> Option<Type> {
         if let Type::Union(members) = ty.peel() {
             let elements = members
                 .iter()
@@ -16730,25 +17154,23 @@ function main(): void { if (result < 10) { } }
         let TypedStmtKind::Expr(call_id) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected expression statement");
         };
-        let TypedExprKind::GenericMethodCall { name, args, .. } =
-            &ta.try_expr(*call_id).unwrap().kind
+        let TypedExprKind::MethodCall { name, args, .. } = &ta.try_expr(*call_id).unwrap().kind
         else {
             panic!(
-                "expected GenericMethodCall, got {:?}",
+                "expected MethodCall, got {:?}",
                 ta.try_expr(*call_id).unwrap().kind,
             );
         };
         assert_eq!(name.name, "log");
-        assert_eq!(args.len(), 2);
-        assert!(args[0].is_generic);
-        let rest = args[1].expr;
+        assert_eq!(args.len(), 1);
+        let rest = args[0];
         let TypedExprKind::ArrayLiteral { elements, .. } = &ta.try_expr(rest).unwrap().kind else {
             panic!(
                 "expected packed rest ArrayLiteral, got {:?}",
                 ta.try_expr(rest).unwrap().kind
             );
         };
-        assert!(elements.is_empty());
+        assert_eq!(elements.len(), 1);
     }
 
     #[test]
@@ -16762,18 +17184,16 @@ function main(): void { if (result < 10) { } }
         let TypedStmtKind::Expr(call_id) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected expression statement");
         };
-        let TypedExprKind::GenericMethodCall { name, args, .. } =
-            &ta.try_expr(*call_id).unwrap().kind
+        let TypedExprKind::MethodCall { name, args, .. } = &ta.try_expr(*call_id).unwrap().kind
         else {
             panic!(
-                "expected GenericMethodCall, got {:?}",
+                "expected MethodCall, got {:?}",
                 ta.try_expr(*call_id).unwrap().kind,
             );
         };
         assert_eq!(name.name, "log");
-        assert_eq!(args.len(), 2);
-        assert!(args[0].is_generic);
-        let rest = args[1].expr;
+        assert_eq!(args.len(), 1);
+        let rest = args[0];
         let TypedExprKind::ArrayLiteral {
             elements,
             element_ty,
@@ -16784,19 +17204,14 @@ function main(): void { if (result < 10) { } }
                 ta.try_expr(rest).unwrap().kind
             );
         };
-        assert_eq!(elements.len(), 2);
+        assert_eq!(elements.len(), 3);
         assert_eq!(*element_ty, Type::Unknown);
     }
 
     #[test]
-    fn console_log_rejects_zero_args() {
+    fn console_log_accepts_zero_args() {
         let (_, diags) = run("function main(): void { console.log(); }");
-        assert!(
-            diags.iter().any(|d| d
-                .message
-                .contains("method `log` expects 1+ argument(s), got 0")),
-            "expected zero-arg console.log diagnostic, got {diags:?}"
-        );
+        assert!(diags.is_empty(), "expected clean typecheck, got {diags:?}");
     }
 
     // ----------------------- Equality -----------------------

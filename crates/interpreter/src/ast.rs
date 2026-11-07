@@ -881,6 +881,8 @@ pub struct Ast {
     exprs: Vec<Expr>,
     stmts: Vec<Stmt>,
     pub top_level: Vec<StmtId>,
+    /// Call argument operands written with a leading `...`.
+    pub call_spread_args: std::collections::BTreeSet<ExprId>,
     /// Maps synthesized `IndexAccess` IDs → their source pattern (populated by `lower_patterns`).
     /// `BTreeMap` is precautionary: the compiler only ever looks entries up by `ExprId`, and
     /// the parser snapshots that render `Ast`'s `Debug` all run before `lower_patterns`

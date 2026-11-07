@@ -909,6 +909,12 @@ pub struct TypedParam {
 /// destruction on a [`crate::compiler_limits::COMPILER_STACK_BYTES`] stack.
 #[derive(Default, Clone, Debug)]
 pub struct TypedAst {
+    /// Positional reads from a collected call-argument array return undefined for missing slots.
+    pub call_spread_index_reads: std::collections::BTreeSet<ExprId>,
+    /// Typed operands written as spread arguments to a rest parameter.
+    pub call_spread_values: std::collections::BTreeSet<ExprId>,
+    /// Tuple sources expanded into positional call arguments; codegen evaluates each once.
+    pub tuple_call_spread_sources: std::collections::BTreeSet<ExprId>,
     /// Number of parameter-initialization statements before a wrapped body.
     pub parameter_default_prologues: std::collections::BTreeMap<StmtId, usize>,
     /// Receiver types for ordinary function expressions; arrows capture their receiver.

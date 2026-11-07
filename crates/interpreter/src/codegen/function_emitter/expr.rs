@@ -42,7 +42,41 @@ pub fn emit_expr(
     if let Some(class) = ctx.ta.inherited_static_receivers.get(&id) {
         crate::codegen::init_guard::emit_check(emitter, ctx, class);
     }
+    let kind = &ctx
+        .ta
+        .try_expr(id)
+        .map_err(crate::codegen::arena_failure)?
+        .kind;
+    let call_boundary = matches!(
+        kind,
+        TypedExprKind::Call { .. }
+            | TypedExprKind::CallClosure { .. }
+            | TypedExprKind::VirtualCall { .. }
+            | TypedExprKind::GenericCall { .. }
+            | TypedExprKind::MethodCall { .. }
+            | TypedExprKind::GenericMethodCall { .. }
+            | TypedExprKind::IntrinsicCall { .. }
+            | TypedExprKind::SuperCtorCall { .. }
+            | TypedExprKind::SuperMethodCall { .. }
+            | TypedExprKind::OptionalChain { .. }
+    );
+    let mark = call_boundary.then(|| emitter.single_evaluation_mark());
+    let cache_tuple_source =
+        ctx.ta.tuple_call_spread_sources.contains(&id) && emitter.evaluated_slot(id).is_none();
     emit_expr_value(emitter, ctx, id)?;
+    if let Some(mark) = mark {
+        emitter.end_single_evaluations(mark)?;
+    }
+    if cache_tuple_source {
+        let ty = &ctx
+            .ta
+            .try_expr(id)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
+        let slot = emitter.add_anonymous_local(ctx.symbols.value_type(ty)?)?;
+        emitter.instruction(Instruction::LocalTee(slot));
+        emitter.record_single_evaluation(id, slot)?;
+    }
     // Preserve concrete field validators while the expression still carries
     // its class arguments, before a surrounding cast or slot erases them.
     crate::codegen::field_guards::attach(
@@ -964,7 +998,8 @@ fn emit_index_access(
             ctx,
             *index,
             result_ty,
-            is_optional_tuple_position(ctx, &recv_ty, *index)?,
+            ctx.ta.call_spread_index_reads.contains(&id)
+                || is_optional_tuple_position(ctx, &recv_ty, *index)?,
             &receiver_name(ctx.ta, *receiver)?,
         )?;
     }

@@ -287,6 +287,7 @@ Ast {
             3,
         ),
     ],
+    call_spread_args: {},
     pattern_origins: {},
     tuple_pattern_sources: {},
     tuple_pattern_pad_defaults: {},

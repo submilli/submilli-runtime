@@ -81,6 +81,14 @@ impl GenericCallee {
 use super::format_signature::SignatureKind;
 use crate::Param;
 
+type CallSpreadSources = Vec<crate::TypedArrayElement>;
+
+struct InferredCallArguments {
+    typed: Vec<ExprId>,
+    checks: Vec<ArgumentCheck>,
+    spread_sources: Option<CallSpreadSources>,
+}
+
 /// Replaces each `TypeVar` bound in `bindings` with its binding, once: unlike
 /// [`TypeParamSubstitution::apply`] it does not chase variables inside a
 /// binding. Fails, without building the rest, once the result passes a type
@@ -663,7 +671,11 @@ impl Inferer<'_> {
         };
         let min_args = super::expr::required_parameter_count(&receiver_params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
-        if !arity_ok {
+        if !arity_ok
+            && !args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
             let help = self.format_signature(SignatureKind::Method {
                 receiver_ty: &receiver_ty,
                 name: &name.name,
@@ -723,7 +735,11 @@ impl Inferer<'_> {
         } else {
             &sig.generics
         };
-        let (mut typed_args, argument_checks) = self.infer_generic_arguments(
+        let InferredCallArguments {
+            typed: mut typed_args,
+            checks: argument_checks,
+            spread_sources,
+        } = self.infer_generic_arguments(
             &args,
             &sig.params,
             &sig.ret,
@@ -732,6 +748,21 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
+        let expanded_arity_ok = typed_args.len() >= min_args && typed_args.len() <= max_args;
+        if !expanded_arity_ok
+            && args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+            && self.error_count() == errors_before_args
+        {
+            self.error(
+                span,
+                format!(
+                    "expected {min_args}-{max_args} argument(s), got {}",
+                    typed_args.len()
+                ),
+            );
+        }
         self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
 
         let object_assign =
@@ -746,10 +777,10 @@ impl Inferer<'_> {
             self.typed_ast
                 .record_authored_arguments(span, typed_args.clone());
         }
-        if arity_ok {
-            self.fill_omitted_defaults(&receiver_params, args.len(), span, &mut typed_args)?;
+        if expanded_arity_ok && spread_sources.is_none() {
+            self.fill_omitted_defaults(&receiver_params, typed_args.len(), span, &mut typed_args)?;
         }
-        if arity_ok && has_rest {
+        if expanded_arity_ok && has_rest && spread_sources.is_none() {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
@@ -841,6 +872,18 @@ impl Inferer<'_> {
         }
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
+        if let Some(sources) = spread_sources {
+            let fixed = sig
+                .params
+                .iter()
+                .take(fixed_count)
+                .map(|p| self.instantiate(&sub, &super::expr::callable_parameter_type(p), span))
+                .collect::<Result<Vec<_>, _>>()?;
+            let rest = has_rest
+                .then(|| self.instantiate(&sub, &rest_elem_ty, span))
+                .transpose()?;
+            typed_args = self.collect_call_arguments(&sources, &fixed, rest.as_ref(), span)?;
+        }
         if array_from && !array_from_mapper && array_like.is_some() {
             let element = self.instantiate(&sub, &Type::TypeVar("T".into()), span)?;
             self.reject_array_like_element_type(&element, span);
@@ -1890,19 +1933,73 @@ impl Inferer<'_> {
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
-    ) -> Result<(Vec<ExprId>, Vec<ArgumentCheck>), CompilerFailure> {
+    ) -> Result<InferredCallArguments, CompilerFailure> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let mut checks = Vec::new();
+        let mut positions = Vec::with_capacity(args.len());
+        let mut spread_sources = Vec::with_capacity(args.len());
+        let mut next_position = 0;
+        let has_call_spread = args
+            .iter()
+            .any(|arg| self.ast.call_spread_args.contains(arg));
+        for &arg in args {
+            positions.push(next_position);
+            if self.ast.call_spread_args.contains(&arg) {
+                let source = self.infer_expr(arg, None)?;
+                let width = match source.1.peel() {
+                    Type::Tuple(tuple) if next_position < fixed_count => tuple.elements.len(),
+                    _ => 1,
+                };
+                next_position = next_position.saturating_add(width);
+                spread_sources.push(Some(source));
+            } else {
+                if has_call_spread
+                    && !self.is_context_sensitive_function(arg)?
+                    && !self.literal_holds_context_sensitive_function(arg)?
+                {
+                    let hint = if next_position < fixed_count {
+                        params
+                            .get(next_position)
+                            .map(super::expr::callable_parameter_type)
+                    } else if has_rest {
+                        Some(rest_elem_ty.clone())
+                    } else {
+                        None
+                    };
+                    let (typed, _) = self.infer_expr(arg, hint.as_ref())?;
+                    self.held_arguments.insert(arg, typed);
+                }
+                next_position = next_position.saturating_add(1);
+                spread_sources.push(None);
+            }
+        }
         let args_with_param_types: Vec<(ExprId, Type)> = args
             .iter()
             .enumerate()
             .map(|(i, &arg_id)| {
-                let param_ty = match params.get(i) {
+                let position = positions[i];
+                let param_ty = match params.get(position) {
                     // An omittable parameter takes an explicit `undefined` too.
-                    Some(param) if i < fixed_count => super::expr::callable_parameter_type(param),
+                    Some(param) if position < fixed_count => {
+                        super::expr::callable_parameter_type(param)
+                    }
                     _ if has_rest => rest_elem_ty.clone(),
                     _ => Type::Error,
+                };
+                let param_ty = if spread_sources[i]
+                    .as_ref()
+                    .is_some_and(|(_, ty)| matches!(ty.peel(), Type::Tuple(_)))
+                    && position < fixed_count
+                {
+                    Type::Error
+                } else if self.ast.call_spread_args.contains(&arg_id)
+                    && position >= fixed_count
+                    && has_rest
+                {
+                    Type::Array(Box::new(param_ty))
+                } else {
+                    param_ty
                 };
                 (arg_id, param_ty)
             })
@@ -1923,11 +2020,58 @@ impl Inferer<'_> {
                 },
             ),
         };
-        let mut typed_slots: Vec<Option<ExprId>> = vec![None; args.len()];
+        let mut typed_slots: Vec<Option<Vec<ExprId>>> = vec![None; args.len()];
         for deferred_pass in [false, true] {
             for (i, (arg_id, param_ty)) in args_with_param_types.iter().enumerate() {
                 let (arg_id, param_ty) = (*arg_id, param_ty.clone());
                 if typed_slots[i].is_some() {
+                    continue;
+                }
+                let position = positions[i];
+                if position < fixed_count
+                    && let Some((source, source_ty)) = &spread_sources[i]
+                    && let Type::Tuple(tuple) = source_ty.peel()
+                {
+                    let projected = self.project_tuple_call_spread(
+                        *source,
+                        tuple,
+                        self.ast
+                            .try_expr(arg_id)
+                            .map_err(super::arena_failure)?
+                            .span,
+                    )?;
+                    for (offset, &read) in projected.iter().enumerate() {
+                        let slot = position + offset;
+                        let expected = if slot < fixed_count {
+                            params.get(slot).map(super::expr::callable_parameter_type)
+                        } else if has_rest {
+                            Some(rest_elem_ty.clone())
+                        } else {
+                            None
+                        };
+                        if let Some(expected) = expected {
+                            let actual = tuple.elements[offset].clone();
+                            if let Err(error) =
+                                sub.unify_argument(&expected, &actual, self.resolver())
+                            {
+                                self.unify_argument_error(
+                                    error,
+                                    sub,
+                                    (&expected, &actual),
+                                    read,
+                                    false,
+                                    &signature_help,
+                                )?;
+                            } else {
+                                checks.push(ArgumentCheck {
+                                    arg: read,
+                                    param_ty: expected,
+                                    arg_ty: actual,
+                                });
+                            }
+                        }
+                    }
+                    typed_slots[i] = Some(projected);
                     continue;
                 }
                 let deferred = function_part(&param_ty).is_some()
@@ -1946,10 +2090,44 @@ impl Inferer<'_> {
                 let errors_before = self.error_count();
                 let diagnostics_before = self.diagnostics.len();
                 let close_matches_before = sub.close_match_count();
-                let (typed_id, arg_ty) =
-                    self.infer_generic_argument(arg_id, &param_ty, &arguments, sub)?;
-                typed_slots[i] = Some(typed_id);
-                let missing_slot = i >= fixed_count && !has_rest;
+                let (typed_id, arg_ty) = if let Some((typed, source_ty)) = &spread_sources[i] {
+                    let typed = *typed;
+                    let source_ty = source_ty.clone();
+                    if position < fixed_count || !has_rest {
+                        let span = self
+                            .ast
+                            .try_expr(arg_id)
+                            .map_err(super::arena_failure)?
+                            .span;
+                        self.error(span, "A spread argument must either have a tuple type or be passed to a rest parameter".into());
+                        (typed, source_ty)
+                    } else {
+                        let element = super::expr::spread_element_type(source_ty.peel())
+                            .or_else(|| self.spread_iterable_element(&source_ty));
+                        let element = if let Some(element) = element {
+                            element
+                        } else {
+                            let span = self
+                                .ast
+                                .try_expr(arg_id)
+                                .map_err(super::arena_failure)?
+                                .span;
+                            self.error(
+                                span,
+                                format!(
+                                    "expected an array to spread or an iterable, got `{source_ty}`"
+                                ),
+                            );
+                            Type::Error
+                        };
+                        self.typed_ast.call_spread_values.insert(typed);
+                        (typed, Type::Array(Box::new(element)))
+                    }
+                } else {
+                    self.infer_generic_argument(arg_id, &param_ty, &arguments, sub)?
+                };
+                typed_slots[i] = Some(vec![typed_id]);
+                let missing_slot = position >= fixed_count && !has_rest;
                 if missing_slot || matches!(arg_ty, Type::Error) {
                     continue;
                 }
@@ -1994,7 +2172,46 @@ impl Inferer<'_> {
                 }
             }
         }
-        Ok((typed_slots.into_iter().flatten().collect(), checks))
+        for &arg in args {
+            self.held_arguments.remove(&arg);
+        }
+        let dynamic_tuple = args.iter().enumerate().any(|(i, arg)| {
+            self.ast.call_spread_args.contains(arg)
+                && positions[i] < fixed_count
+                && spread_sources[i]
+                    .as_ref()
+                    .is_some_and(|(_, ty)| matches!(ty.peel(), Type::Tuple(_)))
+        });
+        let sources = if dynamic_tuple {
+            Some(
+                args.iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        let source = spread_sources[i]
+                            .as_ref()
+                            .map(|(id, _)| *id)
+                            .or_else(|| {
+                                typed_slots[i].as_ref().and_then(|ids| ids.first().copied())
+                            })
+                            .ok_or_else(|| {
+                                super::inference_failure("generic call argument not inferred")
+                            })?;
+                        Ok(if self.ast.call_spread_args.contains(arg) {
+                            crate::TypedArrayElement::Spread(source)
+                        } else {
+                            crate::TypedArrayElement::Value(source)
+                        })
+                    })
+                    .collect::<Result<Vec<_>, CompilerFailure>>()?,
+            )
+        } else {
+            None
+        };
+        Ok(InferredCallArguments {
+            typed: typed_slots.into_iter().flatten().flatten().collect(),
+            checks,
+            spread_sources: sources,
+        })
     }
 
     /// Bind `T` to `never` for an empty array literal passed as a `T[]` no other
@@ -2641,7 +2858,11 @@ impl Inferer<'_> {
         let max_args = if has_rest { usize::MAX } else { params.len() };
         let min_args = super::expr::required_parameter_count(&params);
         let arity_ok = args.len() >= min_args && args.len() <= max_args;
-        if !arity_ok {
+        if !arity_ok
+            && !args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+        {
             let help = self.generic_callee_lift(callee, &callee_ident, &generics, &params, &ret);
             let subject = callee.subject(&callee_ident.name, &generics);
             let msg = if has_rest {
@@ -2686,7 +2907,11 @@ impl Inferer<'_> {
         };
         let errors_before_args = self.error_count();
         let inferred_generics: &[String] = if type_args_written { &[] } else { &generics };
-        let (mut typed_args, argument_checks) = self.infer_generic_arguments(
+        let InferredCallArguments {
+            typed: mut typed_args,
+            checks: argument_checks,
+            spread_sources,
+        } = self.infer_generic_arguments(
             &args,
             &params,
             &ret,
@@ -2695,18 +2920,33 @@ impl Inferer<'_> {
             &mut sub,
             signature_help,
         )?;
+        let expanded_arity_ok = typed_args.len() >= min_args && typed_args.len() <= max_args;
+        if !expanded_arity_ok
+            && args
+                .iter()
+                .any(|arg| self.ast.call_spread_args.contains(arg))
+            && self.error_count() == errors_before_args
+        {
+            self.error(
+                span,
+                format!(
+                    "expected {min_args}-{max_args} argument(s), got {}",
+                    typed_args.len()
+                ),
+            );
+        }
         self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
 
         if has_rest || typed_args.len() < params.len() {
             self.typed_ast
                 .record_authored_arguments(span, typed_args.clone());
         }
-        if arity_ok {
-            self.fill_omitted_defaults(&params, args.len(), span, &mut typed_args)?;
+        if expanded_arity_ok && spread_sources.is_none() {
+            self.fill_omitted_defaults(&params, typed_args.len(), span, &mut typed_args)?;
         }
         // Packed rest array has type T[] — a composite, not a bare TypeVar —
         // so the GenericArgument zip tags it is_generic: false.
-        if arity_ok && has_rest {
+        if expanded_arity_ok && has_rest && spread_sources.is_none() {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
@@ -2745,6 +2985,17 @@ impl Inferer<'_> {
         }
 
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
+        if let Some(sources) = spread_sources {
+            let fixed = params
+                .iter()
+                .take(fixed_count)
+                .map(|p| self.instantiate(&sub, &super::expr::callable_parameter_type(p), span))
+                .collect::<Result<Vec<_>, _>>()?;
+            let rest = has_rest
+                .then(|| self.instantiate(&sub, &rest_elem_ty, span))
+                .transpose()?;
+            typed_args = self.collect_call_arguments(&sources, &fixed, rest.as_ref(), span)?;
+        }
         let result_ty = self.instantiate(&sub, &ret, span)?;
 
         // The gate of a checked host call. It declares exactly one type

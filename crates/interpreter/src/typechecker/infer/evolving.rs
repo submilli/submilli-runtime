@@ -279,6 +279,13 @@ impl Inferer<'_> {
         for &arg in &call.args {
             let source = arg;
             let (typed, ty) = self.infer_expr(source, None)?;
+            let ty = if self.ast.call_spread_args.contains(&source) {
+                super::expr::spread_element_type(ty.peel())
+                    .or_else(|| self.spread_iterable_element(&ty))
+                    .unwrap_or(Type::Error)
+            } else {
+                ty
+            };
             let ty = super::stmt::widen_literal_members(ty);
             added.push(ty);
             held.insert(
