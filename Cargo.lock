@@ -5432,6 +5432,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower",
+ "tracing",
  "tracing-subscriber",
  "unicode-properties",
  "ureq",

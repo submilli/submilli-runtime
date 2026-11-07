@@ -1068,24 +1068,32 @@ impl AppState {
             .filter(|package| blueprint.packages.contains(*package))
             .cloned()
             .collect();
-        if registry_roots.is_empty() && imports.stdlib.is_empty() {
-            return Ok(Arc::new(PreparedBlueprintPackages::default()));
-        }
         let key = format!(
-            "{}:git={}",
+            "{}:git={}:allowed={}",
             prepared_packages_cache_key(blueprint_name, &registry_roots, &imports.stdlib),
-            blueprint.git.is_some()
+            blueprint.git.is_some(),
+            join_key_parts(&blueprint.packages)
         );
         if let Some(cached) = self.cached_prepared_packages(&key) {
             return Ok(cached);
         }
+        let import_suggestions = submilli_build::import_suggestions::ImportSuggestionSource::new(
+            self.package_store().clone(),
+            blueprint.packages.clone(),
+            blueprint.git.is_some(),
+        );
         let generation = self.inner.prepared_generation.load(Ordering::Acquire);
-        let mut selected = self.prepare_selected_packages(&registry_roots, &imports.stdlib)?;
+        let mut selected = if registry_roots.is_empty() && imports.stdlib.is_empty() {
+            PreparedBlueprintPackages::default()
+        } else {
+            self.prepare_selected_packages(&registry_roots, &imports.stdlib)?
+        };
         if blueprint.git.is_none() {
             selected
                 .stdlib_declarations
                 .retain(|decl| decl.package_name != "submilli:git");
         }
+        selected.import_suggestions = Some(import_suggestions);
         let prepared = Arc::new(selected);
         let mut cache = self
             .inner
@@ -1141,6 +1149,7 @@ impl AppState {
             });
         }
         Ok(PreparedBlueprintPackages {
+            import_suggestions: None,
             stdlib_declarations,
             script_declarations,
             modules,
@@ -1277,6 +1286,7 @@ fn server_engine(runtime: &RuntimeConfig) -> wasmtime::Result<Engine> {
 
 #[derive(Clone, Debug, Default)]
 pub struct PreparedBlueprintPackages {
+    pub import_suggestions: Option<submilli_build::import_suggestions::ImportSuggestionSource>,
     pub stdlib_declarations: Vec<PackageDeclaration>,
     /// Declarations of the blueprint-listed packages — the script's importable
     /// surface. Closure-only dependencies are linked but not importable.
@@ -1644,6 +1654,26 @@ fn cache_key_belongs_to_blueprint(key: &str, blueprint_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn missing_import_hints_cache_separates_retained_blueprint_grants() {
+        let state = AppState::new(crate::config::test_config()).await.unwrap();
+        let old = submilli_blueprint::parse("name: hints\npackages: ['@test/revoked']\n").unwrap();
+        let current = submilli_blueprint::parse("name: hints\n").unwrap();
+        state.evict_prepared_packages("hints");
+        // An in-flight request may still hold `old` after the update evicts.
+        let retained = state
+            .prepared_packages_for_imports("hints", &old, &ScriptImports::default())
+            .unwrap();
+        let fresh = state
+            .prepared_packages_for_imports("hints", &current, &ScriptImports::default())
+            .unwrap();
+        assert!(!Arc::ptr_eq(&retained, &fresh));
+        let cached = state
+            .prepared_packages_for_imports("hints", &current, &ScriptImports::default())
+            .unwrap();
+        assert!(Arc::ptr_eq(&fresh, &cached));
+    }
+
     #[tokio::test]
     async fn oauth_deposit_invalidates_catalog_discovered_before_login() {
         let directory = tempfile::tempdir().unwrap();

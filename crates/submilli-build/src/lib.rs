@@ -9,6 +9,7 @@ pub mod capabilities;
 pub mod config;
 pub mod doc_examples;
 pub mod driver;
+pub mod import_suggestions;
 pub mod install;
 pub mod lockfile;
 pub mod package_store;

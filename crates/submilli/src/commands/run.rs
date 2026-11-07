@@ -377,15 +377,17 @@ fn execute_on_this_thread(
         },
         None => Arc::new(VarBindings::new()),
     };
-    let package_artifacts = match blueprint.as_ref() {
+    let parsed = interpreter::parse_script(&source, file);
+    let mut stdlib = interpreter::runtime::stdlib_package_declarations();
+    let (direct_packages, package_artifacts) = match blueprint.as_ref() {
         Some(bp) => match load_blueprint_packages(bp) {
-            Ok(artifacts) => artifacts,
+            Ok(artifacts) => (bp.packages.clone(), artifacts),
             Err(err) => {
                 eprintln!("error: {err}");
                 return Ok(ExitCode::from(1));
             }
         },
-        None => Vec::new(),
+        None => load_project_packages(&parsed, &stdlib)?,
     };
     register_package_sources(&mut sources, &package_artifacts)?;
 
@@ -393,21 +395,13 @@ fn execute_on_this_thread(
     // linked but stay out of the script's importable surface.
     let package_refs: Vec<_> = package_artifacts
         .iter()
-        .filter(|artifact| {
-            blueprint
-                .as_ref()
-                .is_some_and(|bp| bp.packages.contains(&artifact.metadata.package_name))
-        })
+        .filter(|artifact| direct_packages.contains(&artifact.metadata.package_name))
         .map(|artifact| &artifact.package_declaration)
         .collect();
 
     let transitive_refs: Vec<_> = package_artifacts
         .iter()
-        .filter(|artifact| {
-            !blueprint
-                .as_ref()
-                .is_some_and(|bp| bp.packages.contains(&artifact.metadata.package_name))
-        })
+        .filter(|artifact| !direct_packages.contains(&artifact.metadata.package_name))
         .map(|artifact| &artifact.package_declaration)
         .collect();
 
@@ -466,8 +460,6 @@ fn execute_on_this_thread(
     }
     let mcp_defs = mcp_catalog.defs_refs();
     let git_enabled = blueprint.as_ref().is_some_and(|bp| bp.git.is_some());
-    let parsed = interpreter::parse_script(&source, file);
-    let mut stdlib = interpreter::runtime::stdlib_package_declarations();
     stdlib.retain(|decl| git_enabled || decl.package_name != "submilli:git");
     let compiled = interpreter::compile::compile_parsed_script_with_transitive(
         &source,
@@ -483,7 +475,10 @@ fn execute_on_this_thread(
             crate::commands::check::render(&compiled.warnings, &sources)?;
             compiled
         }
-        Err(diags) => {
+        Err(mut diags) => {
+            if let Err(error) = add_import_suggestions(&source, &mut diags, blueprint.as_deref()) {
+                tracing::warn!(%error, "import hint lookup failed");
+            }
             crate::commands::check::render(&diags, &sources)?;
             return Ok(ExitCode::from(1));
         }
@@ -735,6 +730,85 @@ fn named_volume_refusal(blueprint: &Blueprint) -> Option<String> {
          `--vfs <dir>` to give the program a directory)",
         blueprint.name, reference.volume
     ))
+}
+
+fn add_import_suggestions(
+    source: &str,
+    diagnostics: &mut [interpreter::Diagnostic],
+    blueprint: Option<&Blueprint>,
+) -> anyhow::Result<()> {
+    if !interpreter::import_suggestions::ImportSuggestions::needed(diagnostics) {
+        return Ok(());
+    }
+    let mut packages = std::collections::BTreeSet::new();
+    if let Some(blueprint) = blueprint {
+        packages.clone_from(&blueprint.packages);
+    } else {
+        packages = project_package_versions()?.into_keys().collect();
+    }
+    let suggestions = submilli_build::import_suggestions::ImportSuggestionSource::new(
+        PackageStore::default(),
+        packages,
+        blueprint.is_some_and(|blueprint| blueprint.git.is_some()),
+    );
+    for error in suggestions.enrich(source, diagnostics) {
+        tracing::warn!(%error, "import hint lookup failed");
+    }
+    Ok(())
+}
+
+fn project_package_versions() -> anyhow::Result<BTreeMap<String, Option<String>>> {
+    let cwd = std::env::current_dir().context("resolving project directory")?;
+    let Some(path) = submilli_build::find_manifest_upwards(&cwd) else {
+        return Ok(BTreeMap::new());
+    };
+    let manifest = submilli_build::load_manifest(&path)
+        .map_err(|diagnostics| anyhow!("cannot read {}: {diagnostics:?}", path.display()))?;
+    let dependencies = manifest.dependencies.iter().map(|(name, source)| {
+        let version = match source {
+            submilli_build::DependencySource::Version(version) => Some(version.as_str().to_owned()),
+            submilli_build::DependencySource::Github { .. } => None,
+        };
+        (name.as_str().to_owned(), version)
+    });
+    Ok(dependencies
+        .chain(manifest.packages.iter().map(|package| {
+            (
+                package.name.as_str().to_owned(),
+                Some(package.version.as_str().to_owned()),
+            )
+        }))
+        .collect())
+}
+
+fn load_project_packages(
+    parsed: &interpreter::ParsedScript,
+    stdlib: &[interpreter::PackageDeclaration],
+) -> anyhow::Result<(std::collections::BTreeSet<String>, Vec<Artifact>)> {
+    let imports = parsed.external_imports_with_stdlib(stdlib)?;
+    if imports.registry_packages.is_empty() {
+        return Ok((std::collections::BTreeSet::new(), Vec::new()));
+    }
+    let versions = project_package_versions()?;
+    let direct: std::collections::BTreeSet<_> = imports
+        .registry_packages
+        .into_iter()
+        .filter(|name| versions.contains_key(name))
+        .collect();
+    let artifacts = PackageStore::default().load_closure(direct.iter().map(String::as_str))?;
+    for artifact in &artifacts {
+        let name = &artifact.metadata.package_name;
+        if direct.contains(name)
+            && let Some(Some(required)) = versions.get(name)
+            && artifact.metadata.package_version != *required
+        {
+            anyhow::bail!(
+                "package `{name}` has version {} in the store, but submilli.toml requires {required}; rebuild the package or update submilli.toml",
+                artifact.metadata.package_version
+            );
+        }
+    }
+    Ok((direct, artifacts))
 }
 
 fn load_blueprint_packages(blueprint: &Blueprint) -> anyhow::Result<Vec<Artifact>> {

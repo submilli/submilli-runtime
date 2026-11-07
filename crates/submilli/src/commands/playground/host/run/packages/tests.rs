@@ -73,6 +73,33 @@ const USES_UTIL: &str =
     "import { answer } from \"@pied-piper/util\";\nfunction main(): number { return answer(); }";
 
 #[test]
+fn missing_import_hints_cache_separates_retained_blueprint_grants() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = PackageCache::new(PackageStore::new(dir.path()));
+    let engine = interpreter::runtime::RuntimeConfig::default()
+        .engine()
+        .unwrap();
+    cache.clear();
+    let retained = cache
+        .prepare_for_imports(
+            &engine,
+            &blueprint(&["@test/revoked"]),
+            &ScriptImports::default(),
+        )
+        .unwrap();
+    let fresh = cache
+        .prepare_for_imports(&engine, &blueprint(&[]), &ScriptImports::default())
+        .unwrap();
+    assert!(!Arc::ptr_eq(&retained, &fresh));
+    assert!(Arc::ptr_eq(
+        &fresh,
+        &cache
+            .prepare_for_imports(&engine, &blueprint(&[]), &ScriptImports::default())
+            .unwrap()
+    ));
+}
+
+#[test]
 fn a_prepared_set_survives_the_store_losing_its_files_until_the_cache_is_cleared() {
     let dir = tempfile::tempdir().unwrap();
     install(

@@ -183,6 +183,108 @@ async fn delete(router: &Router, session: &str) -> StatusCode {
     send(router, req).await.0
 }
 
+fn write_import_hint_package(store: &Path, name: &str, source: &str) {
+    let package = compile_package(
+        name,
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source,
+        }],
+        &[],
+    )
+    .expect("compile hint package");
+    write_package_artifact(
+        store.join(name),
+        &package.wasm,
+        &package.type_info,
+        &submilli_build::derive_capability_schema(
+            &package.declaration,
+            &[],
+            &package.required_capabilities,
+        ),
+        &package.declaration,
+        &ArtifactMetadata::new(name, "1.0.0", Vec::new()),
+    )
+    .expect("write hint package");
+}
+
+#[tokio::test]
+async fn missing_import_hints_search_the_sessions_importable_packages() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let store = tmp.path().join("packages");
+    write_import_hint_package(
+        &store,
+        "@pied-piper/phone",
+        "export interface Contact { name: string; } export function search_contacts(): number { return 42; }",
+    );
+    write_import_hint_package(
+        &store,
+        "@pied-piper/hidden",
+        "export interface HiddenContact { name: string; } export function hidden_contact(): number { return 0; }",
+    );
+    let blueprint = submilli_blueprint::parse(
+        "name: hints\npackages: ['@pied-piper/phone', '@missing/unavailable']\n",
+    )
+    .expect("blueprint");
+    let router = app(AppState::new(ServerConfig {
+        blueprints: Some(Arc::new(InMemoryBlueprintStore::seed([blueprint]).unwrap())),
+        package_store_root: Some(store),
+        ..in_memory_config::config()
+    })
+    .await
+    .unwrap());
+    let (status, created) = create(&router, json!({ "blueprint": "hints" })).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let session = created["session_id"].as_str().expect("session id");
+    for (code, hint) in [
+        (
+            "function main(): void { search_contacts(); }",
+            "import { search_contacts } from \"@pied-piper/phone\";",
+        ),
+        (
+            "function main(): void { phone.search_contacts(); }",
+            "import phone from \"@pied-piper/phone\";",
+        ),
+        (
+            "function main(): void { const contacts: Contact[] = []; }",
+            "import { Contact } from \"@pied-piper/phone\";",
+        ),
+        (
+            "function main(): void { v4(); }",
+            "import { v4 } from \"submilli:uuid\";",
+        ),
+        (
+            "function main(): void { uuid.v4(); }",
+            "import uuid from \"submilli:uuid\";",
+        ),
+        (
+            "function main(): void { const entries: DirEntry[] = []; }",
+            "import { DirEntry } from \"submilli:fs\";",
+        ),
+    ] {
+        let (_, body) = session_execute(&router, session, code).await;
+        let message = body["error"]["message"].as_str().expect("compile error");
+        assert!(message.contains(hint), "missing {hint}: {body}");
+        assert_eq!(body["error"]["kind"], "compile_error", "{body}");
+    }
+    for code in [
+        "function main(): void { hidden_contact(); }",
+        "function main(): void { const contacts: HiddenContact[] = []; }",
+        "function main(): void { hidden.hidden_contact(); }",
+    ] {
+        let (_, body) = session_execute(&router, session, code).await;
+        assert_eq!(body["error"]["kind"], "compile_error", "{body}");
+        assert!(!body.to_string().contains("@pied-piper/hidden"), "{body}");
+    }
+    let (_, body) = session_execute(&router, session, "import { search_contacts } from \"@pied-piper/phone\"; function main(): number { return search_contacts(); }").await;
+    assert_eq!(body["result"], "42", "{body}");
+    let (_, body) =
+        session_execute(&router, session, "function main(): number { return 42; }").await;
+    assert_eq!(body["result"], "42", "{body}");
+    assert_eq!(delete(&router, session).await, StatusCode::NO_CONTENT);
+}
+
 #[tokio::test]
 async fn full_lifecycle_create_execute_delete() {
     let router = router();

@@ -308,14 +308,22 @@ async fn run_inner(
         return internal_failure(&error.to_string());
     }
     let compiled = compiler_thread::run(|| {
-        compile_parsed_script_timed(
+        let mut compiled = compile_parsed_script_timed(
             code,
             FILENAME,
             &parsed.parsed,
             &imports.packages.stdlib_declarations,
             &package_refs,
             &virtual_refs,
-        )
+        );
+        if let Err(diagnostics) = &mut compiled
+            && let Some(suggestions) = &imports.packages.import_suggestions
+        {
+            for error in suggestions.enrich(code, diagnostics) {
+                tracing::warn!(%error, "import hint lookup failed");
+            }
+        }
+        compiled
     });
     let compiled = match compiled {
         Ok(Ok(out)) => out,

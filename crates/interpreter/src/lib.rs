@@ -18,6 +18,7 @@ pub mod did_you_mean;
 pub mod doc_comment;
 pub mod doc_directives;
 pub mod docs_view;
+pub mod import_suggestions;
 pub mod lexer;
 pub(crate) mod literal_units;
 pub(crate) mod lower_local_types;

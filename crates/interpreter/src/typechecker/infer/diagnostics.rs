@@ -5,6 +5,7 @@
 //! delegate to [`crate::did_you_mean`] but need access to `self.types`
 //! and `self.scopes`, so the helper sits here on the `Inferer`.
 
+use crate::import_suggestions::{named_import_help, namespace_import_help};
 use crate::lower_local_types::{display_type_name, is_local_type_name};
 use crate::{Diagnostic, ExprId, MethodSig, Severity, Span, Type, TypeKind, ValueKind};
 
@@ -850,12 +851,7 @@ impl<'a> Inferer<'a> {
     fn package_namespace_import_help(&self, name: &str) -> Vec<String> {
         self.import_suggestion_packages()
             .filter(|pkg| pkg.package_name.rsplit(['/', ':']).next() == Some(name))
-            .map(|pkg| {
-                format!(
-                    "`{name}` is a module; import it first:\n  import {name} from \"{}\";",
-                    pkg.package_name
-                )
-            })
+            .map(|pkg| namespace_import_help(name, &pkg.package_name))
             .collect()
     }
 
@@ -1867,10 +1863,6 @@ impl<'a> Inferer<'a> {
             self.error_non_condition_type(span, ty);
         }
     }
-}
-
-fn named_import_help(name: &str, package: &str) -> String {
-    format!("`{name}` is exported by `{package}`\n  add `import {{ {name} }} from \"{package}\";`")
 }
 
 #[cfg(test)]
