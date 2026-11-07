@@ -41,6 +41,9 @@ pub(super) async fn assign(
                 continue;
             };
             kept_value.set(caller, value)?;
+            if skips_method_copy(caller, target, target_array, &key)? {
+                continue;
+            }
             if target_array {
                 set_array(caller, target, &key, value).await?;
             } else {
@@ -49,6 +52,35 @@ pub(super) async fn assign(
         }
     }
     Ok(*target)
+}
+
+/// Whether to leave the source's `key` uncopied: it is a method, and the
+/// target is an array or declares a data field or accessor of that name.
+/// JavaScript doesn't copy a method at all. Otherwise it is copied, keeping
+/// its marked name: it adds the name or replaces a target method, because the
+/// result's static type may name it.
+fn skips_method_copy(
+    caller: &mut Caller<'_, StoreData>,
+    target: &Val,
+    target_array: bool,
+    key: &Val,
+) -> wasmtime::Result<bool> {
+    if !super::is_method_slot(caller, key)? {
+        return Ok(false);
+    }
+    if target_array {
+        return Ok(true);
+    }
+    let units = read_string_units(caller, key, "Object.assign source key")?;
+    // `assign` has rejected a target that is neither an array nor a shape.
+    let Some((names, _)) = super::shape_arrays(caller, target)? else {
+        return Ok(true);
+    };
+    if let Some(slot) = super::find_data_slot(caller, target, &units)? {
+        let name = names.get(&mut *caller, slot)?;
+        return Ok(!super::is_method_slot(caller, &name)?);
+    }
+    super::dynamic::has(caller, target, key)
 }
 
 /// Retain the native key vector's reservation while guest setters run. The

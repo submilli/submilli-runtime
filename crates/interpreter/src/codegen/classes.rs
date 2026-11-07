@@ -140,14 +140,19 @@ impl ClassLayout {
                 name: f.name.clone(),
                 optional: f.optional,
                 is_accessor: false,
+                is_method: false,
                 is_private: self.private_members.contains(&f.name),
             })
             .collect();
-        names.extend(self.payload_slots().map(|s| super::field_names::FieldName {
-            name: s.name.clone(),
-            optional: false,
-            is_accessor: s.name.starts_with("get ") || s.name.starts_with("set "),
-            is_private: self.private_members.contains(&s.name),
+        names.extend(self.payload_slots().map(|s| {
+            let is_accessor = s.name.starts_with("get ") || s.name.starts_with("set ");
+            super::field_names::FieldName {
+                name: s.name.clone(),
+                optional: false,
+                is_accessor,
+                is_method: !is_accessor,
+                is_private: self.private_members.contains(&s.name),
+            }
         }));
         names
     }

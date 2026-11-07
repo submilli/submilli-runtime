@@ -19,8 +19,22 @@ pub struct FieldName {
     pub name: String,
     pub optional: bool,
     pub is_accessor: bool,
+    /// A class method's slot: carried for dispatch, but not an own property.
+    /// Its name is shared by every instance, so its flag is never written
+    /// (only a 0 flag is marked present).
+    pub is_method: bool,
     pub is_private: bool,
 }
+
+// The presence flags of marked names that are not own data properties. Any
+// nonzero flag reads as present; the runtime reads the same values
+// (`runtime::prelude::object`).
+
+/// An accessor's slot (`get x` / `set x`).
+pub const ACCESSOR_MARKER: i32 = -1;
+/// A class method's slot: an own property neither for `Object.keys` nor for
+/// `hasOwn`, as in JavaScript.
+pub const METHOD_MARKER: i32 = -2;
 
 pub fn declare_optional_name_type(
     types: &mut wasm_encoder::TypeSection,
@@ -77,6 +91,7 @@ pub fn collect(shapes: &[Type]) -> Vec<Vec<FieldName>> {
                         name: name.clone(),
                         optional: field.optional,
                         is_accessor: false,
+                        is_method: false,
                         is_private: false,
                     })
                     .collect(),
@@ -138,9 +153,12 @@ fn build_init_expr(
             array_size: wasm_u32(code_units.len())?,
         });
         instrs.push(Instruction::I64Const(0));
-        if name.optional || name.is_accessor || name.is_private {
+        let marked = name.optional || name.is_accessor || name.is_method || name.is_private;
+        if marked {
             instrs.push(Instruction::I32Const(if name.is_accessor {
-                -1
+                ACCESSOR_MARKER
+            } else if name.is_method {
+                METHOD_MARKER
             } else if name.optional {
                 0
             } else {
@@ -148,13 +166,11 @@ fn build_init_expr(
             }));
             instrs.push(Instruction::I32Const(i32::from(name.is_private)));
         }
-        instrs.push(Instruction::StructNew(
-            if name.optional || name.is_accessor || name.is_private {
-                optional_name_type
-            } else {
-                intrinsics.string
-            },
-        ));
+        instrs.push(Instruction::StructNew(if marked {
+            optional_name_type
+        } else {
+            intrinsics.string
+        }));
     }
     instrs.push(Instruction::ArrayNewFixed {
         array_type_index: intrinsics.field_names,
@@ -226,7 +242,7 @@ pub(crate) fn emit_name_is_accessor(
         struct_type_index: marked,
         field_index: 3,
     });
-    emitter.instruction(Instruction::I32Const(-1));
+    emitter.instruction(Instruction::I32Const(ACCESSOR_MARKER));
     emitter.instruction(Instruction::I32Eq);
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(0));
@@ -377,6 +393,7 @@ mod tests {
                 name: "x".to_string(),
                 optional: false,
                 is_accessor: false,
+                is_method: false,
                 is_private: false,
             }]
         );
@@ -407,6 +424,7 @@ mod tests {
                 name: "x".to_string(),
                 optional: false,
                 is_accessor: false,
+                is_method: false,
                 is_private: false,
             }]
         );
@@ -416,6 +434,7 @@ mod tests {
                 name: "y".to_string(),
                 optional: false,
                 is_accessor: false,
+                is_method: false,
                 is_private: false,
             }]
         );
