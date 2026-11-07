@@ -174,8 +174,9 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    let generic_names: crate::GenericParameters =
-                        generics.iter().map(|g| g.name.clone()).collect();
+                    let generic_names = crate::GenericParameters::unconstrained(
+                        generics.iter().map(|g| g.name.clone()).collect(),
+                    );
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
                         name.name.clone(),
@@ -207,8 +208,9 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    let generic_names: crate::GenericParameters =
-                        generics.iter().map(|g| g.name.clone()).collect();
+                    let generic_names = crate::GenericParameters::unconstrained(
+                        generics.iter().map(|g| g.name.clone()).collect(),
+                    );
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
                         name.name.clone(),
@@ -261,8 +263,9 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    let generic_names: crate::GenericParameters =
-                        generics.iter().map(|g| g.name.clone()).collect();
+                    let generic_names = crate::GenericParameters::unconstrained(
+                        generics.iter().map(|g| g.name.clone()).collect(),
+                    );
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
                         name.name.clone(),

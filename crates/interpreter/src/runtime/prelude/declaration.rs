@@ -48,7 +48,7 @@ pub(crate) fn insert_temporal_plain_type(
             "toString".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: Type::String,
                 predicate: None,
@@ -59,7 +59,7 @@ pub(crate) fn insert_temporal_plain_type(
             "toJSON".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: Type::String,
                 predicate: None,
@@ -70,7 +70,7 @@ pub(crate) fn insert_temporal_plain_type(
             "equals".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::new("other", super::temporal::like::like_type(local))],
                 ret: Type::Boolean,
                 predicate: None,
@@ -109,7 +109,7 @@ pub(crate) fn insert_temporal_plain_type(
             declaration_span: Span::at(FileId::PRELUDE),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods,
                 properties,
                 dispatch: Dispatch::Direct,
@@ -123,7 +123,7 @@ pub(crate) fn insert_temporal_plain_type(
         "from".to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new().into(),
+            generics: Default::default(),
             params: vec![
                 Param::new("item", super::temporal::like::like_type(local)),
                 super::temporal::like::overflow_param(),
@@ -140,7 +140,7 @@ pub(crate) fn insert_temporal_plain_type(
             "compare".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![
                     Param::new("a", super::temporal::like::like_type(local)),
                     Param::new("b", super::temporal::like::like_type(local)),
@@ -161,7 +161,7 @@ pub(crate) fn insert_temporal_plain_type(
             declaration_span: Span::at(FileId::PRELUDE),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: ctor_methods,
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::Static,

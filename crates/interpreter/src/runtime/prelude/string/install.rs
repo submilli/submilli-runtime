@@ -1378,7 +1378,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_concat"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::String)],
                 ret: Type::String,
                 type_predicate: None,
@@ -1393,7 +1393,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_eq"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::String)],
                 ret: Type::Boolean,
                 type_predicate: None,
@@ -1408,7 +1408,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_length"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::anon(Type::String)],
                 ret: Type::Number,
                 type_predicate: None,
@@ -1423,7 +1423,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_index"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::Number)],
                 ret: Type::String,
                 type_predicate: None,
@@ -1440,7 +1440,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("string_cmp"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::anon(Type::String), Param::anon(Type::String)],
                 ret: Type::Boolean,
                 type_predicate: None,
@@ -1477,14 +1477,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("String"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::String)),
                     (
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1495,7 +1495,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toJson".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1508,7 +1508,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "concat".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::rest(
                                 "strings",
                                 Type::Array(Box::new(Type::String)),
@@ -1524,7 +1524,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "equals".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("other", Type::String)],
                             ret: Type::Boolean,
                             predicate: None,
@@ -1537,7 +1537,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "localeCompare".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("other", Type::String)],
                             ret: Type::Number,
                             predicate: None,
@@ -1550,7 +1550,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "iterator".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::String]),
                             predicate: None,
@@ -1563,7 +1563,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isWellFormed".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::Boolean,
                             predicate: None,
@@ -1576,7 +1576,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toWellFormed".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1589,7 +1589,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "charAt".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("index", Type::Number)],
                             ret: Type::String,
                             predicate: None,
@@ -1602,7 +1602,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "at".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("index", Type::Number)],
                             ret: Type::Union(vec![Type::String, Type::Undefined]),
                             predicate: None,
@@ -1615,7 +1615,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "charCodeAt".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("index", Type::Number)],
                             ret: Type::Number,
                             predicate: None,
@@ -1628,7 +1628,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "codePointAt".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("index", Type::Number)],
                             ret: Type::Union(vec![Type::Number, Type::Undefined]),
                             predicate: None,
@@ -1641,7 +1641,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "slice".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::with_default(
                                     "start",
@@ -1666,7 +1666,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "substr".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("start", Type::Number),
                                 Param::with_default(
@@ -1686,7 +1686,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "substring".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::with_default(
                                     "start",
@@ -1710,7 +1710,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "indexOf".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("search", Type::String),
                                 Param::with_default(
@@ -1730,7 +1730,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "lastIndexOf".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("search", Type::String),
                                 Param::with_default(
@@ -1750,7 +1750,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "includes".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("search", Type::String),
                                 Param::with_default(
@@ -1770,7 +1770,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "startsWith".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("search", Type::String),
                                 Param::with_default(
@@ -1790,7 +1790,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "endsWith".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("search", Type::String),
                                 Param::with_default(
@@ -1810,7 +1810,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "repeat".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("count", Type::Number)],
                             ret: Type::String,
                             predicate: None,
@@ -1823,7 +1823,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "padStart".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("targetLength", Type::Number),
                                 Param::with_default(
@@ -1843,7 +1843,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "padEnd".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("targetLength", Type::Number),
                                 Param::with_default(
@@ -1863,7 +1863,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toUpperCase".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1876,7 +1876,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toLowerCase".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1889,7 +1889,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "trim".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1902,7 +1902,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "trimStart".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1915,7 +1915,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "trimLeft".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1928,7 +1928,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "trimRight".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1941,7 +1941,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "trimEnd".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1954,7 +1954,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "normalize".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::with_default(
                                 "form",
                                 Type::String,
@@ -1975,7 +1975,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "match".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "re",
                                 Type::Union(vec![
@@ -1997,7 +1997,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "search".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "re",
                                 Type::Union(vec![
@@ -2016,7 +2016,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "replace".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new(
                                     "search",
@@ -2041,7 +2041,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "replaceAll".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new(
                                     "search",
@@ -2066,7 +2066,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "split".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new(
                                     "separator",
@@ -2092,7 +2092,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "matchAll".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "re",
                                 Type::Union(vec![Type::String, Type::prelude_interface("RegExp".to_string(), Vec::new())]),
@@ -2127,13 +2127,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("StringConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "@call".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![call_value()],
                             ret: Type::String,
                             predicate: None,
@@ -2146,7 +2146,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "fromCharCode".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::rest("codes", Type::Array(Box::new(Type::Number)))],
                             ret: Type::String,
                             predicate: None,
@@ -2159,7 +2159,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "fromCodePoint".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::rest(
                                 "codePoints",
                                 Type::Array(Box::new(Type::Number)),

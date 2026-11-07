@@ -49,7 +49,7 @@ fn insert_fn(defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret:
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::UUID),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params,
                 ret,
                 type_predicate: None,

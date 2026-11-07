@@ -233,7 +233,7 @@ fn insert_interface(
             declaration_span: Span::at(crate::FileId::SESSION),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
                 dispatch: Dispatch::VTable,
@@ -280,7 +280,7 @@ fn insert_generic_fn(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::SESSION),
             kind: ValueKind::Function {
-                generics: generics.into(),
+                generics: crate::GenericParameters::unconstrained(generics),
                 params,
                 ret,
                 type_predicate: None,

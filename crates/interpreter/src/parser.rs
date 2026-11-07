@@ -2247,6 +2247,11 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+            if matches!(self.peek().kind, TokenKind::Equals) {
+                let equals = self.advance();
+                self.error_at_with_help(equals.span, "generic type parameter defaults are not supported", vec!["remove the default and supply a type argument explicitly when inference cannot determine it".into()]);
+                self.parse_type_annotation()?;
+            }
             // A duplicate is reported and dropped, as `tsc` drops it: the first
             // parameter keeps the name, and the type arguments count against the
             // parameters that remain.

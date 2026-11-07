@@ -997,7 +997,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Error"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 fields: BTreeMap::from([
                     (
                         "cause".to_string(),
@@ -1049,7 +1049,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     "isError".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: vec![Param::with_default(
                             "value", Type::Unknown, crate::DefaultValue::Undefined,
                         )],
@@ -1082,7 +1082,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::from([(
                     "cause".to_string(),
@@ -1109,7 +1109,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("RangeError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
@@ -1137,7 +1137,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("QuotaExceededError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
@@ -1165,7 +1165,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("TimeoutError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
@@ -1193,7 +1193,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("TypeError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
@@ -1221,7 +1221,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("PermissionDeniedError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // Own fields beyond the inherited `cause`/`message`/`name`. BTreeMap
                 // (name) order fixes the payload slots — keep
                 // `BuiltinErrorClass::PermissionDenied.own_fields()` in sync.
@@ -1294,7 +1294,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("SyntaxError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
@@ -1322,7 +1322,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("URIError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
@@ -1350,7 +1350,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("ReferenceError"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 // No own fields — `cause`/`message`/`name` are inherited from `Error`.
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),

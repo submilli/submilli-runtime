@@ -134,7 +134,7 @@ fn insert_agent_info_interface(defs: &mut PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::AGENTS),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
                 dispatch: Dispatch::VTable,
@@ -180,7 +180,7 @@ fn insert_fn(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::AGENTS),
             kind: ValueKind::Function {
-                generics: generics.into(),
+                generics: crate::GenericParameters::unconstrained(generics),
                 params,
                 ret,
                 type_predicate: None,

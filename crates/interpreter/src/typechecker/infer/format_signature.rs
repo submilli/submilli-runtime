@@ -399,7 +399,7 @@ mod tests {
         let out = format_signature(
             SignatureKind::Function {
                 name: "id",
-                generics: &vec!["T".to_string()].into(),
+                generics: &crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 params: &[Param::new("x", Type::TypeVar("T".to_string()))],
                 ret: &Type::TypeVar("T".to_string()),
                 doc: None,
@@ -415,7 +415,10 @@ mod tests {
         let out = format_signature(
             SignatureKind::Function {
                 name: "pair",
-                generics: &vec!["T".to_string(), "U".to_string()].into(),
+                generics: &crate::GenericParameters::unconstrained(vec![
+                    "T".to_string(),
+                    "U".to_string(),
+                ]),
                 params: &[
                     Param::new("a", Type::TypeVar("T".to_string())),
                     Param::new("b", Type::TypeVar("U".to_string())),
@@ -479,7 +482,7 @@ mod tests {
     fn method_no_generics() {
         let sig = MethodSig {
             optional: false,
-            generics: vec![].into(),
+            generics: Default::default(),
             params: vec![],
             ret: Type::String,
             predicate: None,
@@ -501,7 +504,7 @@ mod tests {
     fn method_on_union_receiver_parenthesizes_it() {
         let sig = MethodSig {
             optional: false,
-            generics: vec![].into(),
+            generics: Default::default(),
             params: vec![],
             ret: Type::String,
             predicate: None,
@@ -527,7 +530,7 @@ mod tests {
     fn method_substitutes_interface_generic_with_named_param() {
         let sig = MethodSig {
             optional: false,
-            generics: vec!["U".to_string()].into(),
+            generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
             params: vec![Param::new(
                 "fn",
                 Type::Function {
@@ -558,7 +561,7 @@ mod tests {
     fn method_on_interface_ref_multi_arg_with_named_param() {
         let sig = MethodSig {
             optional: false,
-            generics: vec![].into(),
+            generics: Default::default(),
             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
             ret: Type::TypeVar("V".to_string()),
             predicate: None,
@@ -589,7 +592,7 @@ mod tests {
     fn method_falls_back_to_positional_when_names_empty() {
         let sig = MethodSig {
             optional: false,
-            generics: vec![].into(),
+            generics: Default::default(),
             params: vec![Param::anon(Type::TypeVar("K".to_string()))],
             ret: Type::TypeVar("V".to_string()),
             predicate: None,

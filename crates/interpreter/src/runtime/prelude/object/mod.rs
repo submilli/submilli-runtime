@@ -1258,13 +1258,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Object"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1275,7 +1275,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toJson".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -1302,13 +1302,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("ObjectConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "keys".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("obj", Type::Unknown)],
                             ret: Type::Array(Box::new(Type::String)),
                             predicate: None,
@@ -1321,7 +1321,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "values".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("obj", Type::Unknown)],
                             ret: Type::Array(Box::new(Type::Unknown)),
                             predicate: None,
@@ -1334,7 +1334,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "entries".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("obj", Type::Unknown)],
                             ret: Type::Array(Box::new(Type::Tuple(vec![
                                 Type::String,
@@ -1347,12 +1347,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                     ("assign".into(), MethodSig {
-                        optional: false, generics: vec!["T".into()].into(), params: assign_params(),
+                        optional: false, generics: crate::GenericParameters::unconstrained(vec!["T".into()]), params: assign_params(),
                         ret: Type::TypeVar("T".into()), predicate: None,
                         doc: doc("/** Copies own enumerable values from sources to the original target, in source order. Nullish sources are ignored. */"),
                     }),
                     ("groupBy".into(), MethodSig {
-                        optional: false, generics: vec!["K".into(), "T".into()].into(), params: group_by_params(),
+                        optional: false, generics: crate::GenericParameters::unconstrained(vec!["K".into(), "T".into()]), params: group_by_params(),
                         ret: group_by_output(), predicate: None,
                         doc: doc("/** Groups iterable elements by the callback's property key. The callback receives the element and its index; missing groups read as undefined. */"),
                     }),
@@ -1360,7 +1360,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "fromEntries".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: vec!["T".to_string()].into(),
+                            generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                             params: vec![Param::new("entries", from_entries_input())],
                             ret: from_entries_output(),
                             predicate: None,
@@ -1373,7 +1373,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "hasOwn".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("obj", Type::Unknown),
                                 Param::new("key", Type::String),
@@ -1389,7 +1389,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "is".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("a", Type::Unknown),
                                 Param::new("b", Type::Unknown),

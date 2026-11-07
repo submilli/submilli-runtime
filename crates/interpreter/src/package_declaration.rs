@@ -893,34 +893,36 @@ pub struct GenericParameters {
 }
 
 impl std::ops::Deref for GenericParameters {
-    type Target = Vec<String>;
+    type Target = [String];
 
-    fn deref(&self) -> &Vec<String> {
+    fn deref(&self) -> &[String] {
         &self.names
     }
 }
 
-impl IntoIterator for GenericParameters {
-    type Item = String;
-    type IntoIter = std::vec::IntoIter<String>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.names.into_iter()
-    }
-}
-
-impl From<Vec<String>> for GenericParameters {
-    fn from(names: Vec<String>) -> Self {
+impl GenericParameters {
+    /// Construct parameters known to have no bounds, such as built-in
+    /// declarations. Parsed declarations must resolve and retain their bounds.
+    pub fn unconstrained(names: Vec<String>) -> Self {
         Self {
             names,
             constraints: Box::default(),
         }
     }
-}
-
-impl FromIterator<String> for GenericParameters {
-    fn from_iter<T: IntoIterator<Item = String>>(iter: T) -> Self {
-        Vec::from_iter(iter).into()
+    pub(crate) fn select_names(&self, names: &[String]) -> Self {
+        Self {
+            names: names.to_vec(),
+            constraints: Box::new(
+                names
+                    .iter()
+                    .filter_map(|name| {
+                        self.constraints
+                            .get(name)
+                            .map(|bound| (name.clone(), bound.clone()))
+                    })
+                    .collect(),
+            ),
+        }
     }
 }
 
@@ -1256,7 +1258,7 @@ mod tests {
     #[test]
     fn generic_constraints_survive_serialization_including_unused_parameters() {
         let (ta, diagnostics) = crate::typecheck_to_typed_ast(
-            "function identity<T extends number, U extends T>(value: U): U { return value; }\nfunction main(): void {}",
+            "type Empty<T extends number> = {};\nfunction identity<T extends number, U extends T>(value: U): U { return value; }\nfunction main(): void {}",
             crate::FileId(0),
         );
         assert!(
@@ -1277,6 +1279,10 @@ mod tests {
             generics.constraints.get("U"),
             Some(&Type::TypeVar("T".into()))
         );
+        let crate::TypeKind::Alias { generics, .. } = &restored.types["Empty"].kind else {
+            panic!("alias declaration");
+        };
+        assert_eq!(generics.constraints.get("T"), Some(&Type::Number));
         restored.check_type_limits().unwrap();
     }
 
@@ -1413,7 +1419,7 @@ mod type_limit_checks {
             mangled_name: crate::mangle::prelude("Deep"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Alias {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 ty,
                 doc: None,
             },

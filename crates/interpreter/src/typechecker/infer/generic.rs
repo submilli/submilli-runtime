@@ -610,7 +610,7 @@ impl Inferer<'_> {
             && name.name == "from"
             && args.len() == 1
         {
-            sig.generics = vec!["T".into()].into();
+            sig.generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
             sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
             sig.params
                 .get_mut(1)
@@ -890,6 +890,14 @@ impl Inferer<'_> {
         }
 
         inferred_fallbacks.extend(unchanged_constraint_defaults(&sub, constraint_defaults));
+        if type_args.is_none() {
+            self.constrain_inferred_arguments(
+                &sig.generics,
+                &mut sub,
+                &mut inferred_fallbacks,
+                span,
+            )?;
+        }
         self.check_generic_constraints(&sig.generics, &sub, &inferred_fallbacks, span)?;
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         if let Some(sources) = spread_sources {
@@ -2478,17 +2486,7 @@ impl Inferer<'_> {
         arguments: &GenericArguments,
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        let bounds: BTreeMap<String, Type> = arguments
-            .constraints
-            .iter()
-            .map(|(name, bound)| (name.clone(), sub.apply_or_record(bound, &self.type_limits)))
-            .collect();
-        let hint = if self.is_fully_annotated_function(arg_id)? {
-            hint
-        } else {
-            substitute_typevars(&hint, &bounds, &self.type_limits)
-                .map_err(super::type_limit_unlocated)?
-        };
+        let hint = self.callback_constraint_hint(arg_id, hint, arguments.constraints, sub)?;
         let hint = self.method_interface_literal_hint(arg_id, hint, param_ty, sub)?;
         if let Type::InterfaceRef { name, .. } = hint.peel()
             && self.builds_literal(arg_id)?
@@ -2547,6 +2545,42 @@ impl Inferer<'_> {
             return Ok((typed_id, widened));
         }
         Ok((typed_id, arg_ty))
+    }
+
+    fn callback_constraint_hint(
+        &self,
+        argument: ExprId,
+        hint: Type,
+        constraints: &BTreeMap<String, Type>,
+        sub: &TypeParamSubstitution,
+    ) -> Result<Type, CompilerFailure> {
+        if self.is_context_sensitive_function(argument)?
+            && let Type::TypeVar(name) = hint.peel()
+            && let Some(bound) = constraints.get(name)
+        {
+            let mut bound = sub.apply_or_record(bound, &self.type_limits);
+            let mut visited = std::collections::BTreeSet::new();
+            while let Type::TypeVar(name) = bound.peel() {
+                if !self.type_limits.spend_work(1) {
+                    return Ok(Type::Error);
+                }
+                if !visited.insert(name.clone()) {
+                    break;
+                }
+                let Some(next) = constraints.get(name) else {
+                    break;
+                };
+                bound = sub.apply_or_record(next, &self.type_limits);
+            }
+            let mut callback = self.apparent_type(&bound).peel().clone();
+            if let Type::Function { ret, .. } = &mut callback {
+                // The bound types callback inputs, not its inferred output.
+                // Checking that output against the bound happens after inference.
+                **ret = Type::Unknown;
+                return Ok(callback);
+            }
+        }
+        Ok(hint)
     }
 
     /// Whether `arg_ty` fits `param_ty` without the type parameters that
@@ -3114,6 +3148,9 @@ impl Inferer<'_> {
         }
 
         inferred_fallbacks.extend(unchanged_constraint_defaults(&sub, constraint_defaults));
+        if !type_args_written {
+            self.constrain_inferred_arguments(&generics, &mut sub, &mut inferred_fallbacks, span)?;
+        }
         self.check_generic_constraints(&generics, &sub, &inferred_fallbacks, span)?;
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         if let Some(sources) = spread_sources {

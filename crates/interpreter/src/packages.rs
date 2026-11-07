@@ -2293,7 +2293,7 @@ fn json_package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::extend(&json_prefix, "stringify"),
             declaration_span: Span::at(FileId::JSON),
             kind: ValueKind::Function {
-                generics: vec!["T".to_string()].into(),
+                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 params: vec![
                     Param::new("value", Type::TypeVar("T".to_string())),
                     Param {
@@ -2582,7 +2582,7 @@ fn ts_interface_generics(
 ) -> String {
     if export_prefix == "declare "
         && matches!(name, "Iterable" | "Iterator")
-        && let [t] = generics.as_slice()
+        && let [t] = generics.names.as_slice()
     {
         return format!("<{t}, TReturn = any, TNext = any>");
     }
@@ -3527,7 +3527,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol(package, name),
             declaration_span: crate::Span::at(crate::FileId(0)),
             kind: crate::TypeKind::Alias {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 ty: Type::Number,
                 doc: None,
             },
@@ -3697,7 +3697,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol(package, name),
             declaration_span: crate::Span::at(crate::FileId(0)),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
@@ -4085,7 +4085,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol(package, name),
             declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
             kind: TypeKind::Class {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),
@@ -4178,7 +4178,7 @@ mod tests {
         };
         let method = |ret| MethodSig {
             optional: false,
-            generics: Vec::new().into(),
+            generics: Default::default(),
             params: Vec::new(),
             ret,
             predicate: None,
@@ -4206,7 +4206,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("@pied-piper/zoo", "Animal"),
                 declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
-                    generics: Vec::new().into(),
+                    generics: Default::default(),
                     fields,
                     narrowing_checks: BTreeMap::new(),
                     methods,
@@ -4284,7 +4284,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("@pied-piper/geo", "Shape"),
                 declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
-                    generics: Vec::new().into(),
+                    generics: Default::default(),
                     fields,
                     narrowing_checks: BTreeMap::new(),
                     methods: BTreeMap::new(),
@@ -4324,7 +4324,7 @@ mod tests {
 
         let method = |ret: Type| MethodSig {
             optional: false,
-            generics: Vec::new().into(),
+            generics: Default::default(),
             params: vec![Param::new("x", Type::Number)],
             ret,
             predicate: None,
@@ -4390,7 +4390,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("@pied-piper/calc", "Calc"),
                 declaration_span: Span::new(FileId(0), 0, 0).unwrap(),
                 kind: TypeKind::Class {
-                    generics: Vec::new().into(),
+                    generics: Default::default(),
                     fields: BTreeMap::new(),
                     narrowing_checks: BTreeMap::new(),
                     methods: BTreeMap::new(),

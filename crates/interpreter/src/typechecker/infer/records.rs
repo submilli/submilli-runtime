@@ -1159,7 +1159,11 @@ impl Inferer<'_> {
                 else {
                     return Ok(None);
                 };
-                let bindings = generics.into_iter().zip(args.iter().cloned()).collect();
+                let bindings = generics
+                    .names
+                    .into_iter()
+                    .zip(args.iter().cloned())
+                    .collect();
                 let substitute = |ty: &Type| {
                     substitute_typevars(ty, &bindings, &self.type_limits)
                         .map_err(type_limit_at(base.span))

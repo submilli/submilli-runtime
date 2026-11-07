@@ -2232,7 +2232,7 @@ mod tests {
                 "m".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new().into(),
+                    generics: Default::default(),
                     params: Vec::new(),
                     ret: Type::Void,
                     predicate: None,
@@ -2250,7 +2250,7 @@ mod tests {
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics: Vec::new().into(),
+                    generics: Default::default(),
                     methods,
                     properties,
                     dispatch: Dispatch::VTable,

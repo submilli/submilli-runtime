@@ -55,7 +55,7 @@ fn skill_methods() -> BTreeMap<String, MethodSig> {
         "readFile".to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new().into(),
+            generics: Default::default(),
             params: vec![Param::new("path", Type::String)],
             ret: Type::String,
             predicate: None,
@@ -123,7 +123,7 @@ fn insert_interface(
             declaration_span: Span::at(crate::FileId::SKILLS),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 dispatch: if methods.is_empty() {
                     Dispatch::VTable
                 } else {
@@ -163,7 +163,7 @@ fn insert_fn(defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret:
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::SKILLS),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params,
                 ret,
                 type_predicate: None,

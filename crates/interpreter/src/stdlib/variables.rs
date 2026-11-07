@@ -27,7 +27,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "get"),
             declaration_span: Span::at(crate::FileId::VARIABLES),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::new("name", Type::String)],
                 ret: Type::union(vec![Type::String, Type::Undefined]),
                 type_predicate: None,

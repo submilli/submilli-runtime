@@ -1736,7 +1736,7 @@ mod tests {
                 span: Span::new(crate::FileId(0), 9, 10).unwrap(),
             },
             mangled_name: crate::mangle::package_symbol("main", "f"),
-            generics: vec![].into(),
+            generics: Default::default(),
             params: vec![],
             return_type: Type::Number,
             type_predicate: None,

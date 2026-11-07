@@ -663,7 +663,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("IteratorYieldResult"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Alias {
-                generics: vec!["T".to_string()].into(),
+                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 ty: yield_result_body(),
                 doc: doc(
                     "/** A single yielded element from an `Iterator<T>`: `{ done?: false; value: T }`. The non-terminating arm of `IteratorResult<T>`. */",
@@ -694,7 +694,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("IteratorReturnResult"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Alias {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 ty: return_result_body(),
                 doc: doc(
                     "/** End-of-stream marker: `{ done: true; value: undefined }`. Returned by `Iterator<T>.next()` after the iterator is exhausted; subsequent calls keep returning this same shape. */",
@@ -728,7 +728,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("IteratorResult"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Alias {
-                generics: vec!["T".to_string()].into(),
+                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 ty: iterator_result_body(),
                 doc: doc(
                     "/** Discriminated-union result of `Iterator<T>.next()`. Discriminate on `done`: `false` or absent → element in `value`; `true` → end-of-stream. Designed to compose with `for-of`, which handles the discrimination automatically. */",
@@ -744,12 +744,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Iterator"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: vec!["T".to_string()].into(),
+                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::from([(
                     "next".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: Vec::new(),
                         ret: Type::Alias { mangled: crate::mangle::prelude("IteratorResult"), package: crate::Package::prelude(),
                             name: "IteratorResult".to_string(),
@@ -794,12 +794,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Iterable"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: vec!["T".to_string()].into(),
+                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::from([(
                     "iterator".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: Vec::new(),
                         ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("T".to_string())]),
                         predicate: None,

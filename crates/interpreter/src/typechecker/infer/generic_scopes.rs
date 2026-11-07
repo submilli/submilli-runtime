@@ -29,11 +29,8 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    pub(super) fn push_signature_generics(
-        &mut self,
-        parameters: impl Into<crate::GenericParameters>,
-    ) {
-        self.generics_in_scope.push(parameters.into());
+    pub(super) fn push_signature_generics(&mut self, parameters: crate::GenericParameters) {
+        self.generics_in_scope.push(parameters);
     }
 
     pub(super) fn pop_signature_generics(&mut self) {
@@ -44,9 +41,8 @@ impl<'a> Inferer<'a> {
     /// lockstep; always pop via [`pop_body_generics`].
     pub(super) fn push_body_generics(
         &mut self,
-        parameters: impl Into<crate::GenericParameters>,
+        parameters: crate::GenericParameters,
     ) -> Result<BTreeMap<String, Type>, CompilerFailure> {
-        let parameters = parameters.into();
         let mut map = BTreeMap::new();
         for name in &parameters {
             map.insert(name.clone(), self.fresh_generic_param(name)?);
@@ -101,8 +97,9 @@ impl<'a> Inferer<'a> {
         &mut self,
         annotations: &[crate::TypeParameterAnnotation],
     ) -> Result<crate::GenericParameters, CompilerFailure> {
-        let mut parameters: crate::GenericParameters =
-            annotations.iter().map(|p| p.name.clone()).collect();
+        let mut parameters = crate::GenericParameters::unconstrained(
+            annotations.iter().map(|p| p.name.clone()).collect(),
+        );
         self.push_signature_generics(parameters.clone());
         let pending_start = self.pending_constraint_checks.as_ref().map_or(0, Vec::len);
         for parameter in annotations {
@@ -235,7 +232,10 @@ mod tests {
             // Like arena IDs, `u32::MAX` itself is never allocated, so the frame
             // fails at `U` and nothing is pushed.
             let error = tc
-                .push_body_generics(vec!["U".into(), "V".into()])
+                .push_body_generics(crate::GenericParameters::unconstrained(vec![
+                    "U".into(),
+                    "V".into(),
+                ]))
                 .unwrap_err();
             assert!(matches!(error, CompilerFailure::Limit { .. }), "{error:?}");
             assert_eq!(tc.generics_in_scope.len(), frames);

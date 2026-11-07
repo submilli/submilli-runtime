@@ -12417,7 +12417,11 @@ impl Inferer<'_> {
                 self.reject_nullable_chain_step(&receiver_ty, step_path.as_ref(), &part)?;
                 break;
             }
-            let effective_recv = super::narrowing::strip_nullish(&receiver_ty);
+            let effective_recv = if part.is_optional() {
+                super::narrowing::strip_nullish(&receiver_ty)
+            } else {
+                receiver_ty.clone()
+            };
             // `infer_chain_part` may rewrite the previous part
             // (InterfaceProperty + Call → MethodCall), so it gets
             // `&mut typed_parts` rather than a borrow of the last
@@ -17886,7 +17890,7 @@ function main(): void { if (result < 10) { } }
                 mangled_name: crate::mangle::package_symbol("test:ns", name),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
-                    generics: generics.into(),
+                    generics: crate::GenericParameters::unconstrained(generics),
                     params,
                     ret,
                     type_predicate: None,

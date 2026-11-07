@@ -146,7 +146,7 @@ pub(crate) fn declare_method(
             mangled_name,
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params,
                 ret,
                 type_predicate: None,

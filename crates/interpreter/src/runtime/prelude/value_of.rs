@@ -61,7 +61,7 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
 pub(super) fn signature(ret: Type) -> MethodSig {
     MethodSig {
         optional: false,
-        generics: Vec::new().into(),
+        generics: Default::default(),
         params: Vec::new(),
         ret,
         predicate: None,

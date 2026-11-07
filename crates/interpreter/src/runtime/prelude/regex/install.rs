@@ -460,13 +460,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("RegExp"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "test".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Boolean,
                             predicate: None,
@@ -479,7 +479,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "exec".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new().into(),
+                            generics: Default::default(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Union(vec![
                                 Type::prelude_interface("RegExpExecArray".to_string(), Vec::new()),
@@ -560,7 +560,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         defs.types.insert(interface.to_string(), TypeSymbol {
             name: interface.to_string(), mangled_name: crate::mangle::prelude(interface),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None, generics: Vec::new().into(), methods: BTreeMap::new(),
+            kind: TypeKind::Interface { index: None, generics: Default::default(), methods: BTreeMap::new(),
                 properties: BTreeMap::from([
                     // Numeric keys lower to array reads, so no host getter is imported.
                     ("0".to_string(), PropertySig { readonly: false, intrinsic: true, ..property(Type::String, false) }),
@@ -581,12 +581,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("RegExpConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "escape".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: vec![Param::new("string", Type::String)],
                         ret: Type::String,
                         predicate: None,
@@ -598,7 +598,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     "new".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: constructor_params(),
                         ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
                         predicate: None,
@@ -610,7 +610,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     "@call".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: constructor_params(),
                         ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
                         predicate: None,

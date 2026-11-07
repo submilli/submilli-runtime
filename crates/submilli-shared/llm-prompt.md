@@ -81,10 +81,6 @@ returns `undefined`. A local `let x: T;` must be assigned on every path before
 a read unless `T` includes `undefined`; module-level bindings still need an
 initializer in that case. Template literals accept `null` and `undefined` and render them
 like `String(x)`.
-Generic parameters may have bounds: `function getId<T extends { id: number }>(x: T): number { return x.id; }`.
-Bounds also work on classes, interfaces, type aliases, and supported generic
-methods. A bound may name another parameter (`U extends T`); written and inferred
-arguments must satisfy it. Generic defaults (`T = X`) are unsupported.
 No runtime reflection: of `Object.prototype` only `.toString()` is
 available — no `.hasOwnProperty()`. The type system tells you what
 fields a value has; narrow optional values with `obj.field !== undefined`.

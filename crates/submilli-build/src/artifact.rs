@@ -795,7 +795,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/util", "greet"),
                 declaration_span: Span::new(file, 0, 12).unwrap(),
                 kind: ValueKind::Function {
-                    generics: vec!["T".to_string()].into(),
+                    generics: interpreter::GenericParameters::unconstrained(vec!["T".to_string()]),
                     params: vec![
                         Param::with_default(
                             "name",
@@ -830,7 +830,7 @@ mod tests {
             "rename".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 params: vec![Param::new("name", Type::String)],
                 ret: Type::Void,
                 predicate: None,
@@ -845,7 +845,7 @@ mod tests {
                 declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics: Vec::new().into(),
+                    generics: Default::default(),
                     methods,
                     properties,
                     dispatch: Dispatch::Direct,

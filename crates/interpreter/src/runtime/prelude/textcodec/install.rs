@@ -162,12 +162,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("TextEncoder"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "encode".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: vec![Param::new("s", Type::String)],
                         ret: Type::Uint8Array,
                         predicate: None,
@@ -192,12 +192,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("TextDecoder"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "decode".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: vec![Param::new("bytes", Type::Uint8Array)],
                         ret: Type::String,
                         predicate: None,
@@ -222,12 +222,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("TextEncoderConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: Vec::new(),
                         ret: Type::prelude_interface("TextEncoder".to_string(), Vec::new()),
                         predicate: None,
@@ -252,12 +252,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("TextDecoderConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new().into(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "new".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new().into(),
+                        generics: Default::default(),
                         params: Vec::new(),
                         ret: Type::prelude_interface("TextDecoder".to_string(), Vec::new()),
                         predicate: None,

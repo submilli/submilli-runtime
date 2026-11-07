@@ -20,6 +20,9 @@ impl Inferer<'_> {
     }
 
     fn apparent_type_at_depth(&self, ty: &Type, depth: u32) -> Type {
+        if !contains_body_parameter(ty) {
+            return ty.clone();
+        }
         if depth >= crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH {
             self.type_limits
                 .record(crate::type_size::TypeTooLarge::Depth);
@@ -161,6 +164,37 @@ impl Inferer<'_> {
         assignable(actual, expected, self.resolver())
     }
 
+    /// An invalid inference candidate falls back to its bound. Arguments are
+    /// then checked against the resulting parameter type at their own spans;
+    /// explicit type arguments instead retain the constraint diagnostic.
+    pub(super) fn constrain_inferred_arguments(
+        &self,
+        parameters: &GenericParameters,
+        substitution: &mut TypeParamSubstitution,
+        inferred_fallbacks: &mut Vec<String>,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        for name in &parameters.names {
+            if inferred_fallbacks.contains(name) {
+                continue;
+            }
+            let Some(bound) = parameters.constraints.get(name) else {
+                continue;
+            };
+            let actual = substitution
+                .apply(&Type::TypeVar(name.clone()), &self.type_limits)
+                .map_err(type_limit_at(span))?;
+            let bound = substitution
+                .apply(bound, &self.type_limits)
+                .map_err(type_limit_at(span))?;
+            if !self.satisfies_generic_constraint(&actual, &bound) {
+                substitution.insert(name.clone(), bound);
+                inferred_fallbacks.push(name.clone());
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn check_named_type_constraints(
         &mut self,
         ty: &Type,
@@ -227,4 +261,15 @@ impl Inferer<'_> {
         self.generics_in_scope = scopes;
         result
     }
+}
+
+fn contains_body_parameter(ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if matches!(ty, Type::GenericParam { .. }) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
 }
