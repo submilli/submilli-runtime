@@ -557,6 +557,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None, generics: Vec::new(), methods: BTreeMap::new(),
                 properties: BTreeMap::from([
+                    // Numeric keys lower to array reads, so no host getter is imported.
+                    ("0".to_string(), PropertySig { readonly: false, intrinsic: true, ..property(Type::String, false) }),
                     ("index".to_string(), property(Type::Number, optional)),
                     ("input".to_string(), property(Type::String, optional)),
                     ("groups".to_string(), property(groups_type(), false)),

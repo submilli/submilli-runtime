@@ -431,6 +431,33 @@ fn record_read_explains_undefined_directly() {
 }
 
 #[test]
+fn regex_capture_read_keeps_undefined_help() {
+    insta::assert_snapshot!(render_inside_main(
+        "  const match = /(a)?b/.exec(\"b\");\n  if (match !== null) console.log(match[1].length);"
+    ));
+}
+
+#[test]
+fn regex_other_positions_remain_optional() {
+    for read in [
+        "match[1]",
+        "match[-1]",
+        "match[\"1\"]",
+        "match[index]",
+        "match[0 + 0]",
+        "match?.[1]",
+    ] {
+        let output = render_all(&format!(
+            "function read(match: RegExpExecArray, index: number): string {{\n  return {read};\n}}\nfunction main(): void {{}}\n"
+        ));
+        assert!(
+            output.contains("expected `string`, got `string | undefined`"),
+            "{read}: {output}"
+        );
+    }
+}
+
+#[test]
 fn record_read_explains_undefined_through_const() {
     insta::assert_snapshot!(render_inside_main(
         "  const seen: Record<string, { x: number }> = {};\n  const key: string = 'missing';\n  const v = seen[key];\n  console.log(v.x);"

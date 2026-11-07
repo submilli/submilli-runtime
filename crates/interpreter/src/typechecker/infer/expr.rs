@@ -9386,7 +9386,7 @@ impl Inferer<'_> {
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
         let elem_ty = match receiver_ty.peel() {
-            ty if ty.is_regexp_match_array() => Type::regexp_element(),
+            ty if ty.is_regexp_match_array() => regexp_index_element(self.ast, index)?,
             Type::Array(elem) => (**elem).clone(),
             // tuple indexing must be a non-negative integer
             // literal that's in range. Out-of-range or non-literal
@@ -12029,7 +12029,7 @@ impl Inferer<'_> {
                     );
                 }
                 let elem_ty = match receiver_ty.peel() {
-                    ty if ty.is_regexp_match_array() => Type::regexp_element(),
+                    ty if ty.is_regexp_match_array() => regexp_index_element(self.ast, idx)?,
                     Type::Array(elem) => *elem.clone(),
                     Type::Uint8Array => Type::Number,
                     Type::Tuple(elements) => {
@@ -14084,11 +14084,36 @@ fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Op
     Some(Type::union(elements))
 }
 
+/// Destructuring lowers each position to a literal index read, so it shares
+/// the whole-match guarantee with an explicit `[0]` read.
+fn regexp_index_element(ast: &crate::Ast, index: ExprId) -> Result<Type, CompilerFailure> {
+    let index = peel_parens(ast, index)?;
+    let index = match &ast.try_expr(index).map_err(super::arena_failure)?.kind {
+        ExprKind::Unary {
+            op: UnOp::Neg | UnOp::Pos,
+            operand,
+        } => peel_parens(ast, *operand)?,
+        _ => index,
+    };
+    Ok(
+        match &ast.try_expr(index).map_err(super::arena_failure)?.kind {
+            ExprKind::Number(n) if *n == 0.0 => Type::String,
+            _ => Type::regexp_element(),
+        },
+    )
+}
+
 fn numeric_key_element(receiver_ty: &Type, index: f64) -> Option<Type> {
     let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
     let elem_ty = match receiver_ty.peel() {
         _ if receiver_ty.is_string_shaped() => Type::String,
-        _ if receiver_ty.is_regexp_match_array() => Type::regexp_element(),
+        _ if receiver_ty.is_regexp_match_array() => {
+            if index == 0.0 {
+                Type::String
+            } else {
+                Type::regexp_element()
+            }
+        }
         Type::Array(elem) => (**elem).clone(),
         Type::Uint8Array => Type::Number,
         // A tuple has no element at a key that names no slot, as tsc
