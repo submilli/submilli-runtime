@@ -3126,6 +3126,7 @@ pub(super) struct LoopBodyOutcome {
     /// cannot hold there.
     pub next_pass: Option<narrowing::NarrowEnv>,
     pub reaches_back_edge: bool,
+    pub direct_evolving_reads: std::collections::BTreeSet<narrowing::ReferencePath>,
 }
 
 /// A `while` or `for` condition's check as it first runs.
@@ -3231,7 +3232,13 @@ fn widen_entry_to_cover_next_pass(
     };
     let falsified: Vec<_> = entry_env
         .iter()
-        .filter(|(path, view)| next_pass_falsifies(view, next_pass.get(*path)))
+        .filter(|(path, view)| {
+            next_pass_falsifies(
+                view,
+                next_pass.get(*path),
+                outcome.direct_evolving_reads.contains(*path),
+            )
+        })
         .map(|(path, view)| (path.clone(), view.clone()))
         .collect();
     for (path, view) in &falsified {
@@ -3264,7 +3271,18 @@ fn widen_entry_to_cover_next_pass(
 fn next_pass_falsifies(
     view: &narrowing::NarrowedView,
     post: Option<&narrowing::NarrowedView>,
+    direct_read_in_body: bool,
 ) -> bool {
+    // A fresh empty array's element type is learned from growth in this pass.
+    // If the body only grows it or reads its length, a second pass cannot
+    // change a typed read. Other reads may see prior iterations' elements.
+    if !direct_read_in_body
+        && view.evolving == Some(narrowing::EvolvingType::Array)
+        && super::evolving::array_element(&view.narrowed_ty) == Some(Type::Never)
+        && post.is_some_and(|post| post.evolving == Some(narrowing::EvolvingType::Array))
+    {
+        return false;
+    }
     // A literal the entry view rules out that the next pass doesn't rule
     // out disproves it too, though its type may hold the same members.
     post.is_none_or(|post| {
@@ -3289,13 +3307,22 @@ fn cond_is_static_true(
     })
 }
 
-/// A disproved loop-entry view, keyed by its declaration rather than the
-/// transient scope number assigned when an enclosing loop is retyped.
-#[derive(Clone, PartialEq)]
-pub(super) struct LoopInvalidation {
+/// A loop-entry view to drop or widen, keyed by its declaration rather than
+/// the transient scope number assigned when an enclosing loop is retyped.
+#[derive(Clone)]
+pub(super) struct LoopEntryAdjustment {
     path: narrowing::ReferencePath,
     declaration: Option<Span>,
     narrowed_ty: Type,
+    widened_ty: Option<Type>,
+}
+
+impl LoopEntryAdjustment {
+    fn same_key(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.declaration == other.declaration
+            && self.narrowed_ty == other.narrowed_ty
+    }
 }
 
 impl Inferer<'_> {
@@ -3312,7 +3339,7 @@ impl Inferer<'_> {
         body_scope_floor: narrowing::ScopeId,
         tail: LoopTail,
     ) -> Result<LoopBodyOutcome, CompilerFailure> {
-        self.apply_loop_invalidations(body, body_span);
+        self.apply_loop_entry_adjustments(body, body_span, &mut entry_env)?;
         let diag_len = self.diagnostics.len();
         let mats_len = self.pending_post_if_materializations.len();
         let (breaks_len, continues_len) = self
@@ -3321,6 +3348,7 @@ impl Inferer<'_> {
             .map_or((0, 0), |f| (f.breaks.len(), f.continues.len()));
         let entry_reachable = self.reachable;
         let mut widened = std::collections::BTreeSet::new();
+        let cached_len = self.loop_entry_adjustments.get(&body).map_or(0, Vec::len);
 
         loop {
             let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, tail)?;
@@ -3333,6 +3361,13 @@ impl Inferer<'_> {
             let entry_falsified =
                 widen_entry_to_cover_next_pass(&mut entry_env, &outcome, &mut widened);
             if outer_falsified.is_empty() && !entry_falsified {
+                // An unresolved final diagnostic means this attempt cannot
+                // justify reusing the speculative entry view on another pass.
+                if self.diagnostics.len() != diag_len
+                    && let Some(cached) = self.loop_entry_adjustments.get_mut(&body)
+                {
+                    cached.truncate(cached_len);
+                }
                 return Ok(outcome);
             }
             self.widen_outer_into_entry(&mut entry_env, outer_falsified, &outcome, &mut widened)?;
@@ -3467,15 +3502,27 @@ impl Inferer<'_> {
                 };
                 outlives_loop
                     && outcome.assigned.iter().any(|p| p.is_prefix_of(path))
-                    && next_pass_falsifies(view, next_pass.get(*path))
+                    && next_pass_falsifies(
+                        view,
+                        next_pass.get(*path),
+                        outcome.direct_evolving_reads.contains(*path),
+                    )
             })
             .map(|(path, view)| (path.clone(), view.clone()))
             .collect();
         for (path, view) in &falsified {
-            let invalidation = self.loop_invalidation(path, &view.narrowed_ty);
-            let cached = self.loop_invalidations.entry(body).or_default();
-            if !cached.contains(&invalidation) {
-                cached.push(invalidation);
+            let mut adjustment = self.loop_entry_adjustment(path, &view.narrowed_ty);
+            adjustment.widened_ty = next_pass.get(path).and_then(|post| {
+                (view.evolving == Some(narrowing::EvolvingType::Array)
+                    && post.evolving == Some(narrowing::EvolvingType::Array))
+                .then(|| narrowing::join_views(view, post))
+                .flatten()
+            });
+            if view.evolving.is_none() || adjustment.widened_ty.is_some() {
+                let cached = self.loop_entry_adjustments.entry(body).or_default();
+                if !cached.iter().any(|item| item.same_key(&adjustment)) {
+                    cached.push(adjustment);
+                }
             }
             self.drop_narrowings_under(
                 path,
@@ -3488,24 +3535,50 @@ impl Inferer<'_> {
     /// Reuse widening discovered by an earlier pass through this syntax node.
     /// Inner loops therefore do not repeat their fixed point for every retry
     /// of every enclosing loop. Guards are still installed afresh by the body.
-    fn apply_loop_invalidations(&mut self, body: StmtId, span: Span) {
-        let Some(cached) = self.loop_invalidations.get(&body) else {
-            return;
+    fn apply_loop_entry_adjustments(
+        &mut self,
+        body: StmtId,
+        span: Span,
+        entry_env: &mut narrowing::NarrowEnv,
+    ) -> Result<(), CompilerFailure> {
+        let Some(cached) = self.loop_entry_adjustments.get(&body) else {
+            return Ok(());
         };
         let (active, _) = self.snapshot_active_narrowings(0);
         let falsified: Vec<_> = active
             .iter()
-            .filter(|(path, view)| {
-                cached.contains(&self.loop_invalidation(path, &view.narrowed_ty))
+            .filter_map(|(path, view)| {
+                let key = self.loop_entry_adjustment(path, &view.narrowed_ty);
+                cached
+                    .iter()
+                    .find(|item| item.same_key(&key))
+                    .map(|item| (path.clone(), view.clone(), item.widened_ty.clone()))
             })
-            .map(|(path, _)| path.clone())
             .collect();
-        for path in falsified {
+        for (path, view, widened_ty) in falsified {
             self.drop_narrowings_under(&path, narrowing::InvalidationReason::Write { span });
+            if let Some(narrowed_ty) = widened_ty {
+                entry_env.insert(
+                    path,
+                    narrowing::NarrowedView {
+                        narrowed_ty,
+                        evolving: Some(narrowing::EvolvingType::Array),
+                        facts: narrowing::TypeFacts::EMPTY,
+                        excluded_literals: Default::default(),
+                        binding: self.mint_narrow_binding(span)?,
+                        source: view.source,
+                    },
+                );
+            }
         }
+        Ok(())
     }
 
-    fn loop_invalidation(&self, path: &narrowing::ReferencePath, ty: &Type) -> LoopInvalidation {
+    fn loop_entry_adjustment(
+        &self,
+        path: &narrowing::ReferencePath,
+        ty: &Type,
+    ) -> LoopEntryAdjustment {
         let mut path = path.clone();
         let declaration = if let narrowing::BindingId::Local { name, decl_scope } = &mut path.root {
             let span = self
@@ -3517,10 +3590,11 @@ impl Inferer<'_> {
         } else {
             None
         };
-        LoopInvalidation {
+        LoopEntryAdjustment {
             path,
             declaration,
             narrowed_ty: ty.clone(),
+            widened_ty: None,
         }
     }
 
@@ -3535,6 +3609,7 @@ impl Inferer<'_> {
         tail: LoopTail,
     ) -> Result<LoopBodyOutcome, CompilerFailure> {
         self.push_narrow_frame(entry_env.clone());
+        self.loop_direct_evolving_reads.push(Default::default());
         self.loop_depth += 1;
         let (typed_body, body_post) = self.infer_loop_body(body)?;
         self.loop_depth -= 1;
@@ -3571,6 +3646,10 @@ impl Inferer<'_> {
             }
             (_, edge) => edge,
         };
+        let direct_evolving_reads = self
+            .loop_direct_evolving_reads
+            .pop()
+            .ok_or_else(|| super::inference_failure("loop read collector"))?;
         Ok(LoopBodyOutcome {
             update: typed_update,
             head_edge,
@@ -3578,6 +3657,7 @@ impl Inferer<'_> {
             body: self.wrap_narrow_regions(typed_body, entry_env, body_span)?,
             assigned,
             next_pass,
+            direct_evolving_reads,
         })
     }
 
@@ -4033,6 +4113,58 @@ mod tests {
             );
             assert!(deep < 150_000, "excessive speculative expressions: {deep}");
         });
+    }
+
+    #[test]
+    fn nested_evolving_loop_retries_do_not_multiply() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            let shallow = nested_evolving_loop_expression_count(8, false);
+            let deep = nested_evolving_loop_expression_count(16, false);
+            assert!(
+                deep < shallow * 4,
+                "typed expression growth: {shallow} -> {deep}"
+            );
+        });
+    }
+
+    #[test]
+    fn nested_evolving_reads_do_not_multiply_retries() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            let shallow = nested_evolving_loop_expression_count(8, true);
+            let deep = nested_evolving_loop_expression_count(16, true);
+            assert!(
+                deep < shallow * 4,
+                "typed expression growth: {shallow} -> {deep}"
+            );
+        });
+    }
+
+    fn nested_evolving_loop_expression_count(depth: usize, read_previous: bool) -> usize {
+        use std::fmt::Write;
+        let mut source = String::from("function main(): number[] {\nconst a0 = [];\n");
+        for i in 0..depth {
+            writeln!(source, "for (const i{i} of [0]) {{").unwrap();
+            if read_previous {
+                writeln!(source, "const before{i} = a{i}.at(0) ?? 0;").unwrap();
+            }
+            writeln!(source, "const a{} = [];", i + 1).unwrap();
+        }
+        writeln!(source, "a{depth}.push(1);").unwrap();
+        for i in (0..depth).rev() {
+            if read_previous {
+                writeln!(source, "a{i}.push(a{}.length + before{i});", i + 1).unwrap();
+            } else {
+                writeln!(source, "a{i}.push(a{}.length);", i + 1).unwrap();
+            }
+            source.push_str("}\n");
+        }
+        source.push_str("return a0;\n}");
+        let (ast, diagnostics) = run(&source);
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+        ast.exprs_len()
     }
 
     fn nested_loop_expression_count(depth: usize) -> usize {

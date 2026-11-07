@@ -2284,6 +2284,11 @@ impl Inferer<'_> {
             self.check_nested_function_use(index, span)?;
         }
         let evolving = self.evolving_binding_path(&ident);
+        if let Some(path) = &evolving {
+            for reads in &mut self.loop_direct_evolving_reads {
+                reads.insert(path.clone());
+            }
+        }
         if evolving.as_ref().is_some_and(|path| {
             !self.reads_ruled_out_as_never(path)
                 && self.lookup_narrowed_view(path).is_none_or(|view| {

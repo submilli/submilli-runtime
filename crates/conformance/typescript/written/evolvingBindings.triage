@@ -1,5 +1,5 @@
 line 5 type: by-design spec §Excluded-Features excludes `any`; this auto-array declaration has erased `unknown[]` storage, while its post-loop read is checked as `string[]`.
-line 6 type: by-design spec §Excluded-Features excludes `any`; tsc exposes `any[]` on a growth receiver, where the loop fixed point uses its concrete `string[]` element view.
+line 6 type: by-design spec §Excluded-Features excludes `any`; tsc exposes `any[]` on a growth receiver, while the first loop pass reads the fresh array as `never[]` and its later read has the grown `string[]` type.
 line 8 type: by-design spec §Excluded-Features excludes `any`; the auto-array declaration uses erased storage, while subsequent reads retain concrete element types.
 line 9 type: by-design spec §Excluded-Features excludes `any`; the first growth receiver is `never[]` before its first element, where tsc exposes `any[]`.
 line 11 type: by-design spec §Excluded-Features excludes `any`; a growth receiver keeps its preceding `number[]` view, where tsc exposes `any[]`; the later read is the element union.

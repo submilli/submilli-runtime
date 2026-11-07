@@ -267,7 +267,8 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         namespace_bindings: BTreeMap::new(),
         namespace_symbols: BTreeMap::new(),
         loop_depth: 0,
-        loop_invalidations: Default::default(),
+        loop_entry_adjustments: Default::default(),
+        loop_direct_evolving_reads: Vec::new(),
         switch_depth: 0,
         pending_joins: Vec::new(),
         pending_aliases: BTreeMap::new(),
@@ -563,7 +564,8 @@ pub fn infer_package_checked<'a>(
         namespace_bindings: BTreeMap::new(),
         namespace_symbols: BTreeMap::new(),
         loop_depth: 0,
-        loop_invalidations: Default::default(),
+        loop_entry_adjustments: Default::default(),
+        loop_direct_evolving_reads: Vec::new(),
         switch_depth: 0,
         pending_joins: Vec::new(),
         pending_aliases: BTreeMap::new(),
@@ -1119,7 +1121,8 @@ pub(super) struct Inferer<'a> {
     pub(super) namespace_bindings: BTreeMap<String, NamespaceBinding<'a>>,
     pub(super) namespace_symbols: BTreeMap<String, NamespaceSymbolSet<'a>>,
     pub(super) loop_depth: u32,
-    loop_invalidations: BTreeMap<crate::StmtId, Vec<stmt::LoopInvalidation>>,
+    loop_entry_adjustments: BTreeMap<crate::StmtId, Vec<stmt::LoopEntryAdjustment>>,
+    loop_direct_evolving_reads: Vec<BTreeSet<narrowing::ReferencePath>>,
     /// `break` accepted when `loop_depth + switch_depth > 0`; `continue` still requires `loop_depth > 0` (switch is transparent to continue).
     pub(super) switch_depth: u32,
     pub(super) pending_joins: Vec<narrowing::PendingJoinFrame>,
@@ -1236,7 +1239,8 @@ impl<'a> Inferer<'a> {
         self.type_registry = TypeRegistry::new();
         self.scopes = Scopes::default();
         self.narrow_scopes.clear();
-        self.loop_invalidations.clear();
+        self.loop_entry_adjustments.clear();
+        self.loop_direct_evolving_reads.clear();
         self.assigned_scopes.clear();
         self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
