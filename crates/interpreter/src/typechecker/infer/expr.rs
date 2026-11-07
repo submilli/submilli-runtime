@@ -13831,7 +13831,7 @@ fn named(
     )
 }
 
-/// Why a cast target holding a host-backed interface such as `fs.Stat` is
+/// Why a cast target holding a host-backed interface such as `http.Response` is
 /// rejected: `as` would have to accept an object of its shape, and reads of one
 /// need the host's backing struct.
 const HOST_BACKED_TARGET: &str = "only the standard library builds values of a host-backed \
@@ -15989,26 +15989,26 @@ mod tests {
     /// `submilli:` host type anywhere in the target.
     #[test]
     fn parsed_json_gets_no_cast_where_it_cannot_work() {
-        let fs = crate::stdlib::fs::package_declaration();
-        let src = "import * as fs from \"submilli:fs\"; \
+        let http = crate::stdlib::http::package_declaration();
+        let src = "import * as http from \"submilli:http\"; \
                    interface Box<T> { v: T; } \
-                   interface Holder { s: fs.Stat; } \
-                   interface Dir { [key: string]: fs.Stat; } \
+                   interface Holder { s: http.Response; } \
+                   interface Dir { [key: string]: http.Response; } \
                    interface Id { id: bigint; } \
                    function main(): void { \
                      const t = \"1\"; \
                      const f: () => void = JSON.parse(t); \
                      const b: bigint = JSON.parse(t); \
-                     const s: fs.Stat | null = JSON.parse(t); \
-                     const o: { s?: fs.Stat } = JSON.parse(t); \
+                     const s: http.Response | null = JSON.parse(t); \
+                     const o: { s?: http.Response } = JSON.parse(t); \
                      const h: Holder = JSON.parse(t); \
-                     const g: { a: Box<number>; b: Box<fs.Stat> } = JSON.parse(t); \
+                     const g: { a: Box<number>; b: Box<http.Response> } = JSON.parse(t); \
                      const d: Dir = JSON.parse(t); \
                      const i: Id = JSON.parse(t); \
                      const n: Box<number> | undefined = JSON.parse(t); \
                      const e: ErrorOptions = JSON.parse(t); \
                      const x: number = JSON.parse(\"a very long piece of text to parse, longer than the limit\"); }";
-        let (_, diags) = run_with_packages(src, &[&fs]);
+        let (_, diags) = run_with_packages(src, &[&http]);
         let offered: Vec<_> = diags
             .iter()
             .filter(|d| d.help.iter().any(|h| h.contains("returns `unknown`")))

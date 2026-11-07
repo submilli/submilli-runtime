@@ -1087,7 +1087,7 @@ mod tests {
         assert!(embeddings.get("vectors").is_none(), "{embeddings}");
         assert_eq!(
             models,
-            r#"[{"name":"mock","dimensions":4,"maxInputBytes":10,"identity":"emb1:mock"}]"#
+            r#"[{"dimensions":4,"identity":"emb1:mock","maxInputBytes":10,"name":"mock"}]"#
         );
     }
 
