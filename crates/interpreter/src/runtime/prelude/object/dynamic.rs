@@ -2,7 +2,8 @@
 use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use super::{
-    ctor_key, field_array, field_is_present, field_is_private, is_accessor_slot, shape_arrays,
+    ctor_key, field_array, field_is_present, field_is_private, is_accessor_slot, is_method_slot,
+    shape_arrays,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -194,7 +195,8 @@ pub(super) fn has(
 }
 
 /// How a slot appears among a record's values; `None` when it has no entry
-/// (a private field, an absent optional field, or a setter alone).
+/// (a private field, a class method, an absent optional field, or a setter
+/// alone).
 #[derive(Clone, Copy)]
 enum RecordEntry {
     Getter,
@@ -209,7 +211,7 @@ fn record_entry(
     name: &Val,
     value: &Val,
 ) -> wasmtime::Result<Option<RecordEntry>> {
-    if field_is_private(caller, name)? {
+    if field_is_private(caller, name)? || is_method_slot(caller, name)? {
         return Ok(None);
     }
     if is_accessor_slot(caller, name)? {

@@ -1232,6 +1232,7 @@ fn emit_object_literal(
             name: name.clone(),
             optional: field.optional,
             is_accessor: false,
+            is_method: false,
             is_private: false,
         })
         .collect();
@@ -3037,6 +3038,7 @@ fn emit_spread_shape_checked(
             name: name.clone(),
             optional: field.optional,
             is_accessor: false,
+            is_method: false,
             is_private: false,
         })
         .collect();

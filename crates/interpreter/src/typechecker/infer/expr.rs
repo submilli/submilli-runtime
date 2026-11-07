@@ -3472,9 +3472,9 @@ impl Inferer<'_> {
         let return_is_object_shaped = needs_box(&sig.ret);
         if any_object_shaped || return_is_object_shaped {
             let generic_args: Vec<crate::GenericArgument> = typed_args
-                .into_iter()
+                .iter()
                 .zip(sig.params.iter())
-                .map(|(expr, p)| crate::GenericArgument {
+                .map(|(&expr, p)| crate::GenericArgument {
                     expr,
                     is_generic: needs_box(&p.ty),
                 })
@@ -3484,18 +3484,24 @@ impl Inferer<'_> {
             } else {
                 None
             };
-            return Ok((
-                TypedExprKind::GenericMethodCall {
-                    receiver: typed_receiver,
-                    iface: iface_mangled,
-                    name,
-                    type_args: Vec::new(),
-                    args: generic_args,
-                    return_cast,
-                    type_predicate,
-                },
-                sig.ret,
-            ));
+            let object_enumeration = iface_mangled == crate::mangle::prelude("ObjectConstructor")
+                && matches!(name.name.as_str(), "values" | "entries");
+            let lists_entries = name.name == "entries";
+            let call = TypedExprKind::GenericMethodCall {
+                receiver: typed_receiver,
+                iface: iface_mangled,
+                name,
+                type_args: Vec::new(),
+                args: generic_args,
+                return_cast,
+                type_predicate,
+            };
+            // `Object.values` and `Object.entries` take `obj: unknown`, so
+            // they always take this branch.
+            if object_enumeration && let Some(&arg) = typed_args.first() {
+                return self.type_object_enumeration(call, sig.ret, lists_entries, arg, span);
+            }
+            return Ok((call, sig.ret));
         }
         Ok((
             TypedExprKind::MethodCall {
@@ -4193,16 +4199,9 @@ impl Inferer<'_> {
         Ok(value.to_string())
     }
 
-    /// Wrap `call` in the runtime-checked cast that verifies its result is
-    /// really a `target_ty`. The call node is pushed typed `unknown` — so
-    /// nothing downstream believes its static type before the check runs — and
-    /// the `Cast` around it carries the interface-reduced shape codegen walks,
-    /// giving the same structural test `x as T` gets.
-    ///
-    /// This is the soundness-critical construction behind every "the host
-    /// handed us data, prove it matches" call that the guest verifies — an MCP
-    /// tool with a declared return type — so it goes
-    /// through here rather than building the `Cast` itself. `Err` carries the reason `target_ty`
+    /// Wrap the call of an MCP tool with a declared return type in the
+    /// runtime-checked cast that verifies its result is really a `target_ty`
+    /// (see [`Self::checked_call`]). `Err` carries the reason `target_ty`
     /// cannot be verified; the caller words its own diagnostic around it.
     fn checked_cast_around(
         &mut self,
@@ -4216,22 +4215,60 @@ impl Inferer<'_> {
         {
             return Ok(Err(reason));
         }
+        Ok(Ok(self.checked_call(
+            call,
+            Type::Unknown,
+            target_ty,
+            shape,
+            span,
+        )?))
+    }
+
+    /// Push `call`, typed `call_ty`, and wrap it in the `Cast` that checks at
+    /// run time that its result matches `check`, a reduced shape of
+    /// `target_ty` that `unsupported_cast_target_reason` accepts. `call_ty` is
+    /// the type the host promises, such as `unknown`, so nothing downstream
+    /// believes `target_ty` before the check runs.
+    ///
+    /// This is the soundness-critical construction behind every "the host
+    /// handed us data, prove it matches" call the guest verifies, such as an
+    /// MCP tool's result or `Object.values`, so each goes through here rather
+    /// than building the `Cast` itself.
+    pub(super) fn checked_call(
+        &mut self,
+        call: TypedExprKind,
+        call_ty: Type,
+        target_ty: &Type,
+        check: Type,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let value = self
             .typed_ast
             .try_push_expr(TypedExpr {
                 kind: call,
                 span,
-                ty: Type::Unknown,
+                ty: call_ty,
             })
             .map_err(crate::typechecker::arena_failure)?;
-        Ok(Ok((
+        Ok((
             TypedExprKind::Cast {
                 value,
                 target_ty: target_ty.clone(),
-                check: Some(Box::new(shape)),
+                check: Some(Box::new(check)),
             },
             target_ty.clone(),
-        )))
+        ))
+    }
+
+    /// The shape `value as target_ty` checks at run time: interfaces reduced
+    /// to their object shapes and enums to their members. `Err` carries the
+    /// reason the runtime can't check a `target_ty`.
+    pub(super) fn as_check_shape(&self, target_ty: &Type) -> Result<Type, &'static str> {
+        let shape = self.reduce_enums_to_members(&self.reduce_cast_target(target_ty));
+        match unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()) {
+            Some(reason) => Err(reason),
+            None => Ok(shape),
+        }
     }
 
     /// Records how the argument of `declaration`'s valid `finalizer` is
@@ -4247,22 +4284,22 @@ impl Inferer<'_> {
         let Some(ty) = crate::typechecker::rules::finalizers::value_type(&symbol.kind) else {
             return Ok(());
         };
-        let check = self.reduce_enums_to_members(&self.reduce_cast_target(ty));
-        if let Some(reason) =
-            unsupported_cast_target_reason(&check, self.resolver(), &mut Vec::new())
-        {
-            self.error_with_help(
-                symbol.declaration_span,
-                format!("finalizer value type `{ty}` cannot be verified at runtime: {reason}"),
-                cast_gate_help(
-                    reason,
-                    "cleanup checks the stored value against this type as `value as T` \
+        let check = match self.as_check_shape(ty) {
+            Ok(check) => check,
+            Err(reason) => {
+                self.error_with_help(
+                    symbol.declaration_span,
+                    format!("finalizer value type `{ty}` cannot be verified at runtime: {reason}"),
+                    cast_gate_help(
+                        reason,
+                        "cleanup checks the stored value against this type as `value as T` \
                      checks it, so `T` must be a type `as` accepts"
-                        .into(),
-                ),
-            );
-            return Ok(());
-        }
+                            .into(),
+                    ),
+                );
+                return Ok(());
+            }
+        };
         // Every expression records a runtime test for its type when it is
         // pushed; this argument has no expression, so record it here.
         self.record_runtime_type_test(ty)?;
@@ -13026,26 +13063,26 @@ impl Inferer<'_> {
         let check = if inner_to_target {
             None
         } else {
-            let shape = self.reduce_enums_to_members(&shape);
-            if let Some(reason) =
-                unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new())
-            {
-                let (message, help) = if reason == HOST_BACKED_TARGET {
-                    (
-                        format!("`as` can't produce a `{target_ty}`: {reason}"),
-                        HOST_BACKED_HELP,
-                    )
-                } else {
-                    (
-                        format!("`as` to `{target_ty}` is not yet supported: {reason}"),
-                        "supported targets: primitives (`number`, `string`, `boolean`, \
+            let shape = match self.as_check_shape(&target_ty) {
+                Ok(shape) => shape,
+                Err(reason) => {
+                    let (message, help) = if reason == HOST_BACKED_TARGET {
+                        (
+                            format!("`as` can't produce a `{target_ty}`: {reason}"),
+                            HOST_BACKED_HELP,
+                        )
+                    } else {
+                        (
+                            format!("`as` to `{target_ty}` is not yet supported: {reason}"),
+                            "supported targets: primitives (`number`, `string`, `boolean`, \
                          `null`), `bigint`, arrays, tuples, `Uint8Array`, object shapes \
                          (`{ a: T }`), interfaces, closures, `unknown`, and unions of these",
-                    )
-                };
-                self.error_with_help(span, message, vec![help.to_string()]);
-                return Ok((TypedExprKind::Null, Type::Error));
-            }
+                        )
+                    };
+                    self.error_with_help(span, message, vec![help.to_string()]);
+                    return Ok((TypedExprKind::Null, Type::Error));
+                }
+            };
             Some(Box::new(shape))
         };
         Ok((

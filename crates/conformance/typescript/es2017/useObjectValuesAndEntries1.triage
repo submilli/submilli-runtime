@@ -1,2 +1,2 @@
-line 6, 7, 10, 11, 13, 14, 23, 24, 32, 33 type: by-design spec §1.6 `Object.values` and `Object.entries` erase values to `unknown`
-line 16, 17 type: by-design spec §1.6 `Object.values` and `Object.entries` erase values to `unknown`, so the argument literal has no generic context to keep `true` in
+line 13, 14, 32, 33 type: by-design spec §Excluded-Features there is no `any`, so `Object.values` and `Object.entries` type the values `unknown` where tsc falls back to its `values(o: {}): any[]` overload
+line 16, 17 type: by-design spec §1.6 `Object.values` and `Object.entries` take no type parameter, so the argument literal has no generic context to keep `true` in

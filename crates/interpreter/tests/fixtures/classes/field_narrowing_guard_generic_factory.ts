@@ -12,5 +12,5 @@ export function main(): void {
  assert(empty.read() === null, "nullable generic argument stays nullable");
  assert(Object.hasOwn(empty, "guard value") === false, "guards are not properties");
  const keys = Object.keys(empty);
- assert(keys.length === 3, "only value and method slots are named");
+ assert(keys.join() === "value", "only value slots are named; methods live on the prototype");
 }

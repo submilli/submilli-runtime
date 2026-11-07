@@ -190,7 +190,10 @@ fn enumerate(
             }
             let name = names.get(&mut *caller, i)?;
             let value = values.get(&mut *caller, i)?;
-            if !field_is_present(caller, &name, &value)? || is_accessor_slot(caller, &name)? {
+            if !field_is_present(caller, &name, &value)?
+                || is_accessor_slot(caller, &name)?
+                || is_method_slot(caller, &name)?
+            {
                 continue;
             }
             let elem = match kind {
@@ -301,12 +304,30 @@ pub(crate) fn is_accessor_slot(
     caller: &mut Caller<'_, StoreData>,
     name: &Val,
 ) -> wasmtime::Result<bool> {
+    name_has_marker(caller, name, crate::codegen::field_names::ACCESSOR_MARKER)
+}
+
+/// A class method's slot: the instance carries it for dispatch, but
+/// JavaScript keeps methods on the prototype, so `Object.keys`, `hasOwn` and a
+/// record check don't count it as an own property.
+pub(crate) fn is_method_slot(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+) -> wasmtime::Result<bool> {
+    name_has_marker(caller, name, crate::codegen::field_names::METHOD_MARKER)
+}
+
+fn name_has_marker(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+    marker: i32,
+) -> wasmtime::Result<bool> {
     let name = as_struct(caller, name, "field name")?;
     let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&name.ty(&*caller)?, &string) {
         return Ok(false);
     }
-    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(-1)))
+    Ok(matches!(name.field(&mut *caller, 3)?, Val::I32(flag) if flag == marker))
 }
 
 /// Visibility is carried only by compiler-created marked names. Host-created
@@ -355,7 +376,20 @@ fn spread(
             if source_index == 1 && omitted.contains(&units) {
                 continue;
             }
-            entries.insert(units, (copy_field_name(caller, name, true)?, value));
+            // JavaScript doesn't copy a method at all, so it never replaces an
+            // earlier present field. It is copied otherwise, keeping its marked
+            // name so the copy doesn't list it, because the result's static
+            // type may name it; a later method replaces an earlier one.
+            let is_method = is_method_slot(caller, &name)?;
+            if is_method && !method_may_replace(caller, entries.get(&units))? {
+                continue;
+            }
+            let name = if is_method {
+                name
+            } else {
+                copy_field_name(caller, name, true)?
+            };
+            entries.insert(units, (name, value));
         }
     }
     if let Some((names, _)) = shape_arrays(caller, shape)? {
@@ -413,6 +447,18 @@ fn is_kept_as_object(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtim
     }
     let object_shape = intrinsic_types(&mut *caller)?.object_shape.clone();
     is_a(caller, value, &object_shape)
+}
+
+/// Whether a method may take a spread entry: one nothing earlier gave, or an
+/// earlier method's.
+fn method_may_replace(
+    caller: &mut Caller<'_, StoreData>,
+    earlier: Option<&(Val, Val)>,
+) -> wasmtime::Result<bool> {
+    match earlier {
+        None => Ok(true),
+        Some((name, _)) => is_method_slot(caller, name),
+    }
 }
 
 fn copy_field_name(
@@ -573,6 +619,10 @@ fn grow_fields(
 /// static shape no longer describes all of this object's fields.
 fn inserted_field_name(caller: &mut Caller<'_, StoreData>, name: &Val) -> wasmtime::Result<Val> {
     use wasmtime::{FieldType, Finality, Mutability, StorageType};
+    // A copied method keeps its marked name: its flag never changes.
+    if is_method_slot(caller, name)? {
+        return Ok(*name);
+    }
     let intr = intrinsic_types(&mut *caller)?;
     let mut fields: Vec<_> = intr.string.fields().collect();
     fields.push(FieldType::new(
@@ -739,7 +789,7 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
     };
     let name = names.get(&mut *caller, slot)?;
     let value = values.get(&mut *caller, slot)?;
-    field_is_present(caller, &name, &value)
+    Ok(field_is_present(caller, &name, &value)? && !is_method_slot(caller, &name)?)
 }
 
 /// SameValue on two `f64` bit patterns: any NaN equals any NaN (Wasm arithmetic
@@ -1276,7 +1326,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::Unknown)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the object's field values, aligned with `Object.keys` order. Element types are erased to `unknown` — narrow with `typeof` / `as`.\n * Non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns the object's field values, aligned with `Object.keys` order. They keep the value type of a record or index signature, the field types of an object type (an optional field adds `undefined`), or the element type of an array or string. They are `unknown` for an interface without an index signature, a class-instance argument, a union of unrelated value types, or values a run-time check can't verify (class instances, interfaces with methods, type parameters) — narrow with `typeof` / `as`.\n * A string or array lists its elements; other non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`. A field holding a value outside its declared type throws a `TypeError`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
@@ -1292,7 +1342,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ].into()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `[name, value]` pairs in canonical sorted key order. Values are erased to `unknown` — narrow with `typeof` / `as`.\n * Non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns `[name, value]` pairs in canonical sorted key order. The values are typed as `Object.values` types them.\n * A string or array lists its indices and elements; other non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
