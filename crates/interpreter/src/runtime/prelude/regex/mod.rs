@@ -194,7 +194,63 @@ fn with_regex<T>(
 // construction
 // ---------------------------------------------------------------------------
 
-/// `RegExpConstructor#new(source, flags)`: compile against the tenant's memory
+/// Calling with a regex and no flags preserves its identity and matching state.
+pub(super) fn call_constructor(
+    caller: &mut Caller<'_, StoreData>,
+    pattern: &Val,
+    flags: &Val,
+) -> wasmtime::Result<Val> {
+    if super::undefined::is_undefined(caller, flags)? && !arg_is_string(caller, pattern)? {
+        let _ = regex_pattern(caller, pattern)?;
+        return Ok(*pattern);
+    }
+    construct_from_pattern(caller, pattern, flags)
+}
+
+/// Normalize the string-or-regex pattern and optional flags for fresh construction.
+pub(super) fn construct_from_pattern(
+    caller: &mut Caller<'_, StoreData>,
+    pattern: &Val,
+    flags: &Val,
+) -> wasmtime::Result<Val> {
+    let inherit_flags = super::undefined::is_undefined(caller, flags)?;
+    let (source, flags) = if arg_is_string(caller, pattern)? {
+        let flags = if inherit_flags {
+            Val::AnyRef(Some(
+                crate::runtime::host::write_submilli_string_struct(caller, "")?.to_anyref(),
+            ))
+        } else {
+            *flags
+        };
+        (*pattern, flags)
+    } else {
+        let regex = regex_pattern(caller, pattern)?;
+        let source = regex.field(&mut *caller, 3)?;
+        let flags = if inherit_flags {
+            regex.field(&mut *caller, 4)?
+        } else {
+            *flags
+        };
+        (source, flags)
+    };
+    construct(caller, &source, &flags)
+}
+
+fn regex_pattern(
+    caller: &mut Caller<'_, StoreData>,
+    pattern: &Val,
+) -> wasmtime::Result<Rooted<StructRef>> {
+    let regex = as_struct(caller, pattern, "RegExp pattern")?;
+    let regex_ty = intrinsic_types(&mut *caller)?.regex.clone();
+    if !regex.matches_ty(&*caller, &regex_ty)? {
+        return Err(crate::runtime::host::type_error(
+            "RegExp pattern must be a string or RegExp",
+        ));
+    }
+    Ok(regex)
+}
+
+/// Compile normalized source and flags against the tenant's memory
 /// budget, then build the `$regex` object. The `$string` args are reused verbatim
 /// as the cached `source`/`flags` fields.
 pub(super) fn construct(
