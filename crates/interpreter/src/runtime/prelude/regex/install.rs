@@ -64,15 +64,26 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     let m = MODULE_NAME;
 
-    // --- RegExpConstructor#new (Static: no receiver) ----------------------
+    // --- RegExpConstructor (Static: no receiver) --------------------------
     register_host_fn(
         linker,
         m,
         ctor_key("new"),
-        ft(vec![string.clone(), string.clone()], vec![obj.clone()]),
+        ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
         |caller, params, results| {
             *abi_result(results, 0)? =
-                super::construct(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
+                super::construct_from_pattern(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
+            Ok(())
+        },
+    )?;
+    register_host_fn(
+        linker,
+        m,
+        ctor_key("@call"),
+        ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
+        |caller, params, results| {
+            *abi_result(results, 0)? =
+                super::call_constructor(caller, abi_arg(params, 0)?, abi_arg(params, 1)?)?;
             Ok(())
         },
     )?;
@@ -285,21 +296,15 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![Param::new("string", Type::String)],
         Type::String,
     );
-    // RegExpConstructor#new(source, flags) -> RegExp
-    declare_method(
-        defs,
-        "new",
-        ctor_key("new"),
-        vec![
-            Param::new("source", Type::String),
-            Param::with_default(
-                "flags",
-                Type::String,
-                crate::DefaultValue::String(String::new()),
-            ),
-        ],
-        regexp(),
-    );
+    for method in ["new", "@call"] {
+        declare_method(
+            defs,
+            method,
+            ctor_key(method),
+            constructor_params(),
+            regexp(),
+        );
+    }
 
     // RegExp
     declare_method(
@@ -594,21 +599,30 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     MethodSig {
                         optional: false,
                         generics: Vec::new(),
-                        params: vec![
-                            Param::new("source", Type::String),
-                            Param::with_default("flags", Type::String, crate::DefaultValue::String(String::new())),
-                        ],
+                        params: constructor_params(),
                         ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
                         predicate: None,
                         doc: doc(
-                            "/**\n * Construct a new `RegExp` from `source` and `flags`. Throws on invalid pattern or unsupported feature (lookaround / backreference).\n * @param source The JS regex pattern (without delimiters).\n * @param flags Any subset of `gimsuy`; defaults to an empty string when omitted.\n */",
+                            "/**\n * Construct a fresh `RegExp` from a pattern string or an existing regex. Throws SyntaxError on an invalid pattern or flags.\n * @param source The JS regex pattern (without delimiters), or a regex to copy.\n * @param flags Any subset of `gimsuy`; omitted or undefined flags inherit from a regex source, otherwise default to an empty string.\n */",
+                        ),
+                    },
+                ), (
+                    "@call".to_string(),
+                    MethodSig {
+                        optional: false,
+                        generics: Vec::new(),
+                        params: constructor_params(),
+                        ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                        predicate: None,
+                        doc: doc(
+                            "/** Compile a pattern as `new RegExp` does. Returns an existing regex unchanged when flags are omitted or undefined. */",
                         ),
                     },
                 )]),
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::Static,
                 doc: doc(
-                    "/** Constructor object for `RegExp`. Accessed via the global `RegExp` binding — call `new RegExp(source, flags)`. */",
+                    "/** Constructor object for `RegExp`. Call `RegExp(source, flags?)` or `new RegExp(source, flags?)`. */",
                 ),
             },
         },
@@ -626,6 +640,23 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+fn constructor_params() -> Vec<Param> {
+    vec![
+        Param::new(
+            "source",
+            Type::union(vec![
+                Type::String,
+                Type::prelude_interface("RegExp".to_string(), Vec::new()),
+            ]),
+        ),
+        Param::with_default(
+            "flags",
+            Type::union(vec![Type::String, Type::Undefined]),
+            crate::DefaultValue::Undefined,
+        ),
+    ]
 }
 
 /// How many arguments a replacer function can take: the match, then up to

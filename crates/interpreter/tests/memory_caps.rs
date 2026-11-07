@@ -141,6 +141,25 @@ function main(): void {
 }
 
 #[test]
+fn a_regex_call_past_the_cap_is_not_catchable() {
+    let src = r#"
+function main(): void {
+  const kept: RegExp[] = [];
+  try {
+    let i: number = 0;
+    while (i < 10) {
+      kept.push(RegExp("abc" + i.toString()));
+      i = i + 1;
+    }
+  } catch (e) {
+    kept.pop();
+  }
+}
+"#;
+    assert_cap_ends_the_run(src, 128 * 1024);
+}
+
+#[test]
 fn a_file_handle_past_the_cap_is_not_catchable() {
     let src = r#"
 import { lines, writeText } from "submilli:fs";
