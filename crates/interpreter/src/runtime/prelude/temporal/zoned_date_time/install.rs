@@ -30,19 +30,12 @@ fn install_construction(
         shared::prelude_key("ZonedDateTimeConstructor", "from"),
         FuncType::new(
             &types.engine,
-            [types.string.clone()],
+            [types.object.clone(), types.object.clone()],
             [types.object.clone()],
         ),
         |caller, params, results| {
-            let input =
-                read_string_arg(caller, abi_arg(params, 0)?, "Temporal.ZonedDateTime.from")?;
-            crate::runtime::fuel::charge(
-                &mut *caller,
-                crate::runtime::fuel::PARSE,
-                input.len() as u64,
-            )?;
-            crate::runtime::fuel::charge_host_fuel(&mut *caller, crate::runtime::fuel::TZ)?;
-            let (zoned, tz_id) = super::parse(&input)?;
+            let (zoned, tz_id) =
+                super::super::like::zoned(caller, abi_arg(params, 0)?, Some(*abi_arg(params, 1)?))?;
             *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
             Ok(())
         },
@@ -57,16 +50,8 @@ fn install_construction(
             [ValType::F64],
         ),
         |caller, params, results| {
-            let a = shared::zoned_date_time_timestamp_from_val(
-                caller,
-                abi_arg(params, 0)?,
-                "ZonedDateTime.compare",
-            )?;
-            let b = shared::zoned_date_time_timestamp_from_val(
-                caller,
-                abi_arg(params, 1)?,
-                "ZonedDateTime.compare",
-            )?;
+            let a = super::super::like::zoned_timestamp(caller, abi_arg(params, 0)?)?;
+            let b = super::super::like::zoned_timestamp(caller, abi_arg(params, 1)?)?;
             *abi_result(results, 0)? = Val::F64(super::compare_timestamps(a, b).to_bits());
             Ok(())
         },
@@ -287,7 +272,7 @@ fn install_arithmetic(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             ),
             move |caller, params, results| {
                 let a = shared::zoned_date_time_from_val(caller, abi_arg(params, 0)?, label)?;
-                let b = shared::zoned_date_time_from_val(caller, abi_arg(params, 1)?, label)?;
+                let b = super::super::like::zoned_value(caller, abi_arg(params, 1)?)?;
                 let options = shared::object_diff_options(caller, abi_arg(params, 2)?, label)?;
                 let span = if until {
                     a.until(options.zoned(&b))
@@ -319,7 +304,7 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
         shared::prelude_key("ZonedDateTime", "withTimeZone"),
         FuncType::new(
             &types.engine,
-            [types.object.clone(), types.string.clone()],
+            [types.object.clone(), types.object.clone()],
             [types.object.clone()],
         ),
         move |caller, params, results| {
@@ -328,7 +313,7 @@ fn install_updates(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                 abi_arg(params, 0)?,
                 "ZonedDateTime.withTimeZone",
             )?;
-            let tz_id = read_string_arg(
+            let tz_id = super::super::like::time_zone(
                 caller,
                 abi_arg(params, 1)?,
                 "Temporal.ZonedDateTime.withTimeZone",
@@ -585,11 +570,8 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
                 abi_arg(params, 0)?,
                 "ZonedDateTime.equals",
             )?;
-            let (b, b_tz) = shared::zoned_date_time_identity_from_val(
-                caller,
-                abi_arg(params, 1)?,
-                "ZonedDateTime.equals",
-            )?;
+            let (b, b_tz) = super::super::like::zoned(caller, abi_arg(params, 1)?, None)?;
+            let b = b.timestamp();
             let equal = a == b && super::time_zone_ids_equal(caller, &a_tz, &b_tz)?;
             *abi_result(results, 0)? = Val::I32(equal as i32);
             Ok(())
@@ -600,29 +582,27 @@ fn install_strings(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wasmt
 pub(crate) fn declare(defs: &mut PackageDeclaration) {
     let zoned = || shared::temporal_type("ZonedDateTime");
     let receiver = || Param::new("receiver", zoned());
-    let duration_like = || {
-        Param::new(
-            "duration",
-            Type::Union(vec![
-                shared::temporal_type("Duration"),
-                shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
-            ]),
-        )
-    };
+    let duration_like = || Param::new("duration", super::super::like::like_type("Duration"));
     let optional_options = || Type::Union(vec![Type::any_object(), Type::Undefined]);
 
     shared::declare_direct_fn(
         defs,
         "from",
         shared::prelude_key("ZonedDateTimeConstructor", "from"),
-        vec![Param::new("iso", Type::String)],
+        vec![
+            Param::new("item", super::super::like::like_type("ZonedDateTime")),
+            super::super::like::overflow_param(),
+        ],
         zoned(),
     );
     shared::declare_direct_fn(
         defs,
         "compare",
         shared::prelude_key("ZonedDateTimeConstructor", "compare"),
-        vec![Param::new("a", zoned()), Param::new("b", zoned())],
+        vec![
+            Param::new("a", super::super::like::like_type("ZonedDateTime")),
+            Param::new("b", super::super::like::like_type("ZonedDateTime")),
+        ],
         Type::Number,
     );
     for method in ["add", "subtract"] {
@@ -641,7 +621,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             shared::prelude_key("ZonedDateTime", method),
             vec![
                 receiver(),
-                Param::new("other", zoned()),
+                Param::new("other", super::super::like::like_type("ZonedDateTime")),
                 Param::with_default("options", optional_options(), DefaultValue::Undefined),
             ],
             shared::temporal_type("Duration"),
@@ -677,7 +657,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "withTimeZone",
         shared::prelude_key("ZonedDateTime", "withTimeZone"),
-        vec![receiver(), Param::new("timeZone", Type::String)],
+        vec![
+            receiver(),
+            Param::new("timeZone", super::super::like::like_type("TimeZone")),
+        ],
         zoned(),
     );
     shared::declare_direct_fn(
@@ -715,7 +698,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "equals",
         shared::prelude_key("ZonedDateTime", "equals"),
-        vec![receiver(), Param::new("other", zoned())],
+        vec![
+            receiver(),
+            Param::new("other", super::super::like::like_type("ZonedDateTime")),
+        ],
         Type::Boolean,
     );
     for field in [

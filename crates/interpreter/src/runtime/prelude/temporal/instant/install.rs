@@ -41,10 +41,9 @@ fn install_direct(
         linker,
         host,
         prelude_key("InstantConstructor", "from"),
-        FuncType::new(engine, [string.clone()], obj_result.clone()),
+        FuncType::new(engine, [obj.clone()], obj_result.clone()),
         |caller, params, results| {
-            let s = read_string_arg(caller, abi_arg(params, 0)?, "Temporal.Instant.from")?;
-            let ts = super::parse(&s).map_err(crate::runtime::host::range_error)?;
+            let ts = super::super::like::instant(caller, abi_arg(params, 0)?)?;
             *abi_result(results, 0)? = make_instant(caller, ts)?;
             Ok(())
         },
@@ -89,8 +88,8 @@ fn install_direct(
         prelude_key("InstantConstructor", "compare"),
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::F64]),
         |caller, params, results| {
-            let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant.compare")?;
-            let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant.compare")?;
+            let a = super::super::like::instant(caller, abi_arg(params, 0)?)?;
+            let b = super::super::like::instant(caller, abi_arg(params, 1)?)?;
             *abi_result(results, 0)? = Val::F64(super::compare(a, b).to_bits());
             Ok(())
         },
@@ -119,7 +118,7 @@ fn install_direct(
         FuncType::new(engine, [obj.clone(), obj.clone()], [ValType::I32]),
         |caller, params, results| {
             let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant.equals")?;
-            let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant.equals")?;
+            let b = super::super::like::instant(caller, abi_arg(params, 1)?)?;
             *abi_result(results, 0)? = Val::I32(super::equals(a, b) as i32);
             Ok(())
         },
@@ -192,7 +191,7 @@ fn install_direct(
             ),
             move |caller, params, results| {
                 let a = instant_from_val(caller, abi_arg(params, 0)?, "Instant difference")?;
-                let b = instant_from_val(caller, abi_arg(params, 1)?, "Instant difference")?;
+                let b = super::super::like::instant(caller, abi_arg(params, 1)?)?;
                 let label = if until {
                     "Instant.until"
                 } else {
@@ -224,10 +223,10 @@ fn install_direct(
         linker,
         host,
         prelude_key("Instant", "toZonedDateTimeISO"),
-        FuncType::new(engine, [obj.clone(), string.clone()], obj_result.clone()),
+        FuncType::new(engine, [obj.clone(), obj.clone()], obj_result.clone()),
         |caller, params, results| {
             let ts = instant_from_val(caller, abi_arg(params, 0)?, "Instant.toZonedDateTimeISO")?;
-            let tz_id = read_string_arg(
+            let tz_id = super::super::like::time_zone(
                 caller,
                 abi_arg(params, 1)?,
                 "Temporal.Instant.toZonedDateTimeISO",
@@ -299,22 +298,14 @@ fn instant_round_direct(
 pub(crate) fn declare(defs: &mut PackageDeclaration) {
     let instant = || shared::temporal_type("Instant");
     let receiver = || Param::new("receiver", instant());
-    let duration_like = || {
-        Param::new(
-            "duration",
-            Type::Union(vec![
-                shared::temporal_type("Duration"),
-                shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
-            ]),
-        )
-    };
+    let duration_like = || Param::new("duration", super::super::like::like_type("Duration"));
     let optional_options = || Type::Union(vec![Type::any_object(), Type::Undefined]);
 
     shared::declare_direct_fn(
         defs,
         "from",
         shared::prelude_key("InstantConstructor", "from"),
-        vec![Param::new("iso", Type::String)],
+        vec![Param::new("item", super::super::like::like_type("Instant"))],
         instant(),
     );
     shared::declare_direct_fn(
@@ -335,7 +326,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "compare",
         shared::prelude_key("InstantConstructor", "compare"),
-        vec![Param::new("a", instant()), Param::new("b", instant())],
+        vec![
+            Param::new("a", super::super::like::like_type("Instant")),
+            Param::new("b", super::super::like::like_type("Instant")),
+        ],
         Type::Number,
     );
     for method in ["toString", "toJSON"] {
@@ -351,7 +345,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "equals",
         shared::prelude_key("Instant", "equals"),
-        vec![receiver(), Param::new("other", instant())],
+        vec![
+            receiver(),
+            Param::new("other", super::super::like::like_type("Instant")),
+        ],
         Type::Boolean,
     );
     for (getter, ret) in [
@@ -382,7 +379,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             shared::prelude_key("Instant", method),
             vec![
                 receiver(),
-                Param::new("other", instant()),
+                Param::new("other", super::super::like::like_type("Instant")),
                 Param::with_default("options", optional_options(), DefaultValue::Undefined),
             ],
             shared::temporal_type("Duration"),
@@ -408,7 +405,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "toZonedDateTimeISO",
         shared::prelude_key("Instant", "toZonedDateTimeISO"),
-        vec![receiver(), Param::new("tz", Type::String)],
+        vec![
+            receiver(),
+            Param::new("tz", super::super::like::like_type("TimeZone")),
+        ],
         shared::temporal_type("ZonedDateTime"),
     );
 }

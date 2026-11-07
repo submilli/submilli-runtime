@@ -4,7 +4,7 @@ use wasmtime::{FuncType, HeapType, Linker, RefType, ValType};
 use super::super::shared::*;
 use super::super::{DirectTypes, shared};
 use crate::runtime::StoreData;
-use crate::runtime::host::{read_string_arg, register_host_fn};
+use crate::runtime::host::register_host_fn;
 use crate::runtime::intrinsic_types::IntrinsicTypes;
 use crate::{DefaultValue, PackageDeclaration, Param, Type};
 
@@ -14,23 +14,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     shared::reg_plain_from(
         linker,
         engine,
-        &types.string,
         obj,
         "PlainDateTimeConstructor",
-        "PlainDateTime#from",
-        |s, caller| {
-            let dt = super::parse(s).map_err(crate::runtime::host::range_error)?;
-            shared::make_plain_date_time(
-                caller,
-                i32::from(dt.date().year()),
-                i32::from(dt.date().month()),
-                i32::from(dt.date().day()),
-                i32::from(dt.time().hour()),
-                i32::from(dt.time().minute()),
-                i32::from(dt.time().second()),
-                dt.time().subsec_nanosecond(),
-            )
-        },
+        super::super::like::plain_date_time,
     )?;
     for method in ["toString", "toJSON"] {
         shared::reg_plain_string(
@@ -49,6 +35,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         obj,
         "PlainDateTime",
         shared::plain_equals_date_time,
+        super::super::like::plain_date_time,
     )?;
     shared::reg_plain_compare(
         linker,
@@ -56,6 +43,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         obj,
         "PlainDateTimeConstructor",
         &[1, 2, 3, 4, 5, 6, 7],
+        super::super::like::plain_date_time,
     )?;
     for (name, field) in [
         ("year", 1),
@@ -109,7 +97,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     }
     reg_plain_date_time_to_zoned(
         linker,
-        FuncType::new(engine, [obj.clone(), types.string.clone()], [obj.clone()]),
+        FuncType::new(engine, [obj.clone(), obj.clone()], [obj.clone()]),
     )
 }
 
@@ -215,11 +203,9 @@ fn reg_plain_date_time_pair_op(
         ty,
         move |caller, params, results| {
             let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
-            let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let a = plain_date_from_struct(caller, a_st, &label)?
                 .to_datetime(plain_time_from_struct(caller, a_st, 3, &label)?);
-            let b = plain_date_from_struct(caller, b_st, &label)?
-                .to_datetime(plain_time_from_struct(caller, b_st, 3, &label)?);
+            let b = super::super::like::date_time(caller, abi_arg(params, 1)?, None)?;
             let o = object_diff_options(
                 caller,
                 abi_arg(params, 2)?,
@@ -282,8 +268,11 @@ fn reg_plain_date_time_to_zoned(
         ty,
         |caller, params, results| {
             let st = as_struct_val(caller, abi_arg(params, 0)?, "PlainDateTime.toZonedDateTime")?;
-            let tz_id =
-                read_string_arg(caller, abi_arg(params, 1)?, "PlainDateTime.toZonedDateTime")?;
+            let tz_id = super::super::like::time_zone(
+                caller,
+                abi_arg(params, 1)?,
+                "PlainDateTime.toZonedDateTime",
+            )?;
             let date = plain_date_from_struct(caller, st, "PlainDateTime.toZonedDateTime")?;
             let time = plain_time_from_struct(caller, st, 3, "PlainDateTime.toZonedDateTime")?;
             let (tz, canonical_id) = super::super::zoned_date_time::resolve_time_zone(
@@ -308,7 +297,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "from",
         shared::prelude_key("PlainDateTimeConstructor", "from"),
-        vec![Param::new("s", Type::String)],
+        vec![
+            Param::new("item", super::super::like::like_type("PlainDateTime")),
+            super::super::like::overflow_param(),
+        ],
         ty(),
     );
     for method in ["toString", "toJSON"] {
@@ -324,20 +316,27 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "equals",
         shared::prelude_key("PlainDateTime", "equals"),
-        vec![receiver(), Param::new("other", ty())],
+        vec![
+            receiver(),
+            Param::new("other", super::super::like::like_type("PlainDateTime")),
+        ],
         Type::Boolean,
     );
     shared::declare_direct_fn(
         defs,
         "compare",
         shared::prelude_key("PlainDateTimeConstructor", "compare"),
-        vec![Param::new("a", ty()), Param::new("b", ty())],
+        vec![
+            Param::new("a", super::super::like::like_type("PlainDateTime")),
+            Param::new("b", super::super::like::like_type("PlainDateTime")),
+        ],
         Type::Number,
     );
     let duration_like = || {
         Param::new(
             "duration",
             Type::Union(vec![
+                Type::String,
                 shared::temporal_type("Duration"),
                 shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
             ]),
@@ -359,7 +358,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             shared::prelude_key("PlainDateTime", method),
             vec![
                 receiver(),
-                Param::new("other", ty()),
+                Param::new("other", super::super::like::like_type("PlainDateTime")),
                 Param::with_default(
                     "options",
                     Type::Union(vec![Type::any_object(), Type::Undefined]),
@@ -394,7 +393,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "toZonedDateTime",
         shared::prelude_key("PlainDateTime", "toZonedDateTime"),
-        vec![receiver(), Param::new("timeZone", Type::String)],
+        vec![
+            receiver(),
+            Param::new("timeZone", super::super::like::like_type("TimeZone")),
+        ],
         shared::temporal_type("ZonedDateTime"),
     );
     for (field, ret) in fields() {

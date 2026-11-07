@@ -1,7 +1,7 @@
 // expect-error: no method `withTimeZon` on `Temporal.ZonedDateTime`
 // expect-error: did you mean `withTimeZone`?
 // expect-error: interface Temporal.ZonedDateTime
-// expect-error: withTimeZone(tz: string): Temporal.ZonedDateTime
+// expect-error: withTimeZone(tz: string | Temporal.ZonedDateTime): Temporal.ZonedDateTime
 
 function main(): void {
   const z: Temporal.ZonedDateTime =
