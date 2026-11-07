@@ -3,6 +3,9 @@ source: crates/interpreter/src/typechecker/infer/expr.rs
 expression: ta
 ---
 TypedAst {
+    call_spread_index_reads: {},
+    call_spread_values: {},
+    tuple_call_spread_sources: {},
     parameter_default_prologues: {},
     closure_this: {},
     closure_names: {},
