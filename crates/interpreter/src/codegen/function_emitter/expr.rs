@@ -2838,11 +2838,11 @@ fn emit_object_spread(
             .ta
             .source_type(source.expr_id())
             .map_err(crate::codegen::arena_failure)?;
-        // A source that may hold something other than an object branches on
-        // it: `null` or a primitive copies nothing, while a string or array
-        // held in `{}` copies its indices. Either way the merge still applies
-        // the final shape.
-        let non_object_source = if may_hold_non_object(narrowed_ty) {
+        // A source that may hold something other than an object shape branches
+        // on its backing: nullish and non-string primitive values copy nothing,
+        // while an array or string held in an opaque type copies its indices. Either way the
+        // merge still applies the final shape.
+        let non_shape_source = if may_hold_non_shape(narrowed_ty) {
             Some(emit_object_source_test(
                 emitter,
                 ctx,
@@ -2863,15 +2863,15 @@ fn emit_object_spread(
             emitter.instruction(null_object.clone());
         }
         emitter.instruction(Instruction::Call(merge));
-        if let Some(NonObjectSource {
+        if let Some(NonShapeSource {
             accumulator,
             opaque,
-        }) = non_object_source
+        }) = non_shape_source
         {
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
-            // A string or an array held in `{}` copies its indices, which the
-            // merge reads from it; a nullish or other primitive copies nothing.
+            // Strings and arrays copy their indices; other built-ins copy any
+            // enumerable fields they expose. Nullish values copy nothing.
             match opaque {
                 Some(source) => emitter.instruction(Instruction::LocalGet(source)),
                 None => emitter.instruction(null_object.clone()),
@@ -2899,12 +2899,11 @@ fn emit_spread_shape_argument(
     }
 }
 
-/// Whether a spread source of type `ty` may hold a value with no fields to
-/// copy: `null`, `undefined`, or a falsy primitive such as the `false` of
-/// `c && { … }`.
-fn may_hold_non_object(ty: &Type) -> bool {
+/// Whether a spread source of type `ty` may hold a value without an object
+/// shape: nullish or primitive values, or a built-in behind an interface.
+fn may_hold_non_shape(ty: &Type) -> bool {
     match ty.lowered() {
-        Type::Union(members) => members.iter().any(may_hold_non_object),
+        Type::Union(members) => members.iter().any(may_hold_non_shape),
         Type::Null
         | Type::Undefined
         | Type::Boolean
@@ -2913,6 +2912,7 @@ fn may_hold_non_object(ty: &Type) -> bool {
         | Type::NumberLiteral(_)
         | Type::String
         | Type::StringLiteral(_)
+        | Type::InterfaceRef { .. }
         // `{}`, which holds primitives too.
         | Type::Unknown => true,
         _ => false,
@@ -2920,15 +2920,15 @@ fn may_hold_non_object(ty: &Type) -> bool {
 }
 
 /// The locals the `else` arm of [`emit_object_source_test`] reads.
-struct NonObjectSource {
+struct NonShapeSource {
     accumulator: u32,
-    /// The source, when it is held as an opaque `$Object` (as `{}` is), which
-    /// may be a string or an array.
+    /// The source, when held as an opaque `$Object`, may be a string, array,
+    /// or another built-in backing rather than an `$ObjectShape`.
     opaque: Option<u32>,
 }
 
 /// With the accumulator and then the source on the stack, opens an `if` on
-/// whether the source is an object, whose result is the merged object. Inside
+/// whether the source has an object shape, whose result is the merged object. Inside
 /// it, the accumulator and the source, as an `$ObjectShape`, are on the stack.
 /// Returns the locals the `else` arm reads.
 fn emit_object_source_test(
@@ -2937,7 +2937,7 @@ fn emit_object_source_test(
     source_ty: &Type,
     object: u32,
     object_shape: u32,
-) -> Result<NonObjectSource, crate::compiler_error::CompilerFailure> {
+) -> Result<NonShapeSource, crate::compiler_error::CompilerFailure> {
     let source_type = match ctx.symbols.value_type(source_ty)? {
         ValType::Ref(reference) => ValType::Ref(RefType {
             nullable: true,
@@ -2963,7 +2963,7 @@ fn emit_object_source_test(
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         object_shape,
     )));
-    Ok(NonObjectSource {
+    Ok(NonShapeSource {
         accumulator,
         opaque: opaque.then_some(source),
     })
