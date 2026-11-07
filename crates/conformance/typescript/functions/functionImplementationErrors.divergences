@@ -1,41 +1,8 @@
-types: 15 of 28 tsc entries compared, 8 differ
-
-line 6: f1
-  tsc:  () => "" | 3
-  ours: () => <error>
-
-line 6: function () { return ''; return 3; }
-  tsc:  () => "" | 3
-  ours: () => <error>
-
-line 10: f2
-  tsc:  () => "" | 3
-  ours: () => <error>
-
-line 10: function x() { return ''; return 3; }
-  tsc:  () => "" | 3
-  ours: () => <error>
-
-line 14: f3
-  tsc:  () => "" | 3
-  ours: () => <error>
-
-line 14: () => { return ''; return 3; }
-  tsc:  () => "" | 3
-  ours: () => <error>
-
-line 20: f4
-  tsc:  () => string[] | number[]
-  ours: () => <error>
-
-line 20: function () { if (true) { return ['']; } else { return [1]; } }
-  tsc:  () => string[] | number[]
-  ours: () => <error>
+types: 15 of 28 tsc entries compared, 0 differ
 
 errors:
-line 8: ours: return type `number` conflicts with earlier return `string`; annotate the closure's return type, or return one type on every path (tsc accepts)
-line 12: ours: return type `number` conflicts with earlier return `string`; annotate the closure's return type, or return one type on every path (tsc accepts)
-line 16: ours: return type `number` conflicts with earlier return `string`; annotate the closure's return type, or return one type on every path (tsc accepts)
-line 24: ours: return type `number[]` conflicts with earlier return `string[]`; annotate the closure's return type, or return one type on every path (tsc accepts)
+line 8: ours: unreachable code (tsc accepts)
+line 12: ours: unreachable code (tsc accepts)
+line 16: ours: unreachable code (tsc accepts)
 line 45: ours: expected `Error`, got `undefined` (tsc accepts)
 line 46: ours: unreachable code (tsc accepts)
