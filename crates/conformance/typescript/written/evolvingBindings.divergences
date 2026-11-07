@@ -6,7 +6,7 @@ line 5: loop
 
 line 6: loop
   tsc:  any[]
-  ours: string[]
+  ours: never[]
 
 line 8: mixed
   tsc:  any[]
