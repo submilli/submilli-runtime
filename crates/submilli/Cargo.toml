@@ -33,6 +33,7 @@ base64 = { workspace = true }
 sentry = { workspace = true }
 # The engine's warnings on stderr during `submilli run`, such as a call denied because it
 # needed an approval the run could not ask for.
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sha2 = "0.10"
 subtle = "2.6"

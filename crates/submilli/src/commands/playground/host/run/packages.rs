@@ -24,6 +24,8 @@ use wasmtime::{Engine, Module};
 /// The packages one run links.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreparedPackages {
+    pub(crate) import_suggestions:
+        Option<submilli_build::import_suggestions::ImportSuggestionSource>,
     pub(crate) stdlib_declarations: Vec<PackageDeclaration>,
     /// Declarations of the blueprint-listed packages: the program's importable
     /// surface. Closure-only dependencies are linked but not importable.
@@ -126,25 +128,33 @@ impl PackageCache {
             .filter(|package| blueprint.packages.contains(*package))
             .cloned()
             .collect();
-        if registry_roots.is_empty() && imports.stdlib.is_empty() {
-            return Ok(Arc::new(PreparedPackages::default()));
-        }
         let key = format!(
-            "{}\u{1e}{}\u{1e}git={}",
+            "{}\u{1e}{}\u{1e}git={}\u{1e}allowed={}",
             join_key_parts(&registry_roots),
             join_key_parts(&imports.stdlib),
-            blueprint.git.is_some()
+            blueprint.git.is_some(),
+            join_key_parts(&blueprint.packages)
         );
         if let Some(cached) = self.lock().get(&key) {
             return Ok(Arc::clone(cached));
         }
+        let import_suggestions = submilli_build::import_suggestions::ImportSuggestionSource::new(
+            self.store.clone(),
+            blueprint.packages.clone(),
+            blueprint.git.is_some(),
+        );
         let generation = self.generation.load(Ordering::Acquire);
-        let mut selected = self.prepare_selected(engine, &registry_roots, &imports.stdlib)?;
+        let mut selected = if registry_roots.is_empty() && imports.stdlib.is_empty() {
+            PreparedPackages::default()
+        } else {
+            self.prepare_selected(engine, &registry_roots, &imports.stdlib)?
+        };
         if blueprint.git.is_none() {
             selected
                 .stdlib_declarations
                 .retain(|decl| decl.package_name != "submilli:git");
         }
+        selected.import_suggestions = Some(import_suggestions);
         let prepared = Arc::new(selected);
         let mut sets = self.lock();
         if self.generation.load(Ordering::Acquire) != generation {
@@ -205,6 +215,7 @@ impl PackageCache {
             });
         }
         Ok(PreparedPackages {
+            import_suggestions: None,
             stdlib_declarations,
             script_declarations,
             modules,

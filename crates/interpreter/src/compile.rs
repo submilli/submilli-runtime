@@ -55,9 +55,18 @@ pub struct ParsedScript {
 
 impl ParsedScript {
     pub fn external_imports(&self) -> Result<ScriptImports, CompileError> {
-        let stdlib_names: BTreeSet<String> = runtime::stdlib_package_declarations()
-            .into_iter()
-            .map(|defs| defs.package_name)
+        self.external_imports_with_stdlib(&runtime::stdlib_package_declarations())
+    }
+
+    /// Classify imports using declarations the caller already prepared, without
+    /// constructing the standard library a second time.
+    pub fn external_imports_with_stdlib(
+        &self,
+        stdlib: &[PackageDeclaration],
+    ) -> Result<ScriptImports, CompileError> {
+        let stdlib_names: BTreeSet<&str> = stdlib
+            .iter()
+            .map(|defs| defs.package_name.as_str())
             .collect();
         let mut imports = ScriptImports::default();
         for stmt_id in &self.ast.top_level {
@@ -81,7 +90,7 @@ impl ParsedScript {
                 imports.mcp_servers.insert(server.to_string());
             } else if module == runtime::TOOLS_PACKAGE {
                 imports.tools = true;
-            } else if stdlib_names.contains(module)
+            } else if stdlib_names.contains(module.as_str())
                 || crate::stdlib::OptionalPackage::from_module_name(module).is_some()
             {
                 // An optional package counts as stdlib whether or not the embedder

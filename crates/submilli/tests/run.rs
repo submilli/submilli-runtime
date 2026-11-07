@@ -174,6 +174,99 @@ fn number_return() {
 }
 
 #[test]
+fn missing_import_hints_use_project_packages_and_the_imports_run() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_pied_piper_util_package_with_source(
+        tmp.path(),
+        "export interface Contact { name: string; } export function answer(): number { return 42; }",
+    );
+    fs::write(
+        tmp.path().join("submilli.toml"),
+        "[dependencies]\n\"@pied-piper/util\" = \"0.0.0-test\"\n[[package]]\nname = \"@test/app\"\nversion = \"1.0.0\"\ndescription = \"Import hint test\"\n",
+    )
+    .unwrap();
+    fs::create_dir(tmp.path().join("src")).unwrap();
+    fs::write(
+        tmp.path().join("src/lib.ts"),
+        "export function main(): void {}",
+    )
+    .unwrap();
+    let script = tmp.path().join("consumer.ts");
+    for (source, hint, expected) in [
+        (
+            "function main(): number { return answer(); }",
+            "import { answer } from \"@pied-piper/util\";",
+            "42\n",
+        ),
+        (
+            "function main(): number { return util.answer(); }",
+            "import util from \"@pied-piper/util\";",
+            "42\n",
+        ),
+        (
+            "function main(): number { const contacts: Contact[] = []; return contacts.length; }",
+            "import { Contact } from \"@pied-piper/util\";",
+            "0\n",
+        ),
+    ] {
+        fs::write(&script, source).unwrap();
+        let invoke = || {
+            Command::new(submilli_bin())
+                .current_dir(tmp.path())
+                .env("SUBMILLI_HOME", tmp.path())
+                .arg("run")
+                .arg(&script)
+                .output()
+                .unwrap()
+        };
+        let out = invoke();
+        assert!(!out.status.success());
+        assert!(stderr(&out).contains(hint), "{}", stderr(&out));
+        fs::write(&script, format!("{hint}\n{source}")).unwrap();
+        let out = invoke();
+        assert!(out.status.success(), "{}", stderr(&out));
+        assert_eq!(stdout(&out), expected);
+    }
+    let manifest_path = tmp.path().join("submilli.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(&manifest_path, manifest.replace("0.0.0-test", "9.9.9")).unwrap();
+    fs::write(
+        &script,
+        "import { answer } from \"@pied-piper/util\"; function main(): number { return answer(); }",
+    )
+    .unwrap();
+    let out = Command::new(submilli_bin())
+        .current_dir(tmp.path())
+        .env("SUBMILLI_HOME", tmp.path())
+        .arg("run")
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("submilli.toml requires 9.9.9"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stdout(&out).is_empty());
+    // The same installed package is no longer a candidate outside the project.
+    fs::remove_file(tmp.path().join("submilli.toml")).unwrap();
+    fs::write(&script, "function main(): number { return answer(); }").unwrap();
+    let out = Command::new(submilli_bin())
+        .current_dir(tmp.path())
+        .env("SUBMILLI_HOME", tmp.path())
+        .arg("run")
+        .arg(&script)
+        .output()
+        .unwrap();
+    assert!(
+        !stderr(&out).contains("@pied-piper/util"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn blueprint_package_dependency_runs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     write_pied_piper_util_package(tmp.path());

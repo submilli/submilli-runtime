@@ -1607,14 +1607,22 @@ async fn run_inner(
         return RunOutcome::internal_failure(&error.to_string());
     }
     let compiled = on_compiler_thread(|| {
-        compile_parsed_script_timed(
+        let mut compiled = compile_parsed_script_timed(
             code,
             FILENAME,
             &parsed.parsed,
             &packages.stdlib_declarations,
             &package_refs,
             &virtual_refs,
-        )
+        );
+        if let Err(diagnostics) = &mut compiled
+            && let Some(suggestions) = &packages.import_suggestions
+        {
+            for error in suggestions.enrich(code, diagnostics) {
+                tracing::warn!(%error, "import hint lookup failed");
+            }
+        }
+        compiled
     });
     let compiled = match compiled {
         Ok(Ok(out)) => out,
