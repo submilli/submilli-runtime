@@ -8,7 +8,7 @@ function readOob(arr: number[], i: number): boolean {
     assert(v !== v, "unreachable: OOB read should have thrown");
   } catch (e: Error) {
     threw = true;
-    assert(e.message === "index out of range", "OOB read carries a message");
+    assert(e.message === `index ${i} is out of range for \`arr\` (length 3); use \`arr.at(${i})\` to get \`undefined\` instead`, "OOB read carries a message");
   }
   return threw;
 }
@@ -19,7 +19,7 @@ function writeOob(arr: number[], i: number): boolean {
     arr[i] = 99;
   } catch (e: Error) {
     threw = true;
-    assert(e.message === "index out of range", "OOB write carries a message");
+    assert(e.message === `index ${i} is out of range for \`arr\` (length 3); use \`arr.push(value)\` to append instead`, "OOB write carries a message");
   }
   return threw;
 }

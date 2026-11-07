@@ -1,9 +1,11 @@
 use crate::codegen::CodegenCtx;
+use crate::codegen::bounds::receiver_name;
 use crate::codegen::bounds::{
     emit_checked_index, emit_checked_index_with_length, stash_array_length, stash_index_operand,
 };
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::init_guard;
+use crate::runtime::prelude::index::IndexAccess;
 use crate::{
     EnumVariantPayload, ExprId, Ident, MangledName, StmtId, Type, TypedStmtKind, TypedSwitchCase,
     TypedSwitchValue,
@@ -752,7 +754,14 @@ fn emit_uint8_index_store(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_local));
-    let idx_local = emit_checked_index(emitter, ctx, raw_local, idx_f64_local)?;
+    let idx_local = emit_checked_index(
+        emitter,
+        ctx,
+        raw_local,
+        idx_f64_local,
+        &receiver_name(ctx.ta, receiver)?,
+        IndexAccess::FixedWrite,
+    )?;
     emitter.instruction(Instruction::LocalGet(raw_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));
@@ -853,7 +862,14 @@ fn emit_array_index_store(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
-    let idx_local = emit_checked_index_with_length(emitter, ctx, length, idx_f64_local)?;
+    let idx_local = emit_checked_index_with_length(
+        emitter,
+        ctx,
+        length,
+        idx_f64_local,
+        &receiver_name(ctx.ta, receiver)?,
+        IndexAccess::Write,
+    )?;
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));

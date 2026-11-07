@@ -182,13 +182,18 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         |caller, params, results| {
             let bytes = super::read_bytes(caller, abi_arg(params, 0)?, "Uint8Array#with")?;
-            match super::with(&bytes, f64v(abi_arg(params, 1)?), f64v(abi_arg(params, 2)?)) {
-                Some(out) => {
-                    *abi_result(results, 0)? = super::build(caller, &out)?;
-                    Ok(())
-                }
-                None => Err(crate::runtime::host::range_error("index out of range")),
-            }
+            let Some(out) =
+                super::with(&bytes, f64v(abi_arg(params, 1)?), f64v(abi_arg(params, 2)?))
+            else {
+                crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::PARSE, 1)?;
+                return Err(crate::runtime::host::range_error(format!(
+                    "index {} is out of range (length {})",
+                    crate::runtime::number::format_number_js(f64v(abi_arg(params, 1)?)),
+                    bytes.len()
+                )));
+            };
+            *abi_result(results, 0)? = super::build(caller, &out)?;
+            Ok(())
         },
     )?;
     for name in ["indexOf", "lastIndexOf"] {

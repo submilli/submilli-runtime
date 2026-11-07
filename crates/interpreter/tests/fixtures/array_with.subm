@@ -14,7 +14,7 @@ function main(): void {
     a.with(4, 0);
   } catch (e: Error) {
     threw = true;
-    assert(e.message === "index out of range", "OOB carries the standard message");
+    assert(e.message === "index 4 is out of range (length 4)", "OOB carries the index and length");
   }
   assert(threw, "index at length throws");
 

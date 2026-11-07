@@ -802,7 +802,7 @@ impl CodegenAnalysis {
                     self.note_record_helpers();
                 }
                 self.visit_type_at(elem_ty, stmt.span)?;
-                self.note_index_check();
+                self.note_index_check(ta, Some(*receiver))?;
             }
             TypedStmtKind::NarrowRegion { cast_info, .. } => {
                 self.visit_type_at(&cast_info.from_ty, stmt.span)?;
@@ -1148,10 +1148,11 @@ impl CodegenAnalysis {
                 );
             }
             TypedExprKind::IndexAccess { receiver, .. } => {
-                self.note_index_check();
+                self.note_index_check(ta, Some(*receiver))?;
                 self.note_string_index(
                     ta.source_type(*receiver)
                         .map_err(crate::codegen::arena_failure)?,
+                    bounds::receiver_name(ta, *receiver)?,
                 );
             }
             TypedExprKind::Closure {
@@ -1209,9 +1210,11 @@ impl CodegenAnalysis {
                         ));
                     }
                 }
-                PostfixTarget::Index { elem_ty, .. } => {
+                PostfixTarget::Index {
+                    receiver, elem_ty, ..
+                } => {
                     self.note_postfix_target(elem_ty)?;
-                    self.note_index_check();
+                    self.note_index_check(ta, Some(*receiver))?;
                 }
             },
             TypedExprKind::NonNullAssert { .. } => {
@@ -1387,8 +1390,10 @@ impl CodegenAnalysis {
                     self.visit_type(result_ty)?;
                     // A chain index is bounds-checked like any other, so it
                     // needs the same message in the pool.
-                    self.note_index_check();
-                    self.note_string_index(receiver_ty);
+                    self.note_index_check(ta, None)?;
+                    let name = bounds::chain_receiver_name(ta, base, &parts[..index])?;
+                    self.string_pool.intern_text(&name);
+                    self.note_string_index(receiver_ty, name);
                 }
                 TypedChainPart::Call {
                     result_ty,
@@ -1486,21 +1491,35 @@ impl CodegenAnalysis {
 
     /// `s[i]` reads through the prelude's string index helper. A chain step's
     /// receiver may still be typed nullable: `s?.[i]` reads the non-null part.
-    fn note_string_index(&mut self, receiver_ty: &Type) {
+    fn note_string_index(&mut self, receiver_ty: &Type, name: String) {
         if crate::typechecker::infer::narrowing::strip_nullish(receiver_ty).is_string_shaped() {
             self.dependency_usage
                 .note_value(crate::mangle::prelude("string_index"));
+            // These immutable string globals also hold diagnostic labels, so
+            // successful string reads need neither allocation nor label copies.
+            self.extra_field_names.push(name);
         }
     }
 
-    fn note_index_check(&mut self) {
-        self.string_pool.intern_text(bounds::INDEX_OOB_MESSAGE);
+    fn note_index_check(
+        &mut self,
+        ta: &TypedAst,
+        receiver: Option<ExprId>,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let name = receiver
+            .map(|id| bounds::receiver_name(ta, id))
+            .transpose()?
+            .unwrap_or_default();
+        self.string_pool.intern_text(&name);
+        self.dependency_usage
+            .note_value(crate::mangle::prelude("index_error"));
         for ty in [Type::Array(Box::new(Type::Unknown)), Type::Uint8Array] {
             self.string_pool.intern_text(&cast_check::error_prefix(&ty));
         }
         for tag in cast_check::TYPE_TAG_STRINGS {
             self.string_pool.intern_text(tag);
         }
+        Ok(())
     }
 
     fn note_postfix_target(
