@@ -182,6 +182,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
+        const_record_reads: Default::default(),
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
@@ -485,6 +486,7 @@ pub fn infer_package_checked<'a>(
         prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
+        const_record_reads: Default::default(),
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
@@ -876,6 +878,8 @@ pub(super) struct Inferer<'a> {
     /// in that field keeps its returned literals (see
     /// [`Inferer::field_keeps_returned_literals`]).
     fields_keeping_returned_literals: Option<(crate::ExprId, Vec<String>)>,
+    /// Record-index initializers, keyed by binding identity so shadowing cannot misattribute help.
+    const_record_reads: BTreeMap<narrowing::BindingId, crate::ExprId>,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
@@ -1237,6 +1241,7 @@ impl<'a> Inferer<'a> {
         self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
         self.last_write_spans.clear();
+        self.const_record_reads.clear();
         self.aliased_conditions = Default::default();
         self.suspended_narrow_scopes.clear();
         self.pending_post_if_materializations.clear();

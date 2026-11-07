@@ -1,0 +1,14 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_all(\"function read(v: { x: number } | undefined): void {\\n  console.log(v.x);\\n}\\nfunction main(): void {}\\n\")"
+---
+error: cannot read field `x` on `{ x: number } | undefined`: the receiver can be `undefined`
+ --> test.subm:2:15
+  |
+1 | function read(v: { x: number } | undefined): void {
+2 |   console.log(v.x);
+  |               ^^^
+3 | }
+  |
+help: guard first — `if (v !== undefined) { … v.x … }` — or read it as `v?.x`, or assert non-null with `v!.x`
+---

@@ -1163,6 +1163,11 @@ impl<'a> Inferer<'a> {
                 self.definition_help(receiver_ty),
             ),
         };
+        if Absence::of(receiver_ty).undefined
+            && let Some(origin) = self.record_read_origin_help(receiver)?
+        {
+            help.push(origin);
+        }
         let mut notes: Vec<(Span, String)> = Vec::new();
         if let Some((extra_help, extra_notes)) = self.narrowing_invalidation_hint(receiver)? {
             help.extend(extra_help);
@@ -1170,6 +1175,107 @@ impl<'a> Inferer<'a> {
         }
         self.error_with_help_and_notes(span, message, help, notes);
         Ok(())
+    }
+
+    pub(super) fn record_const_record_read(
+        &mut self,
+        binding: narrowing::BindingId,
+        initializer: ExprId,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if self.is_record_key_read(initializer)? {
+            self.const_record_reads.insert(binding, initializer);
+        }
+        Ok(())
+    }
+
+    fn record_read_origin_help(
+        &self,
+        receiver: ExprId,
+    ) -> Result<Option<String>, crate::compiler_error::CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?;
+        let origin = if self.is_record_key_read(receiver)? {
+            Some(receiver)
+        } else {
+            self.expr_to_reference_path(expr)?
+                .filter(|path| path.chain.is_empty())
+                .and_then(|path| self.const_record_reads.get(&path.root).copied())
+        };
+        let Some(origin) = origin else {
+            return Ok(None);
+        };
+        let read = self
+            .typed_ast
+            .try_expr(origin)
+            .map_err(crate::typechecker::arena_failure)?;
+        let Some(read_text) = self.short_source(read.span) else {
+            return Ok(None);
+        };
+        let subject = if origin == receiver {
+            format!("`{read_text}`")
+        } else {
+            let Some(binding) = self.short_source(expr.span) else {
+                return Ok(None);
+            };
+            format!("`{binding}` is `{read_text}`")
+        };
+        Ok(Some(format!(
+            "{subject}: reading a record by key gives `undefined` when the key is absent"
+        )))
+    }
+
+    fn is_record_key_read(
+        &self,
+        expr: ExprId,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        let expr = self
+            .typed_ast
+            .try_expr(expr)
+            .map_err(crate::typechecker::arena_failure)?;
+        let (receiver, keys) = match &expr.kind {
+            crate::TypedExprKind::IndexAccess { receiver, index } => {
+                let index = self
+                    .typed_ast
+                    .try_expr(*index)
+                    .map_err(crate::typechecker::arena_failure)?;
+                (
+                    *receiver,
+                    super::records::finite_string_keys(&index.ty, self.resolver()),
+                )
+            }
+            // Literal bracket keys are inferred as field accesses too.
+            crate::TypedExprKind::FieldAccess { receiver, name } => {
+                (*receiver, Some(vec![name.name.clone()]))
+            }
+            _ => return Ok(false),
+        };
+        let receiver = self
+            .typed_ast
+            .try_expr(receiver)
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(match receiver.ty.peel() {
+            Type::Union(members) => members
+                .iter()
+                .any(|member| self.record_key_may_be_absent(member, keys.as_deref())),
+            ty => self.record_key_may_be_absent(ty, keys.as_deref()),
+        })
+    }
+
+    fn record_key_may_be_absent(&self, receiver: &Type, keys: Option<&[String]>) -> bool {
+        if self.resolver().index_signature(receiver).is_none() {
+            return false;
+        }
+        // A named optional field on a type that also has an index signature
+        // gets undefined from that field, rather than from a missing key.
+        match keys {
+            Some(keys) => {
+                let fields = self.assignment_target_fields(receiver).unwrap_or_default();
+                keys.iter().any(|key| !fields.contains_key(key))
+            }
+            None => true,
+        }
     }
 
     /// A field read on a union whose members otherwise carry fields, where one

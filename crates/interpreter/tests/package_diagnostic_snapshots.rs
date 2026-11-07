@@ -138,3 +138,31 @@ export function send(input: Input): void {
 "
     ));
 }
+
+#[test]
+fn record_read_origin_does_not_leak_between_modules() {
+    let mut sources = Sources::new();
+    let first = "export function first(seen: Record<string, { x: number }>): void {\n  const v = seen['first'];\n}\n";
+    let second = "export function second(): void {\n  const v: { x: number } | undefined = undefined;\n  console.log(v.x);\n}\n";
+    let first_file = sources.add("first.ts".to_string(), first).unwrap();
+    let second_file = sources.add("second.ts".to_string(), second).unwrap();
+    let first_ast = lower_patterns(parse_source(first, first_file)).unwrap();
+    let second_ast = lower_patterns(parse_source(second, second_file)).unwrap();
+    let (_, _, diags) = infer_package(
+        "@test/package",
+        ModulePath::from("second"),
+        vec![
+            (ModulePath::from("first"), first_file, &first_ast),
+            (ModulePath::from("second"), second_file, &second_ast),
+        ],
+        &sources,
+        runtime_declarations(),
+        BTreeMap::new(),
+    );
+    let output = diags
+        .iter()
+        .map(|diag| diagnostics::render(diag, &sources))
+        .collect::<String>();
+    assert!(output.contains("cannot read field `x`"), "{output}");
+    assert!(!output.contains("reading a record by key"), "{output}");
+}

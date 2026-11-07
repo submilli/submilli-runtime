@@ -144,6 +144,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
+        const_record_reads: Default::default(),
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
