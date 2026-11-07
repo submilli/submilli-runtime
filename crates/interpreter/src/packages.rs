@@ -32,6 +32,14 @@ pub struct ModuleDoc {
     pub declarations: String,
 }
 
+/// Who reads the declarations. Capability bindings help authors grant access;
+/// agents need only the usage notes already added by policy projection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DocAudience {
+    Author,
+    Agent,
+}
+
 /// A search result — name + one-line description.
 pub struct ModuleSummary {
     pub name: String,
@@ -196,10 +204,15 @@ impl StdlibView {
 
     /// [`docs`] over the view.
     pub fn docs(&self, name: &str) -> Option<ModuleDoc> {
+        self.docs_for(name, DocAudience::Author)
+    }
+
+    /// Render a module's narrowed declaration for the requested reader.
+    pub fn docs_for(&self, name: &str, audience: DocAudience) -> Option<ModuleDoc> {
         self.declaration(name).map(|defs| ModuleDoc {
             name: defs.package_name.clone(),
             description: module_description(&defs.package_name).to_string(),
-            declarations: render_declarations(defs),
+            declarations: render_declarations_for(defs, audience),
         })
     }
 
@@ -329,6 +342,16 @@ impl StdlibView {
     /// scheme or scope is a miss here: it was written as a package name, and a
     /// typo of one is an edit-distance question, not a forgotten prefix.
     pub fn match_bare_name(&self, name: &str, extra: &[String]) -> BareNameMatch {
+        self.match_bare_name_for(name, extra, DocAudience::Author)
+    }
+
+    /// [`Self::match_bare_name`], rendering a unique match for `audience`.
+    pub fn match_bare_name_for(
+        &self,
+        name: &str,
+        extra: &[String],
+        audience: DocAudience,
+    ) -> BareNameMatch {
         if !is_bare_name(name) {
             return BareNameMatch::Miss;
         }
@@ -362,7 +385,7 @@ impl StdlibView {
         names.dedup();
         match names.as_slice() {
             [module] => self
-                .docs(module)
+                .docs_for(module, audience)
                 .map_or(BareNameMatch::Miss, BareNameMatch::Unique),
             _ => BareNameMatch::Ambiguous(names),
         }
@@ -1118,16 +1141,22 @@ fn matches_query(defs: &PackageDeclaration, q: &str) -> bool {
 /// embedder can render dynamically-built packages (e.g. `@mcp/<server>`) the same
 /// way the stdlib docs render.
 pub fn render_declarations(defs: &PackageDeclaration) -> String {
+    render_declarations_for(defs, DocAudience::Author)
+}
+
+/// Render directly from the declaration's documentation metadata, omitting
+/// capability bindings for agents without changing the declaration itself.
+pub fn render_declarations_for(defs: &PackageDeclaration, audience: DocAudience) -> String {
     let defs = with_public_type_names(defs);
     let defs = defs.as_ref();
     let mut out = String::new();
     for (name, sym) in &defs.values {
-        push_doc(&mut out, value_doc(&sym.kind), "");
+        push_doc_for(&mut out, value_doc(&sym.kind), "", audience);
         render_value(&mut out, name, &sym.kind, "");
     }
     for (name, sym) in &defs.types {
-        push_doc(&mut out, type_doc(&sym.kind), "");
-        render_type(&mut out, name, sym, "");
+        push_doc_for(&mut out, type_doc(&sym.kind), "", audience);
+        render_type_for(&mut out, name, sym, "", audience);
     }
     out.trim_end().to_string()
 }
@@ -2335,6 +2364,16 @@ fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
 }
 
 fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
+    render_type_for(out, name, sym, indent, DocAudience::Author);
+}
+
+fn render_type_for(
+    out: &mut String,
+    name: &str,
+    sym: &TypeSymbol,
+    indent: &str,
+    audience: DocAudience,
+) {
     let inner = format!("{indent}  ");
     let parent = intrinsic_array_parent(sym)
         .map(|parent| format!(" extends {parent}"))
@@ -2352,14 +2391,14 @@ fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
                 generics_str(generics)
             );
             for (pname, prop) in properties {
-                push_doc(out, &prop.doc, &inner);
+                push_doc_for(out, &prop.doc, &inner, audience);
                 let ro = if prop.readonly { "readonly " } else { "" };
                 let opt = if prop.optional { "?" } else { "" };
                 let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", prop.ty);
             }
             for (mname, m) in methods {
-                push_doc(out, &m.doc, &inner);
+                push_doc_for(out, &m.doc, &inner, audience);
                 let mname = method_prefix(mname);
                 let _ = writeln!(
                     out,
@@ -2415,7 +2454,7 @@ fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
                 if field.visibility == crate::Visibility::Private {
                     continue;
                 }
-                push_doc(out, &field.doc, &inner);
+                push_doc_for(out, &field.doc, &inner, audience);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let fname = member_name(fname);
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", field.ty);
@@ -2424,7 +2463,7 @@ fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
                 if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
                     continue;
                 }
-                push_doc(out, &m.doc, &inner);
+                push_doc_for(out, &m.doc, &inner, audience);
                 let mname = member_name(mname);
                 let _ = writeln!(
                     out,
@@ -2440,7 +2479,7 @@ fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
                 {
                     continue;
                 }
-                push_doc(out, &field.doc, &inner);
+                push_doc_for(out, &field.doc, &inner, audience);
                 let ro = if field.readonly { "readonly " } else { "" };
                 let opt = if field.optional { "?" } else { "" };
                 let fname = member_name(fname);
@@ -2458,7 +2497,7 @@ fn render_type(out: &mut String, name: &str, sym: &TypeSymbol, indent: &str) {
                 if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
                     continue;
                 }
-                push_doc(out, &m.doc, &inner);
+                push_doc_for(out, &m.doc, &inner, audience);
                 let mname = member_name(mname);
                 let _ = writeln!(
                     out,
@@ -2630,12 +2669,20 @@ fn valid_parameter_name(name: &str) -> bool {
 }
 
 fn push_doc(out: &mut String, doc: &Option<DocComment>, indent: &str) {
+    push_doc_for(out, doc, indent, DocAudience::Author);
+}
+
+fn push_doc_for(out: &mut String, doc: &Option<DocComment>, indent: &str, audience: DocAudience) {
     let Some(doc) = doc else { return };
     let mut lines: Vec<String> = doc.summary.lines().map(str::to_string).collect();
     for p in &doc.params {
         lines.push(format!("@param {} {}", p.name, p.description));
     }
-    for cap in &doc.capabilities {
+    let capabilities = match audience {
+        DocAudience::Author => doc.capabilities.as_slice(),
+        DocAudience::Agent => &[],
+    };
+    for cap in capabilities {
         let mut line = format!("@capability {}", cap.capability);
         if !cap.bindings.is_empty() {
             let bindings = cap
@@ -2795,6 +2842,104 @@ mod tests {
                 .entries
                 .iter()
                 .all(|entry| entry.name.starts_with("@pied-piper/"))
+        );
+    }
+
+    #[test]
+    fn agent_declarations_omit_capability_metadata_without_changing_docs_or_symbols() {
+        let mut defs = crate::compile_package(
+            "@test/notes",
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source: r#"
+                    /** Read a note.
+                     * @param path The note path.
+                     * @capability notes.test/read { path }
+                     * @capability notes.test/audit
+                     * @returns The note.
+                     */
+                    export function read(path: string): string { return path; }
+                    export interface Notes {
+                        /** @capability notes.test/read */
+                        read(): string;
+                    }
+                    export class Client {
+                        /** Read through a client. Requires approval.
+                         * @capability notes.test/read */
+                        read(): string { return "note"; }
+                        /** @capability notes.test/write */
+                        static write(): void {}
+                    }
+                "#,
+            }],
+            &[],
+        )
+        .unwrap()
+        .declaration;
+        let ValueKind::Function { doc: Some(doc), .. } =
+            &mut defs.values.get_mut("read").unwrap().kind
+        else {
+            panic!("read has documentation");
+        };
+        // The same text is legitimate prose when it is not a capability tag.
+        doc.summary
+            .push_str("\n@capability is metadata, not a parameter.");
+        let original = defs.clone();
+        let author = render_declarations(&defs);
+        let agent = render_declarations_for(&defs, DocAudience::Agent);
+        for capability in ["notes.test/read", "notes.test/audit", "notes.test/write"] {
+            assert!(
+                author.contains(&format!("@capability {capability}")),
+                "{author}"
+            );
+            assert!(
+                !agent.contains(&format!("@capability {capability}")),
+                "{agent}"
+            );
+        }
+        for preserved in [
+            "@capability is metadata, not a parameter.",
+            "@param path The note path.",
+            "@returns The note.",
+            "Requires approval.",
+            "function read(path: string): string;",
+            "read(): string;",
+            "static write(): void;",
+        ] {
+            assert!(agent.contains(preserved), "{agent}");
+        }
+        assert!(!agent.contains("/**\n */"), "{agent}");
+        assert!(!agent.contains("/**\n   */"), "{agent}");
+        assert_eq!(defs, original);
+        assert_eq!(render_declarations(&defs), author);
+    }
+
+    #[test]
+    fn stdlib_agent_docs_and_bare_names_omit_capability_metadata() {
+        let view = Stdlib::core().view(&Unscoped);
+        for name in view.names() {
+            let author = view.docs(name).unwrap();
+            let agent = view.docs_for(name, DocAudience::Agent).unwrap();
+            assert!(
+                !agent.declarations.contains(" * @capability "),
+                "{name}: {}",
+                agent.declarations
+            );
+            assert_eq!(agent.description, author.description);
+            assert_eq!(agent.name, author.name);
+        }
+        let BareNameMatch::Unique(agent) =
+            view.match_bare_name_for("http", &[], DocAudience::Agent)
+        else {
+            panic!("http uniquely names submilli:http");
+        };
+        assert!(!agent.declarations.contains("@capability"));
+        assert!(
+            view.docs("submilli:http")
+                .unwrap()
+                .declarations
+                .contains("@capability http.get")
         );
     }
 

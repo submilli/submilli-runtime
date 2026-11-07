@@ -2652,6 +2652,15 @@ async fn policy_hides_libraries_from_mcp_discovery() {
                 visible,
                 "{response}"
             );
+            if visible {
+                assert!(
+                    !package_docs_output(&response)["declarations"]
+                        .as_str()
+                        .unwrap()
+                        .contains("@capability"),
+                    "{response}"
+                );
+            }
             if !visible {
                 assert_eq!(package_docs_output(&response)["error"], "unknown_package");
             }
