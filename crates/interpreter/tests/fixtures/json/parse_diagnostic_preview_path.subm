@@ -18,6 +18,15 @@ interface ListIssuesResponse {
   issues: LinearIssue[];
 }
 
+interface Assigned {
+  owner: { id: string; name: string; email: string; role: string };
+}
+
+interface OptionalTitle {
+  id: string;
+  title?: string;
+}
+
 interface ListNodesResponse {
   hasNextPage: boolean;
   nodes: LinearIssue[];
@@ -67,4 +76,32 @@ function main(): void {
     const nums = JSON.parse("[1,\"two\",3]") as number[];
   });
   assert(indexed === "type mismatch: expected number[], got array at $[1] (expected number, got string)", indexed);
+
+  // An optional field accepts a missing key but not JSON null, so the message
+  // says how to accept it. A missing key (above) gets no such advice.
+  const nullField = expectMessage((): void => {
+    const issue = JSON.parse("{\"id\":\"SUB-1\",\"title\":null}") as OptionalTitle;
+  });
+  assert(
+    nullField === "type mismatch: expected OptionalTitle, got object at $[\"title\"] (expected string, got null) — if null is valid there, add `| null` to the expected type",
+    nullField
+  );
+
+  // The advice points at the element's expected type, which the message names.
+  const nullElement = expectMessage((): void => {
+    const nums = JSON.parse("[1,null]") as number[];
+  });
+  assert(
+    nullElement === "type mismatch: expected number[], got array at $[1] (expected number, got null) — if null is valid there, add `| null` to the expected type",
+    nullElement
+  );
+
+  // A long type is named only by its kind, which the advice doesn't repeat.
+  const nullObject = expectMessage((): void => {
+    const assigned = JSON.parse("{\"owner\":null}") as Assigned;
+  });
+  assert(
+    nullObject === "type mismatch: expected Assigned, got object at $[\"owner\"] (expected an object, got null) — if null is valid there, add `| null` to the expected type",
+    nullObject
+  );
 }

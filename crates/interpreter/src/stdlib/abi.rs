@@ -258,6 +258,13 @@ impl TypeDescriptor {
         })
     }
 
+    /// Whether the type declares a named field anywhere, read from its compact
+    /// JSON Schema: a non-empty `properties` map. An index signature alone
+    /// declares none, and a type without a schema counts as declaring none.
+    pub(crate) fn declares_fields(&self) -> bool {
+        self.schema.as_deref().is_some_and(schema_declares_fields)
+    }
+
     /// Whether `value`, a boxed `unknown`, is a `T`: the predicate's answer.
     /// The predicate runs as guest code and pays its own fuel; this charges
     /// the host's flat call cost.
@@ -277,6 +284,13 @@ impl TypeDescriptor {
             ))),
         }
     }
+}
+
+/// Whether a compact JSON Schema declares a named field anywhere: a non-empty
+/// `properties` map. String constants and field names are escaped, so a quote
+/// inside one can't form the pattern.
+fn schema_declares_fields(schema: &str) -> bool {
+    schema.contains(r#""properties":{""#)
 }
 
 /// The descriptor of type parameter `slot` in `env`, the `$types` argument of a
@@ -317,4 +331,36 @@ fn decode_type_argument(
         )?),
     };
     Ok(TypeDescriptor { test, name, schema })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::schema_declares_fields;
+
+    /// Schemas as `typechecker::json_schema` writes them: compact, keys sorted.
+    #[test]
+    fn a_schema_declares_fields_only_through_a_non_empty_properties_map() {
+        let object = r#"{"additionalProperties":false,"properties":{"id":{"type":"string"}},"required":["id"],"type":"object"}"#;
+        let record = r#"{"additionalProperties":{"type":"number"},"properties":{},"required":[],"type":"object"}"#;
+        let empty =
+            r#"{"additionalProperties":false,"properties":{},"required":[],"type":"object"}"#;
+        let objects = format!(r#"{{"items":{object},"type":"array"}}"#);
+        let nullable = format!(r#"{{"anyOf":[{object},{{"type":"null"}}]}}"#);
+        let record_of_objects = format!(
+            r#"{{"additionalProperties":{object},"properties":{{}},"required":[],"type":"object"}}"#
+        );
+        let quoted = r#"{"const":"\"properties\":{\"x\"","type":"string"}"#;
+        for (schema, declares) in [
+            (object.to_string(), true),
+            (objects, true),
+            (nullable, true),
+            (record_of_objects, true),
+            (record.to_string(), false),
+            (empty.to_string(), false),
+            (r#"{"type":"number"}"#.to_string(), false),
+            (quoted.to_string(), false),
+        ] {
+            assert_eq!(schema_declares_fields(&schema), declares, "{schema}");
+        }
+    }
 }

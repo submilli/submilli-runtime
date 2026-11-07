@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1c36f2650a3e6430de1ae5693fd49baacbca5ddbb64b97174489955c09dca1a6"
+  contentHash: "8dc1328edf93747667a1f1e274b68eab0c868a2af3c09d76ea1cd00eb3a525d6"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -222,7 +222,7 @@ all the session's files. A write that would pass it is refused with a
 bytes gets:
 
 ```text
-error: QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more
+error: QuotaExceededError: fs.writeText /notes/big.md: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more — remove files you no longer need, or write less
 ```
 
 Deleting files frees the space. A named volume takes no `size_limit`

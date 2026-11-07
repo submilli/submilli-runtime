@@ -1023,7 +1023,7 @@ fn install_response_members(
         FuncType::new(engine, [receiver.clone()], []),
         |caller, params, _results| {
             let st = backing_receiver(caller, abi_arg(params, 0)?)?;
-            if matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0) {
+            if response_is_ok(caller, &st)? {
                 return Ok(());
             }
             let (status, status_text, url) = read_response_status_line(caller, &st)?;
@@ -1076,18 +1076,44 @@ fn install_response_members(
                 let body_val = st.field(&mut *caller, R_BODY)?;
                 let body = read_string_arg(caller, &body_val, "Response (body)")?;
                 let descriptor = abi::read_type_argument(caller, abi_arg(params, 1)?, 0)?;
+                // Messages name the type and give advice, never the body or a
+                // key in it: the body is whatever the server sent. A failed
+                // response's body is an error document, often not JSON, which a
+                // program may or may not mean to read: its messages name the
+                // status, for a program that meant to read a success body, and
+                // qualify the field advice, which would otherwise widen the type
+                // until it accepts the error.
+                let failed_status = if response_is_ok(caller, &st)? {
+                    None
+                } else {
+                    Some(response_status(caller, &st)?)
+                };
+                let status_note = match failed_status {
+                    None => String::new(),
+                    Some(status) => format!(
+                        " on a {status} response (if you expected a success body, \
+                         check `r.ok` first)"
+                    ),
+                };
                 let value = crate::runtime::json::parse_json_as_unknown(
                     caller,
                     &body,
-                    "r.json(): cannot parse the body",
+                    &format!("r.json(){status_note}: cannot parse the body"),
                 )?;
-                // The message names the type, never the body or a key in it:
-                // the body is whatever the server sent.
                 if descriptor.accepts(caller, value).await? {
                     return Ok(value);
                 }
+                let field_advice = "a field the server may send as `null` needs `| null` in that \
+                                    type, and one it may leave out needs `?`";
+                let advice = match (descriptor.declares_fields(), failed_status) {
+                    (false, _) => String::new(),
+                    (true, None) => format!(" — {field_advice}"),
+                    (true, Some(_)) => {
+                        format!(" — if it is the error document you meant to read, {field_advice}")
+                    }
+                };
                 Err(crate::runtime::host::type_error(format!(
-                    "r.json(): the body does not match `{}`",
+                    "r.json(){status_note}: the body does not match `{}`{advice}",
                     descriptor.name
                 )))
             })
@@ -1097,14 +1123,29 @@ fn install_response_members(
     Ok(())
 }
 
+/// Whether the response's status is a success, as `r.ok` reports it.
+fn response_is_ok(
+    caller: &mut Caller<'_, StoreData>,
+    st: &Rooted<StructRef>,
+) -> wasmtime::Result<bool> {
+    Ok(matches!(st.field(&mut *caller, R_OK)?, Val::I32(ok) if ok != 0))
+}
+
+fn response_status(
+    caller: &mut Caller<'_, StoreData>,
+    st: &Rooted<StructRef>,
+) -> wasmtime::Result<i64> {
+    let Val::F64(bits) = st.field(&mut *caller, R_STATUS)? else {
+        wasmtime::bail!("Response: status is not a number");
+    };
+    Ok(f64::from_bits(bits) as i64)
+}
+
 fn read_response_status_line(
     caller: &mut Caller<'_, StoreData>,
     st: &Rooted<StructRef>,
 ) -> wasmtime::Result<(i64, String, String)> {
-    let Val::F64(bits) = st.field(&mut *caller, R_STATUS)? else {
-        wasmtime::bail!("Response: status is not a number");
-    };
-    let status = f64::from_bits(bits) as i64;
+    let status = response_status(caller, st)?;
     let status_text_val = st.field(&mut *caller, R_STATUS_TEXT)?;
     let status_text = read_string_arg(caller, &status_text_val, "Response (statusText)")?;
     let url_val = st.field(&mut *caller, R_URL)?;
@@ -3418,7 +3459,7 @@ function main(): void {
                     assert(false, "a mismatch must throw");
                 } catch (e: TypeError) {
                     assert(
-                        e.message === "r.json(): the body does not match `{ k: number }`",
+                        e.message === "r.json(): the body does not match `{ k: number }` — a field the server may send as `null` needs `| null` in that type, and one it may leave out needs `?`",
                         e.message
                     );
                 }
@@ -3442,6 +3483,86 @@ function main(): void {
             }
         "#;
         run_with_mock(source, vec![json_response("not json")]).await;
+    }
+
+    /// A failed status's body is an error document: the mismatch leads with
+    /// the status, for a program that meant to read a success body, and keeps
+    /// the field advice, for one that meant to read the error.
+    #[tokio::test]
+    async fn a_mismatched_error_body_names_the_status() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                try {
+                    r.json<{ id: string; name: string }>();
+                    assert(false, "a mismatch must throw");
+                } catch (e: TypeError) {
+                    assert(
+                        e.message === "r.json() on a 404 response (if you expected a success body, check `r.ok` first): the body does not match `{ id: string; name: string }` — if it is the error document you meant to read, a field the server may send as `null` needs `| null` in that type, and one it may leave out needs `?`",
+                        e.message
+                    );
+                }
+            }
+        "#;
+        let mut response = json_response(r#"{"error":"not found"}"#);
+        response.status = 404;
+        response.status_text = "Not Found".to_string();
+        run_with_mock(source, vec![response]).await;
+    }
+
+    /// A program that reads a failed response's error document on purpose
+    /// gets it when it matches; a type without fields gets the status alone.
+    #[tokio::test]
+    async fn a_failed_response_body_reads_when_it_matches() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            interface ApiError { error: string; }
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                assert(!r.ok, "the mock answers 404");
+                const e = r.json<ApiError>();
+                assert(e.error === "not found", e.error);
+                try {
+                    r.json<number>();
+                    assert(false, "a mismatch must throw");
+                } catch (n: TypeError) {
+                    assert(
+                        n.message === "r.json() on a 404 response (if you expected a success body, check `r.ok` first): the body does not match `number`",
+                        n.message
+                    );
+                }
+            }
+        "#;
+        let mut response = json_response(r#"{"error":"not found"}"#);
+        response.status = 404;
+        response.status_text = "Not Found".to_string();
+        run_with_mock(source, vec![response]).await;
+    }
+
+    /// A gateway's HTML error page isn't JSON: the parse failure names the
+    /// status too.
+    #[tokio::test]
+    async fn an_unparsable_error_body_names_the_status() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function main(): void {
+                const r: Response = get("https://example.test/json");
+                try {
+                    r.json<{ id: string }>();
+                    assert(false, "an HTML body must not parse");
+                } catch (e: SyntaxError) {
+                    assert(
+                        e.message.startsWith("r.json() on a 502 response (if you expected a success body, check `r.ok` first): cannot parse the body: "),
+                        e.message
+                    );
+                }
+            }
+        "#;
+        let mut response = json_response("<html>Bad Gateway</html>");
+        response.status = 502;
+        response.status_text = "Bad Gateway".to_string();
+        run_with_mock(source, vec![response]).await;
     }
 
     /// SUB-2084: a mismatch names the type, never a key the server chose,

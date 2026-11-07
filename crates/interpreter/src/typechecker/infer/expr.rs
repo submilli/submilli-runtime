@@ -1593,15 +1593,63 @@ impl Inferer<'_> {
         if !json_can_fill(&shape, 0) || self.holds_host_type(want, &mut Vec::new()) {
             return Ok(None);
         }
-        // A call binds tighter than `as`, so it needs no parentheses.
-        let call = match self.short_source(span) {
-            Some(call) => call.to_string(),
-            None => "JSON.parse(…)".to_string(),
+        Ok(Some(self.parsed_json_cast_advice(span, &want.to_string())))
+    }
+
+    /// The help for reading `member` on `receiver` when `receiver` is a
+    /// `JSON.parse(…)` result, directly or through the unannotated `const` it
+    /// initialized: cast the parse to an array for `length`, otherwise to an
+    /// object that declares `member`. `None` for any other `unknown`, and for a
+    /// built-in method's name: a field read can't tell `body.map(…)` on an
+    /// array from a `"map"` key, so the narrowing help, which covers both,
+    /// stays.
+    fn parsed_json_read_help(
+        &self,
+        receiver: ExprId,
+        member: &str,
+    ) -> Result<Option<String>, CompilerFailure> {
+        let source = self.alias_initializer(receiver)?.unwrap_or(receiver);
+        let source_expr = self
+            .typed_ast
+            .try_expr(source)
+            .map_err(crate::typechecker::arena_failure)?;
+        if !parses_json(&source_expr.kind) || self.is_builtin_method_name(member) {
+            return Ok(None);
+        }
+        // `length` is a property, not a method, so the guard above lets it by.
+        let target = if member == "length" {
+            "{ … }[]".to_string()
+        } else {
+            format!(
+                "{{ {}: … }}",
+                crate::type_rendering::render_field_name(member)?
+            )
         };
-        Ok(Some(format!(
+        Ok(Some(
+            self.parsed_json_cast_advice(source_expr.span, &target),
+        ))
+    }
+
+    /// Whether `name` is a method of an array, a string or a number.
+    fn is_builtin_method_name(&self, name: &str) -> bool {
+        [
+            Type::Array(Box::new(Type::Unknown)),
+            Type::String,
+            Type::Number,
+        ]
+        .iter()
+        .any(|ty| self.find_method(ty, name).is_some())
+    }
+
+    /// Why a `JSON.parse(…)` call at `call_span` is `unknown`, and the checked
+    /// cast to `target` that types it.
+    fn parsed_json_cast_advice(&self, call_span: Span, target: &str) -> String {
+        // A call binds tighter than `as`, so it needs no parentheses.
+        let call = self.short_source(call_span).unwrap_or("JSON.parse(…)");
+        format!(
             "`{call}` returns `unknown`. Cast it to the type you expect, which checks the value at \
-             run time and throws a `TypeError` if it doesn't match: `{call} as {want}`"
-        )))
+             run time and throws a `TypeError` if it doesn't match: `{call} as {target}`"
+        )
     }
 
     /// Whether `ty` holds a host type anywhere, interface properties and index
@@ -8905,24 +8953,23 @@ impl Inferer<'_> {
                 )
             }
             Type::Error => Type::Error,
-            // field access on un-narrowed `unknown` is
-            // rejected. The user must narrow via `typeof` /
-            // `Array.isArray` / `=== null` / a user type guard
-            // before reading fields. Keeping the call path inside
-            // the match (not a fall-through to the catch-all) lets
-            // us tailor the help to point at the narrowing
-            // primitives rather than at `format_definition`, which
-            // for `unknown` is just the literal `"unknown"`.
+            // Field access on un-narrowed `unknown` is rejected, with help
+            // tailored here rather than the catch-all's `format_definition`
+            // (just `"unknown"`): a `JSON.parse` result, directly or through
+            // its `const`, is usually typed by a checked cast; any other
+            // `unknown` is narrowed first.
             Type::Unknown => {
+                let help = match self.parsed_json_read_help(typed_receiver, &name.name)? {
+                    Some(help) => help,
+                    None => "narrow first with `typeof x === \"…\"`, \
+                             `Array.isArray(x)`, `x === null`, or a \
+                             user-defined type guard before reading fields"
+                        .to_string(),
+                };
                 self.error_with_help(
                     span,
                     format!("cannot read field `{}` on `unknown`", name.name,),
-                    vec![
-                        "narrow first with `typeof x === \"…\"`, \
-                         `Array.isArray(x)`, `x === null`, or a \
-                         user-defined type guard before reading fields"
-                            .to_string(),
-                    ],
+                    vec![help],
                 );
                 Type::Error
             }
@@ -15905,6 +15952,63 @@ mod tests {
             Some(
                 "`JSON.parse(\"[]\")` returns `unknown`. Cast it to the type you expect, which checks the value at run time and throws a `TypeError` if it doesn't match: `JSON.parse(\"[]\") as string[]`"
             )
+        );
+    }
+
+    /// Reading a field on a parsed value, directly or through the `const` it
+    /// initialized, names the cast: to an array for `length`, to an object
+    /// declaring the field otherwise. A built-in method's name (`map`, `values`,
+    /// `toLowerCase`) could be a call or a key, so it keeps the narrowing
+    /// advice, as does any other `unknown`, including a `let` that a later
+    /// write could change.
+    #[test]
+    fn a_field_read_on_parsed_json_names_the_checked_cast() {
+        let long = "{\\\"a_key_long_enough_to_push_the_call_past_sixty_bytes\\\": 1}";
+        let (_, diags) = run(&format!(
+            "function main(): void {{ \
+                const body = JSON.parse(\"{{}}\"); \
+                const a: unknown = body.items; \
+                const b: unknown = JSON.parse(\"{{}}\").items; \
+                const c: unknown = body[\"content-type\"]; \
+                const d: unknown = body.length; \
+                const e: unknown = body.map((x: unknown): unknown => x); \
+                const f: unknown = body.values; \
+                const g: unknown = body.toLowerCase(); \
+                const h: unknown = JSON.parse(\"{long}\").items; \
+                let later = JSON.parse(\"{{}}\"); \
+                const i: unknown = later.items; \
+                const other: unknown = 1; \
+                const j: unknown = other.items; }}"
+        ));
+        let helps: Vec<&str> = diags
+            .iter()
+            .map(|d| d.help.first().map(String::as_str).unwrap_or_default())
+            .collect();
+        let cast = |call: &str, target: &str| {
+            format!(
+                "`{call}` returns `unknown`. Cast it to the type you expect, which checks \
+                 the value at run time and throws a `TypeError` if it doesn't match: \
+                 `{call} as {target}`"
+            )
+        };
+        let parse = "JSON.parse(\"{}\")";
+        let narrow = "narrow first with `typeof x === \"…\"`, `Array.isArray(x)`, `x === null`, \
+                      or a user-defined type guard before reading fields";
+        assert_eq!(
+            helps,
+            vec![
+                cast(parse, "{ items: … }").as_str(),
+                cast(parse, "{ items: … }").as_str(),
+                cast(parse, "{ \"content-type\": … }").as_str(),
+                cast(parse, "{ … }[]").as_str(),
+                narrow,
+                narrow,
+                narrow,
+                cast("JSON.parse(…)", "{ items: … }").as_str(),
+                narrow,
+                narrow,
+            ],
+            "{diags:?}"
         );
     }
 

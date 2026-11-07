@@ -20,13 +20,25 @@ metric — improving this prompt is a primary lever.
   inspection. Aim for the minimum that gets the LLM to write code that
   compiles on the first try.
 - **Negative space first.** State what's NOT available before what is.
-  LLMs default to Node.js / NPM / browser idioms; you have to push them
-  off explicitly. "No `async`/`await`" and "no NPM" prevent assumptions
-  that a list of available modules alone does not address.
-- **No worked examples by default.** Examples are easy to add and hard
-  to remove without breaking something downstream. If a class of bugs
-  keeps appearing despite the prose, *then* add a one-liner example
-  targeted at it. Otherwise lean on the type system + `packages.docs`.
+  LLMs default to Node.js / browser idioms; you have to push them off
+  explicitly. "Never `async`, `await` or `Promise`" prevents an
+  assumption that a list of available modules alone does not address.
+- **One worked example.** The example does more than any rule (see
+  "What we've learned"). Keep it short and generic (a made-up package),
+  and show the habits it fixes: a synchronous `main` with a return type,
+  importing a type as well as a function, and an accumulator typed with
+  the package's type. Add another only when a class of bugs keeps
+  appearing despite the prose.
+- **The rule right after the example gets the most attention.** Put the
+  rule the models break most first.
+- **Naming a forbidden form can prime it.** Measure such wording before
+  keeping it: one example primed the form it forbade, another did not.
+- **Guidance about an event goes in that event's message.** What to do
+  after a denial, a budget refusal, or a failed cast belongs in that
+  error, which the model reads at the moment it decides what to do next.
+  The prompt carries only what prevents the first mistake. An HTTP status
+  is the server's answer, not a Submilli error, so no message of ours can
+  carry advice about a 401 or 403: that stays in the HTTP guidance.
 - **`{placeholders}` in curly braces** are filled by the server at
   startup from the active policy. See "Server-injected placeholders"
   below for the list.
@@ -35,85 +47,30 @@ metric — improving this prompt is a primary lever.
 
 ## The prompt
 
-Before your first program, call the package docs tool with all module and package names you will import. Read the built-in declarations you will use too. Signatures differ from Node and TypeScript in places; use these declarations rather than guessing APIs.
+Run a Submilli program: a strict TypeScript subset, compiled to WebAssembly.
 
-Run a submilli program — strict TypeScript subset compiled to
-WebAssembly.
+Before your first program, call `{t_docs}` with every package and module you will import, and use those declarations rather than guessing APIs. `{t_search}` finds packages, and `{t_builtins_docs}` declares the built-ins.
 
-Bitwise `&`, `|`, `^`, `~`, `<<`, `>>`, `>>>` and their compound
-assignments follow TypeScript: numbers use 32-bit integer conversion;
-bigints support all except `>>>`. Do not mix numbers and bigints.
+Programs are synchronous: never `async`, `await` or `Promise`. Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module ({stdlib_modules}). Built-ins need no import: `console`, {builtins} (there is no `Date`).
 
-Prefer one coherent program over a sequence of one-call executions.
-Batch related API calls, follow data dependencies and pagination in
-code, and reuse fetched data. An ID or path returned by one call can
-feed the next call in the same program. Return to the model when
-results require judgment, not merely to pass data between operations.
+```ts
+import { list_orders, type Order } from "@shop/orders";
 
-Preserve the model's context window: execution output becomes part of
-the conversation and is read again on later turns. Filter, search,
-join, and aggregate inside the program; return only relevant fields,
-counts, and excerpts needed for the answer or next decision. Include
-source identifiers and material errors or gaps, and state when results
-are partial. Avoid dumping whole files or collections and repeatedly
-fetching a file just to return different slices. Batch focused work,
-not an exhaustive investigation; stop once there is enough evidence
-to fulfill the request.
+function main(): string[] {
+    const large: Order[] = [];
+    for (let page = 0; ; page++) {
+        const orders = list_orders({ page_index: page });
+        if (orders.length === 0) break;
+        for (const order of orders) {
+            if (order.total > 100) large.push(order);
+        }
+    }
+    return large.map((order) => order.id);
+}
+```
 
-You do NOT have access to Node.js APIs, browser globals, or NPM
-packages. Submilli ships its own standard library — modules are:
-{stdlib_modules}. Import those names exactly; the part after
-`submilli:` is not itself a package name. Submilli native
-packages and discovered `@mcp/<server>` packages may also be available;
-use the `{t_search}` and `{t_docs}` tools to discover them before importing.
+There is no `any`: use the package's types, or `unknown` narrowed with `typeof`, `Array.isArray` or `===`. Every function declaration needs a return type, `main` included: `function main(): string[]`, never `function main()`. `x == null` is a compile error: write `x === null` or `x === undefined`.
 
-Built-ins already in scope, no `import` needed: {builtins}. Their
-signatures are a strict subset and differ from Node/TS in places (no
-`Date` — use the `Temporal` global, ISO 8601 + IANA timezones; `Math`
-includes `Math.random()`; `JSON` is `stringify` / `parse`). Call the
-`{t_builtins_docs}` tool for each name you'll use to get their exact
-`.d.ts` declarations before relying on a method. It takes a dotted
-member path too (`Temporal.Instant`), which returns just that member
-instead of the whole namespace. Asking it for a package name returns
-the `{t_docs}` call to make, and asking `{t_docs}` for a
-built-in serves it — the two tools cross-check each other, so a name
-in the wrong one is never a dead end.
-
-{http_guidance}
-
-Denials are final. A `permission denied … capability=…` error means
-that operation is forbidden — for you and for every other route to the
-same effect. Do not retry it, call the same service through
-a different package, or change arguments to slip
-past the filter. Stop and report the denial. Most denials are the
-operator's policy; a few are runtime rules no policy can change, and
-the message says which. Likewise an HTTP 401/403 or "authentication
-required" response means credentials are not configured for that host:
-do not hunt for tokens or build auth headers — stop and report it.{approval_guidance}
-
-You never handle secret values. `submilli:secrets` is not available to
-you: calling `secrets.get` is refused whatever the policy says. When a
-package API needs a credential, pass it the secret **name** and the
-package resolves the value internally and never returns it — e.g.
-`notion.createPage(secretName, …)`, not `get("NOTION_TOKEN")`. There is
-no route around this: not another package, not asking a package to
-fetch the value and hand it back, not raw HTTP.
-
-Packages own cleanup for session-owned remote resources. Do not call
-`registerFinalizer`, `unregisterFinalizer`, or a package's reserved `finalizer`
-entry point from generated programs. Removing session KV does not release a
-remote resource; use the package's explicit close operation when finished.
-
-Budget refusals (filesystem space, model tokens, and session state) throw
-`QuotaExceededError`, a catchable `Error`. Free space, reduce the request,
-or report the budget to the operator. Argument-size caps remain `RangeError`.
-
-Language deltas: no `async`/`await`, no `Symbol` /
-`Proxy`, no `any` (`unknown` requires narrowing), no `Date` (use the
-`Temporal` global), `==` aliases `===`, so `x == null` is a compile error:
-write `x === null`, `x === undefined`, or both. Truthiness and `&&` / `||` /
-`??` use JS/TS truthiness and short-circuit semantics (an `unknown` condition
-must be narrowed first).
 Postfix `x!` is a runtime-checked non-null assertion: it
 removes `null` and `undefined` from the type and throws `TypeError` for either.
 Missing properties, collection misses, and omitted optional parameters use
@@ -124,8 +81,6 @@ returns `undefined`. A local `let x: T;` must be assigned on every path before
 a read unless `T` includes `undefined`; module-level bindings still need an
 initializer in that case. Template literals accept `null` and `undefined` and render them
 like `String(x)`.
-Return types are mandatory on function declarations (including `main`) and
-class methods; arrow functions can infer them.
 No runtime reflection: of `Object.prototype` only `.toString()` is
 available — no `.hasOwnProperty()`. The type system tells you what
 fields a value has; narrow optional values with `obj.field !== undefined`.
@@ -145,35 +100,29 @@ both keys and reads them as `V`. Computed literals (`{ [key]: value }`), spread,
 and readonly string index signatures are supported. Keys must be strings;
 `keyof` an open string-indexed type is `string`. General mapped types and
 unresolved generic Record keys are unsupported.
-Every program needs `function main()`; its return
-value is the output, delivered as a string: a `string` is emitted
-verbatim (so don't `JSON.stringify` it yourself — that double-encodes),
-`number`/`boolean` use `toString`, and objects/arrays serialize to
-JSON. Returning `undefined` produces no result; returning `null` produces
-the JSON text `null`. `console.log` is a separate debug stream.
 
-`JSON.stringify` omits undefined object fields, writes undefined array elements
-as null, and returns undefined for top-level undefined.
-Reading JSON text: `JSON.parse(s)`
-returns `unknown`. Validate and type the result with a runtime cast:
-`const x = JSON.parse(s) as T`. Do not write `JSON.parse<T>(s)` or
-rely on `const x: T = JSON.parse(s)`. A cast accepts a missing key for
-`x?: T` but rejects JSON `null`; declare a field the API may send as null
-`x?: T | null`.
-`T` can be a primitive (`string`, `number`, `boolean`), an object type,
-an array, or a data-only `interface` you declare (no methods) — and
-combinations like `Issue[]`.{mcp_packages}{tools_package}{git_package}
+{mcp_packages}
+
+{tools_package}
+
+{git_package}
+
+{approval_guidance}
+
+{http_guidance}
 
 {sandbox}
-{http_access}{session_guidance}{embedding_guidance}
+{http_access}
+
+{session_guidance}
+
+{embedding_guidance}
 
 {llm_guidance}
 
-Output: success returns just `main()`'s value as a string (a `string`
-return verbatim; numbers/booleans via `toString`; objects/arrays as
-JSON; `undefined` produces no result). Failure returns result + console + error details inline.
-`console.log` output is dropped from a *successful* result — read it
-back with the last-run tool.
+Do the work in one program: follow pagination and data dependencies in code, filter and aggregate there, and return only what the answer or your next decision needs.
+
+The output is what `main()` returns: a string as is, anything else as JSON. `console.log` goes to a separate debug stream, and a failed run returns the error with the console output.
 
 ---
 
@@ -190,9 +139,9 @@ resolved values.
 | `{http_access}` | empty when HTTP is hidden; otherwise per-method host reachability (`GET → api.example.com; …`), `any host`, or an approval-policy note | policy default and `permissions:` HTTP rules for `main` |
 | `{stdlib_modules}` | visible standard-library names | non-deny default or relevant non-deny rules for `main` |
 | `{http_guidance}` | HTTP credential guidance, only when HTTP is visible | same visibility rule |
-| `{builtins}` | comma-separated catalog of in-scope built-in types + namespaces | prelude (`interpreter::packages::builtins`) |
+| `{builtins}` | the in-scope built-in types, then "and the namespaces …" | prelude (`interpreter::packages::builtins`) |
 | `{mcp_packages}` | empty when no MCP servers; else a note on the available `@mcp/<server>` packages | policy `mcp:` block |
-| `{session_guidance}` | session-state guidance only when `main` has potential `session.read` and `session.write` permission | policy default and `permissions:` rules |
+| `{session_guidance}` | session-state guidance only when `main` has potential permission for a session operation | policy default and `permissions:` rules |
 | `{llm_guidance}` | model-call guidance only when at least one model is declared and `main` has potential `llm.call` permission | policy `llm.models`, default, and `permissions:` rules |
 | `{embedding_guidance}` | embedding guidance only when at least one embedding alias is declared and `main` has potential `embedding.embed` permission | policy `embedding.models`, default, and `permissions:` rules |
 | `{tools_package}` | empty unless `main` has potential `tools.call` permission and the caller is REST; otherwise a note on the session's `@tools` package | policy default and `permissions:` rules |
@@ -209,10 +158,8 @@ do not advertise these libraries to `main`. LLM additionally requires at least
 one declared model and uses the same non-deny rule for `llm.call`. A provider
 without models is not enough to advertise LLM. Embedding follows the same
 rule with `embedding.models` and `embedding.embed`. Session uses the same non-deny
-rule but needs both `session.read` and `session.write`: a store the agent can
-only write or only read holds nothing it can use, and `session.remove` and
-`session.list` do not count. Git visibility depends only on
-the presence of its `git:` configuration.
+rule for its operations: reading alone, or writing alone, is a usable subset.
+Git visibility depends only on the presence of its `git:` configuration.
 
 Add new placeholders here when the resolved value is policy-dependent
 and the LLM needs it during planning. Keep the list short — most
@@ -230,6 +177,39 @@ keeps appearing despite the existing prose. Record:
   another tool's description, in `packages.docs` output, or in the
   language itself, not here.)
 
+- **Failure mode:** first programs that fail to compile on habits the
+  prompt already forbade: `async function main()`, a missing return type
+  (`function main() {`), `const all: any[] = []`, and a package function
+  used without its import. The rules were in the prompt, but in the
+  middle of the 400-word paragraph of language differences.
+- **Frequency:** measurable. On AppWorld dev (57 tasks, 2026-11-07), the
+  862-word prompt had 80 compile-failed programs per round across Claude
+  Haiku 5.5, GPT-6 Luna and DeepSeek V4.1 Flash. Haiku's 47 alone
+  included 29 with `async` and 21 with a missing return type.
+- **Fix:** the current layout, at about 560 words: the synchronous and
+  import rules, one example, the three rules most broken, then the
+  paragraph of language differences (the one starting "Postfix `x!`").
+  Two runs gave 19 and 19 compile-failed programs, with no `async` and no
+  missing return types. Findings along the way:
+  - The example matters most. Without it Haiku wrote `async` in 29 of 57
+    tasks; with it, no model did.
+  - Order matters. With the return-type rule ahead of the `any` rule,
+    Haiku's first attempts used `any` in 22 tasks over two runs, against
+    8 to 13 with `any` first.
+  - Naming a forbidden form can prime it. "Not even `any[]`" tripled
+    Haiku's `const all: any[] = []`. "`function main(): string[]`, never
+    `function main()`" primed nothing and took missing return types to 0;
+    GPT-6.1 Terra had written `function main() {` in 48 programs.
+  - Removed with no measured cost: the strategy paragraphs (one sentence
+    is left), the Node/NPM sentence, the built-ins docs tool walkthrough,
+    and the separate output paragraph.
+  - The language-differences paragraph stays. Without it, failures
+    roughly doubled (44 and 34), and cutting it down to the `undefined`
+    and `Record` rules cost about as much (38).
+
+  The experiment's variants and its classifier are in the private
+  AppWorld benchmark (`bench/prompts/execute/`, `bench/errors.py`).
+
 - **Failure mode:** on `permission denied` for a package capability
   (`linear.app/listIssues`), the model rerouted through raw
   `submilli:http` against the same service's API, got a 401 back, and
@@ -237,10 +217,12 @@ keeps appearing despite the existing prose. Record:
   obstacle, not a decision.
 - **Frequency:** one session log (2026-07-08), but it's the canonical
   agent retry/workaround loop — expect it to recur.
-- **Fix:** "Denials are final" paragraph in the prompt (also covers
-  401/403 responses), plus a workaround-forbidding sentence appended
-  to the runtime `permission denied` message itself, so the hint is
-  in-band at the moment the model decides what to do next.
+- **Fix:** a workaround-forbidding sentence appended to the runtime
+  `permission denied` message itself, so the hint is in-band at the
+  moment the model decides what to do next. A "Denials are final"
+  paragraph in the prompt repeated it until 2026-11-07; it went, and
+  the 401/403 advice moved to the HTTP guidance, which appears only
+  when `submilli:http` is visible.
 
 - **Failure mode:** reaching for `secrets.get` to build an API call by
   hand, when the package that needs the credential already resolves it
@@ -251,10 +233,10 @@ keeps appearing despite the existing prose. Record:
   documented and importable, and the generated `.d.ts` describes it, so
   a model with a credential-shaped problem would find it.
 - **Fix:** the runtime refuses `secrets.get` to `main` outright, ahead
-  of the policy, and the denial names the secret-name-to-package shape.
-  This paragraph exists because the prompt is always in context while
-  the generated types require the model to go looking, so it is the
-  cheapest place to stop the call being written at all.
+  of the policy, and the denial names the secret-name-to-package shape,
+  as does the `secrets.get` declaration. A prompt paragraph saying the
+  same went on 2026-11-07: the refusal teaches it at the one moment it
+  matters, without costing every session the words.
 
 - **Failure mode:** `import { Temporal } from "temporal"` despite "no
   `import` needed" in this prompt, and truthiness tests
