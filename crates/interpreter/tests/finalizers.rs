@@ -521,13 +521,13 @@ fn a_finalizer_value_type_the_runtime_cannot_check_does_not_compile() {
         ("Map<string, number>", "cannot be verified at runtime"),
         ("Lease", "cannot be verified at runtime"),
         ("Chain", "recursive interface types aren't supported"),
-        ("Stat", "host-backed"),
+        ("Response", "host-backed"),
     ] {
         let source = format!(
-            r#"import type {{ Stat }} from "submilli:fs";
+            r#"import type {{ Response }} from "submilli:http";
 export class Lease {{ id: string = ""; }}
 export interface Chain {{ next?: Chain }}
-export type {{ Stat }};
+export type {{ Response }};
 export function finalizer(key: string, value: {ty}): void {{}}"#
         );
         let modules = [PackageSourceModule {

@@ -9,13 +9,13 @@ function main(): void {
   fs.writeText("/a.txt", "hi");
   const stat = fs.stat("/a.txt")!;
   assert(
-    JSON.stringify(stat) === `{"kind":"file","size":2,"modifiedAt":${stat.modifiedAt}}`,
+    JSON.stringify(stat) === `{"kind":"file","modifiedAt":${stat.modifiedAt},"size":2}`,
     JSON.stringify(stat)!,
   );
   const back = JSON.parse(JSON.stringify(stat)!) as { kind: string; size: number; modifiedAt: number };
   assert(back.kind === stat.kind && back.size === stat.size && back.modifiedAt === stat.modifiedAt, "round trip");
   assert(
-    JSON.stringify(fs.peek("/a.txt")) === `{"preview":"hi","encoding":"utf-8","lineEnding":"lf","size":2}`,
+    JSON.stringify(fs.peek("/a.txt")) === `{"encoding":"utf-8","lineEnding":"lf","preview":"hi","size":2}`,
     "Peek",
   );
   const entries: string[] = [];
