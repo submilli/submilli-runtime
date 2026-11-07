@@ -5860,6 +5860,47 @@ function main(): void {
     }
 
     #[test]
+    fn string_index_diagnostic_label_does_not_allocate_on_the_hot_path() {
+        let bytes = compile("let s = \"ab\"; function main(): string { return s[1]; }");
+        let body_idx = (main_export_func_idx(&bytes).expect("main exported")
+            - imported_func_count(&bytes)) as usize;
+        let body = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(|payload| match payload.expect("payload") {
+                Payload::CodeSectionEntry(body) => Some(body),
+                _ => None,
+            })
+            .nth(body_idx)
+            .expect("main body");
+        let mut controls = Vec::new();
+        let mut calls_index = false;
+        let helper = imported_func_idx(&bytes, "submilli:prelude#string_index");
+        for operator in body.get_operators_reader().expect("operators") {
+            use wasmparser::Operator;
+            match operator.expect("operator") {
+                Operator::If { .. } => controls.push(true),
+                Operator::Block { .. } | Operator::Loop { .. } | Operator::TryTable { .. } => {
+                    controls.push(false);
+                }
+                Operator::End => {
+                    controls.pop();
+                }
+                Operator::ArrayNewData { .. }
+                | Operator::ArrayNewFixed { .. }
+                | Operator::StructNew { .. } => {
+                    assert!(
+                        controls.contains(&true),
+                        "string index allocated outside a failure branch"
+                    );
+                }
+                Operator::Call { function_index } if function_index == helper => calls_index = true,
+                _ => {}
+            }
+        }
+        assert!(calls_index, "the test exercises string indexing");
+    }
+
+    #[test]
     fn array_index_out_of_bounds_throws_catchable() {
         // An OOB index used to map to a raw `array.get` that traps uncatchably;
         // it now throws a catchable `Error`, so user `try/catch` can recover.
@@ -5877,7 +5918,12 @@ function main(): void {
         let cfg = crate::runtime::RuntimeConfig::default();
         let result =
             pollster::block_on(cfg.run(&bytes)).expect("OOB throw is catchable, not a trap");
-        assert_eq!(result.value.as_deref(), Some("index out of range"));
+        assert_eq!(
+            result.value.as_deref(),
+            Some(
+                "index 10 is out of range for `a` (length 3); use `a.at(10)` to get `undefined` instead"
+            )
+        );
     }
 
     #[test]

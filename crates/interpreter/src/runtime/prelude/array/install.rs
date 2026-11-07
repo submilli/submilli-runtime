@@ -658,13 +658,17 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ),
         |caller, params, results| {
             let elements = super::read_array(caller, abi_arg(params, 0)?, "Array#with")?;
-            match super::with(&elements, f64v(abi_arg(params, 1)?), *abi_arg(params, 2)?) {
-                Some(out) => {
-                    *abi_result(results, 0)? = super::build_array(caller, &out)?;
-                    Ok(())
-                }
-                None => Err(crate::runtime::host::range_error("index out of range")),
-            }
+            let Some(out) = super::with(&elements, f64v(abi_arg(params, 1)?), *abi_arg(params, 2)?)
+            else {
+                crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::PARSE, 1)?;
+                return Err(crate::runtime::host::range_error(format!(
+                    "index {} is out of range (length {})",
+                    crate::runtime::number::format_number_js(f64v(abi_arg(params, 1)?)),
+                    elements.len()
+                )));
+            };
+            *abi_result(results, 0)? = super::build_array(caller, &out)?;
+            Ok(())
         },
     )?;
 

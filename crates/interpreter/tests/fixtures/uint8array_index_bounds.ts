@@ -10,7 +10,7 @@ function main(): void {
   } catch (e) {
     readMessage = e.message;
   }
-  assert(readMessage === "index out of range", "the read throws RangeError");
+  assert(readMessage === "index 5 is out of range for `u` (length 2); use `u.at(5)` to get `undefined` instead", "the read throws RangeError");
 
   let writeMessage = "";
   try {
@@ -19,7 +19,7 @@ function main(): void {
   } catch (e) {
     writeMessage = e.message;
   }
-  assert(writeMessage === "index out of range", "the write throws RangeError");
+  assert(writeMessage === "index 9 is out of range for `u` (length 2); indexed writes require an existing element", "the write throws RangeError");
 
   try {
     const y = u[5];
@@ -36,7 +36,7 @@ function main(): void {
   } catch (e) {
     arrayMessage = e.message;
   }
-  assert(arrayMessage === readMessage, "same message as the array path");
+  assert(arrayMessage === "index 5 is out of range for `arr` (length 2); use `arr.at(5)` to get `undefined` instead", "same details as the Uint8Array path, with its own receiver name");
 
   u[0] = 7;
   u[1] = 255;
@@ -53,7 +53,7 @@ function main(): void {
   } catch (e) {
     emptyRead = e.message;
   }
-  assert(emptyRead === "index out of range", "slot 0 of an empty array is out of range");
+  assert(emptyRead === "index 0 is out of range for `empty` (length 0); use `empty.at(0)` to get `undefined` instead", "slot 0 of an empty array is out of range");
 
   // Left-to-right evaluation survives the check: the index expression and the
   // RHS both run, in that order, before the bounds check throws.

@@ -20,6 +20,7 @@ pub(crate) mod collection;
 pub(crate) mod console;
 pub mod declaration;
 pub(crate) mod error;
+pub(crate) mod index;
 pub(crate) mod iterator;
 mod keep;
 mod ledger;
@@ -57,6 +58,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     vtable::install_walk_guards(linker)?;
     console::install(linker)?;
     error::install(linker)?;
+    index::install(linker)?;
     string::install(linker)?;
     array::install(linker)?;
     map::install(linker)?;
@@ -101,6 +103,7 @@ pub fn package_declaration() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(MODULE_NAME);
     vtable::declare_walk_guards(&mut defs);
     console::declare(&mut defs);
+    index::declare(&mut defs);
     string::declare(&mut defs);
     array::declare(&mut defs);
     map::declare(&mut defs);

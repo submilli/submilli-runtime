@@ -227,6 +227,14 @@ Conventions used in the formulas:
 
 ### String: index and slice
 
+Bracket-index diagnostics (`SUB-2107`):
+
+| Host function | Work | Formula | When |
+|---|---|---|---|
+| `submilli:prelude#index_error` | Format a failed array/Uint8Array bracket access; bounded receiver label, numeric index and logical length | `CALL + COPY(label) + PARSE(1)` plus shared error construction | Cold path only; label read charges its copy, numeric formatting charged before work; shared error construction charges the output |
+| `submilli:prelude#string_index` | Read one UTF-16 unit; on a miss format the same diagnostic | Hit: `CALL + COPY(1)`; miss: `CALL + COPY(label) + PARSE(1)` plus shared error construction | Receiver read in place; label read and numeric formatting only on a miss; result/error output charged by shared helpers |
+| `submilli:prelude#Array#with`, `submilli:prelude#Uint8Array#with` (miss) | Report the supplied index and length after the existing snapshot | Existing snapshot charge below + `PARSE(1)` plus shared error construction | Numeric formatting before work, only on a miss; no change to the success path |
+
 | Function | What the host does | Formula | Charge point | Notes |
 |---|---|---|---|---|
 | `submilli:prelude#String#charAt` | Copies the whole receiver, returns one unit as a new string (`prelude/string/install.rs:485`, `prelude/string/mod.rs:139`) | `CALL + COPY(len(s))` | before | Operation is O(1); the cost is entirely the receiver copy in `StringAbi::read` (`prelude/string/install.rs:838`). 1 MB string = 1 MB copy per call. Performance bug: a loop of `charAt(i)` over a string is quadratic. |

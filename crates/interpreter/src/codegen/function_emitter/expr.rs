@@ -9,6 +9,7 @@
 //! the owned emitter and module before publishing Wasm.
 
 use crate::codegen::CodegenCtx;
+use crate::codegen::bounds::receiver_name;
 use crate::codegen::bounds::{
     emit_checked_index, emit_checked_index_with_length, stash_array_length, stash_index_operand,
 };
@@ -16,6 +17,7 @@ use crate::codegen::cast_check::emit_structural_test;
 use crate::codegen::function_emitter::FunctionEmitter;
 use crate::codegen::function_emitter::cast;
 use crate::codegen::symbol_table::{MethodSlotAbi, may_hold_null};
+use crate::runtime::prelude::index::IndexAccess;
 use crate::typechecker::infer::narrowing::{
     BindingId, ReferencePath, cast_info_for, falsy_part, truthy_part,
 };
@@ -519,6 +521,7 @@ fn emit_expr_value(
             emit_chain_parts(
                 emitter,
                 ctx,
+                *base,
                 parts,
                 0,
                 &base_ty,
@@ -940,10 +943,20 @@ fn emit_index_access(
         cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
-        emit_uint8_index_with_receiver_on_stack(emitter, ctx, *index)?;
+        emit_uint8_index_with_receiver_on_stack(
+            emitter,
+            ctx,
+            *index,
+            &receiver_name(ctx.ta, *receiver)?,
+        )?;
     } else if recv_ty.is_string_shaped() {
         emit_expr(emitter, ctx, *receiver)?;
-        emit_string_index_with_receiver_on_stack(emitter, ctx, *index)?;
+        emit_string_index_with_receiver_on_stack(
+            emitter,
+            ctx,
+            *index,
+            &receiver_name(ctx.ta, *receiver)?,
+        )?;
     } else {
         emit_expr(emitter, ctx, *receiver)?;
         emit_bounds_checked_index_with_receiver_on_stack(
@@ -952,6 +965,7 @@ fn emit_index_access(
             *index,
             result_ty,
             is_optional_tuple_position(ctx, &recv_ty, *index)?,
+            &receiver_name(ctx.ta, *receiver)?,
         )?;
     }
 
@@ -964,6 +978,7 @@ fn emit_string_index_with_receiver_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     index: ExprId,
+    receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let Some(helper) = ctx.require(
         ctx.symbols.prelude_func_idx("string_index"),
@@ -975,6 +990,14 @@ fn emit_string_index_with_receiver_on_stack(
     // `string | undefined`'s, so it is cast to `$string` after the index runs.
     let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(receiver));
+    // Put the label and index below the receiver argument. This keeps the
+    // receiver cast after index evaluation without an index temporary, so the
+    // pooled label adds no work to an in-range read.
+    let label = ctx
+        .symbols
+        .field_name_string_global_idx(receiver_name)
+        .ok_or_else(|| crate::codegen::internal_failure("string index label global collected"))?;
+    emitter.instruction(Instruction::GlobalGet(label));
     emit_expr(emitter, ctx, index)?;
     emit_index_number(
         emitter,
@@ -984,8 +1007,6 @@ fn emit_string_index_with_receiver_on_stack(
             .map_err(crate::codegen::arena_failure)?
             .ty,
     )?;
-    let index_local = emitter.add_anonymous_local(ValType::F64)?;
-    emitter.instruction(Instruction::LocalSet(index_local));
     emitter.instruction(Instruction::LocalGet(receiver));
     crate::codegen::cast_check::emit_operation_cast_on_stack(
         emitter,
@@ -993,7 +1014,6 @@ fn emit_string_index_with_receiver_on_stack(
         &Type::Unknown,
         &Type::String,
     )?;
-    emitter.instruction(Instruction::LocalGet(index_local));
     emitter.instruction(Instruction::Call(helper));
     Ok(())
 }
@@ -2160,6 +2180,8 @@ fn emit_index_postfix(
             .map_err(crate::codegen::arena_failure)?
             .ty,
         is_uint8,
+        &receiver_name(ctx.ta, receiver)?,
+        IndexAccess::Read,
     )?;
     emitter.instruction(Instruction::LocalGet(backing));
     emitter.instruction(Instruction::LocalGet(position));
@@ -2187,6 +2209,12 @@ fn emit_index_postfix(
             .map_err(crate::codegen::arena_failure)?
             .ty,
         is_uint8,
+        &receiver_name(ctx.ta, receiver)?,
+        if is_uint8 {
+            IndexAccess::FixedWrite
+        } else {
+            IndexAccess::Write
+        },
     )?;
     emitter.instruction(Instruction::LocalGet(backing));
     emitter.instruction(Instruction::LocalGet(position));
@@ -2199,6 +2227,7 @@ fn emit_index_postfix(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_index_location(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -2206,6 +2235,8 @@ fn emit_index_location(
     key: u32,
     key_ty: &Type,
     is_uint8: bool,
+    receiver_name: &str,
+    access: IndexAccess,
 ) -> Result<(u32, u32, u32), crate::compiler_error::CompilerFailure> {
     let (container, raw, ty) = if is_uint8 {
         (
@@ -2246,8 +2277,10 @@ fn emit_index_location(
     }))?;
     emitter.instruction(Instruction::LocalSet(backing));
     let position = match length {
-        Some(length) => emit_checked_index_with_length(emitter, ctx, length, operand)?,
-        None => emit_checked_index(emitter, ctx, backing, operand)?,
+        Some(length) => {
+            emit_checked_index_with_length(emitter, ctx, length, operand, receiver_name, access)?
+        }
+        None => emit_checked_index(emitter, ctx, backing, operand, receiver_name, access)?,
     };
     Ok((backing, position, raw))
 }
@@ -2398,9 +2431,11 @@ fn emit_class_field_postfix(
 /// branch and recurses on the non-null branch. The final receiver is
 /// cast to `result_ty` so the chain's result Wasm type lines up at
 /// the outer expression's slot.
+#[allow(clippy::too_many_arguments)]
 fn emit_chain_parts(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
+    base: ExprId,
     parts: &[crate::TypedChainPart],
     idx: usize,
     receiver_ty: &Type,
@@ -2428,6 +2463,11 @@ fn emit_chain_parts(
     let part = parts.get(idx).ok_or_else(|| {
         crate::codegen::internal_failure("optional-chain part index is out of bounds")
     })?;
+    let receiver_name = if matches!(part, crate::TypedChainPart::Index { .. }) {
+        crate::codegen::bounds::chain_receiver_name(ctx.ta, base, &parts[..idx])?
+    } else {
+        String::new()
+    };
     let next = idx
         .checked_add(1)
         .ok_or_else(|| crate::codegen::internal_failure("optional-chain index overflow"))?;
@@ -2469,11 +2509,20 @@ fn emit_chain_parts(
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(tmp));
         emitter.instruction(Instruction::RefAsNonNull);
-        emit_chain_operation(emitter, ctx, part, receiver_ty, source_ty, check_ty)?;
+        emit_chain_operation(
+            emitter,
+            ctx,
+            part,
+            receiver_ty,
+            source_ty,
+            check_ty,
+            &receiver_name,
+        )?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
             emitter,
             ctx,
+            base,
             parts,
             next,
             &part_result_ty,
@@ -2482,11 +2531,20 @@ fn emit_chain_parts(
         )?;
         emitter.emit_end();
     } else {
-        emit_chain_operation(emitter, ctx, part, receiver_ty, source_ty, check_ty)?;
+        emit_chain_operation(
+            emitter,
+            ctx,
+            part,
+            receiver_ty,
+            source_ty,
+            check_ty,
+            &receiver_name,
+        )?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
             emitter,
             ctx,
+            base,
             parts,
             next,
             &part_result_ty,
@@ -2504,6 +2562,7 @@ fn emit_chain_operation(
     receiver_ty: &Type,
     source_ty: Option<&Type>,
     check_ty: Option<&Type>,
+    receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let crate::TypedChainPart::MethodCall {
         iface,
@@ -2571,6 +2630,7 @@ fn emit_chain_operation(
         part,
         &operation_ty,
         check_ty.unwrap_or(part.result_ty()),
+        receiver_name,
     )?;
     Ok(())
 }
@@ -3053,6 +3113,7 @@ fn emit_chain_access(
     part: &crate::TypedChainPart,
     receiver_ty: &Type,
     check_ty: &Type,
+    receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match part {
         crate::TypedChainPart::Field {
@@ -3162,9 +3223,9 @@ fn emit_chain_access(
                 )?;
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
             } else if receiver_ty.lowered() == &Type::Uint8Array {
-                emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx)?;
+                emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx, receiver_name)?;
             } else if receiver_ty.is_string_shaped() {
-                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx)?;
+                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx, receiver_name)?;
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
@@ -3187,6 +3248,7 @@ fn emit_chain_access(
                     *idx,
                     source_ty,
                     is_optional_tuple_position(ctx, receiver_ty, *idx)?,
+                    receiver_name,
                 )?;
                 if source_ty != result_ty {
                     crate::codegen::cast_check::emit_checked_cast_on_stack(
@@ -4486,6 +4548,7 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
     idx: ExprId,
     result_ty: &Type,
     allow_missing: bool,
+    receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let array_idx = ctx.symbols.array_type_idx().ok_or_else(|| {
         crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
@@ -4542,7 +4605,14 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
         cast::emit_coerce_to_slot(emitter, ctx, &Type::Undefined, result_ty)?;
         emitter.emit_else();
     }
-    let idx_local = emit_checked_index_with_length(emitter, ctx, length, idx_f64_local)?;
+    let idx_local = emit_checked_index_with_length(
+        emitter,
+        ctx,
+        length,
+        idx_f64_local,
+        receiver_name,
+        IndexAccess::Read,
+    )?;
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGet(raw_array_idx));
@@ -4585,6 +4655,7 @@ fn emit_uint8_index_with_receiver_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     index: ExprId,
+    receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let uint8_idx = ctx.symbols.uint8_array_type_idx().ok_or_else(|| {
         crate::codegen::internal_failure("Type::Uint8Array requires intrinsic types declared")
@@ -4630,7 +4701,14 @@ fn emit_uint8_index_with_receiver_on_stack(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_local));
-    let idx_local = emit_checked_index(emitter, ctx, raw_local, idx_f64_local)?;
+    let idx_local = emit_checked_index(
+        emitter,
+        ctx,
+        raw_local,
+        idx_f64_local,
+        receiver_name,
+        IndexAccess::Read,
+    )?;
     emitter.instruction(Instruction::LocalGet(raw_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGetU(raw_uint8_idx));
@@ -7216,6 +7294,7 @@ mod tests {
                     emit_chain_parts(
                         &mut emitter,
                         ctx,
+                        ExprId(0),
                         &[],
                         1,
                         &Type::Number,
@@ -7228,6 +7307,7 @@ mod tests {
                     emit_chain_parts(
                         &mut emitter,
                         ctx,
+                        ExprId(0),
                         &[],
                         0,
                         &Type::Number,

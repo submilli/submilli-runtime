@@ -10,8 +10,115 @@ use wasm_encoder::{BlockType, Instruction, ValType};
 
 use crate::codegen::CodegenCtx;
 use crate::codegen::function_emitter::{FunctionEmitter, emit_const_string_by_text};
+use crate::runtime::prelude::index::IndexAccess;
+use crate::{ExprId, TypedAst, TypedExprKind};
 
-pub const INDEX_OOB_MESSAGE: &str = "index out of range";
+/// A bounded, source-like label. Never evaluate a receiver again for diagnostics.
+pub(crate) fn receiver_name(
+    ta: &TypedAst,
+    mut receiver: ExprId,
+) -> Result<String, crate::compiler_error::CompilerFailure> {
+    let mut fields = Vec::new();
+    for _ in 0..8 {
+        let expr = ta
+            .try_expr(receiver)
+            .map_err(crate::codegen::arena_failure)?;
+        let mut name = match &expr.kind {
+            TypedExprKind::LocalRef { ident, .. } if is_identifier(&ident.name) => {
+                ident.name.clone()
+            }
+            TypedExprKind::GlobalRef { name, .. } if is_identifier(&name.name) => name.name.clone(),
+            TypedExprKind::This => "this".to_string(),
+            TypedExprKind::LocalNarrowRef { path, .. }
+                if path.chain.len() <= 8
+                    && is_identifier(&path.root.render())
+                    && path.chain.iter().all(|segment| {
+                        matches!(
+                            segment,
+                            crate::typechecker::infer::narrowing::PathElem::Field(name)
+                                if is_identifier(name)
+                        )
+                    }) =>
+            {
+                path.render()
+            }
+            TypedExprKind::Narrowed { inner, .. } => {
+                receiver = *inner;
+                continue;
+            }
+            TypedExprKind::Cast { value, .. } | TypedExprKind::NonNullAssert { value } => {
+                receiver = *value;
+                continue;
+            }
+            TypedExprKind::FieldAccess {
+                receiver: base,
+                name,
+            }
+            | TypedExprKind::InterfacePropertyAccess {
+                receiver: base,
+                name,
+                ..
+            } => {
+                if !is_identifier(&name.name) {
+                    return Ok(String::new());
+                }
+                fields.push(name.name.as_str());
+                receiver = *base;
+                continue;
+            }
+            _ => return Ok(String::new()),
+        };
+        for field in fields.iter().rev() {
+            name.push('.');
+            name.push_str(field);
+        }
+        if name.len() <= 64 {
+            return Ok(name);
+        }
+        return Ok(String::new());
+    }
+    Ok(String::new())
+}
+
+pub(crate) fn chain_receiver_name(
+    ta: &TypedAst,
+    base: ExprId,
+    preceding: &[crate::TypedChainPart],
+) -> Result<String, crate::compiler_error::CompilerFailure> {
+    let mut name = receiver_name(ta, base)?;
+    for part in preceding {
+        if name.is_empty() {
+            break;
+        }
+        match part {
+            crate::TypedChainPart::Field { name: field, .. }
+            | crate::TypedChainPart::InterfaceProperty { name: field, .. } => {
+                if !is_identifier(&field.name)
+                    || name
+                        .len()
+                        .saturating_add(field.name.len())
+                        .saturating_add(1)
+                        > 64
+                {
+                    return Ok(String::new());
+                }
+                name.push('.');
+                name.push_str(&field.name);
+            }
+            crate::TypedChainPart::NonNull { .. } => {}
+            _ => return Ok(String::new()),
+        }
+    }
+    Ok(name)
+}
+
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c == '_' || c == '$' || unicode_ident::is_xid_start(c))
+        && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c))
+}
 
 /// Stashes the `f64` index sitting on the stack into a fresh local, ready for
 /// [`emit_checked_index`]. Kept separate from the check because a write must
@@ -35,17 +142,19 @@ pub fn stash_index_operand(
 /// left untouched on the in-bounds path. NaN fails every comparison, so the
 /// first conjunct alone rejects it; `-0` passes all three and truncates to `0`,
 /// as in JS.
-pub fn emit_checked_index(
+pub(crate) fn emit_checked_index(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     raw_arr_local: u32,
     idx_f64_local: u32,
+    receiver: &str,
+    access: IndexAccess,
 ) -> Result<u32, crate::compiler_error::CompilerFailure> {
     let len = emitter.add_anonymous_local(ValType::I32)?;
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::ArrayLen);
     emitter.instruction(Instruction::LocalSet(len));
-    emit_checked_index_with_length(emitter, ctx, len, idx_f64_local)
+    emit_checked_index_with_length(emitter, ctx, len, idx_f64_local, receiver, access)
 }
 
 /// Capture the logical length while leaving the array receiver on the stack.
@@ -68,11 +177,13 @@ pub fn stash_array_length(
     Ok(len)
 }
 
-pub fn emit_checked_index_with_length(
+pub(crate) fn emit_checked_index_with_length(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     len: u32,
     idx_f64_local: u32,
+    receiver: &str,
+    access: IndexAccess,
 ) -> Result<u32, crate::compiler_error::CompilerFailure> {
     // idx >= 0
     emitter.instruction(Instruction::LocalGet(idx_f64_local));
@@ -93,7 +204,7 @@ pub fn emit_checked_index_with_length(
     // throw unless all three hold
     emitter.instruction(Instruction::I32Eqz);
     emitter.emit_if(BlockType::Empty);
-    emit_index_oob_throw(emitter, ctx);
+    emit_index_oob_throw(emitter, ctx, len, idx_f64_local, receiver, access)?;
     emitter.emit_end();
 
     let idx_local = emitter.add_anonymous_local(ValType::I32)?;
@@ -103,23 +214,25 @@ pub fn emit_checked_index_with_length(
     Ok(idx_local)
 }
 
-fn emit_index_oob_throw(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
-    if ctx
-        .latch(emit_const_string_by_text(emitter, ctx, INDEX_OOB_MESSAGE))
-        .is_none()
-    {
-        return;
-    }
-
-    let Some(new_idx) = ctx.latch(
-        ctx.symbols
-            .prelude_func_idx("RangeError#constructor")
-            .ok_or_else(|| crate::codegen::internal_failure("RangeError constructor missing")),
-    ) else {
-        return;
-    };
-    crate::codegen::throw::emit_no_error_options(emitter);
-    emitter.instruction(Instruction::Call(new_idx));
-
-    crate::codegen::throw::emit_error_throw(emitter, ctx);
+fn emit_index_oob_throw(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    len: u32,
+    index: u32,
+    receiver: &str,
+    access: IndexAccess,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let helper = ctx
+        .symbols
+        .prelude_func_idx("index_error")
+        .ok_or_else(|| crate::codegen::internal_failure("index error helper imported"))?;
+    emitter.instruction(Instruction::LocalGet(index));
+    emitter.instruction(Instruction::LocalGet(len));
+    emitter.instruction(Instruction::F64ConvertI32U);
+    emit_const_string_by_text(emitter, ctx, receiver)?;
+    emitter.instruction(Instruction::F64Const((access as u32 as f64).into()));
+    emitter.instruction(Instruction::Call(helper));
+    // The host helper always returns Err(RangeError), never a value.
+    emitter.instruction(Instruction::Unreachable);
+    Ok(())
 }

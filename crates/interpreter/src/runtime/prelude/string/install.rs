@@ -522,7 +522,11 @@ pub fn declare(defs: &mut PackageDeclaration) {
         defs,
         "string_index",
         crate::mangle::prelude("string_index"),
-        vec![Param::anon(Type::String), Param::anon(Type::Number)],
+        vec![
+            Param::anon(Type::String),
+            Param::anon(Type::Number),
+            Param::anon(Type::String),
+        ],
         Type::String,
     );
 }
@@ -556,7 +560,7 @@ fn reg_unit_to_str(
     )
 }
 
-/// `(string, f64) -> string`: `s[index]`. Out of range throws the `RangeError`
+/// `(label, f64, string) -> string`: `s[index]`. Out of range throws the `RangeError`
 /// an array read throws, rather than JavaScript's `undefined`, which the
 /// `string` it is typed as can't hold.
 fn reg_string_index(
@@ -570,12 +574,20 @@ fn reg_string_index(
         linker,
         MODULE_NAME,
         crate::mangle::prelude("string_index"),
-        FuncType::new(engine, [s.clone(), ValType::F64], [s]),
+        FuncType::new(engine, [s.clone(), ValType::F64, s.clone()], [s]),
         move |caller, params, results| {
-            let recv = abi.payload(caller, abi_arg(params, 0)?, "string_index")?;
+            let recv = abi.payload(caller, abi_arg(params, 2)?, "string_index")?;
             let arg = number(abi_arg(params, 1)?, "string_index")?;
             let Some(index) = string_index_unit(recv.len, arg) else {
-                return Err(range_error(crate::codegen::bounds::INDEX_OOB_MESSAGE));
+                let receiver = crate::runtime::host::read_string_arg(
+                    caller,
+                    abi_arg(params, 0)?,
+                    "string_index receiver name",
+                )?;
+                fuel::charge(&mut *caller, fuel::PARSE, 1)?;
+                return Err(range_error(
+                    super::super::index::IndexAccess::Read.message(arg, recv.len, &receiver),
+                ));
             };
             let unit = read_code_unit(&mut *caller, recv.array, index)?;
             *abi_result(results, 0)? =

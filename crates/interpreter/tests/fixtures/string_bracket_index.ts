@@ -1,11 +1,11 @@
 // `s[i]` reads one UTF-16 code unit as a string, like `charAt`, and throws a
 // catchable `RangeError` out of range, as an array read does.
-function rejects(read: () => string): boolean {
+function rejects(read: () => string, expected: string): boolean {
   try {
     read();
     return false;
   } catch (e) {
-    return e instanceof RangeError && e.message === "index out of range";
+    return e instanceof RangeError && e.message === expected;
   }
 }
 
@@ -26,9 +26,9 @@ function main(): void {
   const maybe: string | undefined = s.length > 0 ? s : undefined;
   assert(maybe?.[1] === "é", "an optional chain index");
 
-  assert(rejects(() => s[5]), "past the end");
-  assert(rejects(() => s[-1]), "negative");
-  assert(rejects(() => s[1.5]), "fractional");
-  assert(rejects(() => s[NaN]), "NaN");
-  assert(rejects(() => ""[0]), "the empty string");
+  assert(rejects(() => s[5], "index 5 is out of range for `s` (length 5); use `s.at(5)` to get `undefined` instead"), "past the end");
+  assert(rejects(() => s[-1], "index -1 is out of range for `s` (length 5); use `s.at(-1)` for a non-throwing read instead"), "negative");
+  assert(rejects(() => s[1.5], "index 1.5 is out of range for `s` (length 5); use `s.at(1.5)` for a non-throwing read instead"), "fractional");
+  assert(rejects(() => s[NaN], "index NaN is out of range for `s` (length 5); use `s.at(NaN)` for a non-throwing read instead"), "NaN");
+  assert(rejects(() => ""[0], "index 0 is out of range (length 0); use `.at(0)` to get `undefined` instead"), "the empty string");
 }

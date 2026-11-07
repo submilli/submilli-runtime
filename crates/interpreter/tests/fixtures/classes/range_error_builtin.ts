@@ -41,5 +41,5 @@ function main(): void {
   } catch (e: RangeError) {
     indexed = e.name + ":" + e.message;
   }
-  assert(indexed === "RangeError:index out of range", "arr[i] OOB is RangeError");
+  assert(indexed === "RangeError:index 7 is out of range for `nums` (length 3); use `nums.at(7)` to get `undefined` instead", "arr[i] OOB is RangeError");
 }

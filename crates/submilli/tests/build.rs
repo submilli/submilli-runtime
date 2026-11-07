@@ -1256,7 +1256,7 @@ fn build_test_reports_a_package_initializer_failure_with_its_statement() {
     let err = stderr(&out);
     assert!(
         err.contains(
-            "error: package `@pied-piper/util` failed to initialize: RangeError: index out of range\n  at <top level> (@pied-piper/util/lib:2:"
+            "error: package `@pied-piper/util` failed to initialize: RangeError: index 7 is out of range for `table` (length 1); use `table.at(7)` to get `undefined` instead\n  at <top level> (@pied-piper/util/lib:2:"
         ),
         "stderr: {err}"
     );
