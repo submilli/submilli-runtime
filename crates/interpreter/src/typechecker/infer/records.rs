@@ -147,19 +147,7 @@ impl Inferer<'_> {
         };
         // Signature parameters must satisfy the contract for every instantiation.
         // Bare TypeVars are inference wildcards, so compare opaque copies only.
-        let names = self
-            .generics_in_scope
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>();
-        let bindings = names
-            .into_iter()
-            .map(|name| {
-                let opaque = self.fresh_generic_param(&name)?;
-                Ok((name, opaque))
-            })
-            .collect::<Result<BTreeMap<_, _>, CompilerFailure>>()?;
+        let bindings = self.rigid_signature_bindings()?;
         let substitute = |ty: &Type| {
             substitute_typevars(ty, &bindings, &self.type_limits).map_err(type_limit_at(span))
         };
@@ -949,7 +937,7 @@ impl Inferer<'_> {
     fn validate_bound_interface(
         &mut self,
         name: &crate::Ident,
-        generics: &[crate::Ident],
+        generics: &[crate::TypeParameterAnnotation],
         members: &[crate::InterfaceMember],
         bases: &[TypeAnnotation],
     ) -> Result<(), CompilerFailure> {
@@ -975,11 +963,9 @@ impl Inferer<'_> {
                 crate::InterfaceMember::IndexSignature(_) => None,
             })
             .collect();
-        self.push_signature_generics(generics.iter().map(|g| g.name.clone()).collect());
-        let opaque = generics
-            .iter()
-            .map(|g| Ok((g.name.clone(), self.fresh_generic_param(&g.name)?)))
-            .collect::<Result<_, CompilerFailure>>()?;
+        let parameters = self.push_declared_generics(generics)?;
+        let opaque = self.push_body_generics(parameters)?;
+        self.pop_body_generics();
         let mut inherited = BTreeMap::new();
         for annotation in bases {
             let Some(base) = self.interface_base_contract(annotation)? else {
@@ -1032,7 +1018,7 @@ impl Inferer<'_> {
         }
         let fields = fields
             .into_iter()
-            .filter(|(_, member)| member.generic_count == 0)
+            .filter(|(_, member)| member.generics.is_empty())
             .map(|(name, member)| (name, member.field))
             .collect();
         self.check_index_fields(&fields, index.as_ref(), name.span)?;
@@ -1050,11 +1036,11 @@ impl Inferer<'_> {
     ) -> Result<(), CompilerFailure> {
         let target = InterfaceMemberContract {
             field: ObjectField::required((*index.value).clone()),
-            generic_count: 0,
+            generics: Default::default(),
         };
         for (name, member) in members {
             if crate::property_keys::matches_name(&index.key, name, &self.type_limits)
-                && member.generic_count > 0
+                && !member.generics.is_empty()
                 && !self.interface_member_assignable(member, &target, opaque)?
             {
                 self.error(span, format!("property `{name}` of type `{}` does not satisfy string index value type `{}`", member.field.ty, index.value));
@@ -1071,7 +1057,7 @@ impl Inferer<'_> {
     ) -> Result<bool, CompilerFailure> {
         Ok(left.field.optional == right.field.optional
             && left.field.readonly == right.field.readonly
-            && left.generic_count == right.generic_count
+            && left.generics.len() == right.generics.len()
             && self.interface_member_assignable(left, right, opaque)?
             && self.interface_member_assignable(right, left, opaque)?)
     }
@@ -1085,25 +1071,45 @@ impl Inferer<'_> {
         let actual_ty = substitute_typevars(&actual.field.ty, opaque, &self.type_limits)
             .map_err(type_limit_unlocated)?;
         let mut target_bindings = opaque.clone();
-        for i in 0..expected.generic_count {
-            let name = format!("$method{i}");
-            target_bindings.insert(name.clone(), self.fresh_generic_param(&name)?);
+        let mut expected_generics = expected.generics.clone();
+        for constraint in expected_generics.constraints.values_mut() {
+            *constraint = substitute_typevars(constraint, opaque, &self.type_limits)
+                .map_err(type_limit_unlocated)?;
         }
+        target_bindings.extend(self.push_body_generics(expected_generics)?);
+        self.pop_body_generics();
         // A target generic method promises every instantiation. A source generic
         // method may instantiate to that promise, or to a concrete target signature.
         let expected_ty =
             substitute_typevars(&expected.field.ty, &target_bindings, &self.type_limits)
                 .map_err(type_limit_unlocated)?;
-        if actual.generic_count == 0 {
+        if actual.generics.is_empty() {
             return Ok(assignable(&actual_ty, &expected_ty, self.resolver()));
         }
         let mut inferred =
             crate::typechecker::type_param_substitution::TypeParamSubstitution::new();
         let _ = inferred.unify(&actual_ty, &expected_ty, self.resolver());
-        for i in 0..actual.generic_count {
-            let name = format!("$method{i}");
-            if inferred.get(&name).is_none() {
-                inferred.insert(name, Type::Unknown);
+        let mut unconstrained_by_signature = Vec::new();
+        for name in &actual.generics {
+            if inferred.get(name).is_none() {
+                unconstrained_by_signature.push(name.clone());
+                inferred.insert(name.clone(), Type::Unknown);
+            }
+        }
+        for (name, bound) in actual.generics.constraints.iter() {
+            if unconstrained_by_signature.contains(name) {
+                continue;
+            }
+            let bound = substitute_typevars(bound, opaque, &self.type_limits)
+                .map_err(type_limit_unlocated)?;
+            let bound = inferred
+                .apply(&bound, &self.type_limits)
+                .map_err(type_limit_unlocated)?;
+            let actual = inferred
+                .apply(&Type::TypeVar(name.clone()), &self.type_limits)
+                .map_err(type_limit_unlocated)?;
+            if !self.satisfies_generic_constraint(&actual, &bound) {
+                return Ok(false);
             }
         }
         let instantiated = inferred
@@ -1132,6 +1138,7 @@ impl Inferer<'_> {
         // Keep the named interface while copying signatures so method generics
         // and calling conventions survive inheritance.
         let ty = self.resolve_type_inner(base)?;
+        self.check_named_type_constraints(&ty, base.span)?;
         let (methods, properties, index) = match ty.peel() {
             Type::InterfaceRef {
                 mangled,
@@ -1160,6 +1167,9 @@ impl Inferer<'_> {
                 let methods = methods
                     .into_iter()
                     .map(|(name, mut method)| {
+                        for bound in method.generics.constraints.values_mut() {
+                            *bound = substitute(bound)?;
+                        }
                         for param in &mut method.params {
                             param.ty = substitute(&param.ty)?;
                         }
@@ -1232,7 +1242,7 @@ fn interface_member_contracts(
                         readonly: property.readonly,
                         method: false,
                     },
-                    generic_count: 0,
+                    generics: Default::default(),
                 },
             )
         })
@@ -1244,6 +1254,24 @@ fn interface_member_contracts(
             .enumerate()
             .map(|(i, name)| (name.clone(), Type::TypeVar(format!("$method{i}"))))
             .collect();
+        let generics = crate::GenericParameters {
+            names: (0..method.generics.len())
+                .map(|i| format!("$method{i}"))
+                .collect(),
+            constraints: Box::new(
+                method
+                    .generics
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, name)| {
+                        method.generics.constraints.get(name).map(|bound| {
+                            substitute_typevars(bound, &bindings, limits)
+                                .map(|bound| (format!("$method{i}"), bound))
+                        })
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+        };
         let ty = Type::Function {
             params: method
                 .params
@@ -1267,7 +1295,7 @@ fn interface_member_contracts(
                     readonly: false,
                     method: true,
                 },
-                generic_count: method.generics.len(),
+                generics,
             },
         );
     }
@@ -1282,7 +1310,7 @@ struct InterfaceContract {
 
 struct InterfaceMemberContract {
     field: ObjectField,
-    generic_count: usize,
+    generics: crate::GenericParameters,
 }
 
 /// Ordinary inheritance diagnostics remain recoverable; traversal allocation

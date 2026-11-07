@@ -1,0 +1,10 @@
+types: 33 of 81 tsc entries compared, 1 differ
+
+line 15: foo2(1, "")
+  tsc:  ""
+  ours: string
+
+errors:
+line 15: ours: expected `{ length: number }`, got `string` (tsc accepts)
+line 18: ours: expected `{ length: number }`, got `never[]` (tsc accepts)
+line 19: ours: expected `{ length: number }`, got `string[]` (tsc accepts)

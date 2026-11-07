@@ -291,6 +291,7 @@ impl<'a> Inferer<'a> {
     fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
         self.check_callable_type(&resolved, annot.span);
+        self.check_named_type_constraints(&resolved, annot.span)?;
         Ok(resolved)
     }
 
@@ -1189,7 +1190,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::VTable,
@@ -1202,7 +1203,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 index: None,
-                generics: vec!["T".to_string()],
+                generics: vec!["T".to_string()].into(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::VTable,
@@ -1214,7 +1215,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("test:ns", "ResultList"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Alias {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 ty: Type::Array(Box::new(Type::interface_ref(
                     crate::Package("test:ns".to_string()),
                     "SearchResult",
@@ -1236,7 +1237,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("test:ns", "searchJson"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     params: vec![Param::new("query", Type::String)],
                     ret: Type::Array(Box::new(Type::interface_ref(
                         crate::Package("test:ns".to_string()),
@@ -1685,7 +1686,7 @@ mod tests {
             "get".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params: Vec::new(),
                 ret: t(),
                 predicate: None,
@@ -1696,7 +1697,7 @@ mod tests {
             "put".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params: vec![Param::new("v", t())],
                 ret: Type::Void,
                 predicate: None,
@@ -1710,7 +1711,7 @@ mod tests {
                 mangled_name: mangled,
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Class {
-                    generics: vec!["T".to_string()],
+                    generics: vec!["T".to_string()].into(),
                     fields: BTreeMap::new(),
                     narrowing_checks: BTreeMap::new(),
                     methods,

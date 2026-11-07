@@ -287,7 +287,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@stripe/sdk", "charge"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     params: vec![
                         Param::new("amount", Type::Number),
                         Param::new("currency", Type::String),
@@ -334,7 +334,7 @@ mod tests {
                     mangled_name: mangle::package_symbol("@jina/reader", func),
                     declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                     kind: ValueKind::Function {
-                        generics: Vec::new(),
+                        generics: Vec::new().into(),
                         params: vec![
                             Param::new("host", Type::String),
                             Param::new("format", Type::String),
@@ -382,7 +382,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/sdk", "getIssue"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     params: vec![Param::new("id", id_alias)],
                     ret: Type::Void,
                     type_predicate: None,
@@ -408,7 +408,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/mail", "send"),
                 declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     params: vec![Param::new("input", Type::Unknown)],
                     ret: Type::Void,
                     type_predicate: None,
@@ -448,7 +448,7 @@ mod tests {
                     mangled_name: mangle::package_symbol("@jina/reader", func),
                     declaration_span: Span::new(FileId(0), 0, 1).unwrap(),
                     kind: ValueKind::Function {
-                        generics: Vec::new(),
+                        generics: Vec::new().into(),
                         params: vec![
                             Param::new("host", Type::String),
                             Param::new("path", Type::String),

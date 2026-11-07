@@ -2879,7 +2879,9 @@ impl Inferer<'_> {
                 );
             }
             let diags_before = self.diagnostics.len();
-            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
+            let (typed_receiver, recv_ty) = self.infer_expr(*receiver, None)?;
+            let (mut typed_receiver, mut recv_ty) =
+                self.constraint_receiver(typed_receiver, recv_ty, span)?;
             // A generic receiver inferred in isolation can't resolve its own type
             // parameters and reports a premature "cannot infer" error — e.g.
             // `new Map()` in `new Map().set(k, v)`. The enclosing call resolves
@@ -3047,6 +3049,7 @@ impl Inferer<'_> {
         }
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
+        let (typed_callee, callee_ty) = self.constraint_receiver(typed_callee, callee_ty, span)?;
         let (typed_callee, callee_ty) =
             self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
         // call-signature dispatch — when the callee types
@@ -3230,7 +3233,7 @@ impl Inferer<'_> {
                 Some((name, sig_params)) => self.format_signature(SignatureKind::Function {
                     name,
                     predicate: None,
-                    generics: &[],
+                    generics: &Default::default(),
                     params: sig_params,
                     ret: &ret_ty,
                     doc: lift_doc.as_ref(),
@@ -4910,7 +4913,7 @@ impl Inferer<'_> {
                 CallLift::Function { name } => self.format_signature(SignatureKind::Function {
                     name,
                     predicate: None,
-                    generics: &[],
+                    generics: &Default::default(),
                     params,
                     ret,
                     doc: None,
@@ -9229,6 +9232,8 @@ impl Inferer<'_> {
         {
             return Ok(read);
         }
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if let Some(read) = self.numeric_key_read(typed_receiver, &receiver_ty, &name)? {
             return Ok(read);
         }
@@ -9880,6 +9885,8 @@ impl Inferer<'_> {
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if receiver_ty.is_structural_object() {
             let (typed_index, key_ty) = self.infer_object_key(index)?;
             let ty = self.object_index_read_type(
@@ -11614,6 +11621,8 @@ impl Inferer<'_> {
             .span;
         let rw_op = super::diagnostics::RwOp::Postfix(op);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let target_ty: Type = if let Type::ClassRef { mangled, args, .. } = receiver_ty.peel() {
             let mangled = mangled.clone();
             let class_args = args.clone();
@@ -11842,6 +11851,8 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
@@ -12340,6 +12351,14 @@ impl Inferer<'_> {
             })
             .collect();
         for (part, asserted) in parts.into_iter().zip(asserted) {
+            let apparent = self.apparent_type(&receiver_ty);
+            if apparent != receiver_ty {
+                typed_parts.push(TypedChainPart::Constraint {
+                    result_ty: apparent.clone(),
+                    span: part.span(),
+                });
+                receiver_ty = apparent;
+            }
             // A `?.` whose receiver can't be `null` or `undefined` never
             // short-circuits, so it is the plain step and adds no
             // `| undefined`, as in tsc. A method's `?.()` can short-circuit
@@ -13392,7 +13411,7 @@ impl Inferer<'_> {
                 path.chain.push(element);
                 Some(path)
             }
-            TypedChainPart::NonNull { .. } => Some(path),
+            TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => Some(path),
             TypedChainPart::Call { .. } | TypedChainPart::MethodCall { .. } => None,
         })
     }
@@ -13775,7 +13794,7 @@ impl Inferer<'_> {
         let generics = match &self.lookup_named_type(key)?.kind {
             crate::TypeKind::Interface { generics, .. }
             | crate::TypeKind::Alias { generics, .. } => generics.clone(),
-            _ => Vec::new(),
+            _ => Default::default(),
         };
         let written = crate::lower_local_types::written_type_args(key, &generics).len();
         let lifted = generics.len().saturating_sub(written);
@@ -17867,7 +17886,7 @@ function main(): void { if (result < 10) { } }
                 mangled_name: crate::mangle::package_symbol("test:ns", name),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
-                    generics,
+                    generics: generics.into(),
                     params,
                     ret,
                     type_predicate: None,

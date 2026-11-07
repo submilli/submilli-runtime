@@ -1,0 +1,2 @@
+line 15 type: bug SUB-1832 the rejected string-to-inline-object constraint call retains a widened string recovery type
+line 15, 18, 19 extra: bug SUB-1832 built-in strings and arrays are not assignable to an inline object type with their properties, including { length: number }

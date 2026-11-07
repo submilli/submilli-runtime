@@ -188,14 +188,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("BigInt"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::BigInt)),
                     (
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Vec::new().into(),
                             params: vec![Param::with_default(
                                 "radix",
                                 Type::Number,
@@ -212,7 +212,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toJson".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Vec::new().into(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -237,12 +237,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("BigIntConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 methods: BTreeMap::from([(
                     "@call".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new(),
+                        generics: Vec::new().into(),
                         params: vec![Param::new(
                             "value",
                             Type::Union(vec![Type::String, Type::Number]),

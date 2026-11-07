@@ -848,7 +848,7 @@ mod tests {
                 mangled_name: mangled,
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: crate::TypeKind::Alias {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     ty: itself.clone(),
                     doc: None,
                 },

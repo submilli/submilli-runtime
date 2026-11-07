@@ -112,6 +112,7 @@ impl<'a> Inferer<'a> {
             registry: &self.type_registry,
             limits: &self.type_limits,
             strict_subtype: false,
+            generic_constraints: &self.generic_constraints,
         }
     }
 
@@ -168,7 +169,7 @@ impl<'a> Inferer<'a> {
                         return Some((
                             MethodSig {
                                 optional: false,
-                                generics: Vec::new(),
+                                generics: Default::default(),
                                 params: Vec::new(),
                                 ret: Type::String,
                                 predicate: None,

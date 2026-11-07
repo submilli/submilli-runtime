@@ -52,7 +52,7 @@ fn insert_static(
         name.into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params,
             ret,
             predicate: None,
@@ -85,7 +85,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "status".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![],
             ret: with_optional(
                 object(
@@ -106,7 +106,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "log".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![options(&[
                 ("limit", Type::Number),
                 ("offset", Type::Number),
@@ -124,7 +124,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "diff".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![options(&[
                 ("mode", Type::String),
                 ("from", Type::String),
@@ -145,7 +145,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "show".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![string("ref"), string("path")],
             ret: Type::Uint8Array,
             predicate: None,
@@ -156,7 +156,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "branches".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![],
             ret: array(object(
                 &[
@@ -174,7 +174,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "remotes".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![],
             ret: array(object(
                 &[("name", Type::String), ("url", Type::String)],
@@ -191,7 +191,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "add".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![Param::new("paths", array(Type::String))],
             ret: Type::Void,
             predicate: None,
@@ -202,7 +202,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "commit".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![string("message")],
             ret: Type::String,
             predicate: None,
@@ -213,7 +213,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "createBranch".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![string("name"), default_string("start", "HEAD")],
             ret: Type::Void,
             predicate: None,
@@ -227,7 +227,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "switchBranch".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![string("name")],
             ret: Type::Void,
             predicate: None,
@@ -241,7 +241,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "addRemote".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![string("name"), string("url")],
             ret: Type::Void,
             predicate: None,
@@ -255,7 +255,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "setRemoteUrl".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![string("name"), string("url")],
             ret: Type::Void,
             predicate: None,
@@ -266,7 +266,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "fetch".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![
                 default_string("remote", "origin"),
                 default_string("branch", ""),
@@ -280,7 +280,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
         "pull".into(),
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: vec![].into(),
             params: vec![
                 default_string("remote", "origin"),
                 default_string("branch", ""),
@@ -300,7 +300,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Repository"),
             declaration_span: Span::at(FileId::GIT),
             kind: TypeKind::Class {
-                generics: vec![],
+                generics: vec![].into(),
                 methods,
                 fields: BTreeMap::from([("path".into(), FieldSig {
                     ty: Type::String, visibility: Visibility::Private, readonly: true,

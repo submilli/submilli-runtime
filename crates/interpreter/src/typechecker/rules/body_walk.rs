@@ -341,7 +341,8 @@ impl<V: Visitor> Walk<'_, V> {
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
-                        | TypedChainPart::NonNull { .. } => {}
+                        | TypedChainPart::NonNull { .. }
+                        | TypedChainPart::Constraint { .. } => {}
                     }
                 }
             }

@@ -897,7 +897,7 @@ impl<'a> Walker<'a, '_, '_> {
                 self.consume_all(args, || Usage::PassedTo(name.name.clone()))?;
                 None
             }
-            TypedChainPart::NonNull { .. } => receiver,
+            TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => receiver,
         })
     }
 

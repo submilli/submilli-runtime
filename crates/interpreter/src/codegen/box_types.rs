@@ -360,7 +360,8 @@ impl Collector<'_> {
                         }
                         crate::TypedChainPart::Field { .. }
                         | crate::TypedChainPart::InterfaceProperty { .. }
-                        | crate::TypedChainPart::NonNull { .. } => {}
+                        | crate::TypedChainPart::NonNull { .. }
+                        | crate::TypedChainPart::Constraint { .. } => {}
                     }
                 }
             }

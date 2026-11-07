@@ -14,6 +14,7 @@ use super::{Inferer, ValueEntry};
 impl<'a> Inferer<'a> {
     pub(super) fn signatures(&mut self) -> Result<bool, CompilerFailure> {
         self.pending_index_checks = Some(Vec::new());
+        self.pending_constraint_checks = Some(Vec::new());
         // Enums first — their bodies are value initializers, never type
         // references, so they have no forward-reference concern and
         // their names must be visible before any other body resolves.
@@ -96,8 +97,7 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
                 // Push generics for name visibility only — no body instantiation.
-                let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
-                self.push_signature_generics(generic_names.clone());
+                let generic_names = self.push_declared_generics(&generics)?;
                 let resolved_params: Vec<Param> = self.resolve_params(&params)?;
                 let (resolved_return, resolved_predicate) = match (&return_type, &type_predicate) {
                     (Some(annot), _) => (self.resolve_type(annot)?, None),
@@ -135,6 +135,7 @@ impl<'a> Inferer<'a> {
         }
         self.validate_bound_interfaces(&top_level, &skip)?;
         self.check_pending_indexes();
+        self.check_pending_constraints()?;
         Ok(true)
     }
 
@@ -173,7 +174,7 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    let generic_names: Vec<String> =
+                    let generic_names: crate::GenericParameters =
                         generics.iter().map(|g| g.name.clone()).collect();
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
@@ -206,7 +207,7 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    let generic_names: Vec<String> =
+                    let generic_names: crate::GenericParameters =
                         generics.iter().map(|g| g.name.clone()).collect();
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
@@ -260,7 +261,7 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    let generic_names: Vec<String> =
+                    let generic_names: crate::GenericParameters =
                         generics.iter().map(|g| g.name.clone()).collect();
                     let mangled = self.mangle_top_symbol(&name.name)?;
                     self.types.insert(
@@ -283,7 +284,7 @@ impl<'a> Inferer<'a> {
                         name.name.clone(),
                         super::PendingAlias {
                             name,
-                            generics: generic_names,
+                            generics,
                             annotation: ty,
                             doc,
                         },
@@ -373,7 +374,7 @@ impl<'a> Inferer<'a> {
     pub(super) fn bind_interface(
         &mut self,
         name: Ident,
-        generics: Vec<Ident>,
+        generics: Vec<crate::TypeParameterAnnotation>,
         members: Vec<InterfaceMember>,
         extends: Vec<crate::TypeAnnotation>,
         doc: Option<crate::DocComment>,
@@ -381,8 +382,7 @@ impl<'a> Inferer<'a> {
         // Duplicate detection happened in `pre_register_type_names`;
         // this binder is only reached for a non-duplicate name and
         // overwrites that name's forward-declared placeholder.
-        let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
-        self.push_signature_generics(generic_names.clone());
+        let generic_names = self.push_declared_generics(&generics)?;
         let mut method_sigs: BTreeMap<String, MethodSig> = BTreeMap::new();
         let mut property_sigs: BTreeMap<String, PropertySig> = BTreeMap::new();
         let mut typed_members: Vec<crate::TypedInterfaceMember> = Vec::new();
@@ -452,12 +452,10 @@ impl<'a> Inferer<'a> {
                             shadow_rejected = true;
                         }
                     }
-                    let m_generic_names: Vec<String> =
-                        m_generics.iter().map(|g| g.name.clone()).collect();
                     // Even on shadow rejection, keep resolving the
                     // sig so any downstream type errors surface in
                     // one pass.
-                    self.push_signature_generics(m_generic_names.clone());
+                    let m_generic_names = self.push_declared_generics(&m_generics)?;
                     let resolved_params: Vec<Param> = self.resolve_params(&params)?;
                     let resolved_ret = self.resolve_type(&return_type)?;
                     self.pop_signature_generics();
@@ -700,11 +698,7 @@ impl<'a> Inferer<'a> {
             if self.top_symbols.contains_key(&name.name) {
                 continue;
             }
-            let names = generics
-                .iter()
-                .map(|generic| generic.name.clone())
-                .collect::<Vec<_>>();
-            self.push_signature_generics(names.clone());
+            let names = self.push_declared_generics(generics)?;
             let signature = self
                 .seed_signature_parts(params, return_type.as_ref(), type_predicate.is_some())
                 .map(|(params, ret)| ValueKind::Function {

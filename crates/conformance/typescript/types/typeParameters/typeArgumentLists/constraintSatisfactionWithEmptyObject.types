@@ -1,0 +1,81 @@
+=== constraintSatisfactionWithEmptyObject.ts ===
+// Adapted from TypeScript: retain the {} constraint half, add return types and
+// initialize the interface value. Object's boxed primitive type is not modeled.
+function foo2<T extends {}>(x: T): void {}
+>foo2 : <T extends {}>(x: T) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+const r = foo2({});
+>r : void
+>  : ^^^^
+>foo2({}) : void
+>         : ^^^^
+>foo2 : <T extends {}>(x: T) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+const a = {};
+>a : {}
+>  : ^^
+>{} : {}
+>   : ^^
+
+const r1 = foo2({});
+>r1 : void
+>   : ^^^^
+>foo2({}) : void
+>         : ^^^^
+>foo2 : <T extends {}>(x: T) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+class C2<T extends {}> {
+>C2 : C2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+
+  constructor(public x: T) {}
+>x : T
+>  : ^
+
+}
+const r2 = new C2({});
+>r2 : C2<{}>
+>   : ^^^^^^
+>new C2({}) : C2<{}>
+>           : ^^^^^^
+>C2 : typeof C2
+>   : ^^^^^^^^^
+>{} : {}
+>   : ^^
+
+interface I2<T extends {}> { x: T; }
+>I2 : I2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+const i2: I2<{}> = { x: {} };
+>i2 : I2<{}>
+>   : ^^^^^^
+>{ x: {} } : { x: {}; }
+>          : ^^^^^^^^^^
+>x : {}
+>  : ^^
+>{} : {}
+>   : ^^
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

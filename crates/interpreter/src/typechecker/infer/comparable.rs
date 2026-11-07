@@ -760,6 +760,7 @@ mod tests {
             registry: &registry,
             limits: &limits,
             strict_subtype: false,
+            generic_constraints: &Default::default(),
         };
         let mut proof = Proof {
             types: resolver,

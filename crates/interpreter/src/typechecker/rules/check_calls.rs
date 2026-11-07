@@ -318,7 +318,8 @@ impl Collector<'_> {
             }
             TypedChainPart::Field { .. }
             | TypedChainPart::InterfaceProperty { .. }
-            | TypedChainPart::NonNull { .. } => Ok(()),
+            | TypedChainPart::NonNull { .. }
+            | TypedChainPart::Constraint { .. } => Ok(()),
         }
     }
 

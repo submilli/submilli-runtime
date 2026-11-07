@@ -1171,7 +1171,7 @@ fn insert_json_host_fn(defs: &mut PackageDeclaration, name: &str, params: Vec<Pa
             mangled_name: crate::mangle::host(JSON_MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::JSON),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params,
                 ret: Type::Error,
                 type_predicate: None,

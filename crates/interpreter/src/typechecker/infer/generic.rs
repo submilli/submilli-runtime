@@ -87,6 +87,9 @@ struct InferredCallArguments {
     typed: Vec<ExprId>,
     checks: Vec<ArgumentCheck>,
     spread_sources: Option<CallSpreadSources>,
+    /// Contextual callback defaults are not inference candidates. Keep the
+    /// chosen types so a subsequent replacement is validated normally.
+    constraint_defaults: BTreeMap<String, Type>,
 }
 
 /// Replaces each `TypeVar` bound in `bindings` with its binding, once: unlike
@@ -319,6 +322,18 @@ pub(super) fn erase_generic_params_in_expr(expr: &mut crate::TypedExpr) {
         TypedExprKind::Cast { target_ty, .. } => {
             *target_ty = erase_generic_params(target_ty);
         }
+        TypedExprKind::OptionalChain { parts, .. } => {
+            for part in parts {
+                part.set_result_ty(erase_generic_params(part.result_ty()));
+                if let crate::TypedChainPart::Call {
+                    union_signature: Some(signature),
+                    ..
+                } = part
+                {
+                    *signature = erase_generic_params(signature);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -438,7 +453,7 @@ impl Inferer<'_> {
                 continue;
             };
             let (generic_names, sig_param_types, sig_ret_type, sig_param_defaults): (
-                Vec<String>,
+                crate::GenericParameters,
                 Vec<Type>,
                 Type,
                 Vec<Option<crate::DefaultValue>>,
@@ -456,14 +471,14 @@ impl Inferer<'_> {
                         params.iter().map(|p| p.default.clone()).collect(),
                     ),
                     _ => (
-                        Vec::new(),
+                        crate::GenericParameters::default(),
                         vec![Type::Error; params.len()],
                         Type::Error,
                         vec![None; params.len()],
                     ),
                 },
                 None => (
-                    Vec::new(),
+                    crate::GenericParameters::default(),
                     vec![Type::Error; params.len()],
                     Type::Error,
                     vec![None; params.len()],
@@ -595,7 +610,7 @@ impl Inferer<'_> {
             && name.name == "from"
             && args.len() == 1
         {
-            sig.generics = vec!["T".into()];
+            sig.generics = vec!["T".into()].into();
             sig.ret = Type::Array(Box::new(Type::TypeVar("T".into())));
             sig.params
                 .get_mut(1)
@@ -739,11 +754,13 @@ impl Inferer<'_> {
             typed: mut typed_args,
             checks: argument_checks,
             spread_sources,
+            constraint_defaults,
         } = self.infer_generic_arguments(
             &args,
             &sig.params,
             &sig.ret,
             inferred_generics,
+            &sig.generics.constraints,
             &rest_elem_ty,
             &mut sub,
             signature_help,
@@ -826,7 +843,7 @@ impl Inferer<'_> {
             sub.insert("U".into(), element);
         }
 
-        sub.bind_whole_union_fallbacks();
+        bind_unconstrained_union_fallbacks(&mut sub, &sig.generics);
         let close_match_spans = self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(
             &mut sub,
@@ -848,7 +865,8 @@ impl Inferer<'_> {
         {
             return Ok((TypedExprKind::Null, Type::Error));
         }
-        self.bind_uninferred_to_unknown(&mut sub, &sig.generics, &iface_mangled, span)?;
+        let mut inferred_fallbacks =
+            self.bind_uninferred_type_parameters(&mut sub, &sig.generics, &iface_mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&sig.generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -871,6 +889,8 @@ impl Inferer<'_> {
             );
         }
 
+        inferred_fallbacks.extend(unchanged_constraint_defaults(&sub, constraint_defaults));
+        self.check_generic_constraints(&sig.generics, &sub, &inferred_fallbacks, span)?;
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         if let Some(sources) = spread_sources {
             let fixed = sig
@@ -1000,7 +1020,7 @@ impl Inferer<'_> {
         &self,
         callee: GenericCallee,
         callee_ident: &Ident,
-        generics: &[String],
+        generics: &crate::GenericParameters,
         params: &[Param],
         ret: &Type,
     ) -> String {
@@ -1039,12 +1059,14 @@ impl Inferer<'_> {
     fn bind_leftover_type_parameters(
         &self,
         sub: &mut TypeParamSubstitution,
-        generics: &[String],
+        generics: &crate::GenericParameters,
         ret: &Type,
         expected: Option<&Type>,
         errors_before_args: usize,
     ) {
-        if let Some(want) = expected.filter(|want| !pins_type_parameters(want)) {
+        if let Some(want) = expected.filter(|want| !pins_type_parameters(want))
+            && generics.constraints.is_empty()
+        {
             let _ = sub.unify(ret, &writable_view_for(ret, want), self.resolver());
         }
         if self.error_count() > errors_before_args
@@ -1231,22 +1253,86 @@ impl Inferer<'_> {
         Ok(Err(()))
     }
 
-    /// Bind the type parameters of a program's own generic that nothing
-    /// inferred to `unknown`, as tsc does: every type is assignable to it.
+    /// Bind uninferred parameters to their substituted constraints, resolving
+    /// dependent bounds before falling back to `unknown` for unbounded ones.
     /// Built-in generics keep reporting them, since tsc gives several of them
     /// `any` instead (`new Map()` is `Map<any, any>`), which a later use may
     /// still resolve here (`new Map().set(k, v)`).
-    fn bind_uninferred_to_unknown(
+    fn bind_uninferred_type_parameters(
         &self,
         sub: &mut TypeParamSubstitution,
-        generics: &[String],
+        generics: &crate::GenericParameters,
         declared_by: &crate::MangledName,
         span: Span,
-    ) -> Result<(), CompilerFailure> {
+    ) -> Result<Vec<String>, CompilerFailure> {
         if crate::mangle::is_builtin(declared_by) {
-            return Ok(());
+            return Ok(Vec::new());
         }
-        bind_remaining(sub, generics, Type::Unknown, &self.type_limits).map_err(type_limit_at(span))
+        self.bind_constraint_defaults(sub, generics, span)
+    }
+
+    fn bind_constraint_defaults(
+        &self,
+        sub: &mut TypeParamSubstitution,
+        generics: &crate::GenericParameters,
+        span: Span,
+    ) -> Result<Vec<String>, CompilerFailure> {
+        let inferred_fallbacks = sub
+            .resolve_all(generics, &self.type_limits)
+            .map_err(type_limit_at(span))?
+            .err()
+            .unwrap_or_default();
+        for _ in 0..generics.len() {
+            let Err(unbound) = sub
+                .resolve_all(generics, &self.type_limits)
+                .map_err(type_limit_at(span))?
+            else {
+                break;
+            };
+            let mut progressed = false;
+            for name in unbound {
+                if let Some(bound) = generics.constraints.get(&name) {
+                    let bound = sub
+                        .apply(bound, &self.type_limits)
+                        .map_err(type_limit_at(span))?;
+                    if !super::expr::type_contains_type_var(&bound) {
+                        let selected = sub
+                            .whole_union_fallback(&name)
+                            .filter(|candidate| {
+                                self.satisfies_generic_constraint(candidate, &bound)
+                            })
+                            .cloned()
+                            .unwrap_or(bound);
+                        sub.insert(name, selected);
+                        progressed = true;
+                    }
+                } else {
+                    sub.insert(name, Type::Unknown);
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        let mut fallback = sub.clone();
+        bind_remaining(&mut fallback, generics, Type::Unknown, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        if let Err(unbound) = sub
+            .resolve_all(generics, &self.type_limits)
+            .map_err(type_limit_at(span))?
+        {
+            for name in unbound {
+                let bound = match generics.constraints.get(&name) {
+                    Some(bound) => fallback
+                        .apply(bound, &self.type_limits)
+                        .map_err(type_limit_at(span))?,
+                    None => Type::Unknown,
+                };
+                sub.insert(name, bound);
+            }
+        }
+        Ok(inferred_fallbacks)
     }
 
     /// Report each union argument member that closely matched a parameter
@@ -1930,6 +2016,7 @@ impl Inferer<'_> {
         params: &[Param],
         ret: &Type,
         inferred_generics: &[String],
+        constraints: &BTreeMap<String, Type>,
         rest_elem_ty: &Type,
         sub: &mut TypeParamSubstitution,
         signature_help: impl Fn(&mut Self) -> String,
@@ -1937,6 +2024,7 @@ impl Inferer<'_> {
         let has_rest = params.last().is_some_and(|p| p.rest);
         let fixed_count = params.iter().take_while(|p| !p.rest).count();
         let mut checks = Vec::new();
+        let mut constraint_defaults = BTreeMap::new();
         let mut positions = Vec::with_capacity(args.len());
         let mut spread_sources = Vec::with_capacity(args.len());
         let mut next_position = 0;
@@ -2008,12 +2096,14 @@ impl Inferer<'_> {
             self.type_params_fixed_by_callbacks(&args_with_param_types, inferred_generics)?;
         let arguments = GenericArguments {
             inferred_generics,
+            constraints,
             sourced_by_literals: self
                 .literal_inferred_type_params(&args_with_param_types, inferred_generics)?,
             literal_types: LiteralTypeArguments::new(
                 &args_with_param_types,
                 ret,
                 inferred_generics,
+                constraints,
                 FixedByCallbacks {
                     names: &fixed_by_callbacks,
                     callback_params: &callback_params,
@@ -2083,6 +2173,30 @@ impl Inferer<'_> {
                     continue;
                 }
                 if deferred {
+                    if !constraints.is_empty() {
+                        let parameters = crate::GenericParameters {
+                            names: inferred_generics.to_vec(),
+                            constraints: Box::new(constraints.clone()),
+                        };
+                        let mut defaults = sub.clone();
+                        self.bind_constraint_defaults(
+                            &mut defaults,
+                            &parameters,
+                            self.ast
+                                .try_expr(arg_id)
+                                .map_err(super::arena_failure)?
+                                .span,
+                        )?;
+                        for name in inferred_generics {
+                            if takes_in_callback(&param_ty, name)
+                                && sub.get(name).is_none()
+                                && let Some(bound) = defaults.get(name)
+                            {
+                                sub.insert(name.clone(), bound.clone());
+                                constraint_defaults.insert(name.clone(), bound.clone());
+                            }
+                        }
+                    }
                     fix_callback_parameters(sub, &param_ty, inferred_generics);
                 } else {
                     self.prebind_from_literal_argument(i, &args_with_param_types, &arguments, sub)?;
@@ -2211,6 +2325,7 @@ impl Inferer<'_> {
             typed: typed_slots.into_iter().flatten().flatten().collect(),
             checks,
             spread_sources: sources,
+            constraint_defaults,
         })
     }
 
@@ -2363,6 +2478,17 @@ impl Inferer<'_> {
         arguments: &GenericArguments,
         sub: &mut TypeParamSubstitution,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        let bounds: BTreeMap<String, Type> = arguments
+            .constraints
+            .iter()
+            .map(|(name, bound)| (name.clone(), sub.apply_or_record(bound, &self.type_limits)))
+            .collect();
+        let hint = if self.is_fully_annotated_function(arg_id)? {
+            hint
+        } else {
+            substitute_typevars(&hint, &bounds, &self.type_limits)
+                .map_err(super::type_limit_unlocated)?
+        };
         let hint = self.method_interface_literal_hint(arg_id, hint, param_ty, sub)?;
         if let Type::InterfaceRef { name, .. } = hint.peel()
             && self.builds_literal(arg_id)?
@@ -2800,7 +2926,7 @@ impl Inferer<'_> {
     pub(super) fn infer_generic_call(
         &mut self,
         callee_ident: Ident,
-        generics: Vec<String>,
+        generics: crate::GenericParameters,
         params: Vec<Param>,
         ret: Type,
         mangled: crate::MangledName,
@@ -2911,11 +3037,13 @@ impl Inferer<'_> {
             typed: mut typed_args,
             checks: argument_checks,
             spread_sources,
+            constraint_defaults,
         } = self.infer_generic_arguments(
             &args,
             &params,
             &ret,
             inferred_generics,
+            &generics.constraints,
             &rest_elem_ty,
             &mut sub,
             signature_help,
@@ -2950,7 +3078,7 @@ impl Inferer<'_> {
             self.pack_rest_tail(fixed_count, rest_elem_ty.clone(), span, &mut typed_args)?;
         }
 
-        sub.bind_whole_union_fallbacks();
+        bind_unconstrained_union_fallbacks(&mut sub, &generics);
         let close_match_spans = self.check_deferred_close_matches(&mut sub, span);
         self.bind_leftover_type_parameters(&mut sub, &generics, &ret, expected, errors_before_args);
         if let Some(checked) = &checked
@@ -2960,7 +3088,8 @@ impl Inferer<'_> {
         {
             return Ok((TypedExprKind::Null, Type::Error));
         }
-        self.bind_uninferred_to_unknown(&mut sub, &generics, &mangled, span)?;
+        let mut inferred_fallbacks =
+            self.bind_uninferred_type_parameters(&mut sub, &generics, &mangled, span)?;
         if let Err(unbound) = sub
             .resolve_all(&generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -2984,6 +3113,8 @@ impl Inferer<'_> {
             );
         }
 
+        inferred_fallbacks.extend(unchanged_constraint_defaults(&sub, constraint_defaults));
+        self.check_generic_constraints(&generics, &sub, &inferred_fallbacks, span)?;
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         if let Some(sources) = spread_sources {
             let fixed = params
@@ -3075,10 +3206,21 @@ struct ArgumentCheck {
     arg_ty: Type,
 }
 
+fn unchanged_constraint_defaults(
+    sub: &TypeParamSubstitution,
+    defaults: BTreeMap<String, Type>,
+) -> Vec<String> {
+    defaults
+        .into_iter()
+        .filter_map(|(name, ty)| (sub.get(&name) == Some(&ty)).then_some(name))
+        .collect()
+}
+
 /// What every argument of one generic call is inferred with.
 pub(super) struct GenericArguments<'a> {
     /// The type parameters the call infers rather than takes as written.
     pub(super) inferred_generics: &'a [String],
+    constraints: &'a BTreeMap<String, Type>,
     /// Those that only object and array literals are candidates for
     /// ([`super::inference_sources`]).
     sourced_by_literals: Vec<String>,
@@ -3110,6 +3252,7 @@ impl LiteralTypeArguments {
         args: &[(ExprId, Type)],
         ret: &Type,
         inferred_generics: &[String],
+        constraints: &BTreeMap<String, Type>,
         fixed: FixedByCallbacks<'_>,
     ) -> Self {
         let in_result = top_level_type_params(ret);
@@ -3117,6 +3260,10 @@ impl LiteralTypeArguments {
         let mut sole = Vec::new();
         let mut widened = Vec::new();
         for name in inferred_generics {
+            if constraints.get(name).is_some_and(literal_constraint) {
+                kept.push(name.clone());
+                continue;
+            }
             let mentioning: Vec<&Type> = args
                 .iter()
                 .map(|(_, param)| param)
@@ -3169,6 +3316,36 @@ impl LiteralTypeArguments {
             .iter()
             .any(|name| self.widened.iter().any(|widened| widened == name))
     }
+}
+
+fn literal_constraint(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::String
+        | Type::Number
+        | Type::Boolean
+        | Type::BigInt
+        | Type::StringLiteral(_)
+        | Type::NumberLiteral(_)
+        | Type::BooleanLiteral(_)
+        | Type::BigIntLiteral(_)
+        | Type::TemplateLiteral { .. } => true,
+        Type::Union(members) => members.iter().any(literal_constraint),
+        _ => false,
+    }
+}
+
+/// A concrete union arm offers only a fallback candidate. Constrained
+/// parameters decide whether it fits after their dependent bounds resolve.
+fn bind_unconstrained_union_fallbacks(
+    sub: &mut TypeParamSubstitution,
+    parameters: &crate::GenericParameters,
+) {
+    let names: Vec<_> = parameters
+        .iter()
+        .filter(|name| !parameters.constraints.contains_key(*name))
+        .cloned()
+        .collect();
+    sub.bind_whole_union_fallbacks_named(&names);
 }
 
 /// The type parameters a context-sensitive callback fixes by typing a
@@ -4054,7 +4231,7 @@ mod tests {
                 ret,
                 ..
             } => {
-                assert_eq!(generics, &vec!["T".to_string()]);
+                assert_eq!(generics.names, vec!["T".to_string()]);
                 assert_eq!(
                     params,
                     &vec![Param::new("x", Type::TypeVar("T".to_string()))]

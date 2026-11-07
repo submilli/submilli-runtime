@@ -1924,7 +1924,7 @@ mod missing_import_tests {
                 mangled_name: crate::mangle::package_symbol(name, "Contact"),
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: TypeKind::Alias {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     ty: Type::String,
                     doc: None,
                 },

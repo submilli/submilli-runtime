@@ -696,7 +696,8 @@ impl CodegenAnalysis {
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
-                        | TypedChainPart::NonNull { .. } => {}
+                        | TypedChainPart::NonNull { .. }
+                        | TypedChainPart::Constraint { .. } => {}
                     }
                 }
             }
@@ -1407,6 +1408,7 @@ impl CodegenAnalysis {
                         self.visit_type(signature)?;
                     }
                 }
+                TypedChainPart::Constraint { result_ty, .. } => self.visit_type(result_ty)?,
                 TypedChainPart::NonNull { result_ty, .. } => {
                     self.visit_type(result_ty)?;
                     self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);

@@ -1124,6 +1124,11 @@ impl<'a> Inferer<'a> {
                         null,
                     }));
                 }
+                TypedChainPart::Constraint { .. } => TypedExprKind::Cast {
+                    value: receiver,
+                    target_ty: ty.clone(),
+                    check: None,
+                },
             };
             let previous_receiver = receiver;
             receiver = self

@@ -129,7 +129,7 @@ enum TypeBinding {
 /// What a function declares in the scope its body block shares.
 #[derive(Clone, Copy, Default)]
 struct Signature<'a> {
-    type_params: &'a [Ident],
+    type_params: &'a [crate::TypeParameterAnnotation],
     params: &'a [String],
 }
 
@@ -221,7 +221,7 @@ struct Lifter {
     decls: Vec<LocalDecl>,
     /// The declaration of each type parameter in scope. A frame's are released
     /// when it ends: what lifts them is referenced only inside it.
-    type_params: Vec<Ident>,
+    type_params: Vec<crate::TypeParameterAnnotation>,
     current: Option<InDecl>,
     /// Lifted parameters added to declarations and references.
     lifted_added: usize,
@@ -269,6 +269,7 @@ impl Lifter {
                 ..
             } => {
                 self.push_type_params(generics);
+                self.walk_constraints(generics)?;
                 let names = self.enter_params(ast, params)?;
                 self.walk_opt_type(return_type)?;
                 if let Some(predicate) = type_predicate {
@@ -404,6 +405,7 @@ impl Lifter {
                 ..
             } => {
                 let class_frame = self.push_type_params(generics);
+                self.walk_constraints(generics)?;
                 self.walk_opt_type(extends)?;
                 for ty in implements.iter_mut() {
                     self.walk_type(ty)?;
@@ -465,6 +467,7 @@ impl Lifter {
                 ..
             } => {
                 self.push_type_params(generics);
+                self.walk_constraints(generics)?;
                 let names = self.enter_params(ast, params)?;
                 self.walk_type(return_type)?;
                 let signature = Signature {
@@ -753,7 +756,11 @@ impl Lifter {
 
     /// A function's type parameters and the types its body block declares
     /// share one scope, so one name can't be both.
-    fn check_type_param_clash(&mut self, name: &Ident, fn_type_params: &[Ident]) {
+    fn check_type_param_clash(
+        &mut self,
+        name: &Ident,
+        fn_type_params: &[crate::TypeParameterAnnotation],
+    ) {
         if let Some(param) = fn_type_params.iter().find(|p| p.name == name.name) {
             self.diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -766,7 +773,7 @@ impl Lifter {
     }
 
     /// Enter a scope declaring type parameters `names`. Returns its frame.
-    fn push_type_params(&mut self, names: &[Ident]) -> usize {
+    fn push_type_params(&mut self, names: &[crate::TypeParameterAnnotation]) -> usize {
         let first = self.type_params.len();
         let types = names
             .iter()
@@ -888,7 +895,7 @@ impl Lifter {
         &mut self.decls[id.0]
     }
 
-    fn type_param(&self, id: TypeParamId) -> &Ident {
+    fn type_param(&self, id: TypeParamId) -> &crate::TypeParameterAnnotation {
         &self.type_params[id.0]
     }
 
@@ -910,6 +917,26 @@ impl Lifter {
             uses: Some(DeclUses::default()),
         });
         self.walk_decl_types(&mut kind)?;
+        let mut visited = BTreeSet::new();
+        loop {
+            let parameters: Vec<_> = self
+                .collecting_uses()
+                .into_iter()
+                .flat_map(|uses| uses.type_params.iter().copied())
+                .collect();
+            let mut progressed = false;
+            for parameter in parameters {
+                if visited.insert(parameter) {
+                    progressed = true;
+                    if let Some(mut constraint) = self.type_param(parameter).constraint.clone() {
+                        self.walk_type(&mut constraint)?;
+                    }
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
         let uses = self.current.take().and_then(|in_decl| in_decl.uses);
         Ok(uses.unwrap_or_default())
     }
@@ -929,8 +956,8 @@ impl Lifter {
             uses: None,
         });
         self.walk_decl_types(&mut kind)?;
-        self.current = None;
         self.apply_key(&mut kind, decl)?;
+        self.current = None;
         ast.try_stmt_mut(id).map_err(arena_failure)?.kind = kind;
         Ok(())
     }
@@ -946,6 +973,7 @@ impl Lifter {
                 ..
             } => {
                 self.declare_own_type_params(generics);
+                self.walk_constraints(generics)?;
                 for ty in extends.iter_mut() {
                     self.walk_type(ty)?;
                 }
@@ -962,6 +990,7 @@ impl Lifter {
                             ..
                         } => {
                             self.declare_own_type_params(generics);
+                            self.walk_constraints(generics)?;
                             self.push_values(params.iter().map(|p| p.name.name.clone()).collect());
                             for param in params.iter_mut() {
                                 self.walk_opt_type(&mut param.ty)?;
@@ -977,6 +1006,7 @@ impl Lifter {
             }
             StmtKind::TypeAliasDecl { generics, ty, .. } => {
                 self.declare_own_type_params(generics);
+                self.walk_constraints(generics)?;
                 self.walk_type(ty)?;
                 self.pop();
             }
@@ -987,12 +1017,22 @@ impl Lifter {
 
     /// Push the type parameters a declaration declares, its own or a method's,
     /// and note their names while collecting its uses.
-    fn declare_own_type_params(&mut self, names: &[Ident]) {
+    fn declare_own_type_params(&mut self, names: &[crate::TypeParameterAnnotation]) {
         if let Some(uses) = self.collecting_uses() {
             uses.declared_type_params
                 .extend(names.iter().map(|name| name.name.clone()));
         }
         self.push_type_params(names);
+    }
+
+    fn walk_constraints(
+        &mut self,
+        parameters: &mut [crate::TypeParameterAnnotation],
+    ) -> Result<(), CompilerFailure> {
+        for parameter in parameters {
+            self.walk_opt_type(&mut parameter.constraint)?;
+        }
+        Ok(())
     }
 
     /// Where the uses of the declaration being walked go, while they are
@@ -1014,10 +1054,17 @@ impl Lifter {
         if let Some(generics) = generics {
             let count = self.decl(decl).lifted.len();
             charge(&mut self.lifted_added, count, name.span)?;
-            let lifted = self.decl(decl).lifted.iter().map(|param| Ident {
-                name: param.name.clone(),
-                span: param.span,
-            });
+            let mut lifted: Vec<_> = self
+                .decl(decl)
+                .lifted
+                .iter()
+                .map(|param| {
+                    let mut annotation = self.type_param(param.id).clone();
+                    annotation.ident.name = param.name.clone();
+                    annotation
+                })
+                .collect();
+            self.walk_constraints(&mut lifted)?;
             generics.splice(0..0, lifted);
         }
         name.name.clone_from(&self.decl(decl).key);

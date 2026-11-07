@@ -640,12 +640,14 @@ impl SyntaxChildren {
                 self.binding(binding);
             }
             StmtKind::Function {
+                generics,
                 params,
                 return_type,
                 type_predicate,
                 body,
                 ..
             } => {
+                self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
                 self.params(params);
                 self.annotations(return_type);
                 self.annotations(type_predicate.iter().map(|predicate| &predicate.asserted));
@@ -746,8 +748,12 @@ impl SyntaxChildren {
                 ..
             } => self.exprs(&[*receiver, *index, *value]),
             StmtKind::InterfaceDecl {
-                extends, members, ..
+                generics,
+                extends,
+                members,
+                ..
             } => {
+                self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
                 self.annotations(extends);
                 for member in members {
                     match member {
@@ -756,10 +762,12 @@ impl SyntaxChildren {
                             self.annotation(&signature.value);
                         }
                         InterfaceMember::Method {
+                            generics,
                             params,
                             return_type,
                             ..
                         } => {
+                            self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
                             self.params(params);
                             self.annotation(return_type);
                         }
@@ -768,18 +776,23 @@ impl SyntaxChildren {
                 }
             }
             StmtKind::ClassDecl {
+                generics,
                 extends,
                 implements,
                 members,
                 ..
             } => {
+                self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
                 self.annotations(extends);
                 self.annotations(implements);
                 for member in members {
                     self.class_member(member);
                 }
             }
-            StmtKind::TypeAliasDecl { ty, .. } => self.annotation(ty),
+            StmtKind::TypeAliasDecl { generics, ty, .. } => {
+                self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
+                self.annotation(ty);
+            }
         }
     }
 
@@ -792,11 +805,13 @@ impl SyntaxChildren {
                 self.nodes.extend(initializer.map(Node::Expr));
             }
             ClassMember::Method {
+                generics,
                 params,
                 return_type,
                 body,
                 ..
             } => {
+                self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
                 self.params(params);
                 self.annotation(return_type);
                 self.stmt(*body);
@@ -982,7 +997,8 @@ impl TypedChildren {
             match part {
                 TypedChainPart::Field { .. }
                 | TypedChainPart::InterfaceProperty { .. }
-                | TypedChainPart::NonNull { .. } => {}
+                | TypedChainPart::NonNull { .. }
+                | TypedChainPart::Constraint { .. } => {}
                 TypedChainPart::Index { idx, .. } => self.expr_at(*idx, depth),
                 TypedChainPart::Call { args, .. } | TypedChainPart::MethodCall { args, .. } => {
                     for arg in args {

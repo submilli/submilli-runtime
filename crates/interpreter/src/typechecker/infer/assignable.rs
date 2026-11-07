@@ -26,6 +26,7 @@ pub(crate) struct TypeResolver<'a> {
     /// Relate by tsc's strict subtype relation instead of assignability; see
     /// [`strict_subtype`].
     pub(crate) strict_subtype: bool,
+    pub(super) generic_constraints: &'a BTreeMap<u32, Type>,
 }
 
 /// A single way a class fails to satisfy an interface it declares it `implements`.
@@ -767,6 +768,29 @@ fn assignable_rec(
     if let Type::Refined { original, ty } = actual.without_aliases() {
         return assignable_rec(original, expected, types, seen)
             || assignable_rec(ty, expected, types, seen);
+    }
+    if let Type::GenericParam { id, .. } = actual.peel() {
+        if matches!(expected.peel(), Type::GenericParam { id: other, .. } if id == other) {
+            return true;
+        }
+        if let Some(constraint) = types.generic_constraints.get(id) {
+            let pair = (actual.clone(), expected.clone());
+            if seen.contains(&pair) {
+                return false;
+            }
+            // A chain of distinct parameters can be deep even when every
+            // individual bound is shallow. Bound the proof before recursing.
+            if seen.len() >= crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH as usize {
+                types.limits.record(crate::type_size::TypeTooLarge::Depth);
+                return false;
+            }
+            seen.push(pair);
+            let result = assignable_rec(constraint, expected, types, seen);
+            seen.pop();
+            if result {
+                return true;
+            }
+        }
     }
     if same_alias_instance(actual, expected) {
         return true;
@@ -1839,6 +1863,7 @@ mod tests {
                 registry: &registry,
                 limits: &limits,
                 strict_subtype: false,
+                generic_constraints: &BTreeMap::new(),
             },
         )
     }
@@ -2207,7 +2232,7 @@ mod tests {
                 "m".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     params: Vec::new(),
                     ret: Type::Void,
                     predicate: None,
@@ -2225,7 +2250,7 @@ mod tests {
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     methods,
                     properties,
                     dispatch: Dispatch::VTable,
@@ -2247,6 +2272,7 @@ mod tests {
                 registry: &registry,
                 limits: &limits,
                 strict_subtype: false,
+                generic_constraints: &BTreeMap::new(),
             },
         )
     }

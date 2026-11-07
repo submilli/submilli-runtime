@@ -1847,7 +1847,7 @@ fn accessor_methods(decl: &TypedClassDecl) -> Vec<(crate::TypedClassMethod, Stri
                     name,
                     span: acc.name().span,
                 },
-                generics: Vec::new(),
+                generics: Default::default(),
                 params,
                 return_type,
                 body: acc.body(),

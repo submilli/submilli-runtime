@@ -38,7 +38,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Headers"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: TypeKind::Alias {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 ty: Type::InterfaceRef { mangled: crate::mangle::prelude("Map"),
                     package: crate::Package::prelude(),
                     name: "Map".to_string(),
@@ -71,7 +71,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "download"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params: vec![
                     Param::new("url", Type::String),
                     Param::new("path", Type::String),
@@ -97,7 +97,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "request"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params: vec![
                     Param::new("method", Type::String),
                     Param::new("url", Type::String),
@@ -159,7 +159,7 @@ fn insert_verb_fn(defs: &mut PackageDeclaration, verb: &str, has_body: bool) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, verb),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params,
                 ret: response_type(),
                 type_predicate: None,
@@ -275,7 +275,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
         "throwForStatus".to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new(),
+            generics: Vec::new().into(),
             params: Vec::new(),
             ret: Type::Void,
             predicate: None,
@@ -288,7 +288,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
         "toString".to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new(),
+            generics: Vec::new().into(),
             params: Vec::new(),
             ret: Type::String,
             predicate: None,
@@ -303,7 +303,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
         RESPONSE_JSON.to_string(),
         MethodSig {
             optional: false,
-            generics: vec!["T".to_string()],
+            generics: vec!["T".to_string()].into(),
             params: Vec::new(),
             ret: Type::TypeVar("T".to_string()),
             predicate: None,
@@ -320,7 +320,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Response"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 methods,
                 properties,
                 dispatch: Dispatch::Direct,
@@ -372,7 +372,7 @@ fn insert_download_options_interface(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DownloadOptions"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 methods: BTreeMap::new(),
                 properties,
                 // VTable: fields read via inline field-name scan, no per-field imports emitted.
@@ -449,7 +449,7 @@ fn insert_download_result_interface(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DownloadResult"),
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 methods: BTreeMap::new(),
                 properties,
                 dispatch: Dispatch::VTable,

@@ -222,7 +222,7 @@ pub fn tools_call_package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::host(TOOLS_MODULE_NAME, "call"),
             declaration_span: Span::at(crate::FileId::MCP),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Vec::new().into(),
                 params: vec![
                     Param::new("tool", Type::String),
                     Param::new("args", Type::String),
@@ -278,7 +278,7 @@ mod tests {
                     mangled_name: mangle::host(pkg, name),
                     declaration_span: Span::at(crate::FileId::MCP),
                     kind: ValueKind::Function {
-                        generics: Vec::new(),
+                        generics: Vec::new().into(),
                         params,
                         ret,
                         type_predicate: None,

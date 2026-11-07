@@ -804,7 +804,8 @@ impl State<'_> {
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
-                        | TypedChainPart::NonNull { .. } => {}
+                        | TypedChainPart::NonNull { .. }
+                        | TypedChainPart::Constraint { .. } => {}
                     }
                 }
             }
@@ -1600,7 +1601,8 @@ mod tests {
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
-                        | TypedChainPart::NonNull { .. } => {}
+                        | TypedChainPart::NonNull { .. }
+                        | TypedChainPart::Constraint { .. } => {}
                     }
                 }
             }

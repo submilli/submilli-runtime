@@ -53,7 +53,7 @@ impl ValidatorBodies {
                 TypeKind::Alias { generics, ty, .. } => {
                     imported_aliases
                         .entry(sym.mangled_name.clone())
-                        .or_insert_with(|| (generics.clone(), ty.clone()));
+                        .or_insert_with(|| (generics.to_vec(), ty.clone()));
                 }
                 TypeKind::Interface {
                     generics,
@@ -78,7 +78,7 @@ impl ValidatorBodies {
                                     )
                                 })
                                 .collect();
-                            (generics.clone(), fields)
+                            (generics.to_vec(), fields)
                         });
                 }
                 _ => {}
@@ -91,13 +91,13 @@ impl ValidatorBodies {
                 TypedTypeDecl::Alias(alias) => {
                     local_aliases.insert(
                         alias.name.name.clone(),
-                        (alias.generics.clone(), alias.ty.clone()),
+                        (alias.generics.to_vec(), alias.ty.clone()),
                     );
                 }
                 TypedTypeDecl::Interface(iface) => {
                     if let Some(fields) = data_only_fields(&iface.members) {
                         local_interfaces
-                            .insert(iface.name.name.clone(), (iface.generics.clone(), fields));
+                            .insert(iface.name.name.clone(), (iface.generics.to_vec(), fields));
                     }
                 }
                 _ => {}

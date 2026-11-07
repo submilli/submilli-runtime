@@ -41,7 +41,7 @@ pub(super) enum StaticResolution {
 pub(in crate::typechecker) struct PendingImplements {
     class_name: String,
     mangled: MangledName,
-    generic_names: Vec<String>,
+    generic_names: crate::GenericParameters,
     /// Each target's annotation span and resolved type. Non-interface targets
     /// are already diagnosed and ride along as `Type::Error`.
     targets: Vec<(Span, Type)>,
@@ -122,17 +122,13 @@ impl<'a> Inferer<'a> {
     pub(super) fn bind_class(
         &mut self,
         name: Ident,
-        generics: Vec<Ident>,
+        generics: Vec<crate::TypeParameterAnnotation>,
         extends: Option<TypeAnnotation>,
         implements: Vec<TypeAnnotation>,
         members: Vec<ClassMember>,
         doc: Option<crate::DocComment>,
     ) -> Result<(), CompilerFailure> {
-        let generic_names: Vec<String> = generics.iter().map(|g| g.name.clone()).collect();
-        // Push class-level generics so member annotations can name them. Generic
-        // classes are not otherwise resolved in v1 (rejected as type args in
-        // `resolve_type`), but a `class Box<T> { value: T }` still binds cleanly.
-        self.push_signature_generics(generic_names.clone());
+        let generic_names = self.push_declared_generics(&generics)?;
 
         let mangled = self.mangle_top_symbol(&name.name)?;
         let extends_clause = match self.resolve_extends_target(extends.as_ref())? {
@@ -237,9 +233,7 @@ impl<'a> Inferer<'a> {
                     if self.reject_bad_static_name(&statics, &static_fields, m_name, &name) {
                         continue;
                     }
-                    let m_generic_names: Vec<String> =
-                        m_generics.iter().map(|g| g.name.clone()).collect();
-                    self.push_signature_generics(m_generic_names.clone());
+                    let m_generic_names = self.push_declared_generics(m_generics)?;
                     let resolved_params: Vec<Param> = self.resolve_params(params)?;
                     let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
@@ -302,8 +296,6 @@ impl<'a> Inferer<'a> {
                     if self.reject_duplicate_member(&fields, &methods, m_name, &name) {
                         continue;
                     }
-                    let m_generic_names: Vec<String> =
-                        m_generics.iter().map(|g| g.name.clone()).collect();
                     // Method-level generics on class methods have no codegen
                     // (the vtable slot would get a stub body that traps) —
                     // reject at bind time instead of at runtime. Class-level
@@ -333,7 +325,7 @@ impl<'a> Inferer<'a> {
                             )],
                         );
                     }
-                    self.push_signature_generics(m_generic_names.clone());
+                    let m_generic_names = self.push_declared_generics(m_generics)?;
                     let resolved_params: Vec<Param> = self.resolve_params(params)?;
                     let resolved_ret = self.resolve_type(return_type)?;
                     self.pop_signature_generics();
@@ -577,17 +569,17 @@ impl<'a> Inferer<'a> {
         // both sides, so `Box<T> implements Container<T>` still matches member
         // for member while `Box<T> implements Container<string>` is caught —
         // instantiating with bare `TypeVar`s would make both pass.
+        let opaque = self.push_body_generics(pending.generic_names.clone())?;
+        self.pop_body_generics();
         let class_args: Vec<Type> = pending
             .generic_names
             .iter()
-            .map(|name| self.fresh_generic_param(name))
+            .map(|name| {
+                opaque.get(name).cloned().ok_or_else(|| {
+                    super::inference_failure("class parameter has no body instantiation")
+                })
+            })
             .collect::<Result<_, _>>()?;
-        let opaque: BTreeMap<String, Type> = pending
-            .generic_names
-            .iter()
-            .cloned()
-            .zip(class_args.iter().cloned())
-            .collect();
         for (span, iface_ty) in &pending.targets {
             // Peeled to agree with `resolve_implements_targets`, which admits an
             // aliased interface. An unpeeled match reads `type N = Named` as a
@@ -2464,14 +2456,9 @@ impl<'a> Inferer<'a> {
         let TypeKind::Class { generics, .. } = &sym.kind else {
             return Ok(BTreeMap::new());
         };
-        generics
-            .clone()
-            .into_iter()
-            .map(|g| {
-                let opaque = self.fresh_generic_param(&g)?;
-                Ok((g, opaque))
-            })
-            .collect()
+        let bindings = self.push_body_generics(generics.clone())?;
+        self.pop_body_generics();
+        Ok(bindings)
     }
 
     /// The mangled name of a class declared with `name`, if it resolves to a class.
@@ -3615,7 +3602,7 @@ impl<'a> Inferer<'a> {
             let mangled = sym.mangled_name.clone();
             self.typed_ast
                 .runtime_class_parameters
-                .insert(mangled.clone(), class_generics.clone());
+                .insert(mangled.clone(), class_generics.to_vec());
 
             // Static bodies run without an instance: checked before `current_class`
             // is set so `this`/`super` get the static-specific rejections — and

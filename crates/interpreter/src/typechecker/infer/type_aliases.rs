@@ -106,7 +106,10 @@ impl<'a> Inferer<'a> {
     ) -> Result<Type, CompilerFailure> {
         // Arity check against the forward-declared placeholder's
         // generic-param list (known before the body is resolved).
-        let (generics, mangled): (Vec<String>, crate::MangledName) = match self.types.lookup(name) {
+        let (generics, mangled): (crate::GenericParameters, crate::MangledName) = match self
+            .types
+            .lookup(name)
+        {
             Some(sym) => match &sym.kind {
                 TypeKind::Alias { generics, .. } => (generics.clone(), sym.mangled_name.clone()),
                 _ => return Ok(Type::Error),
@@ -193,7 +196,7 @@ impl<'a> Inferer<'a> {
         self.alias_resolution_stack.push(name.to_string());
         let saved_generics = std::mem::take(&mut self.generics_in_scope);
         let saved_bodies = std::mem::take(&mut self.body_instantiations);
-        self.push_signature_generics(pending.generics.clone());
+        let parameters = self.push_declared_generics(&pending.generics)?;
         let resolved_body = self.resolve_type(&pending.annotation)?;
         self.pop_signature_generics();
         self.generics_in_scope = saved_generics;
@@ -202,14 +205,15 @@ impl<'a> Inferer<'a> {
 
         let mut final_symbol = None;
         if let Some(sym) = self.types.lookup_mut(name)
-            && let TypeKind::Alias { ty, .. } = &mut sym.kind
+            && let TypeKind::Alias { ty, generics, .. } = &mut sym.kind
         {
             *ty = resolved_body.clone();
+            *generics = parameters.clone();
             final_symbol = Some(sym.clone());
         }
         let typed_decl = crate::TypedTypeDecl::Alias(crate::TypedTypeAliasDecl {
             name: pending.name,
-            generics: pending.generics,
+            generics: parameters,
             ty: resolved_body,
             doc: pending.doc,
         });

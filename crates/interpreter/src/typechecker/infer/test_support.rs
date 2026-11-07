@@ -207,6 +207,8 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
+        generic_constraints: Default::default(),
+        pending_constraint_checks: None,
         next_generic_param_id: 0,
         packages_by_name,
         type_only_packages: transitive

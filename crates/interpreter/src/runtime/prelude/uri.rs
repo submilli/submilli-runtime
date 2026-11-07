@@ -210,7 +210,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                 mangled_name: mangled,
                 declaration_span: Span::at(crate::FileId::URI),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Vec::new().into(),
                     params: vec![Param::new("uri", param)],
                     ret: Type::String,
                     type_predicate: None,
