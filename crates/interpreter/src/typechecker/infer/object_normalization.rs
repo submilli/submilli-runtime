@@ -62,6 +62,47 @@ pub(super) fn conditional_normalization(
     }
 }
 
+/// Fresh object returns normalize together just like conditional branches.
+pub(super) fn return_normalization(
+    ast: &crate::Ast,
+    returned: &[super::ReturnedValue],
+) -> Result<Option<NormalizingFields>, CompilerFailure> {
+    let mut choices = Vec::new();
+    for value in returned {
+        if is_primitive_return(&value.ty) {
+            continue;
+        }
+        let Some(source) = value.source else {
+            return Ok(None);
+        };
+        let Some(literals) = fresh_object_choices(ast, source)? else {
+            return Ok(None);
+        };
+        choices.extend(literals);
+    }
+    normalizing_fields(ast, choices).map(Some)
+}
+
+/// Primitive peers contribute no object fields, including through a union.
+fn is_primitive_return(ty: &Type) -> bool {
+    ty.all_members(&|member| {
+        matches!(
+            member,
+            Type::Number
+                | Type::NumberLiteral(_)
+                | Type::String
+                | Type::StringLiteral(_)
+                | Type::Boolean
+                | Type::BooleanLiteral(_)
+                | Type::BigInt
+                | Type::BigIntLiteral(_)
+                | Type::Null
+                | Type::Undefined
+                | Type::Never
+        )
+    })
+}
+
 /// Whether every element is an array literal whose elements are all fresh
 /// object literals, or conditionals choosing between them. An empty one holds
 /// no element to say otherwise.

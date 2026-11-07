@@ -64,9 +64,15 @@ impl Inferer<'_> {
     /// `{ a: { b: never[] } }` is dropped as a subtype of
     /// `{ a: { b: number[] } }`, while `{ a: {} }` stays, having no field `b`.
     pub(super) fn without_fresh_subtypes(&self, types: Vec<Type>) -> Type {
+        self.without_fresh_subtypes_preserving_literals(
+            types.into_iter().map(|ty| ty.widen_literal()).collect(),
+        )
+    }
+
+    /// Closure returns retain primitive literal members while reducing fresh objects.
+    pub(super) fn without_fresh_subtypes_preserving_literals(&self, types: Vec<Type>) -> Type {
         let mut candidates: Vec<Candidate> = Vec::new();
         for ty in types {
-            let ty = ty.widen_literal();
             let members = match ty.peel() {
                 Type::Union(members) => members.clone(),
                 _ => vec![ty],
