@@ -14,14 +14,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     shared::reg_plain_from(
         linker,
         engine,
-        &types.string,
         obj,
         "PlainYearMonthConstructor",
-        "PlainYearMonth#from",
-        |s, caller| {
-            let (year, month) = super::parse(s).map_err(crate::runtime::host::range_error)?;
-            shared::make_plain_year_month(caller, year, month)
-        },
+        super::super::like::plain_year_month,
     )?;
     for method in ["toString", "toJSON"] {
         shared::reg_plain_string(
@@ -40,8 +35,16 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         obj,
         "PlainYearMonth",
         shared::plain_equals_year_month,
+        super::super::like::plain_year_month,
     )?;
-    shared::reg_plain_compare(linker, engine, obj, "PlainYearMonthConstructor", &[1, 2])?;
+    shared::reg_plain_compare(
+        linker,
+        engine,
+        obj,
+        "PlainYearMonthConstructor",
+        &[1, 2],
+        super::super::like::plain_year_month,
+    )?;
     for (name, field) in [("year", 1), ("month", 2)] {
         shared::reg_plain_i32_getter(linker, engine, obj, "PlainYearMonth", name, field)?;
     }
@@ -167,7 +170,8 @@ fn reg_plain_year_month_pair_op(
         ty,
         move |caller, params, results| {
             let a = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
-            let b = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
+            let b_value = super::super::like::plain_year_month(caller, abi_arg(params, 1)?, None)?;
+            let b = as_struct_val(caller, &b_value, &label)?;
             let ay = st_i32(caller, a, 1, &label)?;
             let am = st_i32(caller, a, 2, &label)?;
             let by = st_i32(caller, b, 1, &label)?;
@@ -238,7 +242,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "from",
         shared::prelude_key("PlainYearMonthConstructor", "from"),
-        vec![Param::new("s", Type::String)],
+        vec![
+            Param::new("item", super::super::like::like_type("PlainYearMonth")),
+            super::super::like::overflow_param(),
+        ],
         ty(),
     );
     for method in ["toString", "toJSON"] {
@@ -254,20 +261,27 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "equals",
         shared::prelude_key("PlainYearMonth", "equals"),
-        vec![receiver(), Param::new("other", ty())],
+        vec![
+            receiver(),
+            Param::new("other", super::super::like::like_type("PlainYearMonth")),
+        ],
         Type::Boolean,
     );
     shared::declare_direct_fn(
         defs,
         "compare",
         shared::prelude_key("PlainYearMonthConstructor", "compare"),
-        vec![Param::new("a", ty()), Param::new("b", ty())],
+        vec![
+            Param::new("a", super::super::like::like_type("PlainYearMonth")),
+            Param::new("b", super::super::like::like_type("PlainYearMonth")),
+        ],
         Type::Number,
     );
     let duration_like = || {
         Param::new(
             "duration",
             Type::Union(vec![
+                Type::String,
                 shared::temporal_type("Duration"),
                 shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
             ]),
@@ -289,7 +303,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             shared::prelude_key("PlainYearMonth", method),
             vec![
                 receiver(),
-                Param::new("other", ty()),
+                Param::new("other", super::super::like::like_type("PlainYearMonth")),
                 Param::with_default(
                     "options",
                     Type::Union(vec![Type::any_object(), Type::Undefined]),

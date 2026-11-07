@@ -71,7 +71,7 @@ pub(crate) fn insert_temporal_plain_type(
             MethodSig {
                 optional: false,
                 generics: Vec::new(),
-                params: vec![Param::new("other", self_ref())],
+                params: vec![Param::new("other", super::temporal::like::like_type(local))],
                 ret: Type::Boolean,
                 predicate: None,
                 doc: doc("/** `true` if `this` and `other` denote the same value. */"),
@@ -124,11 +124,14 @@ pub(crate) fn insert_temporal_plain_type(
         MethodSig {
             optional: false,
             generics: Vec::new(),
-            params: vec![Param::new("iso", Type::String)],
+            params: vec![
+                Param::new("item", super::temporal::like::like_type(local)),
+                super::temporal::like::overflow_param(),
+            ],
             ret: self_ref(),
             predicate: None,
             doc: doc(
-                "/** Parse an ISO 8601 string into this Plain type. Throws on malformed input. */",
+                "/** Convert a Temporal value, ISO string, or ISO fields bag. Overflow defaults to constrain; reject throws RangeError. */",
             ),
         },
     )]);
@@ -138,7 +141,10 @@ pub(crate) fn insert_temporal_plain_type(
             MethodSig {
                 optional: false,
                 generics: Vec::new(),
-                params: vec![Param::new("a", self_ref()), Param::new("b", self_ref())],
+                params: vec![
+                    Param::new("a", super::temporal::like::like_type(local)),
+                    Param::new("b", super::temporal::like::like_type(local)),
+                ],
                 ret: Type::Number,
                 predicate: None,
                 doc: doc(

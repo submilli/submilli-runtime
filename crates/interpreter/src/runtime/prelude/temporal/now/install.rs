@@ -1,7 +1,5 @@
 use crate::runtime::effects;
-use crate::runtime::host::{
-    abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
-};
+use crate::runtime::host::{abi_arg, register_host_value_async, write_submilli_string_struct};
 use std::collections::BTreeMap;
 
 use wasmtime::{FuncType, Linker, Val};
@@ -61,7 +59,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => {
                         None
                     }
-                    _ => Some(read_string_arg(
+                    _ => Some(super::super::like::time_zone(
                         caller,
                         abi_arg(params, 0)?,
                         "Temporal.Now.zonedDateTimeISO",
@@ -101,7 +99,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
                     value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => {
                         None
                     }
-                    _ => Some(read_string_arg(
+                    _ => Some(super::super::like::time_zone(
                         caller,
                         abi_arg(params, 0)?,
                         "Temporal.Now.zonedDateTime",
@@ -209,7 +207,7 @@ async fn now_zoned(
 ) -> wasmtime::Result<jiff::Zoned> {
     let tz = match tz {
         value if crate::runtime::prelude::undefined::is_undefined(caller, value)? => None,
-        _ => Some(read_string_arg(caller, tz, label)?),
+        _ => Some(super::super::like::time_zone(caller, tz, label)?),
     };
     let RecordedZoned((zoned, _)) = effects::execute(caller, label, tz, |caller, _, tz| {
         Box::pin(
@@ -258,7 +256,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
                         generics: Vec::new(),
                         params: vec![Param::with_default(
                             "timeZone",
-                            Type::Union(vec![Type::String, Type::Undefined]),
+                            Type::union(vec![
+                                super::super::like::like_type("TimeZone"),
+                                Type::Undefined,
+                            ]),
                             DefaultValue::Undefined,
                         )],
                         ret: shared::temporal_type("ZonedDateTime"),

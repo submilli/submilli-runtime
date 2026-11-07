@@ -2,6 +2,7 @@
 
 mod duration;
 mod instant;
+pub(crate) mod like;
 mod now;
 mod plain_date;
 mod plain_date_time;

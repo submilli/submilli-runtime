@@ -35,16 +35,8 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         shared::prelude_key("DurationConstructor", "from"),
         FuncType::new(engine, [object.clone()], object_result.clone()),
         move |caller, params, results| {
-            let span = if crate::runtime::prelude::collection::is_a(
-                caller,
-                abi_arg(params, 0)?,
-                &intr.string,
-            )? {
-                let input = read_string_arg(caller, abi_arg(params, 0)?, "Temporal.Duration.from")?;
-                super::parse(&input).map_err(crate::runtime::host::range_error)?
-            } else {
-                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.from")?
-            };
+            let span =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.from")?;
             *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
             Ok(())
         },
@@ -443,15 +435,7 @@ fn install_strings(
 pub(crate) fn declare(defs: &mut PackageDeclaration) {
     let duration = || shared::temporal_type("Duration");
     let receiver = || Param::new("receiver", duration());
-    let duration_like = || {
-        Param::new(
-            "duration",
-            Type::Union(vec![
-                duration(),
-                shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
-            ]),
-        )
-    };
+    let duration_like = || Param::new("duration", super::super::like::like_type("Duration"));
     let optional_options = || Type::Union(vec![Type::any_object(), Type::Undefined]);
 
     shared::declare_direct_fn(
@@ -534,7 +518,16 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "with",
         shared::prelude_key("Duration", "with"),
-        vec![receiver(), duration_like()],
+        vec![
+            receiver(),
+            Param::new(
+                "fields",
+                Type::Union(vec![
+                    duration(),
+                    shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
+                ]),
+            ),
+        ],
         duration(),
     );
     for method in ["round", "total"] {

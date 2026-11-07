@@ -14,20 +14,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     shared::reg_plain_from(
         linker,
         engine,
-        &types.string,
         obj,
         "PlainTimeConstructor",
-        "PlainTime#from",
-        |s, caller| {
-            let time = super::parse(s).map_err(crate::runtime::host::range_error)?;
-            shared::make_plain_time(
-                caller,
-                i32::from(time.hour()),
-                i32::from(time.minute()),
-                i32::from(time.second()),
-                time.subsec_nanosecond(),
-            )
-        },
+        super::super::like::plain_time,
     )?;
     for method in ["toString", "toJSON"] {
         shared::reg_plain_string(
@@ -40,8 +29,22 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             shared::plain_to_string_time,
         )?;
     }
-    shared::reg_plain_equals(linker, engine, obj, "PlainTime", shared::plain_equals_time)?;
-    shared::reg_plain_compare(linker, engine, obj, "PlainTimeConstructor", &[1, 2, 3, 4])?;
+    shared::reg_plain_equals(
+        linker,
+        engine,
+        obj,
+        "PlainTime",
+        shared::plain_equals_time,
+        super::super::like::plain_time,
+    )?;
+    shared::reg_plain_compare(
+        linker,
+        engine,
+        obj,
+        "PlainTimeConstructor",
+        &[1, 2, 3, 4],
+        super::super::like::plain_time,
+    )?;
     for (name, field) in [("hour", 1), ("minute", 2), ("second", 3)] {
         shared::reg_plain_i32_getter(linker, engine, obj, "PlainTime", name, field)?;
     }
@@ -153,9 +156,8 @@ fn reg_plain_time_pair_op(
         ty,
         move |caller, params, results| {
             let a_st = as_struct_val(caller, abi_arg(params, 0)?, &label)?;
-            let b_st = as_struct_val(caller, abi_arg(params, 1)?, &label)?;
             let a = plain_time_from_struct(caller, a_st, 0, &label)?;
-            let b = plain_time_from_struct(caller, b_st, 0, &label)?;
+            let b = super::super::like::time(caller, abi_arg(params, 1)?, None)?;
             let o = object_diff_options(
                 caller,
                 abi_arg(params, 2)?,
@@ -185,7 +187,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "from",
         shared::prelude_key("PlainTimeConstructor", "from"),
-        vec![Param::new("s", Type::String)],
+        vec![
+            Param::new("item", super::super::like::like_type("PlainTime")),
+            super::super::like::overflow_param(),
+        ],
         ty(),
     );
     for method in ["toString", "toJSON"] {
@@ -201,20 +206,27 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "equals",
         shared::prelude_key("PlainTime", "equals"),
-        vec![receiver(), Param::new("other", ty())],
+        vec![
+            receiver(),
+            Param::new("other", super::super::like::like_type("PlainTime")),
+        ],
         Type::Boolean,
     );
     shared::declare_direct_fn(
         defs,
         "compare",
         shared::prelude_key("PlainTimeConstructor", "compare"),
-        vec![Param::new("a", ty()), Param::new("b", ty())],
+        vec![
+            Param::new("a", super::super::like::like_type("PlainTime")),
+            Param::new("b", super::super::like::like_type("PlainTime")),
+        ],
         Type::Number,
     );
     let duration_like = || {
         Param::new(
             "duration",
             Type::Union(vec![
+                Type::String,
                 shared::temporal_type("Duration"),
                 shared::object_shape_type(&shared::DURATION_FIELD_NAMES),
             ]),
@@ -236,7 +248,7 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
             shared::prelude_key("PlainTime", method),
             vec![
                 receiver(),
-                Param::new("other", ty()),
+                Param::new("other", super::super::like::like_type("PlainTime")),
                 Param::with_default(
                     "options",
                     Type::Union(vec![Type::any_object(), Type::Undefined]),

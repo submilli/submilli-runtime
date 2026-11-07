@@ -30,7 +30,7 @@ new ports can keep them).
 
 | Pattern | Reason |
 |:--|:--|
-| Calendar machinery: `calendar-temporal-object.js`, `argument-propertybag-calendar-*.js`, `calendarId`, `withCalendar/**`, `era`/`eraYear`, `monthCode`-as-input cases, `calendarname-*.js` toString options | ISO-8601 only; no calendar objects, no calendar ids on the API surface. Copied: `rejected/Temporal/PlainDate/from/calendar-temporal-object.js`, `rejected/Temporal/ZonedDateTime/prototype/withCalendar/calendar-string.js`. |
+| Calendar machinery: `calendar-temporal-object.js`, `argument-propertybag-calendar-*.js`, `calendarId`, `withCalendar/**`, `era`/`eraYear`, `calendarname-*.js` toString options | ISO-8601 only; no calendar objects, no calendar ids on the API surface. Copied: `rejected/Temporal/PlainDate/from/calendar-temporal-object.js`, `rejected/Temporal/ZonedDateTime/prototype/withCalendar/calendar-string.js`. |
 | Non-ISO calendars (all of `test/intl402/Temporal/**`) | ISO-8601 only by design. Copied: `rejected/Temporal/PlainDateTime/from/era-japanese.js`. |
 | `TimeZone` objects and timezone-like property bags (`argument-propertybag-timezone-wrong-type.js`, `timezone-getpossibleinstantsfor-*`, `getTimeZoneTransition/**`) | Time zones are IANA-id strings; no TimeZone objects. Copied: `rejected/Temporal/ZonedDateTime/from/argument-propertybag-timezone-wrong-type.js`. |
 | Property-bag argument coercion (`order-of-operations.js`, `argument-invalid-property.js`, `argument-singular-properties.js`, "incorrectly-spelled properties are ignored" arms, getter traps like `argument-object-get-*-throws.js`, `options-read-before-algorithmic-validation.js`) | Bags are typed literals: misspelled/extra fields and observable getters are compile errors or inexpressible. Copied: `rejected/Temporal/Instant/prototype/add/order-of-operations.js`. Ports of mixed cases drop only those arms (noted in each file). |
@@ -60,9 +60,8 @@ Newly discovered while porting (not in the gaps doc):
 | `PlainTime/prototype/add/argument-object`, `PlainDateTime/prototype/add/hour-overflow` | `nanosecond` on PlainTime/PlainDateTime returns nanoseconds-within-*second* (e.g. 123456789) instead of the standard within-*microsecond* (0–999). `millisecond`/`microsecond` are standard, and `ZonedDateTime.nanosecond` is correct — only these two types diverge. |
 
 Other gaps hit while probing, recorded here but not pinned by a port:
-property-bag `from({ year, month, day })` is a compile error on every type
-(`from` is string-only; the standard accepts field bags); no
-`overflow: "constrain" | "reject"` option on `from`/`add`/`with`;
+`overflow: "constrain" | "reject"` options on `add`/`with` remain unsupported;
+`from` accepts supported ISO field bags, strings and Temporal values with overflow options;
 fixed-offset time-zone ids and bracketed offset annotations are supported.
 
 ## Not ported (curation)
@@ -73,8 +72,7 @@ fixed-offset time-zone ids and bracketed offset annotations are supported.
 | Per-rounding-mode matrices (`roundingmode-{ceil,floor,expand,halfEven,…}.js` × every type/method) and `roundingincrement-*` grids | Huge generated matrices; representative modes are covered by `Instant/until`, `Duration/round`, and the existing `temporal_until_options.subm` fixture. |
 | `argument-string-*` parse-variant grids (separators, offsets, sub-minute offsets, multiple offsets) | Parser torture beyond the minimal ISO forms we guarantee; revisit alongside the extended-year gap. |
 | `argument-duration-max.js`, `*-out-of-range.js`, `infinity-throws-rangeerror.js`, `non-integer-throws-rangeerror.js` per method | Limit/validation behavior is pinned once via `Instant/limits`, `PlainDate/from/limits`, and the Duration cap rows above; per-method repeats add no signal while the range gaps are open. |
-| `equals`/`compare` argument-casting variants (`argument-zoneddatetime.js`, `instant-string.js`, `argument-cast.js`, exhaustive grids) | Arguments are statically typed — implicit casting from strings/bags doesn't exist; the typed-value comparisons are ported (`Instant/compare/cross-epoch`, `Instant/prototype/equals/basic`, `PlainTime/prototype/equals/basic`). |
-| `PlainMonthDay/from/basic.js`, `fields-leap-day.js` and other bag-based `from` cases | Blocked behind the property-bag `from` gap above; the string forms are covered by `temporal_plainmonthday.subm` and `PlainMonthDay/prototype/toPlainDate/basic`. |
+| Exhaustive `equals`/`compare` conversion grids | Strings, ISO field bags, and the Temporal carriers in the TypeScript Like unions are covered by `temporal_like.ts`; typed-value comparisons remain ported. Further upstream grids are curation, not a string/bag conversion gap. |
 | `Duration/prototype/with/sign-conflict-throws-rangeerror.js` | Built on computed property keys (`{ [field]: -1 }`), not in the subset; the merge semantics are ported via `partial-positive`. |
 | `toString` option grids (`fractionalseconddigits-*`, `smallestunit-*`, `calendarname-*`, `timezonename-*`) | `toString(options)` exists only on Duration here (ported: `toString/precision`); the other types' options are part of the tracked round/format cluster. |
 | `PlainDateTime/prototype/toZonedDateTime/basic.js` and disambiguation variants | Pinned through `epochNanoseconds`/`calendarId` (both unavailable); conversion itself is covered by `PlainDate/prototype/toZonedDateTime/basic` and `temporal_plain_to_zoned.subm`. |

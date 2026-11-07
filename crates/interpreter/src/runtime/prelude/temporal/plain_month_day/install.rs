@@ -13,14 +13,9 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     shared::reg_plain_from(
         linker,
         engine,
-        &types.string,
         obj,
         "PlainMonthDayConstructor",
-        "PlainMonthDay#from",
-        |s, caller| {
-            let (month, day) = super::parse(s).map_err(crate::runtime::host::range_error)?;
-            shared::make_plain_month_day(caller, month, day)
-        },
+        super::super::like::plain_month_day,
     )?;
     for method in ["toString", "toJSON"] {
         shared::reg_plain_string(
@@ -39,6 +34,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         obj,
         "PlainMonthDay",
         shared::plain_equals_month_day,
+        super::super::like::plain_month_day,
     )?;
     shared::reg_plain_i32_getter(linker, engine, obj, "PlainMonthDay", "month", 1)?;
     shared::reg_plain_i32_getter(linker, engine, obj, "PlainMonthDay", "day", 2)?;
@@ -142,7 +138,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "from",
         shared::prelude_key("PlainMonthDayConstructor", "from"),
-        vec![Param::new("s", Type::String)],
+        vec![
+            Param::new("item", super::super::like::like_type("PlainMonthDay")),
+            super::super::like::overflow_param(),
+        ],
         ty(),
     );
     for method in ["toString", "toJSON"] {
@@ -158,7 +157,10 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
         defs,
         "equals",
         shared::prelude_key("PlainMonthDay", "equals"),
-        vec![receiver(), Param::new("other", ty())],
+        vec![
+            receiver(),
+            Param::new("other", super::super::like::like_type("PlainMonthDay")),
+        ],
         Type::Boolean,
     );
     shared::declare_direct_fn(
