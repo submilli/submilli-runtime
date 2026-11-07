@@ -2216,8 +2216,6 @@ impl Inferer<'_> {
             let (typed_value, value_ty, reported) =
                 self.infer_assigned_value(value, hint.as_ref())?;
             if entry.requires_assignment
-                && !reported
-                && assignable(&value_ty, entry.write_type(), self.resolver())
                 && let Some(env) = self.narrow_scopes.last_mut()
             {
                 env.definitely_assigned
