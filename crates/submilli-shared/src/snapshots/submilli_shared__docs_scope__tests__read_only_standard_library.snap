@@ -110,7 +110,7 @@ function stat(path: string): Stat;
 function summary(path: string): string;
 
 /**
- * Directory entry yielded by `list(path, options)`. Properties: `kind` / `name` / `path` / `size`. Constructed only by the iterator.
+ * Directory entry yielded by `list(path, options)`. Properties: `kind` / `name` / `path` / `size`. Returned by the iterator.
  */
 interface DirEntry {
   /**
@@ -184,7 +184,7 @@ interface MountInfo {
 }
 
 /**
- * Lightweight file-only inspection — preview + transport metadata. Constructed only by `peek`; user code reads fields via property access.
+ * Lightweight file-only inspection — preview + transport metadata. Returned by `peek`; user code reads fields via property access.
  */
 interface Peek {
   /**
@@ -216,7 +216,7 @@ interface RecursiveOptions {
 }
 
 /**
- * Filesystem metadata returned by `stat(path)`. Constructed only by `stat`; user code reads `kind` / `size` / `modifiedAt` via property access.
+ * Filesystem metadata returned by `stat(path)`. Returned by `stat`; user code reads `kind` / `size` / `modifiedAt` via property access.
  */
 interface Stat {
   /**
@@ -274,7 +274,7 @@ interface Entry {
 }
 
 /**
- * One page of a `list` call: the `entries` it discloses and the `nextCursor` that continues it. Constructed only by `list`.
+ * One page of a `list` call: the `entries` it discloses and the `nextCursor` that continues it. Returned by `list`.
  */
 interface Page {
   /**

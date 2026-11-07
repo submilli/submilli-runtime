@@ -162,7 +162,7 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
         EMBEDDINGS,
         properties,
         methods,
-        "/** The sealed result of `embed`: vectors held by the runtime at 4 bytes per number, in input order, labeled with the embedding-space `identity`. Constructed only by `embed`. Memory is released when the program drops the result. */",
+        "/** The sealed result of `embed`: vectors held by the runtime at 4 bytes per number, in input order, labeled with the embedding-space `identity`. Returned by `embed`. Memory is released when the program drops the result. */",
     );
 }
 
@@ -209,7 +209,7 @@ fn insert_model_interface(defs: &mut PackageDeclaration) {
         EMBEDDING_MODEL,
         properties,
         BTreeMap::new(),
-        "/** One alias this caller may embed with. Constructed only by `models()`, and the list carries nothing derived from the candidates the policy filtered out. */",
+        "/** One alias this caller may embed with. Returned by `models()`, and the list carries nothing derived from the candidates the policy filtered out. */",
     );
 }
 
@@ -229,9 +229,13 @@ fn insert_interface(
             kind: TypeKind::Interface {
                 index: None,
                 generics: Vec::new(),
+                dispatch: if methods.is_empty() {
+                    Dispatch::VTable
+                } else {
+                    Dispatch::Direct
+                },
                 methods,
                 properties,
-                dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::EMBEDDING, doc),
             },
         },

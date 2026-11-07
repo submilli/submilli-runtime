@@ -236,14 +236,14 @@ impl<'a> Inferer<'a> {
         Some(combined)
     }
 
-    /// `toString` on a value of a program-declared interface that doesn't declare it.
+    /// `toString` on a structural interface that does not declare it.
     ///
     /// Every non-null value answers `toString` (spec §1.6). Such a value is an
     /// object, so the call dispatches as `Object`'s does, through vtable slot 0: the
     /// value's own `toString`, else `"[object Object]"`. An interface whose
     /// `toString` is a property keeps that property's rules, so an optional one
-    /// still needs a guard. The runtime's own interfaces stay out: their host
-    /// values would print `[object Object]` where JS names the class.
+    /// still needs a guard. Data-only runtime shapes use the same object path;
+    /// other runtime interfaces keep their own method contracts.
     fn undeclared_interface_to_string(
         &self,
         sym: &crate::TypeSymbol,
@@ -255,13 +255,18 @@ impl<'a> Inferer<'a> {
         crate::MangledName,
         crate::Dispatch,
     )> {
-        let TypeKind::Interface { properties, .. } = &sym.kind else {
+        let TypeKind::Interface {
+            properties,
+            methods,
+            ..
+        } = &sym.kind
+        else {
             return None;
         };
         let is_runtime_interface = sym.mangled_name.as_str().starts_with("submilli:");
         if name != "toString"
             || dispatch != crate::Dispatch::VTable
-            || is_runtime_interface
+            || (is_runtime_interface && !methods.is_empty())
             || properties.contains_key(name)
         {
             return None;

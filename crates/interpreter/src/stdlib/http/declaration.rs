@@ -442,21 +442,6 @@ fn insert_download_result_interface(defs: &mut PackageDeclaration) {
         "/** HTTP status code (e.g. `200`). The download does not trap on non-2xx — a 404 still writes the response body to disk, on the theory that an HTML error page is sometimes what an agent wants. Check `status` to discriminate. */",
     );
 
-    let mut methods = BTreeMap::new();
-    methods.insert(
-        "toString".to_string(),
-        MethodSig {
-            optional: false,
-            generics: Vec::new(),
-            params: Vec::new(),
-            ret: Type::String,
-            predicate: None,
-            doc: crate::doc(crate::FileId::HTTP,
-                "/** Concise description — `\"Download(200, 1024 bytes -> /workspace/file.csv)\"`. */",
-            ),
-        },
-    );
-
     defs.types.insert(
         "DownloadResult".to_string(),
         TypeSymbol {
@@ -465,9 +450,9 @@ fn insert_download_result_interface(defs: &mut PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::HTTP),
             kind: TypeKind::Interface { index: None,
                 generics: Vec::new(),
-                methods,
+                methods: BTreeMap::new(),
                 properties,
-                dispatch: Dispatch::Direct,
+                dispatch: Dispatch::VTable,
                 doc: crate::doc(crate::FileId::HTTP,
                     "/** Result of [`download`] — what was written, where, and the response metadata. */",
                 ),

@@ -41,18 +41,11 @@ pub const MODULE_NAME: &str = crate::runtime::skills::SKILLS_MODULE_NAME;
 /// The capability gating every op in this package.
 pub const CAPABILITY: &str = "skill.load";
 
-// Backing field indices (0 is the vtable). `Skill` extends `SkillInfo`'s layout.
+// `Skill` backing field indices (0 is the vtable).
 const S_NAME: usize = 1;
 const S_DESCRIPTION: usize = 2;
 const S_CONTENT: usize = 3;
 const S_FILES: usize = 4;
-
-const SKILL_INFO_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "SkillInfo",
-    backing: info_backing_struct,
-    properties: &[("name", S_NAME), ("description", S_DESCRIPTION)],
-};
 
 const SKILL_VIEW: HostView = HostView {
     module: MODULE_NAME,
@@ -67,7 +60,7 @@ const SKILL_VIEW: HostView = HostView {
 };
 
 /// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[&SKILL_INFO_VIEW, &SKILL_VIEW];
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&SKILL_VIEW];
 
 #[derive(serde::Serialize)]
 struct SkillFile {
@@ -140,7 +133,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    install_field_getters(linker, &engine, &object, &SKILL_INFO_VIEW)?;
     install_field_getters(linker, &engine, &object, &SKILL_VIEW)
 }
 
@@ -399,15 +391,6 @@ fn call_error_record(error: &SkillError) -> serde_json::Value {
     }
 }
 
-fn info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![string_field(&intr), nullable_object_field(&intr)],
-    )
-}
-
 fn skill_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
     let intr = build_intrinsic_types(engine)?;
     backing_struct(
@@ -428,11 +411,12 @@ fn build_skill_info(
 ) -> wasmtime::Result<Val> {
     let name = write_submilli_string_struct(caller, &skill.name)?;
     let description = listing_description(caller, skill.description.as_deref())?;
-    let ty = info_backing_struct(caller.engine())?;
-    abi::new_backing(
+    abi::new_object(
         caller,
-        ty,
-        &[Val::AnyRef(Some(name.to_anyref())), description],
+        std::collections::BTreeMap::from([
+            ("name".to_string(), Val::AnyRef(Some(name.to_anyref()))),
+            ("description".to_string(), description),
+        ]),
     )
 }
 

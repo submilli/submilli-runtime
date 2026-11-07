@@ -74,14 +74,6 @@ const E_IDENTITY: usize = 4;
 const E_MODEL: usize = 5;
 const E_INPUT_TOKENS: usize = 6;
 
-// `$EmbeddingModelBacking` field indices (0 is the vtable).
-const M_NAME: usize = 1;
-const M_DESCRIPTION: usize = 2;
-const M_DIMENSIONS: usize = 3;
-const M_MAX_INPUT_TOKENS: usize = 4;
-const M_MAX_INPUT_BYTES: usize = 5;
-const M_IDENTITY: usize = 6;
-
 #[derive(serde::Serialize)]
 struct EmbedRequest {
     model: String,
@@ -165,22 +157,8 @@ const EMBEDDINGS_VIEW: HostView = HostView {
     ],
 };
 
-const EMBEDDING_MODEL_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "EmbeddingModel",
-    backing: model_backing_struct,
-    properties: &[
-        ("name", M_NAME),
-        ("description", M_DESCRIPTION),
-        ("dimensions", M_DIMENSIONS),
-        ("maxInputTokens", M_MAX_INPUT_TOKENS),
-        ("maxInputBytes", M_MAX_INPUT_BYTES),
-        ("identity", M_IDENTITY),
-    ],
-};
-
 /// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[&EMBEDDINGS_VIEW, &EMBEDDING_MODEL_VIEW];
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&EMBEDDINGS_VIEW];
 
 fn install_methods(
     linker: &mut Linker<StoreData>,
@@ -669,22 +647,6 @@ fn embeddings_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<Stru
     )
 }
 
-fn model_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr),          // name
-            nullable_object_field(&intr), // description
-            f64_field(),                  // dimensions
-            nullable_object_field(&intr), // maxInputTokens
-            f64_field(),                  // maxInputBytes
-            string_field(&intr),          // identity
-        ],
-    )
-}
-
 /// Seal `batch`: copy its vectors into a packed byte array in the GC heap and
 /// hand the guest a backing struct that holds it in a hidden field.
 ///
@@ -752,18 +714,24 @@ fn build_model(
     };
     let max_input_tokens = optional_number(caller, model.max_input_tokens.map(|n| n as f64))?;
     let identity = string_val(caller, &model.identity)?;
-    let ty = model_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let dimensions_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, model.dimensions as f64)?
+            .to_anyref(),
+    ));
+    let max_input_bytes_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, model.max_input_bytes as f64)?
+            .to_anyref(),
+    ));
+    abi::new_object(
         caller,
-        ty,
-        &[
-            name,
-            description,
-            Val::F64((model.dimensions as f64).to_bits()),
-            max_input_tokens,
-            Val::F64((model.max_input_bytes as f64).to_bits()),
-            identity,
-        ],
+        std::collections::BTreeMap::from([
+            ("name".to_string(), name),
+            ("description".to_string(), description),
+            ("dimensions".to_string(), dimensions_value),
+            ("maxInputTokens".to_string(), max_input_tokens),
+            ("maxInputBytes".to_string(), max_input_bytes_value),
+            ("identity".to_string(), identity),
+        ]),
     )
 }
 
@@ -1119,7 +1087,7 @@ mod tests {
         assert!(embeddings.get("vectors").is_none(), "{embeddings}");
         assert_eq!(
             models,
-            r#"[{"name":"mock","dimensions":4,"maxInputBytes":10,"identity":"emb1:mock"}]"#
+            r#"[{"dimensions":4,"identity":"emb1:mock","maxInputBytes":10,"name":"mock"}]"#
         );
     }
 

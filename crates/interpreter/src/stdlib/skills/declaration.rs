@@ -16,14 +16,14 @@ pub fn package_declaration() -> PackageDeclaration {
         "SkillInfo",
         skill_properties(false),
         BTreeMap::new(),
-        "/** One skill this caller may load. Constructed only by `list()`. */",
+        "/** One skill this caller may load. Returned by `list()`. */",
     );
     insert_interface(
         &mut defs,
         "Skill",
         skill_properties(true),
         skill_methods(),
-        "/** A loaded skill. Read bundled files with `skill.readFile(path)`. Skills are never mounted or accessible through `submilli:fs`. Constructed only by `load()`. */",
+        "/** A loaded skill. Read bundled files with `skill.readFile(path)`. Skills are never mounted or accessible through `submilli:fs`. Returned by `load()`. */",
     );
     insert_fn(
         &mut defs,
@@ -124,9 +124,13 @@ fn insert_interface(
             kind: TypeKind::Interface {
                 index: None,
                 generics: Vec::new(),
+                dispatch: if methods.is_empty() {
+                    Dispatch::VTable
+                } else {
+                    Dispatch::Direct
+                },
                 methods,
                 properties,
-                dispatch: Dispatch::Direct,
                 doc: crate::doc(crate::FileId::SKILLS, doc),
             },
         },

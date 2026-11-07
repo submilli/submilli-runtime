@@ -237,11 +237,8 @@ fn install_core_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Resu
 /// Every host-backed interface of every package, optional ones included.
 pub(crate) fn host_views() -> impl Iterator<Item = &'static abi::HostView> {
     [
-        agents::HOST_VIEWS,
         embedding::HOST_VIEWS,
-        fs::HOST_VIEWS,
         http::HOST_VIEWS,
-        session::HOST_VIEWS,
         skills::HOST_VIEWS,
         url::HOST_VIEWS,
     ]

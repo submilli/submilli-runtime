@@ -633,7 +633,7 @@ async fn agent_and_skill_values_stringify_their_properties() {
         .expect("program completes");
     assert_eq!(
         agents,
-        r#"{"name":"researcher","description":"Finds sources"}"#
+        r#"{"description":"Finds sources","name":"researcher"}"#
     );
     let skills = Harness::default()
         .skills(FakeSkills::new())
@@ -1112,4 +1112,77 @@ async fn an_oversized_name_is_refused_with_a_short_message() {
         .expect("program completes");
     assert!(out.contains("at most 4096 bytes"), "{out}");
     assert!(out.len() < 600, "{}", out.len());
+}
+
+#[tokio::test]
+async fn agent_listing_objects_preserve_shape_and_identity() {
+    let result = Harness::default()
+        .agents(FakeAgents::listing(Ok(two_agents())))
+        .run(
+            r#"
+        import * as agents from "submilli:agents";
+        function main(): string {
+            const item = agents.list()[0];
+            const absent = agents.list()[1];
+            assert(absent.description === undefined, "missing description value");
+            assert(Object.keys(absent).includes("description"), "missing description retains key");
+            assert(!JSON.stringify(absent).includes("description"), "JSON omits undefined description");
+            const record = item as Record<string, unknown>;
+            const subset = item as { name: string };
+            assert(record === item && subset === item, "identity");
+            assert(record["name"] === item.name, "indexed name");
+            assert(Object.keys(item).sort().join(",") === "description,name", "present fields");
+            return "ok";
+        }
+    "#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[tokio::test]
+async fn skill_listing_objects_are_structural() {
+    let result = Harness::default()
+        .skills(FakeSkills::new())
+        .run(
+            r#"
+        import * as skills from "submilli:skills";
+        function main(): string {
+            const item = skills.list()[0];
+            const absent = skills.list()[1];
+            assert(absent.description === undefined, "missing description value");
+            assert(Object.keys(absent).includes("description"), "missing description retains key");
+            assert(!JSON.stringify(absent).includes("description"), "JSON omits undefined description");
+            const record = item as Record<string, unknown>;
+            assert(record === item, "identity");
+            assert(record["name"] === item.name, "indexed name");
+            assert(Object.keys(item).sort().join(",") === "description,name", "present fields");
+            return "ok";
+        }
+    "#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn loaded_skill_cannot_be_used_as_a_shape() {
+    let errors = compile_errors(
+        r#"
+        import * as skills from "submilli:skills";
+        function main(): void {
+            const info: skills.SkillInfo = skills.load("review");
+            console.log(info.name);
+        }
+    "#,
+        harness_stdlib(),
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `SkillInfo`, got `Skill`")),
+        "{errors:?}"
+    );
 }

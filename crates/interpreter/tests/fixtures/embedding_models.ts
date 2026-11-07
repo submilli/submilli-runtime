@@ -6,6 +6,12 @@ import embedding from "submilli:embedding";
 
 function main(): void {
   const all = embedding.models();
+  const first = all[0];
+  const record = first as Record<string, unknown>;
+  assert(record === first, "model identity");
+  assert(record["dimensions"] === first.dimensions, "boxed model dimensions");
+  assert(Object.keys(first).length === 6, "all model fields present");
+  assert(Object.keys(first).includes("description"), "description key present even if undefined");
   assert(all.length === 3, "every candidate the caller may use is listed");
 
   let normalSeen = false;
@@ -25,6 +31,8 @@ function main(): void {
       assert(m.maxInputTokens === 2048, "the Google token limit is reported");
       assert(m.maxInputBytes === 2032, "gemini-001 is bounded at 2,032 bytes, not 3 x 2,048");
       assert(m.description === undefined, "an undeclared description is undefined");
+      assert(Object.keys(m).includes("description"), "undefined model description retains key");
+      assert(!JSON.stringify(m).includes("description"), "JSON omits undefined description");
     }
   }
   assert(normalSeen, "the ordinary alias is listed");

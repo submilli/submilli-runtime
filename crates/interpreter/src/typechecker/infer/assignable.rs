@@ -1556,7 +1556,9 @@ fn satisfies_structurally(
     types: TypeResolver,
     seen: &mut Vec<(Type, Type)>,
 ) -> bool {
-    if is_host_backed_interface(expected) {
+    // Opaque backing structs cannot satisfy reads through an object shape.
+    // Same-interface assignments have already taken the nominal fast path.
+    if is_host_backed_interface(expected) || is_host_backed_interface(actual) {
         return false;
     }
     let key = (actual.clone(), expected.clone());

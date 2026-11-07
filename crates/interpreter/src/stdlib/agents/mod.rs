@@ -18,7 +18,7 @@ pub mod declaration;
 use crate::runtime::effects;
 use std::sync::Arc;
 
-use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
+use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::agents::{
@@ -31,10 +31,7 @@ use crate::runtime::host::{
     abi_arg, read_string_arg, register_host_value_async, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::build_intrinsic_types;
-use crate::stdlib::abi::{
-    self, HostView, backing_struct, install_field_getters, nullable_object_field,
-    read_type_argument, string_field,
-};
+use crate::stdlib::abi::{self, read_type_argument};
 use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
     check_and_approve_call, check_candidate, permitted_candidates, preflight_listing,
@@ -47,20 +44,6 @@ pub const MODULE_NAME: &str = crate::runtime::agents::AGENTS_MODULE_NAME;
 
 /// The capability gating every op in this package.
 pub const CAPABILITY: &str = "agent.run";
-
-// `$AgentInfoBacking` field indices (0 is the vtable).
-const A_NAME: usize = 1;
-const A_DESCRIPTION: usize = 2;
-
-const AGENT_INFO_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "AgentInfo",
-    backing: agent_info_backing_struct,
-    properties: &[("name", A_NAME), ("description", A_DESCRIPTION)],
-};
-
-/// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[&AGENT_INFO_VIEW];
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
@@ -162,11 +145,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         |caller, _params| Box::pin(async move { list(caller).await }),
     )?;
 
-    let receiver = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    install_field_getters(linker, &engine, &receiver, &AGENT_INFO_VIEW)
+    Ok(())
 }
 
 /// One run: gate, charge, record what is sent, dispatch, and return the
@@ -326,18 +305,6 @@ fn call_error_record(error: &AgentCallError) -> serde_json::Value {
     }
 }
 
-fn agent_info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr),          // name
-            nullable_object_field(&intr), // description
-        ],
-    )
-}
-
 fn build_agent_info(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     agent: AgentInfo,
@@ -349,10 +316,11 @@ fn build_agent_info(
         )),
         None => crate::runtime::prelude::undefined::value(caller)?,
     };
-    let ty = agent_info_backing_struct(caller.engine())?;
-    abi::new_backing(
+    abi::new_object(
         caller,
-        ty,
-        &[Val::AnyRef(Some(name.to_anyref())), description],
+        std::collections::BTreeMap::from([
+            ("name".to_string(), Val::AnyRef(Some(name.to_anyref()))),
+            ("description".to_string(), description),
+        ]),
     )
 }

@@ -1,14 +1,10 @@
 //! Explicit host registrations for filesystem operations and resource methods.
 use super::handles::{BackendReader, ChargedDirIter};
 use super::{
-    ENTRY_KIND, ENTRY_NAME, ENTRY_PATH, ENTRY_SIZE, HostMutationBudget, INFO_ACCESS, INFO_MODE,
-    INFO_MOUNTS, INFO_SIZE_LIMIT, INFO_VOLUME, MODULE_NAME, MOUNT_ACCESS, MOUNT_MODE, MOUNT_PATH,
-    MOUNT_SIZE_LIMIT, MOUNT_VOLUME, PEEK_ENCODING, PEEK_LINE_ENDING, PEEK_PREVIEW, PEEK_SIZE,
-    STAT_KIND, STAT_MODIFIED_AT, STAT_SIZE, append, append_text, backend_error, begin_work,
-    build_info, charge_path_work, dir_entry_backing_struct, effects, f64_arg, i32_flag,
-    info_backing_struct, list_next, make_handle_iterator, mount_info_backing_struct, open_writer,
-    peek_backing_struct, peek_file, read_byte_range, read_whole_capped, reader_next,
-    stat_backing_struct, stat_entry, summary, write, write_text, writer_payload,
+    HostMutationBudget, MODULE_NAME, append, append_text, backend_error, begin_work, build_info,
+    charge_path_work, effects, f64_arg, i32_flag, list_next, make_handle_iterator, open_writer,
+    peek_file, read_byte_range, read_whole_capped, reader_next, stat_entry, summary, write,
+    write_text, writer_payload,
 };
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
@@ -22,7 +18,7 @@ use crate::runtime::host::{
     write_submilli_uint8array_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
-use crate::stdlib::abi::{HostView, install_field_getters};
+
 use crate::stdlib::shared::{check_and_approve_call, require_writable};
 use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
@@ -723,9 +719,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    for view in HOST_VIEWS {
-        install_field_getters(linker, &engine, &object, view)?;
-    }
     install_file_writer_methods(linker, &engine, &intr, object)?;
     Ok(())
 }
@@ -733,76 +726,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 // ---------------------------------------------------------------------------
 // Getters and FileWriter methods
 // ---------------------------------------------------------------------------
-
-const STAT_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Stat",
-    backing: stat_backing_struct,
-    properties: &[
-        ("kind", STAT_KIND),
-        ("size", STAT_SIZE),
-        ("modifiedAt", STAT_MODIFIED_AT),
-    ],
-};
-
-const PEEK_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Peek",
-    backing: peek_backing_struct,
-    properties: &[
-        ("preview", PEEK_PREVIEW),
-        ("encoding", PEEK_ENCODING),
-        ("lineEnding", PEEK_LINE_ENDING),
-        ("size", PEEK_SIZE),
-    ],
-};
-
-const DIR_ENTRY_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "DirEntry",
-    backing: dir_entry_backing_struct,
-    properties: &[
-        ("kind", ENTRY_KIND),
-        ("name", ENTRY_NAME),
-        ("path", ENTRY_PATH),
-        ("size", ENTRY_SIZE),
-    ],
-};
-
-const INFO_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Info",
-    backing: info_backing_struct,
-    properties: &[
-        ("mode", INFO_MODE),
-        ("sizeLimit", INFO_SIZE_LIMIT),
-        ("access", INFO_ACCESS),
-        ("volume", INFO_VOLUME),
-        ("mounts", INFO_MOUNTS),
-    ],
-};
-
-const MOUNT_INFO_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "MountInfo",
-    backing: mount_info_backing_struct,
-    properties: &[
-        ("path", MOUNT_PATH),
-        ("mode", MOUNT_MODE),
-        ("volume", MOUNT_VOLUME),
-        ("access", MOUNT_ACCESS),
-        ("sizeLimit", MOUNT_SIZE_LIMIT),
-    ],
-};
-
-/// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[
-    &STAT_VIEW,
-    &PEEK_VIEW,
-    &DIR_ENTRY_VIEW,
-    &INFO_VIEW,
-    &MOUNT_INFO_VIEW,
-];
 
 fn install_file_writer_methods(
     linker: &mut Linker<StoreData>,
