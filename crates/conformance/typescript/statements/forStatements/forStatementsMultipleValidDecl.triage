@@ -1,2 +1,2 @@
-line 6, 16, 26, 31 extra: by-design spec §1.3 a `let` without an initializer starts as `undefined`, so its declared type must include `undefined`
+line 6, 16, 26, 31 type: artifact the declaration probe reports the typed AST's `T | undefined` storage for an uninitialized local, while tsc reports its declared `T`; writes still require `T` and reads require definite assignment (SUB-2083)
 line 18 type: artifact the type comes from code tsc rejects, and each side's recovery type differs (ours types the rejected literal as its target)

@@ -1,11 +1,21 @@
-types: 28 of 73 tsc entries compared, 1 differ
+types: 28 of 73 tsc entries compared, 5 differ
+
+line 6: x
+  tsc:  number
+  ours: number | undefined
+
+line 16: p
+  tsc:  Point
+  ours: Point | undefined
 
 line 18: { x: 0, y: undefined }
   tsc:  { x: number; y: undefined; }
   ours: Point
 
-errors:
-line 6: ours: `let x: number` needs an initializer: without one it starts as `undefined`, which `number` does not include (tsc accepts)
-line 16: ours: `let p: Point` needs an initializer: without one it starts as `undefined`, which `Point` does not include (tsc accepts)
-line 26: ours: `let fn: (arg0: string) => number` needs an initializer: without one it starts as `undefined`, which `(arg0: string) => number` does not include (tsc accepts)
-line 31: ours: `let a: string[]` needs an initializer: without one it starts as `undefined`, which `string[]` does not include (tsc accepts)
+line 26: fn
+  tsc:  (s: string) => number
+  ours: ((arg0: string) => number) | undefined
+
+line 31: a
+  tsc:  string[]
+  ours: string[] | undefined
