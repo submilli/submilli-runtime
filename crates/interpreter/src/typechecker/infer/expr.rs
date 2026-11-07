@@ -6867,8 +6867,8 @@ impl Inferer<'_> {
     /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
     /// is chosen — and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
-    /// TypeScript. Only structural object types and interfaces with an index
-    /// signature spread; anything else is reported. A `by_name` spread's fields
+    /// TypeScript. Structural objects and non-host-backed interfaces spread;
+    /// anything else is reported. A `by_name` spread's fields
     /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
     pub(super) fn spread_source_fields(
         &mut self,
@@ -6899,27 +6899,33 @@ impl Inferer<'_> {
                 // `undefined`, when
                 // another alternative is an object (as in tsc).
                 ref falsy if is_definitely_falsy(falsy) => ObjectFields::new(),
+                ref interface @ Type::InterfaceRef { ref name, .. }
+                    if assignable::is_host_backed_interface(interface) =>
+                {
+                    self.error_with_help(
+                        span,
+                        format!(
+                            "cannot spread host-backed interface `{}` into an object literal",
+                            display_type_name(name)
+                        ),
+                        vec![
+                            "its properties require host getters; copy the needed properties explicitly"
+                                .into(),
+                        ],
+                    );
+                    return Ok(None);
+                }
                 Type::InterfaceRef {
                     ref mangled,
                     ref name,
                     ref args,
                     ..
-                } if index_value.is_some() => {
+                } => {
                     let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
                     else {
                         return Ok(None);
                     };
                     fields
-                }
-                Type::InterfaceRef { name, .. } => {
-                    self.error(
-                        span,
-                        format!(
-                            "cannot spread interface `{}` into an object literal — only structural object types are accepted",
-                            display_type_name(&name)
-                        ),
-                    );
-                    return Ok(None);
                 }
                 // Inner inference already reported it.
                 Type::Error => return Ok(None),

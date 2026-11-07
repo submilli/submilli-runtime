@@ -1,0 +1,2 @@
+@test/profiles lib -
+main app @test/profiles root
