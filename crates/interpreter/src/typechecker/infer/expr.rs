@@ -7339,8 +7339,8 @@ impl Inferer<'_> {
     /// their join — `c ? a : {}` joins to `{}`, which would copy nothing when `a`
     /// is chosen — and a union contributes each member. Over more than one alternative, a
     /// field some lack is optional and its type is the union of theirs, as in
-    /// TypeScript. Structural objects and non-host-backed interfaces spread;
-    /// anything else is reported. A `by_name` spread's fields
+    /// TypeScript. Structural objects, shape-backed interfaces, and regex match
+    /// arrays spread; anything else is reported. A `by_name` spread's fields
     /// are recorded in `TypedAst::spread_mask_fields`, which codegen reads.
     pub(super) fn spread_source_fields(
         &mut self,
@@ -7384,6 +7384,22 @@ impl Inferer<'_> {
                             "its properties require host getters; copy the needed properties explicitly"
                                 .into(),
                         ],
+                    );
+                    return Ok(None);
+                }
+                ref interface @ Type::InterfaceRef { ref name, .. }
+                    if !interface.is_regexp_match_array()
+                        && self
+                            .interface_narrowing_test(interface)
+                            .is_some_and(|test| !test.shape_allowed) =>
+                {
+                    self.error_with_help(
+                        span,
+                        format!(
+                            "cannot spread interface `{}` whose runtime backing is not a structural object",
+                            display_type_name(name)
+                        ),
+                        vec!["copy the needed properties explicitly".into()],
                     );
                     return Ok(None);
                 }
