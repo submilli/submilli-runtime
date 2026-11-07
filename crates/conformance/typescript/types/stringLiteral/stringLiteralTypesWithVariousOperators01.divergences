@@ -1,10 +1,6 @@
-types: 77 of 96 tsc entries compared, 0 differ
+types: 85 of 96 tsc entries compared, 0 differ
 
 errors:
 line 20: ours: unary `-` not defined for `"ABC" | "XYZ"` (tsc accepts)
-line 21: ours: `+` not defined for `number | "ABC" | "XYZ"` and `string` (tsc accepts)
-line 22: ours: `+` not defined for `string` and `number | "ABC" | "XYZ"` (tsc accepts)
-line 23: ours: `+` not defined for `number | "ABC" | "XYZ"` and `"ABC" | "XYZ"` (tsc accepts)
-line 24: ours: `+` not defined for `"ABC" | "XYZ"` and `number | "ABC" | "XYZ"` (tsc accepts)
 line 27: ours: `<` not defined for `number | "ABC" | "XYZ"` and `number | "ABC" | "XYZ"` (tsc accepts)
 line 28: ours: `>=` not defined for `number | "ABC" | "XYZ"` and `"ABC" | "XYZ"` (tsc accepts)
