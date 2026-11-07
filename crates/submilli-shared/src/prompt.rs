@@ -115,7 +115,7 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
         String::new()
     };
     let [search, docs, builtins] = surface.discovery_tools();
-    prompt_template()
+    let description = prompt_template()
         .replace("{stdlib_modules}", &stdlib_modules_phrase(&scope))
         .replace("{sandbox}", &sandbox)
         .replace(
@@ -177,22 +177,45 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
             } else {
                 ""
             },
-        )
+        );
+    collapse_blank_lines(&description)
 }
 
-const TOOLS_GUIDANCE: &str = "\n\nThe application may offer its own tools as the `@tools` package. \
+/// Each conditional block's placeholder sits on its own template line, so one
+/// that resolves to nothing leaves a run of blank lines behind; a paragraph
+/// break is one. A Windows checkout may give the template CRLF line breaks,
+/// which come out as LF.
+fn collapse_blank_lines(text: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    let mut out = String::with_capacity(text.len());
+    let mut newlines = 0;
+    for ch in text.trim().chars() {
+        if ch == '\n' {
+            newlines += 1;
+            if newlines > 2 {
+                continue;
+            }
+        } else {
+            newlines = 0;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+const TOOLS_GUIDANCE: &str = "The application may offer its own tools as the `@tools` package. \
 Call `{t_search}` with `@tools` to see whether this session has them, and `{t_docs}` for their \
 signatures, then `import tools from \"@tools\"`. The application answers each call, which may \
 take a while: a call it refuses throws `PermissionDeniedError`, one it fails throws `Error`, \
 and one it does not answer in time throws `TimeoutError`.";
 
-const APPROVAL_GUIDANCE: &str = "\n\nSome calls under this blueprint need approval before \
+const APPROVAL_GUIDANCE: &str = "Some calls under this blueprint need approval before \
 they run. In a session, the person you are working for, or an administrator, decides, and the \
 call waits until they do. Approved, it runs as usual. Declined, or not decided in time, it throws \
 `PermissionDeniedError`, and that answer is final like any denial. A one-off execute can't wait, \
 so there such a call throws `PermissionDeniedError` at once.";
 
-const GIT_GUIDANCE: &str = "\n\nGit is available as `submilli:git`. Read its package docs before use; \
+const GIT_GUIDANCE: &str = "Git is available as `submilli:git`. Read its package docs before use; \
     init, clone, fetch/pull, and commit require their respective Git capabilities. \
     Other local operations need no Git capability. Push is not available.";
 
@@ -212,17 +235,13 @@ indeterminate, not free.
 Models are operator-declared — `models()` lists them, and `contextWindow` /
 `description` are absent when undeclared, so filtering drops those."#;
 
-const EMBEDDING_GUIDANCE: &str = r#"
-
-Embeddings (`submilli:embedding`): `embed(model, texts, purpose)` turns
+const EMBEDDING_GUIDANCE: &str = r#"Embeddings (`submilli:embedding`): `embed(model, texts, purpose)` turns
 text into vectors through an operator-declared alias; `models()` lists
 the aliases with their `dimensions` and `maxInputBytes`. Pass `"query"`
 or `"document"` as the purpose. An input over the limit is rejected, not
 truncated, so size chunks from `maxInputBytes`."#;
 
-const SESSION_GUIDANCE: &str = r#"
-
-Session state (`submilli:session`): a key-value store scoped to this
+const SESSION_GUIDANCE: &str = r#"Session state (`submilli:session`): a key-value store scoped to this
 session — `set(key, value)` writes, `get<T>(key)` reads it back checked
 against `T` (throws a catchable `TypeError` on a shape mismatch),
 `has`/`remove`/`list` round it out. There is no `set<T>`; the value's
@@ -246,7 +265,9 @@ impl PromptSurface {
 const HTTP_GUIDANCE: &str = r#"When making outbound HTTP, do NOT construct `Authorization` headers
 or include API keys in query strings. The operator's policy
 configures an `auth_proxy` that injects credentials transparently —
-just hit the URL."#;
+just hit the URL. An HTTP 401/403 or "authentication required" response
+means credentials are not configured for that host: do not hunt for
+tokens or build auth headers — stop and report it."#;
 
 fn stdlib_modules_phrase(scope: &DocsScope) -> String {
     [
@@ -286,14 +307,13 @@ const MCP_PACKAGES_EXAMPLE: &str = r#"  import github from "@mcp/github";
 /// Resolve `{mcp_packages}`: empty when the blueprint declares no MCP servers,
 /// else a short note explaining discovery of available `@mcp/<server>` packages and how to
 /// consume their tools — use a typed result directly, cast only for `unknown`.
-/// Injected only when relevant, so the no-MCP prompt stays terse. Starts with a
-/// blank line so it slots cleanly between paragraphs.
+/// Injected only when relevant, so the no-MCP prompt stays terse.
 fn mcp_packages_phrase(blueprint: &Blueprint) -> String {
     if blueprint.mcp.is_empty() {
         return String::new();
     }
     format!(
-        "\n\nMCP servers are configured. Call `{{t_search}}` with `@mcp/` to find \
+        "MCP servers are configured. Call `{{t_search}}` with `@mcp/` to find \
          currently available packages; unauthenticated or unreachable servers are omitted. \
          Call `{{t_docs}}` with an available package \
          name for its tools and signatures, then `import` it. Most tools are \
@@ -311,11 +331,14 @@ fn mcp_packages_phrase(blueprint: &Blueprint) -> String {
 /// compiler. Blueprint-independent.
 fn builtins_phrase() -> String {
     let b = interpreter::packages::builtins();
-    format!(
-        "{}; namespaces {}",
-        b.types.join(", "),
-        b.namespaces.join(", ")
-    )
+    let types = b.types.join(", ");
+    let Some((last, rest)) = b.namespaces.split_last() else {
+        return types;
+    };
+    if rest.is_empty() {
+        return format!("{types}, and the namespace {last}");
+    }
+    format!("{types}, and the namespaces {} and {last}", rest.join(", "))
 }
 
 /// Describe the bound blueprint's VFS configuration for the sandbox section.
@@ -608,10 +631,7 @@ mod tests {
         assert!(!template.starts_with("\n## The prompt"));
 
         let rendered = execute_tool_description(&Blueprint::default(), PromptSurface::Mcp);
-        assert!(!rendered.contains("{vfs_mode}"));
-        assert!(!rendered.contains("{http_access}"));
-        assert!(!rendered.contains("{builtins}"));
-        assert!(!rendered.contains("{mcp_packages}"));
+        assert_rendered_cleanly(&rendered);
     }
 
     #[test]
@@ -627,14 +647,7 @@ mod tests {
         ] {
             assert!(!denied.contains(hidden), "{hidden}: {denied}");
         }
-        for placeholder in [
-            "{stdlib_modules}",
-            "{sandbox}",
-            "{http_guidance}",
-            "{http_access}",
-        ] {
-            assert!(!denied.contains(placeholder));
-        }
+        assert_rendered_cleanly(&denied);
         for action in ["allow", "ask-human"] {
             let blueprint = blueprint_with(&format!(
                 "    - capability: http.get\n      action: {action}\n"
@@ -795,6 +808,151 @@ mod tests {
         let rest = execute_tool_description(&denied, PromptSurface::Rest);
         assert!(!rest.contains("@tools"));
         assert!(!rest.contains("{tools_package}"));
+    }
+
+    #[test]
+    fn approval_guidance_is_its_own_paragraph_on_rest_only() {
+        let asks = blueprint_with("    - capability: http.get\n      action: ask-human\n");
+        let rest = execute_tool_description(&asks, PromptSurface::Rest);
+        assert!(
+            rest.contains("\n\nSome calls under this blueprint need approval"),
+            "{rest}"
+        );
+        let mcp = execute_tool_description(&asks, PromptSurface::Mcp);
+        assert!(!mcp.contains("Some calls under this blueprint"), "{mcp}");
+    }
+
+    /// The template's placeholder names: `{name}` tokens, which code braces
+    /// such as `{ page_index: page }` never match.
+    fn template_placeholders() -> Vec<&'static str> {
+        prompt_template()
+            .split('{')
+            .skip(1)
+            .filter_map(|after| {
+                let (name, _) = after.split_once('}')?;
+                (!name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+                    .then_some(name)
+            })
+            .collect()
+    }
+
+    /// The rendered prompt has no blank-line run and no unresolved placeholder.
+    fn assert_rendered_cleanly(rendered: &str) {
+        assert!(!rendered.contains("\n\n\n"), "{rendered}");
+        let placeholders = template_placeholders();
+        // An empty scan would make every check below vacuous.
+        assert!(placeholders.contains(&"llm_guidance"), "{placeholders:?}");
+        for name in placeholders {
+            let placeholder = format!("{{{name}}}");
+            assert!(
+                !rendered.contains(&placeholder),
+                "{placeholder}: {rendered}"
+            );
+        }
+    }
+
+    /// Every conditional block at once: each is its own paragraph and nothing
+    /// is left unresolved.
+    #[test]
+    fn every_conditional_block_renders_as_its_own_paragraph() {
+        let yaml = r#"
+name: t
+llm:
+  providers:
+    test:
+      type: anthropic
+  models:
+    m:
+      provider: test
+embedding:
+  providers:
+    test:
+      type: huggingface
+      base_url: https://hf.example.com
+  models:
+    docs:
+      provider: test
+      model: bge
+      dimensions: 4
+git:
+  identity:
+    name: Agent
+    email: agent@example.com
+mcp:
+  linear:
+    url: https://x/mcp
+permissions:
+  main:
+    - capability: http.get
+      action: ask-human
+    - capability: fs.read
+      action: allow
+    - capability: session.read
+      action: allow
+    - capability: session.write
+      action: allow
+    - capability: llm.call
+      action: allow
+    - capability: embedding.embed
+      action: allow
+    - capability: tools.call
+      action: allow
+"#;
+        let blueprint = submilli_blueprint::parse(yaml).expect("valid blueprint");
+        let rendered = execute_tool_description(&blueprint, PromptSurface::Rest);
+        assert_rendered_cleanly(&rendered);
+        for paragraph in [
+            "MCP servers are configured.",
+            "The application may offer its own tools",
+            "Git is available as `submilli:git`.",
+            "Some calls under this blueprint need approval",
+            "When making outbound HTTP",
+            "Sandbox: File system",
+            "Session state (`submilli:session`)",
+            "Embeddings (`submilli:embedding`)",
+            "Model calls (`submilli:llm`)",
+            "Do the work in one program",
+        ] {
+            assert!(
+                rendered.contains(&format!("\n\n{paragraph}")),
+                "{paragraph}: {rendered}"
+            );
+        }
+        assert!(
+            rendered.contains(".\nNetwork (`submilli:http`)"),
+            "{rendered}"
+        );
+    }
+
+    /// Placeholders that resolve to nothing leave no blank-line runs, on either
+    /// side of the one block that is present, or with none present.
+    #[test]
+    fn empty_placeholders_collapse_to_one_paragraph_break() {
+        for (rule_lines, present) in [
+            (
+                "    - capability: session.read\n      action: allow\n",
+                "\n\nSession state (`submilli:session`)",
+            ),
+            (
+                "    - capability: http.get\n      action: allow\n",
+                "\n\nNetwork (`submilli:http`)",
+            ),
+        ] {
+            let blueprint = blueprint_with(rule_lines);
+            for surface in [PromptSurface::Mcp, PromptSurface::Rest] {
+                let rendered = execute_tool_description(&blueprint, surface);
+                assert_rendered_cleanly(&rendered);
+                assert!(rendered.contains(present), "{present}: {rendered}");
+            }
+        }
+        for surface in [PromptSurface::Mcp, PromptSurface::Rest] {
+            assert_rendered_cleanly(&execute_tool_description(&Blueprint::default(), surface));
+        }
+    }
+
+    #[test]
+    fn crlf_line_breaks_collapse_like_lf() {
+        assert_eq!(collapse_blank_lines("a\r\n\r\n\r\n\r\nb\r\nc"), "a\n\nb\nc");
     }
 
     #[test]

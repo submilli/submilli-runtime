@@ -873,11 +873,37 @@ fn append_failure_checked(
     concat(emitter, ctx);
     super::cast_check::emit_inline_string(emitter, ctx, ")");
     concat(emitter, ctx);
+    emit_null_value_hint(emitter, ctx, state.failure.value)?;
+    concat(emitter, ctx);
     emitter.emit_else();
     emitter.instruction(Instruction::LocalGet(message));
     emitter.emit_end();
     emitter.instruction(Instruction::RefAsNonNull);
 
+    Ok(())
+}
+
+/// Pushes the advice for JSON `null` where the expected type has none, or `""`
+/// for any other value. An optional field accepts a missing key but not
+/// `null`, which data from an API often holds. The advice points at the
+/// message's "expected" type rather than repeating it, since a long type is
+/// named there only by its kind ("an object").
+fn emit_null_value_hint(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(BlockType::Result(string_slot(ctx)?));
+    super::cast_check::emit_inline_string(
+        emitter,
+        ctx,
+        " — if null is valid there, add `| null` to the expected type",
+    );
+    emitter.emit_else();
+    super::cast_check::emit_inline_string(emitter, ctx, "");
+    emitter.emit_end();
     Ok(())
 }
 

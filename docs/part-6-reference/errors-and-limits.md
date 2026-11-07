@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "808744f00cf1f9ce1025211e760a87241f0fdb3828ab2d2fd1313f94811473da"
+  contentHash: "56097e93129bc1db89e174644ed27e8741736f60c85ba756e6599fe2104d002f"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -249,7 +249,7 @@ The standard library throws these classes. Each extends `Error` and has
 | Class | Thrown when | Example message |
 | --- | --- | --- |
 | `PermissionDeniedError` | The Blueprint refuses an operation, the application refuses a `@tools` call, or an approver refuses a call an `ask-human` or `ask-admin` rule matches, or doesn't decide in time | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
-| `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
+| `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more — remove files you no longer need, or write less` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
 | `SyntaxError` | JSON or a regular expression doesn't parse | `JSON.parse: EOF while parsing an object at line 1 column 1` |
@@ -292,14 +292,14 @@ call is decided.
 
 | Budget | Example message |
 | --- | --- |
-| Filesystem size | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more` |
+| Filesystem size | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more — remove files you no longer need, or write less` |
 | Model tokens, one run | `llm.call: model "claude-haiku-4-5": exceeded the execution token budget: 64006 tokens exceeds the 1000 this execution may spend — use fewer or shorter calls, or split the work across executions` |
 | Model tokens, all runs | Names the server token budget, says the run's own spend isn't what is in the way, and names `--max-llm-tokens`. |
 | Embedding tokens, one run | Names the execution embedding token budget and `--max-execution-embedding-tokens`. |
 | Embedding tokens, all runs | Names the server embedding token budget and `--max-embedding-tokens`. |
 | Embedding requests, one run | Names the request limit and `--max-execution-embedding-requests`. |
 | Session state, one session | `session.set("v16") exceeded the session payload limit: 17001238 retained bytes exceeds the 16777216 this session may hold — remove entries this session no longer needs, or store less per key` |
-| Keys, one session | `session.set("k1024") exceeded the entry count limit: the session already holds 1024` |
+| Keys, one session | `session.set("k1024") exceeded the entry count limit: the session already holds 1024 — remove entries this session no longer needs` |
 
 ### `RangeError`, `TypeError`, `SyntaxError`
 

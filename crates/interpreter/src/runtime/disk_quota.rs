@@ -416,7 +416,7 @@ impl fmt::Display for QuotaExceeded {
                 requested,
             } => write!(
                 f,
-                "the filesystem's size limit of {limit} bytes would be exceeded: {used} bytes are in use and this needs {requested} more"
+                "the filesystem's size limit of {limit} bytes would be exceeded: {used} bytes are in use and this needs {requested} more — remove files you no longer need, or write less"
             ),
             Self::Unmeasured { limit } => write!(
                 f,
@@ -444,6 +444,11 @@ mod tests {
                 used: 100,
                 requested: 1,
             }
+        );
+        assert_eq!(
+            refused.to_string(),
+            "the filesystem's size limit of 100 bytes would be exceeded: 100 bytes are in use \
+             and this needs 1 more — remove files you no longer need, or write less"
         );
         quota.release(30);
         assert_eq!(quota.used(), 70);

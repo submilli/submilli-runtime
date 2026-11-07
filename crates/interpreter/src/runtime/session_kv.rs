@@ -175,9 +175,11 @@ impl std::fmt::Display for SessionKvLimitKind {
                  session may hold — remove entries this session no longer needs, or store \
                  less per key"
             ),
-            Self::EntryCount { limit } => {
-                write!(f, "entry count limit: the session already holds {limit}")
-            }
+            Self::EntryCount { limit } => write!(
+                f,
+                "entry count limit: the session already holds {limit} — remove entries this \
+                 session no longer needs"
+            ),
         }
     }
 }
@@ -637,6 +639,11 @@ mod tests {
                 ..
             }
         ));
+        assert_eq!(
+            err.to_string(),
+            "session.set(\"overflow\") exceeded the entry count limit: the session already \
+             holds 4 — remove entries this session no longer needs"
+        );
         assert_eq!(kv.len(), 4);
         assert_eq!(kv.used_bytes(), before);
         assert!(!kv.has_now(&u("overflow")).expect("has"));

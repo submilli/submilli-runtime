@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d3f43ea3f88735ec18d862dff9260930fe595713a9a7b13de9377cfc1e474fee"
+  contentHash: "88f06cb3f981a4252ed51e67454aefa857de9cb6c881596b643dfb9750907d3d"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -418,19 +418,16 @@ submilli blueprint prompt
 
 ```text
 …
-You do NOT have access to Node.js APIs, browser globals, or NPM
-packages. Submilli ships its own standard library — modules are:
-`submilli:url`, `submilli:crypto`, `submilli:uuid`. Import those names exactly; the part after
-`submilli:` is not itself a package name. Submilli native
-packages and discovered `@mcp/<server>` packages may also be available;
+Programs are synchronous: never `async`, `await` or `Promise`. Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module (`submilli:url`, `submilli:crypto`, `submilli:uuid`). Built-ins need no import: …
 …
 ```
 
 Nothing here grants `fs.read` or `http.get`, so `submilli:fs` and
 `submilli:http` are not listed. A Blueprint that grants them gets the
 modules, a `Sandbox:` line naming its filesystem, and a `Network:` line
-listing its hosts. The rest of the text, on how to write a program and what to do with a
-denial, is the same for all Blueprints.
+listing its hosts. Guidance for other features, such as sessions, model calls,
+Git or MCP servers, appears the same way, only when the Blueprint enables them.
+The rest of the text, on how to write a program, is the same for every Blueprint.
 
 ## Register it on a server
 

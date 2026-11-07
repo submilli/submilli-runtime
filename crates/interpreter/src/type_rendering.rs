@@ -389,6 +389,12 @@ fn write_field_name(out: &mut Writer, name: &str) -> Result<(), RenderError> {
     }
 }
 
+/// A member name as TypeScript prints it: bare when it is an identifier,
+/// quoted otherwise.
+pub(crate) fn render_field_name(name: &str) -> Result<String, RenderError> {
+    Writer::render(RenderLimits::default(), |out| write_field_name(out, name)).map(|r| r.text)
+}
+
 /// Whether a member name can be written bare, as an identifier (keywords
 /// included), rather than as a quoted string.
 pub(crate) fn is_identifier_name(name: &str) -> bool {
