@@ -3412,6 +3412,16 @@ mod tests {
     }
 
     #[test]
+    fn builtin_docs_show_regex_whole_match_type() {
+        for name in ["RegExpMatchArray", "RegExpExecArray"] {
+            let docs = builtin_docs(name).expect("regex match array built-in");
+            assert!(docs.contains(&format!(
+                "interface {name} extends Array<string | undefined> {{\n  \"0\": string;"
+            )));
+        }
+    }
+
+    #[test]
     fn builtin_docs_renders_temporal_namespace() {
         let docs = builtin_docs("Temporal").expect("Temporal built-in");
         assert!(docs.starts_with("namespace Temporal {"));
@@ -4013,8 +4023,11 @@ mod tests {
     fn lib_submilli_d_ts_renders_ambient_builtins() {
         let docs = render_lib_submilli_d_ts();
         assert!(docs.contains("interface Array<"));
-        assert!(docs.contains("interface RegExpMatchArray extends Array<string | undefined>"));
-        assert!(docs.contains("interface RegExpExecArray extends Array<string | undefined>"));
+        for name in ["RegExpMatchArray", "RegExpExecArray"] {
+            assert!(docs.contains(&format!(
+                "interface {name} extends Array<string | undefined> {{\n  \"0\": string;"
+            )));
+        }
         assert!(docs.contains("interface ArrayConstructor"));
         assert!(docs.contains("declare const Array: ArrayConstructor;"));
         assert_eq!(

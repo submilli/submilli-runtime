@@ -1436,8 +1436,8 @@ fn emit_non_shape_interface_test(
     Ok(())
 }
 
-/// Captures and named groups remain mutable through widened aliases, so a
-/// checked cast must validate their current contents even on a branded result.
+/// The whole match, captures and named groups remain mutable through widened
+/// aliases, so a checked cast validates their contents even on a branded result.
 fn emit_regexp_array_test(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -1457,6 +1457,13 @@ fn emit_regexp_array_test(
         .symbols
         .intrinsic_type_indices()
         .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    // The successful element test establishes the array carrier. Nothing calls
+    // guest code between that test and these length/storage reads.
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    emit_regexp_whole_match_test(emitter, ctx, value_local)?;
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
     emit_ref_test(emitter, value_local, intr.regex_match_box);
     emitter.emit_if(BlockType::Result(ValType::I32));
     let groups_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
@@ -1485,6 +1492,46 @@ fn emit_regexp_array_test(
     emitter.instruction(Instruction::I32Const(1));
     emitter.emit_end();
     emitter.instruction(Instruction::I32And);
+    Ok(())
+}
+
+/// Called only after the array carrier and its elements have been validated.
+fn emit_regexp_whole_match_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value_local: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    let array_idx = ctx
+        .symbols
+        .array_type_idx()
+        .ok_or_else(|| crate::codegen::internal_failure("$Array intrinsic registered"))?;
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array_idx,
+        field_index: 2,
+    });
+    // A nonempty logical array has a backing slot zero. Check before loading it
+    // so empty/truncated arrays fail the cast instead of trapping on the read.
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(array_idx)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: array_idx,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::ArrayGet(intr.raw_array));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string_idx(
+        ctx,
+    )?)));
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
     Ok(())
 }
 
