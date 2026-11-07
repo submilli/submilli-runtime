@@ -28,6 +28,8 @@ pub(super) struct ScopeEntry {
     pub(super) storage_ty: Option<Type>,
     /// Assignment contract before a default narrows the readable value.
     pub(super) declared_ty: Option<Type>,
+    /// A typed local without an initializer must be assigned before a read.
+    pub(super) requires_assignment: bool,
     pub(super) is_const: bool,
     pub(super) decl_span: Span,
     /// Disambiguates shadowed bindings for the narrowing engine.
@@ -40,6 +42,14 @@ pub(super) struct ScopeEntry {
 }
 
 impl ScopeEntry {
+    pub(super) fn read_type(&self) -> &Type {
+        if self.requires_assignment {
+            self.write_type()
+        } else {
+            &self.ty
+        }
+    }
+
     pub(super) fn write_type(&self) -> &Type {
         self.declared_ty.as_ref().unwrap_or(&self.ty)
     }
@@ -123,6 +133,19 @@ impl Scopes {
         }
     }
 
+    pub(super) fn insert_uninitialized(&mut self, name: String, declared: Type, span: Span) {
+        let storage = Type::union(vec![declared.clone(), Type::Undefined]);
+        self.insert(name.clone(), storage, false, span);
+        if let Some(entry) = self
+            .stack
+            .last_mut()
+            .and_then(|scope| scope.bindings.get_mut(&name))
+        {
+            entry.declared_ty = Some(declared);
+            entry.requires_assignment = true;
+        }
+    }
+
     pub(super) fn set_parameter_read_type(&mut self, name: &str, ty: Type) {
         if let Some(entry) = self
             .stack
@@ -141,6 +164,7 @@ impl Scopes {
             .iter_mut()
             .rev()
             .find_map(|scope| scope.bindings.get_mut(name))
+            && !entry.requires_assignment
             && let Some(ty) = &entry.declared_ty
         {
             entry.ty = ty.clone();
@@ -182,6 +206,7 @@ impl Scopes {
                     ty,
                     storage_ty: None,
                     declared_ty: None,
+                    requires_assignment: false,
                     is_const,
                     decl_span,
                     decl_scope,

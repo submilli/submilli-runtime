@@ -1,17 +1,14 @@
 ---
 source: crates/interpreter/tests/diagnostic_snapshots.rs
-assertion_line: 151
-expression: "render_inside_main(\"  let x: number;\")"
+expression: "render_inside_main(\"  let x: number;\\n  console.log(x);\")"
 ---
-error: `let x: number` needs an initializer: without one it starts as `undefined`, which `number` does not include
- --> test.subm:2:7
+error: variable `x` is used before being assigned
+ --> test.subm:3:15
   |
-1 | function main(): void {
 2 |   let x: number;
-  |       ^
-3 | }
+3 |   console.log(x);
+  |               ^
+4 | }
   |
-help: initialize it: `let x: number = …;`
-  |
-help: or let it start empty: `let x: number | undefined;`
+help: assign `x` on every path before reading it, or declare it with `| undefined`
 ---

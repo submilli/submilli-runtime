@@ -120,8 +120,9 @@ Missing properties, collection misses, and omitted optional parameters use
 `undefined`; `null` is distinct. Defaults apply to omission or `undefined`,
 never `null`. Optional chains yield `undefined`; `??` handles both values.
 `arr[i]` out of range throws `RangeError`; probe with `arr.at(i)`, which
-returns `undefined`. `let x: T;` needs an initializer unless `T` includes
-`undefined`. Template literals accept `null` and `undefined` and render them
+returns `undefined`. A local `let x: T;` must be assigned on every path before
+a read unless `T` includes `undefined`; module-level bindings still need an
+initializer in that case. Template literals accept `null` and `undefined` and render them
 like `String(x)`.
 Return types are mandatory on function declarations (including `main`) and
 class methods; arrow functions can infer them.

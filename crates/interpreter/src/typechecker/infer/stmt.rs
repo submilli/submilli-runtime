@@ -415,6 +415,21 @@ impl Inferer<'_> {
                 }
             }
         };
+        if self.reachable
+            && let Some(target) = self.pending_joins.iter().rposition(|frame| {
+                matches!(
+                    frame.kind,
+                    narrowing::PendingJoinKind::Function
+                        | narrowing::PendingJoinKind::InvokedFunction
+                )
+            })
+            && self.pending_joins[target].kind == narrowing::PendingJoinKind::InvokedFunction
+        {
+            let base = self.pending_joins[target].narrow_depth;
+            let (env, _) = self.snapshot_active_narrowings(0);
+            let (_, assigned) = self.snapshot_active_narrowings(base);
+            self.pending_joins[target].returns.push((env, assigned));
+        }
         self.reachable = false;
         Ok(TypedStmtKind::Return(typed_value))
     }
@@ -560,8 +575,8 @@ impl Inferer<'_> {
         })
     }
 
-    /// `let x: T;` starts as `undefined`, so `T` must include it: Submilli has
-    /// no uninitialized binding to read before its first assignment.
+    /// Keep the initial `undefined` in storage and flow, while writes must fit
+    /// the annotation. Reads of a non-optional binding require an assigned path.
     fn infer_uninitialized_let(
         &mut self,
         name: Ident,
@@ -569,31 +584,25 @@ impl Inferer<'_> {
         value: ExprId,
         doc: Option<crate::DocComment>,
     ) -> Result<TypedStmtKind, CompilerFailure> {
-        let declared = declared.unwrap_or(Type::Unknown);
-        if !super::assignable::assignable(&Type::Undefined, &declared, self.resolver()) {
-            self.error_with_help(
-                name.span,
-                format!(
-                    "`let {}: {declared}` needs an initializer: without one it starts as \
-                     `undefined`, which `{declared}` does not include",
-                    name.name
-                ),
-                vec![
-                    format!("initialize it: `let {}: {declared} = …;`", name.name),
-                    format!(
-                        "or let it start empty: `let {}: {declared} | undefined;`",
-                        name.name
-                    ),
-                ],
-            );
-        }
+        let declared = self.local_storage_ty(&name, declared.unwrap_or(Type::Unknown));
         let (typed_value, value_ty) = self.infer_expr(value, None)?;
-        self.scopes
-            .insert(name.name.clone(), declared.clone(), false, name.span);
-        self.narrow_local_initializer(&name, &declared, value_ty)?;
+        if super::assignable::assignable(&Type::Undefined, &declared, self.resolver()) {
+            self.scopes
+                .insert(name.name.clone(), declared.clone(), false, name.span);
+        } else {
+            self.scopes
+                .insert_uninitialized(name.name.clone(), declared.clone(), name.span);
+        }
+        let storage = self
+            .scopes
+            .get(&name.name)
+            .ok_or_else(|| super::inference_failure("binding just inserted"))?
+            .storage_type()
+            .clone();
+        self.narrow_local_initializer(&name, &storage, value_ty)?;
         Ok(TypedStmtKind::Let {
             name,
-            ty: declared,
+            ty: storage,
             value: typed_value,
             boxed: false,
             doc,
@@ -1151,17 +1160,23 @@ impl Inferer<'_> {
         Ok(clause_ty)
     }
 
-    fn pending_exit_counts(&self) -> Vec<(usize, usize)> {
+    fn pending_exit_counts(&self) -> Vec<(usize, usize, usize)> {
         self.pending_joins
             .iter()
-            .map(|frame| (frame.breaks.len(), frame.continues.len()))
+            .map(|frame| {
+                (
+                    frame.breaks.len(),
+                    frame.continues.len(),
+                    frame.returns.len(),
+                )
+            })
             .collect()
     }
 
     fn apply_finally_to_pending(
         &mut self,
-        starts: &[(usize, usize)],
-        ends: &[(usize, usize)],
+        starts: &[(usize, usize, usize)],
+        ends: &[(usize, usize, usize)],
         outcome: &ClauseOutcome,
     ) -> Result<(), CompilerFailure> {
         if self.pending_joins.len() != starts.len() || starts.len() != ends.len() {
@@ -1172,6 +1187,7 @@ impl Inferer<'_> {
         for ((frame, start), end) in self.pending_joins.iter_mut().zip(starts).zip(ends) {
             apply_finally_to_transfers(&mut frame.breaks, start.0..end.0, outcome)?;
             apply_finally_to_transfers(&mut frame.continues, start.1..end.1, outcome)?;
+            apply_finally_to_transfers(&mut frame.returns, start.2..end.2, outcome)?;
         }
         Ok(())
     }
@@ -2198,6 +2214,19 @@ impl Inferer<'_> {
                 .then(|| entry.write_type().clone());
             let (typed_value, value_ty, reported) =
                 self.infer_assigned_value(value, hint.as_ref())?;
+            if entry.requires_assignment
+                && !reported
+                && assignable(&value_ty, entry.write_type(), self.resolver())
+                && let Some(env) = self.narrow_scopes.last_mut()
+            {
+                env.definitely_assigned
+                    .insert(narrowing::ReferencePath::root(
+                        narrowing::BindingId::Local {
+                            name: target.name.clone(),
+                            decl_scope: entry.decl_scope,
+                        },
+                    ));
+            }
             if !entry.is_const
                 && !reported
                 && !assignable(&value_ty, entry.write_type(), self.resolver())
@@ -2342,10 +2371,11 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         if let Some(entry) = self.visible_local(&target.name).cloned() {
+            self.report_unassigned_local_read(&target, target.span);
             if entry.is_const {
                 self.report_const_local_write(&target, &entry);
             }
-            let target_ty = entry.ty.clone();
+            let target_ty = entry.read_type().clone();
             let lhs_path =
                 super::narrowing::ReferencePath::root(super::narrowing::BindingId::Local {
                     name: target.name.clone(),
@@ -3030,6 +3060,8 @@ struct ClauseOutcome {
 fn apply_finally_to_exit(post: &mut Option<narrowing::NarrowEnv>, outcome: &ClauseOutcome) {
     match (&outcome.exit, post.as_mut()) {
         (Some(final_post), Some(post)) => {
+            post.definitely_assigned
+                .extend(final_post.definitely_assigned.iter().cloned());
             post.retain(|path, _| {
                 !outcome
                     .all_writes
@@ -3649,6 +3681,11 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(Option<ExprId>, Option<StmtId>, StmtId), CompilerFailure> {
         let (before_loop, _) = self.snapshot_active_narrowings(0);
+        let assignments_before: Vec<_> = self
+            .narrow_scopes
+            .iter()
+            .map(|env| env.definitely_assigned.clone())
+            .collect();
         let first_check = condition
             .map(|c| self.check_first_condition(c))
             .transpose()?;
@@ -3672,6 +3709,12 @@ impl Inferer<'_> {
         let (typed_cond, natural) = match first_check {
             Some(check) => {
                 let head = LoopHead::before_every_pass(before_loop, &outcome, &check.writes);
+                // The first check is speculative. Its later argument writes
+                // cannot prove an earlier argument initialized on the recheck.
+                // Body and loop-head inference balance their narrowing frames.
+                for (env, assigned) in self.narrow_scopes.iter_mut().zip(assignments_before) {
+                    env.definitely_assigned = assigned;
+                }
                 // The head covers the first run, so its check replaces that one.
                 self.diagnostics.drain(check.diagnostic_range);
                 // The head runs before every pass, whether or not the body

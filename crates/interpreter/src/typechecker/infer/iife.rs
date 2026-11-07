@@ -16,6 +16,7 @@ pub(super) struct InvokedBodyExit {
     /// The type each written binding holds when the body finishes, when every
     /// way out of the body is its end.
     pub(super) narrowed: Vec<(narrowing::ReferencePath, Type)>,
+    pub(super) definitely_assigned: BTreeSet<narrowing::ReferencePath>,
 }
 
 /// The arrow an immediately-invoked call runs: `callee`, through parentheses,
@@ -259,7 +260,25 @@ impl Inferer<'_> {
                 Some((path.clone(), view.narrowed_ty.clone()))
             })
             .collect();
-        InvokedBodyExit { written, narrowed }
+        let fallthrough = self
+            .reachable
+            .then(|| self.snapshot_active_narrowings(0).0.definitely_assigned);
+        let returns = self
+            .pending_joins
+            .last()
+            .into_iter()
+            .flat_map(|frame| &frame.returns)
+            .map(|(env, _)| env.definitely_assigned.clone());
+        let definitely_assigned = fallthrough
+            .into_iter()
+            .chain(returns)
+            .reduce(|left, right| left.intersection(&right).cloned().collect())
+            .unwrap_or_default();
+        InvokedBodyExit {
+            written,
+            narrowed,
+            definitely_assigned,
+        }
     }
 
     /// Applies an immediately-invoked body's writes after its call: each
@@ -270,6 +289,14 @@ impl Inferer<'_> {
         exit: InvokedBodyExit,
         call_span: Span,
     ) -> Result<(), CompilerFailure> {
+        let assigned: Vec<_> = exit
+            .definitely_assigned
+            .into_iter()
+            .filter(|path| self.path_root_in_scope(path))
+            .collect();
+        if let Some(env) = self.narrow_scopes.last_mut() {
+            env.definitely_assigned.extend(assigned);
+        }
         for path in exit.written {
             if self.path_root_in_scope(&path) {
                 self.invalidate_for_reassignment(path, call_span);

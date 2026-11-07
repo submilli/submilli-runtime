@@ -1,0 +1,14 @@
+---
+source: crates/interpreter/tests/diagnostic_snapshots.rs
+expression: "render_all(\"function format(value: string | undefined): string {\\n  return JSON.stringify(value).slice(0, 400);\\n}\\nfunction main(): void {}\\n\")"
+---
+error: cannot read field `slice` on `string | undefined`: the receiver can be `undefined`
+ --> test.subm:2:10
+  |
+1 | function format(value: string | undefined): string {
+2 |   return JSON.stringify(value).slice(0, 400);
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+3 | }
+  |
+help: `JSON.stringify` returns `undefined` when its argument is `undefined`: check the argument, or add `?? ""` to the result before accessing its members
+---

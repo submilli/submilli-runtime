@@ -1111,6 +1111,35 @@ impl<'a> Inferer<'a> {
         );
     }
 
+    pub(super) fn report_unassigned_local_read(&mut self, name: &crate::Ident, span: Span) -> bool {
+        let Some(entry) = self.visible_local(&name.name) else {
+            return false;
+        };
+        if !entry.requires_assignment || !self.reachable {
+            return false;
+        }
+        let path = narrowing::ReferencePath::root(narrowing::BindingId::Local {
+            name: name.name.clone(),
+            decl_scope: entry.decl_scope,
+        });
+        if self
+            .narrow_scopes
+            .iter()
+            .any(|env| env.definitely_assigned.contains(&path))
+        {
+            return false;
+        }
+        self.error_with_help(
+            span,
+            format!("variable `{}` is used before being assigned", name.name),
+            vec![format!(
+                "assign `{}` on every path before reading it, or declare it with `| undefined`",
+                name.name
+            )],
+        );
+        true
+    }
+
     /// A field read on a receiver that carries no fields at all. Attaches the
     /// type's definition plus, when the receiver lost a narrowing, the hint
     /// naming what killed it. A nullable receiver gets the guard rewrite *instead
@@ -1132,13 +1161,28 @@ impl<'a> Inferer<'a> {
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?,
         )?;
-        let nullable = self.nullable_receiver_fix(
-            recv_span,
-            recv_path.as_ref(),
-            receiver_ty,
-            name,
-            MemberSide::Read,
-        );
+        let stringify = receiver_ty.spells_undefined()
+            && matches!(
+                self.typed_ast
+                    .try_expr(receiver)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .kind,
+                crate::TypedExprKind::IntrinsicCall {
+                    kind: crate::Intrinsic::JsonStringify,
+                    ..
+                }
+            );
+        let nullable = if stringify {
+            Some("`JSON.stringify` returns `undefined` when its argument is `undefined`: check the argument, or add `?? \"\"` to the result before accessing its members".to_string())
+        } else {
+            self.nullable_receiver_fix(
+                recv_span,
+                recv_path.as_ref(),
+                receiver_ty,
+                name,
+                MemberSide::Read,
+            )
+        };
         let (message, mut help) = match nullable {
             Some(fix) => (
                 format!(

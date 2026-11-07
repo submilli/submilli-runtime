@@ -149,7 +149,21 @@ fn b4_missing_main_help() {
 
 #[test]
 fn b4_let_missing_initializer_help() {
-    insta::assert_snapshot!(render_inside_main("  let x: number;"));
+    insta::assert_snapshot!(render_inside_main("  let x: number;\n  console.log(x);"));
+}
+
+#[test]
+fn for_in_suggests_object_keys() {
+    insta::assert_snapshot!(render_inside_main(
+        "  const obj = { key: 1 };\n  for (const k in obj) console.log(k);"
+    ));
+}
+
+#[test]
+fn stringify_undefined_suggests_coalescing_result() {
+    insta::assert_snapshot!(render_all(
+        "function format(value: string | undefined): string {\n  return JSON.stringify(value).slice(0, 400);\n}\nfunction main(): void {}\n"
+    ));
 }
 
 #[test]
