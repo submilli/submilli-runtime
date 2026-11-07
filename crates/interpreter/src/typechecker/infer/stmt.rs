@@ -730,6 +730,15 @@ impl Inferer<'_> {
         if ty.is_none() {
             self.record_aliased_condition(&name.name, typed_value);
         }
+        if let Some(entry) = self.scopes.get(&name.name) {
+            self.record_const_record_read(
+                narrowing::BindingId::Local {
+                    name: name.name.clone(),
+                    decl_scope: entry.decl_scope,
+                },
+                typed_value,
+            )?;
+        }
         let flow_ty = match self.pattern_binding_flow_type(value)? {
             Some(flow_ty) => flow_ty,
             None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
