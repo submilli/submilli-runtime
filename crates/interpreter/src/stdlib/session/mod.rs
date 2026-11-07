@@ -21,20 +21,17 @@ pub(crate) mod value;
 
 use std::sync::Arc;
 
-use wasmtime::{FuncType, HeapType, Linker, RefType, StructType, Val, ValType};
+use wasmtime::{FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::call_log::{Payload, Side, record_payload};
 use crate::runtime::decision::CallTicket;
 use crate::runtime::fuel;
-use crate::runtime::intrinsic_types::{IntrinsicTypes, build_intrinsic_types};
+use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::session_kv::{
     CursorKeys, SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore,
 };
-use crate::stdlib::abi::{
-    self, HostView, TypeDescriptor, backing_struct, f64_field, install_field_getters,
-    read_type_argument, string_field,
-};
+use crate::stdlib::abi::{self, TypeDescriptor, read_type_argument};
 use crate::stdlib::shared::{
     check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
 };
@@ -48,14 +45,6 @@ pub(super) const MAX_LIST_LIMIT: u32 = 1000;
 /// few of them matched the prefix. A work bound, not a result bound: a prefix
 /// matching nothing still costs at most this much, and the caller pages on.
 const MAX_SCAN_PER_PAGE: usize = 512;
-
-// `$EntryBacking` field indices (0 is the vtable).
-const ENTRY_KEY: usize = 1;
-const ENTRY_SIZE_BYTES: usize = 2;
-
-// `$PageBacking` field indices.
-const PAGE_ENTRIES: usize = 1;
-const PAGE_NEXT_CURSOR: usize = 2;
 
 pub use declaration::package_declaration;
 
@@ -248,71 +237,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    install_getters(linker, &engine, &intr)?;
-
     Ok(())
-}
-
-const ENTRY_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Entry",
-    backing: entry_backing_struct,
-    properties: &[("key", ENTRY_KEY), ("sizeBytes", ENTRY_SIZE_BYTES)],
-};
-
-const PAGE_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "Page",
-    backing: page_backing_struct,
-    properties: &[("entries", PAGE_ENTRIES), ("nextCursor", PAGE_NEXT_CURSOR)],
-};
-
-/// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[&ENTRY_VIEW, &PAGE_VIEW];
-
-/// `Entry` and `Page` are `Dispatch::Direct`, so each property is a host getter
-/// under `submilli:session#<Iface>#<prop>`.
-fn install_getters(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-) -> wasmtime::Result<()> {
-    // A Direct receiver is the non-null `(ref $Object)`; the guest holds these
-    // backings as the nullable `unknown` lowering and codegen bridges the two.
-    let receiver = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object.clone()),
-    ));
-    for view in HOST_VIEWS {
-        install_field_getters(linker, engine, &receiver, view)?;
-    }
-    Ok(())
-}
-
-fn entry_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr), // key
-            f64_field(),         // sizeBytes
-        ],
-    )
-}
-
-fn page_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        // `entries: Entry[]` lowers to a non-null `$Array`; `nextCursor: string |
-        // undefined` is a mixed union, so it lowers to the universal `(ref null $Object)`.
-        vec![
-            abi::array_field(&intr),           // entries
-            abi::nullable_object_field(&intr), // nextCursor
-        ],
-    )
 }
 
 /// One `list` call: gate the operation, then walk the keyspace gating each
@@ -462,18 +387,20 @@ fn build_page(
     entries: &[SessionKvEntry],
     next_cursor: Option<&str>,
 ) -> wasmtime::Result<Val> {
-    let entry_ty = entry_backing_struct(caller.engine())?;
     let mut built = Vec::with_capacity(entries.len());
     for entry in entries {
         let key = crate::runtime::host::write_submilli_string_struct_units(caller, &entry.key)?;
-        built.push(abi::new_backing(
-            caller,
-            entry_ty.clone(),
-            &[
-                Val::AnyRef(Some(key.to_anyref())),
-                Val::F64((entry.size_bytes as f64).to_bits()),
-            ],
-        )?);
+        built.push({
+            let size =
+                crate::runtime::host::write_boxed_number_struct(caller, entry.size_bytes as f64)?;
+            abi::new_object(
+                caller,
+                std::collections::BTreeMap::from([
+                    ("key".to_string(), Val::AnyRef(Some(key.to_anyref()))),
+                    ("sizeBytes".to_string(), Val::AnyRef(Some(size.to_anyref()))),
+                ]),
+            )
+        }?);
     }
     let array = value::build_array(caller, built)?;
     let cursor = match next_cursor {
@@ -484,8 +411,14 @@ fn build_page(
         }
         None => crate::runtime::prelude::undefined::value(caller)?,
     };
-    let page_ty = page_backing_struct(caller.engine())?;
-    abi::new_backing(caller, page_ty, &[array, cursor])
+
+    abi::new_object(
+        caller,
+        std::collections::BTreeMap::from([
+            ("entries".to_string(), array),
+            ("nextCursor".to_string(), cursor),
+        ]),
+    )
 }
 
 /// The stored `value` of `key` once the descriptor for `T` accepts it, or the

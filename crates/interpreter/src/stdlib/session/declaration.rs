@@ -215,7 +215,7 @@ fn insert_page_interface(defs: &mut PackageDeclaration) {
         defs,
         "Page",
         properties,
-        "/** One page of a `list` call: the `entries` it discloses and the `nextCursor` that continues it. Constructed only by `list`. */",
+        "/** One page of a `list` call: the `entries` it discloses and the `nextCursor` that continues it. Returned by `list`. */",
     );
 }
 
@@ -236,7 +236,7 @@ fn insert_interface(
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
-                dispatch: Dispatch::Direct,
+                dispatch: Dispatch::VTable,
                 doc: crate::doc(crate::FileId::SESSION, doc),
             },
         },

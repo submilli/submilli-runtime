@@ -22,8 +22,6 @@ pub mod handles;
 mod install;
 mod summary;
 
-pub(crate) use install::HOST_VIEWS;
-
 use crate::runtime::filesystem::FilesystemError as PortError;
 
 use wasmtime::{
@@ -41,7 +39,7 @@ use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
 use crate::runtime::prelude::iterator::{
     as_struct, build_closable_iterator, iter_done, iter_yield, next_closure_type, void_closure_type,
 };
-use crate::stdlib::abi::{self, backing_struct, externref_field, f64_field, string_field};
+use crate::stdlib::abi::{self, backing_struct, externref_field};
 use crate::stdlib::shared::{
     check_and_approve_call, quota_refusal, require_writable, write_target_trap,
 };
@@ -52,113 +50,8 @@ pub const MODULE_NAME: &str = "submilli:fs";
 pub use declaration::package_declaration;
 pub use install::install;
 
-// `$StatBacking` field indices (0 is the vtable).
-const STAT_KIND: usize = 1;
-const STAT_SIZE: usize = 2;
-const STAT_MODIFIED_AT: usize = 3;
-
-// `$PeekBacking` field indices.
-const PEEK_PREVIEW: usize = 1;
-const PEEK_ENCODING: usize = 2;
-const PEEK_LINE_ENDING: usize = 3;
-const PEEK_SIZE: usize = 4;
-
-// `$DirEntryBacking` field indices.
-const ENTRY_KIND: usize = 1;
-const ENTRY_NAME: usize = 2;
-const ENTRY_PATH: usize = 3;
-const ENTRY_SIZE: usize = 4;
-
-// `$InfoBacking` field indices.
-const INFO_MODE: usize = 1;
-const INFO_SIZE_LIMIT: usize = 2;
-const INFO_ACCESS: usize = 3;
-const INFO_VOLUME: usize = 4;
-const INFO_MOUNTS: usize = 5;
-
-// `$MountInfoBacking` field indices.
-const MOUNT_PATH: usize = 1;
-const MOUNT_MODE: usize = 2;
-const MOUNT_VOLUME: usize = 3;
-const MOUNT_ACCESS: usize = 4;
-const MOUNT_SIZE_LIMIT: usize = 5;
-
 // `$FileWriterBacking`: vtable + the externref handle.
 const WRITER_HANDLE: usize = 1;
-
-fn stat_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr), // kind
-            f64_field(),         // size
-            f64_field(),         // modifiedAt
-        ],
-    )
-}
-
-fn peek_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr), // preview
-            string_field(&intr), // encoding
-            string_field(&intr), // lineEnding
-            f64_field(),         // size
-        ],
-    )
-}
-
-fn dir_entry_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr), // kind
-            string_field(&intr), // name
-            string_field(&intr), // path
-            f64_field(),         // size
-            wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I64)), // nominal marker
-        ],
-    )
-}
-
-fn info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr),     // mode
-            f64_field(),             // sizeLimit
-            string_field(&intr),     // access
-            string_field(&intr),     // volume
-            abi::array_field(&intr), // mounts
-            wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I64)), // nominal marker
-        ],
-    )
-}
-
-fn mount_info_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            string_field(&intr), // path
-            string_field(&intr), // mode
-            string_field(&intr), // volume
-            string_field(&intr), // access
-            f64_field(),         // sizeLimit
-            wasmtime::FieldType::new(Mutability::Const, StorageType::ValType(ValType::I32)), // nominal marker
-        ],
-    )
-}
 
 /// `$FileWriterBacking` — vtable + the `externref` holding the
 /// [`BackendFileWriter`].
@@ -185,7 +78,7 @@ fn handle_env_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> 
 // Extracted op bodies
 // ---------------------------------------------------------------------------
 
-/// `info()`: the active VFS configuration as an `$InfoBacking`.
+/// `info()`: the active VFS configuration as a structural object.
 fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let info = caller.data().vfs_info.clone();
     let mode = match info.mode {
@@ -200,10 +93,9 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let volume = vfs.volume.unwrap_or_default();
     // Cloned out of the store, which the string writes below borrow mutably.
     let mounts = vfs.mounts;
-    let mount_ty = mount_info_backing_struct(caller.engine())?;
     let mut built = Vec::with_capacity(mounts.len());
     for mount in &mounts {
-        built.push(build_mount_info(caller, &mount_ty, mount)?);
+        built.push(build_mount_info(caller, mount)?);
     }
     let mounts = abi::new_array(caller, &built)?;
     // A named root's limit is the volume's, which the server shares in rather
@@ -212,25 +104,24 @@ fn build_info(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let mode = write_submilli_string_struct(caller, mode)?.to_anyref();
     let access = write_submilli_string_struct(caller, access)?.to_anyref();
     let volume = write_submilli_string_struct(caller, &volume)?.to_anyref();
-    let ty = info_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let size_limit_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, size_limit)?.to_anyref(),
+    ));
+    abi::new_object(
         caller,
-        ty,
-        &[
-            Val::AnyRef(Some(mode)),
-            Val::F64(size_limit.to_bits()),
-            Val::AnyRef(Some(access)),
-            Val::AnyRef(Some(volume)),
-            mounts,
-            Val::I64(0),
-        ],
+        std::collections::BTreeMap::from([
+            ("mode".to_string(), Val::AnyRef(Some(mode))),
+            ("sizeLimit".to_string(), size_limit_value),
+            ("access".to_string(), Val::AnyRef(Some(access))),
+            ("volume".to_string(), Val::AnyRef(Some(volume))),
+            ("mounts".to_string(), mounts),
+        ]),
     )
 }
 
-/// One `info().mounts` entry as a `$MountInfoBacking`, fields in `MOUNT_*` order.
+/// One structural entry in `info().mounts`.
 fn build_mount_info(
     caller: &mut Caller<'_, StoreData>,
-    ty: &StructType,
     mount: &crate::runtime::filesystem::MountInfo,
 ) -> wasmtime::Result<Val> {
     let path = write_submilli_string_struct(caller, &mount.path)?.to_anyref();
@@ -238,22 +129,22 @@ fn build_mount_info(
     let volume = write_submilli_string_struct(caller, &mount.volume)?.to_anyref();
     let access = write_submilli_string_struct(caller, mount.access.as_str())?.to_anyref();
     let size_limit = size_limit_number(mount.maximum_bytes);
-    abi::new_backing(
+    let size_limit_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, size_limit)?.to_anyref(),
+    ));
+    abi::new_object(
         caller,
-        ty.clone(),
-        &[
-            Val::AnyRef(Some(path)),
-            Val::AnyRef(Some(mode)),
-            Val::AnyRef(Some(volume)),
-            Val::AnyRef(Some(access)),
-            Val::F64(size_limit.to_bits()),
-            Val::I32(0),
-        ],
+        std::collections::BTreeMap::from([
+            ("path".to_string(), Val::AnyRef(Some(path))),
+            ("mode".to_string(), Val::AnyRef(Some(mode))),
+            ("volume".to_string(), Val::AnyRef(Some(volume))),
+            ("access".to_string(), Val::AnyRef(Some(access))),
+            ("sizeLimit".to_string(), size_limit_value),
+        ]),
     )
 }
 
-/// `-1` stands for "no limit": the language has no `undefined`, so the field
-/// is always present.
+/// The public API uses `-1` to represent an unlimited volume.
 fn size_limit_number(limit: Option<u64>) -> f64 {
     limit.map_or(-1.0, |v| v as f64)
 }
@@ -425,15 +316,19 @@ async fn stat_entry(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime:
         )));
     };
     let kind = write_submilli_string_struct(caller, &stat.kind)?.to_anyref();
-    let ty = stat_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let size_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, stat.size)?.to_anyref(),
+    ));
+    let modified_at_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, stat.modified_ms)?.to_anyref(),
+    ));
+    abi::new_object(
         caller,
-        ty,
-        &[
-            Val::AnyRef(Some(kind)),
-            Val::F64(stat.size.to_bits()),
-            Val::F64(stat.modified_ms.to_bits()),
-        ],
+        std::collections::BTreeMap::from([
+            ("kind".to_string(), Val::AnyRef(Some(kind))),
+            ("size".to_string(), size_value),
+            ("modifiedAt".to_string(), modified_at_value),
+        ]),
     )
 }
 
@@ -493,7 +388,7 @@ async fn stat_path(
     .await
 }
 
-/// `peek(path)`: sniff the first ~256 bytes into a `$PeekBacking`.
+/// `peek(path)`: sniff the first ~256 bytes into a `structural preview object`.
 async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::Result<Val> {
     let observation = runtime_effects::execute(
         caller,
@@ -538,16 +433,18 @@ async fn peek_file(caller: &mut Caller<'_, StoreData>, path: &str) -> wasmtime::
     let preview = write_submilli_string_struct(caller, &preview)?.to_anyref();
     let encoding = write_submilli_string_struct(caller, encoding)?.to_anyref();
     let line_ending = write_submilli_string_struct(caller, line_ending)?.to_anyref();
-    let ty = peek_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let size_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, observation.size as f64)?
+            .to_anyref(),
+    ));
+    abi::new_object(
         caller,
-        ty,
-        &[
-            Val::AnyRef(Some(preview)),
-            Val::AnyRef(Some(encoding)),
-            Val::AnyRef(Some(line_ending)),
-            Val::F64((observation.size as f64).to_bits()),
-        ],
+        std::collections::BTreeMap::from([
+            ("preview".to_string(), Val::AnyRef(Some(preview))),
+            ("encoding".to_string(), Val::AnyRef(Some(encoding))),
+            ("lineEnding".to_string(), Val::AnyRef(Some(line_ending))),
+            ("size".to_string(), size_value),
+        ]),
     )
 }
 
@@ -833,23 +730,27 @@ async fn list_next(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmti
     let Some(entry) = &outcome else {
         return iter_done(caller);
     };
-    let size = entry.bytes as f64;
-    let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
-    let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
-    let path = write_submilli_string_struct(caller, &entry.path)?.to_anyref();
-    let ty = dir_entry_backing_struct(caller.engine())?;
-    let entry = abi::new_backing(
-        caller,
-        ty,
-        &[
-            Val::AnyRef(Some(kind)),
-            Val::AnyRef(Some(name)),
-            Val::AnyRef(Some(path)),
-            Val::F64(size.to_bits()),
-            Val::I64(0),
-        ],
-    )?;
-    iter_yield(caller, entry)
+    fuel::settle_result(caller, |caller| {
+        let size = entry.bytes as f64;
+        let kind = write_submilli_string_struct(caller, entry.kind)?.to_anyref();
+        let name = write_submilli_string_struct(caller, &entry.name)?.to_anyref();
+        let path = write_submilli_string_struct(caller, &entry.path)?.to_anyref();
+        let entry = {
+            let size_value = Val::AnyRef(Some(
+                crate::runtime::host::write_boxed_number_struct(caller, size)?.to_anyref(),
+            ));
+            abi::new_object(
+                caller,
+                std::collections::BTreeMap::from([
+                    ("kind".to_string(), Val::AnyRef(Some(kind))),
+                    ("name".to_string(), Val::AnyRef(Some(name))),
+                    ("path".to_string(), Val::AnyRef(Some(path))),
+                    ("size".to_string(), size_value),
+                ]),
+            )
+        }?;
+        iter_yield(caller, entry)
+    })
 }
 
 /// The next entry of the directory `handle` holds, as one recorded effect.
@@ -1284,6 +1185,9 @@ function main(): void {
  const w = new WriterField(); w.reset(writer("/output.txt")); w.value!.close();
  w.reset(info()); rejects(() => { const v = w.value; });
  const m = new MountField(); m.reset(info().mounts[0]); assert(m.value!.path === "/m", "MountInfo");
+ const mount = info().mounts[0];
+ assert((mount as Record<string, unknown>)["path"] === "/m", "mount record");
+ assert(Object.keys(mount).sort().join(",") === "access,mode,path,sizeLimit,volume", "mount fields");
  m.reset(info()); rejects(() => { const v = m.value; });
  i.reset(info().mounts[0]); rejects(() => { const v = i.value; });
 }

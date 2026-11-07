@@ -2137,3 +2137,17 @@ charged to guest execution. Native outcome limits and decoding charges are uncha
 
 - `fs.mkdir`, `fs.remove`, and `fs.list` read `options.recursive` once through the getter-aware object reader before policy checks. Shared field scanning/string creation charges apply; user getters pay Wasm fuel. Existing path, filesystem, and settlement formulas are unchanged.
 - `fs.read` and `fs.readText` throw above the configured cap; a bounded cap+1 read detects growth after metadata. `fs.stat` throws on absence; `exists` keeps the probe path. No additional per-byte work is introduced.
+
+### Structural data results (SUB-2081)
+
+`fs.info` (including each mount), `fs.stat`, `fs.peek`, each `fs.list` entry,
+`http.download`, `session.list` (page and entries), `agents.list`, `skills.list`,
+and `embedding.models` build ordinary object shapes. In addition to the operation
+costs above, each object pays `ELEM(field count)` and `COPY(field-name UTF-16 units)`
+through `abi::new_object` and the shared string writer before constructing its
+name/value arrays. Numeric fields are boxed through the GC allocation limiter;
+all shape arrays and field-name strings also use that limiter. Required fields
+whose value is `undefined` still occupy a field. These costs are incurred during
+output construction; directory iterator output and committed download results use
+`settle_result` so exhaustion cannot discard an advanced entry or committed file.
+`Skill`, `Embeddings`, `Response`, `FileWriter`, and `URL` retain their backing.

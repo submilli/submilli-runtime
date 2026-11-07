@@ -72,14 +72,6 @@ const R_STATUS: usize = 4;
 const R_STATUS_TEXT: usize = 5;
 const R_URL: usize = 6;
 
-// `$DownloadResultBacking` field indices (0 is the vtable).
-const D_BYTES_WRITTEN: usize = 1;
-const D_CONTENT_TYPE: usize = 2;
-const D_DURATION_MS: usize = 3;
-const D_FINAL_URL: usize = 4;
-const D_PATH: usize = 5;
-const D_STATUS: usize = 6;
-
 /// `$ResponseBacking` — a host-only `$Object` subtype; the guest holds it as
 /// `(ref null $Object)` and reads it through the registered getters, so the
 /// layout is the host's to choose.
@@ -95,23 +87,6 @@ fn response_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<Struct
             f64_field(),                  // status
             string_field(&intr),          // statusText
             string_field(&intr),          // url (final, after redirects)
-        ],
-    )
-}
-
-/// `$DownloadResultBacking` — same host-only pattern as `$ResponseBacking`.
-fn download_result_backing_struct(engine: &wasmtime::Engine) -> wasmtime::Result<StructType> {
-    let intr = build_intrinsic_types(engine)?;
-    backing_struct(
-        engine,
-        &intr,
-        vec![
-            f64_field(),         // bytesWritten
-            string_field(&intr), // contentType
-            f64_field(),         // duration_ms
-            string_field(&intr), // finalUrl
-            string_field(&intr), // path
-            f64_field(),         // status
         ],
     )
 }
@@ -250,7 +225,6 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     )?;
 
     install_response_members(linker, &engine, &intr, object.clone())?;
-    install_download_result_members(linker, &engine, &intr, object)?;
     Ok(())
 }
 
@@ -806,12 +780,14 @@ async fn perform_download(
         },
     )
     .await?;
-    write_download_result(
-        caller,
-        &downloaded.meta,
-        &guest_path,
-        downloaded.duration_ms,
-    )
+    fuel::settle_result(caller, |caller| {
+        write_download_result(
+            caller,
+            &downloaded.meta,
+            &guest_path,
+            downloaded.duration_ms,
+        )
+    })
 }
 
 /// Keep admission and its SQL acknowledgement handling on the execution's drain
@@ -964,7 +940,7 @@ async fn stream_download(
     })
 }
 
-/// Build the `$DownloadResultBacking` from the committed download's metadata.
+/// Build a structural result from the committed download's metadata.
 fn write_download_result(
     caller: &mut Caller<'_, StoreData>,
     meta: &DownloadMeta,
@@ -982,18 +958,27 @@ fn write_download_result(
     let final_url = write_submilli_string_struct(caller, &meta.final_url)?.to_anyref();
     let path = write_submilli_string_struct(caller, guest_path)?.to_anyref();
 
-    let ty = download_result_backing_struct(caller.engine())?;
-    abi::new_backing(
+    let bytes_written_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, meta.bytes_written as f64)?
+            .to_anyref(),
+    ));
+    let duration_ms_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, duration_ms)?.to_anyref(),
+    ));
+    let status_value = Val::AnyRef(Some(
+        crate::runtime::host::write_boxed_number_struct(caller, f64::from(meta.status))?
+            .to_anyref(),
+    ));
+    abi::new_object(
         caller,
-        ty,
-        &[
-            Val::F64((meta.bytes_written as f64).to_bits()),
-            Val::AnyRef(Some(content_type)),
-            Val::F64(duration_ms.to_bits()),
-            Val::AnyRef(Some(final_url)),
-            Val::AnyRef(Some(path)),
-            Val::F64(f64::from(meta.status).to_bits()),
-        ],
+        std::collections::BTreeMap::from([
+            ("bytesWritten".to_string(), bytes_written_value),
+            ("contentType".to_string(), Val::AnyRef(Some(content_type))),
+            ("duration_ms".to_string(), duration_ms_value),
+            ("finalUrl".to_string(), Val::AnyRef(Some(final_url))),
+            ("path".to_string(), Val::AnyRef(Some(path))),
+            ("status".to_string(), status_value),
+        ]),
     )
 }
 
@@ -1015,22 +1000,8 @@ const RESPONSE_VIEW: HostView = HostView {
     ],
 };
 
-const DOWNLOAD_RESULT_VIEW: HostView = HostView {
-    module: MODULE_NAME,
-    interface: "DownloadResult",
-    backing: download_result_backing_struct,
-    properties: &[
-        ("bytesWritten", D_BYTES_WRITTEN),
-        ("contentType", D_CONTENT_TYPE),
-        ("duration_ms", D_DURATION_MS),
-        ("finalUrl", D_FINAL_URL),
-        ("path", D_PATH),
-        ("status", D_STATUS),
-    ],
-};
-
 /// The host-backed interfaces this package's values are.
-pub(crate) const HOST_VIEWS: &[&HostView] = &[&RESPONSE_VIEW, &DOWNLOAD_RESULT_VIEW];
+pub(crate) const HOST_VIEWS: &[&HostView] = &[&RESPONSE_VIEW];
 
 fn install_response_members(
     linker: &mut Linker<StoreData>,
@@ -1139,46 +1110,6 @@ fn read_response_status_line(
     let url_val = st.field(&mut *caller, R_URL)?;
     let url = read_string_arg(caller, &url_val, "Response (url)")?;
     Ok((status, status_text, url))
-}
-
-fn install_download_result_members(
-    linker: &mut Linker<StoreData>,
-    engine: &wasmtime::Engine,
-    intr: &IntrinsicTypes,
-    receiver: ValType,
-) -> wasmtime::Result<()> {
-    let string = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.string.clone()),
-    ));
-    install_field_getters(linker, engine, &receiver, &DOWNLOAD_RESULT_VIEW)?;
-
-    let result_key = crate::mangle::package_symbol(MODULE_NAME, "DownloadResult");
-    register_host_fn(
-        linker,
-        MODULE_NAME,
-        crate::mangle::extend(&result_key, "toString"),
-        FuncType::new(engine, [receiver], [string]),
-        |caller, params, results| {
-            let st = backing_receiver(caller, abi_arg(params, 0)?)?;
-            let Val::F64(status_bits) = st.field(&mut *caller, D_STATUS)? else {
-                wasmtime::bail!("DownloadResult: status is not a number");
-            };
-            let Val::F64(bytes_bits) = st.field(&mut *caller, D_BYTES_WRITTEN)? else {
-                wasmtime::bail!("DownloadResult: bytesWritten is not a number");
-            };
-            let path_val = st.field(&mut *caller, D_PATH)?;
-            let path = read_string_arg(caller, &path_val, "DownloadResult (path)")?;
-            let status = f64::from_bits(status_bits) as i64;
-            let bytes_written = f64::from_bits(bytes_bits) as i64;
-            let text = format!("Download({status}, {bytes_written} bytes -> {path})");
-            let out = write_submilli_string_struct(caller, &text)?;
-            *abi_result(results, 0)? = Val::AnyRef(Some(out.to_anyref()));
-            Ok(())
-        },
-    )?;
-
-    Ok(())
 }
 
 #[cfg(test)]

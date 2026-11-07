@@ -16,6 +16,11 @@ function main(): void {
   const _path: string = r.path;
   const _status: number = r.status;
 
+  const record = r as Record<string, unknown>;
+  assert(record === r && record["bytesWritten"] === 10, "download shape and identity");
+  assert(Object.keys(r).sort().join(",") === "bytesWritten,contentType,duration_ms,finalUrl,path,status", "download fields");
+  const subset = r as { path: string };
+  assert(subset === r && subset.path === "/out.bin", "download subset");
   assert(r.status === 200, "200 over the wire");
   assert(r.bytesWritten === 10, "10 bytes (\"hello live\")");
   assert(r.contentType === "text/plain", "content-type extracted");

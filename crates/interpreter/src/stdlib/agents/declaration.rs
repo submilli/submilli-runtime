@@ -137,10 +137,10 @@ fn insert_agent_info_interface(defs: &mut PackageDeclaration) {
                 generics: Vec::new(),
                 methods: BTreeMap::new(),
                 properties,
-                dispatch: Dispatch::Direct,
+                dispatch: Dispatch::VTable,
                 doc: crate::doc(
                     crate::FileId::AGENTS,
-                    "/** One agent this caller may hand work to. Constructed only by `list()`. */",
+                    "/** One agent this caller may hand work to. Returned by `list()`. */",
                 ),
             },
         },

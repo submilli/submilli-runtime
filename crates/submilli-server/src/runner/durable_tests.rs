@@ -158,10 +158,13 @@ async fn recorded_run_reopens(threshold: Option<usize>) {
     drop(sessions);
     let source = r#"
         import { v4 } from "submilli:uuid";
-        import { writeText, readText } from "submilli:fs";
+        import { writeText, readText, stat } from "submilli:fs";
         const value = v4();
         function main(): string {
             writeText("/result", value);
+            const metadata = stat("/result")!;
+            const fields = metadata as Record<string, unknown>;
+            assert(fields === metadata && fields["size"] === value.length, "replayed metadata shape");
             console.log(value);
             return readText("/result") ?? "missing";
         }
@@ -290,8 +293,8 @@ async fn recorded_run_reopens(threshold: Option<usize>) {
             .unwrap(),
         Some(program.clone())
     );
-    // UUID, write and read are recorded; console writes again without a history row.
-    assert_eq!(resumed.history_position(), 3);
+    // UUID, write, stat and read are recorded; console writes again without a history row.
+    assert_eq!(resumed.history_position(), 4);
     assert_eq!(resumed.attempt(), first.attempt() + 1);
     let objects = if let Some(inline_threshold) = threshold {
         Some(
