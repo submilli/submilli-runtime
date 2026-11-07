@@ -2225,7 +2225,7 @@ function main(): void {
                 assert(mount.volume === "project-memory" && mount.access === "read_write", "mount volume and access");
                 assert(mount.sizeLimit === 1000, "mount size limit");
                 const json = JSON.stringify(fs)!;
-                assert(json.endsWith(`"mounts":[{"path":"/data/memory","mode":"named","volume":"project-memory","access":"read_write","sizeLimit":1000}]}`), json);
+                assert(json === `{"access":"read_write","mode":"per_session","mounts":[{"access":"read_write","mode":"named","path":"/data/memory","sizeLimit":1000,"volume":"project-memory"}],"sizeLimit":-1,"volume":""}`, json);
             }
         "#;
         let data = StoreData::with_vfs("test-run".into(), vfs);
