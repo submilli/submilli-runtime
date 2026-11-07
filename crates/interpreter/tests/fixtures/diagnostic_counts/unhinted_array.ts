@@ -1,3 +1,3 @@
 // expect-error-count: 1
-// expect-error: (matching first element)
-export function main(): void { const q = [1, "bad"]; }
+// expect-error: expected `number`, got `number | string`
+export function main(): void { const q = [1, "bad"]; const n: number = q[0]; }

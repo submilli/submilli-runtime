@@ -1,9 +1,8 @@
-//! The element type of an array literal whose elements all fit one another's
-//! types, the way tsc picks it: the union of the elements' types with each type
-//! that is a subtype of another left out. `[new Dog(), new Animal()]` holds
-//! `Animal`, while `[a, b]` with `a: { x: number; y?: number }` and
-//! `b: { x: number; z?: number }` holds both types, since neither has the
-//! other's optional field.
+//! The element type of an unannotated array literal, the way tsc picks it: the
+//! union of the elements' types with each type that is a subtype of another
+//! left out. `[new Dog(), new Animal()]` holds `Animal`, while `[a, b]` with
+//! `a: { x: number; y?: number }` and `b: { x: number; z?: number }` holds both
+//! types, since neither has the other's optional field.
 
 use crate::TypedArrayElement;
 use crate::compiler_error::CompilerFailure;
@@ -45,7 +44,7 @@ impl Inferer<'_> {
         }
         // A union of function types Submilli can't call through one combined
         // signature (members differing in whether they return a value) keeps
-        // the one type the functions all fit.
+        // `joined`: the one type the functions all fit, when there is one.
         if kept
             .iter()
             .any(|ty| matches!(ty.peel(), Type::Function { .. }))

@@ -414,7 +414,7 @@ impl Inferer<'_> {
             }
             None => self.exit_closure_narrow_boundary(),
         };
-        self.scopes = scopes;
+        self.scopes.restore(scopes);
         self.reachable = reachable;
         self.pattern_sources = pattern_sources;
         self.last_write_spans = last_write_spans;

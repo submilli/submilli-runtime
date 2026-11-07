@@ -1,7 +1,6 @@
 // A tuple literal checked against an *aliased* tuple annotation. The alias has
-// to be peeled before the literal is checked, or the elements get validated
-// under array rules — every element against the first element's type — and a
-// heterogeneous tuple is rejected as `expected number, got string`.
+// to be peeled before the literal is checked, or the literal is inferred under
+// array rules, as `(number | string)[]`, which the tuple type rejects.
 type Pair = [number, string];
 type Chained = Pair;
 type Nums = number[];

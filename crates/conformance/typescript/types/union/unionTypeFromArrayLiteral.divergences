@@ -1,12 +1,4 @@
-types: 10 of 30 tsc entries compared, 4 differ
-
-line 8: arr2
-  tsc:  (string | boolean)[]
-  ours: string[]
-
-line 8: ["hello", true]
-  tsc:  (string | boolean)[]
-  ours: string[]
+types: 10 of 30 tsc entries compared, 2 differ
 
 line 10: [3, "three", "hello"]
   tsc:  [number, string, string]
@@ -15,6 +7,3 @@ line 10: [3, "three", "hello"]
 line 11: arrEmpty
   tsc:  any[]
   ours: never[]
-
-errors:
-line 8: ours: expected `string` (matching first element), got `boolean` (tsc accepts)

@@ -1,5 +1,5 @@
-// expect-error: matching first element
+// expect-error: expected `number[]`, got `string[]`
 function main(): void {
   const xs: string[] = ["a"];
-  const bad = [1, ...xs];
+  const bad: number[] = [1, ...xs];
 }

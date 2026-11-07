@@ -4,8 +4,7 @@
 // those errors are accurate: a literal whose inference is hint-driven is
 // otherwise inferred at the wrong shape and blames itself for the receiver's
 // problem. `[2, "y"]` is a perfectly good `[number, string]`; with no hint it is
-// inferred as a homogeneous array and its second element is checked against the
-// first's type.
+// inferred as the array `(number | string)[]`, which no tuple field accepts.
 //
 // So every rejecting arm passes the field's shape. *Shape*, not permission: a
 // `readonly` field still says what a value written to it would have to be, and

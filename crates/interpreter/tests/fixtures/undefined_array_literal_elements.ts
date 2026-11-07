@@ -1,5 +1,5 @@
-// An array literal's elements share one type, but `null` and `undefined` widen
-// it rather than conflict with it, as TypeScript infers `(number | undefined)[]`.
+// An array literal's element type takes in the `null` and `undefined` its
+// elements hold, as TypeScript infers `(number | undefined)[]`.
 interface Point { x: number; y?: number; }
 function main(): void {
   const p: Point = { x: 1 };

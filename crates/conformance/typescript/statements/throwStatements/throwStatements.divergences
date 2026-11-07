@@ -1,4 +1,4 @@
-types: 29 of 53 tsc entries compared, 5 differ
+types: 29 of 53 tsc entries compared, 4 differ
 
 line 40: anAny
   tsc:  any
@@ -15,10 +15,6 @@ line 44: anUndefined
 line 45: anUndefined
   tsc:  any
   ours: undefined
-
-line 83: ['a', ['b']]
-  tsc:  (string | string[])[]
-  ours: string[]
 
 errors:
 line 32: ours: expected `Error`, got `number` (tsc accepts)
@@ -37,6 +33,6 @@ line 78: ours: expected `Error`, got `string` (tsc accepts)
 line 79: ours: expected `Error`, got `() => string` (tsc accepts)
 line 81: ours: expected `Error`, got `{ x: number; y: number }` (tsc accepts)
 line 82: ours: expected `Error`, got `never[]` (tsc accepts)
-line 83: ours: expected `string` (matching first element), got `string[]` (tsc accepts)
+line 83: ours: expected `Error`, got `(string | string[])[]` (tsc accepts)
 line 84: ours: expected `Error`, got `RegExp` (tsc accepts)
 line 86: ours: expected `Error`, got `C` (tsc accepts)

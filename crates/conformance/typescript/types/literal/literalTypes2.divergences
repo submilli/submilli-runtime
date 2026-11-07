@@ -1,25 +1,5 @@
-types: 148 of 310 tsc entries compared, 5 differ
-
-line 94: c1
-  tsc:  (string | number)[]
-  ours: number[]
-
-line 94: [1, "foo"]
-  tsc:  (string | number)[]
-  ours: number[]
-
-line 97: x1
-  tsc:  (string | number)[]
-  ours: number[]
-
-line 97: [1, "foo"]
-  tsc:  (string | number)[]
-  ours: number[]
+types: 148 of 310 tsc entries compared, 1 differ
 
 line 179: append(aa, 1)
   tsc:  Bit[]
   ours: (0 | 1)[]
-
-errors:
-line 94: ours: expected `number` (matching first element), got `string` (tsc accepts)
-line 97: ours: expected `number` (matching first element), got `string` (tsc accepts)
