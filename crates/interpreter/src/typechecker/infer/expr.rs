@@ -16771,21 +16771,14 @@ function main(): void { if (result < 10) { } }
     }
 
     #[test]
-    fn arrow_block_body_conflicting_returns_errors() {
-        let (_, diags) = run(
+    fn arrow_block_body_unrelated_returns_infer_union() {
+        let ta = run_clean(
             r#"function main(): void { let f = (x: number) => { if (x > 0) { return x; } return "y"; }; }"#,
         );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("conflicts with earlier return")),
-            "expected conflicting-return diagnostic, got: {diags:?}"
-        );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("annotate the closure's return type")),
-            "expected a fix in the diagnostic, got: {diags:?}"
+        let (_params, ret, _body) = closure_in_main_let(&ta);
+        assert_eq!(
+            ret,
+            Type::union(vec![Type::Number, Type::StringLiteral("y".into())])
         );
     }
 
