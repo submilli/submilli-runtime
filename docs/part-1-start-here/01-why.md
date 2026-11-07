@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "human-written"
   confirmed: true
-  contentHash: "7c2b3720446a25c1b51f3159a2401f96cbf90860e3abd4bab80a18519d426764"
+  contentHash: "54db456e54ada42d3455d2d5e64af472e742dec57e9d5d55a50f9e51304692b3"
   confirmedAt: "2026-10-05T20:18:00.685778+00:00"
 ---
 
@@ -147,6 +147,8 @@ permissions:
 ```
 
 This agent may list Stripe charges and post Slack messages and nothing else, only for the signed-in customer, and only to one channel. Your application binds `stripeCustomerId` when the session starts. The value comes from the login, not the conversation, so the model cannot choose it or change it. Nothing else appears in the Blueprint, so none of the other actions the agent may want to take (e.g. HTTP call to another Stripe API) are possible.
+
+[Recorded demo](https://submilli.ai/playground/?scenario=refunds)
 
 Now lets think about attack from the previous example. The injected program tries to export the customer list. No tool/capability for that exists in the Blueprint, so it fails to get the information, and the Submilli runtime records the failed attempt.
 

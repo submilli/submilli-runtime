@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9aa57135b9b515a42f06f565dd6f7a9d648c690aeba576748ed3d25efd9092d2"
+  contentHash: "c4f0e16c9d2ecaa93938e10b30322844e1c3dd927e5e3f8c9ad683c8af25540a"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -162,12 +162,16 @@ request at all.
 Submilli's runtime and native Package ecosystem were built together for
 agents. Packages describe operations and supply typed fields to runtime
 permission checks, so you can write rules in terms of business operations.
+
 For example, `pied-piper.example/credits.apply` means applying a credit, and the Package
 hands the runtime the customer, the amount, and the customer's class, typed,
 before anything is sent. The rule is written against those fields, never
 against a raw payload. Nobody guesses what a request does, and the model is never asked
 to judge its own intent. These are **semantic permissions**, and the
 [next chapter](/docs/packages) shows where the meaning comes from.
+
+[Recorded demo](https://submilli.ai/playground/?scenario=refunds)
+
 
 ## Context: who the session is for
 
