@@ -235,7 +235,6 @@ impl<'a> Inferer<'a> {
                     }
                     let (m_generic_names, resolved_params, resolved_ret) =
                         self.resolve_method_signature(m_generics, params, Some(return_type))?;
-                    self.pop_signature_generics();
                     if self.reject_class_generic_in_static(
                         m_name,
                         &generic_names,
@@ -326,7 +325,6 @@ impl<'a> Inferer<'a> {
                     }
                     let (m_generic_names, resolved_params, resolved_ret) =
                         self.resolve_method_signature(m_generics, params, Some(return_type))?;
-                    self.pop_signature_generics();
                     self.check_conversion_method(
                         "class",
                         m_name,

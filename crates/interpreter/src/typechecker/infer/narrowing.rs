@@ -815,8 +815,9 @@ pub fn strip_undefined(ty: &Type) -> Type {
     }
 }
 
-/// A union member that a nullish test narrows in place: a type parameter, or
-/// a narrowing of one such as `T & ({} | null)`, whose shape `peel` hides.
+/// A union member that a nullish test narrows in place: a type parameter or
+/// a form over one (`T[K]`), or a narrowing of one such as `T & ({} |
+/// null)`, whose shape `peel` hides.
 fn is_type_parameter_or_its_narrowing(member: &Type) -> bool {
     holds_any_value_of_a_parameter(member.peel()) || member.refines_type_parameter()
 }

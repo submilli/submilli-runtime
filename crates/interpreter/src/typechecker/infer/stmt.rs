@@ -1958,14 +1958,18 @@ impl Inferer<'_> {
             vec![self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span)]
         };
         let mut elem_ty = self.common_index_write_type(&targets);
-        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never)).then_some(&elem_ty);
+        // A write through `User[K]` takes the bound's property as its context.
+        let context = super::assignable::write_context(&elem_ty, self.resolver());
+        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never))
+            .then_some(context.as_ref())
+            .flatten();
         let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint)?;
         let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
         if evolving.is_none()
             && !reported
             && !matches!(value_ty, Type::Error)
             && let Some(target) = targets.iter().find(|target| {
-                !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
+                !matches!(target, Type::Error) && !self.fits_index_write(&value_ty, target)
             })
         {
             let help =
@@ -2021,6 +2025,14 @@ impl Inferer<'_> {
 
     /// `o[k] = v` on a type parameter `T`: `v` must fit tsc's `T[K]`, and the
     /// run time writes the property by name on the erased object.
+    /// Whether `value_ty` may be written where an index write stores
+    /// `target`: assignable to it, or, for `T[K]`, to the declared bound's
+    /// property, as tsc writes it.
+    fn fits_index_write(&self, value_ty: &Type, target: &Type) -> bool {
+        assignable(value_ty, target, self.resolver())
+            || super::assignable::fits_bound_property_write(value_ty, target, self.resolver())
+    }
+
     fn infer_generic_index_write(
         &mut self,
         typed_receiver: ExprId,
@@ -2039,17 +2051,28 @@ impl Inferer<'_> {
             );
         }
         let key = self.generic_index_key(&receiver_ty, index)?;
+        let generic_receiver = super::expr::generic_receiver(&receiver_ty).clone();
+        // A literal key writes the bound's property, which may be `readonly`
+        // (`t["a"] = 5` with `T extends { readonly a: number }`).
+        if let Some((_, key_ty)) = &key
+            && !super::utility_types::holds_type_parameter(key_ty)
+        {
+            let bound = self.apparent_type(&generic_receiver);
+            if bound.is_structural_object() {
+                let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+                let _writable = self.object_index_write_targets(&bound, key_ty, index_span);
+            }
+        }
         let target = match &key {
-            Some((_, key_ty)) => Type::indexed_access(
-                super::expr::generic_receiver(&receiver_ty).clone(),
-                key_ty.clone(),
-            ),
+            Some((_, key_ty)) => Type::indexed_access(generic_receiver, key_ty.clone()),
             None => Type::Error,
         };
-        let (typed_value, value_ty, reported) = self.infer_assigned_value(value, Some(&target))?;
+        let context = super::assignable::write_context(&target, self.resolver());
+        let (typed_value, value_ty, reported) =
+            self.infer_assigned_value(value, context.as_ref())?;
         if !reported
             && !matches!(value_ty, Type::Error)
-            && !assignable(&value_ty, &target, self.resolver())
+            && !self.fits_index_write(&value_ty, &target)
         {
             self.error(
                 value_span,

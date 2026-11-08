@@ -36,14 +36,19 @@ impl LiteralKinds {
     pub(super) fn is_empty(self) -> bool {
         !(self.string || self.number || self.boolean || self.bigint)
     }
+    /// A bound `keyof T` keeps string and number literals, as in tsc:
+    /// `pick(o, ["a", "b"])` with `K extends keyof T` binds `"a" | "b"`.
     fn from_context(ty: &Type, parameter: bool) -> Self {
         Self {
             string: ty.any_member(&|ty| {
-                matches!(ty, Type::StringLiteral(_) | Type::TemplateLiteral { .. })
-                    || parameter && ty == &Type::String
+                matches!(
+                    ty,
+                    Type::StringLiteral(_) | Type::TemplateLiteral { .. } | Type::KeyOf(_)
+                ) || parameter && ty == &Type::String
             }),
             number: ty.any_member(&|ty| {
-                matches!(ty, Type::NumberLiteral(_)) || parameter && ty == &Type::Number
+                matches!(ty, Type::NumberLiteral(_) | Type::KeyOf(_))
+                    || parameter && ty == &Type::Number
             }),
             boolean: ty.any_member(&|ty| matches!(ty, Type::Boolean | Type::BooleanLiteral(_))),
             bigint: ty.any_member(&|ty| {

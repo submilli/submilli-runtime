@@ -537,18 +537,37 @@ impl Type {
     /// Whether `receiver[key]` reads and writes the property by name at run
     /// time: a structural object, or an erased generic receiver (`T`, whose
     /// `o[k]` is tsc's `T[K]`).
+    /// Whether every value of `self` is a string, array, tuple or byte array,
+    /// read by element.
+    fn indexes_by_element(&self) -> bool {
+        match self.peel() {
+            Type::Union(members) => members.iter().all(Type::indexes_by_element),
+            Type::Array(_)
+            | Type::Tuple(_)
+            | Type::Uint8Array
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::TemplateLiteral { .. } => true,
+            _ => false,
+        }
+    }
+
     pub fn indexes_by_name(&self) -> bool {
-        // `value !== undefined` narrows a parameter to `T & ({} | null)`,
-        // which indexes as `T` does. A bound's shape (`T & number[]`) keeps
-        // its own representation.
+        // A narrowed parameter (`T & ({} | null)` after `value !==
+        // undefined`, `(T | undefined) & object` after `?.`) indexes as `T`
+        // does. A bound's shape (`T & number[]`) keeps its own
+        // representation.
         let refined = match self.without_aliases() {
-            Type::Refined { original, ty } if original.lowers_to_erased_slot() => match ty.peel() {
-                Type::Union(members) => members
-                    .iter()
-                    .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined))
-                    .all(Type::is_structural_object),
-                _ => false,
-            },
+            Type::Refined { original, ty } => {
+                let erased = match original.without_aliases() {
+                    Type::Union(members) => members.iter().all(|member| {
+                        member.lowers_to_erased_slot()
+                            || matches!(member.peel(), Type::Null | Type::Undefined)
+                    }),
+                    original => original.lowers_to_erased_slot(),
+                };
+                erased && !ty.indexes_by_element()
+            }
             _ => false,
         };
         refined || self.is_structural_object() || self.lowers_to_erased_slot()

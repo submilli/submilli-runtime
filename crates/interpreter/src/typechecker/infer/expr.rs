@@ -336,6 +336,16 @@ pub(super) fn type_admits_nullish(ty: &Type, types: TypeResolver<'_>) -> bool {
     type_admits_null(ty, types) || type_admits_undefined(ty, types)
 }
 
+/// [`type_admits_nullish`], with a `T[K]` member nullish where its base
+/// constraint is (an optional property among `K`'s, or an unbounded `T`).
+pub(super) fn may_be_nullish(ty: &Type, types: TypeResolver<'_>) -> bool {
+    type_admits_nullish(ty, types)
+        || any_resolved_member(ty, types, &|member| {
+            matches!(member, Type::IndexedAccess { .. })
+                && type_admits_nullish(&super::assignable::base_constraint(member, types), types)
+        })
+}
+
 /// The `typeof` result a tag names, for each tag narrowing understands.
 pub(super) fn typeof_tag_kind(tag: &str) -> Option<crate::TypeofTagKind> {
     Some(match tag {
@@ -586,10 +596,24 @@ fn is_builtin_value(ty: &Type) -> bool {
 /// The type parameter (or form over one) a generic `o[k]` indexes: `T` for
 /// a narrowed `T & {}`, whose keys are `T`'s.
 pub(super) fn generic_receiver(receiver: &Type) -> &Type {
-    match receiver.without_aliases() {
-        Type::Refined { original, .. } => original.without_aliases(),
-        other => other,
+    let Type::Refined { original, .. } = receiver.without_aliases() else {
+        return receiver.without_aliases();
+    };
+    // `o?.[k]` on `T | undefined` refines it to `(T | undefined) & {}`,
+    // which holds only `T`'s values.
+    if let Type::Union(members) = original.without_aliases() {
+        let mut erased = members
+            .iter()
+            .filter(|member| member.lowers_to_erased_slot());
+        if let (Some(only), None) = (erased.next(), erased.next())
+            && members.iter().all(|member| {
+                member == only || matches!(member.peel(), Type::Null | Type::Undefined)
+            })
+        {
+            return only.without_aliases();
+        }
     }
+    original.without_aliases()
 }
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
@@ -10088,27 +10112,14 @@ impl Inferer<'_> {
         if !self.fits_generic_key(receiver_ty, key_ty, span) {
             return Some(Type::Error);
         }
-        let ty = Type::indexed_access(receiver_ty.clone(), key_ty.clone());
-        self.note_generic_read(&ty);
-        Some(ty)
+        Some(Type::indexed_access(receiver_ty.clone(), key_ty.clone()))
     }
 
-    /// The type a chain step's generic read leaves in the typed tree: with
-    /// `undefined` where a missing key reads it ([`Self::note_generic_read`]).
-    fn chain_read_result_type(&mut self, ty: &Type) -> Type {
-        if matches!(self.pending_read, Some(PendingRead::GivesUndefined)) {
-            self.pending_read = None;
-            return Type::union(vec![ty.clone(), Type::Undefined]);
-        }
-        ty.clone()
-    }
-
+    /// Whether `ty`, or a member of it, has an index signature.
     pub(super) fn has_index_signature(&self, ty: &Type) -> bool {
         match ty.peel() {
-            Type::Union(members) => members
-                .iter()
-                .any(|member| self.has_index_signature(member)),
-            _ => self.resolver().index_signature(ty).is_some(),
+            Type::Union(members) => self.has_index_signature_member(members),
+            _ => self.has_index_signature_member(std::slice::from_ref(ty)),
         }
     }
 
@@ -10142,6 +10153,22 @@ impl Inferer<'_> {
         let Some((typed_index, key_ty)) = self.generic_index_key(&receiver_ty, index)? else {
             return Ok((TypedExprKind::Null, Type::Error));
         };
+        // A key that names no type parameter reads through the bound, as
+        // tsc reads `r[k]` with `k: string` and `R extends Record<string,
+        // number>`: as `number`.
+        if !super::utility_types::holds_type_parameter(&key_ty) {
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+            let (typed_receiver, bound) =
+                self.constraint_receiver(typed_receiver, receiver_ty.clone(), index_span)?;
+            if bound.is_structural_object() {
+                let ty = self.object_index_read_type(&bound, &key_ty, index_span);
+                let kind = TypedExprKind::IndexAccess {
+                    receiver: typed_receiver,
+                    index: typed_index,
+                };
+                return self.narrowed_index_read(kind, ty);
+            }
+        }
         let ty = Type::indexed_access(generic_receiver(&receiver_ty).clone(), key_ty);
         self.note_generic_read(&ty);
         Ok((
@@ -10161,11 +10188,28 @@ impl Inferer<'_> {
     /// missing read, decided as one (`missing_reads`). A present `undefined`
     /// reads as itself either way.
     fn note_generic_read(&mut self, read_ty: &Type) {
-        if super::assignable::base_constraint(read_ty, self.resolver()).holds_undefined() {
+        if self.generic_read_gives_undefined(read_ty) {
             self.pending_read = Some(PendingRead::GivesUndefined);
         } else {
             self.note_missable_read();
         }
+    }
+
+    /// Whether every instantiation's property holds `undefined`, so a
+    /// missing key reads it.
+    fn generic_read_gives_undefined(&self, read_ty: &Type) -> bool {
+        super::assignable::base_constraint(read_ty, self.resolver()).holds_undefined()
+    }
+
+    /// The type a chain step's generic read leaves in the typed tree: with
+    /// `undefined` where a missing key reads it, and otherwise a missing
+    /// read for the chain to decide.
+    fn chain_read_result_type(&mut self, ty: &Type) -> Type {
+        if self.generic_read_gives_undefined(ty) {
+            return Type::union(vec![ty.clone(), Type::Undefined]);
+        }
+        self.note_missable_read();
+        ty.clone()
     }
 
     fn infer_index_access(
@@ -10198,6 +10242,7 @@ impl Inferer<'_> {
                 index: typed_index,
             };
             if let Some(ty) = self.generic_key_read(&receiver_ty, &key_ty, index_span) {
+                self.note_generic_read(&ty);
                 return Ok((kind, ty));
             }
             let ty = self.object_index_read_type(&receiver_ty, &key_ty, index_span);
@@ -12470,10 +12515,7 @@ impl Inferer<'_> {
         // to the context. Without one, `tags ?? []` and `onDone ?? (() => {})`
         // take their type from the left operand, as in TypeScript; other
         // operands keep their own.
-        let lhs_may_be_nullish = type_admits_nullish(&lhs_ty, self.resolver())
-            || any_resolved_member(&lhs_ty, self.resolver(), &|member| {
-                matches!(member, Type::IndexedAccess { .. })
-            });
+        let lhs_may_be_nullish = may_be_nullish(&lhs_ty, self.resolver());
         let rhs_expected = expected.filter(|_| lhs_may_be_nullish).cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
             && !self
@@ -12499,8 +12541,7 @@ impl Inferer<'_> {
         }
 
         // A poisoned operand has no knowable nullability, and naming it in the
-        // message would print `<error>` at the user. `T[K]` may be nullish
-        // where an instantiation's property is.
+        // message would print `<error>` at the user.
         let lhs_decides = !lhs_may_be_nullish && !matches!(lhs_ty.peel(), Type::Error);
         // The error for a left side whose syntax is never nullish says the same.
         let reported_constant = self.check_constant_nullishness(lhs)?;
@@ -12962,7 +13003,6 @@ impl Inferer<'_> {
                         ));
                     };
                     let ty = Type::indexed_access(generic_receiver(receiver_ty).clone(), key_ty);
-                    self.note_generic_read(&ty);
                     let result_ty = self.chain_read_result_type(&ty);
                     return Ok((
                         TypedChainPart::Index {
@@ -13364,7 +13404,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if type_admits_nullish(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if may_be_nullish(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {

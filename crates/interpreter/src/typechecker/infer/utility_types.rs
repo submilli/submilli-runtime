@@ -1246,8 +1246,13 @@ pub(crate) fn keyof_type(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
         return Some(Type::union(keys));
     }
     // An array, tuple, string or byte array is indexed by number besides its
-    // members' names.
-    let numeric = builtin_view(ty.peel()).is_some_and(|(element, _)| element.is_some());
+    // members' names, and so is a union of them (`keyof (string |
+    // number[])`), whose keys are those every member has.
+    let has_elements = |ty: &Type| builtin_view(ty).is_some_and(|(element, _)| element.is_some());
+    let numeric = match ty.peel() {
+        Type::Union(members) => members.iter().all(|member| has_elements(member.peel())),
+        other => has_elements(other),
+    };
     let mut keys: Vec<Type> = member_names(ty, types, 0)?
         .into_iter()
         .flat_map(key_literals)

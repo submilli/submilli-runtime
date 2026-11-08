@@ -42,6 +42,16 @@ impl Inferer<'_> {
             };
             current = bound;
         }
+        // A bound kept lazy over a declaration bound later, or over the
+        // class a static method belongs to (`P extends Partial<Own>`),
+        // evaluates where it is read.
+        let evaluated;
+        if super::utility_types::has_evaluable_application(current) {
+            evaluated = self
+                .type_limits
+                .type_or_error(super::utility_types::normalize(current, self.resolver()));
+            current = &evaluated;
+        }
         if let Type::Refined {
             original,
             ty: shape,
@@ -263,8 +273,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(), CompilerFailure> {
         match ty {
-            // A concrete form (over a later declaration) reports a missing
-            // key where it evaluates.
+            // Only a generic form: a concrete one (over a later declaration)
+            // reports a missing key where it evaluates.
             Type::IndexedAccess { object, index }
                 if super::utility_types::holds_type_parameter(ty) =>
             {
@@ -273,12 +283,32 @@ impl Inferer<'_> {
                 }
                 Ok(())
             }
-            Type::InterfaceRef { .. }
-            | Type::ClassRef { .. }
-            | Type::Alias { .. }
-            | Type::AliasRef { .. } => {
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::ClassRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::Alias {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::AliasRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
                 if !self.defer_constraint_check(ty, span) {
-                    self.check_argument_bounds(ty, span)?;
+                    self.check_argument_bounds(mangled, name, args, span)?;
                 }
                 Ok(())
             }
@@ -302,34 +332,13 @@ impl Inferer<'_> {
 
     /// Check the arguments of an interface, class or alias application
     /// against its parameters' bounds.
-    fn check_argument_bounds(&mut self, ty: &Type, span: Span) -> Result<(), CompilerFailure> {
-        let (Type::InterfaceRef {
-            mangled,
-            name,
-            args,
-            ..
-        }
-        | Type::ClassRef {
-            mangled,
-            name,
-            args,
-            ..
-        }
-        | Type::Alias {
-            mangled,
-            name,
-            args,
-            ..
-        }
-        | Type::AliasRef {
-            mangled,
-            name,
-            args,
-            ..
-        }) = ty
-        else {
-            return Ok(());
-        };
+    fn check_argument_bounds(
+        &mut self,
+        mangled: &crate::MangledName,
+        name: &str,
+        args: &[Type],
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
         let Some(symbol) = self.lookup_structural_type(mangled, name) else {
             return Ok(());
         };

@@ -350,13 +350,57 @@ impl<'a> Inferer<'a> {
     /// evaluation: a missing member (`B["zz"]`), or a cycle of forms that only
     /// name each other (`A["b"]` and `B["c"]`).
     pub(super) fn check_forward_forms(&mut self) -> Result<(), CompilerFailure> {
+        let forms = std::mem::take(&mut self.forward_forms);
+        if forms.is_empty() {
+            return Ok(());
+        }
         let _settled = super::utility_types::SettledForms::enter();
-        for (form, span) in std::mem::take(&mut self.forward_forms) {
+        for (form, span) in forms {
             let mut failures = Vec::new();
             super::utility_types::normalize_reporting(&form, self.resolver(), &mut failures)
                 .map_err(super::type_limit_at(span))?;
             if let Some(failure) = failures.into_iter().next() {
                 self.error(span, failure);
+            }
+        }
+        self.settle_member_types()
+    }
+
+    /// Replace the forms kept lazy in interface and class members with what
+    /// they evaluate to, now that every declaration is bound. A method's
+    /// parameters and result then have one representation for its callers
+    /// and its body: `static key(k: keyof Box): string { return k; }` passes
+    /// a `string`, not an erased `keyof Box`.
+    fn settle_member_types(&mut self) -> Result<(), CompilerFailure> {
+        let names: Vec<String> = self.types.iter_names().map(str::to_owned).collect();
+        for name in names {
+            let Some(symbol) = self.types.lookup(&name) else {
+                continue;
+            };
+            if !matches!(
+                symbol.kind,
+                TypeKind::Interface { .. } | TypeKind::Class { .. }
+            ) {
+                continue;
+            }
+            let mut kind = symbol.kind.clone();
+            let mut exceeded = None;
+            for_each_member_type_mut(&mut kind, &mut |ty| {
+                if !super::utility_types::has_evaluable_application(ty) {
+                    return;
+                }
+                match super::utility_types::normalize(ty, self.resolver()) {
+                    Ok(settled) => *ty = settled,
+                    Err(limit) => exceeded = Some(limit),
+                }
+            });
+            if let Some(limit) = exceeded {
+                return Err(super::type_limit_unlocated(limit));
+            }
+            if let Some(symbol) = self.types.lookup_mut(&name)
+                && symbol.kind != kind
+            {
+                symbol.kind = kind;
             }
         }
         Ok(())
@@ -589,5 +633,62 @@ fn rehydrate_reachable(
                 rehydrate_reachable(inner, types, skip, child, budget)
             })
         }
+    }
+}
+
+/// Every member type of an interface or class: fields, properties, an index
+/// signature's value, method, static and accessor signatures, and the
+/// constructor's parameters.
+fn for_each_member_type_mut(kind: &mut TypeKind, settle: &mut dyn FnMut(&mut Type)) {
+    let method = |method: &mut crate::MethodSig, settle: &mut dyn FnMut(&mut Type)| {
+        method
+            .params
+            .iter_mut()
+            .for_each(|param| settle(&mut param.ty));
+        settle(&mut method.ret);
+    };
+    match kind {
+        TypeKind::Interface {
+            methods,
+            properties,
+            index,
+            ..
+        } => {
+            methods.values_mut().for_each(|sig| method(sig, settle));
+            properties
+                .values_mut()
+                .for_each(|property| settle(&mut property.ty));
+            if let Some(index) = index {
+                settle(&mut index.value);
+            }
+        }
+        TypeKind::Class {
+            fields,
+            methods,
+            accessors,
+            constructor,
+            statics,
+            static_fields,
+            ..
+        } => {
+            fields
+                .values_mut()
+                .chain(static_fields.values_mut())
+                .for_each(|field| settle(&mut field.ty));
+            methods
+                .values_mut()
+                .chain(statics.values_mut())
+                .for_each(|sig| method(sig, settle));
+            for accessor in accessors {
+                match accessor {
+                    crate::AccessorSig::Getter { ret_ty, .. } => settle(ret_ty),
+                    crate::AccessorSig::Setter { param, .. } => settle(&mut param.ty),
+                }
+            }
+            constructor
+                .iter_mut()
+                .for_each(|param| settle(&mut param.ty));
+        }
+        _ => {}
     }
 }

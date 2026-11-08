@@ -1,4 +1,4 @@
-types: 69 of 187 tsc entries compared, 10 differ
+types: 69 of 187 tsc entries compared, 8 differ
 
 line 69: carrier
   tsc:  WithoutError<Data>
@@ -16,10 +16,6 @@ line 73: carrier
   tsc:  WithError
   ours: DataCarrier<Data> & WithError
 
-line 82: foo.tag
-  tsc:  string | boolean
-  ours: string | boolean | undefined
-
 line 83: foo
   tsc:  { tag: true; x: number; } | { [x: string]: string; }
   ours: Foo
@@ -27,10 +23,6 @@ line 83: foo
 line 86: foo
   tsc:  { tag: false; y: number; } | { [x: string]: string; }
   ours: Foo
-
-line 91: foo.tag
-  tsc:  string | boolean
-  ours: string | boolean | undefined
 
 line 92: foo
   tsc:  { tag: true; x: number; }

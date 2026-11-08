@@ -111,13 +111,18 @@ impl Inferer<'_> {
                 self.maybe_missing_uses.insert(id);
             }
             // Codegen reads `undefined` for a missing key of a read typed
-            // with room for it; the inferred type stays tsc's.
+            // with room for it; the type as written stays tsc's.
             PendingRead::GivesUndefined if matches!(kind, TypedExprKind::IndexAccess { .. }) => {
                 let expr = self
                     .typed_ast
                     .try_expr_mut(id)
                     .map_err(super::arena_failure)?;
-                expr.ty = Type::union(vec![expr.ty.clone(), Type::Undefined]);
+                let widened = Type::union(vec![expr.ty.clone(), Type::Undefined]);
+                let written = std::mem::replace(&mut expr.ty, widened);
+                self.typed_ast
+                    .widened_missing_reads
+                    .entry(id)
+                    .or_insert(written);
             }
             _ => {}
         }

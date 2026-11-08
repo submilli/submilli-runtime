@@ -32,9 +32,9 @@ Upstream: 5055 TypeScript tests. Suite: 995 TypeScript cases, 715 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `number` | §1.1 | done | 1514 | 402 | 1112 | 0 | 4698 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1566 | 415 | 1151 | 0 | 4040 | 1 of 1 | — | — |  |
-| `boolean` | §1.1 | done | 493 | 166 | 327 | 0 | 2818 | 1 of 1 | — | — |  |
+| `number` | §1.1 | done | 1514 | 402 | 1112 | 0 | 4694 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1566 | 415 | 1151 | 0 | 4038 | 1 of 1 | — | — |  |
+| `boolean` | §1.1 | done | 493 | 166 | 327 | 0 | 2817 | 1 of 1 | — | — |  |
 | `null` | §1.1 | done | 401 | 128 | 273 | 0 | 1796 | 1 of 1 | — | — |  |
 | `undefined` | §1.1 | done | 386 | 176 | 210 | 0 | 1563 | 1 of 1 | — | — |  |
 | `void` | §1.1 | done | 521 | 97 | 424 | 0 | 1692 | 1 of 1 | — | — |  |
@@ -47,14 +47,14 @@ Upstream: 5055 TypeScript tests. Suite: 995 TypeScript cases, 715 test262 cases.
 | Object types (`{ x: T }`) | §1.2 | done | 1575 | 350 | 1225 | 0 | 2027 | 1 of 1 | — | — |  |
 | Optional properties (`a?: T`) | §1.2 | done | 129 | 54 | 75 | 0 | 60 | 1 of 1 | — | — |  |
 | Object literal shorthand (`{ x }`) | §1.2 | done | 83 | 17 | 66 | 0 | 26 | 1 of 1 | — | — |  |
-| Arrays (`T[]`) | §1.2 | done | 833 | 226 | 607 | 0 | 927 | 1 of 1 | 73 | 297 |  |
+| Arrays (`T[]`) | §1.2 | done | 833 | 226 | 607 | 0 | 926 | 1 of 1 | 73 | 297 |  |
 | Optional tuple elements | §1.2 | done | 10 | 4 | 6 | 0 | 2 | 1 of 1 | — | — |  |
 | Optional methods | §1.2 | done | 33 | 7 | 26 | 0 | 3 | 1 of 1 | — | — |  |
-| Tuples (`[T, U]`) | §1.2 | done | 153 | 54 | 99 | 0 | 324 | 1 of 1 | — | — |  |
+| Tuples (`[T, U]`) | §1.2 | done | 153 | 54 | 99 | 0 | 321 | 1 of 1 | — | — |  |
 | `readonly` arrays and tuples | §1.2 | done | 24 | 7 | 17 | 0 | 50 | 1 of 1 | — | — |  |
 | Union types (`A | B`) | §1.2 | done | 462 | 224 | 238 | 0 | 2697 | 1 of 1 | — | — |  |
-| Type aliases (`type X = …`) | §1.2 | done | 319 | 93 | 226 | 0 | 797 | 1 of 1 | — | — |  |
-| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 295 | 102 | 193 | 0 | 1746 | 2 of 2 | — | — |  |
+| Type aliases (`type X = …`) | §1.2 | done | 319 | 93 | 226 | 0 | 785 | 1 of 1 | — | — |  |
+| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 295 | 102 | 193 | 0 | 1744 | 2 of 2 | — | — |  |
 
 ## Declarations
 
@@ -188,7 +188,7 @@ Upstream: 5055 TypeScript tests. Suite: 995 TypeScript cases, 715 test262 cases.
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| String literals | §1.7 | done | 1902 | 438 | 1464 | 0 | 1726 | 2 of 2 | — | — |  |
+| String literals | §1.7 | done | 1902 | 438 | 1464 | 0 | 1724 | 2 of 2 | — | — |  |
 | Template literals | §1.7 | done | 280 | 72 | 208 | 0 | 375 | 1 of 1 | — | — |  |
 | String methods | §1.7 | done | — | — | — | — | — | — | 87 | 555 |  |
 

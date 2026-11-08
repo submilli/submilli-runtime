@@ -1,20 +1,12 @@
-types: 130 of 292 tsc entries compared, 25 differ
+types: 130 of 292 tsc entries compared, 23 differ
 
 line 22: b
   tsc:  { [key: string]: number; }
   ours: T
 
-line 24: b.x
-  tsc:  number
-  ours: number | undefined
-
 line 24: b
   tsc:  { [key: string]: number; }
   ours: T
-
-line 25: c.x
-  tsc:  number
-  ours: number | undefined
 
 line 28: b
   tsc:  { [key: string]: number; }

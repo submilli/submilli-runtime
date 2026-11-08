@@ -465,7 +465,6 @@ impl<'a> Inferer<'a> {
                     // one pass.
                     let (m_generic_names, resolved_params, resolved_ret) =
                         self.resolve_method_signature(&m_generics, &params, Some(&return_type))?;
-                    self.pop_signature_generics();
                     if shadow_rejected {
                         continue;
                     }
@@ -599,23 +598,26 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// A method's generics (pushed; the caller pops them), parameters and
-    /// return type, resolved [`with_method_signature`](Self::with_method_signature).
+    /// A method's generics, parameters and return type, resolved
+    /// [`with_method_signature`](Self::with_method_signature).
     pub(super) fn resolve_method_signature(
         &mut self,
         generics: &[crate::TypeParameterAnnotation],
         params: &[crate::ParamDecl],
         return_type: Option<&crate::TypeAnnotation>,
     ) -> Result<(crate::GenericParameters, Vec<Param>, Type), CompilerFailure> {
-        self.with_method_signature(|this| {
-            let names = this.push_declared_generics(generics)?;
+        let names = self.with_method_signature(|this| this.push_declared_generics(generics))?;
+        let resolved = self.with_method_signature(|this| {
             let params = this.resolve_params(params)?;
             let ret = match return_type {
                 Some(annotation) => this.resolve_type(annotation)?,
                 None => Type::Void,
             };
-            Ok((names, params, ret))
-        })
+            Ok((params, ret))
+        });
+        self.pop_signature_generics();
+        let (params, ret) = resolved?;
+        Ok((names, params, ret))
     }
 
     /// Run `resolve` with [`Inferer::resolving_method_signature`] set: a

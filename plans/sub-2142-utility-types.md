@@ -406,3 +406,29 @@ Not changed (P3), filed as follow-ups:
 - SUB-2160: a circular bound through `T[K]` (`T extends U["x"], U extends { x: T }`) is accepted where tsc reports TS2313. (`(keyof T)["length"]`, the other lenient case, is now rejected.)
 - SUB-2161: bounds that fan out past the type budget are rejected though tsc accepts them.
 - By design: a read of a `Record<string, V>` without `??` throws `MissingValueError` (SUB-2148).
+
+## Review round 4 (2026-11-08)
+
+Decided with Doron: **`T[K]` targets follow a sound subset.**
+- A write follows tsc: `t["a"] = 5` fits when `5` fits, for writing, the property every bound key names in the *declared* bound (`fits_bound_property_write`). Parameters nested in that bound stay themselves, so `T extends { a: U }` makes the write check against `U`.
+- A value returned or assigned into `T["a"]` fits only when the declared bound gives the property one literal value (`T["length"]` of a pair). tsc accepts any value of the property's type there, which a narrower `T` contradicts; Submilli would then trap uncatchably at the call.
+
+Fixed:
+- **Unsound write targets.** The round 3 rule substituted nested bounds into the target; `declared_bound` keeps them, and a form's base constraint is used only when its bounds name no other parameter (`closed_bounds`). A type parameter's index signature is ignored rather than rejecting the bound.
+- **`readonly` writes.** A literal-key write through a type parameter checks the bound's property for `readonly`.
+- **Receivers.** `o?.[k]` on a bounded `T | undefined` or `T | null` reads `T[K]` again (`generic_receiver` unwraps the refinement), and `T extends object` reads by name at run time (`indexes_by_name`). A record-bounded receiver read with a concrete key (`r[k]`, `k: string`) has the element type, so `(r[k] ?? 0) + 1` works.
+- **Mapped utilities.** `keyof Pick<T, K>` is `K`, `keyof Omit<T, K>` is `Exclude<keyof T, K>`, `Partial`, `Readonly` and `Required` keep `T`'s keys, and `Pick<T, K>[K]`, `Readonly<T>[K]` and `Required<T>[K]` read `T[K]` (`mapped_property`), a form target included.
+- **`??`** asks a form's base constraint whether it may be nullish (`may_be_nullish`), and so does the redundant `?.` warning.
+- **Static methods over their own class.** Forms kept lazy in interface and class members are settled once every declaration is bound (`settle_member_types`), so a static method's parameters and result have one representation for callers and body (the invalid Wasm). A bound kept lazy evaluates where `apparent_type` reads it.
+- **Inference.** A `keyof` bound keeps literals in array elements: `count(o, ["a", "b"])` binds `"a" | "b"`.
+- **Clean code.** `generic_read_gives_undefined` replaces the hidden `pending_read` round trip in chains; renamed bound helpers; one helper for mapped-utility properties; `resolve_method_signature` pops its generics; `check_argument_bounds` takes the destructured application.
+
+- **`keyof` of a union of indexables** keeps `number` (SUB-2159): the new key check reached it through `T["elements"][number]` with an array-union bound.
+- **`Pick` over generic keys** is bounded by `Pick<bound, bound of K>` again, for member reads; `keyof` of it no longer reads that bound, so the round 3 unsoundness stays fixed.
+- **Conformance.** Rounds 2 and 3 ran `cargo test -p conformance` without `SUBMILLI_TEST_NIGHTLY_ONLY=1`, which skips the TypeScript cases. Rerun properly: the divergence changes are improvements, a written-type record for `GivesUndefined` reads keeps `T[K] | undefined` out of the printed types, and the new lines are triaged (SUB-2156 for `Record<K, V>` keys, SUB-2148's design for `noUncheckedIndexedAccess`).
+
+Not changed (P3 or pre-existing):
+- Arithmetic on a type parameter or form (`t + 1` with `T extends number`, `r[k] * 2` with a generic `K`) is rejected, as it was for type parameters before this branch.
+- A getter whose type is a form over its own class stays a self-reference (SUB-2154).
+- An invalid `Pick` key in a member reports both the evaluation failure and the constraint error.
+- Values tsc accepts into `T["a"]` outside the sound subset are rejected, by the decision above.

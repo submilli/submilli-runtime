@@ -1,4 +1,4 @@
-types: 132 of 181 tsc entries compared, 37 differ
+types: 133 of 181 tsc entries compared, 36 differ
 
 line 11: v00_2
   tsc:  keyof T
@@ -143,10 +143,3 @@ line 79: b04_8
 line 79: null as unknown as (Pick<BPR, keyof BPR>)
   tsc:  Pick<BPR, keyof BPR>
   ours: Pick<BPR, "a" | "b">
-
-line 90: x["other"]
-  tsc:  number
-  ours: number | undefined
-
-errors:
-line 90: ours: cannot read field `toFixed` on `number | undefined`: the receiver can be `undefined` (tsc accepts)

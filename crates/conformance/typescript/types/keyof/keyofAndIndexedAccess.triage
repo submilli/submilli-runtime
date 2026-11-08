@@ -1,0 +1,1 @@
+line 495, 497 extra: bug SUB-2156 `Record<K, V>` rejects a key that mentions a type parameter

@@ -26,15 +26,15 @@ line 31: { 2: true }
 
 line 35: c4
   tsc:  any
-  ours: boolean | undefined
+  ours: boolean
 
 line 35: c5
   tsc:  any
-  ours: boolean | undefined
+  ours: boolean
 
 line 35: c6
   tsc:  any
-  ours: boolean | undefined
+  ours: boolean
 
 errors:
 line 35: tsc TS2488: Type 'F' must have a '[Symbol.iterator]()' method that returns an iterator. (we accept)
