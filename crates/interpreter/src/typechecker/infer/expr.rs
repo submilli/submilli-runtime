@@ -18,6 +18,7 @@ use crate::{
 
 use super::assignable::{TypeResolver, strict_subtype};
 use super::format_signature::SignatureKind;
+use super::missing_reads::PendingRead;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
 use super::stmt::StaticWrite;
@@ -762,6 +763,9 @@ impl Inferer<'_> {
         // An arrow or object literal whose own errors explain its mismatch
         // with `expected` isn't reported again as a whole.
         let mut reported_in_parts = false;
+        // A read nested inside notes itself to its own `infer_expr`; what is
+        // pending now belongs to no node.
+        self.pending_read = None;
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let (kind, ty) = (match expr.kind {
@@ -950,6 +954,7 @@ impl Inferer<'_> {
             }
         })?;
         let static_receiver = self.pending_static_receiver.take();
+        let pending_read = self.pending_read.take();
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -1024,6 +1029,7 @@ impl Inferer<'_> {
                 .inherited_static_receivers
                 .insert(id, receiver);
         }
+        self.record_pending_read(pending_read, id)?;
         self.record_narrowed_read_freshness(id)?;
         self.record_constraint_literal_freshness(id, &ty, span);
         self.record_runtime_type_test(&ty)
@@ -1152,15 +1158,24 @@ impl Inferer<'_> {
                 name: ident.name.clone(),
                 decl_scope: entry.decl_scope,
             });
-            if let Some(read) = self.narrowed_read(path) {
-                return Ok(read);
+            let narrowed = self.narrowed_read(path);
+            let read_ty = match narrowed {
+                Some(read) if entry.missing_read.is_none() => return Ok(read),
+                // A narrowing never proves a maybe-missing local present: the
+                // read keeps the narrowed type but still checks the value. A
+                // narrowing that rules out every value leaves the local's type.
+                Some((_, ty)) if !super::narrowing::is_ruled_out(&ty) => ty,
+                _ => entry.read_type().clone(),
+            };
+            if entry.missing_read.is_some() {
+                self.pending_read = Some(PendingRead::MaybeMissingLocal);
             }
             return Ok((
                 TypedExprKind::LocalRef {
                     ident: ident.clone(),
                     boxed: false,
                 },
-                entry.read_type().clone(),
+                read_ty,
             ));
         }
         // `JSON` is a compiler-intrinsic namespace
@@ -1946,6 +1961,11 @@ impl Inferer<'_> {
         if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
             self.error_nan_comparison(op, span);
         }
+        // `===` and `!==` check both sides: a missing value is `undefined`,
+        // which strict equality compares like any other value. The operands
+        // were related at their written types above.
+        self.absorb_missing(typed_lhs)?;
+        self.absorb_missing(typed_rhs)?;
         Ok((
             TypedExprKind::Binary {
                 op,
@@ -1982,6 +2002,14 @@ impl Inferer<'_> {
             None
         };
         let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+        // `x || d` tests `x`: a missing left side is falsy and takes `d`,
+        // including through a `&&` there. `x && …` checks `x` only where its
+        // result is itself tested, which `absorb_missing_in_test` handles.
+        let lhs_ty = if op == BinOp::Or && self.absorb_missing_in_test(typed_lhs)? {
+            Type::union(vec![lhs_ty, Type::Undefined])
+        } else {
+            lhs_ty
+        };
         self.check_constant_truthiness(lhs)?;
         let mut condition_error = false;
         if matches!(lhs_ty.peel(), Type::Unknown) {
@@ -2168,6 +2196,12 @@ impl Inferer<'_> {
                 // The operand keeps a literal type, which can decide the result:
                 // `!true` is `false`.
                 let (id, operand_ty) = self.infer_expr_keeping_literals(operand, None, true)?;
+                // `!x` tests `x`: a missing operand is falsy.
+                let operand_ty = if self.absorb_missing_in_test(id)? {
+                    Type::union(vec![operand_ty, Type::Undefined])
+                } else {
+                    operand_ty
+                };
                 self.check_constant_truthiness(operand)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
@@ -2319,9 +2353,12 @@ impl Inferer<'_> {
             self.report_evolving_read(&ident, span);
         }
         let (kind, ty) = self.resolve_ident(ident, span)?;
+        // A local holding a maybe-missing read is read, checked and cast to
+        // `ty` by codegen itself (see `missing_reads`).
         let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
             self.scopes
                 .get(&ident.name)
+                .filter(|entry| entry.missing_read.is_none())
                 .map(|entry| entry.storage_type().clone())
         } else {
             None
@@ -2387,6 +2424,12 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (value, value_ty) = self.infer_expr(operand, None)?;
+        // `typeof x` checks `x`: a missing value is `"undefined"`.
+        let value_ty = if self.absorb_missing(value)? {
+            Type::union(vec![value_ty, Type::Undefined])
+        } else {
+            value_ty
+        };
         let name = Ident {
             name: format!("#typeof_{}", self.typed_ast.exprs_len()),
             span,
@@ -2501,6 +2544,8 @@ impl Inferer<'_> {
             return Ok(None);
         };
         let (typed_operand, _) = self.infer_expr(operand_id, None)?;
+        // `typeof x` checks `x`: a missing value is `"undefined"`.
+        self.absorb_missing(typed_operand)?;
         // Retained refinements cannot prove the kind of a later live read.
         let tag = if let Some(kind) = typeof_tag_kind(&tag) {
             kind
@@ -5085,7 +5130,12 @@ impl Inferer<'_> {
         rest: bool,
     ) -> Result<ExprId, CompilerFailure> {
         if !self.ast.call_spread_args.contains(&arg) {
-            return Ok(self.infer_expr(arg, expected)?.0);
+            let typed = self.infer_expr(arg, expected)?.0;
+            // A parameter whose type names `undefined` takes a missing value.
+            if let Some(param) = expected {
+                self.absorb_missing_into(typed, param)?;
+            }
+            return Ok(typed);
         }
         let span = self.ast.try_expr(arg).map_err(super::arena_failure)?.span;
         let (typed, source_ty) = self.infer_expr(arg, None)?;
@@ -5296,7 +5346,12 @@ impl Inferer<'_> {
         let arg = *args
             .get(position)
             .ok_or_else(|| super::inference_failure("missing call argument"))?;
-        self.infer_expr(arg, hint)
+        let (typed, ty) = self.infer_expr(arg, hint)?;
+        // A parameter whose type names `undefined` takes a missing value.
+        if let Some(param) = hint {
+            self.absorb_missing_into(typed, param)?;
+        }
+        Ok((typed, ty))
     }
 
     /// [`Self::bind_param_call_args`] for a callee known only by its
@@ -6727,6 +6782,13 @@ impl Inferer<'_> {
                         },
                     )?;
                     self.object_this_hint = previous_hint;
+                    // An optional field takes a missing value as `undefined`.
+                    let value_ty = match &hint {
+                        Some(hint) if self.absorb_missing_into(typed_value, hint)? => {
+                            Type::union(vec![value_ty, Type::Undefined])
+                        }
+                        _ => value_ty,
+                    };
                     let in_type_parameter_position = expected_field_ty
                         .as_ref()
                         .is_some_and(is_type_parameter_position);
@@ -9403,6 +9465,7 @@ impl Inferer<'_> {
             && let Some(index) = self.resolver().index_signature(&receiver_ty)
             && crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
         {
+            self.note_missable_read();
             return Ok((
                 TypedExprKind::FieldAccess {
                     receiver: typed_receiver,
@@ -9434,6 +9497,7 @@ impl Inferer<'_> {
                 } else if let Some(index) = index.as_ref().filter(|index| {
                     crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
                 }) {
+                    self.note_missable_read();
                     index.read_ty()
                 } else {
                     // An object literal still resolves the prelude `Object`
@@ -9905,6 +9969,9 @@ impl Inferer<'_> {
         };
         let typed_index =
             self.push_synthetic_expr(TypedExprKind::Number(index), Type::Number, name.span)?;
+        if numeric_key_may_miss(receiver_ty, index) {
+            self.note_missable_read();
+        }
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -9961,7 +10028,9 @@ impl Inferer<'_> {
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
         let elem_ty = match receiver_ty.peel() {
-            ty if ty.is_regexp_match_array() => regexp_index_element(self.ast, index)?,
+            // A match group reads as `string`, as in tsc's `--strict`; a group
+            // that did not take part is a missing value (see `missing_reads`).
+            ty if ty.is_regexp_match_array() => Type::String,
             Type::Array(elem) => (**elem).clone(),
             // tuple indexing must be a non-negative integer
             // literal that's in range. Out-of-range or non-literal
@@ -10124,6 +10193,9 @@ impl Inferer<'_> {
             }
         };
         let (typed_index, _) = self.infer_numeric_index(index)?;
+        if index_read_may_miss(self.ast, &receiver_ty, index)? {
+            self.note_missable_read();
+        }
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -10976,6 +11048,11 @@ impl Inferer<'_> {
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
+                // A declared return type that names `undefined` takes a
+                // missing value, as a `return` statement's does.
+                if let Some(declared) = &annotated_ret {
+                    self.absorb_missing_into(id, declared)?;
+                }
                 self.validate_type_predicate_return(id, span)?;
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
@@ -11566,9 +11643,13 @@ impl Inferer<'_> {
                 TypedExprKind::PostfixUnary {
                     op,
                     target: crate::PostfixTarget::Local {
+                        // A local holding a maybe-missing read is stored as
+                        // `T | undefined`.
+                        // The binding's own type otherwise: a defaulted
+                        // parameter's storage still admits the omission.
+                        target_ty: entry.maybe_missing_storage().unwrap_or(entry.ty),
                         ident: target,
                         boxed: false,
-                        target_ty: entry.ty,
                     },
                 },
                 result_ty,
@@ -11976,6 +12057,7 @@ impl Inferer<'_> {
         _span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
+        self.absorb_missing_in_test(typed_cond)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
         self.check_condition_ty(&cond_ty, cond_span);
         self.check_constant_truthiness(cond)?;
@@ -12198,6 +12280,12 @@ impl Inferer<'_> {
         let lhs_context =
             self.left_operand_context(lhs, expected, &[Type::Null, Type::Undefined])?;
         let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+        // A left side that may be missing is `undefined` here when it is.
+        let lhs_ty = if self.absorb_missing(typed_lhs)? {
+            Type::union(vec![lhs_ty, Type::Undefined])
+        } else {
+            lhs_ty
+        };
         // The right side runs only where the left is `null` or `undefined`.
         let rhs_env = self.nullish_operand_env(typed_lhs)?;
         // An unreachable right side is never the result, so it is not held
@@ -12371,9 +12459,14 @@ impl Inferer<'_> {
         } else {
             self.infer_expr(base, None)?
         };
+        // A base that may be missing is checked by the `?.` after it. The
+        // chain keeps the type tsc gives it, so the missing value is decided
+        // where the chain goes, as for the base itself; see `missing_reads`.
+        let base_may_miss =
+            parts.first().is_some_and(ChainPart::is_optional) && self.may_be_missing(typed_base);
         // The namespace rejection subsumes the redundancy warning — a namespace
         // receiver is non-nullable too, and two diagnostics for one `?` is noise.
-        if !self.reported_namespace_chain_base(base, &base_ty, &parts)? {
+        if !self.reported_namespace_chain_base(base, &base_ty, &parts)? && !base_may_miss {
             self.warn_redundant_leading_optional(
                 &base_ty,
                 self.ast.try_expr(base).map_err(super::arena_failure)?.span,
@@ -12408,11 +12501,40 @@ impl Inferer<'_> {
                 None => asserts_tail,
             })
             .collect();
-        for (part, asserted) in parts.into_iter().zip(asserted) {
+        // A step whose element or key may be missing gives `undefined` where
+        // the chain's result already has room for it: at the last step, or
+        // before a `?.` that short-circuits on it.
+        let ends_or_short_circuits: Vec<bool> = (0..parts.len())
+            .map(|index| parts.get(index + 1).is_none_or(ChainPart::is_optional))
+            .collect();
+        // Whether the current step's receiver may be a missing value: the
+        // base, or a step before it. A `?.` on it checks it, but adds no
+        // `undefined` to the chain's type, which stays tsc's.
+        let mut receiver_may_miss = base_may_miss;
+        // The steps whose result may be missing and reaches a check: the
+        // `?.` after it, or one around the whole chain for the last step.
+        // Each reads as `T | undefined` once a check takes the chain.
+        let mut missing_steps: Vec<usize> = Vec::new();
+        // Whether a `?.` can short-circuit on a `null` or `undefined` its
+        // receiver's type allows, which adds `undefined` to the chain's type.
+        let mut adds_undefined = false;
+        for ((part, asserted), ends_or_short_circuits) in
+            parts.into_iter().zip(asserted).zip(ends_or_short_circuits)
+        {
+            let checks_missing_receiver = part.is_optional() && receiver_may_miss;
             let apparent = self.constraint_receiver_type(&receiver_ty, part.span())?;
             if apparent != receiver_ty {
+                // A receiver this step's `?.` checks may be missing: the view
+                // keeps room for `undefined`, which the `?.` then skips.
+                // `receiver_ty` stays the bound, so the chain's type stays
+                // tsc's.
+                let result_ty = if checks_missing_receiver {
+                    Type::union(vec![apparent.clone(), Type::Undefined])
+                } else {
+                    apparent.clone()
+                };
                 typed_parts.push(TypedChainPart::Constraint {
-                    result_ty: apparent.clone(),
+                    result_ty,
                     span: part.span(),
                 });
                 receiver_ty = apparent;
@@ -12429,12 +12551,17 @@ impl Inferer<'_> {
                 });
             let part = if part.is_optional()
                 && !may_skip_method_call
+                && !checks_missing_receiver
                 && !type_admits_nullish(&receiver_ty, self.resolver())
             {
                 part.as_plain_step()
             } else {
                 part
             };
+            // A receiver whose type also allows `null` or `undefined` can
+            // short-circuit on those too.
+            adds_undefined |= part.is_optional()
+                && (!checks_missing_receiver || type_admits_nullish(&receiver_ty, self.resolver()));
             if part.is_optional() && short_circuit_span.is_none() {
                 short_circuit_span = Some(part.span());
                 self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -12485,13 +12612,31 @@ impl Inferer<'_> {
             // `&mut typed_parts` rather than a borrow of the last
             // element. It returns the new part to push and the
             // resulting type.
-            let (mut typed_part, next_ty) = self.infer_chain_part(
+            self.pending_read = None;
+            let (mut typed_part, mut next_ty) = self.infer_chain_part(
                 &effective_recv,
                 step_path.as_ref(),
                 part,
                 &mut typed_parts,
                 &mut pending_method,
             )?;
+            let missable = matches!(self.pending_read.take(), Some(PendingRead::Missable))
+                && !asserted
+                && !next_ty.holds_undefined()
+                && !matches!(next_ty.peel(), Type::Error | Type::Never);
+            receiver_may_miss = false;
+            if missable && ends_or_short_circuits {
+                if adds_undefined {
+                    // The chain's result already has room for `undefined`.
+                    next_ty = Type::union(vec![next_ty, Type::Undefined]);
+                    typed_part.set_result_ty(next_ty.clone());
+                } else {
+                    // Its index among the typed parts, which a method call
+                    // folds with its callee.
+                    missing_steps.push(typed_parts.len());
+                    receiver_may_miss = true;
+                }
+            }
             step_path = self.extend_chain_path(step_path, &typed_part)?;
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
@@ -12513,11 +12658,25 @@ impl Inferer<'_> {
 
         // A chain with no step left that can short-circuit has no `undefined`
         // branch to add.
-        let final_ty = if short_circuit_span.is_some() {
+        let final_ty = if adds_undefined {
             Type::union(vec![receiver_ty, Type::Undefined])
         } else {
             receiver_ty
         };
+        if final_ty.holds_undefined() {
+            // The chain's result has room for a missing value's `undefined`.
+            if base_may_miss {
+                self.absorb_missing(typed_base)?;
+            }
+            super::missing_reads::widen_missing_steps(&mut typed_parts, &missing_steps);
+        } else if base_may_miss || !missing_steps.is_empty() {
+            // A chain whose base or a step may find no value is itself a read
+            // a check around it can catch; see `missing_reads`.
+            self.pending_read = Some(PendingRead::Chain(super::missing_reads::MissableChain {
+                base: base_may_miss,
+                steps: missing_steps,
+            }));
+        }
         Ok((
             TypedExprKind::OptionalChain {
                 base: typed_base,
@@ -12558,6 +12717,9 @@ impl Inferer<'_> {
                         Type::Number,
                         name.span,
                     )?;
+                    if numeric_key_may_miss(receiver_ty, index) {
+                        self.note_missable_read();
+                    }
                     *pending_method = None;
                     return Ok((
                         TypedChainPart::Index {
@@ -12633,7 +12795,7 @@ impl Inferer<'_> {
                     );
                 }
                 let elem_ty = match receiver_ty.peel() {
-                    ty if ty.is_regexp_match_array() => regexp_index_element(self.ast, idx)?,
+                    ty if ty.is_regexp_match_array() => Type::String,
                     Type::Array(elem) => *elem.clone(),
                     Type::Uint8Array => Type::Number,
                     Type::Tuple(elements) => {
@@ -12675,6 +12837,9 @@ impl Inferer<'_> {
                         Type::Error
                     }
                 };
+                if index_read_may_miss(self.ast, receiver_ty, idx)? {
+                    self.note_missable_read();
+                }
                 (
                     TypedChainPart::Index {
                         idx: typed_idx,
@@ -13116,9 +13281,13 @@ impl Inferer<'_> {
             fresh_shapes
         };
         let mut per_member_tys: Vec<Type> = Vec::with_capacity(members.len());
+        let mut through_index_signature = false;
         for m in members {
             match self.union_member_field_read_ty(m, name) {
-                Ok(ty) => per_member_tys.push(ty),
+                Ok(ty) => {
+                    through_index_signature |= self.reads_through_index_signature(m, name);
+                    per_member_tys.push(ty);
+                }
                 Err(_) if is_fresh_literal_member(m, fresh_shapes) => {
                     per_member_tys.push(Type::Undefined);
                 }
@@ -13135,6 +13304,10 @@ impl Inferer<'_> {
                     return Type::Error;
                 }
             }
+        }
+        // A member that backs the name with its index signature may not have it.
+        if through_index_signature {
+            self.note_missable_read();
         }
         Type::union(per_member_tys)
     }
@@ -13278,6 +13451,7 @@ impl Inferer<'_> {
                 if let Some(index) = index.as_ref().filter(|index| {
                     crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
                 }) {
+                    self.note_missable_read();
                     return ChainField::plain(index.read_ty());
                 }
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
@@ -13371,6 +13545,7 @@ impl Inferer<'_> {
                         )
                     })
                 {
+                    self.note_missable_read();
                     return ChainField::plain(index.read_ty());
                 }
                 self.report_missing_field(span, receiver_ty, &name.name);
@@ -14688,36 +14863,52 @@ fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Op
     Some(Type::union(elements))
 }
 
-/// Destructuring lowers each position to a literal index read, so it shares
-/// the whole-match guarantee with an explicit `[0]` read.
-fn regexp_index_element(ast: &crate::Ast, index: ExprId) -> Result<Type, CompilerFailure> {
-    let index = peel_parens(ast, index)?;
-    let index = match &ast.try_expr(index).map_err(super::arena_failure)?.kind {
-        ExprKind::Unary {
-            op: UnOp::Neg | UnOp::Pos,
-            operand,
-        } => peel_parens(ast, *operand)?,
-        _ => index,
-    };
-    Ok(
-        match &ast.try_expr(index).map_err(super::arena_failure)?.kind {
-            ExprKind::Number(n) if *n == 0.0 => Type::String,
-            _ => Type::regexp_element(),
-        },
-    )
+/// Whether an index read of `receiver` at `index` may find no element: any
+/// read of an array (alone or in a union with tuples), string or
+/// `Uint8Array`, and a regex match group other than the whole match `[0]`,
+/// whose group may not have taken part. A tuple's index is a literal the
+/// typechecker has already checked against its arity.
+fn index_read_may_miss(
+    ast: &crate::Ast,
+    receiver: &Type,
+    index: ExprId,
+) -> Result<bool, CompilerFailure> {
+    let receiver = receiver.peel();
+    if receiver.is_regexp_match_array() {
+        let whole_match = matches!(
+            ast.try_expr(peel_parens(ast, index)?).map_err(super::arena_failure)?.kind,
+            ExprKind::Number(n) if n == 0.0
+        );
+        return Ok(!whole_match);
+    }
+    Ok(match receiver {
+        Type::Array(_) | Type::Uint8Array => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Array(_))),
+        Type::Tuple(_) => false,
+        other => other.is_string_shaped(),
+    })
+}
+
+/// Whether `receiver["<index>"]`, a numeric key read, may find no element,
+/// as [`index_read_may_miss`] decides for an index.
+fn numeric_key_may_miss(receiver: &Type, index: f64) -> bool {
+    match receiver.peel() {
+        ty if ty.is_regexp_match_array() => index != 0.0,
+        Type::Tuple(_) => false,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Array(_))),
+        _ => true,
+    }
 }
 
 fn numeric_key_element(receiver_ty: &Type, index: f64) -> Option<Type> {
     let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
     let elem_ty = match receiver_ty.peel() {
-        _ if receiver_ty.is_string_shaped() => Type::String,
-        _ if receiver_ty.is_regexp_match_array() => {
-            if index == 0.0 {
-                Type::String
-            } else {
-                Type::regexp_element()
-            }
-        }
+        // A match group reads as `string` too; see `index_read_may_miss`.
+        _ if receiver_ty.is_string_shaped() || receiver_ty.is_regexp_match_array() => Type::String,
         Type::Array(elem) => (**elem).clone(),
         Type::Uint8Array => Type::Number,
         // A tuple has no element at a key that names no slot, as tsc
@@ -17144,7 +17335,43 @@ mod tests {
         let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Let");
         };
-        assert_eq!(*ty, Type::Number);
+        // The read is `number`. The local holds it maybe missing, so it is
+        // stored as `number | undefined` (see `missing_reads`).
+        assert_eq!(*ty, Type::union(vec![Type::Number, Type::Undefined]));
+    }
+
+    #[test]
+    fn index_reads_are_typed_as_their_element_and_a_check_joins_the_default() {
+        let ta = run_clean(
+            "function main(): void {
+                const r: Record<string, number> = {};
+                const k: string = 'a';
+                const joined = r[k] ?? 'd';
+                const element: number = r[k];
+                const dotted: number = r.key;
+                const m = /(a)/.exec('a');
+                if (m !== null) { const group: string = m[1]; }
+            }",
+        );
+        let const_ty = |wanted: &str| {
+            (0..ta.stmts_len())
+                .find_map(
+                    |i| match &ta.try_stmt(crate::StmtId(i as u32)).unwrap().kind {
+                        TypedStmtKind::Const { name, ty, .. } if name.name == wanted => {
+                            Some(ty.clone())
+                        }
+                        _ => None,
+                    },
+                )
+                .unwrap_or_else(|| panic!("no const `{wanted}`"))
+        };
+        assert_eq!(
+            const_ty("joined"),
+            Type::union(vec![Type::Number, Type::StringLiteral("d".into())])
+        );
+        assert_eq!(const_ty("element"), Type::Number);
+        assert_eq!(const_ty("dotted"), Type::Number);
+        assert_eq!(const_ty("group"), Type::String);
     }
 
     #[test]

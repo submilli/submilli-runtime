@@ -76,8 +76,9 @@ removes `null` and `undefined` from the type and throws `TypeError` for either.
 Missing properties, collection misses, and omitted optional parameters use
 `undefined`; `null` is distinct. Defaults apply to omission or `undefined`,
 never `null`. Optional chains yield `undefined`; `??` handles both values.
-`arr[i]` out of range throws `RangeError`; probe with `arr.at(i)`, which
-returns `undefined`. A local `let x: T;` must be assigned on every path before
+`arr[i]` and `obj[key]` read as the element type. Check a missing one where
+you read it (`arr[i] ?? d`, `key in obj`, `arr.at(i)`): an unchecked
+missing read throws `MissingValueError`. A local `let x: T;` must be assigned on every path before
 a read unless `T` includes `undefined`; module-level bindings still need an
 initializer in that case. Template literals accept `null` and `undefined` and render them
 like `String(x)`.
@@ -94,8 +95,7 @@ words are fine as object keys (`{ type: "x" }`, read back as
 `obj.type`); for keys that aren't valid identifiers, quote them and
 index with a string literal (`{ "content-length": 5 }` →
 `obj["content-length"]`). Use `Record<string, V>` or `{ [key: string]: V }`
-for dynamic `obj[key]` reads and writes. Missing reads return `undefined`, so
-their read type is `V | undefined`; writes require `V`. `Record<"a" | "b", V>` requires
+for dynamic `obj[key]` reads and writes. Reads are `V` and writes require `V`. `Record<"a" | "b", V>` requires
 both keys and reads them as `V`. Computed literals (`{ [key]: value }`), spread,
 and readonly string index signatures are supported. Keys must be strings;
 `keyof` an open string-indexed type is `string`. General mapped types and

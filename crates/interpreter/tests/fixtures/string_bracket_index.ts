@@ -1,11 +1,11 @@
 // `s[i]` reads one UTF-16 code unit as a string, like `charAt`, and throws a
-// catchable `RangeError` out of range, as an array read does.
+// catchable `MissingValueError` out of range, as an array read does.
 function rejects(read: () => string, expected: string): boolean {
   try {
     read();
     return false;
   } catch (e) {
-    return e instanceof RangeError && e.message === expected;
+    return e instanceof MissingValueError && e.message === expected;
   }
 }
 
@@ -26,9 +26,10 @@ function main(): void {
   const maybe: string | undefined = s.length > 0 ? s : undefined;
   assert(maybe?.[1] === "é", "an optional chain index");
 
-  assert(rejects(() => s[5], "index 5 is out of range for `s` (length 5); use `s.at(5)` to get `undefined` instead"), "past the end");
-  assert(rejects(() => s[-1], "index -1 is out of range for `s` (length 5); use `s.at(-1)` for a non-throwing read instead"), "negative");
-  assert(rejects(() => s[1.5], "index 1.5 is out of range for `s` (length 5); use `s.at(1.5)` for a non-throwing read instead"), "fractional");
-  assert(rejects(() => s[NaN], "index NaN is out of range for `s` (length 5); use `s.at(NaN)` for a non-throwing read instead"), "NaN");
-  assert(rejects(() => ""[0], "index 0 is out of range (length 0); use `.at(0)` to get `undefined` instead"), "the empty string");
+  assert(rejects(() => s[5], "index 5 is out of range for `s` (length 5); use `s[5] ?? …` or `s.at(5)`"), "past the end");
+  assert(rejects(() => s[-1], "index -1 is out of range for `s` (length 5); use `s[-1] ?? …` for a default, or `s.at(-1)` to count from the end"), "negative");
+  assert(rejects(() => s[1.5], "index 1.5 is out of range for `s` (length 5); use `s[1.5] ?? …` for a default, or `s.at(1.5)` to count from the end"), "fractional");
+  assert(rejects(() => s[NaN], "index NaN is out of range for `s` (length 5); use `s[NaN] ?? …` for a default, or `s.at(NaN)` to count from the end"), "NaN");
+  assert((s[9] ?? "none") === "none", "a checked read past the end");
+  assert(rejects(() => ""[0], "index 0 is out of range (length 0); use `?? …` at the read, or `.at(0)`"), "the empty string");
 }

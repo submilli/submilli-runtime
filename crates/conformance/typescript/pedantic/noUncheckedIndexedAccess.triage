@@ -1,0 +1,2 @@
+line 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 32, 33, 76, 78, 83 type: by-design spec §1.2 an index read is `T`, as in tsc's `--strict` without noUncheckedIndexedAccess, and a missing element or key is decided where the read is checked
+line 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 83 missed: by-design spec §1.2 an index read is `T`, as in tsc's `--strict` without noUncheckedIndexedAccess, and a missing element or key is decided where the read is checked

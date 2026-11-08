@@ -378,6 +378,14 @@ impl Inferer<'_> {
                     ty: value_ty,
                     widened,
                 } = self.infer_returned_value_with_widened(v, hint.as_ref())?;
+                // Returning reads the value: a missing one becomes `undefined`
+                // only when the declared return type names it. An inferred
+                // return type has no such contract, so the read decides here.
+                if self.inferred_returns.is_none()
+                    && let Some(declared) = &hint
+                {
+                    self.absorb_missing_into(id, declared)?;
+                }
                 // A closure in a `void` context may return `unknown` (see
                 // `infer_arrow`), so a `void` value it returns is run and
                 // `undefined` returned in its place.
@@ -529,6 +537,8 @@ impl Inferer<'_> {
             true,
         )?;
         self.drop_selected_default_mismatch(component_hint.as_ref(), value, &value_ty)?;
+        let (value_ty, holds_missing) =
+            self.absorb_initializer(&name, hint.as_ref(), typed_value, value_ty)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -557,19 +567,26 @@ impl Inferer<'_> {
             name.span,
             origin,
         );
+        self.scopes.mark_statement_local(&name.name);
         // A destructured parameter's binding narrows its siblings as a
         // destructured `const` does, while no write reaches it.
         if ty.is_none() && self.reads_pattern_parameter(value)? {
             self.record_aliased_condition(&name.name, typed_value);
         }
-        let flow_ty = match self.pattern_binding_flow_type(value)? {
-            Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
-        };
-        self.narrow_local_initializer(&name, &bound, flow_ty)?;
+        if holds_missing {
+            self.hold_initializer_read(&name.name, name.span, typed_value)?;
+        }
+        let storage = self.settle_local_initializer(
+            &name,
+            ty.is_some(),
+            value,
+            typed_value,
+            value_ty,
+            &bound,
+        )?;
         Ok(TypedStmtKind::Let {
             name,
-            ty: bound,
+            ty: storage.unwrap_or(bound),
             value: typed_value,
             boxed: false,
             doc,
@@ -594,6 +611,7 @@ impl Inferer<'_> {
             self.scopes
                 .insert_uninitialized(name.name.clone(), declared.clone(), name.span);
         }
+        self.scopes.mark_statement_local(&name.name);
         let storage = self
             .scopes
             .get(&name.name)
@@ -723,6 +741,8 @@ impl Inferer<'_> {
             hint.is_none(),
         )?;
         self.drop_selected_default_mismatch(component_hint.as_ref(), value, &value_ty)?;
+        let (value_ty, holds_missing) =
+            self.absorb_initializer(&name, hint.as_ref(), typed_value, value_ty)?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.evolving_storage_type(&name, bound);
@@ -734,32 +754,100 @@ impl Inferer<'_> {
             name.span,
             origin,
         );
-        if crate::lower_patterns::is_pattern_value(&name.name) {
+        self.scopes.mark_statement_local(&name.name);
+        let is_pattern_value = crate::lower_patterns::is_pattern_value(&name.name);
+        if is_pattern_value {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
         if ty.is_none() {
             self.record_aliased_condition(&name.name, typed_value);
         }
-        if let Some(entry) = self.scopes.get(&name.name) {
-            self.record_const_record_read(
-                narrowing::BindingId::Local {
-                    name: name.name.clone(),
-                    decl_scope: entry.decl_scope,
-                },
-                typed_value,
-            )?;
+        if holds_missing {
+            self.hold_initializer_read(&name.name, name.span, typed_value)?;
         }
-        let flow_ty = match self.pattern_binding_flow_type(value)? {
-            Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
-        };
-        self.narrow_local_initializer(&name, &bound, flow_ty)?;
+        let storage = self.settle_local_initializer(
+            &name,
+            ty.is_some(),
+            value,
+            typed_value,
+            value_ty,
+            &bound,
+        )?;
         Ok(TypedStmtKind::Const {
             name,
-            ty: bound,
+            ty: storage.unwrap_or(bound),
             value: typed_value,
             doc,
         })
+    }
+
+    /// An annotated `let`/`const` initializer whose annotation names
+    /// `undefined` takes a missing value. The local then reads as `T`, as tsc
+    /// narrows it, holding the read maybe missing (`hold_initializer_read`);
+    /// one that can't hold it (`ScopeEntry::can_hold_missing_read`) starts
+    /// out maybe `undefined`. Returns the initializer's flow type and whether
+    /// the local holds the read.
+    fn absorb_initializer(
+        &mut self,
+        name: &Ident,
+        hint: Option<&Type>,
+        typed_value: ExprId,
+        value_ty: Type,
+    ) -> Result<(Type, bool), CompilerFailure> {
+        // The binding isn't in scope yet; it is a `let`/`const` local.
+        let can_hold = !self.captured_locals.contains(&name.span);
+        // A value the local's present flag can't follow is read at its own
+        // type, throwing there if missing, and the local narrows to it. A
+        // local that can't hold a read keeps no flag, so it takes any read
+        // as maybe `undefined`.
+        let absorbed = match hint {
+            Some(hint) if !can_hold || self.present_flag_can_follow(typed_value, hint) => {
+                self.absorb_missing_into(typed_value, hint)?
+            }
+            _ => false,
+        };
+        let holds_missing = absorbed && can_hold;
+        let value_ty = if absorbed && !holds_missing {
+            Type::union(vec![value_ty, Type::Undefined])
+        } else {
+            value_ty
+        };
+        Ok((value_ty, holds_missing))
+    }
+
+    /// The end of a local `let`/`const` declaration, once `name` is in scope
+    /// with type `bound`: decides whether it holds a maybe-missing read (see
+    /// `missing_reads`) and installs its initial narrowing. `value` is the
+    /// source initializer, `typed_value` its typed node and `value_ty` its
+    /// flow type. Returns the widened storage of an unannotated maybe-missing
+    /// local.
+    fn settle_local_initializer(
+        &mut self,
+        name: &Ident,
+        annotated: bool,
+        value: ExprId,
+        typed_value: ExprId,
+        value_ty: Type,
+        bound: &Type,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let storage = if crate::lower_patterns::is_pattern_value(&name.name) {
+            None
+        } else {
+            self.bind_maybe_missing_local(name, annotated, typed_value, bound)?
+        };
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.assigned_flow_type(bound, annotated, typed_value, value_ty)?,
+        };
+        // A local holding a maybe-missing read reads as `T`: its value was
+        // widened only to be stored, and each use is decided by itself.
+        let flow_ty = if storage.is_some() {
+            narrowing::strip_undefined(&flow_ty)
+        } else {
+            flow_ty
+        };
+        self.narrow_local_initializer(name, bound, flow_ty)?;
+        Ok(storage)
     }
 
     fn infer_if_statement(
@@ -776,6 +864,7 @@ impl Inferer<'_> {
             .span;
         self.note_if_condition_ands(condition, then_body_span)?;
         let (typed_cond, cond_ty) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed_cond)?;
         let cond_span = self
             .ast
             .try_expr(condition)
@@ -1584,6 +1673,7 @@ impl Inferer<'_> {
                 };
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
+                let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
@@ -1631,6 +1721,7 @@ impl Inferer<'_> {
                 };
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
+                let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
@@ -1685,6 +1776,7 @@ impl Inferer<'_> {
                 };
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
+                let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
@@ -1848,6 +1940,7 @@ impl Inferer<'_> {
         let mut elem_ty = self.common_index_write_type(&targets);
         let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never)).then_some(&elem_ty);
         let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint)?;
+        let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
         if evolving.is_none()
             && !reported
             && !matches!(value_ty, Type::Error)
@@ -2219,6 +2312,38 @@ impl Inferer<'_> {
                 .then(|| entry.write_type().clone());
             let (typed_value, value_ty, reported) =
                 self.infer_assigned_value(value, hint.as_ref())?;
+            let maybe_missing_storage = entry.maybe_missing_storage();
+            let can_hold =
+                entry.can_hold_missing_read(self.captured_locals.contains(&entry.decl_span));
+            // A value the local's present flag can't follow is read at its
+            // own type, throwing there if missing.
+            let can_follow = self.present_flag_can_follow(typed_value, entry.write_type());
+            // An unannotated local holding a maybe-missing read takes another
+            // one as it is.
+            let absorbed = if maybe_missing_storage.is_some() {
+                if can_follow && self.absorb_missing(typed_value)? {
+                    self.hold_assigned_read(&target.name, entry.decl_span, typed_value)?;
+                }
+                false
+            } else {
+                // A local that can't hold a read keeps no flag, so it takes
+                // any read as maybe `undefined`.
+                !entry.is_const
+                    && (!can_hold || can_follow)
+                    && self.absorb_missing_into(typed_value, entry.write_type())?
+            };
+            // A local whose type names `undefined` takes a missing read. It
+            // reads as `T` from here, as tsc narrows it, holding the read maybe
+            // missing; one that can't hold it reads as maybe `undefined`.
+            let holds_missing = absorbed && can_hold;
+            let value_ty = if holds_missing {
+                self.hold_assigned_read(&target.name, entry.decl_span, typed_value)?;
+                value_ty
+            } else if absorbed {
+                Type::union(vec![value_ty, Type::Undefined])
+            } else {
+                value_ty
+            };
             if entry.requires_assignment
                 && let Some(env) = self.narrow_scopes.last_mut()
             {
@@ -2250,9 +2375,13 @@ impl Inferer<'_> {
                 flow_ty,
                 Some(value),
             )?;
+            if maybe_missing_storage.is_some() {
+                self.typed_ast.widened_bindings.insert(target.span);
+            }
+            let target_ty = maybe_missing_storage.unwrap_or_else(|| entry.storage_type().clone());
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
-                target_ty: entry.storage_type().clone(),
+                target_ty,
                 value: typed_value,
                 boxed: false,
                 narrowed_shadow_ty,
@@ -2273,6 +2402,7 @@ impl Inferer<'_> {
                     let hint = self.evolving_binding_path(&target).is_none().then_some(&ty);
                     let (typed_value, value_ty, reported) =
                         self.infer_assigned_value(value, hint)?;
+                    let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
                         self.error(
                             value_span,
@@ -2388,13 +2518,23 @@ impl Inferer<'_> {
             let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
+                // A narrowing never proves a maybe-missing local present, so
+                // the read is the local itself, which codegen checks.
+                let kind = if entry.missing_read.is_some() {
+                    TypedExprKind::LocalRef {
+                        ident: target.clone(),
+                        boxed: false,
+                    }
+                } else {
+                    TypedExprKind::LocalNarrowRef {
+                        binding,
+                        path: lhs_path,
+                    }
+                };
                 let id = self
                     .typed_ast
                     .try_push_expr(TypedExpr {
-                        kind: TypedExprKind::LocalNarrowRef {
-                            binding,
-                            path: lhs_path,
-                        },
+                        kind,
                         span: target.span,
                         ty: narrowed_ty.clone(),
                     })
@@ -2452,9 +2592,16 @@ impl Inferer<'_> {
                 result_ty,
                 None,
             )?;
+            let target_ty = match entry.maybe_missing_storage() {
+                Some(storage) => {
+                    self.typed_ast.widened_bindings.insert(target.span);
+                    storage
+                }
+                None => entry.storage_type().clone(),
+            };
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
-                target_ty: entry.storage_type().clone(),
+                target_ty,
                 value: synth_binary,
                 boxed: false,
                 narrowed_shadow_ty,
@@ -3682,6 +3829,7 @@ impl Inferer<'_> {
         let mats_len = self.pending_post_if_materializations.len();
         self.enter_loop_head(state, body_span)?;
         let (typed_condition, _) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed_condition)?;
         let (true_env, _) = self.predicate_envs(typed_condition)?;
         let after = self.condition_can_hold(typed_condition)?.then(|| {
             let mut after = self.snapshot_active_narrowings(0).0;
@@ -3828,6 +3976,7 @@ impl Inferer<'_> {
         let diagnostics_from = self.diagnostics.len();
         self.clause_write_scopes.push(Default::default());
         let (typed, ty) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed)?;
         let cond_span = self
             .ast
             .try_expr(condition)
@@ -3863,6 +4012,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed)?;
         self.check_condition_ty(&ty, cond_span);
         self.check_constant_truthiness(condition)?;
         let (_, false_env) = self.predicate_envs(typed)?;

@@ -482,9 +482,8 @@ The generic dictionary local uses `{}` instead of the usual placeholder cast,
 because casting to an erased generic parameter is unsupported. Both compilers
 retain its declared index value type `T`.
 
-Open reads include `undefined` in Submilli even when an upstream case does not enable
-TypeScript's `noUncheckedIndexedAccess`; the committed divergences retain this
-intentional difference. Numeric/symbol keys, class index signatures, generic key
+Open reads are `V` in Submilli, as in TypeScript's `--strict`, so the cases that
+enable `noUncheckedIndexedAccess` diverge by design. Numeric/symbol keys, class index signatures, generic key
 parameters, and general mapped types remain outside these ports.
 
 The spread port records two substantive inference differences: Submilli retains

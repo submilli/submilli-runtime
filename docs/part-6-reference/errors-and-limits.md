@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "56097e93129bc1db89e174644ed27e8741736f60c85ba756e6599fe2104d002f"
+  contentHash: "41f78f534cd89bd053da90c5b1e93546f73f17c4bd6f7937a1365ad597cef080"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -251,6 +251,7 @@ The standard library throws these classes. Each extends `Error` and has
 | `PermissionDeniedError` | The Blueprint refuses an operation, the application refuses a `@tools` call, or an approver refuses a call an `ask-human` or `ask-admin` rule matches, or doesn't decide in time | `permission denied: caller=main capability=http.get: policy denied http.get for main. This request is forbidden by the operator's policy — do not work around the denial (another package, raw HTTP, or other arguments to reach the same thing); report it and stop.` |
 | `QuotaExceededError` | A filesystem size limit, a model-token budget, or a session-state limit would be passed | `fs.writeText /big.txt: the filesystem's size limit of 1024 bytes would be exceeded: 0 bytes are in use and this needs 2000 more — remove files you no longer need, or write less` |
 | `RangeError` | A value is outside a fixed bound | `crypto.randomBytes: length 1048577 exceeds maximum 1048576` |
+| `MissingValueError` | A read finds no value and nothing checks it: an index out of range, a key a record doesn't have, a regex group that didn't take part | ``index 5 is out of range for `parts` (length 1); use `parts[5] ?? …` or `parts.at(5)` `` |
 | `TypeError` | An argument has the wrong form, or a service the call needs isn't present | ``http GET: the URL path "/a/../b" has the dot segment ".."; a URL parser removes a `.` segment, and a `..` segment with the segment before it, so build the path without them`` |
 | `SyntaxError` | JSON or a regular expression doesn't parse | `JSON.parse: EOF while parsing an object at line 1 column 1` |
 | `TimeoutError` | The harness did not answer an [application tool](/docs/reference/http-api#application-tools) call within the Blueprint's `tool_call_timeout` | `@tools.approve: the application did not answer in time` |

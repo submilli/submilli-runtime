@@ -2540,6 +2540,9 @@ impl Inferer<'_> {
         self.fields_keeping_returned_literals = enclosing_fields;
         self.arguments_with_replaceable_hints.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
+        // A parameter whose type, as instantiated so far, names `undefined`
+        // takes a missing value: `x?: T`, or `T` bound to `V | undefined`.
+        self.absorb_missing_into(typed_id, &hint)?;
         if keeps_literal {
             self.record_kept_literal_argument(typed_id);
         }

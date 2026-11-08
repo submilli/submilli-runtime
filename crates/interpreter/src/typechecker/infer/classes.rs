@@ -3797,6 +3797,14 @@ impl<'a> Inferer<'a> {
             let typed_init = initializer
                 .map(|expr| {
                     let (typed, value_ty) = self.infer_expr(expr, Some(&body_ty))?;
+                    // A field whose type names `undefined`, or an optional
+                    // one, takes a missing value.
+                    let slot = if sig.optional {
+                        Type::union(vec![body_ty.clone(), Type::Undefined])
+                    } else {
+                        body_ty.clone()
+                    };
+                    self.absorb_missing_into(typed, &slot)?;
                     if !super::assignable(&value_ty, &body_ty, self.resolver())
                         && !matches!(value_ty, Type::Error)
                     {

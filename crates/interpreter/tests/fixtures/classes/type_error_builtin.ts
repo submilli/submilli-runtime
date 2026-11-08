@@ -1,7 +1,7 @@
-class MissingValueError extends TypeError {
+class MissingFieldError extends TypeError {
   constructor(message: string) {
     super(message);
-    this.name = "MissingValueError";
+    this.name = "MissingFieldError";
   }
 }
 
@@ -59,9 +59,9 @@ function main(): void {
   );
 
   // User subclasses of TypeError chain through it to Error.
-  const custom = new MissingValueError("field absent");
-  assert(custom instanceof MissingValueError, "instanceof own class");
+  const custom = new MissingFieldError("field absent");
+  assert(custom instanceof MissingFieldError, "instanceof own class");
   assert(custom instanceof TypeError, "instanceof TypeError parent");
   assert(custom instanceof Error, "instanceof Error root");
-  assert(custom.name === "MissingValueError", "subclass name");
+  assert(custom.name === "MissingFieldError", "subclass name");
 }

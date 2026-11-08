@@ -6,7 +6,8 @@ function message(f: () => void): string {
   try {
     f();
     return "no throw";
-  } catch (e: RangeError) {
+  } catch (e: Error) {
+    // A read throws `MissingValueError`, a write `RangeError`.
     return e.message.split(";")[0];
   }
 }
@@ -14,15 +15,15 @@ function message(f: () => void): string {
 function main(): void {
   const a: number[] = [1, 2];
 
-  assert(message(() => { const x = a[-1]; }) === "index -1 is out of range for `a` (length 2)", "negative read");
+  assert(message(() => { const x: number = a[-1]; }) === "index -1 is out of range for `a` (length 2)", "negative read");
   assert(message(() => { a[-1] = 99; }) === "index -1 is out of range for `a` (length 2)", "negative write");
-  assert(message(() => { const x = a[0 / 0]; }) === "index NaN is out of range for `a` (length 2)", "NaN read");
+  assert(message(() => { const x: number = a[0 / 0]; }) === "index NaN is out of range for `a` (length 2)", "NaN read");
   assert(message(() => { a[0 / 0] = 99; }) === "index NaN is out of range for `a` (length 2)", "NaN write");
-  assert(message(() => { const x = a[0.5]; }) === "index 0.5 is out of range for `a` (length 2)", "fractional read");
+  assert(message(() => { const x: number = a[0.5]; }) === "index 0.5 is out of range for `a` (length 2)", "fractional read");
   assert(message(() => { a[1.5] = 99; }) === "index 1.5 is out of range for `a` (length 2)", "fractional write");
-  assert(message(() => { const x = a[-1 / 0]; }) === "index -Infinity is out of range for `a` (length 2)", "-Infinity read");
-  assert(message(() => { const x = a[1 / 0]; }) === "index Infinity is out of range for `a` (length 2)", "Infinity read");
-  assert(message(() => { const x = a[1e300]; }) === "index 1e+300 is out of range for `a` (length 2)", "huge finite read");
+  assert(message(() => { const x: number = a[-1 / 0]; }) === "index -Infinity is out of range for `a` (length 2)", "-Infinity read");
+  assert(message(() => { const x: number = a[1 / 0]; }) === "index Infinity is out of range for `a` (length 2)", "Infinity read");
+  assert(message(() => { const x: number = a[1e300]; }) === "index 1e+300 is out of range for `a` (length 2)", "huge finite read");
   assert(message(() => { a[-1] = a[-1] + 1; }) === "index -1 is out of range for `a` (length 2)", "compound write");
 
   // Nothing above reached storage.
@@ -36,10 +37,10 @@ function main(): void {
 
   // The same check backs `Uint8Array`.
   const u = Uint8Array.alloc(2);
-  assert(message(() => { const x = u[-1]; }) === "index -1 is out of range for `u` (length 2)", "Uint8Array negative read");
+  assert(message(() => { const x: number = u[-1]; }) === "index -1 is out of range for `u` (length 2)", "Uint8Array negative read");
   assert(message(() => { u[-1] = 5; }) === "index -1 is out of range for `u` (length 2)", "Uint8Array negative write");
-  assert(message(() => { const x = u[0.5]; }) === "index 0.5 is out of range for `u` (length 2)", "Uint8Array fractional read");
-  assert(message(() => { const x = u[0 / 0]; }) === "index NaN is out of range for `u` (length 2)", "Uint8Array NaN read");
+  assert(message(() => { const x: number = u[0.5]; }) === "index 0.5 is out of range for `u` (length 2)", "Uint8Array fractional read");
+  assert(message(() => { const x: number = u[0 / 0]; }) === "index NaN is out of range for `u` (length 2)", "Uint8Array NaN read");
   u[1] = 9;
   assert(u[0] === 0, "Uint8Array slot 0 untouched");
   assert(u[1] === 9, "an in-range Uint8Array write still lands");
@@ -47,21 +48,21 @@ function main(): void {
   // An index computed at runtime is checked the same way.
   let i = 2;
   i = i - 3;
-  assert(message(() => { const x = a[i]; }) === "index -1 is out of range for `a` (length 2)", "computed negative index");
+  assert(message(() => { const x: number = a[i]; }) === "index -1 is out of range for `a` (length 2)", "computed negative index");
 
   // The two ends of the in-range interval.
   assert(a[0] === 7 && a[1] === 2, "both slots are readable");
-  assert(message(() => { const x = a[2]; }) === "index 2 is out of range for `a` (length 2)", "exactly at the length");
+  assert(message(() => { const x: number = a[2]; }) === "index 2 is out of range for `a` (length 2)", "exactly at the length");
   const empty: number[] = [];
-  assert(message(() => { const x = empty[0]; }) === "index 0 is out of range for `empty` (length 0)", "empty array");
-  assert(message(() => { const x = empty[-0]; }) === "index 0 is out of range for `empty` (length 0)", "-0 on an empty array");
+  assert(message(() => { const x: number = empty[0]; }) === "index 0 is out of range for `empty` (length 0)", "empty array");
+  assert(message(() => { const x: number = empty[-0]; }) === "index 0 is out of range for `empty` (length 0)", "-0 on an empty array");
 
   // Large magnitudes and values that are integers only after rounding.
-  assert(message(() => { const x = a[2147483648]; }) === "index 2147483648 is out of range for `a` (length 2)", "2**31");
-  assert(message(() => { const x = a[4294967295]; }) === "index 4294967295 is out of range for `a` (length 2)", "2**32 - 1");
-  assert(message(() => { const x = a[9007199254740992]; }) === "index 9007199254740992 is out of range for `a` (length 2)", "2**53");
-  assert(message(() => { const x = a[-1e-320]; }) === "index -1e-320 is out of range for `a` (length 2)", "a denormal below zero");
-  assert(message(() => { const x = a[0.9999999999999999]; }) === "index 0.9999999999999999 is out of range for `a` (length 2)", "just under 1");
+  assert(message(() => { const x: number = a[2147483648]; }) === "index 2147483648 is out of range for `a` (length 2)", "2**31");
+  assert(message(() => { const x: number = a[4294967295]; }) === "index 4294967295 is out of range for `a` (length 2)", "2**32 - 1");
+  assert(message(() => { const x: number = a[9007199254740992]; }) === "index 9007199254740992 is out of range for `a` (length 2)", "2**53");
+  assert(message(() => { const x: number = a[-1e-320]; }) === "index -1e-320 is out of range for `a` (length 2)", "a denormal below zero");
+  assert(message(() => { const x: number = a[0.9999999999999999]; }) === "index 0.9999999999999999 is out of range for `a` (length 2)", "just under 1");
 
   // A write's RHS runs before the range check throws (left-to-right order).
   order = "";
@@ -70,10 +71,10 @@ function main(): void {
 
   // Every receiver shape routes through the same check.
   const h = new Holder();
-  assert(message(() => { const x = h.arr[-1]; }) === "index -1 is out of range for `h.arr` (length 3)", "field receiver, read");
+  assert(message(() => { const x: number = h.arr[-1]; }) === "index -1 is out of range for `h.arr` (length 3)", "field receiver, read");
   assert(message(() => { h.arr[-1] = 99; }) === "index -1 is out of range for `h.arr` (length 3)", "field receiver, write");
   assert(h.arr[0] === 1, "the field's slot 0 is untouched");
-  assert(message(() => { const x = h.get()[0.5]; }) === "index 0.5 is out of range (length 3)", "method-result receiver");
+  assert(message(() => { const x: number = h.get()[0.5]; }) === "index 0.5 is out of range (length 3)", "method-result receiver");
   assert(message(() => { const g = (): number => a[-1]; const y = g(); }) === "index -1 is out of range for `a` (length 2)", "inside a closure");
 
   // `.at(i)` is the documented non-throwing alternative and keeps JS clamping.

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "e28d91c562bca75076f6ffad2a0f62f665bf951cacd557b45c53a5eaeed31761"
+  contentHash: "30088cb1b901785ad42290f89e69b7dcbb6b26b5751455211e49081a23cd4cb4"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -23,7 +23,7 @@ modules are on [Standard library](/docs/reference/standard-library).
 `submilli builtins` prints the catalog:
 
 ```text
-Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
+Types: Array, BigInt, Boolean, Error, Map, MissingValueError, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
 Namespaces: JSON, Math, Temporal
 ```
 
@@ -43,7 +43,8 @@ Namespaces: JSON, Math, Temporal
 | `TextEncoder`, `TextDecoder` | Type | UTF-8 encoding and decoding |
 | `Error` | Error class | The base error class. `throw` takes `Error` and its subclasses |
 | `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null` or `undefined`, invalid UTF-8, an invalid URL |
-| `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
+| `RangeError` | Error class | Out-of-range values: an array index written past the end, bigint division by zero, invalid Temporal values, and argument-size caps |
+| `MissingValueError` | Error class | A read that finds no value and no check: an array or string index out of range, a key a record doesn't have, or a regex group that didn't take part ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)) |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
 | `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
 | `ReferenceError` | Error class | Reading or writing a module variable, static field, or parameter before its declaration or initialization has run |
@@ -341,6 +342,14 @@ Constructor object for `Map`.
 | --- | --- |
 | `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): Map<K, T[]>` | Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. |
 | `new <K, V>(entries?: readonly (readonly [K, V])[] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
+
+## `MissingValueError`
+
+A read found no value (`extends Error`): an array or string index out of range, a key a record does not have, or a regex group that did not take part in the match. Check the read where it happens: `r[k] ?? fallback`, `k in r`, or `a.at(i)`.
+
+| Member | Description |
+| --- | --- |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `Number`
 

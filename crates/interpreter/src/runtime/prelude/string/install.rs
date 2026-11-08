@@ -560,9 +560,10 @@ fn reg_unit_to_str(
     )
 }
 
-/// `(label, f64, string) -> string`: `s[index]`. Out of range throws the `RangeError`
-/// an array read throws, rather than JavaScript's `undefined`, which the
-/// `string` it is typed as can't hold.
+/// `(label, f64, string) -> string`: `s[index]`. Out of range throws the
+/// `MissingValueError` an array read throws, rather than JavaScript's
+/// `undefined`, which the `string` it is typed as can't hold. A read that a
+/// check catches is bounds-tested in codegen before this call.
 fn reg_string_index(
     linker: &mut Linker<StoreData>,
     engine: &wasmtime::Engine,
@@ -585,7 +586,7 @@ fn reg_string_index(
                     "string_index receiver name",
                 )?;
                 fuel::charge(&mut *caller, fuel::PARSE, 1)?;
-                return Err(range_error(
+                return Err(crate::runtime::host::missing_value_error(
                     super::super::index::IndexAccess::Read.message(arg, recv.len, &receiver),
                 ));
             };

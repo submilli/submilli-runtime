@@ -218,8 +218,13 @@ impl IndexSignature {
         })
     }
 
+    /// The type a read through the signature gives: the value type, as in
+    /// tsc's `--strict`. A key the object doesn't have is a missing value,
+    /// which a check at the read or a place that holds `undefined` decides
+    /// (see `typechecker::infer::missing_reads`); anywhere else it throws
+    /// `MissingValueError`.
     pub fn read_ty(&self) -> Type {
-        Type::union(vec![(*self.value).clone(), Type::Undefined])
+        (*self.value).clone()
     }
 }
 
@@ -452,6 +457,54 @@ impl Type {
         matches!(self.peel(), Self::InterfaceRef { mangled, .. }
             if *mangled == crate::mangle::prelude("RegExpMatchArray")
                 || *mangled == crate::mangle::prelude("RegExpExecArray"))
+    }
+
+    /// Whether a value of this type can be `undefined` at run time: a member
+    /// is `undefined`, `void` or `unknown`. A missing read of such a type
+    /// gives `undefined`, since the type already allows it; any other missing
+    /// read is decided at a check, or throws `MissingValueError`. A type
+    /// parameter does not count: it may be instantiated with a type that has
+    /// no room for `undefined`.
+    pub fn holds_undefined(&self) -> bool {
+        match self.peel() {
+            Type::Undefined | Type::Void | Type::Unknown => true,
+            Type::Union(members) => members.iter().any(Type::holds_undefined),
+            _ => false,
+        }
+    }
+
+    /// Whether a member is a type parameter, whose instantiation may hold
+    /// `undefined` though the type itself doesn't name it.
+    pub fn has_type_parameter_member(&self) -> bool {
+        match self.peel() {
+            Type::GenericParam { .. } | Type::TypeVar(_) => true,
+            Type::Union(members) => members.iter().any(Type::has_type_parameter_member),
+            _ => false,
+        }
+    }
+
+    /// Whether this type names `undefined`: a member is `undefined` or `void`,
+    /// as a `| undefined` union, an optional parameter or an optional field
+    /// is. A type with `unknown` in it does not count, optional or not: a
+    /// missing read passed to `String(value?: unknown)` throws, while one
+    /// passed to an optional parameter of another type, such as `Number`'s,
+    /// takes `undefined`.
+    pub fn names_undefined(&self) -> bool {
+        fn has_unknown(ty: &Type) -> bool {
+            match ty.peel() {
+                Type::Unknown => true,
+                Type::Union(members) => members.iter().any(has_unknown),
+                _ => false,
+            }
+        }
+        fn names(ty: &Type) -> bool {
+            match ty.peel() {
+                Type::Undefined | Type::Void => true,
+                Type::Union(members) => members.iter().any(names),
+                _ => false,
+            }
+        }
+        names(self) && !has_unknown(self)
     }
 
     pub fn regexp_element() -> Type {

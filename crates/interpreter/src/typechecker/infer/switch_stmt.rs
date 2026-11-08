@@ -514,6 +514,17 @@ impl Inferer<'_> {
             self.rule_out_after_exhaustive_switch(&site, switch_span)?;
         }
 
+        // A `switch` compares its discriminant with `===`, so it checks a
+        // missing value: one goes to `default`, or past every case. A switch
+        // whose cases cover every value of `T` with no `default` has no place
+        // for it, so there the discriminant reads the value.
+        let disc_ty = if (typed_default.is_some() || !covers_every_value)
+            && self.absorb_missing(typed_disc)?
+        {
+            Type::union(vec![disc_ty, Type::Undefined])
+        } else {
+            disc_ty
+        };
         Ok(TypedStmtKind::Switch {
             discriminant: typed_disc,
             discriminant_ty: disc_ty,

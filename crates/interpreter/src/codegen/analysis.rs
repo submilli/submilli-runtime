@@ -50,6 +50,11 @@ impl CodegenAnalysis {
             ));
         }
 
+        // A use of a local holding a missing read throws this message.
+        for local in ta.maybe_missing_locals.values() {
+            analysis.string_pool.intern_text(&local.message);
+        }
+
         for (id, ty) in &ta.runtime_source_types {
             let span = ta
                 .try_expr(*id)
@@ -448,6 +453,23 @@ impl CodegenAnalysis {
                 helper,
             ));
         }
+    }
+
+    /// A read through a record's index signature throws, naming the key and
+    /// `receiver`, when the key is missing and the read is typed without room
+    /// for `undefined`. An index read notes it whatever its receiver, as it
+    /// notes `index_error`: only a record read uses it, and an unused import
+    /// costs nothing.
+    fn note_missing_key(&mut self, receiver: &str) {
+        self.dependency_usage
+            .note_value(crate::mangle::prelude("missing_key_error"));
+        // A read at a type parameter probes the key with `hasField`.
+        self.dependency_usage.note_member(crate::mangle::extend(
+            &crate::mangle::prelude("ObjectConstructor"),
+            "#hasField",
+        ));
+        self.string_pool.intern_text("");
+        self.string_pool.intern_text(receiver);
     }
 
     fn walk_stmt(
@@ -1141,15 +1163,17 @@ impl CodegenAnalysis {
             }
             TypedExprKind::FieldAccess { receiver, name } => {
                 self.extra_field_names.push(name.name.clone());
-                self.note_shaped_property_access(
-                    ta.source_type(*receiver)
-                        .map_err(crate::codegen::arena_failure)?,
-                    &name.name,
-                    AccessorKind::Get,
-                );
+                let receiver_ty = ta
+                    .source_type(*receiver)
+                    .map_err(crate::codegen::arena_failure)?;
+                if ta.has_string_index(receiver_ty) {
+                    self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
+                }
+                self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
             }
             TypedExprKind::IndexAccess { receiver, .. } => {
                 self.note_index_check(ta, Some(*receiver))?;
+                self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
                 self.note_string_index(
                     ta.source_type(*receiver)
                         .map_err(crate::codegen::arena_failure)?,
@@ -1367,6 +1391,13 @@ impl CodegenAnalysis {
                 } => {
                     self.extra_field_names.push(name.name.clone());
                     self.visit_type(result_ty)?;
+                    if ta.has_string_index(receiver_ty) {
+                        self.note_missing_key(&bounds::chain_receiver_name(
+                            ta,
+                            base,
+                            &parts[..index],
+                        )?);
+                    }
                     self.note_shaped_property_access(receiver_ty, &name.name, AccessorKind::Get);
                 }
                 TypedChainPart::InterfaceProperty {
@@ -1394,6 +1425,7 @@ impl CodegenAnalysis {
                     self.note_index_check(ta, None)?;
                     let name = bounds::chain_receiver_name(ta, base, &parts[..index])?;
                     self.string_pool.intern_text(&name);
+                    self.note_missing_key(&name);
                     self.note_string_index(receiver_ty, name);
                 }
                 TypedChainPart::Call {

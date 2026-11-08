@@ -58,6 +58,8 @@ impl<'a> Inferer<'a> {
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                     let (typed_value, value_ty) =
                         self.infer_expr_keeping_literals(value, hint.as_ref(), true)?;
+                    let value_ty =
+                        self.absorb_into_declared(hint.as_ref(), typed_value, value_ty)?;
                     // Reassignable, so a fresh literal widens, except for an
                     // annotated pattern's default; see the block-scoped `Let`
                     // arm in `stmt.rs`.
@@ -119,6 +121,8 @@ impl<'a> Inferer<'a> {
                     let hint = ty.as_ref().map(|a| self.resolve_type(a)).transpose()?;
                     let (typed_value, value_ty) =
                         self.infer_expr_keeping_literals(value, hint.as_ref(), hint.is_none())?;
+                    let value_ty =
+                        self.absorb_into_declared(hint.as_ref(), typed_value, value_ty)?;
                     let origin =
                         self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
                     let annotated = hint.is_some();
@@ -138,10 +142,6 @@ impl<'a> Inferer<'a> {
                     if ty.is_none() {
                         self.record_global_aliased_condition(mangled.clone(), typed_value);
                     }
-                    self.record_const_record_read(
-                        super::narrowing::BindingId::Global(mangled.clone()),
-                        typed_value,
-                    )?;
                     if crate::lower_patterns::is_pattern_value(&name.name) {
                         self.pattern_sources.insert(name.name.clone(), typed_value);
                     }
@@ -418,6 +418,7 @@ impl<'a> Inferer<'a> {
                 .current_static
                 .replace((class_name.name.clone(), name.name.clone()));
             let (typed_value, value_ty) = self.infer_expr(*init, Some(&sig.ty))?;
+            let value_ty = self.absorb_into_declared(Some(&sig.ty), typed_value, value_ty)?;
             self.current_static = prev_static;
             if !super::assignable(&value_ty, &sig.ty, self.resolver())
                 && !matches!(value_ty, crate::Type::Error)

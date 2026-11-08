@@ -10,6 +10,10 @@ use crate::{Ast, Diagnostic, ExprId, Ident, Severity, Span, StmtId};
 #[derive(Default)]
 pub(super) struct Analysis {
     pub(super) mutators: HashSet<(String, Span)>,
+    /// Declarations, by name span, of the locals a nested function reads or
+    /// writes. A missing index read can't wait in one of those: the closure
+    /// gets a copy of its value, so the read decides at once.
+    pub(super) captured_locals: HashSet<Span>,
     /// Names a function body writes that no enclosing block declares: the
     /// module-level bindings functions write.
     pub(super) function_written_globals: HashSet<String>,
@@ -700,6 +704,9 @@ impl Analysis {
         let Some((scope, binding)) = self.resolve_use(ident) else {
             return;
         };
+        if binding.function_depth < self.function_depth {
+            self.captured_locals.insert(binding.span);
+        }
         if binding.initialized
             || self.is_inside_function_declared_in(scope)
             || (binding.parameter && self.is_deferred_from(binding.function_depth))
@@ -764,6 +771,7 @@ impl Analysis {
         let declaration = binding.span;
         if binding.function_depth < self.function_depth {
             self.mutators.insert((ident.name.clone(), declaration));
+            self.captured_locals.insert(declaration);
             return;
         }
         // A write in a branch or loop can execute after a closure elsewhere
