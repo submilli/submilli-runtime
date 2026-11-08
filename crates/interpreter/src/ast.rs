@@ -842,8 +842,12 @@ pub enum TypeAnnotationKind {
     /// Always ≥2 members; single-element unions are unwrapped by the parser.
     Union(Vec<TypeAnnotation>),
     /// `keyof T` — the union of `T`'s member names as string literal types.
-    /// Resolved eagerly, so this never reaches the typed AST.
     KeyOf(Box<TypeAnnotation>),
+    /// `T[K]` — the type of `T`'s property `K`.
+    IndexedAccess {
+        object: Box<TypeAnnotation>,
+        index: Box<TypeAnnotation>,
+    },
     /// `typeof x` — the type of the *value* `x`, looked up in the value namespace
     /// rather than the type namespace. `path` is the dotted reference, one span per
     /// segment (`typeof o.k` has two). Resolved eagerly, like [`KeyOf`](Self::KeyOf).

@@ -820,6 +820,9 @@ impl<'a> Inferer<'a> {
             TypeAnnotationKind::BigIntLiteral(digits) => crate::types::bigint_literal_type(digits),
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
+            TypeAnnotationKind::IndexedAccess { object, index } => {
+                self.resolve_indexed_access(object, index, annot.span)?
+            }
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,
         })
     }
@@ -1037,6 +1040,10 @@ impl<'a> Inferer<'a> {
         if matches!(resolved.peel(), Type::Unknown) {
             return Ok(Type::Never);
         }
+        // Every key, as tsc's `string | number | symbol` without `symbol`.
+        if matches!(resolved.peel(), Type::Never) {
+            return Ok(Type::union(vec![Type::String, Type::Number]));
+        }
         if let Some(index) = self.resolver().index_signature(&resolved) {
             if matches!(index.key.peel(), Type::String) {
                 return Ok(if index.string_keyof_includes_number {
@@ -1069,12 +1076,62 @@ impl<'a> Inferer<'a> {
         ))
     }
 
+    /// `T[K]`: the type of `T`'s property `K`, as tsc computes it. A type
+    /// computation, not a read: `Record<string, V>[string]` is `V`.
+    fn resolve_indexed_access(
+        &mut self,
+        object: &TypeAnnotation,
+        index: &TypeAnnotation,
+        span: crate::Span,
+    ) -> Result<Type, CompilerFailure> {
+        let object_ty = self.resolve_type(object)?;
+        let index_ty = self.resolve_type(index)?;
+        if super::utility_types::holds_type_parameter(&object_ty)
+            || super::utility_types::holds_type_parameter(&index_ty)
+        {
+            self.error(
+                span,
+                "an indexed access type over a type parameter is not supported yet".to_string(),
+            );
+            return Ok(Type::Error);
+        }
+        match super::utility_types::index_access_type(&object_ty, &index_ty, self.resolver()) {
+            Ok(ty) => Ok(ty),
+            Err(message) => {
+                self.error(index.span, message);
+                Ok(Type::Error)
+            }
+        }
+    }
+
     /// The member names `keyof` reports, or `None` if the type has no member list to
     /// read. Interfaces flatten inherited members at declaration time, so the two maps
     /// on the symbol are the whole surface.
     fn member_names_of(&self, ty: &Type) -> Option<Vec<String>> {
         match ty.peel() {
             Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
+            // `keyof (A | B)` is the keys every member has.
+            Type::Union(members) => {
+                let mut names: Option<Vec<String>> = None;
+                for member in members {
+                    let member_names = self.member_names_of(member)?;
+                    names = Some(match names {
+                        None => member_names,
+                        Some(names) => names
+                            .into_iter()
+                            .filter(|name| member_names.contains(name))
+                            .collect(),
+                    });
+                }
+                names
+            }
+            // A class instance's public members, inherited ones included.
+            Type::ClassRef { mangled, args, .. } => Some(
+                self.resolver()
+                    .class_full_form(mangled, args)?
+                    .into_keys()
+                    .collect(),
+            ),
             Type::InterfaceRef { .. } => {
                 let (mangled, _package, name, _args) = ty.interface_routing()?;
                 let sym = self.lookup_structural_type(&mangled, name)?;

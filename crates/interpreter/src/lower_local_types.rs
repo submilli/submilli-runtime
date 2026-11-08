@@ -1266,6 +1266,10 @@ impl Lifter {
             | TypeAnnotationKind::Optional(inner)
             | TypeAnnotationKind::Readonly(inner)
             | TypeAnnotationKind::KeyOf(inner) => self.walk_type(inner)?,
+            TypeAnnotationKind::IndexedAccess { object, index } => {
+                self.walk_type(object)?;
+                self.walk_type(index)?;
+            }
             TypeAnnotationKind::TemplateLiteral {
                 substitutions: items,
                 ..

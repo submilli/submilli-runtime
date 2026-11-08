@@ -749,3 +749,124 @@ fn merged_field(members: &[Structure], name: &str) -> ObjectField {
         method,
     }
 }
+
+/// `object[index]` for concrete operands, tsc's indexed access type. It
+/// distributes over a union index, and over a union object for a property
+/// every member has. A literal key reads the property (with `undefined` when
+/// it is optional), `number` reads an array or tuple element, and `string` or
+/// `number` reads an index signature's value. `Err` holds the diagnostic.
+pub(crate) fn index_access_type(
+    object: &Type,
+    index: &Type,
+    types: TypeResolver<'_>,
+) -> Result<Type, String> {
+    if matches!(object.peel(), Type::Error) || matches!(index.peel(), Type::Error) {
+        return Ok(Type::Error);
+    }
+    let evaluator = Evaluator { types };
+    let mut results = Vec::new();
+    for key in members(index) {
+        results.push(evaluator.index_one(object, &key, 0)?);
+    }
+    Ok(Type::union(results))
+}
+
+impl Evaluator<'_> {
+    fn index_one(&self, object: &Type, key: &Type, depth: u32) -> Result<Type, String> {
+        if depth > MAX_EXPANSIONS {
+            return Err("the indexed type expands too deeply".into());
+        }
+        let next = depth + 1;
+        let cannot = || format!("Type `{key}` cannot be used to index type `{object}`");
+        match object {
+            Type::Alias { ty, .. } | Type::Refined { ty, .. } => {
+                return self.index_one(ty, key, next);
+            }
+            Type::AliasRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                let body = super::type_aliases::alias_ref_body(mangled, name, args, self.types);
+                return self.index_one(&body, key, next);
+            }
+            Type::Union(members) => {
+                let parts = members
+                    .iter()
+                    .map(|member| self.index_one(member, key, next))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| match key_name(key) {
+                        Some(name) => {
+                            format!("Property `{name}` does not exist on type `{object}`")
+                        }
+                        None => cannot(),
+                    })?;
+                return Ok(Type::union(parts));
+            }
+            Type::Readonly(inner) => return self.index_one(inner, key, next),
+            _ => {}
+        }
+        let key_ty = key.without_aliases();
+        match object {
+            Type::Array(element) => {
+                return match key_name(key) {
+                    _ if is_numeric_key(key_ty) => Ok(element.as_ref().clone()),
+                    Some(name) if name == "length" => Ok(Type::Number),
+                    Some(name) => Err(format!(
+                        "Property `{name}` does not exist on type `{object}`"
+                    )),
+                    None => Err(cannot()),
+                };
+            }
+            Type::Tuple(tuple) => {
+                return match key_ty {
+                    Type::Number => Ok(Type::union(tuple.elements.clone())),
+                    Type::NumberLiteral(value) => {
+                        let position = value.0 as usize;
+                        match tuple.elements.get(position) {
+                            Some(element) if value.0.fract() == 0.0 && value.0 >= 0.0 => {
+                                Ok(ObjectField::widen_optional(
+                                    position >= tuple.required_len(),
+                                    element.clone(),
+                                ))
+                            }
+                            _ => Err(format!(
+                                "Tuple type `{object}` of length {} has no element at index {}",
+                                tuple.elements.len(),
+                                crate::runtime::number::format_number_js(value.0)
+                            )),
+                        }
+                    }
+                    _ => Err(cannot()),
+                };
+            }
+            _ => {}
+        }
+        let (fields, index) = self.structure(object).map_err(|_| cannot())?;
+        if let Some(name) = key_name(key) {
+            if let Some(field) = fields.get(&name) {
+                return Ok(field.read_ty());
+            }
+            if let Some(index) = &index
+                && crate::property_keys::matches_name(&index.key, &name, self.types.limits)
+            {
+                return Ok(index.value.as_ref().clone());
+            }
+            return Err(format!(
+                "Property `{name}` does not exist on type `{object}`"
+            ));
+        }
+        if let Some(index) = &index
+            && (matches!(key_ty, Type::String) && matches!(index.key.peel(), Type::String)
+                || matches!(key_ty, Type::Number))
+        {
+            return Ok(index.value.as_ref().clone());
+        }
+        Err(cannot())
+    }
+}
+
+fn is_numeric_key(key: &Type) -> bool {
+    matches!(key, Type::Number | Type::NumberLiteral(_)) || matches!(key, Type::NumberEnum { .. })
+}
