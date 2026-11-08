@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "human-written"
   confirmed: true
-  contentHash: "15da07736fc815e544eaf470300e2d68d04863cbdfc1cc596714aa785bb016a4"
+  contentHash: "2b4105131be1fd4901e978ebeb33ca2b853a8d32e2844d1711a64efd5725f55e"
   confirmedAt: "2026-10-05T20:18:00.685778+00:00"
 ---
 
@@ -39,6 +39,12 @@ It has become clear that agents should write code. The question that stems from 
 <span id="what-that-looks-like"></span>
 
 ## A real world example
+
+Consider an agent that was asked to investigate a spike in failed payments. It needs to:
+
+* List the failures
+* Look up the affected accounts
+* Search the open support cases
 
 Then, it needs to total the impact, and flag the customers who matter and require a follow up.
 
