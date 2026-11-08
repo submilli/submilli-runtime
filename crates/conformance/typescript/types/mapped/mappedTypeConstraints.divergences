@@ -6,7 +6,7 @@ line 5: obj.b
 
 line 9: obj.b
   tsc:  T["b"]
-  ours: <error>
+  ours: string
 
 line 12: obj
   tsc:  Pick<T | U, keyof T & keyof U>

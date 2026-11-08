@@ -136,7 +136,10 @@ impl<'a> Inferer<'a> {
             self.resolve_alias_body(&name)?;
         }
         self.validate_bound_interfaces(&top_level, &skip)?;
-        self.check_forward_forms()?;
+        // Lazy member forms exist only where forward forms were kept.
+        if self.check_forward_forms()? {
+            self.settle_member_types()?;
+        }
         self.check_pending_indexes();
         self.check_pending_constraints()?;
         Ok(true)

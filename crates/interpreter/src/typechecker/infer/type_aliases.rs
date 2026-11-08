@@ -349,10 +349,11 @@ impl<'a> Inferer<'a> {
     /// declaration is bound, reporting where it was written why it has no
     /// evaluation: a missing member (`B["zz"]`), or a cycle of forms that only
     /// name each other (`A["b"]` and `B["c"]`).
-    pub(super) fn check_forward_forms(&mut self) -> Result<(), CompilerFailure> {
+    /// Returns whether any form was kept lazy, so members may hold one.
+    pub(super) fn check_forward_forms(&mut self) -> Result<bool, CompilerFailure> {
         let forms = std::mem::take(&mut self.forward_forms);
         if forms.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         let _settled = super::utility_types::SettledForms::enter();
         for (form, span) in forms {
@@ -363,7 +364,7 @@ impl<'a> Inferer<'a> {
                 self.error(span, failure);
             }
         }
-        self.settle_member_types()
+        Ok(true)
     }
 
     /// Replace the forms kept lazy in interface and class members with what
@@ -371,7 +372,7 @@ impl<'a> Inferer<'a> {
     /// parameters and result then have one representation for its callers
     /// and its body: `static key(k: keyof Box): string { return k; }` passes
     /// a `string`, not an erased `keyof Box`.
-    fn settle_member_types(&mut self) -> Result<(), CompilerFailure> {
+    pub(super) fn settle_member_types(&mut self) -> Result<(), CompilerFailure> {
         let names: Vec<String> = self.types.iter_names().map(str::to_owned).collect();
         for name in names {
             let Some(symbol) = self.types.lookup(&name) else {
@@ -384,22 +385,24 @@ impl<'a> Inferer<'a> {
                 continue;
             }
             let mut kind = symbol.kind.clone();
+            let mut changed = false;
             let mut exceeded = None;
             for_each_member_type_mut(&mut kind, &mut |ty| {
                 if !super::utility_types::has_evaluable_application(ty) {
                     return;
                 }
                 match super::utility_types::normalize(ty, self.resolver()) {
-                    Ok(settled) => *ty = settled,
+                    Ok(settled) => {
+                        *ty = settled;
+                        changed = true;
+                    }
                     Err(limit) => exceeded = Some(limit),
                 }
             });
             if let Some(limit) = exceeded {
                 return Err(super::type_limit_unlocated(limit));
             }
-            if let Some(symbol) = self.types.lookup_mut(&name)
-                && symbol.kind != kind
-            {
+            if changed && let Some(symbol) = self.types.lookup_mut(&name) {
                 symbol.kind = kind;
             }
         }

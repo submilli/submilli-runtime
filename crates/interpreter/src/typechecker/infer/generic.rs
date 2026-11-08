@@ -3418,11 +3418,11 @@ fn literal_constraint(ty: &Type) -> bool {
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::BigIntLiteral(_)
-        | Type::TemplateLiteral { .. }
-        // `K extends keyof T` keeps `"a"` a literal, as in tsc.
-        | Type::KeyOf(_) => true,
+        | Type::TemplateLiteral { .. } => true,
         Type::Union(members) => members.iter().any(literal_constraint),
-        _ => false,
+        // `K extends keyof T` (or `Extract<keyof T, string>`) keeps `"a"` a
+        // literal, as in tsc.
+        bound => super::constraint_literals::names_keys(bound),
     }
 }
 

@@ -36,18 +36,21 @@ impl LiteralKinds {
     pub(super) fn is_empty(self) -> bool {
         !(self.string || self.number || self.boolean || self.bigint)
     }
-    /// A bound `keyof T` keeps string and number literals, as in tsc:
-    /// `pick(o, ["a", "b"])` with `K extends keyof T` binds `"a" | "b"`.
+    /// The kinds of literal a value keeps where `ty` is its context (a
+    /// parameter's bound when `parameter`). A bound naming `keyof T` keeps
+    /// string and number literals, as in tsc: `pick(o, ["a", "b"])` with `K
+    /// extends keyof T`, or `K extends Extract<keyof T, string>`, binds
+    /// `"a" | "b"`.
     fn from_context(ty: &Type, parameter: bool) -> Self {
         Self {
             string: ty.any_member(&|ty| {
-                matches!(
-                    ty,
-                    Type::StringLiteral(_) | Type::TemplateLiteral { .. } | Type::KeyOf(_)
-                ) || parameter && ty == &Type::String
+                matches!(ty, Type::StringLiteral(_) | Type::TemplateLiteral { .. })
+                    || names_keys(ty)
+                    || parameter && ty == &Type::String
             }),
             number: ty.any_member(&|ty| {
-                matches!(ty, Type::NumberLiteral(_) | Type::KeyOf(_))
+                matches!(ty, Type::NumberLiteral(_))
+                    || names_keys(ty)
                     || parameter && ty == &Type::Number
             }),
             boolean: ty.any_member(&|ty| matches!(ty, Type::Boolean | Type::BooleanLiteral(_))),
@@ -163,6 +166,10 @@ impl Inferer<'_> {
                 {
                     let bound = sub
                         .apply(bound, &self.type_limits)
+                        .map_err(type_limit_at(span))?;
+                    // A bound over a parameter inferred already evaluates:
+                    // `Exclude<keyof U, "id">` is `"b"`.
+                    let bound = super::utility_types::normalize(&bound, self.resolver())
                         .map_err(type_limit_at(span))?;
                     enqueue(&mut pending, &mut budget, argument, &bound, true)
                         .map_err(type_limit_at(span))?;
@@ -406,6 +413,21 @@ fn enqueue(
     budget.charge_copy(ty, 0)?;
     pending.push((expression, ty.clone(), parameter));
     Ok(())
+}
+
+/// Whether `ty` is `keyof T` or a utility over it (`Extract<keyof T, string>`).
+pub(super) fn names_keys(ty: &Type) -> bool {
+    if !ty.is_type_operator() {
+        return false;
+    }
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if matches!(ty, Type::KeyOf(_)) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
 }
 
 #[cfg(test)]

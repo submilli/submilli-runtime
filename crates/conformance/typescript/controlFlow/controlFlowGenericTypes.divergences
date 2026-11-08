@@ -82,7 +82,7 @@ line 150: obj && obj[key]
 
 line 150: obj[key]
   tsc:  NonNullable<T>[K]
-  ours: T[K] | undefined
+  ours: T[K]
 
 line 155: obj
   tsc:  T

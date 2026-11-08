@@ -8,6 +8,9 @@ function count<T extends {}, K extends keyof T>(value: T, keys: K[]): number { r
 function total<R extends Record<string, number>>(record: R, key: string): number { return (record[key] ?? 0) + 1; }
 function setA<T extends { a: number }>(value: T): void { value["a"] = 5; }
 function patchA<T extends { a: number }>(patch: Partial<T>): void { patch["a"] = 6; }
+function held<T, K extends keyof T>(value: T, key: K): T[K] { const read = value[key]; return read; }
+function label<T, K extends Extract<keyof T, string>>(value: T, key: K): string { return `${key}:${String(value[key])}`; }
+function rest<T, K extends keyof T>(value: T, key: Exclude<keyof T, K>): T[Exclude<keyof T, K>] { return value[key]; }
 class Box {
   value: string = "v";
   static key(key: keyof Box): string { return key; }
@@ -28,4 +31,7 @@ function main(): void {
   patchA(patch);
   assert(target.a === 5 && patch.a === 6, "writes through a bound and a partial");
   assert(Box.key("value") === "value" && Box.read({}) === "none" && Box.typed("x") === "x", "static methods over their own class");
+  const optional: { a?: number } = {};
+  assert(held(optional, "a") === undefined, "a local holds an absent optional property as undefined");
+  assert(label(user, "name") === "name:u" && rest<User, "age">(user, "name") === "u", "keys bounded by utilities over keyof");
 }

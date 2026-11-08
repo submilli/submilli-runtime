@@ -16091,14 +16091,14 @@ fn interpolates_at_run_time(ty: &Type) -> bool {
         | Type::Unknown
         | Type::NonPrimitive
         | Type::TypeVar(_)
-        | Type::GenericParam { .. }
-        | Type::KeyOf(_)
-        | Type::IndexedAccess { .. } => true,
+        | Type::GenericParam { .. } => true,
         Type::Union(members) => members.iter().any(|member| {
             matches!(member.peel(), Type::Undefined | Type::Void)
                 || interpolates_at_run_time(member)
         }),
-        _ => false,
+        // `keyof T`, `T[K]` and a utility over `T` (`Exclude<keyof T, K>`)
+        // hold what an instantiation holds.
+        form => form.is_type_operator(),
     }
 }
 

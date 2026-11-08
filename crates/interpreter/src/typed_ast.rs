@@ -948,6 +948,12 @@ pub struct TypedAst {
     /// local without a present flag typed with room for `undefined`, which
     /// takes the value as it is.
     pub widened_missing_reads: std::collections::HashMap<ExprId, Type>,
+    /// Generic reads (`o[k]` typed `T[K]`) whose missing key reads
+    /// `undefined`: every instantiation's property holds it (an optional
+    /// field among `K`'s, or an unbounded `T`). Their type stays tsc's;
+    /// codegen reads `undefined` for a missing key, as for a read typed with
+    /// room for it.
+    pub missing_reads_undefined: std::collections::BTreeSet<ExprId>,
     /// Declarations and assignment targets, by span, whose recorded type is
     /// the `T | undefined` storage of an unannotated local holding a
     /// maybe-missing read, though the local has the type `T`. Only tools that

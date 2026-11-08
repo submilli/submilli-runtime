@@ -432,3 +432,22 @@ Not changed (P3 or pre-existing):
 - A getter whose type is a form over its own class stays a self-reference (SUB-2154).
 - An invalid `Pick` key in a member reports both the evaluation failure and the constraint error.
 - Values tsc accepts into `T["a"]` outside the sound subset are rejected, by the decision above.
+
+## Review round 5 (2026-11-08)
+
+Decided with Doron:
+- **The plain getter stays rejected.** `return t.a` into `T["a"]` fails the sound subset, since a member read through a bound has the bound's type. SUB-2162 tracks typing such a read as `T["a"]` and reading forms through their constraint in operators.
+
+Fixed:
+- **`Pick` over generic keys** holds the keys every instantiation of its key type includes (`lower_keys`): none for a bare `K`, `"b"` for `Extract<keyof T, "b">`. Round 4's `Pick<bound, bound of K>` let reads and assignments see keys a narrower `K` drops.
+- **Missing generic reads.** Reads whose missing key reads `undefined` are listed in `TypedAst::missing_reads_undefined` instead of changing their type, so their type stays tsc's, codegen checks them as `T[K] | undefined`, and a local holding one stays present.
+- **`readonly`** is reported through any bound, class fields and getter-only accessors included, once per write (`report_readonly_keys`).
+- **Deferred utilities as values**: `${v}` and `t[k]` with `v` or `k` typed `NonNullable<T>`, `Exclude<keyof T, K>` and the like.
+- **Literal keys** stay literal against a bound naming `keyof` through a utility (`K extends Extract<keyof T, string>`), in direct arguments and arrays.
+- **`keyof` identities** of mapped utilities hold on either side (`mapped_keys`, before same-shape pairs).
+- **Clean code**: doc comments back on their functions, member settling called explicitly after `check_forward_forms`, a change flag instead of a deep comparison, a `MappedProperty` enum, and renamed helpers.
+
+Not changed (P3):
+- A concrete-key record read in an optional chain (`r?.[k]`, `k: string`) still has the form type.
+- `keyof T` into `keyof Omit<T, K>`, and `T[K]` into `Required<T>[K]`, stay stricter than tsc.
+- `keyof` of a union with index-signature members, `t[k]` with `T extends number[]`, and indexing a narrowed array-bounded `T[K]`.

@@ -1944,10 +1944,8 @@ impl Inferer<'_> {
         {
             // `u[k] = v` with `K extends keyof User` writes tsc's `User[K]`.
             if self.fits_generic_key(&receiver_ty, &key_ty, index_span) {
-                // Each key it may be must be writable, which reports a
-                // `readonly` one; the target stays `User[K]`.
-                let bound = self.apparent_type(&key_ty);
-                let _writable = self.object_index_write_targets(&receiver_ty, &bound, index_span);
+                let keys = self.apparent_type(&key_ty);
+                self.report_readonly_keys(&receiver_ty, &keys, index_span);
                 vec![Type::indexed_access(receiver_ty.clone(), key_ty.clone())]
             } else {
                 vec![Type::Error]
@@ -2023,8 +2021,26 @@ impl Inferer<'_> {
         })
     }
 
-    /// `o[k] = v` on a type parameter `T`: `v` must fit tsc's `T[K]`, and the
-    /// run time writes the property by name on the erased object.
+    /// Report a write through `receiver[keys]` where some key names a
+    /// property no member of `receiver` lets one write: a `readonly` field or
+    /// property, or a getter without a setter (tsc's TS2540).
+    fn report_readonly_keys(&mut self, receiver: &Type, keys: &Type, span: Span) {
+        let receivers = super::utility_types::members(receiver);
+        for key in super::utility_types::members(keys) {
+            let Type::StringLiteral(name) = key.peel() else {
+                continue;
+            };
+            let readonly = receivers.iter().any(|member| {
+                self.union_member_field_write(member, name)
+                    .is_some_and(|write| !write.writable)
+            });
+            if readonly {
+                self.error(span, format!("cannot assign to readonly property `{name}`"));
+                return;
+            }
+        }
+    }
+
     /// Whether `value_ty` may be written where an index write stores
     /// `target`: assignable to it, or, for `T[K]`, to the declared bound's
     /// property, as tsc writes it.
@@ -2033,6 +2049,8 @@ impl Inferer<'_> {
             || super::assignable::fits_bound_property_write(value_ty, target, self.resolver())
     }
 
+    /// `o[k] = v` on a type parameter `T`: `v` must fit tsc's `T[K]`, and the
+    /// run time writes the property by name on the erased object.
     fn infer_generic_index_write(
         &mut self,
         typed_receiver: ExprId,
@@ -2058,10 +2076,8 @@ impl Inferer<'_> {
             && !super::utility_types::holds_type_parameter(key_ty)
         {
             let bound = self.apparent_type(&generic_receiver);
-            if bound.is_structural_object() {
-                let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
-                let _writable = self.object_index_write_targets(&bound, key_ty, index_span);
-            }
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+            self.report_readonly_keys(&bound, key_ty, index_span);
         }
         let target = match &key {
             Some((_, key_ty)) => Type::indexed_access(generic_receiver, key_ty.clone()),
