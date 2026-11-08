@@ -61,7 +61,11 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
                 let span = name.span;
+                let class = name.name.clone();
+                self.binding_types.push(class.clone());
                 self.bind_class(name, generics, extends, implements, members, doc)?;
+                self.binding_types.pop();
+                self.unbound_types.remove(&class);
                 self.type_size_checkpoint(Some(span))?;
             }
         }
@@ -195,6 +199,7 @@ impl<'a> Inferer<'a> {
                             },
                         },
                     );
+                    self.unbound_types.insert(name.name.clone());
                 }
                 StmtKind::ClassDecl { name, generics, .. } => {
                     if self.types.blocking_type(&name.name).is_some() {
@@ -237,6 +242,7 @@ impl<'a> Inferer<'a> {
                             },
                         },
                     );
+                    self.unbound_types.insert(name.name.clone());
                 }
                 StmtKind::TypeAliasDecl {
                     name,

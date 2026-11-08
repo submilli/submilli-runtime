@@ -1399,7 +1399,7 @@ impl Inferer<'_> {
 
     /// `ty` with `sub` applied, at a call site at `span`.
     fn instantiate(
-        &self,
+        &mut self,
         sub: &TypeParamSubstitution,
         ty: &Type,
         span: Span,
@@ -1407,7 +1407,21 @@ impl Inferer<'_> {
         let applied = sub
             .apply(ty, &self.type_limits)
             .map_err(type_limit_at(span))?;
-        super::utility_types::normalize(&applied, self.resolver()).map_err(type_limit_at(span))
+        self.normalize_at(&applied, span)
+    }
+
+    /// [`utility_types::normalize`](super::utility_types::normalize), reporting
+    /// at `span` each form the instantiation leaves with no evaluation, such
+    /// as `Partial<Uint8Array>`.
+    pub(super) fn normalize_at(&mut self, ty: &Type, span: Span) -> Result<Type, CompilerFailure> {
+        let mut failures = Vec::new();
+        let normalized =
+            super::utility_types::normalize_reporting(ty, self.resolver(), &mut failures)
+                .map_err(type_limit_at(span))?;
+        for failure in failures {
+            self.error(span, failure);
+        }
+        Ok(normalized)
     }
 
     /// Bind type parameters from the annotated parameters of a function
@@ -2457,6 +2471,13 @@ impl Inferer<'_> {
             Some(loose) => loose.apply_or_record(param_ty, &self.type_limits),
             None => sub.apply_or_record(param_ty, &self.type_limits),
         };
+        // A hint `T[K]` with `T` and `K` bound is the property's type, so a
+        // callback argument takes its parameters from it.
+        let hint =
+            super::utility_types::normalize(&hint, self.resolver()).unwrap_or_else(|exceeded| {
+                self.type_limits.record(exceeded);
+                Type::Error
+            });
         let diagnostics_before = self.diagnostics.len();
         let errors_before = self.error_count();
         let first = self.infer_generic_argument_with(arg_id, param_ty, hint, arguments, sub)?;

@@ -68,8 +68,10 @@ impl<'a> Inferer<'a> {
                     &generics,
                     &resolved_args,
                 );
-            sub.apply(&ty, &self.type_limits)
-                .map_err(super::type_limit_at(span))?
+            let body = sub
+                .apply(&ty, &self.type_limits)
+                .map_err(super::type_limit_at(span))?;
+            self.normalize_at(&body, span)?
         };
         let alias = Type::alias_ty(
             package,
@@ -821,7 +823,7 @@ impl<'a> Inferer<'a> {
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
             TypeAnnotationKind::IndexedAccess { object, index } => {
-                self.resolve_indexed_access(object, index, annot.span)?
+                self.resolve_indexed_access(object, index)?
             }
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,
         })
@@ -1027,17 +1029,24 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
-    /// types. Matches TypeScript: methods count as members alongside properties, and
-    /// `keyof` of a type with no members is `never` — which `Type::union` already
-    /// produces from an empty vector. `unknown` has no members either.
-    ///
-    /// Only concrete operands are supported. `keyof T` for a type parameter has no
-    /// eager answer and would need a deferred type node, so it is rejected by name
-    /// rather than resolved to something narrower than it should be.
+    /// `keyof T`: for a concrete `T` the union of its member names, as
+    /// [`utility_types::keyof_type`](super::utility_types::keyof_type) reads
+    /// them; over a type parameter the symbolic [`Type::KeyOf`], which
+    /// instantiation evaluates.
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type(operand)?;
-        // Over a type parameter the key set is unknown until instantiation.
+        // Over a type parameter the key set is unknown until instantiation,
+        // and over a later declaration until its members are bound.
+        match self.pending_declaration(std::slice::from_ref(&resolved)) {
+            Some(super::type_aliases::PendingDeclaration::Cycle(declared)) => {
+                self.report_cycle("keyof", &declared, operand.span);
+                return Ok(Type::Error);
+            }
+            Some(super::type_aliases::PendingDeclaration::Forward) => {
+                return Ok(Type::KeyOf(Box::new(resolved)));
+            }
+            None => {}
+        }
         if super::utility_types::holds_type_parameter(&resolved) {
             return Ok(Type::KeyOf(Box::new(resolved)));
         }
@@ -1059,15 +1068,26 @@ impl<'a> Inferer<'a> {
         &mut self,
         object: &TypeAnnotation,
         index: &TypeAnnotation,
-        span: crate::Span,
     ) -> Result<Type, CompilerFailure> {
         let object_ty = self.resolve_type(object)?;
         let index_ty = self.resolve_type(index)?;
+        match self.pending_declaration(&[object_ty.clone(), index_ty.clone()]) {
+            Some(super::type_aliases::PendingDeclaration::Cycle(declared)) => {
+                self.report_cycle("T[K]", &declared, object.span);
+                return Ok(Type::Error);
+            }
+            Some(super::type_aliases::PendingDeclaration::Forward) => {
+                return Ok(Type::IndexedAccess {
+                    object: Box::new(object_ty),
+                    index: Box::new(index_ty),
+                });
+            }
+            None => {}
+        }
         // Over a type parameter the property is unknown until instantiation.
         if super::utility_types::holds_type_parameter(&object_ty)
             || super::utility_types::holds_type_parameter(&index_ty)
         {
-            let _ = span;
             return Ok(Type::IndexedAccess {
                 object: Box::new(object_ty),
                 index: Box::new(index_ty),
@@ -1599,14 +1619,16 @@ mod tests {
     }
 
     #[test]
-    fn keyof_rejects_an_operand_with_no_members() {
+    fn keyof_of_a_primitive_reads_its_interface() {
+        // As in tsc, `keyof number` is the keys of `Number`, so `"x"` is
+        // rejected and `"toFixed"` accepted.
         let (_ta, diags) = run("function main(): void { const k: keyof number = \"x\"; }");
         assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("needs an object type or interface")),
-            "expected a `keyof` operand diagnostic: {diags:?}"
+            diags.iter().any(|d| d.message.contains("got `\"x\"`")),
+            "expected `\"x\"` rejected: {diags:?}"
         );
+        let (_ta, diags) = run("function main(): void { const k: keyof number = \"toFixed\"; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
     /// `keyof` is contextual, not reserved — TypeScript allows it as an identifier.

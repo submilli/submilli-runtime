@@ -244,6 +244,8 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: std::collections::BTreeSet::new(),
+        binding_types: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),

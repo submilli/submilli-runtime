@@ -1,4 +1,4 @@
-types: 117 of 222 tsc entries compared, 25 differ
+types: 126 of 222 tsc entries compared, 33 differ
 
 line 7: x
   tsc:  string
@@ -76,6 +76,26 @@ line 129: value
   tsc:  number
   ours: never
 
+line 150: x2
+  tsc:  NonNullable<T>[K]
+  ours: T | T[K]
+
+line 150: obj && obj[key]
+  tsc:  NonNullable<T>[K]
+  ours: T | T[K]
+
+line 150: obj[key]
+  tsc:  NonNullable<T>[K]
+  ours: T[K]
+
+line 155: x2
+  tsc:  T[K]
+  ours: T
+
+line 155: obj && obj[key]
+  tsc:  T[K]
+  ours: T
+
 line 155: obj
   tsc:  T
   ours: T & {}
@@ -92,13 +112,25 @@ line 159: obj
   tsc:  Record<keyof T, string> | undefined
   ours: T
 
+line 160: x2
+  tsc:  Record<keyof T, string>[K]
+  ours: T
+
+line 160: obj && obj[key]
+  tsc:  Record<keyof T, string>[K]
+  ours: T
+
 line 160: obj
   tsc:  Record<keyof T, string>
   ours: T & {}
 
+line 160: obj[key]
+  tsc:  Record<keyof T, string>[K]
+  ours: T[K]
+
 line 212: control
   tsc:  T
-  ours: T & (Button | Checkbox)
+  ours: T & ({} | null)
 
 errors:
 line 159: tsc TS18048: 'obj' is possibly 'undefined'. (we accept)
@@ -108,9 +140,5 @@ line 16: ours: expected `string`, got `T & {}` (tsc accepts)
 line 35: ours: type-guard return value does not narrow parameter `x` to `undefined` (tsc accepts)
 line 67: ours: expected `"A"`, got `AB` (tsc accepts)
 line 127: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)
-line 150: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)
 line 153: ours: unsupported Record key type `keyof T` (tsc accepts)
-line 155: ours: expected `number`, got `K` (tsc accepts)
 line 158: ours: unsupported Record key type `keyof T` (tsc accepts)
-line 160: ours: expected `number`, got `K` (tsc accepts)
-line 212: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)

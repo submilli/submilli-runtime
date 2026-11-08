@@ -63,6 +63,13 @@ pub(super) async fn get(
     name: &Val,
 ) -> wasmtime::Result<Val> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
+    // A generic `o[k]` whose `T` is a string, array or other built-in value.
+    if shape_arrays(caller, object)?.is_none() {
+        let name = String::from_utf16_lossy(&key);
+        return super::super::member::builtin_property(caller, object, &name)
+            .await
+            .map_err(|error| crate::runtime::host::throw_host_error(caller, error));
+    }
     if let Some(property) = find(caller, object, &key, false)? {
         if !field_is_present(caller, &property.name, &property.value)? {
             return super::super::undefined::value(caller);
@@ -125,6 +132,16 @@ pub(super) async fn set(
         return set_builtin_property(caller, object, &key, value);
     }
     if let Some(property) = find(caller, object, &key, false)? {
+        // Methods are fixed at their declaration, as a static write enforces.
+        if super::is_method_slot(caller, &property.name)? {
+            return Err(crate::runtime::host::throw_host_error(
+                caller,
+                crate::runtime::host::type_error(format!(
+                    "Cannot assign to method '{}'",
+                    String::from_utf16_lossy(&key)
+                )),
+            ));
+        }
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
@@ -165,7 +182,12 @@ fn set_builtin_property(
         },
         _ => Ok(false),
     };
-    let result = if name == "length" && is_a(caller, &array)? {
+    let index = super::integer_key(key).filter(|index| *index < u32::MAX);
+    let result = if let (Some(index), true) = (index, is_a(caller, &array)?) {
+        // `xs[i] = v` through a generic `o[k]`: in range only, as a static
+        // array write.
+        set_array_element(caller, object, index, value)
+    } else if name == "length" && is_a(caller, &array)? {
         let length = crate::runtime::host::read_boxed_number(caller, value, "Array#length")?;
         super::super::array::set_length(caller, object, length)
     } else if name == "lastIndex" && is_a(caller, &regex)? {
@@ -177,6 +199,26 @@ fn set_builtin_property(
         )))
     };
     result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
+}
+
+fn set_array_element(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    index: u32,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
+    if index >= storage.len {
+        return Err(crate::runtime::host::range_error(format!(
+            "Array index {index} is out of range for length {}",
+            storage.len
+        )));
+    }
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+    storage
+        .backing
+        .set(&mut *caller, index, *value)
+        .map_err(crate::runtime::host::fatal_host_error)
 }
 
 pub(super) fn has(

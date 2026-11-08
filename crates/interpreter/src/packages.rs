@@ -1796,7 +1796,6 @@ fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
     .then_some("Array<string | undefined>")
 }
 
-/// `parent` is the rendered `extends` target, if it has one.
 /// The `lib.es5.d.ts` text of a built-in utility type, whose alias body is an
 /// application of itself.
 fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
@@ -1810,6 +1809,7 @@ fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
     }
 }
 
+/// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
     name: &str,
@@ -1879,8 +1879,7 @@ fn render_ts_type(
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
-        TypeKind::Alias { ty, .. } if utility_declaration(name, ty).is_some() => {
-            let text = utility_declaration(name, ty).unwrap_or_default();
+        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
             let _ = writeln!(out, "{indent}{export_prefix}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
@@ -2445,8 +2444,7 @@ fn render_type_for(
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
-        TypeKind::Alias { ty, .. } if utility_declaration(name, ty).is_some() => {
-            let text = utility_declaration(name, ty).unwrap_or_default();
+        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
             let _ = writeln!(out, "{indent}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {

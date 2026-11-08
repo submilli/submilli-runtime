@@ -1,4 +1,4 @@
-types: 11 of 22 tsc entries compared, 5 differ
+types: 10 of 22 tsc entries compared, 5 differ
 
 line 10: y
   tsc:  Uppercase<Lowercase<`${number}`>>
@@ -19,3 +19,6 @@ line 16: y
 line 17: y
   tsc:  Uppercase<Lowercase<`${number}`>>
   ours: `${number}`
+
+errors:
+line 2: ours: `as` to `Uppercase<Lowercase<string>>` is not yet supported: string mapping types have no run-time check (tsc accepts)

@@ -352,6 +352,83 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
     invoke(caller, &token, &args).await
 }
 
+/// `object[name]` on a built-in value (a string, array, `Uint8Array`, boxed
+/// primitive, `Map`, `Set` or `RegExp`), as a generic `o[k]` reads it once
+/// `T` turns out to be one: an element for a canonical index, or the named
+/// property. Reading a method by name would need a bound method value, which
+/// a built-in has none of, so it throws a `TypeError`, as does a value with
+/// no interface here (a host object such as a `Temporal` value).
+pub(super) async fn builtin_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    require_receiver(caller, object)?;
+    let Some(interface) = receiver_interface(caller, object)? else {
+        return Err(host::type_error(format!(
+            "Cannot read property '{name}' of this value by name"
+        )));
+    };
+    let indexed = ["String", "Array", "Uint8Array"]
+        .iter()
+        .any(|kind| crate::mangle::prelude(kind).as_str() == interface);
+    let member = if indexed && is_index(name) {
+        // `at` reads an element as an index does for every index in range,
+        // and `undefined` past the end.
+        "at"
+    } else if is_builtin_method(&interface, name) {
+        return Err(host::type_error(format!(
+            "Cannot read the method '{name}' of a built-in value by name"
+        )));
+    } else {
+        let name_value = Val::AnyRef(Some(
+            host::write_submilli_string_struct(caller, name)?.to_anyref(),
+        ));
+        let interface_value = Val::AnyRef(Some(
+            host::write_submilli_string_struct(caller, &interface)?.to_anyref(),
+        ));
+        return property(caller, &[*object, name_value, interface_value]).await;
+    };
+    let index: f64 = name
+        .parse()
+        .map_err(|_| host::fatal_host_error("canonical index did not parse"))?;
+    let params = [
+        *object,
+        Val::AnyRef(Some(
+            host::write_submilli_string_struct(caller, member)?.to_anyref(),
+        )),
+        Val::AnyRef(Some(
+            host::write_submilli_string_struct(caller, &interface)?.to_anyref(),
+        )),
+    ];
+    let token = lookup(caller, &params).await?;
+    let argument = box_result(caller, Val::F64(index.to_bits()))?;
+    let args = Val::AnyRef(Some(
+        host::write_submilli_array_struct(caller, &[argument])?.to_anyref(),
+    ));
+    invoke(caller, &token, &args).await
+}
+
+/// A canonical array index: digits with no leading zero, below 2^32 - 1.
+fn is_index(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| byte.is_ascii_digit())
+        && (name == "0" || !name.starts_with('0'))
+        && name.parse::<u32>().is_ok_and(|index| index < u32::MAX)
+}
+
+/// Whether the prelude interface `interface` (a mangled name) declares
+/// `name` as a method rather than a property.
+fn is_builtin_method(interface: &str, name: &str) -> bool {
+    let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
+    prelude.iter().any(|package| {
+        package.types.values().any(|symbol| {
+            symbol.mangled_name.as_str() == interface
+                && matches!(&symbol.kind, crate::TypeKind::Interface { methods, .. } if methods.contains_key(name))
+        })
+    })
+}
+
 fn require_receiver(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<()> {
     if super::undefined::is_nullish(caller, value)? {
         return Err(host::type_error(

@@ -524,7 +524,6 @@ impl Type {
         Type::union(vec![Type::String, Type::Undefined])
     }
 
-    /// A receiver whose computed string keys use the object property carrier.
     /// Whether `receiver[key]` reads and writes the property by name at run
     /// time: a structural object, or an erased generic receiver (`T`, whose
     /// `o[k]` is tsc's `T[K]`).
@@ -532,6 +531,7 @@ impl Type {
         self.is_structural_object() || self.lowers_to_erased_slot()
     }
 
+    /// A receiver whose computed string keys use the object property carrier.
     pub fn is_structural_object(&self) -> bool {
         if self.is_regexp_match_array() {
             return false;
@@ -775,13 +775,24 @@ impl Type {
     /// type parameter's does: a type parameter itself, `keyof T`, `T[K]`, or
     /// a utility application over a type parameter (`Partial<T>`).
     pub fn lowers_to_erased_slot(&self) -> bool {
-        match self.peel() {
-            Type::TypeVar(_)
-            | Type::GenericParam { .. }
-            | Type::KeyOf(_)
-            | Type::IndexedAccess { .. } => true,
-            ty => crate::typechecker::infer::utility_types::deferred_application(ty).is_some(),
-        }
+        let ty = self.peel();
+        matches!(ty, Type::TypeVar(_) | Type::GenericParam { .. }) || ty.is_type_operator()
+    }
+
+    /// Whether this is an application of a built-in utility type (`Partial<…>`),
+    /// over a type parameter or over the concrete type codegen substituted for
+    /// one.
+    pub fn is_utility_application(&self) -> bool {
+        matches!(self, Type::AliasRef { mangled, .. }
+            if crate::typechecker::infer::utility_types::utility(mangled).is_some())
+    }
+
+    /// Whether this is `keyof T`, `T[K]` or a utility application over a
+    /// type parameter: a type computed from type parameters, known only once
+    /// a call instantiates them.
+    pub fn is_type_operator(&self) -> bool {
+        matches!(self, Type::KeyOf(_) | Type::IndexedAccess { .. })
+            || crate::typechecker::infer::utility_types::deferred_application(self).is_some()
     }
 
     /// Remove display aliases while retaining generic guard identity.

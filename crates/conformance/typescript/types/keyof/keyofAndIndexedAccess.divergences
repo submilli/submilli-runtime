@@ -1,28 +1,12 @@
-types: 212 of 483 tsc entries compared, 24 differ
+types: 212 of 483 tsc entries compared, 20 differ
 
 line 107: len
   tsc:  2
-  ours: <error>
+  ours: number
 
 line 107: getProperty(t, "length")
   tsc:  2
-  ours: <error>
-
-line 108: s2
-  tsc:  Shape
-  ours: <error>
-
-line 108: getProperty(t, "0")
-  tsc:  Shape
-  ours: <error>
-
-line 109: b2
-  tsc:  boolean
-  ours: <error>
-
-line 109: getProperty(t, "1")
-  tsc:  boolean
-  ours: <error>
+  ours: number
 
 line 138: x => x[key]
   tsc:  (x: T) => T[K]
@@ -97,13 +81,6 @@ line 511: stringMap[x]
   ours: string | undefined
 
 errors:
-line 32: ours: `keyof` needs an object type or interface, got `string` (tsc accepts)
-line 33: ours: `keyof` needs an object type or interface, got `number` (tsc accepts)
-line 34: ours: `keyof` needs an object type or interface, got `boolean` (tsc accepts)
-line 42: ours: `keyof` needs an object type or interface, got `Shape[]` (tsc accepts)
-line 47: ours: `keyof` needs an object type or interface, got `[string, number]` (tsc accepts)
-line 72: ours: Type `"0"` cannot be used to index type `[string, number]` (tsc accepts)
-line 73: ours: Type `"1"` cannot be used to index type `[string, number]` (tsc accepts)
 line 148: ours: expected `Shape`, got `{ height: number; name: string; visible: boolean; width: number }` (tsc accepts)
 line 149: ours: cannot index into non-array type `Shape` (tsc accepts)
 line 153: ours: expected `Shape`, got `{ height: number; name: string; visible: boolean; width: number }` (tsc accepts)

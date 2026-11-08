@@ -814,7 +814,11 @@ impl Inferer<'_> {
                 .kind
                 .clone()
             {
+                let interface = name.name.clone();
+                self.binding_types.push(interface.clone());
                 self.bind_interface(name, generics, members, extends, doc)?;
+                self.binding_types.pop();
+                self.unbound_types.remove(&interface);
             }
         }
         Ok(true)

@@ -1919,7 +1919,7 @@ impl Inferer<'_> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let evolving = self.evolving_array_receiver(receiver)?;
         let (typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
-        if self.indexes_by_name(&receiver_ty) {
+        if self.is_generic_index_receiver(&receiver_ty) {
             return self.infer_generic_index_write(
                 typed_receiver,
                 receiver_ty,
@@ -2030,7 +2030,7 @@ impl Inferer<'_> {
         let key = self.generic_index_key(&receiver_ty, index)?;
         let target = match &key {
             Some((_, key_ty)) => Type::IndexedAccess {
-                object: Box::new(receiver_ty),
+                object: Box::new(super::expr::generic_receiver(&receiver_ty).clone()),
                 index: Box::new(key_ty.clone()),
             },
             None => Type::Error,

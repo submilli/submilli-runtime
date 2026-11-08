@@ -91,6 +91,14 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
     }
 }
 
+/// See [`Inferer::pending_declaration`].
+pub(super) enum PendingDeclaration {
+    /// The operand names the declaration being resolved or bound: the name.
+    Cycle(String),
+    /// The operand names a declaration bound later in the signature pass.
+    Forward,
+}
+
 impl<'a> Inferer<'a> {
     /// Resolve a *reference* to type alias `name` at a use site.
     ///
@@ -176,8 +184,12 @@ impl<'a> Inferer<'a> {
                     &generics,
                     &resolved_args,
                 );
-            sub.apply(&body, &self.type_limits)
-                .map_err(super::type_limit_at(span))?
+            let body = sub
+                .apply(&body, &self.type_limits)
+                .map_err(super::type_limit_at(span))?;
+            // `type V<T, K extends keyof T> = T[K]` evaluates once its
+            // arguments are known.
+            self.normalize_at(&body, span)?
         };
         let alias = Type::alias_ty(
             alias_package,
@@ -201,7 +213,7 @@ impl<'a> Inferer<'a> {
         args: Vec<Type>,
         span: crate::Span,
     ) -> Result<Type, CompilerFailure> {
-        use super::utility_types::{Evaluated, Utility, application, evaluate, label};
+        use super::utility_types::{Evaluated, Utility, deferred, evaluate, label};
         // `typeof identity` names a generic function, whose own type
         // parameters are no parameter in scope here. tsc instantiates them
         // with their constraints for `ReturnType` and `Parameters`; the
@@ -213,41 +225,16 @@ impl<'a> Inferer<'a> {
         } else {
             args
         };
-        let deferred = application(utility, args.clone(), None);
-        self.check_named_type_constraints(&deferred, span)?;
-        // An argument naming an alias still being resolved (`type Tree = {
-        // kids: Partial<Tree>[] }`) has no body yet. The application would
-        // have to stay a name inside the alias body, which run-time checks
-        // expand without a type table, so it is rejected (tsc accepts it).
-        let referenced: BTreeSet<MangledName> = args.iter().flat_map(alias_ref_names).collect();
-        let open = self
-            .alias_resolution_stack
-            .iter()
-            .find(|name| {
-                self.type_mangled_name(name)
-                    .is_some_and(|mangled| referenced.contains(&mangled))
-            })
-            .cloned();
-        if let Some(alias) = open {
-            let alias = alias.as_str();
-            self.error_with_help(
-                span,
-                format!(
-                    "`{}` cannot be applied to the recursive alias `{}` inside its own definition",
-                    utility.name(),
-                    display_type_name(alias),
-                ),
-                vec![format!(
-                    "spell out the {} fields of `{}` in a separate type",
-                    match utility.name() {
-                        "Partial" => "optional",
-                        "Readonly" => "readonly",
-                        _ => "resulting",
-                    },
-                    display_type_name(alias),
-                )],
-            );
-            return Ok(Type::Error);
+        let deferred = deferred(utility, args.clone());
+        self.check_application_constraints(&deferred, span)?;
+        match self.pending_declaration(&args) {
+            Some(PendingDeclaration::Cycle(declared)) => {
+                self.report_cycle(utility.name(), &declared, span);
+                return Ok(Type::Error);
+            }
+            // Evaluated where it is used, once every declaration is bound.
+            Some(PendingDeclaration::Forward) => return Ok(deferred),
+            None => {}
         }
         let ty = match evaluate(utility, &args, self.resolver()) {
             Evaluated::Resolved(ty) => label(utility, args, ty),
@@ -272,6 +259,56 @@ impl<'a> Inferer<'a> {
                 self.instantiate_foreign_type_vars(child)
             }),
         }
+    }
+
+    /// Whether `operands` name a declaration the signature pass has not
+    /// finished: one it is resolving or binding now (a cycle, as in `type
+    /// Tree = { kids: Partial<Tree>[] }` or `interface Node { next:
+    /// Readonly<Node> }`), or a later one whose members are not bound yet.
+    pub(super) fn pending_declaration(&self, operands: &[Type]) -> Option<PendingDeclaration> {
+        let mut referenced = BTreeSet::new();
+        let mut pending: Vec<&Type> = operands.iter().collect();
+        while let Some(ty) = pending.pop() {
+            if let Type::InterfaceRef { mangled, .. }
+            | Type::ClassRef { mangled, .. }
+            | Type::AliasRef { mangled, .. } = ty
+            {
+                referenced.insert(mangled.clone());
+            }
+            crate::type_size::for_each_child(ty, |child| pending.push(child));
+        }
+        let is_referenced = |name: &&String| {
+            self.type_mangled_name(name)
+                .is_some_and(|mangled| referenced.contains(&mangled))
+        };
+        if let Some(declared) = self
+            .alias_resolution_stack
+            .iter()
+            .chain(&self.binding_types)
+            .find(is_referenced)
+        {
+            return Some(PendingDeclaration::Cycle(declared.clone()));
+        }
+        self.unbound_types
+            .iter()
+            .find(is_referenced)
+            .map(|_| PendingDeclaration::Forward)
+    }
+
+    /// A utility, `keyof` or `T[K]` (`operator`) over the type `declared`
+    /// inside its own definition, which has no evaluation yet (SUB-2154).
+    pub(super) fn report_cycle(&mut self, operator: &str, declared: &str, span: crate::Span) {
+        self.error_with_help(
+            span,
+            format!(
+                "`{operator}` cannot be applied to `{}` inside its own definition",
+                display_type_name(declared),
+            ),
+            vec![format!(
+                "spell out the type `{operator}` would give in a separate declaration; \
+                 self-referencing applications are not supported yet"
+            )],
+        );
     }
 
     fn type_mangled_name(&self, name: &str) -> Option<crate::MangledName> {
@@ -319,9 +356,13 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    /// [`rehydrate_alias_refs`] against this inferer's type registry.
+    /// [`rehydrate_alias_refs`] against this inferer's type registry, with
+    /// every concrete utility application, `keyof` and `T[K]` evaluated: a
+    /// generic interface's `keyof T` member read at `J<{ a: number }>` is
+    /// `"a"`.
     pub(super) fn rehydrate_alias_refs(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
-        rehydrate_alias_refs(ty, self.resolver())
+        let rehydrated = rehydrate_alias_refs(ty, self.resolver())?;
+        super::utility_types::normalize(&rehydrated, self.resolver())
     }
 }
 
@@ -398,12 +439,15 @@ pub(crate) fn alias_ref_body(
     if generics.is_empty() {
         return body.clone();
     }
-    types.limits.type_or_error(
+    let substituted = types.limits.type_or_error(
         crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
             generics, args,
         )
         .apply(body, types.limits),
-    )
+    );
+    types
+        .limits
+        .type_or_error(super::utility_types::normalize(&substituted, types))
 }
 
 /// The type a lazy utility application stands for. A deferred application is
@@ -413,10 +457,10 @@ fn utility_body(
     args: &[Type],
     types: TypeResolver<'_>,
 ) -> Type {
-    use super::utility_types::{Evaluated, application, evaluate};
+    use super::utility_types::{Evaluated, deferred, evaluate};
     match evaluate(utility, args, types) {
         Evaluated::Resolved(ty) => ty,
-        Evaluated::Deferred => application(utility, args.to_vec(), None),
+        Evaluated::Deferred => deferred(utility, args.to_vec()),
         Evaluated::Invalid(_) => Type::Error,
     }
 }

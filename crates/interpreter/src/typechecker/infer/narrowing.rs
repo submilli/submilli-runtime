@@ -1833,9 +1833,9 @@ fn join_flow_types(left: &Type, right: &Type) -> Type {
 /// erased operand from folding to a constant.
 pub fn has_erased_member(ty: &Type) -> bool {
     match ty.peel() {
-        Type::TypeVar(_) | Type::GenericParam { .. } => true,
         Type::Union(members) => members.iter().any(has_erased_member),
-        _ => false,
+        // A type parameter, or a form over one such as `Readonly<T>`.
+        member => member.lowers_to_erased_slot(),
     }
 }
 

@@ -11,7 +11,7 @@ function label<T extends { name: string }, K extends keyof T>(value: T, key: K):
 function main(): void {
   const name: string = read({ id: 1, name: "ada" }, "name");
   const balance: number = read(new Account(), "balance");
-  const zero: string = read({ 0: "zero" }, 0);
+  const zero: string = read({ zero: "zero" }, "zero");
   assert(name === "ada" && balance === 5 && zero === "zero", "T[K] reads");
   assert(keysOf({ a: 1, b: 2 }, "b")[0] === "b", "keyof T keeps the literal");
   const user = { id: 1, name: "ada" };

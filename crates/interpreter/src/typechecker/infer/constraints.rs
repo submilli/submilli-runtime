@@ -65,11 +65,7 @@ impl Inferer<'_> {
         // `Partial<T>`, `keyof T` and `T[K]` read as the operator applied to
         // each parameter's bound: `p.a` on `Partial<T>` with `T extends { a:
         // number }` is `number | undefined` (tsc keeps `T["a"] | undefined`).
-        if matches!(
-            current.without_aliases(),
-            Type::KeyOf(_) | Type::IndexedAccess { .. }
-        ) || super::utility_types::deferred_application(current.without_aliases()).is_some()
-        {
+        if current.without_aliases().is_type_operator() {
             return super::assignable::form_apparent(current, self.resolver());
         }
         if let Type::Union(members) = current.without_aliases() {
@@ -242,7 +238,23 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Check a written named type's arguments against its parameters'
+    /// bounds. A utility application is checked once, where it is resolved
+    /// ([`Self::check_application_constraints`]), so it is skipped here.
     pub(super) fn check_named_type_constraints(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        if ty.is_utility_application()
+            || matches!(ty, Type::Alias { mangled, .. } if super::utility_types::utility(mangled).is_some())
+        {
+            return Ok(());
+        }
+        self.check_application_constraints(ty, span)
+    }
+
+    pub(super) fn check_application_constraints(
         &mut self,
         ty: &Type,
         span: Span,
@@ -274,11 +286,6 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
-        // A labeled utility result (`Omit<User, "a">`) was checked as an
-        // application where it was written.
-        if matches!(ty, Type::Alias { .. }) && super::utility_types::utility(mangled).is_some() {
-            return Ok(());
-        }
         if let Some(pending) = &mut self.pending_constraint_checks {
             pending.push(PendingConstraintCheck {
                 ty: ty.clone(),
@@ -306,7 +313,7 @@ impl Inferer<'_> {
         let result = (|| {
             for check in pending {
                 self.generics_in_scope = check.scopes;
-                self.check_named_type_constraints(&check.ty, check.span)?;
+                self.check_application_constraints(&check.ty, check.span)?;
             }
             Ok(())
         })();

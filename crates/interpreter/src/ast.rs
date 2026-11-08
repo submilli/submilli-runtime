@@ -850,7 +850,7 @@ pub enum TypeAnnotationKind {
     },
     /// `typeof x` — the type of the *value* `x`, looked up in the value namespace
     /// rather than the type namespace. `path` is the dotted reference, one span per
-    /// segment (`typeof o.k` has two). Resolved eagerly, like [`KeyOf`](Self::KeyOf).
+    /// segment (`typeof o.k` has two). Resolved eagerly.
     TypeOf {
         path: Vec<Ident>,
     },

@@ -4950,7 +4950,15 @@ impl<'a> Parser<'a> {
             self.tokens.get(i).map(|t| &t.kind),
             Some(TokenKind::LeftBracket)
         ) {
-            i += 1;
+            if matches!(
+                self.tokens.get(i + 1).map(|t| &t.kind),
+                Some(TokenKind::RightBracket)
+            ) {
+                i += 2;
+                continue;
+            }
+            // `T[K]`: an indexed access type, whose index is a whole type.
+            i = self.scan_past_type_annotation_at_depth(i + 1, TypePos::Anywhere, depth + 1)?;
             if !matches!(
                 self.tokens.get(i).map(|t| &t.kind),
                 Some(TokenKind::RightBracket)

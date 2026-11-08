@@ -144,21 +144,27 @@ pub(super) fn typeof_result_type() -> Type {
 /// its literal type or widens to its primitive. Peels through aliases so
 /// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
 fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
-    // A template literal type or a string mapping such as `Uppercase<string>`
-    // is a literal context, as in tsc: `"ABC"` against either stays `"ABC"`.
-    // So is `keyof T`, for string and number keys.
-    let names = |ty: &Type| {
-        names_literal(ty.peel(), is_literal)
-            || ((matches!(ty.peel(), Type::TemplateLiteral { .. } | Type::KeyOf(_))
-                || super::utility_types::symbolic_chain(ty).is_some())
-                && is_literal(&Type::StringLiteral(String::new())))
-            || (matches!(ty.peel(), Type::KeyOf(_))
-                && is_literal(&Type::NumberLiteral(crate::types::LiteralF64(0.0))))
-    };
     match expected.map(crate::types::Type::peel) {
-        Some(Type::Union(ms)) => ms.iter().any(names),
-        Some(_) => expected.is_some_and(|ty| names(ty) || names(ty.peel())),
+        Some(Type::Union(ms)) => ms.iter().any(|m| is_literal_context(m, is_literal)),
+        Some(_) => expected.is_some_and(|ty| is_literal_context(ty, is_literal)),
         None => false,
+    }
+}
+
+/// Whether `ty` keeps a literal `is_literal` accepts: a literal type, and, as
+/// in tsc, a template literal type, a string mapping (`Uppercase<string>`)
+/// for strings, and `keyof T` for strings and numbers.
+fn is_literal_context(ty: &Type, is_literal: fn(&Type) -> bool) -> bool {
+    let string = || is_literal(&Type::StringLiteral(String::new()));
+    if super::utility_types::symbolic_chain(ty).is_some() {
+        return string();
+    }
+    match ty.peel() {
+        Type::TemplateLiteral { .. } => string(),
+        Type::KeyOf(_) => {
+            string() || is_literal(&Type::NumberLiteral(crate::types::LiteralF64(0.0)))
+        }
+        peeled => names_literal(peeled, is_literal),
     }
 }
 
@@ -556,12 +562,25 @@ pub(super) fn is_type_parameter_position(hint: &Type) -> bool {
     matches!(hint.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
 }
 
-/// Whether a type parameter occurs anywhere in `ty`. Unlike
-/// [`mentions_type_var`], it also counts body-internal `GenericParam`s and
-/// looks through refinements: a type argument written inside a generic is
-/// built from either.
-fn holds_type_parameter(ty: &Type) -> bool {
-    super::utility_types::holds_type_parameter(ty)
+/// Whether `ty` holds `keyof T`, `T[K]` or a utility over a type parameter.
+fn contains_type_operator(ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if ty.is_type_operator() {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
+}
+
+/// The type parameter (or form over one) a generic `o[k]` indexes: `T` for
+/// a narrowed `T & {}`, whose keys are `T`'s.
+pub(super) fn generic_receiver(receiver: &Type) -> &Type {
+    match receiver.without_aliases() {
+        Type::Refined { original, .. } => original,
+        other => other,
+    }
 }
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
@@ -709,7 +728,9 @@ impl Inferer<'_> {
         // recursion back-edge, which carries no body to read. Rehydrating first
         // is what lets the hint reach the second level of a recursive shape.
         let rehydrated_hint = expected.and_then(|want| {
-            super::type_aliases::type_has_alias_ref(want).then(|| {
+            (super::type_aliases::type_has_alias_ref(want)
+                || super::utility_types::has_evaluable_application(want))
+            .then(|| {
                 self.type_limits
                     .type_or_error(self.rehydrate_alias_refs(want))
             })
@@ -4231,11 +4252,30 @@ impl Inferer<'_> {
         if is_type_parameter_position(target_ty) {
             return Ok(());
         }
+        // `keyof T`, `T[K]` and a utility over `T` need `T`'s structure, which
+        // its descriptor's predicate does not carry (SUB-2152).
+        if contains_type_operator(target_ty) {
+            self.checked_call_error(
+                type_args_written,
+                target_ty,
+                span,
+                format!(
+                    "`{callee}<{target_ty}>` cannot be checked at run time: `{target_ty}` \
+                     computes a type from a type parameter, whose descriptor carries only a \
+                     predicate"
+                ),
+                vec![format!(
+                    "pass the type parameter itself (`{callee}<T>`), call it at a concrete \
+                     type — `{example}` — or {alternative}."
+                )],
+            );
+            return Err(());
+        }
         // A type built from a type parameter (`T[]`, `{ item: T }`) gets a
         // descriptor assembled here, whose predicate tests through the
         // caller's. That is enough for a call that only checks; a schema
         // cannot be described where `T` is unknown.
-        if holds_type_parameter(target_ty) {
+        if super::utility_types::holds_type_parameter(target_ty) {
             if !checked.sends_schema() {
                 return Ok(());
             }
@@ -7115,7 +7155,11 @@ impl Inferer<'_> {
             Vec::with_capacity(merged.len());
         let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
             std::collections::BTreeMap::new();
-        for (name, (field, source)) in merged {
+        for (name, (mut field, source)) in merged {
+            // A generic interface's member at its arguments (`Readonly<T>` at
+            // `I<{ a: number }>`) is laid out as the type it stands for.
+            field.ty = super::utility_types::normalize(&field.ty, self.resolver())
+                .map_err(super::type_limit_at(span))?;
             field_origins.push(crate::TypedObjectFieldOrigin {
                 name: Ident {
                     name: name.clone(),
@@ -9985,14 +10029,27 @@ impl Inferer<'_> {
 
     /// Whether `o[k]` on `receiver` is tsc's symbolic `T[K]`, read or written
     /// by name at run time: the receiver is a type parameter, a utility over
-    /// one or an indexed access, unless its bound is an array or tuple, which
-    /// indexes as the bound does.
-    pub(super) fn indexes_by_name(&self, receiver: &Type) -> bool {
-        receiver.lowers_to_erased_slot()
-            && !matches!(receiver.peel(), Type::TypeVar(_) | Type::KeyOf(_))
+    /// one or an indexed access, or a narrowing of one (`T & {}`). A receiver
+    /// bounded by an array, a tuple, a string or a primitive indexes as its
+    /// bound does.
+    pub(super) fn is_generic_index_receiver(&self, receiver: &Type) -> bool {
+        let erased = generic_receiver(receiver);
+        erased.lowers_to_erased_slot()
+            && !matches!(erased.peel(), Type::TypeVar(_) | Type::KeyOf(_))
             && !matches!(
-                self.apparent_type(receiver).peel(),
-                Type::Array(_) | Type::Tuple(_)
+                self.apparent_type(erased).peel(),
+                Type::Array(_)
+                    | Type::Tuple(_)
+                    | Type::Uint8Array
+                    | Type::String
+                    | Type::StringLiteral(_)
+                    | Type::TemplateLiteral { .. }
+                    | Type::Number
+                    | Type::NumberLiteral(_)
+                    | Type::BigInt
+                    | Type::BigIntLiteral(_)
+                    | Type::Boolean
+                    | Type::BooleanLiteral(_)
             )
     }
 
@@ -10003,6 +10060,7 @@ impl Inferer<'_> {
         receiver_ty: &Type,
         index: ExprId,
     ) -> Result<Option<(ExprId, Type)>, CompilerFailure> {
+        let receiver_ty = generic_receiver(receiver_ty);
         let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
         let (typed_index, key_ty) = self.infer_object_key(index)?;
         let keys = Type::KeyOf(Box::new(receiver_ty.clone()));
@@ -10023,12 +10081,11 @@ impl Inferer<'_> {
         typed_receiver: ExprId,
         receiver_ty: Type,
         index: ExprId,
-        span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let Some((typed_index, key_ty)) = self.generic_index_key(&receiver_ty, index)? else {
             return Ok((TypedExprKind::Null, Type::Error));
         };
-        let _ = span;
+        let receiver_ty = generic_receiver(&receiver_ty).clone();
         Ok((
             TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
@@ -10058,8 +10115,8 @@ impl Inferer<'_> {
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
-        if self.indexes_by_name(&receiver_ty) {
-            return self.infer_generic_index_access(typed_receiver, receiver_ty, index, span);
+        if self.is_generic_index_receiver(&receiver_ty) {
+            return self.infer_generic_index_access(typed_receiver, receiver_ty, index);
         }
         let (typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, span)?;
@@ -12818,6 +12875,34 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
+                // `o?.[k]` on a type parameter reads `T[K]` by name, as `o[k]`.
+                if self.is_generic_index_receiver(receiver_ty) {
+                    let Some((typed_idx, key_ty)) = self.generic_index_key(receiver_ty, idx)?
+                    else {
+                        return Ok((
+                            TypedChainPart::Index {
+                                idx,
+                                optional,
+                                result_ty: Type::Error,
+                                span,
+                            },
+                            Type::Error,
+                        ));
+                    };
+                    let ty = Type::IndexedAccess {
+                        object: Box::new(generic_receiver(receiver_ty).clone()),
+                        index: Box::new(key_ty),
+                    };
+                    return Ok((
+                        TypedChainPart::Index {
+                            idx: typed_idx,
+                            optional,
+                            result_ty: ty.clone(),
+                            span,
+                        },
+                        ty,
+                    ));
+                }
                 let (typed_idx, idx_ty) = if receiver_ty.is_structural_object() {
                     self.infer_object_key(idx)?
                 } else {
@@ -14729,6 +14814,11 @@ fn unsupported_cast_target_reason(
     types: super::assignable::TypeResolver,
     seen: &mut Vec<Type>,
 ) -> Option<&'static str> {
+    // `Uppercase<string>` is a `string` the mapping leaves unchanged, a set no
+    // run-time string test describes.
+    if super::utility_types::symbolic_chain(target_ty).is_some() {
+        return Some("string mapping types have no run-time check");
+    }
     let peeled = target_ty.peel();
     match peeled {
         Type::TemplateLiteral { .. } => None,

@@ -3,5 +3,5 @@ types: 12 of 22 tsc entries compared, 0 differ
 errors:
 line 12: ours: expected `number`, got ``${number}`` (tsc accepts)
 line 16: ours: expected `number`, got `number | `${number}`` (tsc accepts)
-line 19: ours: Type ``${number}`` cannot be used to index type `boolean[]` (tsc accepts)
-line 20: ours: Type ``${number}`` cannot be used to index type `boolean[]` (tsc accepts)
+line 19: ours: Type ``${number}`` cannot be used to index type `Array<boolean>` (tsc accepts)
+line 20: ours: Type ``${number}`` cannot be used to index type `Array<boolean>` (tsc accepts)

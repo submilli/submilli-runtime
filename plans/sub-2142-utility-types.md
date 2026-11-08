@@ -315,3 +315,41 @@ Where the implementation departs from the design above:
   - SUB-2150 triages the rest, which are listed in `unexplained.txt`.
   - SUB-2153 is an inference gap found there.
   - Generic `Record<K, V>` keys (`mappedTypes2`, `mappedTypeConstraints` line 22) stay listed until their issue is filed.
+
+## Review round 1 (2026-11-08)
+
+Decided with Doron:
+- **Generic `o[k]` at run time works on every receiver.**
+  - `#getField` reads a string, array, tuple, `Uint8Array`, boxed primitive, `Map`, `Set` or `RegExp` through `member::builtin_property`: an index reads an element, and any other name reads the property.
+  - Reading a built-in method by name throws a `TypeError`.
+  - `#setField` writes an array element (in range, as a static write) and throws a `TypeError` on a method slot, since methods are fixed.
+- **Forward references.** A utility, `keyof` or `T[K]` over an interface or class the signature pass has not bound yet stays lazy and evaluates where it is used. Over the type being declared, it is a cycle and gets a diagnostic. SUB-2154 tracks support for cycles. Recursive aliases get the same diagnostic.
+
+Fixed:
+- **Diagnostics.** Evaluation failures at instantiation are reported at the call (`normalize_at`) instead of becoming a silent `Type::Error`.
+- **`keyof` and `T[K]` of built-ins.** Both read strings, primitives, arrays and `Uint8Array` through their prelude interfaces.
+  - A numeric property name gives both literal forms (`0 | "0"`), since field keys keep names only (SUB-2111).
+- **Concrete forms evaluate everywhere** they appear: generic user aliases (`type ByKind<K> = Extract<Shape, { kind: K }>`), generic argument hints, assignability (`evaluate_concrete_operator`), rehydrated expression types, object literal layouts and generic interface members.
+- **Soundness.** `form_apparent` is tsc's base constraint:
+  - `keyof T` is bounded by every key, and `T[K]` indexes the bound by its index's bound.
+  - `Exclude` reads through its operand, and `Extract` through its filter when the operand is unbounded.
+  - `Pick` over generic keys gives `{}`, and `Parameters` gives `unknown`.
+- **Relations** (`relate_type_operators`, now an ordered dispatcher):
+  - `keyof T` fits `keyof T | undefined` and aliases of it.
+  - `T[K]` fits `T[keyof T]`.
+  - `Partial<T>[K]` fits `T[K] | undefined`.
+  - `ReturnType<() => T>` evaluates eagerly, as does any utility whose needed shape is known (`structure_known`).
+- **Codegen.** A run-time test over a utility application, `keyof` or `T[K]` (deferred, or substituted by codegen) admits the value, as an erased `T` does.
+- **Rejected as unchecked:** casts to string mappings, and checked calls (`json<keyof T>()`) on forms.
+- **Smaller fixes:**
+  - `Uppercase<Enum>`, `Pick<Record<string, V>, string>`, `Omit<T, number>`
+  - arrow return types `T[K]`
+  - `o?.[k]` and narrowed receivers
+  - `instanceof` and truthiness narrowing on forms
+  - `Pick`/`Omit` inference
+  - one constraint check per utility application
+  - `T extends string` / `Uint8Array` indexing (a regression)
+- **Accepted deviations:**
+  - A member read through a type parameter's bound has the bound's property type, so `o.a` is `number`, not tsc's `T["a"]`.
+  - A generic method of an interface is not mapped by `Partial`.
+  - Compound generic writes (`o[k] += 1`) keep their existing rejection, which tsc also rejects for an unbounded `T`.

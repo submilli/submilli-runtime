@@ -2086,21 +2086,12 @@ impl<'a> Unifier<'a> {
         }
     }
 
-    /// The registry to expand with when one side is a recursion back-edge, and
-    /// `None` otherwise. A back-edge is a *name*, so `peel` stops at it and the
-    /// structural arms never see the body — left alone, the pair falls through
-    /// to the nominal `param_ty == arg_ty` comparison, which reads a recursive
-    /// alias and its own expansion as two different types.
-    ///
-    /// A `TypeVar` param is excluded: binding it to the back-edge is what the
-    /// caller wants, and the expansion happens when that binding is compared
-    /// against the next argument.
     /// A parameter that is a utility over a type parameter, `keyof T` or
     /// `T[K]`. A matching application unifies argument by argument; `Partial`,
     /// `Readonly` and `Required` reverse their mapping (tsc's reverse mapped
-    /// type), and `Exclude`, `Extract` and `NonNullable` take the argument as
-    /// `T`. The rest, like `NoInfer`, bind nothing. `None` for any other
-    /// parameter.
+    /// type), and `Exclude`, `Extract`, `NonNullable`, `Pick` and `Omit` take
+    /// the argument as a candidate for `T`. The rest, like `NoInfer`, bind
+    /// nothing. `None` for any other parameter.
     #[allow(clippy::result_large_err)]
     fn unify_type_operator(
         &mut self,
@@ -2116,27 +2107,39 @@ impl<'a> Unifier<'a> {
             && utility(mangled) == Some(applied)
             && args.len() == params.len()
         {
-            let pairs: Vec<(Type, Type)> =
-                params.iter().cloned().zip(args.iter().cloned()).collect();
             return Some(
-                pairs
+                params
                     .iter()
+                    .zip(args)
                     .try_for_each(|(param, arg)| self.unify(param, arg)),
             );
         }
-        let operand = params.first()?.clone();
+        let operand = params.first()?;
         Some(match applied {
             Utility::Partial | Utility::Readonly | Utility::Required => {
                 let reversed = reverse_mapped(applied, arg_ty.peel());
-                self.unify(&operand, &reversed)
+                self.unify(operand, &reversed)
             }
-            Utility::Exclude | Utility::Extract | Utility::NonNullable => {
-                self.unify(&operand, arg_ty)
-            }
+            // `Pick<T, K>` and `Omit<T, K>` hold `T`'s fields, so the
+            // argument is a candidate for `T`, as tsc infers it.
+            Utility::Exclude
+            | Utility::Extract
+            | Utility::NonNullable
+            | Utility::Pick
+            | Utility::Omit => self.unify(operand, arg_ty),
             _ => Ok(()),
         })
     }
 
+    /// The registry to expand with when one side is a recursion back-edge, and
+    /// `None` otherwise. A back-edge is a *name*, so `peel` stops at it and the
+    /// structural arms never see the body — left alone, the pair falls through
+    /// to the nominal `param_ty == arg_ty` comparison, which reads a recursive
+    /// alias and its own expansion as two different types.
+    ///
+    /// A `TypeVar` param is excluded: binding it to the back-edge is what the
+    /// caller wants, and the expansion happens when that binding is compared
+    /// against the next argument.
     fn alias_ref_expansion(&self, param_ty: &Type, arg_ty: &Type) -> Option<TypeResolver<'a>> {
         let is_back_edge =
             matches!(param_ty, Type::AliasRef { .. }) || matches!(arg_ty, Type::AliasRef { .. });

@@ -35,40 +35,58 @@ pub(crate) enum Utility {
     Uncapitalize,
 }
 
-const ALL: [(Utility, &str); 15] = [
-    (Utility::Partial, "Partial"),
-    (Utility::Required, "Required"),
-    (Utility::Readonly, "Readonly"),
-    (Utility::Pick, "Pick"),
-    (Utility::Omit, "Omit"),
-    (Utility::Exclude, "Exclude"),
-    (Utility::Extract, "Extract"),
-    (Utility::NonNullable, "NonNullable"),
-    (Utility::Parameters, "Parameters"),
-    (Utility::ReturnType, "ReturnType"),
-    (Utility::NoInfer, "NoInfer"),
-    (Utility::Uppercase, "Uppercase"),
-    (Utility::Lowercase, "Lowercase"),
-    (Utility::Capitalize, "Capitalize"),
-    (Utility::Uncapitalize, "Uncapitalize"),
-];
-
 /// The utility a prelude alias names, keyed on its mangled identity so a user
 /// type of the same name never matches.
 pub(crate) fn utility(mangled: &MangledName) -> Option<Utility> {
-    ALL.iter()
-        .find(|(_, name)| &crate::mangle::prelude(name) == mangled)
-        .map(|(utility, _)| *utility)
+    let name = mangled
+        .as_str()
+        .strip_prefix(crate::mangle::PRELUDE_PACKAGE)?
+        .strip_prefix(crate::mangle::SEP)?;
+    Utility::ALL
+        .into_iter()
+        .find(|utility| utility.name() == name)
 }
 
 impl Utility {
+    pub(crate) const ALL: [Utility; 15] = [
+        Utility::Partial,
+        Utility::Required,
+        Utility::Readonly,
+        Utility::Pick,
+        Utility::Omit,
+        Utility::Exclude,
+        Utility::Extract,
+        Utility::NonNullable,
+        Utility::Parameters,
+        Utility::ReturnType,
+        Utility::NoInfer,
+        Utility::Uppercase,
+        Utility::Lowercase,
+        Utility::Capitalize,
+        Utility::Uncapitalize,
+    ];
+
     pub(crate) fn name(self) -> &'static str {
-        ALL.iter()
-            .find(|(utility, _)| *utility == self)
-            .map_or("", |(_, name)| name)
+        match self {
+            Utility::Partial => "Partial",
+            Utility::Required => "Required",
+            Utility::Readonly => "Readonly",
+            Utility::Pick => "Pick",
+            Utility::Omit => "Omit",
+            Utility::Exclude => "Exclude",
+            Utility::Extract => "Extract",
+            Utility::NonNullable => "NonNullable",
+            Utility::Parameters => "Parameters",
+            Utility::ReturnType => "ReturnType",
+            Utility::NoInfer => "NoInfer",
+            Utility::Uppercase => "Uppercase",
+            Utility::Lowercase => "Lowercase",
+            Utility::Capitalize => "Capitalize",
+            Utility::Uncapitalize => "Uncapitalize",
+        }
     }
 
-    fn is_string_mapping(self) -> bool {
+    pub(crate) fn is_string_mapping(self) -> bool {
         matches!(
             self,
             Utility::Uppercase | Utility::Lowercase | Utility::Capitalize | Utility::Uncapitalize
@@ -102,7 +120,7 @@ pub(crate) fn holds_type_parameter(ty: &Type) -> bool {
 
 /// The application of `utility` to `args`, or the reason it has none.
 pub(crate) fn evaluate(utility: Utility, args: &[Type], types: TypeResolver<'_>) -> Evaluated {
-    if args.iter().any(holds_type_parameter) {
+    if !structure_known(utility, args) {
         return Evaluated::Deferred;
     }
     if args.iter().any(|arg| matches!(arg.peel(), Type::Error)) {
@@ -138,7 +156,7 @@ pub(crate) fn evaluate(utility: Utility, args: &[Type], types: TypeResolver<'_>)
 /// while conditional and intrinsic results, and mapped arrays, tuples and
 /// primitives, print bare (`Exclude<"a" | "b", "a">` is `"b"`).
 pub(crate) fn label(utility: Utility, args: Vec<Type>, evaluated: Type) -> Type {
-    let labeled = match utility {
+    let keeps_name = match utility {
         Utility::Partial
         | Utility::Required
         | Utility::Readonly
@@ -149,22 +167,30 @@ pub(crate) fn label(utility: Utility, args: Vec<Type>, evaluated: Type) -> Type 
         ),
         _ => false,
     };
-    if labeled {
-        application(utility, args, Some(evaluated))
+    if keeps_name {
+        labeled(utility, args, evaluated)
     } else {
         evaluated
     }
 }
 
-/// `utility<args>`: the deferred application when `body` is `None`, else the
-/// labeled alias over `body`.
-pub(crate) fn application(utility: Utility, args: Vec<Type>, body: Option<Type>) -> Type {
+/// `utility<args>` as an application still to evaluate (a `Type::AliasRef`
+/// to the prelude alias).
+pub(crate) fn deferred(utility: Utility, args: Vec<Type>) -> Type {
     let name = utility.name();
-    let mangled = crate::mangle::prelude(name);
-    match body {
-        Some(body) => Type::alias_ty(Package::prelude(), name, mangled, args, Box::new(body)),
-        None => Type::alias_ref(Package::prelude(), name, mangled, args),
-    }
+    Type::alias_ref(Package::prelude(), name, crate::mangle::prelude(name), args)
+}
+
+/// `utility<args>` labeling the type `body` it evaluated to.
+pub(crate) fn labeled(utility: Utility, args: Vec<Type>, body: Type) -> Type {
+    let name = utility.name();
+    Type::alias_ty(
+        Package::prelude(),
+        name,
+        crate::mangle::prelude(name),
+        args,
+        Box::new(body),
+    )
 }
 
 /// `NonNullable<T>`, tsc's `T & {}`: `null`, `undefined` and `void` drop out,
@@ -183,7 +209,7 @@ fn non_nullable(operand: &Type) -> Type {
 
 /// The members a distributive utility maps over: a union's members, or the
 /// type itself.
-fn members(ty: &Type) -> Vec<Type> {
+pub(crate) fn members(ty: &Type) -> Vec<Type> {
     match ty.without_aliases() {
         Type::Union(members) => members.clone(),
         Type::Never => Vec::new(),
@@ -191,7 +217,8 @@ fn members(ty: &Type) -> Vec<Type> {
     }
 }
 
-/// Bound on alias expansions while looking for an operand's structure.
+/// Bound on recursion back-edge (`AliasRef`) expansions while looking for an
+/// operand's structure. Peeling an inline alias label is finite and free.
 const MAX_EXPANSIONS: u32 = 64;
 
 struct Evaluator<'a> {
@@ -212,7 +239,7 @@ impl Evaluator<'_> {
         }
         let next = depth + 1;
         match operand {
-            Type::Alias { ty, .. } => self.homomorphic(utility, ty, next),
+            Type::Alias { ty, .. } => self.homomorphic(utility, ty, depth),
             Type::AliasRef {
                 mangled,
                 name,
@@ -245,31 +272,20 @@ impl Evaluator<'_> {
             | Type::Void
             | Type::NumberEnum { .. }
             | Type::StringEnum { .. } => Ok(operand.clone()),
-            Type::Array(element) => Ok(match utility {
+            Type::Array(_) | Type::Tuple(_) => Ok(match utility {
                 Utility::Readonly => Type::Readonly(Box::new(operand.clone())),
-                _ => Type::Array(Box::new(map_element(utility, element))),
+                _ => map_container(utility, operand),
             }),
-            Type::Tuple(tuple) => Ok(match utility {
-                Utility::Readonly => Type::Readonly(Box::new(operand.clone())),
-                _ => Type::Tuple(map_tuple(utility, tuple)),
-            }),
-            Type::Readonly(inner) => match inner.as_ref() {
-                Type::Array(element) => Ok(Type::Readonly(Box::new(match utility {
-                    Utility::Readonly => inner.as_ref().clone(),
-                    _ => Type::Array(Box::new(map_element(utility, element))),
-                }))),
-                Type::Tuple(tuple) => Ok(Type::Readonly(Box::new(match utility {
-                    Utility::Readonly => inner.as_ref().clone(),
-                    _ => Type::Tuple(map_tuple(utility, tuple)),
-                }))),
-                other => self.homomorphic(utility, other, next),
-            },
+            Type::Readonly(inner) if matches!(inner.as_ref(), Type::Array(_) | Type::Tuple(_)) => {
+                Ok(Type::Readonly(Box::new(map_container(utility, inner))))
+            }
+            Type::Readonly(inner) => self.homomorphic(utility, inner, next),
             Type::Object { fields, index } => Ok(map_object(utility, fields, index.as_ref())),
             Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
                 let (fields, index) = self.structure(operand)?;
                 Ok(map_object(utility, &fields, index.as_ref()))
             }
-            Type::Refined { ty, .. } => self.homomorphic(utility, ty, next),
+            Type::Refined { ty, .. } => self.homomorphic(utility, ty, depth),
             Type::Uint8Array => Err(Some(format!(
                 "`{}` does not apply to `Uint8Array`",
                 utility.name()
@@ -349,7 +365,7 @@ impl Evaluator<'_> {
             }
             match ty {
                 Type::Alias { ty, .. } | Type::Refined { ty, .. } => {
-                    pending.push((*ty, depth + 1));
+                    pending.push((*ty, depth));
                 }
                 Type::AliasRef {
                     mangled,
@@ -375,8 +391,14 @@ impl Evaluator<'_> {
         let members = self.object_members(object)?;
         let available = common_keys(&members);
         let mut fields = BTreeMap::new();
+        let mut index = None;
         // A key outside `keyof T` fails `Pick`'s constraint, which reports it.
-        for key in members_of_keys(keys) {
+        for key in self.key_members(keys) {
+            if matches!(key.without_aliases(), Type::String | Type::Number) {
+                // `Pick<Record<string, V>, string>` keeps the index signature.
+                index = Some(shared_index(&members).ok_or(None)?);
+                continue;
+            }
             let Some(name) = key_name(&key) else {
                 return Err(None);
             };
@@ -387,10 +409,23 @@ impl Evaluator<'_> {
             }
             fields.insert(name.clone(), merged_field(&members, &name));
         }
-        Ok(Type::Object {
-            fields,
-            index: None,
-        })
+        Ok(Type::Object { fields, index })
+    }
+
+    /// The keys a key-type argument names: a union's members, with an enum
+    /// spread into its members, as tsc spreads a string enum in `Pick`.
+    fn key_members(&self, keys: &Type) -> Vec<Type> {
+        members(keys)
+            .into_iter()
+            .flat_map(|key| match key.without_aliases() {
+                enumeration @ (Type::NumberEnum { member: None, .. }
+                | Type::StringEnum { member: None, .. }) => {
+                    super::comparable::enum_member_types(enumeration, self.types)
+                        .unwrap_or_else(|| vec![key.clone()])
+                }
+                _ => vec![key],
+            })
+            .collect()
     }
 
     /// `Omit<T, K>`, tsc's `Pick<T, Exclude<keyof T, K>>`. An index signature
@@ -403,13 +438,17 @@ impl Evaluator<'_> {
                 index: Some(index),
             });
         }
-        let omitted: Vec<Type> = members_of_keys(keys);
-        let omits_every_string = omitted
-            .iter()
-            .any(|key| matches!(key.without_aliases(), Type::String));
+        let omitted: Vec<Type> = self.key_members(keys);
+        let omits_every = |base: Type| omitted.iter().any(|key| key.without_aliases() == &base);
+        let (omits_every_string, omits_every_number) =
+            (omits_every(Type::String), omits_every(Type::Number));
         let mut fields = BTreeMap::new();
         for name in common_keys(&members) {
+            let numeric = name
+                .parse::<f64>()
+                .is_ok_and(|value| crate::runtime::number::format_number_js(value) == name);
             let dropped = omits_every_string
+                || (omits_every_number && numeric)
                 || omitted
                     .iter()
                     .any(|key| key_name(key).as_deref() == Some(name.as_str()));
@@ -485,7 +524,8 @@ impl Evaluator<'_> {
     /// literals with JavaScript's default case mapping and keep `string`
     /// symbolic (`Uppercase<string>`).
     fn string_mapping(&self, mapping: Utility, operand: &Type) -> Outcome {
-        let mapped = members(operand)
+        let mapped = self
+            .key_members(operand)
             .into_iter()
             .map(|member| match member.without_aliases() {
                 Type::StringLiteral(text) => Ok(Type::StringLiteral(map_text(mapping, text))),
@@ -497,11 +537,8 @@ impl Evaluator<'_> {
                     parts,
                     substitutions,
                 } => Ok(map_template(mapping, parts, substitutions)),
-                _ if map_symbolic(mapping, &member).is_some() => {
-                    Ok(map_symbolic(mapping, &member).unwrap_or(Type::Error))
-                }
                 Type::Error => Ok(Type::Error),
-                _ => Err(None),
+                _ => map_symbolic(mapping, &member).ok_or(None),
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Type::union(mapped))
@@ -514,17 +551,13 @@ impl Evaluator<'_> {
 /// mapping applied to itself is unchanged. `None` for any other operand.
 fn map_symbolic(mapping: Utility, operand: &Type) -> Option<Type> {
     if matches!(operand.without_aliases(), Type::String) && symbolic_chain(operand).is_none() {
-        return Some(application(mapping, vec![Type::String], Some(Type::String)));
+        return Some(labeled(mapping, vec![Type::String], Type::String));
     }
     let chain = symbolic_chain(operand)?;
     if chain.last() == Some(&mapping) {
         return Some(operand.clone());
     }
-    Some(application(
-        mapping,
-        vec![operand.clone()],
-        Some(Type::String),
-    ))
+    Some(labeled(mapping, vec![operand.clone()], Type::String))
 }
 
 /// The mappings a symbolic string mapping applies to `string`, innermost
@@ -613,6 +646,16 @@ fn map_template(mapping: Utility, parts: &[String], substitutions: &[Type]) -> T
     }
 }
 
+/// An array or tuple under `Partial` or `Required`, element by element, or
+/// unchanged under `Readonly` (whose wrapper the caller adds).
+fn map_container(utility: Utility, container: &Type) -> Type {
+    match container {
+        Type::Array(element) => Type::Array(Box::new(map_element(utility, element))),
+        Type::Tuple(tuple) => Type::Tuple(map_tuple(utility, tuple)),
+        other => other.clone(),
+    }
+}
+
 /// An array element under `Partial` (`T | undefined`) or `Required`
 /// (without `undefined`).
 fn map_element(utility: Utility, element: &Type) -> Type {
@@ -688,11 +731,6 @@ fn map_object(
         index
     });
     Type::Object { fields, index }
-}
-
-/// The keys a key-type argument names: a union's members, or the type.
-fn members_of_keys(keys: &Type) -> Vec<Type> {
-    members(keys)
 }
 
 /// The property a key type names: a string or number literal, or a string
@@ -798,7 +836,7 @@ impl Evaluator<'_> {
         let cannot = || format!("Type `{key}` cannot be used to index type `{object}`");
         match object {
             Type::Alias { ty, .. } | Type::Refined { ty, .. } => {
-                return self.index_one(ty, key, next);
+                return self.index_one(ty, key, depth);
             }
             Type::AliasRef {
                 mangled,
@@ -822,46 +860,70 @@ impl Evaluator<'_> {
                     })?;
                 return Ok(Type::union(parts));
             }
-            Type::Readonly(inner) => return self.index_one(inner, key, next),
+            Type::Readonly(inner) => return self.index_one(inner, key, depth),
             _ => {}
         }
-        let key_ty = key.without_aliases();
-        match object {
-            Type::Array(element) => {
-                return match key_name(key) {
-                    _ if is_numeric_key(key_ty) => Ok(element.as_ref().clone()),
-                    Some(name) if name == "length" => Ok(Type::Number),
-                    Some(name) => Err(format!(
-                        "Property `{name}` does not exist on type `{object}`"
-                    )),
-                    None => Err(cannot()),
-                };
-            }
-            Type::Tuple(tuple) => {
-                return match key_ty {
-                    Type::Number => Ok(Type::union(tuple.elements.clone())),
-                    Type::NumberLiteral(value) => {
-                        let position = value.0 as usize;
-                        match tuple.elements.get(position) {
-                            Some(element) if value.0.fract() == 0.0 && value.0 >= 0.0 => {
-                                Ok(ObjectField::widen_optional(
-                                    position >= tuple.required_len(),
-                                    element.clone(),
-                                ))
-                            }
-                            _ => Err(format!(
-                                "Tuple type `{object}` of length {} has no element at index {}",
-                                tuple.elements.len(),
-                                crate::runtime::number::format_number_js(value.0)
-                            )),
-                        }
-                    }
-                    _ => Err(cannot()),
-                };
-            }
-            _ => {}
+        // `"0"` names element `0`, as the number does.
+        let element_key = match key.without_aliases() {
+            Type::StringLiteral(name) if builtin_view(object).is_some() => name
+                .parse::<f64>()
+                .ok()
+                .filter(|value| crate::runtime::number::format_number_js(*value) == *name)
+                .map(|value| Type::NumberLiteral(crate::types::LiteralF64(value))),
+            _ => None,
+        };
+        let key_ty = element_key.as_ref().unwrap_or(key.without_aliases());
+        if let (Type::Tuple(tuple), Type::NumberLiteral(value)) = (object, key_ty) {
+            let position = value.0 as usize;
+            return match tuple.elements.get(position) {
+                Some(element) if value.0.fract() == 0.0 && value.0 >= 0.0 => Ok(
+                    ObjectField::widen_optional(position >= tuple.required_len(), element.clone()),
+                ),
+                _ => Err(format!(
+                    "Tuple type `{object}` of length {} has no element at index {}",
+                    tuple.elements.len(),
+                    crate::runtime::number::format_number_js(value.0)
+                )),
+            };
         }
-        let (fields, index) = self.structure(object).map_err(|_| cannot())?;
+        // A string, array or primitive reads an element by number and any
+        // other property from its prelude interface, as tsc reads `T[K]`
+        // through the apparent type.
+        if let Some((element, view)) = builtin_view(object) {
+            return match element {
+                Some(element) if is_numeric_key(key_ty) => Ok(element),
+                _ => self.index_one(&view, key, next),
+            };
+        }
+        let (fields, index) = match object {
+            // Interface members, generic methods aside, whose types an index
+            // reads where a mapped type would have to carry them.
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } if !is_host_backed_interface(object) => {
+                // A generic method has no function type here; it reads as
+                // `unknown` rather than as a missing property.
+                if let Some(member) = key_name(key)
+                    && let Some(symbol) = self.types.lookup(mangled, name)
+                    && let TypeKind::Interface { methods, .. } = &symbol.kind
+                    && methods
+                        .get(&member)
+                        .is_some_and(|method| !method.generics.is_empty())
+                {
+                    return Ok(Type::Unknown);
+                }
+                (
+                    self.types
+                        .interface_full_form(mangled, name, args)
+                        .ok_or_else(cannot)?,
+                    self.types.index_signature(object),
+                )
+            }
+            _ => self.structure(object).map_err(|_| cannot())?,
+        };
         if let Some(name) = key_name(key) {
             if let Some(field) = fields.get(&name) {
                 return Ok(field.read_ty());
@@ -885,13 +947,33 @@ impl Evaluator<'_> {
     }
 }
 
+/// The element type a built-in value reads by number (`None` for a value
+/// with no elements) and the prelude interface it reads other properties
+/// from: `Array<T>` for an array or tuple, `String` for a string.
+fn builtin_view(ty: &Type) -> Option<(Option<Type>, Type)> {
+    let interface = apparent_interface(ty)?;
+    let element = match ty {
+        Type::Array(element) => Some(element.as_ref().clone()),
+        Type::Tuple(tuple) => Some(Type::union(tuple.elements.clone())),
+        Type::String | Type::StringLiteral(_) | Type::TemplateLiteral { .. } => Some(Type::String),
+        Type::StringEnum { .. } => Some(Type::String),
+        Type::Uint8Array => Some(Type::Number),
+        _ => None,
+    };
+    let args = match &element {
+        Some(element) if interface == "Array" => vec![element.clone()],
+        _ => Vec::new(),
+    };
+    Some((element, Type::prelude_interface(interface, args)))
+}
+
 fn is_numeric_key(key: &Type) -> bool {
     matches!(key, Type::Number | Type::NumberLiteral(_)) || matches!(key, Type::NumberEnum { .. })
 }
 
 /// Whether `ty` holds a utility application whose arguments no longer
 /// mention a type parameter, which [`normalize`] would evaluate.
-fn has_evaluable_application(ty: &Type) -> bool {
+pub(crate) fn has_evaluable_application(ty: &Type) -> bool {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         if let Type::AliasRef { mangled, args, .. } = ty
@@ -908,44 +990,74 @@ fn has_evaluable_application(ty: &Type) -> bool {
     false
 }
 
-/// `ty` with every utility application whose arguments became concrete
-/// (after instantiation substituted its type parameters) replaced by the type
-/// it stands for, labeled as a written application is.
+/// `ty` itself evaluated when it is a `keyof` or `T[K]` whose operands are
+/// concrete, as relations meet them inside generic members instantiated at
+/// concrete types. `None` for any other type.
+pub(crate) fn evaluate_concrete_operator(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
+    let operator = ty.without_aliases();
+    if !matches!(operator, Type::KeyOf(_) | Type::IndexedAccess { .. })
+        || holds_type_parameter(operator)
+    {
+        return None;
+    }
+    Some(normalize(operator, types).unwrap_or(Type::Error))
+}
+
+/// `ty` with every utility application, `keyof` and `T[K]` whose operands
+/// became concrete (after instantiation substituted its type parameters)
+/// replaced by the type it stands for, labeled as a written application is.
+/// One that has no evaluation becomes `Type::Error`; [`normalize_reporting`]
+/// says why.
 pub(crate) fn normalize(
     ty: &Type,
     types: TypeResolver<'_>,
 ) -> Result<Type, crate::type_size::TypeTooLarge> {
+    normalize_reporting(ty, types, &mut Vec::new())
+}
+
+/// [`normalize`], adding to `failures` why each form that has no evaluation
+/// has none, for the caller to report at its span.
+pub(crate) fn normalize_reporting(
+    ty: &Type,
+    types: TypeResolver<'_>,
+    failures: &mut Vec<String>,
+) -> Result<Type, crate::type_size::TypeTooLarge> {
     if !has_evaluable_application(ty) {
         return Ok(ty.clone());
     }
-    normalize_node(ty, types)
+    normalize_node(ty, types, failures)
 }
 
 fn normalize_node(
     ty: &Type,
     types: TypeResolver<'_>,
+    failures: &mut Vec<String>,
 ) -> Result<Type, crate::type_size::TypeTooLarge> {
-    let mapped = crate::type_size::map_children(ty, |child| normalize_node(child, types))?;
+    let mapped =
+        crate::type_size::map_children(ty, |child| normalize_node(child, types, failures))?;
     if holds_type_parameter(&mapped) {
         return Ok(mapped);
     }
-    match &mapped {
-        Type::KeyOf(operand) => return Ok(keyof_type(operand, types).unwrap_or(Type::Error)),
-        Type::IndexedAccess { object, index } => {
-            return Ok(index_access_type(object, index, types).unwrap_or(Type::Error));
-        }
-        _ => {}
-    }
-    if let Type::AliasRef { mangled, args, .. } = &mapped
-        && let Some(utility) = utility(mangled)
-    {
-        return Ok(match evaluate(utility, args, types) {
-            Evaluated::Resolved(result) => label(utility, args.clone(), result),
-            Evaluated::Deferred => mapped,
-            Evaluated::Invalid(_) => Type::Error,
-        });
-    }
-    Ok(mapped)
+    let evaluated = match &mapped {
+        Type::KeyOf(operand) => keyof_type(operand, types)
+            .ok_or_else(|| format!("`keyof` needs an object type or interface, got `{operand}`")),
+        Type::IndexedAccess { object, index } => index_access_type(object, index, types),
+        Type::AliasRef { mangled, args, .. } => match utility(mangled) {
+            Some(utility) => match evaluate(utility, args, types) {
+                Evaluated::Resolved(result) => Ok(label(utility, args.clone(), result)),
+                Evaluated::Deferred => Ok(mapped.clone()),
+                Evaluated::Invalid(reason) => Err(reason.unwrap_or_else(|| {
+                    format!("`{mapped}` has no evaluation for these arguments")
+                })),
+            },
+            None => Ok(mapped.clone()),
+        },
+        _ => Ok(mapped.clone()),
+    };
+    Ok(evaluated.unwrap_or_else(|reason| {
+        failures.push(reason);
+        Type::Error
+    }))
 }
 
 /// `keyof ty` for a concrete `ty`, tsc's index type: the union of its
@@ -968,39 +1080,91 @@ pub(crate) fn keyof_type(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
                 Type::String
             });
         }
-        let mut keys: Vec<Type> = member_names(ty, types)
+        let mut keys: Vec<Type> = member_names(ty, types, 0)
             .unwrap_or_default()
             .into_iter()
-            .map(key_literal)
+            .flat_map(key_literals)
             .collect();
         keys.push(*index.key);
         return Some(Type::union(keys));
     }
-    let names = member_names(ty, types)?;
-    Some(Type::union(names.into_iter().map(key_literal).collect()))
+    // An array, tuple, string or byte array is indexed by number besides its
+    // members' names.
+    let numeric = builtin_view(ty.peel()).is_some_and(|(element, _)| element.is_some());
+    let mut keys: Vec<Type> = member_names(ty, types, 0)?
+        .into_iter()
+        .flat_map(key_literals)
+        .collect();
+    // A tuple's positions are keys too: `keyof [A, B]` holds `"0"` and `"1"`.
+    if let Type::Tuple(tuple) = ty.peel() {
+        keys.extend(
+            (0..tuple.elements.len()).flat_map(|position| key_literals(position.to_string())),
+        );
+    }
+    if numeric {
+        keys.push(Type::Number);
+    }
+    Some(Type::union(keys))
 }
 
-/// A property name as `keyof` reports it: a numeric name (`0`) is a number
-/// literal, as tsc writes `keyof { 0: string }`; any other is a string.
-fn key_literal(name: String) -> Type {
+/// The literal types a property name stands for in `keyof`. The field map
+/// keeps names only (SUB-2111), so a numeric name (`0`, or `"0"` quoted) is
+/// both the number literal tsc gives for `{ 0: … }` and the string literal it
+/// gives for `{ "0": … }`.
+fn key_literals(name: String) -> Vec<Type> {
     match name.parse::<f64>() {
-        Ok(value) if crate::runtime::number::format_number_js(value) == name => {
-            Type::NumberLiteral(crate::types::LiteralF64(value))
-        }
-        _ => Type::StringLiteral(name),
+        Ok(value) if crate::runtime::number::format_number_js(value) == name => vec![
+            Type::NumberLiteral(crate::types::LiteralF64(value)),
+            Type::StringLiteral(name),
+        ],
+        _ => vec![Type::StringLiteral(name)],
     }
+}
+
+/// The prelude interface a primitive, array or byte array reads its members
+/// from, as tsc reads `keyof string` from `String`.
+fn apparent_interface(ty: &Type) -> Option<&'static str> {
+    Some(match ty {
+        Type::String
+        | Type::StringLiteral(_)
+        | Type::TemplateLiteral { .. }
+        | Type::StringEnum { .. } => "String",
+        Type::Number | Type::NumberLiteral(_) | Type::NumberEnum { .. } => "Number",
+        Type::Boolean | Type::BooleanLiteral(_) => "Boolean",
+        Type::BigInt | Type::BigIntLiteral(_) => "BigInt",
+        Type::Array(_) | Type::Tuple(_) => "Array",
+        Type::Uint8Array => "Uint8Array",
+        _ => return None,
+    })
 }
 
 /// The property names `keyof` reports: an object type's fields, an
 /// interface's properties and methods, a class instance's public members,
 /// and the names every member of a union has.
-fn member_names(ty: &Type, types: TypeResolver<'_>) -> Option<Vec<String>> {
+fn member_names(ty: &Type, types: TypeResolver<'_>, depth: u32) -> Option<Vec<String>> {
+    if depth > MAX_EXPANSIONS {
+        return None;
+    }
+    let next = depth + 1;
+    if let Some(interface) = apparent_interface(ty.peel()) {
+        let mangled = crate::mangle::prelude(interface);
+        let TypeKind::Interface {
+            methods,
+            properties,
+            ..
+        } = &types.lookup(&mangled, interface)?.kind
+        else {
+            return None;
+        };
+        return Some(properties.keys().chain(methods.keys()).cloned().collect());
+    }
     match ty.peel() {
+        Type::Function { .. } => Some(Vec::new()),
         Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
         Type::Union(members) => {
             let mut names: Option<Vec<String>> = None;
             for member in members {
-                let member_names = member_names(member, types)?;
+                let member_names = member_names(member, types, next)?;
                 names = Some(match names {
                     None => member_names,
                     Some(names) => names
@@ -1033,8 +1197,40 @@ fn member_names(ty: &Type, types: TypeResolver<'_>) -> Option<Vec<String>> {
         } => member_names(
             &super::type_aliases::alias_ref_body(mangled, name, args, types),
             types,
+            next,
         ),
         _ => None,
+    }
+}
+
+/// Whether `utility` can be evaluated over `args` now: a mapped utility or
+/// `ReturnType`/`Parameters` needs only its operand's outer shape (tsc
+/// evaluates `ReturnType<() => T>` to `T`), `Pick` and `Omit` also concrete
+/// keys, and the conditional and intrinsic utilities concrete arguments.
+fn structure_known(utility: Utility, args: &[Type]) -> bool {
+    match (utility, args) {
+        (
+            Utility::Partial
+            | Utility::Required
+            | Utility::Readonly
+            | Utility::ReturnType
+            | Utility::Parameters,
+            [operand],
+        ) => known_shape(operand),
+        (Utility::Pick | Utility::Omit, [object, keys]) => {
+            known_shape(object) && !holds_type_parameter(keys)
+        }
+        _ => !args.iter().any(holds_type_parameter),
+    }
+}
+
+/// Whether `ty`'s outer shape is known: it is no type parameter, form over
+/// one or narrowing of one, and no union with such a member.
+fn known_shape(ty: &Type) -> bool {
+    match ty.without_aliases() {
+        Type::Union(members) => members.iter().all(known_shape),
+        Type::Refined { .. } => false,
+        other => !other.lowers_to_erased_slot(),
     }
 }
 

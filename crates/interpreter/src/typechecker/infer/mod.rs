@@ -286,6 +286,8 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: BTreeSet::new(),
+        binding_types: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
@@ -590,6 +592,8 @@ pub fn infer_package_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: BTreeSet::new(),
+        binding_types: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
@@ -1190,6 +1194,12 @@ pub(super) struct Inferer<'a> {
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
     /// finished, and for a true cycle infinite) body.
     pub(super) alias_resolution_stack: Vec<String>,
+    /// Interfaces and classes of this module whose members the signature
+    /// pass has not bound yet, and those it is binding now. A utility, `keyof`
+    /// or `T[K]` over the first stays lazy until it is used; over the second
+    /// it is a cycle (SUB-2154).
+    pub(super) unbound_types: BTreeSet<String>,
+    pub(super) binding_types: Vec<String>,
     /// Nested annotation and alias-body resolutions in progress. Alias chains
     /// resolve recursively, so their length is bounded before the stack is.
     pub(super) type_resolution_depth: u32,
