@@ -197,7 +197,18 @@ impl<'a> Inferer<'a> {
         args: Vec<Type>,
         span: crate::Span,
     ) -> Result<Type, CompilerFailure> {
-        use super::utility_types::{Evaluated, application, evaluate, label};
+        use super::utility_types::{Evaluated, Utility, application, evaluate, label};
+        // `typeof identity` names a generic function, whose own type
+        // parameters are no parameter in scope here. tsc instantiates them
+        // with their constraints for `ReturnType` and `Parameters`; the
+        // function type no longer records those, so they become `unknown`.
+        let args = if matches!(utility, Utility::Parameters | Utility::ReturnType) {
+            args.iter()
+                .map(|arg| self.instantiate_foreign_type_vars(arg))
+                .collect()
+        } else {
+            args
+        };
         let deferred = application(utility, args.clone(), None);
         self.check_named_type_constraints(&deferred, span)?;
         // An argument naming an alias still being resolved (`type Tree = {
@@ -255,6 +266,17 @@ impl<'a> Inferer<'a> {
         };
         crate::type_size::check(&ty).map_err(super::type_limit_at(span))?;
         Ok(ty)
+    }
+
+    /// `ty` with each type variable that names no type parameter in scope
+    /// replaced by `unknown`.
+    fn instantiate_foreign_type_vars(&self, ty: &Type) -> Type {
+        match ty {
+            Type::TypeVar(name) if !self.is_generic_in_scope(name) => Type::Unknown,
+            _ => crate::type_size::map_children_infallible(ty, |child| {
+                self.instantiate_foreign_type_vars(child)
+            }),
+        }
     }
 
     fn type_mangled_name(&self, name: &str) -> Option<crate::MangledName> {

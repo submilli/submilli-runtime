@@ -170,6 +170,11 @@ impl Inferer<'_> {
     }
 
     pub(super) fn satisfies_generic_constraint(&self, actual: &Type, expected: &Type) -> bool {
+        if let Type::Union(members) = actual.peel() {
+            return members
+                .iter()
+                .all(|member| self.satisfies_generic_constraint(member, expected));
+        }
         // This is a type-level proof, not an assignment of one closure ABI to
         // another. A `never[]` rest accepts every fixed parameter type by
         // contravariance, as used by ReturnType/Parameters without `any`.
