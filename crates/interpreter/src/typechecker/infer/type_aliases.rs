@@ -180,7 +180,7 @@ impl<'a> Inferer<'a> {
             body
         } else {
             let sub =
-                crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
+                crate::typechecker::type_param_substitution::TypeParamSubstitution::instantiation(
                     &generics,
                     &resolved_args,
                 );
@@ -537,7 +537,7 @@ pub(crate) fn alias_ref_body(
         return body.clone();
     }
     let substituted = types.limits.type_or_error(
-        crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
+        crate::typechecker::type_param_substitution::TypeParamSubstitution::instantiation(
             generics, args,
         )
         .apply(body, types.limits),

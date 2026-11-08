@@ -96,6 +96,7 @@ impl Inferer<'_> {
 
     /// The static proof permits a representation-only cast. The original
     /// expression still has its erased slot, including for primitive bounds.
+    /// A form with no members to read is reported here.
     pub(super) fn constraint_receiver(
         &mut self,
         value: ExprId,
@@ -106,15 +107,7 @@ impl Inferer<'_> {
         if apparent == ty {
             return Ok((value, ty));
         }
-        // A form whose bound has no evaluation (`Pick<T, "length">` with `T
-        // extends number[]`) has no members to read; say so rather than read
-        // an `Error`.
-        if matches!(apparent.peel(), Type::Error) && !matches!(ty.peel(), Type::Error) {
-            self.error(
-                span,
-                format!("`{ty}` has no members to read: its bound has no evaluation"),
-            );
-        }
+        self.report_unreadable_form(&ty, &apparent, span);
         let value = self.push_synthetic_expr(
             TypedExprKind::Cast {
                 value,
@@ -125,6 +118,25 @@ impl Inferer<'_> {
             span,
         )?;
         Ok((value, apparent))
+    }
+
+    /// Report a receiver that is a form whose bound has no evaluation
+    /// (`Pick<T, "length">` with `T extends number[]`): its apparent type is
+    /// `Error`, so it has no members to read. An `Error` from anything else
+    /// (an unknown bound, a type limit) was reported where it arose.
+    pub(super) fn report_unreadable_form(&mut self, ty: &Type, apparent: &Type, span: Span) {
+        let has_form = super::utility_types::members(ty)
+            .iter()
+            .any(|member| member.without_aliases().is_type_operator());
+        let unreadable = super::utility_types::members(apparent)
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Error));
+        if has_form && unreadable {
+            self.error(
+                span,
+                format!("`{ty}` has no members to read: its bound has no evaluation"),
+            );
+        }
     }
 
     /// Both direct member reads and optional chains expose the bound's shape

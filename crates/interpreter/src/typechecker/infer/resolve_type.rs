@@ -1858,6 +1858,31 @@ mod invariant_tests {
     }
 }
 
+/// Whether a form over a type parameter may fill a template hole, as tsc
+/// decides from its constraint: a string mapping always (`on${Capitalize<K>}`),
+/// a filter of a valid hole (`id_${Extract<keyof T, string>}`), and `T[K]` or
+/// `ReturnType<F>` as leniently as a bare `T`. An object utility
+/// (`Partial<T>`), a parameter list and a bare `keyof T`, which may hold a
+/// `symbol`, may not.
+fn valid_form_hole(form: &Type) -> bool {
+    use super::utility_types::{Utility, deferred_application};
+    match form {
+        Type::KeyOf(_) => false,
+        Type::IndexedAccess { .. } => true,
+        _ => match deferred_application(form) {
+            Some((utility, _)) if utility.is_string_mapping() => true,
+            Some((Utility::Extract, [operand, filter])) => {
+                valid_template_hole(filter) || valid_template_hole(operand)
+            }
+            Some((Utility::Exclude | Utility::NonNullable | Utility::NoInfer, [operand, ..])) => {
+                valid_template_hole(operand)
+            }
+            Some((Utility::ReturnType, _)) => true,
+            _ => false,
+        },
+    }
+}
+
 fn valid_template_hole(ty: &Type) -> bool {
     match ty.peel() {
         Type::String
@@ -1873,9 +1898,7 @@ fn valid_template_hole(ty: &Type) -> bool {
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
         | Type::Never => true,
-        // `get${Capitalize<K>}` or `id_${Extract<keyof T, string>}`: a form
-        // over a type parameter holds what an instantiation holds.
-        form if form.is_type_operator() => true,
+        form if form.is_type_operator() => valid_form_hole(form),
         Type::TemplateLiteral { substitutions, .. } | Type::Union(substitutions) => {
             substitutions.iter().all(valid_template_hole)
         }

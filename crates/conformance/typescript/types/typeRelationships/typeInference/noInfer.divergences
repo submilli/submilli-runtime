@@ -1,16 +1,8 @@
-types: 51 of 133 tsc entries compared, 4 differ
-
-line 40: ['bar']
-  tsc:  "bar"[]
-  ours: string[]
+types: 51 of 133 tsc entries compared, 2 differ
 
 line 41: ['bar']
   tsc:  "bar"[]
   ours: string[]
-
-line 42: { x: 'bar' }
-  tsc:  { x: "bar"; }
-  ours: { x: string }
 
 line 43: { x: 'bar' }
   tsc:  { x: "bar"; }

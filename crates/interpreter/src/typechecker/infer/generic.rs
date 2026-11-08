@@ -3350,7 +3350,10 @@ impl LiteralTypeArguments {
         let mut sole = Vec::new();
         let mut widened = Vec::new();
         for name in inferred_generics {
-            if constraints.get(name).is_some_and(literal_constraint) {
+            if constraints
+                .get(name)
+                .is_some_and(|bound| literal_constraint(bound, constraints))
+            {
                 kept.push(name.clone());
                 continue;
             }
@@ -3408,7 +3411,7 @@ impl LiteralTypeArguments {
     }
 }
 
-fn literal_constraint(ty: &Type) -> bool {
+fn literal_constraint(ty: &Type, constraints: &BTreeMap<String, Type>) -> bool {
     match ty.peel() {
         Type::String
         | Type::Number
@@ -3419,11 +3422,37 @@ fn literal_constraint(ty: &Type) -> bool {
         | Type::BooleanLiteral(_)
         | Type::BigIntLiteral(_)
         | Type::TemplateLiteral { .. } => true,
-        Type::Union(members) => members.iter().any(literal_constraint),
+        Type::Union(members) => members
+            .iter()
+            .any(|member| literal_constraint(member, constraints)),
+        // `V extends T["kind"]` with `T extends { kind: "a" | "b" }` keeps
+        // `"a"`, as the property's constraint is primitive.
+        Type::IndexedAccess { object, index } => constraint_property(object, index, constraints)
+            .is_some_and(|property| literal_constraint(&property, constraints)),
         // `K extends keyof T` (or `Extract<keyof T, string>`) keeps `"a"` a
         // literal, as in tsc.
-        bound => super::constraint_literals::names_keys(bound),
+        bound => super::constraint_literals::literal_bound(bound),
     }
+}
+
+/// The property `object[index]` names in `object`'s declared bound, when
+/// `object` is a type parameter of the call bounded by an object type and
+/// `index` a literal key.
+fn constraint_property(
+    object: &Type,
+    index: &Type,
+    constraints: &BTreeMap<String, Type>,
+) -> Option<Type> {
+    let Type::TypeVar(name) = object.peel() else {
+        return None;
+    };
+    let Type::Object { fields, .. } = constraints.get(name)?.peel() else {
+        return None;
+    };
+    let Type::StringLiteral(key) = index.peel() else {
+        return None;
+    };
+    fields.get(key).map(|field| field.ty.clone())
 }
 
 /// A concrete union arm offers only a fallback candidate. Constrained

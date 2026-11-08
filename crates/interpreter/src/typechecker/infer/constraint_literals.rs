@@ -45,12 +45,12 @@ impl LiteralKinds {
         Self {
             string: ty.any_member(&|ty| {
                 matches!(ty, Type::StringLiteral(_) | Type::TemplateLiteral { .. })
-                    || names_keys(ty)
+                    || literal_bound(ty)
                     || parameter && ty == &Type::String
             }),
             number: ty.any_member(&|ty| {
                 matches!(ty, Type::NumberLiteral(_))
-                    || names_keys(ty)
+                    || literal_bound(ty)
                     || parameter && ty == &Type::Number
             }),
             boolean: ty.any_member(&|ty| matches!(ty, Type::Boolean | Type::BooleanLiteral(_))),
@@ -170,7 +170,7 @@ impl Inferer<'_> {
                     // A key bound over a parameter inferred already
                     // evaluates: `Exclude<keyof U, "id">` is `"b"`. Any other
                     // bound keeps its form (`T[keyof T]` widens, as in tsc).
-                    let bound = if names_keys(&bound) {
+                    let bound = if literal_bound(&bound) {
                         super::utility_types::normalize(&bound, self.resolver())
                             .map_err(type_limit_at(span))?
                     } else {
@@ -420,20 +420,31 @@ fn enqueue(
     Ok(())
 }
 
-/// Whether `ty` is `keyof T`, or a utility that keeps part of one
-/// (`Extract<keyof T, string>`, `Exclude<keyof T, K>`). A `keyof` in an index
-/// position (`T[keyof T]`) names values, not keys, so tsc widens there.
-pub(super) fn names_keys(ty: &Type) -> bool {
+/// Whether a bound keeps the literal a value is inferred from, as tsc keeps
+/// one for a primitive constraint: `keyof T`, a string mapping
+/// (`Capitalize<S>`), and `Extract`, `Exclude`, `NonNullable` or `NoInfer`
+/// of either or of a type parameter (`Extract<keyof T, string>`, `Extract<U,
+/// string>`). A bound in an index position (`T[keyof T]`) names values, so
+/// tsc widens there. Read from the application as written, so a concrete one
+/// (`Exclude<keyof U, "id">` once `U` is inferred) counts too.
+pub(super) fn literal_bound(ty: &Type) -> bool {
     use super::utility_types::{Utility, utility};
     match ty.without_aliases() {
         Type::KeyOf(_) => true,
-        Type::Union(members) => members.iter().any(names_keys),
-        Type::AliasRef { mangled, args, .. } => {
-            matches!(
-                utility(mangled),
-                Some(Utility::Extract | Utility::Exclude | Utility::NonNullable | Utility::NoInfer)
-            ) && args.first().is_some_and(names_keys)
-        }
+        Type::Union(members) => members.iter().any(literal_bound),
+        Type::AliasRef { mangled, args, .. } => match utility(mangled) {
+            Some(mapping) if mapping.is_string_mapping() => true,
+            Some(Utility::Extract | Utility::Exclude | Utility::NonNullable | Utility::NoInfer) => {
+                args.first().is_some_and(|operand| {
+                    literal_bound(operand)
+                        || matches!(
+                            operand.without_aliases(),
+                            Type::TypeVar(_) | Type::GenericParam { .. }
+                        )
+                })
+            }
+            _ => false,
+        },
         _ => false,
     }
 }

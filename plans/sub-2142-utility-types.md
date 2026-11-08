@@ -468,3 +468,20 @@ Not changed (P3 or pre-existing):
 - A template literal *expression* with a type-parameter hole is typed `string` (`return \`id_${k}\`` into `` `id_${K}` ``), as on upstream.
 - `Pick` over an array bound has no evaluation, so it is reported rather than read.
 - `Pick<X["u"], keyof U>` and writes of `T[K]` into `Pick<Readonly<T>, K>[K]` stay stricter than tsc.
+
+## Review round 7 (2026-11-08)
+
+The last round before the PR, as Doron asked.
+
+Fixed:
+- **Name capture in alias bodies.** Instantiating an alias substitutes every parameter at once (`TypeParamSubstitution::instantiation`), so `type Swap<K, T extends keyof K> = Select<K, T>` keeps the caller's `K` apart from the alias's, and `type B2<U, T> = A2<U, T>` no longer swaps its arguments.
+- **Template literal types with forms.** A template whose holes evaluate (`` `on${Capitalize<"click">}` ``) folds to the string where it is instantiated and related. A hole accepts a form only when tsc would: a string mapping, a filter of a valid hole, or `T[K]` and `ReturnType<F>` as leniently as a bare `T`; object utilities and a bare `keyof T` are rejected.
+- **Writes through `Required<T>`** check `Required`'s own bound, so `undefined` stays rejected; reads still see `T[K]`.
+- **Optional chains through a form with no evaluation** report the diagnostic too (no internal compiler failure), and the diagnostic fires only for forms, so it no longer follows an unknown bound.
+- **Literal inference** keeps literals against string mappings (`Capitalize<S>`), against `Extract`, `Exclude`, `NonNullable` and `NoInfer` of a type parameter (`Extract<U, string>`), and against `T["kind"]` when the bound's property is primitive (`literal_bound`, `constraint_property`).
+- **Clean code**: one `mapped_property` lookup in `base_constraint`, and the receiver doc mentions the diagnostic.
+
+Accepted (P3):
+- A concrete key fits `keyof Omit<T, "a">` through the bound's keys (`"b"`), where tsc checks `Exclude<keyof T, "a">` and rejects it. This is the index read the round 6 fix restored, and it is sound.
+- `V extends T["k"]` with `k: string` widens where tsc keeps the literal; inferring `K` backwards through `` `on${Capitalize<K>}` `` is not supported.
+- Clean-code P3-3 (rigid arguments in one place) is left: moving the step into `check_generic_constraints` changes every caller's substitution.

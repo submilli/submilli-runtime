@@ -16,6 +16,11 @@ function omitted<T extends { a: number; b: string }>(value: Omit<T, "a">): void 
 type Handler<K extends string> = `on${Capitalize<K>}`;
 function first<T, V extends T[keyof T]>(value: T, item: V): V { return item; }
 function strict<R extends Record<string, number>, K extends keyof R>(value: Pick<R, K>, key: K): R[K] { return value[key]; }
+function on<K extends string>(event: K, handler: `on${Capitalize<K>}`): string { return handler; }
+type Select<T, K extends keyof T> = Pick<T, K>;
+type Swap<K, T extends keyof K> = Select<K, T>;
+function kinds<T extends { kind: "a" | "b" }, V extends T["kind"]>(value: T, kind: V): V[] { return [kind]; }
+function strings<U extends string | number, K extends Extract<U, string>>(value: U, key: K): K[] { return [key]; }
 class Box {
   value: string = "v";
   static key(key: keyof Box): string { return key; }
@@ -48,4 +53,8 @@ function main(): void {
   let missing = false;
   try { strict<Record<string, number>, string>({}, "zz"); } catch (e) { missing = e instanceof Error && e.name === "MissingValueError"; }
   assert(missing, "a Pick over a record bound keeps missing reads");
+  const swapped: Swap<User, "age"> = { age: 4 };
+  const literalKinds: "a"[] = kinds({ kind: "a" }, "a");
+  const literalKeys: "s"[] = strings("s", "s");
+  assert(on("click", "onClick") === "onClick" && swapped.age === 4 && literalKinds[0] === "a" && literalKeys[0] === "s", "instantiated template holes, aliases over aliases, literals against utility bounds");
 }

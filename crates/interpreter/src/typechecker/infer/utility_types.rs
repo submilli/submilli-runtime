@@ -1022,11 +1022,14 @@ pub(crate) fn refers_to_itself(form: &Type) -> String {
 }
 
 /// `ty` itself evaluated when it is a `keyof` or `T[K]` whose operands are
-/// concrete, as relations meet them inside generic members instantiated at
-/// concrete types. `None` for any other type.
+/// concrete, or a template literal whose holes are (`on${Capitalize<"x">}`),
+/// as relations meet them inside generic members instantiated at concrete
+/// types. `None` for any other type.
 pub(crate) fn evaluate_concrete_operator(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
     let operator = ty.without_aliases();
-    if !is_concrete_keyof_or_index(operator) {
+    let template =
+        matches!(operator, Type::TemplateLiteral { .. }) && has_evaluable_application(operator);
+    if !is_concrete_keyof_or_index(operator) && !template {
         return None;
     }
     Some(normalize(operator, types).unwrap_or(Type::Error))
@@ -1064,6 +1067,14 @@ fn normalize_node(
 ) -> Result<Type, crate::type_size::TypeTooLarge> {
     let mapped =
         crate::type_size::map_children(ty, |child| normalize_node(child, types, failures))?;
+    // A template whose holes evaluated (`on${Capitalize<"click">}`) folds to
+    // the string it spells.
+    let mapped = match mapped {
+        template @ Type::TemplateLiteral { .. } => {
+            crate::property_keys::normalize_template(template, &mut types.limits.budget())?
+        }
+        other => other,
+    };
     Ok(evaluate_guarded(mapped, types, failures))
 }
 

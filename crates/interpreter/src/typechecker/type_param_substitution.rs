@@ -49,6 +49,12 @@ pub struct TypeParamSubstitution {
     /// union parameter while its type parameter was unbound: each must fit
     /// the parameter once inference is done, as tsc checks the argument then.
     close_matches: Vec<CloseMatch>,
+    /// Replace each bound variable by its binding as it stands, without
+    /// following a binding into another or substituting inside it: an
+    /// alias instantiated with arguments that mention the caller's own type
+    /// parameters (`type B<K, T> = A<K, T>`) keeps them apart from the
+    /// alias's (see [`Self::instantiation`]).
+    simultaneous: bool,
 }
 
 /// An argument member that must fit the union parameter `param` once
@@ -86,6 +92,18 @@ impl TypeParamSubstitution {
     }
 
     /// Mismatched lengths silently truncate to the shorter — caller validates arity.
+    /// [`from_pairs`](Self::from_pairs) for instantiating a declaration's
+    /// body: every parameter is replaced by its argument at once, so an
+    /// argument naming a type parameter of the same name as another of the
+    /// declaration's (`Sel<K, "a">` for `type Sel<T, K> = Pick<T, K>`) is
+    /// never substituted again.
+    pub fn instantiation(generics: &[String], type_args: &[Type]) -> Self {
+        Self {
+            simultaneous: true,
+            ..Self::from_pairs(generics, type_args)
+        }
+    }
+
     pub fn from_pairs(generics: &[String], type_args: &[Type]) -> Self {
         Self {
             bindings: generics
@@ -101,6 +119,7 @@ impl TypeParamSubstitution {
             several_literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
+            simultaneous: false,
         }
     }
 
@@ -119,6 +138,7 @@ impl TypeParamSubstitution {
             several_literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
+            simultaneous: false,
         }
     }
 
@@ -387,6 +407,7 @@ impl TypeParamSubstitution {
             several_literal_candidates,
             whole_union_fallbacks,
             close_matches: _,
+            simultaneous: _,
         } = before;
         let names: std::collections::BTreeSet<String> = self
             .bindings
@@ -460,6 +481,13 @@ impl TypeParamSubstitution {
         budget: &mut TypeBudget<'_>,
         substituting: &mut Vec<String>,
     ) -> Result<Type, TypeTooLarge> {
+        if self.simultaneous
+            && let Type::TypeVar(name) = ty
+            && let Some(bound) = self.bindings.get(name)
+        {
+            budget.charge_copy(bound, depth)?;
+            return Ok(bound.clone());
+        }
         let open_before = substituting.len();
         let applied = self
             .chase_binding(ty, budget, substituting)

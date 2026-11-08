@@ -2082,8 +2082,10 @@ pub(super) fn write_context(target: &Type, types: TypeResolver) -> Option<Type> 
 
 /// [`bound_properties`] of the form `target` (`T[K]`).
 fn indexed_bound_properties(target: &Type, types: TypeResolver) -> Option<Vec<Type>> {
-    // A write through `Pick<T, K>[K]` writes `T[K]`, as tsc rewrites it.
-    if let Some(MappedProperty::Same(property)) = mapped_property(target) {
+    // A write through `Pick<T, K>[K]` or `Readonly<T>[K]` writes `T[K]`,
+    // as tsc rewrites it. `Required<T>[K]` keeps its own bound, whose
+    // property holds no `undefined`.
+    if let Some(property) = written_property(target) {
         return indexed_bound_properties(&property, types);
     }
     let Type::IndexedAccess { object, index } = target.without_aliases() else {
@@ -2233,6 +2235,23 @@ fn mapped_keys(form: &Type) -> Option<Type> {
     }
 }
 
+/// `M<T>[K]` as `T[K]` for a write, where `M` is `Pick` or `Readonly`.
+fn written_property(form: &Type) -> Option<Type> {
+    use super::utility_types::{Utility, deferred_application};
+    let Type::IndexedAccess { object, index } = form.without_aliases() else {
+        return None;
+    };
+    let mut object = object.as_ref();
+    let mut mapped = false;
+    while let Some((Utility::Readonly | Utility::Pick, [operand, ..])) =
+        deferred_application(object)
+    {
+        object = operand;
+        mapped = true;
+    }
+    mapped.then(|| Type::indexed_access(object.clone(), index.as_ref().clone()))
+}
+
 /// A property of a mapped utility, `M<T>[K]`, as `T[K]`.
 enum MappedProperty {
     /// `Readonly`, `Required` (narrower) and `Pick` read `T`'s property.
@@ -2340,19 +2359,18 @@ pub(super) fn base_constraint(ty: &Type, types: TypeResolver) -> Type {
     use super::utility_types::{Utility, deferred_application, index_access_type};
     let upper = |operand: &Type| concrete_upper_bound(operand, types);
     let evaluate = |ty: Type| super::utility_types::normalize(&ty, types).unwrap_or(Type::Error);
+    // `Pick<T, K>[K]` is `T[K]` (`Partial` adds `undefined`).
+    if let Some(property) = mapped_property(ty) {
+        return match property {
+            MappedProperty::Same(property) => base_constraint(&property, types),
+            MappedProperty::Optional(property) => {
+                Type::union(vec![base_constraint(&property, types), Type::Undefined])
+            }
+        };
+    }
     match ty.without_aliases() {
         // A narrower `T` has more keys: only every key bounds `keyof T`.
         Type::KeyOf(_) => Type::union(vec![Type::String, Type::Number]),
-        // `Pick<T, K>[K]` is `T[K]` (`Partial` adds `undefined`).
-        form @ Type::IndexedAccess { .. } if mapped_property(form).is_some() => {
-            match mapped_property(form) {
-                Some(MappedProperty::Optional(property)) => {
-                    Type::union(vec![base_constraint(&property, types), Type::Undefined])
-                }
-                Some(MappedProperty::Same(property)) => base_constraint(&property, types),
-                None => Type::Unknown,
-            }
-        }
         Type::IndexedAccess { object, index } => {
             index_access_type(&upper(object), &upper(index), types).unwrap_or(Type::Unknown)
         }

@@ -12744,6 +12744,7 @@ impl Inferer<'_> {
         {
             let checks_missing_receiver = part.is_optional() && receiver_may_miss;
             let apparent = self.constraint_receiver_type(&receiver_ty, part.span())?;
+            self.report_unreadable_form(&receiver_ty, &apparent, part.span());
             if apparent != receiver_ty {
                 // A receiver this step's `?.` checks may be missing: the view
                 // keeps room for `undefined`, which the `?.` then skips.

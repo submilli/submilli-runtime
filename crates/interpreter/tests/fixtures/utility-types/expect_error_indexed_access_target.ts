@@ -8,6 +8,9 @@
 // expect-error: cannot assign to readonly property `g`
 // expect-error: field `a` does not exist on `Pick<T, K>
 // expect-error: `Pick<T, "length">` has no members to read
+// expect-error: `Pick<T, "length"> | undefined` has no members to read
+// expect-error: expected `number`, got `undefined`
+// expect-error: template substitution must be string
 function read<T extends { a: number }>(value: T): T["a"] { return 5; }
 function nested<U extends string | number, T extends { a: U }>(value: T): void { value["a"] = 5; }
 function frozen<T extends { readonly a: number }>(value: T): void { value["a"] = 5; }
@@ -16,4 +19,7 @@ function classField<T extends C>(value: T): void { value["r"] = 5; }
 function getter<T extends C>(value: T): void { value["g"] = 5; }
 function picked<T extends { a: number; b: string }, K extends "a" | "b">(value: Pick<T, K>): number { return value.a; }
 function length<T extends number[]>(value: Pick<T, "length">): number { return value.length; }
+function chained<T extends number[]>(value: Pick<T, "length"> | undefined): number { return value?.length ?? 0; }
+function required<T extends { a?: number }>(value: Required<T>): void { value["a"] = undefined; }
+type Bad<T> = `p_${Partial<T>}`;
 function main(): void {}
