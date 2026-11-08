@@ -32,7 +32,14 @@ function f1(x: Color | string): void {
 >x : Color
 >  : ^^^^^
 
-        /*pruned*/;
+        let y_2: Color = null as unknown as (Color);
+>y_2 : Color
+>    : ^^^^^
+>null as unknown as (Color) : Color
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
     }
     else {
         let z = x;
@@ -99,7 +106,14 @@ function f2(x: Color | string | string[]): void {
 >x : Color
 >  : ^^^^^
 
-        /*pruned*/;
+        let z_2: Color = null as unknown as (Color);
+>z_2 : Color
+>    : ^^^^^
+>null as unknown as (Color) : Color
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
     }
     else {
         let w = x;
@@ -149,7 +163,14 @@ function f2(x: Color | string | string[]): void {
 >x : Color | string[]
 >  : ^^^^^^^^^^^^^^^^
 
-        /*pruned*/;
+        let b_2: Color | string[] = null as unknown as (Color | string[]);
+>b_2 : Color | string[]
+>    : ^^^^^^^^^^^^^^^^
+>null as unknown as (Color | string[]) : Color | string[]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
     }
 }
 

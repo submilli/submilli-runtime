@@ -1,0 +1,110 @@
+=== typeParameterAssignability3.ts ===
+// type parameters are not assignable to one another unless directly or indirectly constrained to one another
+
+class Foo { foo: string; }
+>Foo : Foo
+>    : ^^^
+>foo : string
+>    : ^^^^^^
+
+
+function foo<T extends Foo, U extends Foo>(t: T, u: U): void {
+>foo : <T extends Foo, U extends Foo>(t: T, u: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    /*pruned*/;
+    /*pruned*/;
+    /**/;  // ok
+    /**/;  // ok
+
+    /**/;  // ok
+    /**/;  // ok
+
+    t = u; // error
+>t = u : U
+>      : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    u = t; // error
+>u = t : T
+>      : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+}
+
+class C<T extends Foo, U extends Foo> {
+>C : C<T, U>
+>  : ^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+    t: T;
+>t : T
+>  : ^
+
+    u: U;
+>u : U
+>  : ^
+
+    r: () => void = () => {
+>r : () => void
+>  : ^^^^^^^^^^
+>() => {         this.t = this.u; // error         this.u = this.t; // error     } : () => void
+>                                                                                  : ^^^^^^^^^^
+
+        this.t = this.u; // error
+>this.t = this.u : U
+>                : ^
+>this.t : T
+>       : ^
+>this : this
+>     : ^^^^
+>t : T
+>  : ^
+>this.u : U
+>       : ^
+>this : this
+>     : ^^^^
+>u : U
+>  : ^
+
+        this.u = this.t; // error
+>this.u = this.t : T
+>                : ^
+>this.u : U
+>       : ^
+>this : this
+>     : ^^^^
+>u : U
+>  : ^
+>this.t : T
+>       : ^
+>this : this
+>     : ^^^^
+>t : T
+>  : ^
+
+    }
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

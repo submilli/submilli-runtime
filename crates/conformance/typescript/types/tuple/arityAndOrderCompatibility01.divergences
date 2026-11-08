@@ -1,0 +1,39 @@
+types: 52 of 68 tsc entries compared, 8 differ
+
+line 10: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 14: null as unknown as ({ 0: string; 1: number; length: 2; })
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 22: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 25: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 28: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 31: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 34: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+line 37: z
+  tsc:  { 0: string; 1: number; length: 2; }
+  ours: { "0": string; "1": number; length: 2 }
+
+errors:
+line 2: ours: interface base must be an interface or structural object type (tsc accepts)
+line 21: ours: no field `2` on type `StrNum` (tsc accepts)
+line 39: ours: expected `[string, number]`, got `StrNum` (tsc accepts)
+line 40: ours: expected `[string, number]`, got `StrNum` (tsc accepts)

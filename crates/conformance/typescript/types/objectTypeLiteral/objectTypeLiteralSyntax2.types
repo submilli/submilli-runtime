@@ -56,7 +56,7 @@ let y: {
 
 });
 
-/*pruned*/;                                                                           
+/*pruned*/;
 
 function main(): void {}
 >main : () => void

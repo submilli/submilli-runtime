@@ -1,1 +1,5 @@
-types: 26 of 47 tsc entries compared, 0 differ
+types: 27 of 50 tsc entries compared, 1 differ
+
+line 16: g2
+  tsc:  { 0: number; }
+  ours: { "0": number }

@@ -56,8 +56,16 @@ fn = null; // Should be error
 >   : ^^^
 
 
-/**/;
-/**/;     // OK
+let v;
+>v : any
+>  : ^^^
+
+v = null; // OK
+>v = null : null
+>         : ^^^^
+>v : any
+>  : ^^^
+
 
 /*pruned*/;
 

@@ -16,12 +16,12 @@ function foo<T, U>(t: T, u: U): T | U {
     return true ? t : u;
 }
 
-/*pruned*/;                                                                               
-                                                    
- 
+function foo2<T extends U, U>(t: T, u: U): U { // Error for referencing own type parameter
+    return true ? t : u; // Ok because BCT(T, U) = U
+}
 
-/*pruned*/;                                                
-                        
- 
+function foo3<T extends U, U extends V, V>(t: T, u: U): U {
+    return true ? t : u;
+}
 
 function main(): void {}

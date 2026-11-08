@@ -12,13 +12,13 @@ interface S extends T {
     Foo?: Derived // error
 }
 
-/*pruned*/;   
-            
- 
+interface T2 {
+    1: Base;
+}
 
-/*pruned*/;              
-                         
- 
+interface S2 extends T2 {
+    1?: Derived; // error
+}
 
 interface T3 {
     '1': Base;

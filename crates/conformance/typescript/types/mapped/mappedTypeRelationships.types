@@ -1,0 +1,1032 @@
+=== mappedTypeRelationships.ts ===
+
+function f1<T>(x: T, k: keyof T): T[keyof T] {
+>f1 : <T>(x: T, k: keyof T) => T[keyof T]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+    return x[k];
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+function f2<T, K extends keyof T>(x: T, k: K): T[K] {
+>f2 : <T, K extends keyof T>(x: T, k: K) => T[K]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+    return x[k];
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f3<T, U extends T>(x: T, y: U, k: keyof T): void {
+>f3 : <T, U extends T>(x: T, y: U, k: keyof T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+    x[k] = y[k];
+>x[k] = y[k] : U[keyof T]
+>            : ^^^^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+>y[k] : U[keyof T]
+>     : ^^^^^^^^^^
+>y : U
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[keyof T]
+>            : ^^^^^^^^^^
+>y[k] : U[keyof T]
+>     : ^^^^^^^^^^
+>y : U
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+function f4<T, U extends T, K extends keyof T>(x: T, y: U, k: K): void {
+>f4 : <T, U extends T, K extends keyof T>(x: T, y: U, k: K) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+>k : K
+>  : ^
+
+    x[k] = y[k];
+>x[k] = y[k] : U[K]
+>            : ^^^^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+>y[k] : U[K]
+>     : ^^^^
+>y : U
+>  : ^
+>k : K
+>  : ^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[K]
+>            : ^^^^
+>y[k] : U[K]
+>     : ^^^^
+>y : U
+>  : ^
+>k : K
+>  : ^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f5<T, U extends T>(x: T, y: U, k: keyof U): void {
+>f5 : <T, U extends T>(x: T, y: U, k: keyof U) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+>k : keyof U
+>  : ^^^^^^^
+
+    x[k] = y[k];  // Error
+>x[k] = y[k] : U[keyof U]
+>            : ^^^^^^^^^^
+>x[k] : any
+>     : ^^^
+>x : T
+>  : ^
+>k : keyof U
+>  : ^^^^^^^
+>y[k] : U[keyof U]
+>     : ^^^^^^^^^^
+>y : U
+>  : ^
+>k : keyof U
+>  : ^^^^^^^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : any
+>            : ^^^
+>y[k] : U[keyof U]
+>     : ^^^^^^^^^^
+>y : U
+>  : ^
+>k : keyof U
+>  : ^^^^^^^
+>x[k] : any
+>     : ^^^
+>x : T
+>  : ^
+>k : keyof U
+>  : ^^^^^^^
+
+}
+
+function f6<T, U extends T, K extends keyof U>(x: T, y: U, k: K): void {
+>f6 : <T, U extends T, K extends keyof U>(x: T, y: U, k: K) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+>k : K
+>  : ^
+
+    x[k] = y[k];  // Error
+>x[k] = y[k] : U[K]
+>            : ^^^^
+>x[k] : any
+>     : ^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+>y[k] : U[K]
+>     : ^^^^
+>y : U
+>  : ^
+>k : K
+>  : ^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : any
+>            : ^^^
+>y[k] : U[K]
+>     : ^^^^
+>y : U
+>  : ^
+>k : K
+>  : ^
+>x[k] : any
+>     : ^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f10<T>(x: T, y: Partial<T>, k: keyof T): void {
+>f10 : <T>(x: T, y: Partial<T>, k: keyof T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    x[k] = y[k];  // Error
+>x[k] = y[k] : Partial<T>[keyof T]
+>            : ^^^^^^^^^^^^^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+>y[k] : Partial<T>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    y[k] = x[k];
+>y[k] = x[k] : T[keyof T]
+>            : ^^^^^^^^^^
+>y[k] : Partial<T>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+function f11<T, K extends keyof T>(x: T, y: Partial<T>, k: K): void {
+>f11 : <T, K extends keyof T>(x: T, y: Partial<T>, k: K) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>k : K
+>  : ^
+
+    x[k] = y[k];  // Error
+>x[k] = y[k] : Partial<T>[K]
+>            : ^^^^^^^^^^^^^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+>y[k] : Partial<T>[K]
+>     : ^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>k : K
+>  : ^
+
+    y[k] = x[k];
+>y[k] = x[k] : T[K]
+>            : ^^^^
+>y[k] : Partial<T>[K]
+>     : ^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>k : K
+>  : ^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f12<T, U extends T>(x: T, y: Partial<U>, k: keyof T): void {
+>f12 : <T, U extends T>(x: T, y: Partial<U>, k: keyof T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : Partial<U>
+>  : ^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    x[k] = y[k];  // Error
+>x[k] = y[k] : Partial<U>[keyof T]
+>            : ^^^^^^^^^^^^^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+>y[k] : Partial<U>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^
+>y : Partial<U>
+>  : ^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[keyof T]
+>            : ^^^^^^^^^^
+>y[k] : Partial<U>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^
+>y : Partial<U>
+>  : ^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+function f13<T, U extends T, K extends keyof T>(x: T, y: Partial<U>, k: K): void {
+>f13 : <T, U extends T, K extends keyof T>(x: T, y: Partial<U>, k: K) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>y : Partial<U>
+>  : ^^^^^^^^^^
+>k : K
+>  : ^
+
+    x[k] = y[k];  // Error
+>x[k] = y[k] : Partial<U>[K]
+>            : ^^^^^^^^^^^^^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+>y[k] : Partial<U>[K]
+>     : ^^^^^^^^^^^^^
+>y : Partial<U>
+>  : ^^^^^^^^^^
+>k : K
+>  : ^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[K]
+>            : ^^^^
+>y[k] : Partial<U>[K]
+>     : ^^^^^^^^^^^^^
+>y : Partial<U>
+>  : ^^^^^^^^^^
+>k : K
+>  : ^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f20<T>(x: T, y: Readonly<T>, k: keyof T): void {
+>f20 : <T>(x: T, y: Readonly<T>, k: keyof T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    x[k] = y[k];
+>x[k] = y[k] : Readonly<T>[keyof T]
+>            : ^^^^^^^^^^^^^^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+>y[k] : Readonly<T>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[keyof T]
+>            : ^^^^^^^^^^
+>y[k] : Readonly<T>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+function f21<T, K extends keyof T>(x: T, y: Readonly<T>, k: K): void {
+>f21 : <T, K extends keyof T>(x: T, y: Readonly<T>, k: K) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>k : K
+>  : ^
+
+    x[k] = y[k];
+>x[k] = y[k] : Readonly<T>[K]
+>            : ^^^^^^^^^^^^^^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+>y[k] : Readonly<T>[K]
+>     : ^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>k : K
+>  : ^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[K]
+>            : ^^^^
+>y[k] : Readonly<T>[K]
+>     : ^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>k : K
+>  : ^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f22<T, U extends T>(x: T, y: Readonly<U>, k: keyof T): void {
+>f22 : <T, U extends T>(x: T, y: Readonly<U>, k: keyof T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : Readonly<U>
+>  : ^^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    x[k] = y[k];
+>x[k] = y[k] : Readonly<U>[keyof T]
+>            : ^^^^^^^^^^^^^^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+>y[k] : Readonly<U>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>y : Readonly<U>
+>  : ^^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[keyof T]
+>            : ^^^^^^^^^^
+>y[k] : Readonly<U>[keyof T]
+>     : ^^^^^^^^^^^^^^^^^^^^
+>y : Readonly<U>
+>  : ^^^^^^^^^^^
+>k : keyof T
+>  : ^^^^^^^
+>x[k] : T[keyof T]
+>     : ^^^^^^^^^^
+>x : T
+>  : ^
+>k : keyof T
+>  : ^^^^^^^
+
+}
+
+function f23<T, U extends T, K extends keyof T>(x: T, y: Readonly<U>, k: K): void {
+>f23 : <T, U extends T, K extends keyof T>(x: T, y: Readonly<U>, k: K) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>K : K
+>  : ^
+>x : T
+>  : ^
+>y : Readonly<U>
+>  : ^^^^^^^^^^^
+>k : K
+>  : ^
+
+    x[k] = y[k];
+>x[k] = y[k] : Readonly<U>[K]
+>            : ^^^^^^^^^^^^^^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+>y[k] : Readonly<U>[K]
+>     : ^^^^^^^^^^^^^^
+>y : Readonly<U>
+>  : ^^^^^^^^^^^
+>k : K
+>  : ^
+
+    y[k] = x[k];  // Error
+>y[k] = x[k] : T[K]
+>            : ^^^^
+>y[k] : Readonly<U>[K]
+>     : ^^^^^^^^^^^^^^
+>y : Readonly<U>
+>  : ^^^^^^^^^^^
+>k : K
+>  : ^
+>x[k] : T[K]
+>     : ^^^^
+>x : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+type Thing = { a: string, b: string };
+>Thing : Thing
+>      : ^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+
+function f30<T>(x: T, y: Partial<T>): void {
+>f30 : <T>(x: T, y: Partial<T>) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+
+    x = y;  // Error
+>x = y : Partial<T>
+>      : ^^^^^^^^^^
+>x : T
+>  : ^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+
+    y = x;
+>y = x : T
+>      : ^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>x : T
+>  : ^
+
+}
+
+function f31<T extends Thing>(x: Partial<Thing>, y: Partial<T>): void {
+>f31 : <T extends Thing>(x: Partial<Thing>, y: Partial<T>) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : Partial<Thing>
+>  : ^^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+
+    x = y;
+>x = y : Partial<T>
+>      : ^^^^^^^^^^
+>x : Partial<Thing>
+>  : ^^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+
+    y = x;  // Error
+>y = x : Partial<Thing>
+>      : ^^^^^^^^^^^^^^
+>y : Partial<T>
+>  : ^^^^^^^^^^
+>x : Partial<Thing>
+>  : ^^^^^^^^^^^^^^
+
+}
+
+function f40<T>(x: T, y: Readonly<T>): void {
+>f40 : <T>(x: T, y: Readonly<T>) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+    x = y;
+>x = y : Readonly<T>
+>      : ^^^^^^^^^^^
+>x : T
+>  : ^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+    y = x;
+>y = x : T
+>      : ^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+
+}
+
+function f41<T extends Thing>(x: Readonly<Thing>, y: Readonly<T>): void {
+>f41 : <T extends Thing>(x: Readonly<Thing>, y: Readonly<T>) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : Readonly<Thing>
+>  : ^^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+    x = y;
+>x = y : Readonly<T>
+>      : ^^^^^^^^^^^
+>x : Readonly<Thing>
+>  : ^^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+    y = x;  // Error
+>y = x : Readonly<Thing>
+>      : ^^^^^^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+>x : Readonly<Thing>
+>  : ^^^^^^^^^^^^^^^
+
+}
+
+type Item = {
+>Item : Item
+>     : ^^^^
+
+    name: string;
+>name : string
+>     : ^^^^^^
+
+}
+
+type ItemMap = {
+>ItemMap : ItemMap
+>        : ^^^^^^^
+
+    [x: string]: Item;
+>x : string
+>  : ^^^^^^
+
+}
+
+function f50<T extends ItemMap>(obj: T, key: keyof T): string {
+>f50 : <T extends ItemMap>(obj: T, key: keyof T) => string
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>obj : T
+>    : ^
+>key : keyof T
+>    : ^^^^^^^
+
+    let item: Item = obj[key];
+>item : Item
+>     : ^^^^
+>obj[key] : T[keyof T]
+>         : ^^^^^^^^^^
+>obj : T
+>    : ^
+>key : keyof T
+>    : ^^^^^^^
+
+    return obj[key].name;
+>obj[key].name : string
+>              : ^^^^^^
+>obj[key] : T[keyof T]
+>         : ^^^^^^^^^^
+>obj : T
+>    : ^
+>key : keyof T
+>    : ^^^^^^^
+>name : string
+>     : ^^^^^^
+
+}
+
+function f51<T extends ItemMap, K extends keyof T>(obj: T, key: K): string {
+>f51 : <T extends ItemMap, K extends keyof T>(obj: T, key: K) => string
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K : K
+>  : ^
+>obj : T
+>    : ^
+>key : K
+>    : ^
+
+    let item: Item = obj[key];
+>item : Item
+>     : ^^^^
+>obj[key] : T[K]
+>         : ^^^^
+>obj : T
+>    : ^
+>key : K
+>    : ^
+
+    return obj[key].name;
+>obj[key].name : string
+>              : ^^^^^^
+>obj[key] : T[K]
+>         : ^^^^
+>obj : T
+>    : ^
+>key : K
+>    : ^
+>name : string
+>     : ^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+function f80<T>(t: T): Partial<T> {
+>f80 : <T>(t: T) => Partial<T>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    return t;
+>t : T
+>  : ^
+
+}
+
+function f81<T, K extends keyof T>(t: T, k: K): Partial<T[K]> {
+>f81 : <T, K extends keyof T>(t: T, k: K) => Partial<T[K]>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K : K
+>  : ^
+>t : T
+>  : ^
+>k : K
+>  : ^
+
+    return t[k];
+>t[k] : T[K]
+>     : ^^^^
+>t : T
+>  : ^
+>k : K
+>  : ^
+
+}
+
+function f82<T, K1 extends keyof T, K2 extends keyof T[K1]>(t: T, k1: K1, k2: K2): Partial<T[K1][K2]> {
+>f82 : <T, K1 extends keyof T, K2 extends keyof T[K1]>(t: T, k1: K1, k2: K2) => Partial<T[K1][K2]>
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K1 : K1
+>   : ^^
+>K2 : K2
+>   : ^^
+>t : T
+>  : ^
+>k1 : K1
+>   : ^^
+>k2 : K2
+>   : ^^
+
+    return t[k1][k2];
+>t[k1][k2] : T[K1][K2]
+>          : ^^^^^^^^^
+>t[k1] : T[K1]
+>      : ^^^^^
+>t : T
+>  : ^
+>k1 : K1
+>   : ^^
+>k2 : K2
+>   : ^^
+
+}
+
+// #31070
+/*pruned*/;
+function f90<T extends { x: number }>(): void {
+>f90 : <T extends { x: number; }>() => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : number
+>  : ^^^^^^
+
+    /*pruned*/;
+}
+
+function f<T extends { x: {} }>(): Partial<T> {
+>f : <T extends { x: {}; }>() => Partial<T>
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : {}
+>  : ^^
+
+    return undefined! as T;
+>undefined! as T : T
+>                : ^
+>undefined! : never
+>           : ^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+}
+
+// #32365
+interface SettingsTypes {
+>SettingsTypes : SettingsTypes
+>              : ^^^^^^^^^^^^^
+
+  audio: {
+>audio : { volume: string; }
+>      : ^^^^^^^^^^^^^^^^^^^
+
+    volume: string;
+>volume : string
+>       : ^^^^^^
+
+  };
+  video: {
+>video : { resolution: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^
+
+    resolution: string;
+>resolution : string
+>           : ^^^^^^
+
+  };
+}
+/*pruned*/;
+
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

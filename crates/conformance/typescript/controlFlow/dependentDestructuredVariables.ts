@@ -40,24 +40,24 @@ function f12({ kind, payload }: Action): void {
 }
 
 // repro #50206
-/*pruned*/;                                                 
-                       
-                          
-     
-                       
-                              
-     
- 
+function f13<T extends Action>({ kind, payload }: T): void {
+    if (kind === 'A') {
+        payload.toFixed();
+    }
+    if (kind === 'B') {
+        payload.toUpperCase();
+    }
+}
 
-/*pruned*/;                                 
-                                
-                       
-                          
-     
-                       
-                              
-     
- 
+function f14<T extends Action>(t: T): void {
+    const { kind, payload } = t;
+    if (kind === 'A') {
+        payload.toFixed();
+    }
+    if (kind === 'B') {
+        payload.toUpperCase();
+    }
+}
 
 type Action2 =
     | { kind: 'A', payload: number | undefined }

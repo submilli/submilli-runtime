@@ -24,7 +24,7 @@ let a4 = [() => 1, ];
 //     - If the array literal contains no spread elements and is contextually typed by a tuple-like type,
 //       the resulting type is a tuple type constructed from the types of the element expressions.
 
-/*pruned*/;                                  
+/*pruned*/;                                            
 let b1: [number[], string[]] = [[1, 2, 3], ["hello", "string"]];
 
 // The resulting type an array literal expression is determined as follows:
@@ -41,13 +41,13 @@ let temp = ["s", "t", "r"];
 let temp1 = [1, 2, 3];
 let temp2: [number[], string[]] = [[1, 2, 3], ["hello", "string"]];
 
-/*pruned*/;                                
-/*pruned*/;                                        
+interface myArray extends Array<Number> { }
+interface myArray2 extends Array<Number|String> { }
 let d0 = [1, true, ...temp, ];  // has type (string|number|boolean)[]
 let d1 = [...temp];            // has type string[]
 let d2: number[] = [...temp1];
-/*pruned*/;                  
-/*pruned*/;                            
+let d3: myArray = [...temp1];
+let d4: myArray2 = [...temp, ...temp1];
 /*pruned*/;      
 /*pruned*/;      
 let d7 = [...a4];

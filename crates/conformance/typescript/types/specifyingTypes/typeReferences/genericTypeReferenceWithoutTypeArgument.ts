@@ -10,7 +10,7 @@ let c: C = null as unknown as (C);
 
 let a: { x: C } = null as unknown as ({ x: C });
 /*pruned*/;                                               
-/*pruned*/;                                               
+let d: { [x: C]: C } = null as unknown as ({ [x: C]: C });
 
 let e = (x: C) => { let y: C = null as unknown as (C); return y; }
 
@@ -31,7 +31,7 @@ interface I extends C {}
 /*pruned*/;                
 /*pruned*/;                 
 
-/*pruned*/;                            
+function h<T extends C>(x: T): void { }
 /*pruned*/;                              
 
 let j = <C>null;

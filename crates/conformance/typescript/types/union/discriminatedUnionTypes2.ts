@@ -64,37 +64,37 @@ interface WithoutError<Data> {
 
 type DataCarrier<Data> = WithError | WithoutError<Data>
 
-/*pruned*/;                                           
-                                 
-                                         
-                                       
-            
-                                          
-                                       
-     
- 
+function f20<Data>(carrier: DataCarrier<Data>): void {
+    if (carrier.error === null) {
+        const error: null = carrier.error
+        const data: Data = carrier.data
+    } else {
+        const error: Error = carrier.error
+        const data: null = carrier.data
+    }
+}
 
 // Repro from #28935
 
-/*pruned*/;                                                                               
+type Foo = { tag: true, x: number } | { tag: false, y: number } | { [x: string]: string };
 
-/*pruned*/;                   
-                  
-            
-     
-          
-            
-     
- 
+function f30(foo: Foo): void {
+    if (foo.tag) {
+        foo;
+    }
+    else {
+        foo;
+    }
+}
 
-/*pruned*/;                   
-                           
-            
-     
-          
-            
-     
- 
+function f31(foo: Foo): void {
+    if (foo.tag === true) {
+        foo;
+    }
+    else {
+        foo;
+    }
+}
 
 // Repro from #33448
 

@@ -117,7 +117,10 @@ let r6 = (new C2()).f<string>(1);
 /*pruned*/;
 /*pruned*/;
 
-/**/;
+let a;
+>a : any
+>  : ^^^
+
 /*pruned*/;
 
 /*pruned*/;

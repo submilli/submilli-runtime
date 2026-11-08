@@ -37,14 +37,48 @@ let b: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
+let c: E | F = null as unknown as (E | F);
+>c : E | F
+>  : ^^^^^
+>null as unknown as (E | F) : E | F
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 // operator **
 /*pruned*/;
+let r2 = c ** b;
+>r2 : number
+>   : ^^^^^^
+>c ** b : number
+>       : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let r3 = c ** c;
+>r3 : number
+>   : ^^^^^^
+>c ** c : number
+>       : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let r5 = b ** c;
+>r5 : number
+>   : ^^^^^^
+>b ** c : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let r7 = E.a ** b;
 >r7 : number

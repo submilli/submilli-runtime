@@ -41,7 +41,7 @@ function f4(): void {
 // Repro from #8851
 
 const re = /./g
-/*pruned*/;                                                                     
+let match: RegExpExecArray | null = null as unknown as (RegExpExecArray | null);
 
 /*pruned*/;                               
                                                     

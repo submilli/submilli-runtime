@@ -9,7 +9,7 @@ interface I {
 let ai: I = null as unknown as (I);
 
 enum E { A }
-/*pruned*/;                        
+let ae: E = null as unknown as (E);
 
 let b: number = undefined;
 let c: string = undefined;
@@ -24,7 +24,7 @@ let j: () => {} = undefined;
 let l: (x: number) => string = undefined;
 /*pruned*/;    
 ai = undefined;
-/*pruned*/;    
+ae = undefined;
 let m: number[] = undefined;
 let n: { foo: string } = undefined;
 /*pruned*/;                       

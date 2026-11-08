@@ -226,7 +226,14 @@ let d: void = null as unknown as (void);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
+let e: E = null as unknown as (E);
+>e : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 let f: {} = null as unknown as ({});
 >f : {}
 >  : ^^
@@ -285,7 +292,16 @@ let r1a4 = x < d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r1a5 = x < e;
+>r1a5 : boolean
+>     : ^^^^^^^
+>x < e : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r1a6 = x < f;
 >r1a6 : boolean
 >     : ^^^^^^^
@@ -347,7 +363,16 @@ let r1b4 = d < x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r1b5 = e < x;
+>r1b5 : boolean
+>     : ^^^^^^^
+>e < x : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r1b6 = f < x;
 >r1b6 : boolean
 >     : ^^^^^^^
@@ -410,7 +435,16 @@ let r2a4 = x > d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r2a5 = x > e;
+>r2a5 : boolean
+>     : ^^^^^^^
+>x > e : boolean
+>      : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r2a6 = x > f;
 >r2a6 : boolean
 >     : ^^^^^^^
@@ -472,7 +506,16 @@ let r2b4 = d > x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r2b5 = e > x;
+>r2b5 : boolean
+>     : ^^^^^^^
+>e > x : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r2b6 = f > x;
 >r2b6 : boolean
 >     : ^^^^^^^
@@ -535,7 +578,16 @@ let r3a4 = x <= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r3a5 = x <= e;
+>r3a5 : boolean
+>     : ^^^^^^^
+>x <= e : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r3a6 = x <= f;
 >r3a6 : boolean
 >     : ^^^^^^^
@@ -597,7 +649,16 @@ let r3b4 = d <= x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r3b5 = e <= x;
+>r3b5 : boolean
+>     : ^^^^^^^
+>e <= x : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r3b6 = f <= x;
 >r3b6 : boolean
 >     : ^^^^^^^
@@ -660,7 +721,16 @@ let r4a4 = x >= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r4a5 = x >= e;
+>r4a5 : boolean
+>     : ^^^^^^^
+>x >= e : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r4a6 = x >= f;
 >r4a6 : boolean
 >     : ^^^^^^^
@@ -722,7 +792,16 @@ let r4b4 = d >= x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r4b5 = e >= x;
+>r4b5 : boolean
+>     : ^^^^^^^
+>e >= x : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r4b6 = f >= x;
 >r4b6 : boolean
 >     : ^^^^^^^
@@ -785,7 +864,16 @@ let r5a4 = x == d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r5a5 = x == e;
+>r5a5 : boolean
+>     : ^^^^^^^
+>x == e : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r5a6 = x == f;
 >r5a6 : boolean
 >     : ^^^^^^^
@@ -847,7 +935,16 @@ let r5b4 = d == x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r5b5 = e == x;
+>r5b5 : boolean
+>     : ^^^^^^^
+>e == x : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r5b6 = f == x;
 >r5b6 : boolean
 >     : ^^^^^^^
@@ -910,7 +1007,16 @@ let r6a4 = x != d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r6a5 = x != e;
+>r6a5 : boolean
+>     : ^^^^^^^
+>x != e : boolean
+>       : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r6a6 = x != f;
 >r6a6 : boolean
 >     : ^^^^^^^
@@ -972,7 +1078,16 @@ let r6b4 = d != x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r6b5 = e != x;
+>r6b5 : boolean
+>     : ^^^^^^^
+>e != x : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r6b6 = f != x;
 >r6b6 : boolean
 >     : ^^^^^^^
@@ -1035,7 +1150,16 @@ let r7a4 = x === d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r7a5 = x === e;
+>r7a5 : boolean
+>     : ^^^^^^^
+>x === e : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r7a6 = x === f;
 >r7a6 : boolean
 >     : ^^^^^^^
@@ -1097,7 +1221,16 @@ let r7b4 = d === x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r7b5 = e === x;
+>r7b5 : boolean
+>     : ^^^^^^^
+>e === x : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r7b6 = f === x;
 >r7b6 : boolean
 >     : ^^^^^^^
@@ -1160,7 +1293,16 @@ let r8a4 = x !== d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r8a5 = x !== e;
+>r8a5 : boolean
+>     : ^^^^^^^
+>x !== e : boolean
+>        : ^^^^^^^
+>x : undefined
+>  : ^^^^^^^^^
+>e : E
+>  : ^
+
 let r8a6 = x !== f;
 >r8a6 : boolean
 >     : ^^^^^^^
@@ -1222,7 +1364,16 @@ let r8b4 = d !== x;
 >x : undefined
 >  : ^^^^^^^^^
 
-/*pruned*/;
+let r8b5 = e !== x;
+>r8b5 : boolean
+>     : ^^^^^^^
+>e !== x : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>x : undefined
+>  : ^^^^^^^^^
+
 let r8b6 = f !== x;
 >r8b6 : boolean
 >     : ^^^^^^^

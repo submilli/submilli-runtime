@@ -20,63 +20,63 @@ function f(param: string | number): void {
 // local function declaration
 function f1(param: string | number): void {
     let var2: string | number = null as unknown as (string | number);
-    /*pruned*/;                                 
-                                              
-                                                                
+    function f2(param1: string | number): void {
+        // global vars in function declaration
+        num = typeof var1 === "string" && var1.length; // string
 
-                                                    
-                                                                
+        // variables from outer function declaration
+        num = typeof var2 === "string" && var2.length; // string
 
-                                          
-                                                                  
+        // parameters in outer declaration
+        num = typeof param === "string" && param.length; // string
 
-                
-                                                                         
-                                                                
-                                                                    
-     
+        // local
+        let var3: string | number = null as unknown as (string | number);
+        num = typeof var3 === "string" && var3.length; // string
+        num = typeof param1 === "string" && param1.length; // string
+    }
 }
 // Function expression
 function f2(param: string | number): void {
     // variables in function declaration
     let var2: string | number = null as unknown as (string | number);
     // variables in function expressions
-    /*pruned*/;                                 
-                                              
-                                                                
+    let r = function (param1: string | number) {
+        // global vars in function declaration
+        num = typeof var1 === "string" && var1.length; // string
 
-                                                    
-                                                                
+        // variables from outer function declaration
+        num = typeof var2 === "string" && var2.length; // string
 
-                                          
-                                                                  
+        // parameters in outer declaration
+        num = typeof param === "string" && param.length; // string
 
-                
-                                                                         
-                                                                
-                                                                    
-              
+        // local
+        let var3: string | number = null as unknown as (string | number);
+        num = typeof var3 === "string" && var3.length; // string
+        num = typeof param1 === "string" && param1.length; // string
+    } (param);
 }
 // Arrow expression
 function f3(param: string | number): void {
     // variables in function declaration
     let var2: string | number = null as unknown as (string | number);
     // variables in function expressions
-    /*pruned*/;                            
-                                              
-                                                                
+    let r = ((param1: string | number) => {
+        // global vars in function declaration
+        num = typeof var1 === "string" && var1.length; // string
 
-                                                    
-                                                                
+        // variables from outer function declaration
+        num = typeof var2 === "string" && var2.length; // string
 
-                                          
-                                                                  
+        // parameters in outer declaration
+        num = typeof param === "string" && param.length; // string
 
-                
-                                                                         
-                                                                
-                                                                    
-              
+        // local
+        let var3: string | number = null as unknown as (string | number);
+        num = typeof var3 === "string" && var3.length; // string
+        num = typeof param1 === "string" && param1.length; // string
+    })(param);
 }
 // Return type of function
 // Inside function declaration

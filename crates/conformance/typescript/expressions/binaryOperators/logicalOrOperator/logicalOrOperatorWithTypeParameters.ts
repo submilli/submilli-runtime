@@ -16,11 +16,11 @@ function fn2<T, U/* extends T*/, V/* extends T*/>(t: T, u: U, v: V): void {
     //var r7: T = u || v;
 }
 
-/*pruned*/;                                                                                             
-                    
-                        
-                            
-                                   
- 
+function fn3<T extends { a: string; b: string }, U extends { a: string; b: number }>(t: T, u: U): void {
+    let r1 = t || u;
+    let r2: {} = t || u;
+    let r3 = t || { a: '' };
+    let r4: { a: string } = t || u;
+}
 
 function main(): void {}

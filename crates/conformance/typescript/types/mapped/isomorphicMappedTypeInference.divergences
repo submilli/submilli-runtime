@@ -1,0 +1,12 @@
+types: 36 of 107 tsc entries compared, 2 differ
+
+line 102: b
+  tsc:  { [x: string]: Box<number> | Box<string> | Box<boolean>; }
+  ours: { [key: string]: { value: number } }
+
+line 102: makeDictionary({ a: box(42), b: box("hello"), c: box(true) })
+  tsc:  { [x: string]: Box<number> | Box<string> | Box<boolean>; }
+  ours: { [key: string]: { value: number } }
+
+errors:
+line 102: ours: expected `{ value: number }`, got `{ value: string }` (tsc accepts)

@@ -6,5 +6,6 @@ invalidNumberAssignments.ts(9,11): error TS2564: Property 'foo' has no initializ
 invalidNumberAssignments.ts(10,5): error TS2322: Type 'number' is not assignable to type 'C'.
 invalidNumberAssignments.ts(13,5): error TS2322: Type 'number' is not assignable to type 'I'.
 invalidNumberAssignments.ts(15,5): error TS2322: Type 'number' is not assignable to type '{ baz: string; }'.
+invalidNumberAssignments.ts(16,5): error TS2322: Type 'number' is not assignable to type '{ 0: number; }'.
 invalidNumberAssignments.ts(22,5): error TS2322: Type 'number' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'number'.
 invalidNumberAssignments.ts(24,1): error TS2630: Cannot assign to 'i' because it is a function.

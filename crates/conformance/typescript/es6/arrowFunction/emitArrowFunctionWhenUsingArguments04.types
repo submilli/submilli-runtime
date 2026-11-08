@@ -1,0 +1,25 @@
+=== emitArrowFunctionWhenUsingArguments04.ts ===
+
+function f(): void {
+>f : () => void
+>  : ^^^^^^^^^^
+
+    let arguments;
+>arguments : any
+>          : ^^^
+
+    let a = () => arguments;
+>a : () => undefined
+>  : ^^^^^^^^^^^^^^^
+>() => arguments : () => undefined
+>                : ^^^^^^^^^^^^^^^
+>arguments : undefined
+>          : ^^^^^^^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -32,17 +32,61 @@ let x: number = E1.A;
 
 // Enum object type is anonymous with properties of the enum type and numeric indexer
 /*pruned*/;
-/**/;
+let e_2: {
+>e_2 : { readonly [n: number]: string; readonly A: E1.A; readonly B: E1.B; readonly C: E1.C; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    readonly A: E1.A;
+>A : E1.A
+>  : ^^^^
+>E1 : any
+>   : ^^^
 
+    readonly B: E1.B;
+>B : E1.B
+>  : ^^^^
+>E1 : any
+>   : ^^^
 
+    readonly C: E1.C;
+>C : E1.C
+>  : ^^^^
+>E1 : any
+>   : ^^^
 
+    readonly [n: number]: string;
+>n : number
+>  : ^^^^^^
 
+} = null as unknown as ({
+>null as unknown as ({     readonly A: E1.A;     readonly B: E1.B;     readonly C: E1.C;     readonly [n: number]: string; }) : { readonly [n: number]: string; readonly A: E1.A; readonly B: E1.B; readonly C: E1.C; }
+>                                                                                                                             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
 
+    readonly A: E1.A;
+>A : E1.A
+>  : ^^^^
+>E1 : any
+>   : ^^^
 
+    readonly B: E1.B;
+>B : E1.B
+>  : ^^^^
+>E1 : any
+>   : ^^^
 
+    readonly C: E1.C;
+>C : E1.C
+>  : ^^^^
+>E1 : any
+>   : ^^^
 
+    readonly [n: number]: string;
+>n : number
+>  : ^^^^^^
 
+});
 /*pruned*/;
 
 // Reverse mapping of enum returns string name of property

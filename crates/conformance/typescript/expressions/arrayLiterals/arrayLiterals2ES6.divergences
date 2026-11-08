@@ -1,1 +1,5 @@
-types: 44 of 79 tsc entries compared, 0 differ
+types: 51 of 91 tsc entries compared, 0 differ
+
+errors:
+line 44: ours: interface base must be an interface or structural object type (tsc accepts)
+line 45: ours: interface base must be an interface or structural object type (tsc accepts)

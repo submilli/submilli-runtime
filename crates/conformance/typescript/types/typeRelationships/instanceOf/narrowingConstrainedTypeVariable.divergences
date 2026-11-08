@@ -1,0 +1,16 @@
+types: 21 of 38 tsc entries compared, 3 differ
+
+line 10: v
+  tsc:  T
+  ours: T & C
+
+line 21: v
+  tsc:  T
+  ours: (T & C) | (U & C)
+
+line 32: v
+  tsc:  T
+  ours: T & E
+
+errors:
+line 21: ours: expected `T`, got `(T & C) | (U & C)` (tsc accepts)

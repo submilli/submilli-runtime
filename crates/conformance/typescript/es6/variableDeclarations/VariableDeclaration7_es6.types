@@ -1,0 +1,11 @@
+=== VariableDeclaration7_es6.ts ===
+let a
+>a : any
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

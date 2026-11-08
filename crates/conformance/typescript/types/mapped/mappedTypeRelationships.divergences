@@ -1,0 +1,16 @@
+types: 226 of 370 tsc entries compared, 3 differ
+
+line 82: x
+  tsc:  Partial<Thing>
+  ours: Partial<T>
+
+line 87: x
+  tsc:  T
+  ours: Readonly<T>
+
+line 92: x
+  tsc:  Readonly<Thing>
+  ours: { readonly a: string; readonly b: string }
+
+errors:
+line 82: tsc TS2322: Type 'Partial<Thing>' is not assignable to type 'Partial<T>'. (we accept)

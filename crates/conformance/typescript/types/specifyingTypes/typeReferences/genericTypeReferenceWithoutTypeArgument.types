@@ -36,7 +36,18 @@ let a: { x: C } = null as unknown as ({ x: C });
 >  : ^^^
 
 /*pruned*/;
-/*pruned*/;
+let d: { [x: C]: C } = null as unknown as ({ [x: C]: C });
+>d : {}
+>  : ^^
+>x : any
+>  : ^^^
+>null as unknown as ({ [x: C]: C }) : {}
+>                                   : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>x : any
+>  : ^^^
+
 
 let e = (x: C) => { let y: C = null as unknown as (C); return y; }
 >e : (x: C) => any
@@ -110,7 +121,14 @@ interface I extends C {}
 /*pruned*/;
 /*pruned*/;
 
-/*pruned*/;
+function h<T extends C>(x: T): void { }
+>h : <T extends C>(x: T) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
 /*pruned*/;
 
 let j = <C>null;

@@ -1,0 +1,89 @@
+types: 45 of 85 tsc entries compared, 22 differ
+
+line 8: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 8: { 0o45436: "Hello", a: 0o45436, b: oct1, oct1, 0o7777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777: true }
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 16: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 16: { 0O45436: "hi", a: 0O45436, b: oct2, oct2, 0o7777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777: false, }
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 24: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 25: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 26: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 27: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 28: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 29: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 30: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 31: obj1
+  tsc:  { 19230: string; a: number; b: number; oct1: number; Infinity: boolean; }
+  ours: { "19230": string; Infinity: boolean; a: number; b: number; oct1: number }
+
+line 33: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 34: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 35: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 36: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 37: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 38: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 39: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 40: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 41: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }
+
+line 42: obj2
+  tsc:  { 19230: string; a: number; b: number; oct2: number; 5.462437423415177e+244: boolean; }
+  ours: { "19230": string; "5.462437423415177e+244": boolean; a: number; b: number; oct2: number }

@@ -53,11 +53,11 @@ function f6(): void {
     z;
 }
 
-/*pruned*/;          
-                                              
-                                                    
-      
- 
+function f7(): void {
+    let o: { [x: string]: number } = { x: 1 };
+    let { x }: { [x: string]: string | number } = o;
+    x;
+}
 
 
 function main(): void {}

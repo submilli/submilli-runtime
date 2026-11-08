@@ -1,0 +1,215 @@
+// @target: es2015
+// @strictNullChecks: true
+// @declaration: true
+
+function f1<T>(x: T, k: keyof T): T[keyof T] {
+    return x[k];
+}
+
+function f2<T, K extends keyof T>(x: T, k: K): T[K] {
+    return x[k];
+}
+
+function f3<T, U extends T>(x: T, y: U, k: keyof T): void {
+    x[k] = y[k];
+    y[k] = x[k];  // Error
+}
+
+function f4<T, U extends T, K extends keyof T>(x: T, y: U, k: K): void {
+    x[k] = y[k];
+    y[k] = x[k];  // Error
+}
+
+function f5<T, U extends T>(x: T, y: U, k: keyof U): void {
+    x[k] = y[k];  // Error
+    y[k] = x[k];  // Error
+}
+
+function f6<T, U extends T, K extends keyof U>(x: T, y: U, k: K): void {
+    x[k] = y[k];  // Error
+    y[k] = x[k];  // Error
+}
+
+function f10<T>(x: T, y: Partial<T>, k: keyof T): void {
+    x[k] = y[k];  // Error
+    y[k] = x[k];
+}
+
+function f11<T, K extends keyof T>(x: T, y: Partial<T>, k: K): void {
+    x[k] = y[k];  // Error
+    y[k] = x[k];
+}
+
+function f12<T, U extends T>(x: T, y: Partial<U>, k: keyof T): void {
+    x[k] = y[k];  // Error
+    y[k] = x[k];  // Error
+}
+
+function f13<T, U extends T, K extends keyof T>(x: T, y: Partial<U>, k: K): void {
+    x[k] = y[k];  // Error
+    y[k] = x[k];  // Error
+}
+
+function f20<T>(x: T, y: Readonly<T>, k: keyof T): void {
+    x[k] = y[k];
+    y[k] = x[k];  // Error
+}
+
+function f21<T, K extends keyof T>(x: T, y: Readonly<T>, k: K): void {
+    x[k] = y[k];
+    y[k] = x[k];  // Error
+}
+
+function f22<T, U extends T>(x: T, y: Readonly<U>, k: keyof T): void {
+    x[k] = y[k];
+    y[k] = x[k];  // Error
+}
+
+function f23<T, U extends T, K extends keyof T>(x: T, y: Readonly<U>, k: K): void {
+    x[k] = y[k];
+    y[k] = x[k];  // Error
+}
+
+type Thing = { a: string, b: string };
+
+function f30<T>(x: T, y: Partial<T>): void {
+    x = y;  // Error
+    y = x;
+}
+
+function f31<T extends Thing>(x: Partial<Thing>, y: Partial<T>): void {
+    x = y;
+    y = x;  // Error
+}
+
+function f40<T>(x: T, y: Readonly<T>): void {
+    x = y;
+    y = x;
+}
+
+function f41<T extends Thing>(x: Readonly<Thing>, y: Readonly<T>): void {
+    x = y;
+    y = x;  // Error
+}
+
+type Item = {
+    name: string;
+}
+
+type ItemMap = {
+    [x: string]: Item;
+}
+
+function f50<T extends ItemMap>(obj: T, key: keyof T): string {
+    let item: Item = obj[key];
+    return obj[key].name;
+}
+
+function f51<T extends ItemMap, K extends keyof T>(obj: T, key: K): string {
+    let item: Item = obj[key];
+    return obj[key].name;
+}
+
+/*pruned*/;   
+                         
+ 
+
+/*pruned*/;   
+                         
+ 
+
+/*pruned*/;                                
+          
+          
+ 
+
+/*pruned*/;         
+                         
+ 
+
+/*pruned*/;                                           
+                    
+          
+ 
+
+/*pruned*/;                                            
+          
+          
+ 
+
+/*pruned*/;                                                                      
+          
+          
+ 
+
+/*pruned*/;                                                                                   
+          
+                    
+ 
+
+/*pruned*/;                                                                                   
+          
+                    
+ 
+
+/*pruned*/;                                                                                   
+          
+                    
+ 
+
+/*pruned*/;                                                                                                
+          
+                    
+ 
+
+/*pruned*/;                                                                                                
+          
+                    
+ 
+
+/*pruned*/;                                                                                          
+          
+                    
+ 
+
+function f80<T>(t: T): Partial<T> {
+    return t;
+}
+
+function f81<T, K extends keyof T>(t: T, k: K): Partial<T[K]> {
+    return t[k];
+}
+
+function f82<T, K1 extends keyof T, K2 extends keyof T[K1]>(t: T, k1: K1, k2: K2): Partial<T[K1][K2]> {
+    return t[k1][k2];
+}
+
+// #31070
+/*pruned*/;                                   
+function f90<T extends { x: number }>(): void {
+    /*pruned*/;                    
+}
+
+function f<T extends { x: {} }>(): Partial<T> {
+    return undefined! as T;
+}
+
+// #32365
+interface SettingsTypes {
+  audio: {
+    volume: string;
+  };
+  video: {
+    resolution: string;
+  };
+}
+/*pruned*/;                                                          
+                 
+ 
+/*pruned*/;                                                     
+/*pruned*/;                                                               
+/*pruned*/;                                                                            
+/*pruned*/;                                                  
+/*pruned*/;                                                            
+
+function main(): void {}

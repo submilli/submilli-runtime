@@ -1,0 +1,9 @@
+types: 2 of 3 tsc entries compared, 2 differ
+
+line 2: a
+  tsc:  any
+  ours: unknown
+
+line 2: b
+  tsc:  any
+  ours: unknown

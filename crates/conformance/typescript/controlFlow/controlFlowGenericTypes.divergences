@@ -1,0 +1,116 @@
+types: 117 of 222 tsc entries compared, 25 differ
+
+line 7: x
+  tsc:  string
+  ours: T & {}
+
+line 8: x
+  tsc:  string
+  ours: T & {}
+
+line 11: y.a
+  tsc:  string
+  ours: T & {}
+
+line 12: y.a
+  tsc:  string
+  ours: T & {}
+
+line 15: z[0]
+  tsc:  string
+  ours: T & {}
+
+line 16: z[0]
+  tsc:  string
+  ours: T & {}
+
+line 23: x
+  tsc:  NonNullable<Extract<T, string | undefined>>
+  ours: Extract<T, string | undefined> & {}
+
+line 24: x
+  tsc:  string
+  ours: Extract<T, string | undefined> & {}
+
+line 25: x
+  tsc:  string
+  ours: Extract<T, string | undefined> & {}
+
+line 45: isUndefined
+  tsc:  (x: unknown) => x is undefined
+  ours: (arg0: unknown) => boolean
+
+line 45: x
+  tsc:  Box<T> | undefined
+  ours: T
+
+line 57: isUndefined
+  tsc:  (x: unknown) => x is undefined
+  ours: (arg0: unknown) => boolean
+
+line 57: x
+  tsc:  Box<T> | undefined
+  ours: T
+
+line 67: value
+  tsc:  "A"
+  ours: AB
+
+line 88: value
+  tsc:  MyUnion
+  ours: BB | AA
+
+line 116: object
+  tsc:  Union
+  ours: T
+
+line 117: object
+  tsc:  A1
+  ours: T & A1
+
+line 128: value
+  tsc:  A[K]
+  ours: <error>
+
+line 129: value
+  tsc:  number
+  ours: never
+
+line 155: obj
+  tsc:  T
+  ours: T & {}
+
+line 159: x1
+  tsc:  Record<keyof T, string>[K]
+  ours: T[K]
+
+line 159: obj[key]
+  tsc:  Record<keyof T, string>[K]
+  ours: T[K]
+
+line 159: obj
+  tsc:  Record<keyof T, string> | undefined
+  ours: T
+
+line 160: obj
+  tsc:  Record<keyof T, string>
+  ours: T & {}
+
+line 212: control
+  tsc:  T
+  ours: T & (Button | Checkbox)
+
+errors:
+line 159: tsc TS18048: 'obj' is possibly 'undefined'. (we accept)
+line 8: ours: expected `string`, got `T & {}` (tsc accepts)
+line 12: ours: expected `string`, got `T & {}` (tsc accepts)
+line 16: ours: expected `string`, got `T & {}` (tsc accepts)
+line 35: ours: type-guard return value does not narrow parameter `x` to `undefined` (tsc accepts)
+line 67: ours: expected `"A"`, got `AB` (tsc accepts)
+line 127: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)
+line 150: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)
+line 153: ours: unsupported Record key type `keyof T` (tsc accepts)
+line 155: ours: expected `number`, got `K` (tsc accepts)
+line 158: ours: unsupported Record key type `keyof T` (tsc accepts)
+line 160: ours: expected `number`, got `K` (tsc accepts)
+line 212: ours: objects can only be indexed by a string literal or a finite union of their keys (tsc accepts)

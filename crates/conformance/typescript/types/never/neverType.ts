@@ -32,25 +32,25 @@ function infiniteLoop2(): never {
     }
 }
 
-/*pruned*/;                                       
-                        
-                  
-                     
-                    
-                       
-     
-                                          
- 
+function move1(direction: "up" | "down"): 1 | -1 {
+    switch (direction) {
+        case "up":
+            return 1;
+        case "down":
+            return -1; 
+    }
+    return error("Should never get here");
+}
 
-/*pruned*/;                                       
-                                   
-                                   
-                                       
- 
+function move2(direction: "up" | "down"): 1 | -1 {
+    return direction === "up" ? 1 :
+        direction === "down" ? -1 :
+        error("Should never get here");
+}
 
-/*pruned*/;                                     
-                                         
- 
+function check<T>(x: T | undefined): NonNullable<T> {
+    return x || error("Undefined value");
+}
 
 class C {
     void1(): void {

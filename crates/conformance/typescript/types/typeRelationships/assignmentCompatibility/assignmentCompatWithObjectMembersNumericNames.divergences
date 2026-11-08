@@ -1,0 +1,105 @@
+types: 40 of 75 tsc entries compared, 25 differ
+
+line 16: a
+  tsc:  { 1: string; bar?: string; }
+  ours: { "1": string; bar?: string }
+
+line 16: null as unknown as ({ 1.: string; bar?: string })
+  tsc:  { 1: string; bar?: string; }
+  ours: { "1": string; bar?: string }
+
+line 17: b
+  tsc:  { 1: string; baz?: string; }
+  ours: { "1": string; baz?: string }
+
+line 17: null as unknown as ({ 1.0: string; baz?: string })
+  tsc:  { 1: string; baz?: string; }
+  ours: { "1": string; baz?: string }
+
+line 19: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 19: { 1.0: '' }
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 20: b2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 20: { 1: '' }
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 28: s2
+  tsc:  S2
+  ours: T2
+
+line 30: b
+  tsc:  { 1: string; baz?: string; }
+  ours: { "1": string; baz?: string }
+
+line 31: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 33: a
+  tsc:  { 1: string; bar?: string; }
+  ours: { "1": string; bar?: string }
+
+line 33: b
+  tsc:  { 1: string; baz?: string; }
+  ours: { "1": string; baz?: string }
+
+line 34: b
+  tsc:  { 1: string; baz?: string; }
+  ours: { "1": string; baz?: string }
+
+line 34: a
+  tsc:  { 1: string; bar?: string; }
+  ours: { "1": string; bar?: string }
+
+line 36: a
+  tsc:  { 1: string; bar?: string; }
+  ours: { "1": string; bar?: string }
+
+line 37: a
+  tsc:  { 1: string; bar?: string; }
+  ours: { "1": string; bar?: string }
+
+line 37: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 39: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 39: b2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 40: b2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 40: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 41: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+line 41: b
+  tsc:  { 1: string; baz?: string; }
+  ours: { "1": string; baz?: string }
+
+line 42: a2
+  tsc:  { 1: string; }
+  ours: { "1": string }
+
+errors:
+line 6: ours: property `1` has no initializer and is not assigned in the constructor (tsc accepts)
+line 7: ours: property `1` has no initializer and is not assigned in the constructor (tsc accepts)

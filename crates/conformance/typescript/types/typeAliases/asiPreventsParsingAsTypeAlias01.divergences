@@ -1,0 +1,17 @@
+types: 6 of 8 tsc entries compared, 4 differ
+
+line 3: type
+  tsc:  any
+  ours: unknown
+
+line 4: string
+  tsc:  any
+  ours: unknown
+
+line 5: Foo
+  tsc:  any
+  ours: unknown
+
+line 8: Foo
+  tsc:  any
+  ours: unknown

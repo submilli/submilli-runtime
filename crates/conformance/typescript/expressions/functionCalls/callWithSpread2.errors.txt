@@ -1,0 +1,12 @@
+callWithSpread2.ts(24,13): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+callWithSpread2.ts(25,7): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+callWithSpread2.ts(28,5): error TS2345: Argument of type 'string | number' is not assignable to parameter of type 'number | undefined'.   Type 'string' is not assignable to type 'number'.
+callWithSpread2.ts(29,5): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+callWithSpread2.ts(30,13): error TS2345: Argument of type 'string | number' is not assignable to parameter of type 'number | undefined'.   Type 'string' is not assignable to type 'number'.
+callWithSpread2.ts(31,13): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+callWithSpread2.ts(32,11): error TS2345: Argument of type 'string | number' is not assignable to parameter of type 'number | undefined'.   Type 'string' is not assignable to type 'number'.
+callWithSpread2.ts(33,11): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+callWithSpread2.ts(34,8): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+callWithSpread2.ts(35,8): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+callWithSpread2.ts(36,8): error TS2345: Argument of type 'number' is not assignable to parameter of type 'string'.
+callWithSpread2.ts(37,14): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.

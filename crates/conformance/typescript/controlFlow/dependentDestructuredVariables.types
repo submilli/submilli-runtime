@@ -170,24 +170,111 @@ function f12({ kind, payload }: Action): void {
 }
 
 // repro #50206
-/*pruned*/;
+function f13<T extends Action>({ kind, payload }: T): void {
+>f13 : <T extends Action>({ kind, payload }: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>kind : "A" | "B"
+>     : ^^^^^^^^^
+>payload : string | number
+>        : ^^^^^^^^^^^^^^^
 
+    if (kind === 'A') {
+>kind === 'A' : boolean
+>             : ^^^^^^^
+>kind : "A" | "B"
+>     : ^^^^^^^^^
+>'A' : "A"
+>    : ^^^
 
+        payload.toFixed();
+>payload.toFixed() : string
+>                  : ^^^^^^
+>payload.toFixed : (fractionDigits?: number) => string
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>payload : number
+>        : ^^^^^^
+>toFixed : (fractionDigits?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    }
+    if (kind === 'B') {
+>kind === 'B' : boolean
+>             : ^^^^^^^
+>kind : "A" | "B"
+>     : ^^^^^^^^^
+>'B' : "B"
+>    : ^^^
 
+        payload.toUpperCase();
+>payload.toUpperCase() : string
+>                      : ^^^^^^
+>payload.toUpperCase : () => string
+>                    : ^^^^^^^^^^^^
+>payload : string
+>        : ^^^^^^
+>toUpperCase : () => string
+>            : ^^^^^^^^^^^^
 
+    }
+}
 
+function f14<T extends Action>(t: T): void {
+>f14 : <T extends Action>(t: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
 
+    const { kind, payload } = t;
+>kind : "A" | "B"
+>     : ^^^^^^^^^
+>payload : string | number
+>        : ^^^^^^^^^^^^^^^
+>t : Action
+>  : ^^^^^^
 
-/*pruned*/;
+    if (kind === 'A') {
+>kind === 'A' : boolean
+>             : ^^^^^^^
+>kind : "A" | "B"
+>     : ^^^^^^^^^
+>'A' : "A"
+>    : ^^^
 
+        payload.toFixed();
+>payload.toFixed() : string
+>                  : ^^^^^^
+>payload.toFixed : (fractionDigits?: number) => string
+>                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>payload : number
+>        : ^^^^^^
+>toFixed : (fractionDigits?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    }
+    if (kind === 'B') {
+>kind === 'B' : boolean
+>             : ^^^^^^^
+>kind : "A" | "B"
+>     : ^^^^^^^^^
+>'B' : "B"
+>    : ^^^
 
+        payload.toUpperCase();
+>payload.toUpperCase() : string
+>                      : ^^^^^^
+>payload.toUpperCase : () => string
+>                    : ^^^^^^^^^^^^
+>payload : string
+>        : ^^^^^^
+>toUpperCase : () => string
+>            : ^^^^^^^^^^^^
 
-
-
-
-
+    }
+}
 
 type Action2 =
 >Action2 : Action2

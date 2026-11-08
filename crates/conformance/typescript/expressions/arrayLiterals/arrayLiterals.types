@@ -100,7 +100,46 @@ let boolArr = [false, true, false, true];
 /*pruned*/;                                                                   // Should OK, not be a parse error
 
 // Contextual type C with numeric index signature makes array literal of EveryType E of type BCT(E,C)[]
-/*pruned*/;
+let context1: { [n: number]: { a: string; b: number; }; } = [{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }];
+>context1 : { [n: number]: { a: string; b: number; }; }
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>n : number
+>  : ^^^^^^
+>a : string
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>[{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }] : ({ a: string; b: number; c: string; } | { a: string; b: number; c: number; })[]
+>                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: '', b: 0, c: '' } : { a: string; b: number; c: string; }
+>                       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>b : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+>c : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+>{ a: "", b: 3, c: 0 } : { a: string; b: number; c: number; }
+>                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>b : number
+>  : ^^^^^^
+>3 : 3
+>  : ^
+>c : number
+>  : ^^^^^^
+>0 : 0
+>  : ^
+
 let context2 = [{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }];
 >context2 : ({ a: string; b: number; c: string; } | { a: string; b: number; c: number; })[]
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

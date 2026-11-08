@@ -1,0 +1,334 @@
+=== mappedTypes2.ts ===
+
+function verifyLibTypes<T, K extends keyof T, U>(): void {
+>verifyLibTypes : <T, K extends keyof T, U>() => void
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K : K
+>  : ^
+>U : U
+>  : ^
+
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+}
+
+type Proxy<T> = {
+>Proxy : Proxy<T>
+>      : ^^^^^^^^
+>T : T
+>  : ^
+
+    get(): T;
+>get : () => T
+>    : ^^^^^^^
+
+    set(value: T): void;
+>set : (value: T) => void
+>    : ^^^^^^^^^^^^^^^^^^
+>value : T
+>      : ^
+
+}
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+function assign<T>(obj: T, props: Partial<T>): void { }
+>assign : <T>(obj: T, props: Partial<T>) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>obj : T
+>    : ^
+>props : Partial<T>
+>      : ^^^^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+function mapObject<K extends string, T, U>(obj: Record<K, T>, f: (x: T) => U): Record<K, U> { return null as unknown as (Record<K, U>); }
+>mapObject : <K extends string, T, U>(obj: Record<K, T>, f: (x: T) => U) => Record<K, U>
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>K : K
+>  : ^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>obj : Record<K, T>
+>    : ^^^^^^^^^^^^
+>f : (x: T) => U
+>  : ^^^^^^^^^^^
+>x : T
+>  : ^
+>null as unknown as (Record<K, U>) : Record<K, U>
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+interface Point {
+>Point : Point
+>      : ^^^^^
+
+    x: number;
+>x : number
+>  : ^^^^^^
+
+    y: number;
+>y : number
+>  : ^^^^^^
+
+}
+
+interface Shape {
+>Shape : Shape
+>      : ^^^^^
+
+    name: string;
+>name : string
+>     : ^^^^^^
+
+    width: number;
+>width : number
+>      : ^^^^^^
+
+    height: number;
+>height : number
+>       : ^^^^^^
+
+    location: Point;
+>location : Point
+>         : ^^^^^
+
+}
+
+interface PartialShape {
+>PartialShape : PartialShape
+>             : ^^^^^^^^^^^^
+
+    name?: string;
+>name : string | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+
+    width?: number;
+>width : number | undefined
+>      : ^^^^^^^^^^^^^^^^^^
+
+    height?: number;
+>height : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+
+    location?: Point;
+>location : Point | undefined
+>         : ^^^^^^^^^^^^^^^^^
+
+}
+
+interface ReadonlyShape {
+>ReadonlyShape : ReadonlyShape
+>              : ^^^^^^^^^^^^^
+
+    readonly name: string;
+>name : string
+>     : ^^^^^^
+
+    readonly width: number;
+>width : number
+>      : ^^^^^^
+
+    readonly height: number;
+>height : number
+>       : ^^^^^^
+
+    readonly location: Point;
+>location : Point
+>         : ^^^^^
+
+}
+
+function f0(s1: Shape, s2: Shape): void {
+>f0 : (s1: Shape, s2: Shape) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s1 : Shape
+>   : ^^^^^
+>s2 : Shape
+>   : ^^^^^
+
+    assign(s1, { name: "circle" });
+>assign(s1, { name: "circle" }) : void
+>                               : ^^^^
+>assign : <T>(obj: T, props: Partial<T>) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s1 : Shape
+>   : ^^^^^
+>{ name: "circle" } : { name: string; }
+>                   : ^^^^^^^^^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>"circle" : "circle"
+>         : ^^^^^^^^
+
+    assign(s2, { width: 10, height: 20 });
+>assign(s2, { width: 10, height: 20 }) : void
+>                                      : ^^^^
+>assign : <T>(obj: T, props: Partial<T>) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s2 : Shape
+>   : ^^^^^
+>{ width: 10, height: 20 } : { width: number; height: number; }
+>                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>width : number
+>      : ^^^^^^
+>10 : 10
+>   : ^^
+>height : number
+>       : ^^^^^^
+>20 : 20
+>   : ^^
+
+}
+
+function f1(shape: Shape): void {
+>f1 : (shape: Shape) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^
+>shape : Shape
+>      : ^^^^^
+
+    let frozen: ReadonlyShape = null as unknown as (ReadonlyShape);
+>frozen : ReadonlyShape
+>       : ^^^^^^^^^^^^^
+>null as unknown as (ReadonlyShape) : ReadonlyShape
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let frozen_2: Readonly<Shape> = null as unknown as (Readonly<Shape>);
+>frozen_2 : Readonly<Shape>
+>         : ^^^^^^^^^^^^^^^
+>null as unknown as (Readonly<Shape>) : Readonly<Shape>
+>                                     : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    /*pruned*/;
+}
+
+function f2(shape: Shape): void {
+>f2 : (shape: Shape) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^
+>shape : Shape
+>      : ^^^^^
+
+    let partial: PartialShape = null as unknown as (PartialShape);
+>partial : PartialShape
+>        : ^^^^^^^^^^^^
+>null as unknown as (PartialShape) : PartialShape
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let partial_2: Partial<Shape> = null as unknown as (Partial<Shape>);
+>partial_2 : Partial<Shape>
+>          : ^^^^^^^^^^^^^^
+>null as unknown as (Partial<Shape>) : Partial<Shape>
+>                                    : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let partial_3: Partial<Shape> = {};
+>partial_3 : Partial<Shape>
+>          : ^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+}
+
+function f3(shape: Shape): void {
+>f3 : (shape: Shape) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^
+>shape : Shape
+>      : ^^^^^
+
+    /*pruned*/;                                 // { name: string, location: Point }
+}
+
+function f4(): void {
+>f4 : () => void
+>   : ^^^^^^^^^^
+
+    const rec = { foo: "hello", bar: "world", baz: "bye" };
+>rec : { foo: string; bar: string; baz: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ foo: "hello", bar: "world", baz: "bye" } : { foo: string; bar: string; baz: string; }
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>foo : string
+>    : ^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+>bar : string
+>    : ^^^^^^
+>"world" : "world"
+>        : ^^^^^^^
+>baz : string
+>    : ^^^^^^
+>"bye" : "bye"
+>      : ^^^^^
+
+    const lengths = mapObject(rec, s => s.length);  // { foo: number, bar: number, baz: number }
+>lengths : Record<"foo" | "bar" | "baz", number>
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>mapObject(rec, s => s.length) : Record<"foo" | "bar" | "baz", number>
+>                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>mapObject : <K extends string, T, U>(obj: Record<K, T>, f: (x: T) => U) => Record<K, U>
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>rec : { foo: string; bar: string; baz: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s => s.length : (s: string) => number
+>              : ^^^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+>s.length : number
+>         : ^^^^^^
+>s : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+
+}
+
+function f5(shape: Shape): void {
+>f5 : (shape: Shape) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^
+>shape : Shape
+>      : ^^^^^
+
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+}
+
+/*pruned*/;
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

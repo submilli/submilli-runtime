@@ -339,37 +339,146 @@ type DataCarrier<Data> = WithError | WithoutError<Data>
 >     : ^^^^
 
 
-/*pruned*/;
+function f20<Data>(carrier: DataCarrier<Data>): void {
+>f20 : <Data>(carrier: DataCarrier<Data>) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>Data : Data
+>     : ^^^^
+>carrier : DataCarrier<Data>
+>        : ^^^^^^^^^^^^^^^^^
 
+    if (carrier.error === null) {
+>carrier.error === null : boolean
+>                       : ^^^^^^^
+>carrier.error : Error | null
+>              : ^^^^^^^^^^^^
+>carrier : DataCarrier<Data>
+>        : ^^^^^^^^^^^^^^^^^
+>error : Error | null
+>      : ^^^^^^^^^^^^
 
+        const error: null = carrier.error
+>error : null
+>      : ^^^^
+>carrier.error : null
+>              : ^^^^
+>carrier : WithoutError<Data>
+>        : ^^^^^^^^^^^^^^^^^^
+>error : null
+>      : ^^^^
 
+        const data: Data = carrier.data
+>data : Data
+>     : ^^^^
+>carrier.data : Data
+>             : ^^^^
+>carrier : WithoutError<Data>
+>        : ^^^^^^^^^^^^^^^^^^
+>data : Data
+>     : ^^^^
 
+    } else {
+        const error: Error = carrier.error
+>error : Error
+>      : ^^^^^
+>carrier.error : Error
+>              : ^^^^^
+>carrier : WithError
+>        : ^^^^^^^^^
+>error : Error
+>      : ^^^^^
 
+        const data: null = carrier.data
+>data : null
+>     : ^^^^
+>carrier.data : null
+>             : ^^^^
+>carrier : WithError
+>        : ^^^^^^^^^
+>data : null
+>     : ^^^^
 
-
-
+    }
+}
 
 // Repro from #28935
 
-/*pruned*/;
+type Foo = { tag: true, x: number } | { tag: false, y: number } | { [x: string]: string };
+>Foo : Foo
+>    : ^^^
+>tag : true
+>    : ^^^^
+>true : true
+>     : ^^^^
+>x : number
+>  : ^^^^^^
+>tag : false
+>    : ^^^^^
+>false : false
+>      : ^^^^^
+>y : number
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
 
-/*pruned*/;
 
+function f30(foo: Foo): void {
+>f30 : (foo: Foo) => void
+>    : ^^^^^^^^^^^^^^^^^^
+>foo : Foo
+>    : ^^^
 
+    if (foo.tag) {
+>foo.tag : string | boolean
+>        : ^^^^^^^^^^^^^^^^
+>foo : Foo
+>    : ^^^
+>tag : string | boolean
+>    : ^^^^^^^^^^^^^^^^
 
+        foo;
+>foo : { tag: true; x: number; } | { [x: string]: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    }
+    else {
+        foo;
+>foo : { tag: false; y: number; } | { [x: string]: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    }
+}
 
+function f31(foo: Foo): void {
+>f31 : (foo: Foo) => void
+>    : ^^^^^^^^^^^^^^^^^^
+>foo : Foo
+>    : ^^^
 
+    if (foo.tag === true) {
+>foo.tag === true : boolean
+>                 : ^^^^^^^
+>foo.tag : string | boolean
+>        : ^^^^^^^^^^^^^^^^
+>foo : Foo
+>    : ^^^
+>tag : string | boolean
+>    : ^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
 
-/*pruned*/;
+        foo;
+>foo : { tag: true; x: number; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    }
+    else {
+        foo;
+>foo : { tag: false; y: number; } | { [x: string]: string; }
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-
-
-
-
-
+    }
+}
 
 // Repro from #33448
 

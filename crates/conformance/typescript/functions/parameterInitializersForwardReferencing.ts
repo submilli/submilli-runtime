@@ -17,14 +17,14 @@
  
 
 function inside(a = b): void {
-    /**/; 
+    let b;
 }
 
 function outside(): void {
-    /**/; 
-    /*pruned*/;                                                                                          
-              
-     
+    let b;
+    function inside(a: undefined = b): void { // Still an error because b is declared inside the function
+        let b;
+    }
 }
 
 function defaultArgFunction(a: () => number = function () { return b; }, b: number = 1): void { }
@@ -36,7 +36,7 @@ class C {
 }
 
 // Function expressions
-let x = (a = b, b = c, c = d) => { /**/;  };
+let x = (a = b, b = c, c = d) => { let d; };
 
 // Should not produce errors - can reference later parameters if they occur within a function expression initializer.
 /*pruned*/;                                                  

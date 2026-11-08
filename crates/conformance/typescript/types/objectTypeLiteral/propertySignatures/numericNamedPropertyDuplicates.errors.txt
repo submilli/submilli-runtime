@@ -1,0 +1,6 @@
+numericNamedPropertyDuplicates.ts(10,5): error TS2300: Duplicate identifier '2'.
+numericNamedPropertyDuplicates.ts(11,5): error TS2300: Duplicate identifier '2'.
+numericNamedPropertyDuplicates.ts(15,5): error TS2300: Duplicate identifier '1'.
+numericNamedPropertyDuplicates.ts(16,5): error TS2300: Duplicate identifier '1'.
+numericNamedPropertyDuplicates.ts(18,5): error TS2300: Duplicate identifier '1'.
+numericNamedPropertyDuplicates.ts(19,5): error TS2300: Duplicate identifier '1'.

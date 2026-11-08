@@ -1,0 +1,12 @@
+intrinsicKeyword.ts(4,9): error TS2304: Cannot find name 'intrinsic'.
+intrinsicKeyword.ts(4,41): error TS2304: Cannot find name 'intrinsic'.
+intrinsicKeyword.ts(5,22): error TS2304: Cannot find name 'intrinsic'.
+intrinsicKeyword.ts(5,69): error TS2304: Cannot find name 'intrinsic'.
+intrinsicKeyword.ts(6,13): error TS2304: Cannot find name 'intrinsic'.
+intrinsicKeyword.ts(7,23): error TS2795: The 'intrinsic' keyword can only be used to declare compiler provided intrinsic types.
+intrinsicKeyword.ts(8,20): error TS2304: Cannot find name 'intrinsic'.
+intrinsicKeyword.ts(9,28): error TS2313: Type parameter 'intrinsic' has a circular constraint.
+intrinsicKeyword.ts(9,41): error TS2795: The 'intrinsic' keyword can only be used to declare compiler provided intrinsic types.
+intrinsicKeyword.ts(10,28): error TS2313: Type parameter 'intrinsic' has a circular constraint.
+intrinsicKeyword.ts(13,20): error TS2503: Cannot find namespace 'intrinsic'.
+intrinsicKeyword.ts(13,62): error TS2503: Cannot find namespace 'intrinsic'.

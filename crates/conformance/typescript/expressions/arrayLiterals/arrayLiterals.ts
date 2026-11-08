@@ -23,7 +23,7 @@ let boolArr = [false, true, false, true];
 /*pruned*/;                                                                   // Should OK, not be a parse error
 
 // Contextual type C with numeric index signature makes array literal of EveryType E of type BCT(E,C)[]
-/*pruned*/;                                                                                                 
+let context1: { [n: number]: { a: string; b: number; }; } = [{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }];
 let context2 = [{ a: '', b: 0, c: '' }, { a: "", b: 3, c: 0 }];
 
 // Contextual type C with numeric index signature of type Base makes array literal of Derived have type Base[]

@@ -1,0 +1,2 @@
+line 5, 9, 13 type: by-design spec §2.1 a property read through a type parameter has its bound's property type, where tsc keeps the indexed access `T["b"]`
+line 12 type: artifact we print `keyof (T | U)`, which tsc prints as the intersection `keyof T & keyof U`

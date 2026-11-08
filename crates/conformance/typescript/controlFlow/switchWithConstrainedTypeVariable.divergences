@@ -1,0 +1,9 @@
+types: 6 of 14 tsc entries compared, 2 differ
+
+line 9: key
+  tsc:  "a"
+  ours: T
+
+line 12: key
+  tsc:  "b"
+  ours: T

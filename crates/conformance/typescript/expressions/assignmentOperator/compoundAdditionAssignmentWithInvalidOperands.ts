@@ -35,9 +35,9 @@ x4 += a;
 x4 += true;
 x4 += {};
 
-/*pruned*/;                        
-/**/;   
-/*pruned*/;
-/**/;    
+let x5: E = null as unknown as (E);
+x5 += a;
+x5 += true;
+x5 += {};
 
 function main(): void {}

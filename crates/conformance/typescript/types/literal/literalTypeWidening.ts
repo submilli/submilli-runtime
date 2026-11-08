@@ -111,8 +111,8 @@ let x = onMouseOver();
 
 // Repro from #23649
 
-/*pruned*/;                                                                  
-                                             
+/*pruned*/;                                                                       
+                                                  
                                          
                
  
@@ -127,11 +127,11 @@ let x = onMouseOver();
                                                
 /*pruned*/;                               
 
-                                                    
+/*pruned*/;                                         
 
-// Repro from #29081
+                    
 
-/*pruned*/;                                                   
+                                                              
                              
                                         
  

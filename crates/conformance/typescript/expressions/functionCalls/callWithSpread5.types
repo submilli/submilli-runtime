@@ -1,0 +1,73 @@
+=== callWithSpread5.ts ===
+const x: number = null as unknown as (number);
+>x : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const nnnu: [number, number, number?] = null as unknown as ([number, number, number?]);
+>nnnu : [number, number, (number | undefined)?]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ([number, number, number?]) : [number, number, (number | undefined)?]
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const nntnnnt: [number, number] | [number, number, number] = null as unknown as ([number, number] | [number, number, number]);
+>nntnnnt : [number, number] | [number, number, number]
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ([number, number] | [number, number, number]) : [number, number] | [number, number, number]
+>                                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+function fn(a: number, b: number, bb: number, ...c: number[]): number { return null as unknown as (number); }
+>fn : (a: number, b: number, bb: number, ...c: number[]) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>bb : number
+>   : ^^^^^^
+>c : number[]
+>  : ^^^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+fn(...nnnu, x)
+>fn(...nnnu, x) : number
+>               : ^^^^^^
+>fn : (a: number, b: number, bb: number, ...c: number[]) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...nnnu : number | undefined
+>        : ^^^^^^^^^^^^^^^^^^
+>nnnu : [number, number, (number | undefined)?]
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+fn(...nntnnnt, x)
+>fn(...nntnnnt, x) : number
+>                  : ^^^^^^
+>fn : (a: number, b: number, bb: number, ...c: number[]) => number
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...nntnnnt : number
+>           : ^^^^^^
+>nntnnnt : [number, number] | [number, number, number]
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

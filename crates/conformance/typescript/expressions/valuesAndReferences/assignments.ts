@@ -22,8 +22,8 @@ E.A = null; // OK per spec, Error per implementation (509581)
 function fn(): void { }
 fn = null; // Should be error
 
-/**/; 
-/**/;     // OK
+let v;
+v = null; // OK
 
 /*pruned*/;            
                    

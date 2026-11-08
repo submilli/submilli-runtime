@@ -4,8 +4,8 @@
 // In an intersection everything absorbs unknown
 
 /*pruned*/;                 // null
-/*pruned*/;                 // undefined
-/*pruned*/;                        // never
+/*pruned*/;                      // undefined
+/*pruned*/;                             // never
 /*pruned*/;                   // string
 /*pruned*/;                     // string[]
 /*pruned*/;                    // unknown
@@ -110,7 +110,7 @@ function f20(x: unknown): void {
 function f22(x: unknown): void {
     /*pruned*/;     
     let v2: unknown = x;
-    /*pruned*/;          // Error
+    let v3: object = x;  // Error
     let v4: string = x;  // Error
     let v5: string[] = x;  // Error
     let v6: {} = x;  // Error
@@ -119,18 +119,18 @@ function f22(x: unknown): void {
 
 // Type parameter 'T extends unknown' not related to object
 
-/*pruned*/;                                  
-                                
- 
+function f23<T extends unknown>(x: T): void {
+    let y: object = x;  // Error
+}
 
 // Anything fresh but primitive assignable to { [x: string]: unknown }
 
-/*pruned*/;                                      
-           
-                 
-                           
-                      
- 
+function f24(x: { [x: string]: unknown }): void {
+    x = {};
+    x = { a: 5 };
+    x = [1, 2, 3]; // Error
+    x = 123;  // Error
+}
 
 // Locals of type unknown always considered initialized
 
@@ -169,10 +169,10 @@ function f28(x: unknown): void {
 
 // Type parameter with explicit 'unknown' constraint not assignable to '{}'
 
-/*pruned*/;                                           
-                  
-                  
- 
+function f30<T, U extends unknown>(t: T, u: U): void {
+    let x: {} = t;
+    let y: {} = u;
+}
 
 // Repro from #26796
 
@@ -180,9 +180,9 @@ function f28(x: unknown): void {
 /*pruned*/;                                                                   
 /*pruned*/;                                 // false
 
-/*pruned*/;                                   
-                         
- 
+function oops<T extends unknown>(arg: T): {} {
+    return arg;  // Error
+}
 
 
 function main(): void {}

@@ -34,13 +34,25 @@ interface S extends T {
 
 }
 
-/*pruned*/;
+interface T2 {
+>T2 : T2
+>   : ^^
 
+    1?: Base;
+>1 : Base | undefined
+>  : ^^^^^^^^^^^^^^^^
 
+}
 
-/*pruned*/;
+interface S2 extends T2 {
+>S2 : S2
+>   : ^^
 
+    2: Derived; // ok
+>2 : Derived
+>  : ^^^^^^^
 
+}
 
 interface T3 {
 >T3 : T3

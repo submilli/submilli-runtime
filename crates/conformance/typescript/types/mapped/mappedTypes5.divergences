@@ -1,0 +1,7 @@
+types: 60 of 97 tsc entries compared, 0 differ
+
+errors:
+line 40: ours: no method `create` on `ObjectConstructor` (tsc accepts)
+line 41: ours: no method `create` on `ObjectConstructor` (tsc accepts)
+line 59: ours: no method `create` on `ObjectConstructor` (tsc accepts)
+line 60: ours: no method `create` on `ObjectConstructor` (tsc accepts)

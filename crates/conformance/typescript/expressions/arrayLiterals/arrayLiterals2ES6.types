@@ -143,8 +143,14 @@ let temp2: [number[], string[]] = [[1, 2, 3], ["hello", "string"]];
 >         : ^^^^^^^^
 
 
-/*pruned*/;
-/*pruned*/;
+interface myArray extends Array<Number> { }
+>myArray : myArray
+>        : ^^^^^^^
+
+interface myArray2 extends Array<Number|String> { }
+>myArray2 : myArray2
+>         : ^^^^^^^^
+
 let d0 = [1, true, ...temp, ];  // has type (string|number|boolean)[]
 >d0 : (string | number | boolean)[]
 >   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -179,8 +185,30 @@ let d2: number[] = [...temp1];
 >temp1 : number[]
 >      : ^^^^^^^^
 
-/*pruned*/;
-/*pruned*/;
+let d3: myArray = [...temp1];
+>d3 : myArray
+>   : ^^^^^^^
+>[...temp1] : number[]
+>           : ^^^^^^^^
+>...temp1 : number
+>         : ^^^^^^
+>temp1 : number[]
+>      : ^^^^^^^^
+
+let d4: myArray2 = [...temp, ...temp1];
+>d4 : myArray2
+>   : ^^^^^^^^
+>[...temp, ...temp1] : (string | number)[]
+>                    : ^^^^^^^^^^^^^^^^^^^
+>...temp : string
+>        : ^^^^^^
+>temp : string[]
+>     : ^^^^^^^^
+>...temp1 : number
+>         : ^^^^^^
+>temp1 : number[]
+>      : ^^^^^^^^
+
 /*pruned*/;
 /*pruned*/;
 let d7 = [...a4];

@@ -1,0 +1,21 @@
+mappedTypeRelationships.ts(15,5): error TS2322: Type 'T[keyof T]' is not assignable to type 'U[keyof T]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'.
+mappedTypeRelationships.ts(20,5): error TS2322: Type 'T[K]' is not assignable to type 'U[K]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'.
+mappedTypeRelationships.ts(24,5): error TS2536: Type 'keyof U' cannot be used to index type 'T'.
+mappedTypeRelationships.ts(25,12): error TS2536: Type 'keyof U' cannot be used to index type 'T'.
+mappedTypeRelationships.ts(29,5): error TS2536: Type 'K' cannot be used to index type 'T'.
+mappedTypeRelationships.ts(30,12): error TS2536: Type 'K' cannot be used to index type 'T'.
+mappedTypeRelationships.ts(34,5): error TS2322: Type 'T[keyof T] | undefined' is not assignable to type 'T[keyof T]'.   'T[keyof T]' could be instantiated with an arbitrary type which could be unrelated to 'T[keyof T] | undefined'.
+mappedTypeRelationships.ts(39,5): error TS2322: Type 'T[K] | undefined' is not assignable to type 'T[K]'.   'T[K]' could be instantiated with an arbitrary type which could be unrelated to 'T[K] | undefined'.
+mappedTypeRelationships.ts(44,5): error TS2322: Type 'U[keyof T] | undefined' is not assignable to type 'T[keyof T]'.   'T[keyof T]' could be instantiated with an arbitrary type which could be unrelated to 'U[keyof T] | undefined'.
+mappedTypeRelationships.ts(45,5): error TS2322: Type 'T[keyof T]' is not assignable to type 'U[keyof T] | undefined'.   Type 'T[string] | T[number] | T[symbol]' is not assignable to type 'U[keyof T] | undefined'.     Type 'T[string]' is not assignable to type 'U[keyof T] | undefined'.
+mappedTypeRelationships.ts(49,5): error TS2322: Type 'U[K] | undefined' is not assignable to type 'T[K]'.   'T[K]' could be instantiated with an arbitrary type which could be unrelated to 'U[K] | undefined'.
+mappedTypeRelationships.ts(50,5): error TS2322: Type 'T[K]' is not assignable to type 'U[K] | undefined'.   Type 'T[keyof T]' is not assignable to type 'U[K] | undefined'.     Type 'T[string] | T[number] | T[symbol]' is not assignable to type 'U[K] | undefined'.       Type 'T[string]' is not assignable to type 'U[K] | undefined'.
+mappedTypeRelationships.ts(55,5): error TS2542: Index signature in type 'Readonly<T>' only permits reading.
+mappedTypeRelationships.ts(60,5): error TS2542: Index signature in type 'Readonly<T>' only permits reading.
+mappedTypeRelationships.ts(65,5): error TS2322: Type 'T[keyof T]' is not assignable to type 'U[keyof T]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'.
+mappedTypeRelationships.ts(65,5): error TS2542: Index signature in type 'Readonly<U>' only permits reading.
+mappedTypeRelationships.ts(70,5): error TS2322: Type 'T[K]' is not assignable to type 'U[K]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'.
+mappedTypeRelationships.ts(70,5): error TS2542: Index signature in type 'Readonly<U>' only permits reading.
+mappedTypeRelationships.ts(76,5): error TS2322: Type 'Partial<T>' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'Partial<T>'.
+mappedTypeRelationships.ts(82,5): error TS2322: Type 'Partial<Thing>' is not assignable to type 'Partial<T>'.
+mappedTypeRelationships.ts(92,5): error TS2322: Type 'Readonly<Thing>' is not assignable to type 'Readonly<T>'.

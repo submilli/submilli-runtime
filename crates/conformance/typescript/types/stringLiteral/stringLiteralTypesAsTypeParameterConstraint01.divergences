@@ -1,0 +1,17 @@
+types: 25 of 49 tsc entries compared, 4 differ
+
+line 13: fResult
+  tsc:  "foo"
+  ours: string
+
+line 16: gResult
+  tsc:  "foo"
+  ours: string
+
+line 19: hResult
+  tsc:  "foo" | "bar"
+  ours: string
+
+line 20: hResult
+  tsc:  "foo" | "bar"
+  ours: string

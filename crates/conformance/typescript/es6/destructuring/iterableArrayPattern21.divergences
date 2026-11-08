@@ -1,0 +1,16 @@
+types: 3 of 8 tsc entries compared, 3 differ
+
+line 2: a
+  tsc:  any
+  ours: string
+
+line 2: b
+  tsc:  any
+  ours: boolean
+
+line 2: { 0: "", 1: true }
+  tsc:  { 0: string; 1: boolean; }
+  ours: { "0": string; "1": boolean }
+
+errors:
+line 2: tsc TS2488: Type '{ 0: string; 1: boolean; }' must have a '[Symbol.iterator]()' method that returns an iterator. (we accept)

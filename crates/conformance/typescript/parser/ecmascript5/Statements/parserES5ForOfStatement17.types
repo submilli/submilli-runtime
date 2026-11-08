@@ -1,0 +1,11 @@
+=== parserES5ForOfStatement17.ts ===
+for (let of; ;) { }
+>of : any
+>   : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

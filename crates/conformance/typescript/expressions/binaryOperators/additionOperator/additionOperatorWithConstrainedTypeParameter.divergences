@@ -1,0 +1,9 @@
+types: 26 of 39 tsc entries compared, 0 differ
+
+errors:
+line 3: ours: unsupported Record key type `K` (tsc accepts)
+line 4: ours: `+` not defined for `number` and `T[K]` (tsc accepts)
+line 5: ours: `+=` not defined for `number` and `T[K]` (tsc accepts)
+line 7: ours: unsupported Record key type `K` (tsc accepts)
+line 9: ours: `+` not defined for `number` and `T[K]` (tsc accepts)
+line 10: ours: `+=` not defined for `number` and `T[K]` (tsc accepts)

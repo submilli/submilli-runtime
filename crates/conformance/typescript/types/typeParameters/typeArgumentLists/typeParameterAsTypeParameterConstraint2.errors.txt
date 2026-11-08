@@ -1,0 +1,5 @@
+typeParameterAsTypeParameterConstraint2.ts(7,8): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'.
+typeParameterAsTypeParameterConstraint2.ts(8,8): error TS2345: Argument of type '{}' is not assignable to parameter of type 'number'.
+typeParameterAsTypeParameterConstraint2.ts(17,11): error TS2322: Type 'string' is not assignable to type 'number'.
+typeParameterAsTypeParameterConstraint2.ts(18,11): error TS2322: Type '{}' is not assignable to type 'number'.
+typeParameterAsTypeParameterConstraint2.ts(19,10): error TS2345: Argument of type 'string[]' is not assignable to parameter of type '{ length: never[]; }'.   Types of property 'length' are incompatible.     Type 'number' is not assignable to type 'never[]'.

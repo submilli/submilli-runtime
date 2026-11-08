@@ -1,0 +1,10 @@
+types: 3 of 9 tsc entries compared, 1 differ
+
+line 18: fn4
+  tsc:  any
+  ours: unknown
+
+errors:
+line 14: tsc TS2300: Duplicate identifier 'fn3'. (we accept)
+line 18: tsc TS2300: Duplicate identifier 'fn4'. (we accept)
+line 21: tsc TS2300: Duplicate identifier 'fn5'. (we accept)

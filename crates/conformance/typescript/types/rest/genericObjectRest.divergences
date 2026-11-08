@@ -1,0 +1,8 @@
+types: 14 of 43 tsc entries compared, 0 differ
+
+errors:
+line 7: ours: object rest can only destructure an object with a known shape; source has type `T` (tsc accepts)
+line 8: ours: object rest can only destructure an object with a known shape; source has type `T` (tsc accepts)
+line 9: ours: object rest can only destructure an object with a known shape; source has type `T` (tsc accepts)
+line 15: ours: unresolved identifier `Symbol` (tsc accepts)
+line 16: ours: unresolved identifier `Symbol` (tsc accepts)

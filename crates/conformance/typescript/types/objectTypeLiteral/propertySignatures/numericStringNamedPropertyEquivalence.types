@@ -1,0 +1,92 @@
+=== numericStringNamedPropertyEquivalence.ts ===
+// Each of these types has an error in it.
+// String named and numeric named properties conflict if they would be equivalent after ToNumber on the property name.
+class C {
+>C : C
+>  : ^
+
+    "1": number;
+>"1" : number
+>    : ^^^^^^
+
+    "1.0": number; // not a duplicate
+>"1.0" : number
+>      : ^^^^^^
+
+    1.0: number;
+>1.0 : number
+>    : ^^^^^^
+
+}
+
+interface I {
+>I : I
+>  : ^
+
+    "1": number;
+>"1" : number
+>    : ^^^^^^
+
+    "1.": number; // not a duplicate
+>"1." : number
+>     : ^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+}
+
+let a: {
+>a : { 1: number; }
+>  : ^^^^^^^^^^^^^^
+
+    "1": number;
+>"1" : number
+>    : ^^^^^^
+
+    1.0: string;
+>1.0 : number
+>    : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     "1": number;     1.0: string; }) : { 1: number; }
+>                                                           : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    "1": number;
+>"1" : number
+>    : ^^^^^^
+
+    1.0: string;
+>1.0 : number
+>    : ^^^^^^
+
+});
+
+let b = {
+>b : { 0: string; }
+>  : ^^^^^^^^^^^^^^
+>{     "0": '',     0: '' } : { 0: string; }
+>                           : ^^^^^^^^^^^^^^
+
+    "0": '',
+>"0" : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+    0: ''
+>0 : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

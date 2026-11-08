@@ -1,0 +1,58 @@
+=== functionNameConflicts.ts ===
+//Function and variable of the same name in same declaration space
+//Function overload with different name from implementation signature
+
+/*pruned*/;
+
+
+
+
+
+
+
+function fn3(): void { }
+>fn3 : () => void
+>    : ^^^^^^^^^^
+
+let fn3;
+>fn3 : any
+>    : ^^^
+
+
+function func(): void {
+>func : () => void
+>     : ^^^^^^^^^^
+
+    let fn4;
+>fn4 : any
+>    : ^^^
+
+    function fn4(): void { }
+>fn4 : () => void
+>    : ^^^^^^^^^^
+
+
+    function fn5(): void { }
+>fn5 : () => void
+>    : ^^^^^^^^^^
+
+    let fn5;
+>fn5 : any
+>    : ^^^
+
+}
+
+/*pruned*/;
+function overrr(): void {
+>overrr : () => void
+>       : ^^^^^^^^^^
+
+
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

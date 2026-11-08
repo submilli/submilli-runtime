@@ -54,10 +54,10 @@ x5 **= true;
 x5 **= ''
 x5 **= {};
 
-/*pruned*/;                        
-/**/;    
-/*pruned*/; 
-/**/;    
-/**/;     
+let x6: E = null as unknown as (E);
+x6 **= b;
+x6 **= true;
+x6 **= ''
+x6 **= {};
 
 function main(): void {}

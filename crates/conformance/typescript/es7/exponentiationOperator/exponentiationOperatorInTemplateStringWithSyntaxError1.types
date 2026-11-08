@@ -12,7 +12,10 @@ let t2 = 10;
 >10 : 10
 >   : ^^
 
-/**/;
+let s;
+>s : any
+>  : ^^^
+
 
 // Error: early syntax error using ES7 SimpleUnaryExpression on left-hand side without ()
 // TempateHead & TemplateTail are empty

@@ -24,8 +24,22 @@ let a: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
-/*pruned*/;
+let b: E = null as unknown as (E);
+>b : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let c: E | F = null as unknown as (E | F);
+>c : E | F
+>  : ^^^^^
+>null as unknown as (E | F) : E | F
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 let r1 = a + a;
 >r1 : number
@@ -37,9 +51,36 @@ let r1 = a + a;
 >a : number
 >  : ^^^^^^
 
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let r2 = a + b;
+>r2 : number
+>   : ^^^^^^
+>a + b : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>b : E
+>  : ^
+
+let r3 = b + a;
+>r3 : number
+>   : ^^^^^^
+>b + a : number
+>      : ^^^^^^
+>b : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r4 = b + b;
+>r4 : number
+>   : ^^^^^^
+>b + b : number
+>      : ^^^^^^
+>b : E
+>  : ^
+>b : E
+>  : ^
+
 
 let r5 = 0 + a;
 >r5 : number
@@ -120,11 +161,56 @@ let r9 = E['a'] + F['c'];
 >    : ^^^
 
 
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let r10 = a + c;
+>r10 : number
+>    : ^^^^^^
+>a + c : number
+>      : ^^^^^^
+>a : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
+let r11 = c + a;
+>r11 : number
+>    : ^^^^^^
+>c + a : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>a : number
+>  : ^^^^^^
+
+let r12 = b + c;
+>r12 : number
+>    : ^^^^^^
+>b + c : number
+>      : ^^^^^^
+>b : E
+>  : ^
+>c : E | F
+>  : ^^^^^
+
+let r13 = c + b;
+>r13 : number
+>    : ^^^^^^
+>c + b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : E
+>  : ^
+
+let r14 = c + c;
+>r14 : number
+>    : ^^^^^^
+>c + c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 
 
 function main(): void {}
