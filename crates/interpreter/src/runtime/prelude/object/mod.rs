@@ -40,7 +40,7 @@ fn ctor_key(method: &str) -> MangledName {
 }
 
 /// Canonical array-index property names, excluding 2^32 - 1.
-fn integer_key(units: &[u16]) -> Option<u32> {
+pub(super) fn integer_key(units: &[u16]) -> Option<u32> {
     if units.is_empty() || (units.len() > 1 && units.first() == Some(&48)) {
         return None;
     }

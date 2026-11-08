@@ -174,7 +174,11 @@ fn set_builtin_property(
 ) -> wasmtime::Result<()> {
     let name = String::from_utf16_lossy(key);
     let intr = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?;
-    let (array, regex) = (intr.array.clone(), intr.regex.clone());
+    let (array, uint8_array, regex) = (
+        intr.array.clone(),
+        intr.uint8_array.clone(),
+        intr.regex.clone(),
+    );
     let is_a = |caller: &mut Caller<'_, StoreData>, ty: &wasmtime::StructType| match object {
         Val::AnyRef(Some(any)) => match any.as_struct(&mut *caller)? {
             Some(st) => st.matches_ty(&*caller, ty),
@@ -182,11 +186,23 @@ fn set_builtin_property(
         },
         _ => Ok(false),
     };
-    let index = super::integer_key(key).filter(|index| *index < u32::MAX);
-    let result = if let (Some(index), true) = (index, is_a(caller, &array)?) {
-        // `xs[i] = v` through a generic `o[k]`: in range only, as a static
-        // array write.
-        set_array_element(caller, object, index, value)
+    // `xs[i] = v` through a generic `o[k]`: in range only, as a static write.
+    // A number that is no index (`-1`, `1.5`) is out of range there too.
+    let number = name
+        .parse::<f64>()
+        .ok()
+        .filter(|number| {
+            number.is_finite() && crate::runtime::number::format_number_js(*number) == name
+        });
+    let elements = if is_a(caller, &array)? {
+        Some(Elements::Array)
+    } else if is_a(caller, &uint8_array)? {
+        Some(Elements::Uint8)
+    } else {
+        None
+    };
+    let result = if let (Some(number), Some(elements)) = (number, elements) {
+        set_element(caller, object, elements, number, value)
     } else if name == "length" && is_a(caller, &array)? {
         let length = crate::runtime::host::read_boxed_number(caller, value, "Array#length")?;
         super::super::array::set_length(caller, object, length)
@@ -201,23 +217,56 @@ fn set_builtin_property(
     result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
 }
 
-fn set_array_element(
+#[derive(Clone, Copy)]
+enum Elements {
+    Array,
+    Uint8,
+}
+
+fn set_element(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
-    index: u32,
+    elements: Elements,
+    index: f64,
     value: &Val,
 ) -> wasmtime::Result<()> {
-    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
-    if index >= storage.len {
-        return Err(crate::runtime::host::range_error(format!(
-            "Array index {index} is out of range for length {}",
-            storage.len
-        )));
+    let backing = match elements {
+        Elements::Array => {
+            let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
+            (storage.backing, storage.len)
+        }
+        Elements::Uint8 => {
+            let object = super::super::iterator::as_struct(caller, object, "Uint8Array")?;
+            let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
+                return Err(crate::runtime::host::fatal_host_error(
+                    "invalid Uint8Array backing",
+                ));
+            };
+            let backing = backing.unwrap_array(&mut *caller)?;
+            let len = backing.len(&mut *caller)?;
+            (backing, len)
+        }
+    };
+    let (backing, len) = backing;
+    if index.fract() != 0.0 || index < 0.0 || index >= f64::from(len) {
+        let access = match elements {
+            Elements::Array => super::super::index::IndexAccess::Write,
+            Elements::Uint8 => super::super::index::IndexAccess::FixedWrite,
+        };
+        return Err(crate::runtime::host::range_error(
+            access.message(index, len as usize, ""),
+        ));
     }
+    let value = match elements {
+        Elements::Array => *value,
+        Elements::Uint8 => {
+            let number = crate::runtime::host::read_boxed_number(caller, value, "Uint8Array element")?;
+            Val::I32(i32::from(crate::runtime::number::to_uint8(number)))
+        }
+    };
     fuel::charge(&mut *caller, fuel::ELEM, 1)?;
-    storage
-        .backing
-        .set(&mut *caller, index, *value)
+    backing
+        .set(&mut *caller, index as u32, value)
         .map_err(crate::runtime::host::fatal_host_error)
 }
 

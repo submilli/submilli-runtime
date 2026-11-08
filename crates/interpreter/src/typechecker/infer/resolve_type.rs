@@ -1037,15 +1037,13 @@ impl<'a> Inferer<'a> {
         let resolved = self.resolve_type(operand)?;
         // Over a type parameter the key set is unknown until instantiation,
         // and over a later declaration until its members are bound.
-        match self.pending_declaration(std::slice::from_ref(&resolved)) {
-            Some(super::type_aliases::PendingDeclaration::Cycle(declared)) => {
-                self.report_cycle("keyof", &declared, operand.span);
-                return Ok(Type::Error);
-            }
-            Some(super::type_aliases::PendingDeclaration::Forward) => {
-                return Ok(Type::KeyOf(Box::new(resolved)));
-            }
-            None => {}
+        if let Some(ty) = self.defer_if_pending(
+            "keyof",
+            std::slice::from_ref(&resolved),
+            operand.span,
+            || Type::KeyOf(Box::new(resolved.clone())),
+        ) {
+            return Ok(ty);
         }
         if super::utility_types::holds_type_parameter(&resolved) {
             return Ok(Type::KeyOf(Box::new(resolved)));
@@ -1071,33 +1069,70 @@ impl<'a> Inferer<'a> {
     ) -> Result<Type, CompilerFailure> {
         let object_ty = self.resolve_type(object)?;
         let index_ty = self.resolve_type(index)?;
-        match self.pending_declaration(&[object_ty.clone(), index_ty.clone()]) {
-            Some(super::type_aliases::PendingDeclaration::Cycle(declared)) => {
-                self.report_cycle("T[K]", &declared, object.span);
-                return Ok(Type::Error);
-            }
-            Some(super::type_aliases::PendingDeclaration::Forward) => {
-                return Ok(Type::IndexedAccess {
-                    object: Box::new(object_ty),
-                    index: Box::new(index_ty),
-                });
-            }
-            None => {}
+        let operands = [object_ty.clone(), index_ty.clone()];
+        if let Some(ty) = self.defer_if_pending("T[K]", &operands, index.span, || {
+            Type::indexed_access(object_ty.clone(), index_ty.clone())
+        }) {
+            return Ok(ty);
         }
         // Over a type parameter the property is unknown until instantiation.
         if super::utility_types::holds_type_parameter(&object_ty)
             || super::utility_types::holds_type_parameter(&index_ty)
         {
-            return Ok(Type::IndexedAccess {
-                object: Box::new(object_ty),
-                index: Box::new(index_ty),
-            });
+            // Its key is checked against `keyof T` with the other written
+            // constraints (`check_named_type_constraints`).
+            return Ok(Type::indexed_access(object_ty, index_ty));
         }
-        match super::utility_types::index_access_type(&object_ty, &index_ty, self.resolver()) {
-            Ok(ty) => Ok(ty),
-            Err(message) => {
-                self.error(index.span, message);
-                Ok(Type::Error)
+        let property =
+            match super::utility_types::index_access_type(&object_ty, &index_ty, self.resolver()) {
+                Ok(ty) => ty,
+                Err(message) => {
+                    self.error(index.span, message);
+                    return Ok(Type::Error);
+                }
+            };
+        self.settle_written_form(property, "T[K]", index.span)
+    }
+
+    /// A form's evaluation where it is written. One still naming a later
+    /// declaration stays lazy and is checked once every declaration is bound;
+    /// one naming the declaration being bound (`interface J { b: I["a"] }`
+    /// with `I["a"]` being `J["b"]`) is a cycle; any other is evaluated to the
+    /// end, reporting why it has none.
+    pub(super) fn settle_written_form(
+        &mut self,
+        ty: Type,
+        operator: &str,
+        span: crate::Span,
+    ) -> Result<Type, CompilerFailure> {
+        let mut current = ty;
+        let mut seen = Vec::new();
+        loop {
+            if let Some(ty) = self.defer_if_pending(
+                operator,
+                std::slice::from_ref(&current),
+                span,
+                || current.clone(),
+            ) {
+                return Ok(ty);
+            }
+            // Follow a chain of forms (`I["a"]` is `J["b"]`, which is
+            // `K["c"]`) one step at a time, so one reaching the declaration
+            // being bound is reported as the cycle it is.
+            let Some(step) = super::utility_types::evaluate_step(&current, self.resolver()) else {
+                return self.normalize_at(&current, span);
+            };
+            if seen.contains(&current) {
+                self.error(span, format!("`{current}` refers to itself"));
+                return Ok(Type::Error);
+            }
+            seen.push(current);
+            match step {
+                Ok(next) => current = next,
+                Err(reason) => {
+                    self.error(span, reason);
+                    return Ok(Type::Error);
+                }
             }
         }
     }

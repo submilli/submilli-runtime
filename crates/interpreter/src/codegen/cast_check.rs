@@ -586,8 +586,7 @@ fn emit_structural_test_inner(
         // So does one codegen instantiated (`Partial<{ a: number }>` for a
         // generic class's field): it has no type table to evaluate it with.
         operator
-            if operator.is_type_operator()
-                || operator.is_utility_application()
+            if operator.is_utility_application()
                 || matches!(operator, Type::KeyOf(_) | Type::IndexedAccess { .. }) =>
         {
             emitter.instruction(Instruction::I32Const(1));

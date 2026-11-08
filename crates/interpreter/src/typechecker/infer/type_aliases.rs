@@ -227,14 +227,8 @@ impl<'a> Inferer<'a> {
         };
         let deferred = deferred(utility, args.clone());
         self.check_application_constraints(&deferred, span)?;
-        match self.pending_declaration(&args) {
-            Some(PendingDeclaration::Cycle(declared)) => {
-                self.report_cycle(utility.name(), &declared, span);
-                return Ok(Type::Error);
-            }
-            // Evaluated where it is used, once every declaration is bound.
-            Some(PendingDeclaration::Forward) => return Ok(deferred),
-            None => {}
+        if let Some(ty) = self.defer_if_pending(utility.name(), &args, span, || deferred.clone()) {
+            return Ok(ty);
         }
         let ty = match evaluate(utility, &args, self.resolver()) {
             Evaluated::Resolved(ty) => label(utility, args, ty),
@@ -265,6 +259,44 @@ impl<'a> Inferer<'a> {
     /// finished: one it is resolving or binding now (a cycle, as in `type
     /// Tree = { kids: Partial<Tree>[] }` or `interface Node { next:
     /// Readonly<Node> }`), or a later one whose members are not bound yet.
+    /// Run `bind` for the interface or class `name`: a form over it there is
+    /// a cycle, and afterwards it is bound.
+    pub(super) fn with_binding<T>(
+        &mut self,
+        name: String,
+        bind: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.binding_types.push(name.clone());
+        let result = bind(self);
+        self.binding_types.pop();
+        self.unbound_types.remove(&name);
+        result
+    }
+
+    /// The form a written operator stands for while `operands` name a
+    /// declaration not bound yet: `Error` after reporting a cycle, or `form`,
+    /// evaluated where it is used once every declaration is bound. `None`
+    /// when every declaration they name is bound.
+    pub(super) fn defer_if_pending(
+        &mut self,
+        operator: &str,
+        operands: &[Type],
+        span: crate::Span,
+        form: impl FnOnce() -> Type,
+    ) -> Option<Type> {
+        match self.pending_declaration(operands)? {
+            PendingDeclaration::Cycle(declared) => {
+                self.report_cycle(operator, &declared, span);
+                Some(Type::Error)
+            }
+            PendingDeclaration::Forward => {
+                let form = form();
+                self.forward_forms.push((form.clone(), span));
+                Some(form)
+            }
+        }
+    }
+
     pub(super) fn pending_declaration(&self, operands: &[Type]) -> Option<PendingDeclaration> {
         let mut referenced = BTreeSet::new();
         let mut pending: Vec<&Type> = operands.iter().collect();
@@ -281,13 +313,15 @@ impl<'a> Inferer<'a> {
             self.type_mangled_name(name)
                 .is_some_and(|mangled| referenced.contains(&mangled))
         };
-        if let Some(declared) = self
-            .alias_resolution_stack
-            .iter()
-            .chain(&self.binding_types)
-            .find(is_referenced)
-        {
+        if let Some(declared) = self.alias_resolution_stack.iter().find(is_referenced) {
             return Some(PendingDeclaration::Cycle(declared.clone()));
+        }
+        if let Some(declared) = self.binding_types.iter().find(is_referenced) {
+            return Some(if self.resolving_method_signature {
+                PendingDeclaration::Forward
+            } else {
+                PendingDeclaration::Cycle(declared.clone())
+            });
         }
         self.unbound_types
             .iter()
@@ -309,6 +343,22 @@ impl<'a> Inferer<'a> {
                  self-referencing applications are not supported yet"
             )],
         );
+    }
+
+    /// Check each form kept lazy over a later declaration now that every
+    /// declaration is bound, reporting where it was written why it has no
+    /// evaluation: a missing member (`B["zz"]`), or a cycle of forms that only
+    /// name each other (`A["b"]` and `B["c"]`).
+    pub(super) fn check_forward_forms(&mut self) -> Result<(), CompilerFailure> {
+        for (form, span) in std::mem::take(&mut self.forward_forms) {
+            let mut failures = Vec::new();
+            super::utility_types::normalize_reporting(&form, self.resolver(), &mut failures)
+                .map_err(super::type_limit_at(span))?;
+            if let Some(failure) = failures.into_iter().next() {
+                self.error(span, failure);
+            }
+        }
+        Ok(())
     }
 
     fn type_mangled_name(&self, name: &str) -> Option<crate::MangledName> {
@@ -360,7 +410,7 @@ impl<'a> Inferer<'a> {
     /// every concrete utility application, `keyof` and `T[K]` evaluated: a
     /// generic interface's `keyof T` member read at `J<{ a: number }>` is
     /// `"a"`.
-    pub(super) fn rehydrate_alias_refs(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
+    pub(super) fn rehydrate_and_evaluate(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
         let rehydrated = rehydrate_alias_refs(ty, self.resolver())?;
         super::utility_types::normalize(&rehydrated, self.resolver())
     }

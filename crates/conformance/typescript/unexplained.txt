@@ -258,11 +258,6 @@ types/literal/numericStringLiteralTypes.ts 12 extra
 types/literal/numericStringLiteralTypes.ts 16 extra
 types/literal/numericStringLiteralTypes.ts 19 extra
 types/literal/numericStringLiteralTypes.ts 20 extra
-types/mapped/mappedTypeConstraints.ts 22 extra
-types/mapped/mappedTypeConstraints.ts 23 type
-types/mapped/mappedTypeConstraints.ts 24 type
-types/mapped/mappedTypes2.ts 32 extra
-types/mapped/mappedTypes2.ts 84 extra
 types/members/objectTypeWithNumericProperty.ts 5 extra
 types/members/objectTypeWithNumericProperty.ts 6 extra
 types/members/objectTypeWithNumericProperty.ts 26 type

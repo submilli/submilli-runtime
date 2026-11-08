@@ -62,11 +62,11 @@ impl Inferer<'_> {
             }
             return shape.as_ref().clone();
         }
-        // `Partial<T>`, `keyof T` and `T[K]` read as the operator applied to
-        // each parameter's bound: `p.a` on `Partial<T>` with `T extends { a:
-        // number }` is `number | undefined` (tsc keeps `T["a"] | undefined`).
+        // A form reads through its base constraint: `p.a` on `Partial<T>`
+        // with `T extends { a: number }` is `number | undefined` (tsc keeps
+        // `T["a"] | undefined`).
         if current.without_aliases().is_type_operator() {
-            return super::assignable::form_apparent(current, self.resolver());
+            return super::assignable::base_constraint(current, self.resolver());
         }
         if let Type::Union(members) = current.without_aliases() {
             let mut budget = self.type_limits.budget();
@@ -254,11 +254,30 @@ impl Inferer<'_> {
         self.check_application_constraints(ty, span)
     }
 
+    /// Check an application's arguments against its parameters' bounds, and
+    /// a `T[K]` form's key against `keyof T`. Inside a declaration the check
+    /// waits until every bound is known.
     pub(super) fn check_application_constraints(
         &mut self,
         ty: &Type,
         span: Span,
     ) -> Result<(), CompilerFailure> {
+        if let Type::IndexedAccess { object, index } = ty {
+            // A concrete form (over a later declaration) reports a missing
+            // key where it evaluates.
+            if !super::utility_types::holds_type_parameter(ty) {
+                return Ok(());
+            }
+            if let Some(pending) = &mut self.pending_constraint_checks {
+                pending.push(PendingConstraintCheck {
+                    ty: ty.clone(),
+                    span,
+                    scopes: self.generics_in_scope.clone(),
+                });
+                return Ok(());
+            }
+            return self.check_index_key(object, index, span);
+        }
         let (Type::InterfaceRef {
             mangled,
             name,
@@ -305,6 +324,27 @@ impl Inferer<'_> {
         };
         let substitution = TypeParamSubstitution::from_pairs(&parameters, args);
         self.check_generic_constraints(&parameters, &substitution, &[], span)
+    }
+
+    /// tsc's TS2536: `T["a"]` needs `"a"` among the keys of `T`'s bound.
+    fn check_index_key(&mut self, object: &Type, index: &Type, span: Span) -> Result<(), CompilerFailure> {
+        let rigid = self.rigid_signature_bindings()?;
+        let rigid_object = super::generic::substitute_typevars(object, &rigid, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        let rigid_index = super::generic::substitute_typevars(index, &rigid, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        let keys = super::utility_types::normalize(
+            &Type::KeyOf(Box::new(rigid_object)),
+            self.resolver(),
+        )
+        .map_err(type_limit_at(span))?;
+        if !self.satisfies_generic_constraint(&rigid_index, &keys) {
+            self.error(
+                span,
+                format!("Type `{index}` cannot be used to index type `{object}`"),
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn check_pending_constraints(&mut self) -> Result<(), CompilerFailure> {

@@ -806,6 +806,8 @@ pub fn target_allows_null(
             | Type::Never
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. }
             | Type::AliasRef { .. }
     ) || (matches!(ty, Type::Union(_)) && is_nullable_ref(ctx.symbols.value_type(ty)?)))
 }

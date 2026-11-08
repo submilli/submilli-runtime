@@ -61,11 +61,9 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
                 let span = name.span;
-                let class = name.name.clone();
-                self.binding_types.push(class.clone());
-                self.bind_class(name, generics, extends, implements, members, doc)?;
-                self.binding_types.pop();
-                self.unbound_types.remove(&class);
+                self.with_binding(name.name.clone(), |this| {
+                    this.bind_class(name, generics, extends, implements, members, doc)
+                })?;
                 self.type_size_checkpoint(Some(span))?;
             }
         }
@@ -138,6 +136,7 @@ impl<'a> Inferer<'a> {
             self.resolve_alias_body(&name)?;
         }
         self.validate_bound_interfaces(&top_level, &skip)?;
+        self.check_forward_forms()?;
         self.check_pending_indexes();
         self.check_pending_constraints()?;
         Ok(true)
@@ -465,8 +464,8 @@ impl<'a> Inferer<'a> {
                     // sig so any downstream type errors surface in
                     // one pass.
                     let m_generic_names = self.push_declared_generics(&m_generics)?;
-                    let resolved_params: Vec<Param> = self.resolve_params(&params)?;
-                    let resolved_ret = self.resolve_type(&return_type)?;
+                    let (resolved_params, resolved_ret) =
+                        self.resolve_method_signature(&params, Some(&return_type))?;
                     self.pop_signature_generics();
                     if shadow_rejected {
                         continue;
@@ -605,6 +604,26 @@ impl<'a> Inferer<'a> {
     /// default value has to know the *sibling* parameter names: a default is
     /// evaluated in the function's own scope, so an identifier naming a
     /// parameter refers to that parameter, never to a global of the same name.
+    /// A method's parameters and return type, with
+    /// [`Inferer::resolving_method_signature`] set while they resolve.
+    pub(super) fn resolve_method_signature(
+        &mut self,
+        params: &[crate::ParamDecl],
+        return_type: Option<&crate::TypeAnnotation>,
+    ) -> Result<(Vec<Param>, Type), CompilerFailure> {
+        self.resolving_method_signature = true;
+        let resolved = (|| {
+            let params = self.resolve_params(params)?;
+            let ret = match return_type {
+                Some(annotation) => self.resolve_type(annotation)?,
+                None => Type::Void,
+            };
+            Ok((params, ret))
+        })();
+        self.resolving_method_signature = false;
+        resolved
+    }
+
     pub(super) fn resolve_params(
         &mut self,
         params: &[crate::ParamDecl],

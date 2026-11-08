@@ -123,6 +123,17 @@ pub(crate) fn evaluate(utility: Utility, args: &[Type], types: TypeResolver<'_>)
     if !structure_known(utility, args) {
         return Evaluated::Deferred;
     }
+    // An argument that is itself a lazy form (`Uppercase<B["s"]>` over a later
+    // declaration) is evaluated first.
+    let mut failures = Vec::new();
+    let args: Vec<Type> = args
+        .iter()
+        .map(|arg| evaluate_guarded(arg.clone(), types, &mut failures))
+        .collect();
+    if let Some(failure) = failures.pop() {
+        return Evaluated::Invalid(Some(failure));
+    }
+    let args = args.as_slice();
     if args.iter().any(|arg| matches!(arg.peel(), Type::Error)) {
         return Evaluated::Resolved(Type::Error);
     }
@@ -886,6 +897,16 @@ impl Evaluator<'_> {
                 )),
             };
         }
+        // A tuple's length is each count its optional elements allow
+        // (`[A, B?]["length"]` is `1 | 2`), as `t.length` reads it.
+        if let (Type::Tuple(tuple), Type::StringLiteral(name)) = (object, key_ty)
+            && name == "length"
+        {
+            let lengths = (tuple.required_len()..=tuple.elements.len())
+                .map(|length| Type::NumberLiteral(crate::types::LiteralF64(length as f64)))
+                .collect();
+            return Ok(Type::union(lengths));
+        }
         // A string, array or primitive reads an element by number and any
         // other property from its prelude interface, as tsc reads `T[K]`
         // through the apparent type.
@@ -1035,29 +1056,93 @@ fn normalize_node(
 ) -> Result<Type, crate::type_size::TypeTooLarge> {
     let mapped =
         crate::type_size::map_children(ty, |child| normalize_node(child, types, failures))?;
-    if holds_type_parameter(&mapped) {
-        return Ok(mapped);
+    Ok(evaluate_guarded(mapped, types, failures))
+}
+
+thread_local! {
+    /// The concrete forms being evaluated on this thread. A lazy form over a
+    /// later declaration can name another (`A["b"]` names `B["c"]`); one met
+    /// again while it evaluates only names itself, which is a cycle.
+    static EVALUATING: std::cell::RefCell<Vec<Type>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `ty` is a `keyof`, `T[K]` or utility application whose operands
+/// are concrete, which evaluates to another type.
+fn is_concrete_operator(ty: &Type) -> bool {
+    !holds_type_parameter(ty)
+        && (matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. })
+            || ty.is_utility_application())
+}
+
+/// `ty` evaluated while it is a concrete form, through as many forms as it
+/// names, guarded against cycles. Only the outer type is evaluated: the
+/// fields of a result keep their lazy forms, so mutually referring
+/// declarations (`A` holding `Partial<B>`, `B` holding `Partial<A>`) stay finite.
+fn evaluate_guarded(ty: Type, types: TypeResolver<'_>, failures: &mut Vec<String>) -> Type {
+    if !is_concrete_operator(&ty) {
+        return ty;
     }
-    let evaluated = match &mapped {
+    if EVALUATING.with(|stack| stack.borrow().contains(&ty)) {
+        failures.push(format!("`{ty}` refers to itself"));
+        return Type::Error;
+    }
+    EVALUATING.with(|stack| stack.borrow_mut().push(ty.clone()));
+    let evaluated = evaluate_form(&ty, types);
+    let result = match evaluated {
+        Ok(result) if result == ty => {
+            failures.push(format!("`{ty}` refers to itself"));
+            Type::Error
+        }
+        Ok(result) => evaluate_guarded(result, types, failures),
+        Err(reason) => {
+            failures.push(reason);
+            Type::Error
+        }
+    };
+    EVALUATING.with(|stack| stack.borrow_mut().pop());
+    result
+}
+
+/// One evaluation step of `ty` when it is a lazy `keyof` or `T[K]` with
+/// concrete operands; `None` for any other type.
+pub(crate) fn evaluate_step(ty: &Type, types: TypeResolver<'_>) -> Option<Result<Type, String>> {
+    let form = ty.without_aliases();
+    if !matches!(form, Type::KeyOf(_) | Type::IndexedAccess { .. }) || holds_type_parameter(form) {
+        return None;
+    }
+    Some(match form {
         Type::KeyOf(operand) => keyof_type(operand, types)
             .ok_or_else(|| format!("`keyof` needs an object type or interface, got `{operand}`")),
         Type::IndexedAccess { object, index } => index_access_type(object, index, types),
+        _ => Ok(form.clone()),
+    })
+}
+
+/// One evaluation step of a concrete form.
+fn evaluate_form(form: &Type, types: TypeResolver<'_>) -> Result<Type, String> {
+    match form {
+        Type::KeyOf(operand) => keyof_type(operand, types)
+            .ok_or_else(|| format!("`keyof` needs an object type or interface, got `{operand}`")),
+        Type::IndexedAccess { object, index } => {
+            let mut failures = Vec::new();
+            let object = evaluate_guarded(object.as_ref().clone(), types, &mut failures);
+            let index = evaluate_guarded(index.as_ref().clone(), types, &mut failures);
+            if let Some(failure) = failures.pop() {
+                return Err(failure);
+            }
+            index_access_type(&object, &index, types)
+        }
         Type::AliasRef { mangled, args, .. } => match utility(mangled) {
             Some(utility) => match evaluate(utility, args, types) {
                 Evaluated::Resolved(result) => Ok(label(utility, args.clone(), result)),
-                Evaluated::Deferred => Ok(mapped.clone()),
-                Evaluated::Invalid(reason) => Err(reason.unwrap_or_else(|| {
-                    format!("`{mapped}` has no evaluation for these arguments")
-                })),
+                Evaluated::Deferred => Ok(form.clone()),
+                Evaluated::Invalid(reason) => Err(reason
+                    .unwrap_or_else(|| format!("`{form}` has no evaluation for these arguments"))),
             },
-            None => Ok(mapped.clone()),
+            None => Ok(form.clone()),
         },
-        _ => Ok(mapped.clone()),
-    };
-    Ok(evaluated.unwrap_or_else(|reason| {
-        failures.push(reason);
-        Type::Error
-    }))
+        _ => Ok(form.clone()),
+    }
 }
 
 /// `keyof ty` for a concrete `ty`, tsc's index type: the union of its
@@ -1123,7 +1208,7 @@ fn key_literals(name: String) -> Vec<Type> {
 
 /// The prelude interface a primitive, array or byte array reads its members
 /// from, as tsc reads `keyof string` from `String`.
-fn apparent_interface(ty: &Type) -> Option<&'static str> {
+pub(crate) fn apparent_interface(ty: &Type) -> Option<&'static str> {
     Some(match ty {
         Type::String
         | Type::StringLiteral(_)

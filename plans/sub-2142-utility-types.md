@@ -314,7 +314,7 @@ Where the implementation departs from the design above:
   - SUB-2142 triages only the utility-type cases.
   - SUB-2150 triages the rest, which are listed in `unexplained.txt`.
   - SUB-2153 is an inference gap found there.
-  - Generic `Record<K, V>` keys (`mappedTypes2`, `mappedTypeConstraints` line 22) stay listed until their issue is filed.
+  - Generic `Record<K, V>` keys (`mappedTypes2`, `mappedTypeConstraints` lines 22–24) are triaged to SUB-2156.
 
 ## Review round 1 (2026-11-08)
 
@@ -353,3 +353,29 @@ Fixed:
   - A member read through a type parameter's bound has the bound's property type, so `o.a` is `number`, not tsc's `T["a"]`.
   - A generic method of an interface is not mapped by `Partial`.
   - Compound generic writes (`o[k] += 1`) keep their existing rejection, which tsc also rejects for an unbounded `T`.
+
+## Review round 2 (2026-11-08)
+
+Fixed:
+- **Crashes and blow-ups.**
+  - An F-bounded parameter (`T extends { left: T | null }`) no longer expands its bound into itself: `substitute_bounds` keeps a parameter met inside its own bound.
+  - Mutual cycles through `T[K]` (`interface A { b: B["c"] }`, `interface B { c: A["b"] }`) get tsc's TS2502 as a diagnostic instead of overflowing the stack (guarded evaluation, `settle_written_form`).
+  - A forward form with a missing member (`B["zz"]`) is reported once every declaration is bound (`check_forward_forms`).
+- **Declarations.** `T["a"]` and `T[K]` check their key against `keyof T` where written (tsc's TS2536), with the other written constraints.
+- **Generic `o[k]`.**
+  - A receiver narrowed by `!== undefined` (`T & ({} | null)`) reads and writes by name.
+  - A concrete receiver with a generic key (`user[key]`, `K extends keyof User`) is `User[K]`.
+  - At run time, a name that is no index and no member (`"-1"`, `"1.5"`) is missing, as on an object, so the read throws `MissingValueError`.
+  - Writes to a negative, fractional or out-of-range index throw a `RangeError`, as static writes do. `Uint8Array` elements are written and wrap as a static write does.
+  - Temporal getters read by name (`temporal_interface` tells the classes apart by vtable). Methods still throw a `TypeError`.
+  - The built-in member table is built once (`builtin_member`).
+- **Tuples.** `[A, B]["length"]` is `2`, and `[A, B?]["length"]` is `1 | 2`.
+- **Casts** to an interface whose members hold a forward form (`k: keyof B`, `B` declared later) evaluate it in `reduce_cast_target`, so the run-time check tests the keys.
+- **Clean code.** The relate steps are documented and named (`relate_subset_of_operand`). `form_apparent` is now `base_constraint`, and its dead `keyof` source arm is gone. `defer_if_pending`, `with_binding` and `Type::indexed_access` replace repeated code. The built-in classifier is shared (`apparent_interface`). The evaluating rehydration is `rehydrate_and_evaluate`.
+
+Accepted leniency:
+- A value fits `T["a"]` when `T`'s bound gives `a` one literal value (`T["length"]` of a pair is `2`). tsc rejects `return 2` there but accepts `return t.length`, which reads `T["length"]`. Here a member read through a bound has the bound's type (round 1), so this rule keeps `t.length` valid. It is sound: every `T` has that one value.
+
+Out of scope (pre-existing):
+- `f([1, "x"])` with `f<T extends [number, string]>(t: T)` infers an array, not a tuple from the bound, even without utility types. Filed as SUB-2157.
+- `Record<K, V>` with a type-parameter key stays rejected. Filed as SUB-2156.

@@ -353,11 +353,11 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
 }
 
 /// `object[name]` on a built-in value (a string, array, `Uint8Array`, boxed
-/// primitive, `Map`, `Set` or `RegExp`), as a generic `o[k]` reads it once
-/// `T` turns out to be one: an element for a canonical index, or the named
-/// property. Reading a method by name would need a bound method value, which
-/// a built-in has none of, so it throws a `TypeError`, as does a value with
-/// no interface here (a host object such as a `Temporal` value).
+/// primitive, `Map`, `Set`, `RegExp` or Temporal value), as a generic `o[k]`
+/// reads it once `T` turns out to be one: an element for a canonical index,
+/// or the named property. Reading a method by name would need a bound method
+/// value, which a built-in has none of, so it throws a `TypeError`. Any other
+/// name (`"-1"`, `"1.5"`) is missing, as on an object.
 pub(super) async fn builtin_property(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
@@ -372,61 +372,76 @@ pub(super) async fn builtin_property(
     let indexed = ["String", "Array", "Uint8Array"]
         .iter()
         .any(|kind| crate::mangle::prelude(kind).as_str() == interface);
-    let member = if indexed && is_index(name) {
+    let index = super::object::integer_key(&name.encode_utf16().collect::<Vec<_>>());
+    let (member, argument) = match (index, builtin_member(&interface, name)) {
         // `at` reads an element as an index does for every index in range,
         // and `undefined` past the end.
-        "at"
-    } else if is_builtin_method(&interface, name) {
-        return Err(host::type_error(format!(
-            "Cannot read the method '{name}' of a built-in value by name"
-        )));
-    } else {
-        let name_value = Val::AnyRef(Some(
-            host::write_submilli_string_struct(caller, name)?.to_anyref(),
-        ));
-        let interface_value = Val::AnyRef(Some(
-            host::write_submilli_string_struct(caller, &interface)?.to_anyref(),
-        ));
-        return property(caller, &[*object, name_value, interface_value]).await;
+        (Some(index), _) if indexed => ("at", Some(f64::from(index))),
+        (_, Some(BuiltinMember::Method)) => {
+            return Err(host::type_error(format!(
+                "Cannot read the method '{name}' of a built-in value by name"
+            )));
+        }
+        (_, Some(BuiltinMember::Property)) => (name, None),
+        (_, None) if name == "length" && indexed => (name, None),
+        (_, None) => return super::undefined::value(caller),
     };
-    let index: f64 = name
-        .parse()
-        .map_err(|_| host::fatal_host_error("canonical index did not parse"))?;
-    let params = [
-        *object,
-        Val::AnyRef(Some(
-            host::write_submilli_string_struct(caller, member)?.to_anyref(),
-        )),
-        Val::AnyRef(Some(
-            host::write_submilli_string_struct(caller, &interface)?.to_anyref(),
-        )),
-    ];
+    let name_value = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, member)?.to_anyref(),
+    ));
+    let interface_value = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, &interface)?.to_anyref(),
+    ));
+    let params = [*object, name_value, interface_value];
+    let Some(argument) = argument else {
+        return property(caller, &params).await;
+    };
     let token = lookup(caller, &params).await?;
-    let argument = box_result(caller, Val::F64(index.to_bits()))?;
+    let argument = box_result(caller, Val::F64(argument.to_bits()))?;
     let args = Val::AnyRef(Some(
         host::write_submilli_array_struct(caller, &[argument])?.to_anyref(),
     ));
     invoke(caller, &token, &args).await
 }
 
-/// A canonical array index: digits with no leading zero, below 2^32 - 1.
-fn is_index(name: &str) -> bool {
-    !name.is_empty()
-        && name.bytes().all(|byte| byte.is_ascii_digit())
-        && (name == "0" || !name.starts_with('0'))
-        && name.parse::<u32>().is_ok_and(|index| index < u32::MAX)
+#[derive(Clone, Copy)]
+enum BuiltinMember {
+    Method,
+    Property,
 }
 
-/// Whether the prelude interface `interface` (a mangled name) declares
-/// `name` as a method rather than a property.
-fn is_builtin_method(interface: &str, name: &str) -> bool {
-    let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
-    prelude.iter().any(|package| {
-        package.types.values().any(|symbol| {
-            symbol.mangled_name.as_str() == interface
-                && matches!(&symbol.kind, crate::TypeKind::Interface { methods, .. } if methods.contains_key(name))
-        })
-    })
+/// How the prelude interface `interface` (a mangled name) declares `name`.
+fn builtin_member(interface: &str, name: &str) -> Option<BuiltinMember> {
+    static MEMBERS: LazyLock<HashMap<String, HashMap<String, BuiltinMember>>> =
+        LazyLock::new(|| {
+            let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
+            let mut members = HashMap::new();
+            for symbol in prelude.iter().flat_map(|package| package.types.values()) {
+                let crate::TypeKind::Interface {
+                    methods,
+                    properties,
+                    ..
+                } = &symbol.kind
+                else {
+                    continue;
+                };
+                let entry: &mut HashMap<String, BuiltinMember> = members
+                    .entry(symbol.mangled_name.as_str().to_owned())
+                    .or_default();
+                entry.extend(
+                    properties
+                        .keys()
+                        .map(|name| (name.clone(), BuiltinMember::Property)),
+                );
+                entry.extend(
+                    methods
+                        .keys()
+                        .map(|name| (name.clone(), BuiltinMember::Method)),
+                );
+            }
+            members
+        });
+    MEMBERS.get(interface)?.get(name).copied()
 }
 
 fn require_receiver(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<()> {
@@ -475,7 +490,8 @@ fn receiver_interface(
             }
         }
     }
-    Ok(None)
+    Ok(super::temporal::shared::temporal_interface(caller, &object)?
+        .map(|interface| interface.as_str().to_owned()))
 }
 
 fn box_boolean(

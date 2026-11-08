@@ -577,10 +577,22 @@ fn contains_type_operator(ty: &Type) -> bool {
 /// The type parameter (or form over one) a generic `o[k]` indexes: `T` for
 /// a narrowed `T & {}`, whose keys are `T`'s.
 pub(super) fn generic_receiver(receiver: &Type) -> &Type {
-    match receiver.without_aliases() {
-        Type::Refined { original, .. } => original,
+    let receiver = match receiver.without_aliases() {
+        Type::Refined { original, .. } => original.without_aliases(),
         other => other,
+    };
+    // `value !== undefined` narrows `T | undefined`: the receiver is `T`.
+    if let Type::Union(members) = receiver {
+        let mut erased = members.iter().filter(|member| member.lowers_to_erased_slot());
+        if let (Some(only), None) = (erased.next(), erased.next())
+            && members.iter().all(|member| {
+                member == only || matches!(member.peel(), Type::Null | Type::Undefined)
+            })
+        {
+            return only;
+        }
     }
+    receiver
 }
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
@@ -732,7 +744,7 @@ impl Inferer<'_> {
                 || super::utility_types::has_evaluable_application(want))
             .then(|| {
                 self.type_limits
-                    .type_or_error(self.rehydrate_alias_refs(want))
+                    .type_or_error(self.rehydrate_and_evaluate(want))
             })
         });
         let expected = rehydrated_hint.as_ref().or(expected);
@@ -973,7 +985,7 @@ impl Inferer<'_> {
         // Rehydrate any `AliasRef` (read out of a recursive alias's body
         // via field / index / call) back to the inline `Alias` form.
         let ty = self
-            .rehydrate_alias_refs(&ty)
+            .rehydrate_and_evaluate(&ty)
             .map_err(super::type_limit_at(span))?;
         // The expression's own type may compose several values of the
         // largest size.
@@ -10036,21 +10048,7 @@ impl Inferer<'_> {
         let erased = generic_receiver(receiver);
         erased.lowers_to_erased_slot()
             && !matches!(erased.peel(), Type::TypeVar(_) | Type::KeyOf(_))
-            && !matches!(
-                self.apparent_type(erased).peel(),
-                Type::Array(_)
-                    | Type::Tuple(_)
-                    | Type::Uint8Array
-                    | Type::String
-                    | Type::StringLiteral(_)
-                    | Type::TemplateLiteral { .. }
-                    | Type::Number
-                    | Type::NumberLiteral(_)
-                    | Type::BigInt
-                    | Type::BigIntLiteral(_)
-                    | Type::Boolean
-                    | Type::BooleanLiteral(_)
-            )
+            && super::utility_types::apparent_interface(self.apparent_type(erased).peel()).is_none()
     }
 
     /// The key a generic `o[k]` reads or writes, converted to the property
@@ -10063,15 +10061,23 @@ impl Inferer<'_> {
         let receiver_ty = generic_receiver(receiver_ty);
         let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
         let (typed_index, key_ty) = self.infer_object_key(index)?;
+        Ok(self
+            .fits_generic_key(receiver_ty, &key_ty, index_span)
+            .then_some((typed_index, key_ty)))
+    }
+
+    /// Whether `key_ty` fits `keyof receiver_ty`, reporting tsc's TS2536 when
+    /// it does not.
+    pub(super) fn fits_generic_key(&mut self, receiver_ty: &Type, key_ty: &Type, span: Span) -> bool {
         let keys = Type::KeyOf(Box::new(receiver_ty.clone()));
-        if !assignable(&key_ty, &keys, self.resolver()) {
+        let fits = assignable(key_ty, &keys, self.resolver());
+        if !fits {
             self.error(
-                index_span,
+                span,
                 format!("Type `{key_ty}` cannot be used to index type `{receiver_ty}`"),
             );
-            return Ok(None);
         }
-        Ok(Some((typed_index, key_ty)))
+        fits
     }
 
     /// `o[k]` on a type parameter `T`: tsc's `T[K]`, read by name at run
@@ -10085,16 +10091,16 @@ impl Inferer<'_> {
         let Some((typed_index, key_ty)) = self.generic_index_key(&receiver_ty, index)? else {
             return Ok((TypedExprKind::Null, Type::Error));
         };
+        // A key may be absent (`R extends Record<string, V>`): `o[k] ?? d`
+        // reads `undefined` for it, as on a record.
+        self.note_missable_read();
         let receiver_ty = generic_receiver(&receiver_ty).clone();
         Ok((
             TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
                 index: typed_index,
             },
-            Type::IndexedAccess {
-                object: Box::new(receiver_ty),
-                index: Box::new(key_ty),
-            },
+            Type::indexed_access(receiver_ty, key_ty),
         ))
     }
 
@@ -10122,15 +10128,21 @@ impl Inferer<'_> {
             self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if receiver_ty.is_structural_object() {
             let (typed_index, key_ty) = self.infer_object_key(index)?;
-            let ty = self.object_index_read_type(
-                &receiver_ty,
-                &key_ty,
-                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
-            );
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
             let kind = TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
                 index: typed_index,
             };
+            // `u[k]` with `K extends keyof User` is tsc's `User[K]`.
+            if super::utility_types::holds_type_parameter(&key_ty) {
+                if !self.fits_generic_key(&receiver_ty, &key_ty, index_span) {
+                    return Ok((TypedExprKind::Null, Type::Error));
+                }
+                self.note_missable_read();
+                let ty = Type::indexed_access(receiver_ty, key_ty);
+                return Ok((kind, ty));
+            }
+            let ty = self.object_index_read_type(&receiver_ty, &key_ty, index_span);
             return self.narrowed_index_read(kind, ty);
         }
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
@@ -12889,10 +12901,7 @@ impl Inferer<'_> {
                             Type::Error,
                         ));
                     };
-                    let ty = Type::IndexedAccess {
-                        object: Box::new(generic_receiver(receiver_ty).clone()),
-                        index: Box::new(key_ty),
-                    };
+                    let ty = Type::indexed_access(generic_receiver(receiver_ty).clone(), key_ty);
                     return Ok((
                         TypedChainPart::Index {
                             idx: typed_idx,
@@ -14431,8 +14440,13 @@ impl Inferer<'_> {
     /// runtime check is actually needed. An alias or interface keeps its name
     /// around its reduced body, so a failed check names the type the program
     /// wrote.
+    /// The shape a cast checks. A member naming an interface declared after
+    /// its own (`k: keyof B`) stays lazy while declarations bind, so it is
+    /// evaluated here.
     fn reduce_cast_target(&self, ty: &Type) -> Type {
-        self.reduce_interfaces(ty, true)
+        let reduced = self.reduce_interfaces(ty, true);
+        self.type_limits
+            .type_or_error(super::utility_types::normalize(&reduced, self.resolver()))
     }
 
     fn reduce_interfaces(&self, ty: &Type, cast_target: bool) -> Type {

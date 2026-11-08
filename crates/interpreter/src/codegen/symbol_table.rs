@@ -209,6 +209,8 @@ pub(crate) fn may_hold_null(ty: &Type) -> bool {
         | Type::Unknown
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
         | Type::AliasRef { .. } => true,
         Type::Union(members) => members.iter().any(may_hold_null),
         _ => false,
