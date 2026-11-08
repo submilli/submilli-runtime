@@ -1797,6 +1797,19 @@ fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
 }
 
 /// `parent` is the rendered `extends` target, if it has one.
+/// The `lib.es5.d.ts` text of a built-in utility type, whose alias body is an
+/// application of itself.
+fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
+    match body {
+        Type::AliasRef {
+            mangled,
+            name: applied,
+            ..
+        } if applied == name => crate::runtime::prelude::utility_types::declaration_text(mangled),
+        _ => None,
+    }
+}
+
 fn render_ts_type(
     out: &mut String,
     name: &str,
@@ -1865,6 +1878,10 @@ fn render_ts_type(
                 let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
+        }
+        TypeKind::Alias { ty, .. } if utility_declaration(name, ty).is_some() => {
+            let text = utility_declaration(name, ty).unwrap_or_default();
+            let _ = writeln!(out, "{indent}{export_prefix}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
             let _ = writeln!(
@@ -2424,6 +2441,10 @@ fn render_type_for(
                 let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
+        }
+        TypeKind::Alias { ty, .. } if utility_declaration(name, ty).is_some() => {
+            let text = utility_declaration(name, ty).unwrap_or_default();
+            let _ = writeln!(out, "{indent}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
             let _ = writeln!(

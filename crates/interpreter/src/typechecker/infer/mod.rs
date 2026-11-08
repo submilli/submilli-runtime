@@ -55,6 +55,7 @@ mod type_namespace;
 mod type_predicate;
 mod type_registry;
 mod union_call;
+pub(crate) mod utility_types;
 mod value_operand;
 pub(crate) mod variance;
 

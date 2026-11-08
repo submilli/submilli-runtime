@@ -144,9 +144,17 @@ pub(super) fn typeof_result_type() -> Type {
 /// its literal type or widens to its primitive. Peels through aliases so
 /// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
 fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
+    // A template literal type or a string mapping such as `Uppercase<string>`
+    // is a literal context, as in tsc: `"ABC"` against either stays `"ABC"`.
+    let names = |ty: &Type| {
+        names_literal(ty.peel(), is_literal)
+            || ((matches!(ty.peel(), Type::TemplateLiteral { .. })
+                || super::utility_types::symbolic_mapping_of(ty).is_some())
+                && is_literal(&Type::StringLiteral(String::new())))
+    };
     match expected.map(crate::types::Type::peel) {
-        Some(Type::Union(ms)) => ms.iter().any(|m| names_literal(m.peel(), is_literal)),
-        Some(ty) => names_literal(ty, is_literal),
+        Some(Type::Union(ms)) => ms.iter().any(names),
+        Some(_) => expected.is_some_and(|ty| names(ty) || names(ty.peel())),
         None => false,
     }
 }

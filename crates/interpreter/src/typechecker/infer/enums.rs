@@ -15,7 +15,7 @@ impl<'a> Inferer<'a> {
         if self.reject_intrinsic_name(&name) {
             return Ok(());
         }
-        if let Some(prev) = self.types.lookup(&name.name) {
+        if let Some(prev) = self.types.blocking_type(&name.name) {
             let prev_span = prev.declaration_span;
             self.diagnostics.push(Diagnostic {
                 severity: Severity::Error,

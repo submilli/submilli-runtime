@@ -821,6 +821,9 @@ fn assignable_rec(
     if drops_readonly(actual, expected) || readonly_meets_mutator(actual, expected, types) {
         return false;
     }
+    if let Some(mapping) = super::utility_types::symbolic_mapping_of(expected) {
+        return fits_symbolic_mapping(mapping, actual);
+    }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
         let pair = (actual.clone(), expected.clone());
         seen.push(pair);
@@ -1763,6 +1766,44 @@ pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Opt
         index: types.index_signature(ty),
         fields: types.interface_data_shape(mangled, name, args)?,
     })
+}
+
+/// Whether `actual` fits a symbolic string mapping such as `Uppercase<string>`:
+/// only strings the mapping leaves unchanged do, so `"ABC"` fits and `"abc"`
+/// and `string` do not.
+fn fits_symbolic_mapping(mapping: super::utility_types::Utility, actual: &Type) -> bool {
+    use super::utility_types::{mapping_preserves, symbolic_mapping_of};
+    if symbolic_mapping_of(actual) == Some(mapping) {
+        return true;
+    }
+    match actual.without_aliases() {
+        Type::Never | Type::Error => true,
+        Type::StringLiteral(text) => mapping_preserves(mapping, text),
+        Type::StringEnum {
+            member: Some(member),
+            ..
+        } => mapping_preserves(mapping, &member.value),
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => {
+            use super::utility_types::Utility;
+            if matches!(mapping, Utility::Capitalize | Utility::Uncapitalize) {
+                // Only the first character is mapped.
+                return match parts.first() {
+                    Some(head) if !head.is_empty() => mapping_preserves(mapping, head),
+                    _ => substitutions
+                        .first()
+                        .is_none_or(|hole| fits_symbolic_mapping(mapping, hole)),
+                };
+            }
+            parts.iter().all(|part| mapping_preserves(mapping, part))
+                && substitutions
+                    .iter()
+                    .all(|hole| fits_symbolic_mapping(mapping, hole))
+        }
+        _ => false,
+    }
 }
 
 /// Whether `ty` is an interface whose values only the host builds, such as

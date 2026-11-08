@@ -141,6 +141,10 @@ impl<'a> Inferer<'a> {
             .map(|a| self.resolve_type(a))
             .collect::<Result<_, _>>()?;
 
+        if let Some(utility) = super::utility_types::utility(&mangled) {
+            return self.resolve_utility_application(utility, resolved_args, span);
+        }
+
         // Recursion back-edge: emit the lazy by-name reference.
         if self.alias_resolution_stack.iter().any(|n| n == name) {
             return Ok(Type::alias_ref(
@@ -182,6 +186,79 @@ impl<'a> Inferer<'a> {
         // identity alias doubles the type it wraps.
         crate::type_size::check(&alias).map_err(super::type_limit_at(span))?;
         Ok(alias)
+    }
+
+    /// A written utility application, `Partial<User>`: its constraints are
+    /// checked here, at the application's own span, and it evaluates to the
+    /// type it stands for.
+    fn resolve_utility_application(
+        &mut self,
+        utility: super::utility_types::Utility,
+        args: Vec<Type>,
+        span: crate::Span,
+    ) -> Result<Type, CompilerFailure> {
+        use super::utility_types::{Evaluated, application, evaluate, label};
+        let deferred = application(utility, args.clone(), None);
+        self.check_named_type_constraints(&deferred, span)?;
+        // An argument naming an alias still being resolved (`type Tree = {
+        // kids: Partial<Tree>[] }`) has no body yet. The application would
+        // have to stay a name inside the alias body, which run-time checks
+        // expand without a type table, so it is rejected (tsc accepts it).
+        let referenced: BTreeSet<MangledName> = args.iter().flat_map(alias_ref_names).collect();
+        let open = self
+            .alias_resolution_stack
+            .iter()
+            .find(|name| {
+                self.type_mangled_name(name)
+                    .is_some_and(|mangled| referenced.contains(&mangled))
+            })
+            .cloned();
+        if let Some(alias) = open {
+            let alias = alias.as_str();
+            self.error_with_help(
+                span,
+                format!(
+                    "`{}` cannot be applied to the recursive alias `{}` inside its own definition",
+                    utility.name(),
+                    display_type_name(alias),
+                ),
+                vec![format!(
+                    "spell out the {} fields of `{}` in a separate type",
+                    match utility.name() {
+                        "Partial" => "optional",
+                        "Readonly" => "readonly",
+                        _ => "resulting",
+                    },
+                    display_type_name(alias),
+                )],
+            );
+            return Ok(Type::Error);
+        }
+        let ty = match evaluate(utility, &args, self.resolver()) {
+            Evaluated::Resolved(ty) => label(utility, args, ty),
+            Evaluated::Deferred => {
+                self.error_with_help(
+                    span,
+                    format!(
+                        "`{}` over a type parameter is not supported yet",
+                        utility.name()
+                    ),
+                    vec![],
+                );
+                Type::Error
+            }
+            Evaluated::Invalid(Some(reason)) => {
+                self.error(span, reason);
+                Type::Error
+            }
+            Evaluated::Invalid(None) => Type::Error,
+        };
+        crate::type_size::check(&ty).map_err(super::type_limit_at(span))?;
+        Ok(ty)
+    }
+
+    fn type_mangled_name(&self, name: &str) -> Option<crate::MangledName> {
+        self.types.lookup(name).map(|sym| sym.mangled_name.clone())
     }
 
     /// Resolve alias `name`'s body, fill in its placeholder symbol, and
@@ -289,6 +366,9 @@ pub(crate) fn alias_ref_body(
     args: &[Type],
     types: TypeResolver<'_>,
 ) -> Type {
+    if let Some(utility) = super::utility_types::utility(mangled) {
+        return utility_body(utility, args, types);
+    }
     let Some(sym) = types.lookup(mangled, name) else {
         return Type::Error;
     };
@@ -307,6 +387,21 @@ pub(crate) fn alias_ref_body(
         )
         .apply(body, types.limits),
     )
+}
+
+/// The type a lazy utility application stands for. A deferred application is
+/// its own body, so the walk stops there.
+fn utility_body(
+    utility: super::utility_types::Utility,
+    args: &[Type],
+    types: TypeResolver<'_>,
+) -> Type {
+    use super::utility_types::{Evaluated, application, evaluate};
+    match evaluate(utility, args, types) {
+        Evaluated::Resolved(ty) => ty,
+        Evaluated::Deferred => application(utility, args.to_vec(), None),
+        Evaluated::Invalid(_) => Type::Error,
+    }
 }
 
 /// Builds under a budget from `types`: expanding a back-edge copies a stored
@@ -337,6 +432,14 @@ fn rehydrate_reachable(
                 .collect::<Result<_, _>>()?;
             let body = alias_ref_body(mangled, name, &rehydrated_args, types);
             budget.charge_copy(&body, child)?;
+            if let Some(utility) = super::utility_types::utility(mangled) {
+                // A deferred application stays a name; a concrete one is the
+                // type it stands for, labeled as a written one is.
+                return Ok(match body {
+                    Type::AliasRef { .. } => body,
+                    body => super::utility_types::label(utility, rehydrated_args, body),
+                });
+            }
             Ok(Type::alias_ty(
                 package.clone(),
                 name.clone(),

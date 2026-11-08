@@ -253,6 +253,11 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
+        // A labeled utility result (`Omit<User, "a">`) was checked as an
+        // application where it was written.
+        if matches!(ty, Type::Alias { .. }) && super::utility_types::utility(mangled).is_some() {
+            return Ok(());
+        }
         if let Some(pending) = &mut self.pending_constraint_checks {
             pending.push(PendingConstraintCheck {
                 ty: ty.clone(),

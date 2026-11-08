@@ -37,6 +37,7 @@ pub mod textcodec;
 pub mod uint8array;
 pub(crate) mod undefined;
 pub(crate) mod uri;
+pub(crate) mod utility_types;
 pub(crate) mod value;
 mod value_of;
 pub(crate) mod vtable;

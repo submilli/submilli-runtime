@@ -160,7 +160,7 @@ impl<'a> Inferer<'a> {
                 .clone();
             match stmt.kind {
                 StmtKind::InterfaceDecl { name, generics, .. } => {
-                    if self.types.contains(&name.name) {
+                    if self.types.blocking_type(&name.name).is_some() {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: name.span,
@@ -197,7 +197,7 @@ impl<'a> Inferer<'a> {
                     );
                 }
                 StmtKind::ClassDecl { name, generics, .. } => {
-                    if self.types.contains(&name.name) {
+                    if self.types.blocking_type(&name.name).is_some() {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: name.span,
@@ -248,7 +248,7 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    if let Some(prev) = self.types.lookup(&name.name) {
+                    if let Some(prev) = self.types.blocking_type(&name.name) {
                         let prev_span = prev.declaration_span;
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
