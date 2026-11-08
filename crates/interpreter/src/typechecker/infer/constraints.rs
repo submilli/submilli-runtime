@@ -86,7 +86,7 @@ impl Inferer<'_> {
         ty: Type,
         span: Span,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        let apparent = self.apparent_type(&ty);
+        let apparent = self.constraint_receiver_type(&ty, span)?;
         if apparent == ty {
             return Ok((value, ty));
         }
@@ -100,6 +100,32 @@ impl Inferer<'_> {
             span,
         )?;
         Ok((value, apparent))
+    }
+
+    /// Both direct member reads and optional chains expose the bound's shape
+    /// while retaining the source identity for later discriminant narrowing.
+    pub(super) fn constraint_receiver_type(
+        &self,
+        ty: &Type,
+        span: Span,
+    ) -> Result<Type, CompilerFailure> {
+        let apparent = self.apparent_type(ty);
+        if &apparent == ty {
+            return Ok(apparent);
+        }
+        let original = match ty.without_aliases() {
+            Type::Refined { original, .. } => original.as_ref(),
+            _ => ty,
+        };
+        let mut budget = self.type_limits.budget();
+        budget
+            .charge_copy(original, 1)
+            .map_err(type_limit_at(span))?;
+        budget
+            .charge_copy(&apparent, 1)
+            .map_err(type_limit_at(span))?;
+        budget.charge(1).map_err(type_limit_at(span))?;
+        Ok(super::narrowing::preserve_refinement(original, apparent))
     }
 
     pub(super) fn check_generic_constraints(

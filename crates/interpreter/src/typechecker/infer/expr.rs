@@ -12409,7 +12409,7 @@ impl Inferer<'_> {
             })
             .collect();
         for (part, asserted) in parts.into_iter().zip(asserted) {
-            let apparent = self.apparent_type(&receiver_ty);
+            let apparent = self.constraint_receiver_type(&receiver_ty, part.span())?;
             if apparent != receiver_ty {
                 typed_parts.push(TypedChainPart::Constraint {
                     result_ty: apparent.clone(),

@@ -2595,7 +2595,9 @@ impl Inferer<'_> {
             if let Type::Function { ret, .. } = &mut callback {
                 // The bound types callback inputs, not its inferred output.
                 // Checking that output against the bound happens after inference.
-                **ret = Type::Unknown;
+                // An unresolved return hint makes both expression and block
+                // bodies infer their returns, just like a generic callback slot.
+                **ret = hint.clone();
                 return Ok(callback);
             }
         }
