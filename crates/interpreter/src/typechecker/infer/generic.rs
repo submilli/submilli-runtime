@@ -148,6 +148,9 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
             ty: Box::new(erase_generic_params(ty)),
         },
         Type::GenericParam { name, .. } => Type::TypeVar(name.clone()),
+        Type::KeyOf(_) | Type::IndexedAccess { .. } => {
+            crate::type_size::map_children_infallible(ty, erase_generic_params)
+        }
         Type::Object { fields, index } => Type::Object {
             index: index.as_ref().map(|i| i.map_types(erase_generic_params)),
             fields: fields
@@ -353,10 +356,7 @@ pub(super) fn erase_generic_params_in_stmt(stmt: &mut TypedStmt) {
 /// erased union (`T | null` and friends), and `unknown` — mirrors the
 /// `needs_box` shape used for the non-generic-method return path.
 fn return_erases_to_object_slot(ret: &Type) -> bool {
-    matches!(
-        ret.peel(),
-        Type::TypeVar(_) | Type::Unknown | Type::Union(_)
-    )
+    ret.lowers_to_erased_slot() || matches!(ret.peel(), Type::Unknown | Type::Union(_))
 }
 
 impl Inferer<'_> {
@@ -966,7 +966,7 @@ impl Inferer<'_> {
         self.record_generic_call_arguments(&typed_args, &sig.params, &sig.ret, type_args.is_some());
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
-        let any_generic_arg = sig.params.iter().any(|p| matches!(p.ty, Type::TypeVar(_)));
+        let any_generic_arg = sig.params.iter().any(|p| p.ty.lowers_to_erased_slot());
         // The wrapper erases any TypeVar-mentioning return to `$Object`, so the
         // substituted result needs a cast back to its static shape — not only a
         // bare `V`, but also `V | null` and other erased unions (their object
@@ -978,7 +978,7 @@ impl Inferer<'_> {
                 .zip(sig.params.iter())
                 .map(|(expr, p)| crate::GenericArgument {
                     expr,
-                    is_generic: matches!(p.ty, Type::TypeVar(_)),
+                    is_generic: p.ty.lowers_to_erased_slot(),
                 })
                 .collect();
             let return_cast = if object_assign && result_ty.is_structural_object() {
@@ -1404,8 +1404,10 @@ impl Inferer<'_> {
         ty: &Type,
         span: Span,
     ) -> Result<Type, CompilerFailure> {
-        sub.apply(ty, &self.type_limits)
-            .map_err(type_limit_at(span))
+        let applied = sub
+            .apply(ty, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        super::utility_types::normalize(&applied, self.resolver()).map_err(type_limit_at(span))
     }
 
     /// Bind type parameters from the annotated parameters of a function
@@ -3226,7 +3228,7 @@ impl Inferer<'_> {
             .zip(params.iter())
             .map(|(expr, p)| crate::GenericArgument {
                 expr,
-                is_generic: matches!(p.ty, Type::TypeVar(_)),
+                is_generic: p.ty.lowers_to_erased_slot(),
             })
             .collect();
         let return_cast = if return_erases_to_object_slot(&ret) {
@@ -3389,7 +3391,9 @@ fn literal_constraint(ty: &Type) -> bool {
         | Type::NumberLiteral(_)
         | Type::BooleanLiteral(_)
         | Type::BigIntLiteral(_)
-        | Type::TemplateLiteral { .. } => true,
+        | Type::TemplateLiteral { .. }
+        // `K extends keyof T` keeps `"a"` a literal, as in tsc.
+        | Type::KeyOf(_) => true,
         Type::Union(members) => members.iter().any(literal_constraint),
         _ => false,
     }

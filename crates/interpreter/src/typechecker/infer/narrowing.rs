@@ -1308,6 +1308,8 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::Unknown
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
         | Type::AliasRef { .. } => false,
 
         // Peeled by the caller.

@@ -146,6 +146,59 @@ fn graph_compiles_in_dependency_order_and_artifacts_reload() {
 }
 
 #[test]
+fn utility_types_in_exported_signatures_survive_reload() {
+    let externals_dir = TempDir::new().expect("externals tempdir");
+    let externals = PackageStore::new(externals_dir.path());
+    let project = TempDir::new().expect("project tempdir");
+    write_docs(project.path(), "util", "# Util\n");
+    write_module(
+        project.path(),
+        "util/src/lib.ts",
+        r#"
+            /** `value` seen through the property `key`. */
+            export function pick<T, K extends keyof T>(value: T, key: K): Pick<T, K> { return value; }
+            /** The value of property `key`. */
+            export function read<T, K extends keyof T>(value: T, key: K): T[K] { return value[key]; }
+            /** `fallback`, typed as what `f` returns. */
+            export function call<F extends (...args: never[]) => unknown>(f: F, fallback: ReturnType<F>): ReturnType<F> { return fallback; }
+            /** A change to apply. */
+            export function patch<T>(base: T, change: Partial<T>): T { return base; }
+        "#,
+    );
+    let manifest = r#"
+[[package]]
+name = "@pied-piper/util"
+version = "0.1.0"
+description = "Utility package."
+path = "util"
+"#;
+    let built = build(project.path(), &externals, manifest, None).expect("build succeeds");
+    let target_dir = TempDir::new().expect("target tempdir");
+    let target = PackageStore::new(target_dir.path());
+    install_packages(&target, &built).expect("install succeeds");
+    let util = target.load("@pied-piper/util").expect("util reloads");
+
+    let script = r#"
+        import { pick, read, call, patch } from "@pied-piper/util";
+        function main(): number {
+            const user = { id: 1, name: "ada" };
+            const name: string = read(user, "name");
+            const picked: { name: string } = pick(user, "name");
+            const count: number = call(() => 3, 0);
+            return patch(user, { id: 2 }).id + count + name.length + picked.name.length;
+        }
+    "#;
+    compile_script(
+        script,
+        "main.ts",
+        FileId(1),
+        &[&util.package_declaration],
+        &[],
+    )
+    .expect("consumer compiles against the reloaded utility signatures");
+}
+
+#[test]
 fn artifact_includes_capabilities_schema_with_literal_requires() {
     let project = TempDir::new().expect("project tempdir");
     write_module(

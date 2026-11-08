@@ -749,6 +749,27 @@ fn assignable_rec(
     if !types.limits.spend_work(1) {
         return false;
     }
+    // `NoInfer<X>` is `X` and `NonNullable<X>` is `X & {}`, before the
+    // refinement rules below compare `X & {}` piecewise.
+    if let Some(expected) = rewrite_identity_operator(expected) {
+        return assignable_rec(actual, &expected, types, seen);
+    }
+    if let Some(actual) = rewrite_identity_operator(actual) {
+        return assignable_rec(&actual, expected, types, seen);
+    }
+    // `keyof T` grows as `T` narrows, so its only upper bound is every key.
+    // Checked before a union target is split into members it fits only whole.
+    if let Type::KeyOf(_) = actual.without_aliases()
+        && !matches!(expected.peel(), Type::KeyOf(_) | Type::TypeVar(_))
+        && expected != actual
+    {
+        return assignable_rec(
+            &Type::union(vec![Type::String, Type::Number]),
+            expected,
+            types,
+            seen,
+        );
+    }
     // `unknown` and a type parameter fit a union that holds every value, as
     // in TypeScript.
     if matches!(actual.peel(), Type::Unknown | Type::GenericParam { .. })
@@ -856,6 +877,9 @@ fn assignable_rec(
     }
     if matches!(expected, Type::TypeVar(_)) || matches!(actual, Type::TypeVar(_)) {
         return true;
+    }
+    if let Some(related) = relate_type_operators(actual, expected, types, seen) {
+        return related;
     }
     // Placed after TypeVar so generic fns can receive `unknown`; the wildcard binds T→Unknown, post-substitution sees identity.
     if matches!(expected, Type::Unknown) {
@@ -1766,6 +1790,136 @@ pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Opt
         index: types.index_signature(ty),
         fields: types.interface_data_shape(mangled, name, args)?,
     })
+}
+
+/// A deferred utility application, `keyof T` or `T[K]` on either side. Like a
+/// type parameter they are wildcards while they mention a signature
+/// `TypeVar`. With body type parameters, the identities tsc proves for any
+/// `X` hold (`X` fits `Partial<X>`, `Readonly<X>` fits `X`, `keyof T` fits
+/// `string | number`), and otherwise a source relates by its apparent type:
+/// the operator evaluated with each type parameter replaced by its bound.
+/// `None` when neither side is such a form.
+fn relate_type_operators(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> Option<bool> {
+    use super::utility_types::{Utility, deferred_application};
+    let actual_form = is_type_operator(actual);
+    let expected_form = is_type_operator(expected);
+    if !actual_form && !expected_form {
+        return None;
+    }
+    if (actual_form && mentions_signature_var(actual))
+        || (expected_form && mentions_signature_var(expected))
+    {
+        return Some(true);
+    }
+    if actual == expected {
+        return Some(true);
+    }
+    if let Some((utility, args)) = deferred_application(expected) {
+        let identity = match (utility, args) {
+            (
+                Utility::Partial | Utility::Readonly | Utility::Pick | Utility::Omit,
+                [operand, ..],
+            ) => operand == actual,
+            _ => false,
+        };
+        if identity {
+            return Some(true);
+        }
+    }
+    if let Type::KeyOf(operand) = expected
+        && !actual_form
+    {
+        // A key fits `keyof T` when it is a key of every `T`: one of the
+        // bound's keys. An unbounded `T` has none.
+        let bound = apparent_operand(operand, types);
+        return Some(
+            super::utility_types::keyof_type(&bound, types)
+                .is_some_and(|keys| assignable_rec(actual, &keys, types, seen)),
+        );
+    }
+    if expected_form {
+        // Any other target holds only its own instances.
+        return Some(false);
+    }
+    if let Some((utility, [operand, ..])) = deferred_application(actual)
+        && matches!(
+            utility,
+            Utility::Readonly | Utility::Required | Utility::Exclude | Utility::Extract
+        )
+        && operand == expected
+    {
+        return Some(true);
+    }
+    if let Type::KeyOf(_) = actual {
+        return Some(assignable_rec(
+            &Type::union(vec![Type::String, Type::Number]),
+            expected,
+            types,
+            seen,
+        ));
+    }
+    let apparent = apparent_operand(actual, types);
+    let apparent = super::utility_types::normalize(&apparent, types).unwrap_or(Type::Error);
+    if is_type_operator(&apparent) {
+        return Some(false);
+    }
+    Some(assignable_rec(&apparent, expected, types, seen))
+}
+
+/// `NoInfer<X>` as `X`, and `NonNullable<X>` as the narrowing's `X & {}`, for
+/// an application that still mentions a type parameter.
+fn rewrite_identity_operator(ty: &Type) -> Option<Type> {
+    use super::utility_types::{Utility, deferred_application};
+    match deferred_application(ty) {
+        Some((Utility::NoInfer, [operand])) => Some(operand.clone()),
+        Some((Utility::NonNullable, [operand])) => Some(Type::Refined {
+            original: Box::new(operand.clone()),
+            ty: Box::new(Type::empty_object()),
+        }),
+        _ => None,
+    }
+}
+
+/// Whether `ty` is a deferred utility application, `keyof T` or `T[K]`.
+fn is_type_operator(ty: &Type) -> bool {
+    matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. })
+        || super::utility_types::deferred_application(ty).is_some()
+}
+
+fn mentions_signature_var(ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if matches!(ty, Type::TypeVar(_)) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
+}
+
+/// `ty` with each body type parameter replaced by its bound, or `unknown`
+/// when it has none: the type every instantiation is assignable to.
+pub(super) fn apparent_operand(ty: &Type, types: TypeResolver) -> Type {
+    fn replace(ty: &Type, types: TypeResolver, depth: u32) -> Type {
+        if depth > crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH {
+            return Type::Error;
+        }
+        match ty {
+            Type::GenericParam { id, .. } => match types.generic_constraints.get(id) {
+                Some(bound) => replace(bound, types, depth + 1),
+                None => Type::Unknown,
+            },
+            _ => crate::type_size::map_children_infallible(ty, |child| {
+                replace(child, types, depth + 1)
+            }),
+        }
+    }
+    replace(ty, types, 0)
 }
 
 /// Whether `actual` fits a symbolic string mapping such as `Uppercase<string>`:

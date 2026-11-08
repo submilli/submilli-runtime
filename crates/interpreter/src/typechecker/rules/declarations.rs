@@ -242,6 +242,8 @@ impl<'a> TypeDeclarations<'a> {
             | Type::Never
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. }
             | Type::NumberEnum { .. }
             | Type::StringEnum { .. }
             // `peel` has removed these.

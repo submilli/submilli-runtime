@@ -136,6 +136,8 @@ pub fn emit_box(
         }
         Type::TypeVar(_)
         | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
         | Type::Unknown
         | Type::NonPrimitive
         | Type::Never => {
@@ -676,6 +678,8 @@ pub fn emit_cast_to(
         }
         Type::TypeVar(_)
         | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
         | Type::Unknown
         | Type::NonPrimitive
         | Type::Never => {

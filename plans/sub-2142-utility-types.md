@@ -273,3 +273,25 @@ Commit order inside the PR:
 - **Generic `obj[k]` at run time** reads by string key from an erased `$Object` that may be a class instance or interface value. Verify the record read path. If it doesn't hold, reject with a diagnostic.
 - **`has_evaluable_operator` walks `Alias` bodies** on every `infer_expr` result. Measure on the fixture suite.
 - **Hard dependencies on the constraints PR:** constraints on prelude aliases, type-argument checks in annotations, and the apparent-type helper.
+
+## Implementation notes (2026-11-08)
+
+The PR starts from SUB-2145's PR #360 (head `851c84d5`) while it sits in the merge queue, and is rebased onto `main` once #360 lands.
+
+Where the implementation departs from the design above:
+- **Commit order.**
+  - Commit 3 resolves `T[K]` only for concrete operands, plus `keyof` of unions, class instances and `never`.
+  - The `KeyOf` and `IndexedAccess` variants arrive with the generic work in commit 4, since only type parameters need them.
+- **Recursive aliases.** A utility applied to an alias inside that alias's own definition (`type Tree = { kids: Partial<Tree>[] }`) is rejected with a diagnostic, an accepted divergence. The application would stay a name inside the alias body, and codegen's run-time validators expand bodies without a type table.
+- **Literal contexts.**
+  - A template literal type, a string mapping (`Uppercase<string>`) and `keyof T` keep a literal in context, as in tsc.
+  - The template literal case fixes an existing gap: `` const t: `id-${string}` = "id-abc" `` was rejected before.
+- **Generic `o[k]`.** It reads through the record path (`ObjectConstructor##getField`) on the erased object, so it works on plain objects and class instances. Its type is `T[K]`. A key that doesn't fit `keyof T` is rejected.
+- **Casts.** `as Partial<T>`, `as ReturnType<F>`, `as keyof T` and the other deferred forms are rejected as erased, exactly like `as T`.
+- **`ReturnType<typeof f>` for a generic `f`.** The function's own type parameters become `unknown`, as tsc instantiates them with their (unrecorded) constraints.
+- **The `never[]`-rest bound** of `ReturnType` and `Parameters` now distributes over a union of function types.
+- **`keyof { 0: string }`** is the number literal `0`, as in tsc.
+- **Constraint messages** name the bound as written (`keyof User`), while the check uses its evaluation.
+- **Left out.**
+  - The `Readonly` rendering fix (§9) is moot. `Readonly<User>` evaluates to an object type, so `Type::Readonly(InterfaceRef)` no longer arises from it.
+  - The codegen guard for a concrete utility `AliasRef` was not added. Normalization covers instantiation and rehydration.

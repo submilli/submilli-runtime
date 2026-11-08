@@ -487,7 +487,9 @@ impl DependencyUsage {
             | Type::NonPrimitive
             | Type::Error
             | Type::TypeVar(_)
-            | Type::GenericParam { .. } => {}
+            | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. } => {}
         }
     }
 

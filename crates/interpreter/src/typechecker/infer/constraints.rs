@@ -62,6 +62,24 @@ impl Inferer<'_> {
             }
             return shape.as_ref().clone();
         }
+        // `Partial<T>`, `keyof T` and `T[K]` read as the operator applied to
+        // each parameter's bound: `p.a` on `Partial<T>` with `T extends { a:
+        // number }` is `number | undefined` (tsc keeps `T["a"] | undefined`).
+        if matches!(
+            current.without_aliases(),
+            Type::KeyOf(_) | Type::IndexedAccess { .. }
+        ) || super::utility_types::deferred_application(current.without_aliases()).is_some()
+        {
+            let resolver = self.resolver();
+            let apparent = super::assignable::apparent_operand(current, resolver);
+            return match super::utility_types::normalize(&apparent, resolver) {
+                Ok(apparent) => apparent,
+                Err(exceeded) => {
+                    self.type_limits.record(exceeded);
+                    Type::Error
+                }
+            };
+        }
         if let Type::Union(members) = current.without_aliases() {
             let mut budget = self.type_limits.budget();
             let mut apparent_members = Vec::new();
@@ -156,7 +174,11 @@ impl Inferer<'_> {
             let expected =
                 super::generic::substitute_typevars(&expected, &rigid, &self.type_limits)
                     .map_err(type_limit_at(span))?;
-            if !self.satisfies_generic_constraint(&actual, &expected) {
+            // `keyof T` and utilities in a bound evaluate once `T` is known,
+            // though the message names the bound as written (`keyof User`).
+            let evaluated = super::utility_types::normalize(&expected, self.resolver())
+                .map_err(type_limit_at(span))?;
+            if !self.satisfies_generic_constraint(&actual, &evaluated) {
                 self.error_with_help(
                     span,
                     format!("Type `{actual}` does not satisfy the constraint `{expected}`"),
@@ -217,6 +239,8 @@ impl Inferer<'_> {
                 .map_err(type_limit_at(span))?;
             let bound = substitution
                 .apply(bound, &self.type_limits)
+                .map_err(type_limit_at(span))?;
+            let bound = super::utility_types::normalize(&bound, self.resolver())
                 .map_err(type_limit_at(span))?;
             if !self.satisfies_generic_constraint(&actual, &bound) {
                 substitution.insert(name.clone(), bound);

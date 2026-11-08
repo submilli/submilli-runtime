@@ -303,7 +303,8 @@ pub(crate) fn child_count(ty: &Type) -> usize {
             ..
         }
         | Type::Union(members) => members.len(),
-        Type::Refined { .. } => 2,
+        Type::Refined { .. } | Type::IndexedAccess { .. } => 2,
+        Type::KeyOf(_) => 1,
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
         | Type::AliasRef { args, .. } => args.len(),
@@ -353,7 +354,11 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
                 visit(&index.value);
             }
         }
-        Type::Array(inner) | Type::Readonly(inner) => visit(inner),
+        Type::Array(inner) | Type::Readonly(inner) | Type::KeyOf(inner) => visit(inner),
+        Type::IndexedAccess { object, index } => {
+            visit(object);
+            visit(index);
+        }
         Type::Tuple(members) => members.iter().for_each(visit),
         Type::TemplateLiteral {
             substitutions: members,
@@ -457,6 +462,11 @@ pub fn map_children<E>(
         },
         Type::Array(inner) => Type::Array(Box::new(map(inner)?)),
         Type::Readonly(inner) => Type::Readonly(Box::new(map(inner)?)),
+        Type::KeyOf(inner) => Type::KeyOf(Box::new(map(inner)?)),
+        Type::IndexedAccess { object, index } => Type::IndexedAccess {
+            object: Box::new(map(object)?),
+            index: Box::new(map(index)?),
+        },
         Type::Tuple(members) => Type::Tuple(crate::types::TupleType {
             elements: map_all(members)?,
             optional: members.optional,
@@ -575,8 +585,11 @@ impl<'a> TypeChildren<'a> {
                 children.trailing[0] = index.as_ref().map(|index| index.key.as_ref());
                 children.trailing[1] = index.as_ref().map(|index| index.value.as_ref());
             }
-            Type::Array(inner) | Type::Readonly(inner) => {
+            Type::Array(inner) | Type::Readonly(inner) | Type::KeyOf(inner) => {
                 children.trailing[0] = Some(inner);
+            }
+            Type::IndexedAccess { object, index } => {
+                children.trailing = [Some(object), Some(index)];
             }
             Type::Tuple(tuple) => children.members = tuple.elements.iter(),
             Type::TemplateLiteral {

@@ -122,8 +122,7 @@ pub(crate) fn declaration_text(mangled: &crate::MangledName) -> Option<&'static 
         .map(|utility| utility.declaration)
 }
 
-/// The bound of each constrained utility parameter. `Pick`'s `K extends keyof
-/// T` is checked by the evaluator, which names the missing key.
+/// The bound of each constrained utility parameter.
 fn constraints(name: &str) -> BTreeMap<String, Type> {
     let callable = || Type::Function {
         params: vec![Type::Array(Box::new(Type::Never))],
@@ -133,6 +132,10 @@ fn constraints(name: &str) -> BTreeMap<String, Type> {
         has_rest: true,
     };
     match name {
+        "Pick" => BTreeMap::from([(
+            "K".to_string(),
+            Type::KeyOf(Box::new(Type::TypeVar("T".to_string()))),
+        )]),
         "Omit" => BTreeMap::from([(
             "K".to_string(),
             Type::union(vec![Type::String, Type::Number]),

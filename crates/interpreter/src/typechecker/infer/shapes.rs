@@ -137,6 +137,12 @@ impl<'a> ShapeCollector<'a> {
                     self.collect(a);
                 }
             }
+            // A symbolic `keyof T` or `T[K]` lowers like a type parameter.
+            Type::KeyOf(inner) => self.collect(inner),
+            Type::IndexedAccess { object, index } => {
+                self.collect(object);
+                self.collect(index);
+            }
             // aliases have no shape of their own — recurse into the body
             Type::Alias { ty: inner, .. }
             | Type::Refined { ty: inner, .. }

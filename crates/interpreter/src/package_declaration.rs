@@ -664,8 +664,15 @@ impl PackageShapeCollector {
                     self.collect_type(arg);
                 }
             }
-            Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) => {
+            Type::Alias { ty, .. }
+            | Type::Refined { ty, .. }
+            | Type::Readonly(ty)
+            | Type::KeyOf(ty) => {
                 self.collect_type(ty);
+            }
+            Type::IndexedAccess { object, index } => {
+                self.collect_type(object);
+                self.collect_type(index);
             }
             Type::Number
             | Type::BigInt

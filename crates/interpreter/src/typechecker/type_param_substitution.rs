@@ -777,6 +777,9 @@ impl<'a> Unifier<'a> {
             return Ok(());
         }
 
+        if let Some(result) = self.unify_type_operator(param_ty, unpeeled_arg) {
+            return result;
+        }
         if let Some(types) = self.alias_ref_expansion(param_ty, arg_ty) {
             return self.unify_expanded(param_ty, arg_ty, types);
         }
@@ -2092,6 +2095,48 @@ impl<'a> Unifier<'a> {
     /// A `TypeVar` param is excluded: binding it to the back-edge is what the
     /// caller wants, and the expansion happens when that binding is compared
     /// against the next argument.
+    /// A parameter that is a utility over a type parameter, `keyof T` or
+    /// `T[K]`. A matching application unifies argument by argument; `Partial`,
+    /// `Readonly` and `Required` reverse their mapping (tsc's reverse mapped
+    /// type), and `Exclude`, `Extract` and `NonNullable` take the argument as
+    /// `T`. The rest, like `NoInfer`, bind nothing. `None` for any other
+    /// parameter.
+    #[allow(clippy::result_large_err)]
+    fn unify_type_operator(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+    ) -> Option<Result<(), UnifyError>> {
+        use crate::typechecker::infer::utility_types::{Utility, deferred_application, utility};
+        if matches!(param_ty, Type::KeyOf(_) | Type::IndexedAccess { .. }) {
+            return Some(Ok(()));
+        }
+        let (applied, params) = deferred_application(param_ty)?;
+        if let Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } = arg_ty
+            && utility(mangled) == Some(applied)
+            && args.len() == params.len()
+        {
+            let pairs: Vec<(Type, Type)> =
+                params.iter().cloned().zip(args.iter().cloned()).collect();
+            return Some(
+                pairs
+                    .iter()
+                    .try_for_each(|(param, arg)| self.unify(param, arg)),
+            );
+        }
+        let operand = params.first()?.clone();
+        Some(match applied {
+            Utility::Partial | Utility::Readonly | Utility::Required => {
+                let reversed = reverse_mapped(applied, arg_ty.peel());
+                self.unify(&operand, &reversed)
+            }
+            Utility::Exclude | Utility::Extract | Utility::NonNullable => {
+                self.unify(&operand, arg_ty)
+            }
+            _ => Ok(()),
+        })
+    }
+
     fn alias_ref_expansion(&self, param_ty: &Type, arg_ty: &Type) -> Option<TypeResolver<'a>> {
         let is_back_edge =
             matches!(param_ty, Type::AliasRef { .. }) || matches!(arg_ty, Type::AliasRef { .. });
@@ -2148,6 +2193,43 @@ impl<'a> Unifier<'a> {
             });
         }
         self.unify(&expanded_param, &expanded_arg)
+    }
+}
+
+/// The `T` whose `Partial<T>`, `Readonly<T>` or `Required<T>` is `ty`: the
+/// modifier the utility adds is removed from each field, and arrays map
+/// element by element. Other types are their own source.
+fn reverse_mapped(utility: crate::typechecker::infer::utility_types::Utility, ty: &Type) -> Type {
+    use crate::typechecker::infer::utility_types::Utility;
+    let element = |element: &Type| match utility {
+        Utility::Partial => crate::typechecker::infer::narrowing::strip_undefined(element),
+        _ => element.clone(),
+    };
+    match ty {
+        Type::Object { fields, index } => Type::Object {
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    let mut field = field.clone();
+                    match utility {
+                        Utility::Partial => field.optional = false,
+                        Utility::Readonly => field.readonly = false,
+                        _ => {}
+                    }
+                    (name.clone(), field)
+                })
+                .collect(),
+            index: index.clone(),
+        },
+        Type::Array(inner) => Type::Array(Box::new(element(inner))),
+        Type::Readonly(inner) if utility == Utility::Readonly => inner.as_ref().clone(),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| reverse_mapped(utility, member))
+                .collect(),
+        ),
+        _ => ty.clone(),
     }
 }
 

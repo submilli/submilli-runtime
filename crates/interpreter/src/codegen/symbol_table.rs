@@ -1051,6 +1051,8 @@ impl SymbolTable {
             }
             Type::TypeVar(_)
             | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. }
             | Type::Unknown
             | Type::NonPrimitive
             | Type::Void => {

@@ -446,6 +446,19 @@ pub enum Type {
     /// TypeScript. Every object, array, function and class instance is one. It
     /// has `{}`'s members and, like `{}`, lowers as `unknown`.
     NonPrimitive,
+    /// `keyof T` while its operand mentions a type parameter (tsc's
+    /// IndexType). A concrete operand resolves to the union of its keys, so
+    /// this only appears in generic signatures and bodies, and lowers like a
+    /// type parameter.
+    KeyOf(Box<Type>),
+    /// `T[K]` while an operand mentions a type parameter (tsc's
+    /// IndexedAccessType). Concrete operands resolve to the property type, so
+    /// this only appears in generic signatures and bodies, and lowers like a
+    /// type parameter.
+    IndexedAccess {
+        object: Box<Type>,
+        index: Box<Type>,
+    },
 }
 
 impl Type {
@@ -749,6 +762,19 @@ impl Type {
             crate::mangle::prelude("RangeError"),
             Vec::new(),
         )
+    }
+
+    /// Whether a value of this type sits in the erased generic slot, as a
+    /// type parameter's does: a type parameter itself, `keyof T`, `T[K]`, or
+    /// a utility application over a type parameter (`Partial<T>`).
+    pub fn lowers_to_erased_slot(&self) -> bool {
+        match self.peel() {
+            Type::TypeVar(_)
+            | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. } => true,
+            ty => crate::typechecker::infer::utility_types::deferred_application(ty).is_some(),
+        }
     }
 
     /// Remove display aliases while retaining generic guard identity.

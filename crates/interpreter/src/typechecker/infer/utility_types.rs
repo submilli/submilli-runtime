@@ -274,7 +274,10 @@ impl Evaluator<'_> {
                 "`{}` does not apply to `Uint8Array`",
                 utility.name()
             ))),
-            Type::TypeVar(_) | Type::GenericParam { .. } => Err(None),
+            Type::TypeVar(_)
+            | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. } => Err(None),
         }
     }
 
@@ -372,18 +375,15 @@ impl Evaluator<'_> {
         let members = self.object_members(object)?;
         let available = common_keys(&members);
         let mut fields = BTreeMap::new();
+        // A key outside `keyof T` fails `Pick`'s constraint, which reports it.
         for key in members_of_keys(keys) {
             let Some(name) = key_name(&key) else {
-                return Err(Some(format!(
-                    "Type `{keys}` does not satisfy the constraint `keyof {object}`"
-                )));
+                return Err(None);
             };
             if !available.iter().any(|known| known == &name)
                 && !members.iter().all(|(_, index)| index.is_some())
             {
-                return Err(Some(format!(
-                    "Type `{keys}` does not satisfy the constraint `keyof {object}`"
-                )));
+                return Err(None);
             }
             fields.insert(name.clone(), merged_field(&members, &name));
         }
@@ -869,4 +869,164 @@ impl Evaluator<'_> {
 
 fn is_numeric_key(key: &Type) -> bool {
     matches!(key, Type::Number | Type::NumberLiteral(_)) || matches!(key, Type::NumberEnum { .. })
+}
+
+/// Whether `ty` holds a utility application whose arguments no longer
+/// mention a type parameter, which [`normalize`] would evaluate.
+fn has_evaluable_application(ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if let Type::AliasRef { mangled, args, .. } = ty
+            && utility(mangled).is_some()
+            && !args.iter().any(holds_type_parameter)
+        {
+            return true;
+        }
+        if matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. }) && !holds_type_parameter(ty) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
+}
+
+/// `ty` with every utility application whose arguments became concrete
+/// (after instantiation substituted its type parameters) replaced by the type
+/// it stands for, labeled as a written application is.
+pub(crate) fn normalize(
+    ty: &Type,
+    types: TypeResolver<'_>,
+) -> Result<Type, crate::type_size::TypeTooLarge> {
+    if !has_evaluable_application(ty) {
+        return Ok(ty.clone());
+    }
+    normalize_node(ty, types)
+}
+
+fn normalize_node(
+    ty: &Type,
+    types: TypeResolver<'_>,
+) -> Result<Type, crate::type_size::TypeTooLarge> {
+    let mapped = crate::type_size::map_children(ty, |child| normalize_node(child, types))?;
+    if holds_type_parameter(&mapped) {
+        return Ok(mapped);
+    }
+    match &mapped {
+        Type::KeyOf(operand) => return Ok(keyof_type(operand, types).unwrap_or(Type::Error)),
+        Type::IndexedAccess { object, index } => {
+            return Ok(index_access_type(object, index, types).unwrap_or(Type::Error));
+        }
+        _ => {}
+    }
+    if let Type::AliasRef { mangled, args, .. } = &mapped
+        && let Some(utility) = utility(mangled)
+    {
+        return Ok(match evaluate(utility, args, types) {
+            Evaluated::Resolved(result) => label(utility, args.clone(), result),
+            Evaluated::Deferred => mapped,
+            Evaluated::Invalid(_) => Type::Error,
+        });
+    }
+    Ok(mapped)
+}
+
+/// `keyof ty` for a concrete `ty`, tsc's index type: the union of its
+/// property names as string literals, with an index signature's key type.
+/// `None` for a type with no member list (a primitive, an array).
+pub(crate) fn keyof_type(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
+    match ty.peel() {
+        Type::Unknown => return Some(Type::Never),
+        // Every key, as tsc's `string | number | symbol` without `symbol`.
+        Type::Never => return Some(Type::union(vec![Type::String, Type::Number])),
+        Type::Error => return Some(Type::Error),
+        _ => {}
+    }
+    if let Some(index) = types.index_signature(ty) {
+        if matches!(index.key.peel(), Type::String) {
+            return Some(if index.string_keyof_includes_number {
+                Type::union(vec![Type::String, Type::Number])
+            } else {
+                Type::String
+            });
+        }
+        let mut keys: Vec<Type> = member_names(ty, types)
+            .unwrap_or_default()
+            .into_iter()
+            .map(key_literal)
+            .collect();
+        keys.push(*index.key);
+        return Some(Type::union(keys));
+    }
+    let names = member_names(ty, types)?;
+    Some(Type::union(names.into_iter().map(key_literal).collect()))
+}
+
+/// A property name as `keyof` reports it: a numeric name (`0`) is a number
+/// literal, as tsc writes `keyof { 0: string }`; any other is a string.
+fn key_literal(name: String) -> Type {
+    match name.parse::<f64>() {
+        Ok(value) if crate::runtime::number::format_number_js(value) == name => {
+            Type::NumberLiteral(crate::types::LiteralF64(value))
+        }
+        _ => Type::StringLiteral(name),
+    }
+}
+
+/// The property names `keyof` reports: an object type's fields, an
+/// interface's properties and methods, a class instance's public members,
+/// and the names every member of a union has.
+fn member_names(ty: &Type, types: TypeResolver<'_>) -> Option<Vec<String>> {
+    match ty.peel() {
+        Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
+        Type::Union(members) => {
+            let mut names: Option<Vec<String>> = None;
+            for member in members {
+                let member_names = member_names(member, types)?;
+                names = Some(match names {
+                    None => member_names,
+                    Some(names) => names
+                        .into_iter()
+                        .filter(|name| member_names.contains(name))
+                        .collect(),
+                });
+            }
+            names
+        }
+        Type::InterfaceRef { mangled, name, .. } => {
+            let TypeKind::Interface {
+                methods,
+                properties,
+                ..
+            } = &types.lookup(mangled, name)?.kind
+            else {
+                return None;
+            };
+            Some(properties.keys().chain(methods.keys()).cloned().collect())
+        }
+        Type::ClassRef { mangled, args, .. } => {
+            Some(types.class_full_form(mangled, args)?.into_keys().collect())
+        }
+        Type::AliasRef {
+            mangled,
+            name,
+            args,
+            ..
+        } => member_names(
+            &super::type_aliases::alias_ref_body(mangled, name, args, types),
+            types,
+        ),
+        _ => None,
+    }
+}
+
+/// The utility and arguments of an application that still mentions a type
+/// parameter.
+pub(crate) fn deferred_application(ty: &Type) -> Option<(Utility, &[Type])> {
+    let Type::AliasRef { mangled, args, .. } = ty else {
+        return None;
+    };
+    let utility = utility(mangled)?;
+    args.iter()
+        .any(holds_type_parameter)
+        .then_some((utility, args.as_slice()))
 }

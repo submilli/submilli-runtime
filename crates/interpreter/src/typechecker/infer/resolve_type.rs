@@ -1037,43 +1037,20 @@ impl<'a> Inferer<'a> {
     /// rather than resolved to something narrower than it should be.
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type(operand)?;
-        if matches!(resolved.peel(), Type::Unknown) {
-            return Ok(Type::Never);
+        // Over a type parameter the key set is unknown until instantiation.
+        if super::utility_types::holds_type_parameter(&resolved) {
+            return Ok(Type::KeyOf(Box::new(resolved)));
         }
-        // Every key, as tsc's `string | number | symbol` without `symbol`.
-        if matches!(resolved.peel(), Type::Never) {
-            return Ok(Type::union(vec![Type::String, Type::Number]));
+        if let Some(keys) = super::utility_types::keyof_type(&resolved, self.resolver()) {
+            return Ok(keys);
         }
-        if let Some(index) = self.resolver().index_signature(&resolved) {
-            if matches!(index.key.peel(), Type::String) {
-                return Ok(if index.string_keyof_includes_number {
-                    Type::union(vec![Type::String, Type::Number])
-                } else {
-                    Type::String
-                });
-            }
-            let mut keys = self
-                .member_names_of(&resolved)
-                .unwrap_or_default()
-                .into_iter()
-                .map(Type::StringLiteral)
-                .collect::<Vec<_>>();
-            keys.push(*index.key);
-            return Ok(Type::union(keys));
+        if !matches!(resolved.peel(), Type::Error) {
+            self.error(
+                operand.span,
+                format!("`keyof` needs an object type or interface, got `{resolved}`"),
+            );
         }
-        let Some(names) = self.member_names_of(&resolved) else {
-            if !matches!(resolved.peel(), Type::Error) {
-                self.error_with_help(
-                    operand.span,
-                    format!("`keyof` needs an object type or interface, got `{resolved}`"),
-                    keyof_help(&resolved),
-                );
-            }
-            return Ok(Type::Error);
-        };
-        Ok(Type::union(
-            names.into_iter().map(Type::StringLiteral).collect(),
-        ))
+        Ok(Type::Error)
     }
 
     /// `T[K]`: the type of `T`'s property `K`, as tsc computes it. A type
@@ -1086,14 +1063,15 @@ impl<'a> Inferer<'a> {
     ) -> Result<Type, CompilerFailure> {
         let object_ty = self.resolve_type(object)?;
         let index_ty = self.resolve_type(index)?;
+        // Over a type parameter the property is unknown until instantiation.
         if super::utility_types::holds_type_parameter(&object_ty)
             || super::utility_types::holds_type_parameter(&index_ty)
         {
-            self.error(
-                span,
-                "an indexed access type over a type parameter is not supported yet".to_string(),
-            );
-            return Ok(Type::Error);
+            let _ = span;
+            return Ok(Type::IndexedAccess {
+                object: Box::new(object_ty),
+                index: Box::new(index_ty),
+            });
         }
         match super::utility_types::index_access_type(&object_ty, &index_ty, self.resolver()) {
             Ok(ty) => Ok(ty),
@@ -1101,51 +1079,6 @@ impl<'a> Inferer<'a> {
                 self.error(index.span, message);
                 Ok(Type::Error)
             }
-        }
-    }
-
-    /// The member names `keyof` reports, or `None` if the type has no member list to
-    /// read. Interfaces flatten inherited members at declaration time, so the two maps
-    /// on the symbol are the whole surface.
-    fn member_names_of(&self, ty: &Type) -> Option<Vec<String>> {
-        match ty.peel() {
-            Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
-            // `keyof (A | B)` is the keys every member has.
-            Type::Union(members) => {
-                let mut names: Option<Vec<String>> = None;
-                for member in members {
-                    let member_names = self.member_names_of(member)?;
-                    names = Some(match names {
-                        None => member_names,
-                        Some(names) => names
-                            .into_iter()
-                            .filter(|name| member_names.contains(name))
-                            .collect(),
-                    });
-                }
-                names
-            }
-            // A class instance's public members, inherited ones included.
-            Type::ClassRef { mangled, args, .. } => Some(
-                self.resolver()
-                    .class_full_form(mangled, args)?
-                    .into_keys()
-                    .collect(),
-            ),
-            Type::InterfaceRef { .. } => {
-                let (mangled, _package, name, _args) = ty.interface_routing()?;
-                let sym = self.lookup_structural_type(&mangled, name)?;
-                let TypeKind::Interface {
-                    methods,
-                    properties,
-                    ..
-                } = &sym.kind
-                else {
-                    return None;
-                };
-                Some(properties.keys().chain(methods.keys()).cloned().collect())
-            }
-            _ => None,
         }
     }
 }
@@ -1216,18 +1149,6 @@ impl TypeofRoot {
             _ => TypeofRoot::OtherType,
         }
     }
-}
-
-/// Why `keyof` of a type parameter has no answer: its key set is not known.
-fn keyof_help(operand: &Type) -> Vec<String> {
-    if !matches!(operand.peel(), Type::TypeVar(_) | Type::GenericParam { .. }) {
-        return Vec::new();
-    }
-    vec![
-        "`keyof` of a type parameter is not supported: generics are erased, so `keyof` \
-         needs a concrete object type"
-            .to_string(),
-    ]
 }
 
 #[cfg(test)]

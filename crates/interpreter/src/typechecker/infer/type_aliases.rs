@@ -53,7 +53,11 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
                 walk_alias_refs(m, visit);
             }
         }
-        Type::Array(e) | Type::Readonly(e) => walk_alias_refs(e, visit),
+        Type::Array(e) | Type::Readonly(e) | Type::KeyOf(e) => walk_alias_refs(e, visit),
+        Type::IndexedAccess { object, index } => {
+            walk_alias_refs(object, visit);
+            walk_alias_refs(index, visit);
+        }
         Type::Object { fields, index } => {
             if let Some(i) = index {
                 walk_alias_refs(&i.value, visit);
@@ -247,17 +251,8 @@ impl<'a> Inferer<'a> {
         }
         let ty = match evaluate(utility, &args, self.resolver()) {
             Evaluated::Resolved(ty) => label(utility, args, ty),
-            Evaluated::Deferred => {
-                self.error_with_help(
-                    span,
-                    format!(
-                        "`{}` over a type parameter is not supported yet",
-                        utility.name()
-                    ),
-                    vec![],
-                );
-                Type::Error
-            }
+            // It evaluates once instantiation substitutes its type parameters.
+            Evaluated::Deferred => deferred,
             Evaluated::Invalid(Some(reason)) => {
                 self.error(span, reason);
                 Type::Error
