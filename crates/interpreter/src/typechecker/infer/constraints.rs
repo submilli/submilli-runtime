@@ -106,6 +106,15 @@ impl Inferer<'_> {
         if apparent == ty {
             return Ok((value, ty));
         }
+        // A form whose bound has no evaluation (`Pick<T, "length">` with `T
+        // extends number[]`) has no members to read; say so rather than read
+        // an `Error`.
+        if matches!(apparent.peel(), Type::Error) && !matches!(ty.peel(), Type::Error) {
+            self.error(
+                span,
+                format!("`{ty}` has no members to read: its bound has no evaluation"),
+            );
+        }
         let value = self.push_synthetic_expr(
             TypedExprKind::Cast {
                 value,
@@ -348,7 +357,16 @@ impl Inferer<'_> {
             | TypeKind::Alias { generics, .. } => generics.clone(),
             _ => return Ok(()),
         };
-        let substitution = TypeParamSubstitution::from_pairs(&parameters, args);
+        // The arguments' own type parameters become rigid first, so one named
+        // like a parameter of the application (`Pick<K, "a">` with the user's
+        // `K`) is never chased into that parameter's binding.
+        let rigid = self.rigid_signature_bindings()?;
+        let args = args
+            .iter()
+            .map(|arg| super::generic::substitute_typevars(arg, &rigid, &self.type_limits))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(type_limit_at(span))?;
+        let substitution = TypeParamSubstitution::from_pairs(&parameters, &args);
         self.check_generic_constraints(&parameters, &substitution, &[], span)
     }
 

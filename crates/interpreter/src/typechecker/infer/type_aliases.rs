@@ -349,11 +349,10 @@ impl<'a> Inferer<'a> {
     /// declaration is bound, reporting where it was written why it has no
     /// evaluation: a missing member (`B["zz"]`), or a cycle of forms that only
     /// name each other (`A["b"]` and `B["c"]`).
-    /// Returns whether any form was kept lazy, so members may hold one.
-    pub(super) fn check_forward_forms(&mut self) -> Result<bool, CompilerFailure> {
+    pub(super) fn check_forward_forms(&mut self) -> Result<(), CompilerFailure> {
         let forms = std::mem::take(&mut self.forward_forms);
         if forms.is_empty() {
-            return Ok(false);
+            return Ok(());
         }
         let _settled = super::utility_types::SettledForms::enter();
         for (form, span) in forms {
@@ -364,7 +363,7 @@ impl<'a> Inferer<'a> {
                 self.error(span, failure);
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Replace the forms kept lazy in interface and class members with what

@@ -137,7 +137,9 @@ impl<'a> Inferer<'a> {
         }
         self.validate_bound_interfaces(&top_level, &skip)?;
         // Lazy member forms exist only where forward forms were kept.
-        if self.check_forward_forms()? {
+        let kept_lazy = !self.forward_forms.is_empty();
+        self.check_forward_forms()?;
+        if kept_lazy {
             self.settle_member_types()?;
         }
         self.check_pending_indexes();

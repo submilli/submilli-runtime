@@ -969,11 +969,10 @@ fn emit_index_access(
     // never `undefined`, so its value tells. Taken before anything nested is
     // emitted, so no nested read can take it.
     let mut present_flag = take_present_flag(emitter, id);
-    // A generic read whose missing key reads `undefined` always finds a
-    // value: a local holding it is present.
-    if ctx.ta.missing_reads_undefined.contains(&id)
-        && let Some(flag) = present_flag.take()
-    {
+    let missing_reads_undefined = ctx.ta.missing_reads_undefined.contains(&id);
+    // Such a read always finds a value (see `checked_ty` below): a local
+    // holding it is present.
+    if missing_reads_undefined && let Some(flag) = present_flag.take() {
         set_present_flag(emitter, flag, true);
     }
     let recv_ty = ctx
@@ -990,7 +989,7 @@ fn emit_index_access(
         .ta
         .source_type(id)
         .map_err(crate::codegen::arena_failure)?;
-    let checked_ty = if ctx.ta.missing_reads_undefined.contains(&id) {
+    let checked_ty = if missing_reads_undefined {
         Type::union(vec![source_ty.clone(), Type::Undefined])
     } else {
         source_ty.clone()

@@ -451,3 +451,20 @@ Not changed (P3):
 - A concrete-key record read in an optional chain (`r?.[k]`, `k: string`) still has the form type.
 - `keyof T` into `keyof Omit<T, K>`, and `T[K]` into `Required<T>[K]`, stay stricter than tsc.
 - `keyof` of a union with index-signature members, `t[k]` with `T extends number[]`, and indexing a narrowed array-bounded `T[K]`.
+
+## Review round 6 (2026-11-08)
+
+Fixed:
+- **Name capture.** A constraint check paired the application's arguments with its own parameters before making the arguments' type parameters rigid, so a user `K` in `Pick<K, "a">` was chased into `Pick`'s `K`. The arguments are rigid first now.
+- **Concrete keys of mapped utilities.** A literal outside `keyof Omit<T, "a">`'s identity (`Exclude<keyof T, "a">`) is tried against the bound's keys, so `p["b"]` on `Omit<T, "a">` works again; a form keeps the strict identity.
+- **`M<T>[K]`** reads and writes as `T[K]` (`Pick<T, K>[K]` over a record bound is a missing read again, and a write checks `T[K]`'s bound).
+- **A form whose bound has no evaluation** (`Pick<T, "length">` with `T extends number[]`) reports a diagnostic at the read instead of an internal compiler failure.
+- **Literal keys** stay literal only against `keyof` and utilities that keep part of it; `V extends T[keyof T]` widens, as in tsc. Only such key bounds are evaluated in literal contexts.
+- **Template literal types** accept forms in their holes (`` `on${Capitalize<K>}` ``).
+- **One diagnostic** for a write through `Readonly<T>`.
+- **Clean code**: explicit `kept_lazy` at the settle call site, one lookup of `missing_reads_undefined` in codegen, `lower_keys` below its caller with its `never` fallback explained, the `report_readonly_keys` doc, and one `index_span` binding.
+
+Not changed (P3 or pre-existing):
+- A template literal *expression* with a type-parameter hole is typed `string` (`return \`id_${k}\`` into `` `id_${K}` ``), as on upstream.
+- `Pick` over an array bound has no evaluation, so it is reported rather than read.
+- `Pick<X["u"], keyof U>` and writes of `T[K]` into `Pick<Readonly<T>, K>[K]` stay stricter than tsc.

@@ -1873,6 +1873,9 @@ fn valid_template_hole(ty: &Type) -> bool {
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
         | Type::Never => true,
+        // `get${Capitalize<K>}` or `id_${Extract<keyof T, string>}`: a form
+        // over a type parameter holds what an instantiation holds.
+        form if form.is_type_operator() => true,
         Type::TemplateLiteral { substitutions, .. } | Type::Union(substitutions) => {
             substitutions.iter().all(valid_template_hole)
         }

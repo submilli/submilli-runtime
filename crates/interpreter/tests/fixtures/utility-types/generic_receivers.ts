@@ -11,6 +11,11 @@ function patchA<T extends { a: number }>(patch: Partial<T>): void { patch["a"] =
 function held<T, K extends keyof T>(value: T, key: K): T[K] { const read = value[key]; return read; }
 function label<T, K extends Extract<keyof T, string>>(value: T, key: K): string { return `${key}:${String(value[key])}`; }
 function rest<T, K extends keyof T>(value: T, key: Exclude<keyof T, K>): T[Exclude<keyof T, K>] { return value[key]; }
+function named<K extends { a: number }>(value: Pick<K, "a">): number { return value.a; }
+function omitted<T extends { a: number; b: string }>(value: Omit<T, "a">): void { value["b"] = "y"; }
+type Handler<K extends string> = `on${Capitalize<K>}`;
+function first<T, V extends T[keyof T]>(value: T, item: V): V { return item; }
+function strict<R extends Record<string, number>, K extends keyof R>(value: Pick<R, K>, key: K): R[K] { return value[key]; }
 class Box {
   value: string = "v";
   static key(key: keyof Box): string { return key; }
@@ -34,4 +39,13 @@ function main(): void {
   const optional: { a?: number } = {};
   assert(held(optional, "a") === undefined, "a local holds an absent optional property as undefined");
   assert(label(user, "name") === "name:u" && rest<User, "age">(user, "name") === "u", "keys bounded by utilities over keyof");
+  const target2 = { a: 1, b: "x" };
+  omitted(target2);
+  const handler: Handler<"click"> = "onClick";
+  let widened = first({ a: "x" as string }, "x");
+  widened = "y";
+  assert(named({ a: 3 }) === 3 && target2.b === "y" && handler === "onClick" && widened === "y", "user type parameters named like Pick's, Omit writes, mapped template holes, widened values");
+  let missing = false;
+  try { strict<Record<string, number>, string>({}, "zz"); } catch (e) { missing = e instanceof Error && e.name === "MissingValueError"; }
+  assert(missing, "a Pick over a record bound keeps missing reads");
 }

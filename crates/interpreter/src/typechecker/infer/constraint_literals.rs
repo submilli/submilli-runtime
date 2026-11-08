@@ -167,10 +167,15 @@ impl Inferer<'_> {
                     let bound = sub
                         .apply(bound, &self.type_limits)
                         .map_err(type_limit_at(span))?;
-                    // A bound over a parameter inferred already evaluates:
-                    // `Exclude<keyof U, "id">` is `"b"`.
-                    let bound = super::utility_types::normalize(&bound, self.resolver())
-                        .map_err(type_limit_at(span))?;
+                    // A key bound over a parameter inferred already
+                    // evaluates: `Exclude<keyof U, "id">` is `"b"`. Any other
+                    // bound keeps its form (`T[keyof T]` widens, as in tsc).
+                    let bound = if names_keys(&bound) {
+                        super::utility_types::normalize(&bound, self.resolver())
+                            .map_err(type_limit_at(span))?
+                    } else {
+                        bound
+                    };
                     enqueue(&mut pending, &mut budget, argument, &bound, true)
                         .map_err(type_limit_at(span))?;
                 }
@@ -415,19 +420,22 @@ fn enqueue(
     Ok(())
 }
 
-/// Whether `ty` is `keyof T` or a utility over it (`Extract<keyof T, string>`).
+/// Whether `ty` is `keyof T`, or a utility that keeps part of one
+/// (`Extract<keyof T, string>`, `Exclude<keyof T, K>`). A `keyof` in an index
+/// position (`T[keyof T]`) names values, not keys, so tsc widens there.
 pub(super) fn names_keys(ty: &Type) -> bool {
-    if !ty.is_type_operator() {
-        return false;
-    }
-    let mut pending = vec![ty];
-    while let Some(ty) = pending.pop() {
-        if matches!(ty, Type::KeyOf(_)) {
-            return true;
+    use super::utility_types::{Utility, utility};
+    match ty.without_aliases() {
+        Type::KeyOf(_) => true,
+        Type::Union(members) => members.iter().any(names_keys),
+        Type::AliasRef { mangled, args, .. } => {
+            matches!(
+                utility(mangled),
+                Some(Utility::Extract | Utility::Exclude | Utility::NonNullable | Utility::NoInfer)
+            ) && args.first().is_some_and(names_keys)
         }
-        crate::type_size::for_each_child(ty, |child| pending.push(child));
+        _ => false,
     }
-    false
 }
 
 #[cfg(test)]

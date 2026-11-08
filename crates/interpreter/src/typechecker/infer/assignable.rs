@@ -1862,9 +1862,14 @@ fn relate_type_operators(
     {
         return Some(true);
     }
-    // The keys of a mapped utility are its key type, on either side.
+    // The keys of a mapped utility are its key type, on either side. A
+    // concrete key outside it may still be one of the bound's keys
+    // (`"b"` in `keyof Omit<T, "a">`), which `relate_into_form` tries.
     if let Some(keys) = mapped_keys(expected) {
-        return Some(assignable_rec(actual, &keys, types, seen));
+        let fits = assignable_rec(actual, &keys, types, seen);
+        if fits || actual_form {
+            return Some(fits);
+        }
     }
     if let Some(keys) = mapped_keys(actual) {
         return Some(assignable_rec(&keys, expected, types, seen));
@@ -2077,6 +2082,10 @@ pub(super) fn write_context(target: &Type, types: TypeResolver) -> Option<Type> 
 
 /// [`bound_properties`] of the form `target` (`T[K]`).
 fn indexed_bound_properties(target: &Type, types: TypeResolver) -> Option<Vec<Type>> {
+    // A write through `Pick<T, K>[K]` writes `T[K]`, as tsc rewrites it.
+    if let Some(MappedProperty::Same(property)) = mapped_property(target) {
+        return indexed_bound_properties(&property, types);
+    }
     let Type::IndexedAccess { object, index } = target.without_aliases() else {
         return None;
     };
@@ -2172,46 +2181,6 @@ fn without_index_signature(ty: Type, types: TypeResolver) -> Type {
             }
         }
         _ => ty,
-    }
-}
-
-/// The keys every instantiation of the key type `keys` includes: `keyof T`
-/// holds at least its bound's keys, `Extract` and `Exclude` keep what they
-/// keep of those, and a bare type parameter may be `never`.
-fn lower_keys(keys: &Type, types: TypeResolver) -> Type {
-    use super::utility_types::{Utility, deferred, deferred_application, holds_type_parameter};
-    let evaluate = |ty: Type| super::utility_types::normalize(&ty, types).unwrap_or(Type::Never);
-    let open = keys.without_aliases();
-    if !holds_type_parameter(open) {
-        return keys.clone();
-    }
-    match open {
-        Type::KeyOf(operand) => {
-            super::utility_types::keyof_type(&concrete_upper_bound(operand, types), types)
-                .unwrap_or(Type::Never)
-        }
-        Type::Union(members) => Type::union(
-            members
-                .iter()
-                .map(|member| lower_keys(member, types))
-                .collect(),
-        ),
-        other => match deferred_application(other) {
-            Some((Utility::Extract, [operand, filter])) if !holds_type_parameter(filter) => {
-                evaluate(deferred(
-                    Utility::Extract,
-                    vec![lower_keys(operand, types), filter.clone()],
-                ))
-            }
-            Some((Utility::Exclude, [operand, filter])) => evaluate(deferred(
-                Utility::Exclude,
-                vec![
-                    lower_keys(operand, types),
-                    concrete_upper_bound(filter, types),
-                ],
-            )),
-            _ => Type::Never,
-        },
     }
 }
 
@@ -2374,6 +2343,16 @@ pub(super) fn base_constraint(ty: &Type, types: TypeResolver) -> Type {
     match ty.without_aliases() {
         // A narrower `T` has more keys: only every key bounds `keyof T`.
         Type::KeyOf(_) => Type::union(vec![Type::String, Type::Number]),
+        // `Pick<T, K>[K]` is `T[K]` (`Partial` adds `undefined`).
+        form @ Type::IndexedAccess { .. } if mapped_property(form).is_some() => {
+            match mapped_property(form) {
+                Some(MappedProperty::Optional(property)) => {
+                    Type::union(vec![base_constraint(&property, types), Type::Undefined])
+                }
+                Some(MappedProperty::Same(property)) => base_constraint(&property, types),
+                None => Type::Unknown,
+            }
+        }
         Type::IndexedAccess { object, index } => {
             index_access_type(&upper(object), &upper(index), types).unwrap_or(Type::Unknown)
         }
@@ -2453,6 +2432,48 @@ pub(super) fn base_constraint(ty: &Type, types: TypeResolver) -> Type {
             )),
             // Not a form: callers pass only forms.
             None => substitute_bounds(operator, types),
+        },
+    }
+}
+
+/// The keys every instantiation of the key type `keys` includes: `keyof T`
+/// holds at least its bound's keys, `Extract` and `Exclude` keep what they
+/// keep of those, and a bare type parameter may be `never`.
+fn lower_keys(keys: &Type, types: TypeResolver) -> Type {
+    use super::utility_types::{
+        Utility, deferred, deferred_application, holds_type_parameter, keyof_type, normalize,
+    };
+    // A lower bound that has no evaluation guarantees no key.
+    let evaluate = |ty: Type| normalize(&ty, types).unwrap_or(Type::Never);
+    let open = keys.without_aliases();
+    if !holds_type_parameter(open) {
+        return keys.clone();
+    }
+    match open {
+        Type::KeyOf(operand) => {
+            keyof_type(&concrete_upper_bound(operand, types), types).unwrap_or(Type::Never)
+        }
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| lower_keys(member, types))
+                .collect(),
+        ),
+        other => match deferred_application(other) {
+            Some((Utility::Extract, [operand, filter])) if !holds_type_parameter(filter) => {
+                evaluate(deferred(
+                    Utility::Extract,
+                    vec![lower_keys(operand, types), filter.clone()],
+                ))
+            }
+            Some((Utility::Exclude, [operand, filter])) => evaluate(deferred(
+                Utility::Exclude,
+                vec![
+                    lower_keys(operand, types),
+                    concrete_upper_bound(filter, types),
+                ],
+            )),
+            _ => Type::Never,
         },
     }
 }

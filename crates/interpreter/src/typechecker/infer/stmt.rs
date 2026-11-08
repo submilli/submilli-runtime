@@ -1999,7 +1999,6 @@ impl Inferer<'_> {
                 recv_span,
             )?;
         }
-        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
         self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
         self.narrow_keyed_field_after_write(
             typed_receiver,
@@ -2022,8 +2021,9 @@ impl Inferer<'_> {
     }
 
     /// Report a write through `receiver[keys]` where some key names a
-    /// property no member of `receiver` lets one write: a `readonly` field or
-    /// property, or a getter without a setter (tsc's TS2540).
+    /// property some member of `receiver` does not let one write: a
+    /// `readonly` field or property, or a getter without a setter (tsc's
+    /// TS2540). Reports once per write.
     fn report_readonly_keys(&mut self, receiver: &Type, keys: &Type, span: Span) {
         let receivers = super::utility_types::members(receiver);
         for key in super::utility_types::members(keys) {
@@ -2060,9 +2060,11 @@ impl Inferer<'_> {
         recv_span: Span,
     ) -> Result<TypedStmtKind, CompilerFailure> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-        if let Some((super::utility_types::Utility::Readonly, _)) =
-            super::utility_types::deferred_application(receiver_ty.peel())
-        {
+        let through_readonly = matches!(
+            super::utility_types::deferred_application(receiver_ty.peel()),
+            Some((super::utility_types::Utility::Readonly, _))
+        );
+        if through_readonly {
             self.error(
                 recv_span,
                 format!("cannot assign through `{receiver_ty}`, which only permits reading"),
@@ -2073,6 +2075,7 @@ impl Inferer<'_> {
         // A literal key writes the bound's property, which may be `readonly`
         // (`t["a"] = 5` with `T extends { readonly a: number }`).
         if let Some((_, key_ty)) = &key
+            && !through_readonly
             && !super::utility_types::holds_type_parameter(key_ty)
         {
             let bound = self.apparent_type(&generic_receiver);
