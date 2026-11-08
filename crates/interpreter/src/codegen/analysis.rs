@@ -820,7 +820,7 @@ impl CodegenAnalysis {
                 if ta
                     .source_type(*receiver)
                     .map_err(crate::codegen::arena_failure)?
-                    .is_structural_object()
+                    .indexes_by_name()
                 {
                     self.note_record_helpers();
                 }

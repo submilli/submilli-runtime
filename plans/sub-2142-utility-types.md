@@ -286,8 +286,12 @@ Where the implementation departs from the design above:
 - **Literal contexts.**
   - A template literal type, a string mapping (`Uppercase<string>`) and `keyof T` keep a literal in context, as in tsc.
   - The template literal case fixes an existing gap: `` const t: `id-${string}` = "id-abc" `` was rejected before.
-- **Generic `o[k]`.** It reads through the record path (`ObjectConstructor##getField`) on the erased object, so it works on plain objects and class instances. Its type is `T[K]`. A key that doesn't fit `keyof T` is rejected.
-- **Casts.** `as Partial<T>`, `as ReturnType<F>`, `as keyof T` and the other deferred forms are rejected as erased, exactly like `as T`.
+- **Generic `o[k]`.** Reads and writes go through the record path (`ObjectConstructor##getField` and `#setField`) on the erased object. They work on plain objects and class instances.
+  - A receiver that lowers to the erased slot takes that path in codegen (`Type::indexes_by_name`). The typed tree keeps the receiver's type.
+  - The type is `T[K]`. A key that doesn't fit `keyof T` is rejected, and so is a write through `Readonly<T>`.
+- **Casts.** `as Partial<T>`, `as ReturnType<F>`, `as keyof T` and the other deferred forms are rejected as erased, like `as T`.
+  - The runtime descriptors could support them. SUB-2151 lifts the gate for `as T`, `T[]` and the like.
+  - SUB-2152, blocked by SUB-2151, covers the utility forms. For the structural ones (`Partial`, `Pick`, `ReturnType`, …) the caller builds the descriptor.
 - **`ReturnType<typeof f>` for a generic `f`.** The function's own type parameters become `unknown`, as tsc instantiates them with their (unrecorded) constraints.
 - **The `never[]`-rest bound** of `ReturnType` and `Parameters` now distributes over a union of function types.
 - **`keyof { 0: string }`** is the number literal `0`, as in tsc.
@@ -295,3 +299,19 @@ Where the implementation departs from the design above:
 - **Left out.**
   - The `Readonly` rendering fix (§9) is moot. `Readonly<User>` evaluates to an object type, so `Type::Readonly(InterfaceRef)` no longer arises from it.
   - The codegen guard for a concrete utility `AliasRef` was not added. Normalization covers instantiation and rehydration.
+- **Relations found by the conformance cases** (all as in tsc):
+  - A string mapping over another stays nested (`Uppercase<Lowercase<string>>` is its own set) and fits its outer mapping.
+  - `Partial`, `Readonly` and `Required` around the same `T` relate by optionality (`Readonly<T>` fits `Partial<T>`).
+  - `{}` fits `Partial<T>`.
+  - The same utility on both sides relates through its arguments.
+  - `keyof` is contravariant.
+  - `U[K]` fits `T[K]` when `U` fits `T`.
+  - A target that holds every value accepts any form.
+  - `Extract<T, U>` reads through `U`.
+  - A truthiness or typeof test narrows a form by refinement, as it does a type parameter.
+  - A concrete utility application evaluates wherever assignability expands it, so a `NoInfer<T>` argument is checked after inference.
+- **Conformance.** The plan's `--refresh` also re-ported cases that unrelated earlier changes made portable.
+  - SUB-2142 triages only the utility-type cases.
+  - SUB-2150 triages the rest, which are listed in `unexplained.txt`.
+  - SUB-2153 is an inference gap found there.
+  - Generic `Record<K, V>` keys (`mappedTypes2`, `mappedTypeConstraints` line 22) stay listed until their issue is filed.

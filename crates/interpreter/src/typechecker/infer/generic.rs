@@ -2389,6 +2389,12 @@ impl Inferer<'_> {
     ) -> Result<(), CompilerFailure> {
         for check in checks {
             let param = sub.apply_or_record(&check.param_ty, &self.type_limits);
+            let param = super::utility_types::normalize(&param, self.resolver()).unwrap_or_else(
+                |exceeded| {
+                    self.type_limits.record(exceeded);
+                    Type::Error
+                },
+            );
             if super::expr::type_contains_type_var(&param) {
                 continue;
             }

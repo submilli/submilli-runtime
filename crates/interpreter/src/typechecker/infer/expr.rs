@@ -150,7 +150,7 @@ fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bo
     let names = |ty: &Type| {
         names_literal(ty.peel(), is_literal)
             || ((matches!(ty.peel(), Type::TemplateLiteral { .. } | Type::KeyOf(_))
-                || super::utility_types::symbolic_mapping_of(ty).is_some())
+                || super::utility_types::symbolic_chain(ty).is_some())
                 && is_literal(&Type::StringLiteral(String::new())))
             || (matches!(ty.peel(), Type::KeyOf(_))
                 && is_literal(&Type::NumberLiteral(crate::types::LiteralF64(0.0))))
@@ -9983,6 +9983,39 @@ impl Inferer<'_> {
         self.infer_expr(index, Some(&Type::Number))
     }
 
+    /// Whether `o[k]` on `receiver` is tsc's symbolic `T[K]`, read or written
+    /// by name at run time: the receiver is a type parameter, a utility over
+    /// one or an indexed access, unless its bound is an array or tuple, which
+    /// indexes as the bound does.
+    pub(super) fn indexes_by_name(&self, receiver: &Type) -> bool {
+        receiver.lowers_to_erased_slot()
+            && !matches!(receiver.peel(), Type::TypeVar(_) | Type::KeyOf(_))
+            && !matches!(
+                self.apparent_type(receiver).peel(),
+                Type::Array(_) | Type::Tuple(_)
+            )
+    }
+
+    /// The key a generic `o[k]` reads or writes, converted to the property
+    /// name, and its type, which must fit `keyof T`.
+    pub(super) fn generic_index_key(
+        &mut self,
+        receiver_ty: &Type,
+        index: ExprId,
+    ) -> Result<Option<(ExprId, Type)>, CompilerFailure> {
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        let (typed_index, key_ty) = self.infer_object_key(index)?;
+        let keys = Type::KeyOf(Box::new(receiver_ty.clone()));
+        if !assignable(&key_ty, &keys, self.resolver()) {
+            self.error(
+                index_span,
+                format!("Type `{key_ty}` cannot be used to index type `{receiver_ty}`"),
+            );
+            return Ok(None);
+        }
+        Ok(Some((typed_index, key_ty)))
+    }
+
     /// `o[k]` on a type parameter `T`: tsc's `T[K]`, read by name at run
     /// time from the erased object. The key must fit `keyof T`.
     fn infer_generic_index_access(
@@ -9992,26 +10025,10 @@ impl Inferer<'_> {
         index: ExprId,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
-        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
-        let (typed_index, key_ty) = self.infer_object_key(index)?;
-        let keys = Type::KeyOf(Box::new(receiver_ty.clone()));
-        if !assignable(&key_ty, &keys, self.resolver()) {
-            self.error(
-                index_span,
-                format!("Type `{key_ty}` cannot be used to index type `{receiver_ty}`"),
-            );
+        let Some((typed_index, key_ty)) = self.generic_index_key(&receiver_ty, index)? else {
             return Ok((TypedExprKind::Null, Type::Error));
-        }
-        let record = Type::any_object();
-        let typed_receiver = self.push_synthetic_expr(
-            TypedExprKind::Cast {
-                value: typed_receiver,
-                target_ty: record.clone(),
-                check: None,
-            },
-            record,
-            span,
-        )?;
+        };
+        let _ = span;
         Ok((
             TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
@@ -10041,13 +10058,7 @@ impl Inferer<'_> {
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
-        // An array- or tuple-bounded `T` indexes as its bound does.
-        if matches!(receiver_ty.peel(), Type::GenericParam { .. })
-            && !matches!(
-                self.apparent_type(&receiver_ty).peel(),
-                Type::Array(_) | Type::Tuple(_)
-            )
-        {
+        if self.indexes_by_name(&receiver_ty) {
             return self.infer_generic_index_access(typed_receiver, receiver_ty, index, span);
         }
         let (typed_receiver, receiver_ty) =

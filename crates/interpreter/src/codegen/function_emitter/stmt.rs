@@ -645,7 +645,7 @@ fn emit_assign_index(
         .ta
         .source_type(receiver)
         .map_err(crate::codegen::arena_failure)?
-        .is_structural_object()
+        .indexes_by_name()
     {
         let object = emit_operand_once(emitter, ctx, receiver)?;
         let key = emit_operand_once(emitter, ctx, index)?;

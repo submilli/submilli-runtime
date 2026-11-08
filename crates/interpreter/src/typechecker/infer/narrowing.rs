@@ -1142,8 +1142,10 @@ pub fn truthy_part(ty: &Type) -> Type {
         .filter(|m| truthiness_class(m) != TruthinessClass::AlwaysFalsy)
         .map(|m| match m.without_aliases() {
             Type::Boolean => Type::BooleanLiteral(true),
-            // A truthy `T` is `T & {}`, as in TypeScript.
+            // A truthy `T` is `T & {}`, as in TypeScript, and so is a truthy
+            // form over one (`Extract<T, string | undefined> & {}`).
             Type::GenericParam { .. } => intersect_with(m, TypeFacts::TRUTHY),
+            _ if holds_any_value_of_a_parameter(m.peel()) => intersect_with(m, TypeFacts::TRUTHY),
             _ => m.clone(),
         })
         .collect();
@@ -1348,7 +1350,7 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
             }
             // `Array.isArray` pins an `object` to an array.
             Type::NonPrimitive if matches!(asserted, Type::Array(_)) => return asserted,
-            Type::GenericParam { .. } => {
+            form if holds_any_value_of_a_parameter(form) => {
                 return Type::Refined {
                     original: Box::new(ty.clone()),
                     ty: Box::new(asserted),
@@ -1360,7 +1362,7 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
     if matches!(peeled, Type::Unknown) && tests_only_presence(facts) {
         return recombine_unknown(intersect_with(&unknown_as_union(), facts));
     }
-    if matches!(peeled, Type::GenericParam { .. }) && tests_only_presence(facts) {
+    if holds_any_value_of_a_parameter(peeled) && tests_only_presence(facts) {
         return preserve_refinement(ty, intersect_with(&Type::Unknown, facts));
     }
     match peeled {
@@ -1404,6 +1406,13 @@ fn typeof_object_narrowing(ty: &Type, peeled: &Type) -> Option<Type> {
     }
 }
 
+/// A body type parameter, or a utility, `keyof T` or `T[K]` over one: a type
+/// whose values a test narrows by refinement (`T & {}`), as it knows none of
+/// them statically.
+fn holds_any_value_of_a_parameter(peeled: &Type) -> bool {
+    peeled.lowers_to_erased_slot() && !matches!(peeled, Type::TypeVar(_))
+}
+
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     if let Type::Refined {
         original,
@@ -1421,7 +1430,7 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
         }
         return Type::Unknown;
     }
-    if matches!(peeled, Type::GenericParam { .. }) {
+    if holds_any_value_of_a_parameter(peeled) {
         return preserve_refinement(ty, subtract(&Type::Unknown, facts));
     }
     // A `void` result may hold any value, so no test rules it out: `typeof

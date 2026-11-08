@@ -1919,6 +1919,15 @@ impl Inferer<'_> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let evolving = self.evolving_array_receiver(receiver)?;
         let (typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
+        if self.indexes_by_name(&receiver_ty) {
+            return self.infer_generic_index_write(
+                typed_receiver,
+                receiver_ty,
+                index,
+                value,
+                recv_span,
+            );
+        }
         let (mut typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let evolving = evolving.filter(|_| super::evolving::array_element(&receiver_ty).is_some());
@@ -1996,6 +2005,54 @@ impl Inferer<'_> {
             index: typed_index,
             value: typed_value,
             elem_ty,
+        })
+    }
+
+    /// `o[k] = v` on a type parameter `T`: `v` must fit tsc's `T[K]`, and the
+    /// run time writes the property by name on the erased object.
+    fn infer_generic_index_write(
+        &mut self,
+        typed_receiver: ExprId,
+        receiver_ty: Type,
+        index: ExprId,
+        value: ExprId,
+        recv_span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+        if let Some((super::utility_types::Utility::Readonly, _)) =
+            super::utility_types::deferred_application(receiver_ty.peel())
+        {
+            self.error(
+                recv_span,
+                format!("cannot assign through `{receiver_ty}`, which only permits reading"),
+            );
+        }
+        let key = self.generic_index_key(&receiver_ty, index)?;
+        let target = match &key {
+            Some((_, key_ty)) => Type::IndexedAccess {
+                object: Box::new(receiver_ty),
+                index: Box::new(key_ty.clone()),
+            },
+            None => Type::Error,
+        };
+        let (typed_value, value_ty, reported) = self.infer_assigned_value(value, Some(&target))?;
+        if !reported
+            && !matches!(value_ty, Type::Error)
+            && !assignable(&value_ty, &target, self.resolver())
+        {
+            self.error(
+                value_span,
+                super::diagnostics::mismatch_message(&target, &value_ty),
+            );
+        }
+        let Some((typed_index, _)) = key else {
+            return Ok(TypedStmtKind::Expr(typed_value));
+        };
+        Ok(TypedStmtKind::AssignIndex {
+            receiver: typed_receiver,
+            index: typed_index,
+            value: typed_value,
+            elem_ty: target,
         })
     }
 

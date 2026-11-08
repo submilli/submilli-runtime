@@ -493,17 +493,12 @@ impl Evaluator<'_> {
                     member: Some(member),
                     ..
                 } => Ok(Type::StringLiteral(map_text(mapping, &member.value))),
-                Type::String => Ok(symbolic_string_mapping(mapping)),
                 Type::TemplateLiteral {
                     parts,
                     substitutions,
                 } => Ok(map_template(mapping, parts, substitutions)),
-                Type::Alias { mangled, args, .. }
-                    if utility(mangled).is_some_and(Utility::is_string_mapping)
-                        && matches!(args.as_slice(), [Type::String]) =>
-                {
-                    // `Uppercase<Lowercase<string>>` keeps the outer mapping.
-                    Ok(symbolic_string_mapping(mapping))
+                _ if map_symbolic(mapping, &member).is_some() => {
+                    Ok(map_symbolic(mapping, &member).unwrap_or(Type::Error))
                 }
                 Type::Error => Ok(Type::Error),
                 _ => Err(None),
@@ -513,27 +508,51 @@ impl Evaluator<'_> {
     }
 }
 
-/// `Uppercase<string>` and its siblings: a `string` that only the mapping's
-/// fixed points inhabit.
-pub(crate) fn symbolic_string_mapping(mapping: Utility) -> Type {
-    application(mapping, vec![Type::String], Some(Type::String))
+/// `mapping` applied to `string` or to a symbolic mapping of it, which stays
+/// symbolic: `Uppercase<string>`, and `Uppercase<Lowercase<string>>`, a
+/// different set (`"ß"` lowercases to itself and uppercases to `"SS"`). A
+/// mapping applied to itself is unchanged. `None` for any other operand.
+fn map_symbolic(mapping: Utility, operand: &Type) -> Option<Type> {
+    if matches!(operand.without_aliases(), Type::String) && symbolic_chain(operand).is_none() {
+        return Some(application(mapping, vec![Type::String], Some(Type::String)));
+    }
+    let chain = symbolic_chain(operand)?;
+    if chain.last() == Some(&mapping) {
+        return Some(operand.clone());
+    }
+    Some(application(
+        mapping,
+        vec![operand.clone()],
+        Some(Type::String),
+    ))
 }
 
-/// Whether a string literal is unchanged by the symbolic mapping `ty`
-/// (`Uppercase<string>` holds `"ABC"` but not `"abc"`). `None` when `ty` is
-/// not a symbolic string mapping.
-pub(crate) fn symbolic_mapping_of(ty: &Type) -> Option<Utility> {
+/// The mappings a symbolic string mapping applies to `string`, innermost
+/// first: `[Lowercase, Uppercase]` for `Uppercase<Lowercase<string>>`. `None`
+/// when `ty` is not one.
+pub(crate) fn symbolic_chain(ty: &Type) -> Option<Vec<Utility>> {
     let Type::Alias { mangled, args, .. } = ty else {
         return None;
     };
     let mapping = utility(mangled).filter(|utility| utility.is_string_mapping())?;
-    matches!(args.as_slice(), [arg] if matches!(arg.without_aliases(), Type::String))
-        .then_some(mapping)
+    let [arg] = args.as_slice() else {
+        return None;
+    };
+    let mut chain = match arg {
+        Type::String => Vec::new(),
+        inner => symbolic_chain(inner)?,
+    };
+    chain.push(mapping);
+    Some(chain)
 }
 
-/// Whether `text` is a fixed point of `mapping`.
-pub(crate) fn mapping_preserves(mapping: Utility, text: &str) -> bool {
-    map_text(mapping, text) == text
+/// Whether `text` is in the set a chain of mappings over `string` describes:
+/// applying the chain leaves it unchanged.
+pub(crate) fn chain_preserves(chain: &[Utility], text: &str) -> bool {
+    chain
+        .iter()
+        .fold(text.to_string(), |text, mapping| map_text(*mapping, &text))
+        == text
 }
 
 fn map_text(mapping: Utility, text: &str) -> String {
@@ -582,10 +601,9 @@ fn map_template(mapping: Utility, parts: &[String], substitutions: &[Type]) -> T
         .enumerate()
         .map(|(position, hole)| {
             let touched = whole || (position == 0 && !first_is_text);
-            if touched && matches!(hole.without_aliases(), Type::String) {
-                symbolic_string_mapping(mapping)
-            } else {
-                hole.clone()
+            match map_symbolic(mapping, hole) {
+                Some(mapped) if touched => mapped,
+                _ => hole.clone(),
             }
         })
         .collect();

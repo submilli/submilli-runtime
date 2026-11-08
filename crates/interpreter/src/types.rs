@@ -525,6 +525,13 @@ impl Type {
     }
 
     /// A receiver whose computed string keys use the object property carrier.
+    /// Whether `receiver[key]` reads and writes the property by name at run
+    /// time: a structural object, or an erased generic receiver (`T`, whose
+    /// `o[k]` is tsc's `T[K]`).
+    pub fn indexes_by_name(&self) -> bool {
+        self.is_structural_object() || self.lowers_to_erased_slot()
+    }
+
     pub fn is_structural_object(&self) -> bool {
         if self.is_regexp_match_array() {
             return false;

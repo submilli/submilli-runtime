@@ -602,7 +602,7 @@ fn emit_expr_value(
                     .ta
                     .source_type(*receiver)
                     .map_err(crate::codegen::arena_failure)?
-                    .is_structural_object()
+                    .indexes_by_name()
             {
                 emit_object_index_postfix(
                     emitter,
@@ -982,7 +982,7 @@ fn emit_index_access(
         .source_type(id)
         .map_err(crate::codegen::arena_failure)?
         .holds_undefined();
-    if recv_ty.is_structural_object() {
+    if recv_ty.indexes_by_name() {
         emit_expr(emitter, ctx, *receiver)?;
         cast::emit_box(
             emitter,
@@ -3719,7 +3719,7 @@ fn emit_chain_access(
             emit_object_property_read_as(emitter, ctx, rcv_local, &name.name, result_ty, check_ty)?;
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
-            if receiver_ty.is_structural_object() {
+            if receiver_ty.indexes_by_name() {
                 let probe = stash_probed_record(emitter, ctx, check_ty, None)?;
                 emit_expr(emitter, ctx, *idx)?;
                 crate::codegen::cast_check::emit_operation_cast_on_stack(

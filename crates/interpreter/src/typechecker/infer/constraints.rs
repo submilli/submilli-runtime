@@ -70,15 +70,7 @@ impl Inferer<'_> {
             Type::KeyOf(_) | Type::IndexedAccess { .. }
         ) || super::utility_types::deferred_application(current.without_aliases()).is_some()
         {
-            let resolver = self.resolver();
-            let apparent = super::assignable::apparent_operand(current, resolver);
-            return match super::utility_types::normalize(&apparent, resolver) {
-                Ok(apparent) => apparent,
-                Err(exceeded) => {
-                    self.type_limits.record(exceeded);
-                    Type::Error
-                }
-            };
+            return super::assignable::form_apparent(current, self.resolver());
         }
         if let Type::Union(members) = current.without_aliases() {
             let mut budget = self.type_limits.budget();

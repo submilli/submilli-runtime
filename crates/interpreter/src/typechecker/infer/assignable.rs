@@ -787,6 +787,23 @@ fn assignable_rec(
             && assignable_rec(actual, ty, types, seen);
     }
     if let Type::Refined { original, ty } = actual.without_aliases() {
+        // A narrowed form (`Extract<T, string | undefined> & {}`) also holds
+        // only the members of its apparent type that the narrowing admits.
+        if is_type_operator(original) && !mentions_signature_var(original) {
+            let apparent = form_apparent(original, types);
+            let members: Vec<Type> = match apparent.peel() {
+                Type::Union(members) => members.clone(),
+                _ => vec![apparent.clone()],
+            };
+            let admitted: Vec<Type> = members
+                .into_iter()
+                .filter(|member| assignable_rec(member, ty, types, seen))
+                .collect();
+            if !admitted.is_empty() && assignable_rec(&Type::union(admitted), expected, types, seen)
+            {
+                return true;
+            }
+        }
         return assignable_rec(original, expected, types, seen)
             || assignable_rec(ty, expected, types, seen);
     }
@@ -816,6 +833,11 @@ fn assignable_rec(
     if same_alias_instance(actual, expected) {
         return true;
     }
+    // Before a union target is split: `Uppercase<T>` fits `"FOO" | "BAR"`
+    // through its bound only as a whole.
+    if let Some(related) = relate_type_operators(actual, expected, types, seen) {
+        return related;
+    }
     // Keep named pairs on the active proof path: expanding a back-edge can
     // change its inline spelling without changing the alias instantiation.
     if seen
@@ -842,8 +864,8 @@ fn assignable_rec(
     if drops_readonly(actual, expected) || readonly_meets_mutator(actual, expected, types) {
         return false;
     }
-    if let Some(mapping) = super::utility_types::symbolic_mapping_of(expected) {
-        return fits_symbolic_mapping(mapping, actual);
+    if let Some(chain) = super::utility_types::symbolic_chain(expected) {
+        return fits_symbolic_mapping(&chain, actual);
     }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
         let pair = (actual.clone(), expected.clone());
@@ -877,9 +899,6 @@ fn assignable_rec(
     }
     if matches!(expected, Type::TypeVar(_)) || matches!(actual, Type::TypeVar(_)) {
         return true;
-    }
-    if let Some(related) = relate_type_operators(actual, expected, types, seen) {
-        return related;
     }
     // Placed after TypeVar so generic fns can receive `unknown`; the wildcard binds T→Unknown, post-substitution sees identity.
     if matches!(expected, Type::Unknown) {
@@ -1553,6 +1572,11 @@ pub(crate) fn expand_alias_ref(ty: &Type, types: TypeResolver) -> Type {
     else {
         return ty.clone();
     };
+    // A utility's alias body is an application of itself: its evaluation is
+    // the body to compare against.
+    if super::utility_types::utility(mangled).is_some() {
+        return super::type_aliases::alias_ref_body(mangled, name, args, types);
+    }
     let Some(sym) = types.lookup(mangled, name) else {
         return ty.clone();
     };
@@ -1816,11 +1840,91 @@ fn relate_type_operators(
     {
         return Some(true);
     }
+    if matches!(actual.peel(), Type::Error | Type::Never)
+        || matches!(expected.peel(), Type::Error | Type::Unknown)
+        || expected.holds_every_value()
+    {
+        return Some(true);
+    }
     if actual == expected {
         return Some(true);
     }
+    // A union target holds a form when one of its members does.
+    if actual_form
+        && let Type::Union(members) = expected.peel()
+        && members
+            .iter()
+            .any(|member| assignable_rec(actual, member, types, seen))
+    {
+        return Some(true);
+    }
+    // `keyof T` fits `keyof U` when `U` fits `T`: a narrower type has more
+    // keys. `Partial`, `Readonly` and `Required` keep their operand's keys.
+    if let (Type::KeyOf(actual_operand), Type::KeyOf(expected_operand)) = (actual, expected) {
+        let actual_base = homomorphic_wrapping(actual_operand).map_or(&**actual_operand, |w| w.0);
+        let expected_base =
+            homomorphic_wrapping(expected_operand).map_or(&**expected_operand, |w| w.0);
+        return Some(
+            actual_base == expected_base || assignable_rec(expected_base, actual_base, types, seen),
+        );
+    }
+    // `U[K]` fits `T[K]` when `U` fits `T`.
+    if let (
+        Type::IndexedAccess {
+            object: actual_object,
+            index: actual_index,
+        },
+        Type::IndexedAccess {
+            object: expected_object,
+            index: expected_index,
+        },
+    ) = (actual, expected)
+        && actual_index == expected_index
+        && assignable_rec(actual_object, expected_object, types, seen)
+    {
+        return Some(true);
+    }
+    // `Partial`, `Readonly` and `Required` around the same `T` relate by the
+    // optionality they leave, as tsc relates generic mapped types by their
+    // modifiers: `Readonly<T>` fits `Partial<T>`, and `T` fits `Readonly<T>`.
+    if let (Some((actual_base, actual_optional)), Some((expected_base, expected_optional))) =
+        (homomorphic_wrapping(actual), homomorphic_wrapping(expected))
+        && actual_base == expected_base
+    {
+        return Some(match (actual_optional, expected_optional) {
+            (_, Optionality::Optional) => true,
+            (Optionality::Optional, _) => false,
+            (_, Optionality::Required) => actual_optional == Optionality::Required,
+            (_, Optionality::Unchanged) => true,
+        });
+    }
+    // The same utility on both sides relates through its arguments, for the
+    // utilities that preserve assignability (`Uppercase<U>` fits
+    // `Uppercase<T>` when `U` fits `T`).
+    if let (Some((left, left_args)), Some((right, right_args))) =
+        (deferred_application(actual), deferred_application(expected))
+        && left == right
+        && left_args.len() == right_args.len()
+    {
+        let covariant = match left {
+            Utility::Exclude | Utility::Extract => {
+                left_args[1] == right_args[1]
+                    && assignable_rec(&left_args[0], &right_args[0], types, seen)
+            }
+            Utility::Pick | Utility::Omit | Utility::Parameters => false,
+            _ => left_args
+                .iter()
+                .zip(right_args)
+                .all(|(left, right)| assignable_rec(left, right, types, seen)),
+        };
+        if covariant {
+            return Some(true);
+        }
+    }
     if let Some((utility, args)) = deferred_application(expected) {
         let identity = match (utility, args) {
+            // `{}` fits any mapped type that makes every property optional.
+            (Utility::Partial, _) if actual.is_empty_object() => true,
             (
                 Utility::Partial | Utility::Readonly | Utility::Pick | Utility::Omit,
                 [operand, ..],
@@ -1830,6 +1934,17 @@ fn relate_type_operators(
         if identity {
             return Some(true);
         }
+    }
+    // These hold a subset of their operand's values (`Readonly<X>` reads as
+    // `X`), so they fit wherever the operand does.
+    if let Some((utility, [operand, ..])) = deferred_application(actual)
+        && matches!(
+            utility,
+            Utility::Readonly | Utility::Required | Utility::Exclude | Utility::Extract
+        )
+        && assignable_rec(operand, expected, types, seen)
+    {
+        return Some(true);
     }
     if let Type::KeyOf(operand) = expected
         && !actual_form
@@ -1846,15 +1961,6 @@ fn relate_type_operators(
         // Any other target holds only its own instances.
         return Some(false);
     }
-    if let Some((utility, [operand, ..])) = deferred_application(actual)
-        && matches!(
-            utility,
-            Utility::Readonly | Utility::Required | Utility::Exclude | Utility::Extract
-        )
-        && operand == expected
-    {
-        return Some(true);
-    }
     if let Type::KeyOf(_) = actual {
         return Some(assignable_rec(
             &Type::union(vec![Type::String, Type::Number]),
@@ -1863,9 +1969,10 @@ fn relate_type_operators(
             seen,
         ));
     }
-    let apparent = apparent_operand(actual, types);
-    let apparent = super::utility_types::normalize(&apparent, types).unwrap_or(Type::Error);
-    if is_type_operator(&apparent) {
+    let apparent = form_apparent(actual, types);
+    // An apparent `never` (`T[keyof T]` with `T` unbounded has no keys to
+    // read) proves nothing about the values the form holds.
+    if is_type_operator(&apparent) || matches!(apparent.peel(), Type::Never) {
         return Some(false);
     }
     Some(assignable_rec(&apparent, expected, types, seen))
@@ -1885,6 +1992,36 @@ fn rewrite_identity_operator(ty: &Type) -> Option<Type> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Optionality {
+    /// Properties as the base declares them.
+    Unchanged,
+    /// Every property optional (`Partial`).
+    Optional,
+    /// Every property required (`Required`).
+    Required,
+}
+
+/// The type `ty` wraps in `Partial`, `Readonly` and `Required`, and the
+/// optionality the outermost of them leaves. A type that is no such wrapping
+/// is its own base, unchanged. `None` when that base holds no type
+/// parameter, since only deferred wrappings need this.
+fn homomorphic_wrapping(ty: &Type) -> Option<(&Type, Optionality)> {
+    use super::utility_types::{Utility, deferred_application};
+    let (base, optionality) = match deferred_application(ty) {
+        Some((Utility::Partial, [operand])) => {
+            (homomorphic_wrapping(operand)?.0, Optionality::Optional)
+        }
+        Some((Utility::Required, [operand])) => {
+            (homomorphic_wrapping(operand)?.0, Optionality::Required)
+        }
+        Some((Utility::Readonly, [operand])) => homomorphic_wrapping(operand)?,
+        Some(_) => return None,
+        None => (ty, Optionality::Unchanged),
+    };
+    super::utility_types::holds_type_parameter(base).then_some((base, optionality))
+}
+
 /// Whether `ty` is a deferred utility application, `keyof T` or `T[K]`.
 fn is_type_operator(ty: &Type) -> bool {
     matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. })
@@ -1900,6 +2037,20 @@ fn mentions_signature_var(ty: &Type) -> bool {
         crate::type_size::for_each_child(ty, |child| pending.push(child));
     }
     false
+}
+
+/// What every instantiation of the form `ty` is assignable to: the form with
+/// each type parameter replaced by its bound, evaluated. `Extract<T, U>`
+/// holds only values of `U`, so an unbounded `T` leaves `U`.
+pub(super) fn form_apparent(ty: &Type, types: TypeResolver) -> Type {
+    use super::utility_types::{Utility, deferred_application};
+    if let Some((Utility::Extract, [operand, filter])) = deferred_application(ty)
+        && matches!(apparent_operand(operand, types).peel(), Type::Unknown)
+    {
+        return apparent_operand(filter, types);
+    }
+    let apparent = apparent_operand(ty, types);
+    super::utility_types::normalize(&apparent, types).unwrap_or(Type::Error)
 }
 
 /// `ty` with each body type parameter replaced by its bound, or `unknown`
@@ -1925,36 +2076,37 @@ pub(super) fn apparent_operand(ty: &Type, types: TypeResolver) -> Type {
 /// Whether `actual` fits a symbolic string mapping such as `Uppercase<string>`:
 /// only strings the mapping leaves unchanged do, so `"ABC"` fits and `"abc"`
 /// and `string` do not.
-fn fits_symbolic_mapping(mapping: super::utility_types::Utility, actual: &Type) -> bool {
-    use super::utility_types::{mapping_preserves, symbolic_mapping_of};
-    if symbolic_mapping_of(actual) == Some(mapping) {
-        return true;
+fn fits_symbolic_mapping(chain: &[super::utility_types::Utility], actual: &Type) -> bool {
+    use super::utility_types::{Utility, chain_preserves, symbolic_chain};
+    // The mappings are idempotent, so whatever `m` produces is a fixed point
+    // of `m`: `Uppercase<Lowercase<string>>` fits `Uppercase<string>`.
+    if let Some(actual_chain) = symbolic_chain(actual) {
+        return actual_chain == chain || (chain.len() == 1 && actual_chain.last() == chain.last());
     }
     match actual.without_aliases() {
         Type::Never | Type::Error => true,
-        Type::StringLiteral(text) => mapping_preserves(mapping, text),
+        Type::StringLiteral(text) => chain_preserves(chain, text),
         Type::StringEnum {
             member: Some(member),
             ..
-        } => mapping_preserves(mapping, &member.value),
+        } => chain_preserves(chain, &member.value),
         Type::TemplateLiteral {
             parts,
             substitutions,
         } => {
-            use super::utility_types::Utility;
-            if matches!(mapping, Utility::Capitalize | Utility::Uncapitalize) {
+            if let [mapping @ (Utility::Capitalize | Utility::Uncapitalize)] = chain {
                 // Only the first character is mapped.
                 return match parts.first() {
-                    Some(head) if !head.is_empty() => mapping_preserves(mapping, head),
+                    Some(head) if !head.is_empty() => chain_preserves(&[*mapping], head),
                     _ => substitutions
                         .first()
-                        .is_none_or(|hole| fits_symbolic_mapping(mapping, hole)),
+                        .is_none_or(|hole| fits_symbolic_mapping(chain, hole)),
                 };
             }
-            parts.iter().all(|part| mapping_preserves(mapping, part))
+            parts.iter().all(|part| chain_preserves(chain, part))
                 && substitutions
                     .iter()
-                    .all(|hole| fits_symbolic_mapping(mapping, hole))
+                    .all(|hole| fits_symbolic_mapping(chain, hole))
         }
         _ => false,
     }
