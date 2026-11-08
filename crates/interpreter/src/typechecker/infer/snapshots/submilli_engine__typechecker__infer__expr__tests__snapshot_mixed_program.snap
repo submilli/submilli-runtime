@@ -4,6 +4,9 @@ expression: ta
 ---
 TypedAst {
     call_spread_index_reads: {},
+    maybe_missing_locals: {},
+    widened_missing_reads: {},
+    widened_bindings: {},
     call_spread_values: {},
     tuple_call_spread_sources: {},
     parameter_default_prologues: {},

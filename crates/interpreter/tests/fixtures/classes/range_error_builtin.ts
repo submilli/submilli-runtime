@@ -32,14 +32,24 @@ function main(): void {
   }
   assert(arm === "base:Error", "base Error skips the RangeError arm");
 
-  // Out-of-range indexing throws a RangeError.
+  // An out-of-range write throws a RangeError. A read finds no value and
+  // throws `MissingValueError`, which is not one.
   const nums: number[] = [1, 2, 3];
   let indexed = "";
   try {
-    const x = nums[7];
-    indexed = x.toString();
+    nums[7] = 4;
   } catch (e: RangeError) {
     indexed = e.name + ":" + e.message;
   }
-  assert(indexed === "RangeError:index 7 is out of range for `nums` (length 3); use `nums.at(7)` to get `undefined` instead", "arr[i] OOB is RangeError");
+  assert(indexed === "RangeError:index 7 is out of range for `nums` (length 3); use `nums.push(value)` to append instead", "arr[i] = v OOB is RangeError");
+  let read = "";
+  try {
+    const x = nums[7];
+    read = x.toString();
+  } catch (e: RangeError) {
+    read = "range";
+  } catch (e) {
+    read = e.name;
+  }
+  assert(read === "MissingValueError", "arr[i] OOB read is not a RangeError");
 }

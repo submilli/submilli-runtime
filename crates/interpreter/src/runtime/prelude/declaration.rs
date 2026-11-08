@@ -349,6 +349,7 @@ mod tests {
                 "IteratorYieldResult",
                 "Map",
                 "MapConstructor",
+                "MissingValueError",
                 "Number",
                 "NumberConstructor",
                 "Object",
@@ -433,6 +434,7 @@ mod tests {
                 "Error"
                     | "QuotaExceededError"
                     | "TimeoutError"
+                    | "MissingValueError"
                     | "RangeError"
                     | "ReferenceError"
                     | "TypeError"

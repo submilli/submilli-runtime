@@ -97,6 +97,16 @@ impl Inferer<'_> {
         let expected = (!shaped_by_pattern).then_some(&declared);
         let errors_before = self.error_count();
         let (default_value, default_ty) = self.infer_expr(default, expected)?;
+        // A parameter whose type names `undefined` takes a missing default,
+        // and reads as maybe `undefined`.
+        // Only a written type that names `undefined` takes a missing default:
+        // an unannotated parameter's type admits `undefined` because the
+        // argument may be omitted, and its default then reads the value.
+        let default_ty = if param.ty.is_some() {
+            self.absorb_into_declared(expected, default_value, default_ty)?
+        } else {
+            default_ty
+        };
         let default_span = self.ast.try_expr(default).map_err(arena_failure)?.span;
         // Replace only the outer contextual mismatch with the parameter
         // diagnostic; keep errors from inside the initializer intact.
@@ -391,7 +401,6 @@ impl Inferer<'_> {
         infer: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
     ) -> Result<T, CompilerFailure> {
         let scopes = self.scopes.clone();
-        let const_record_reads = self.const_record_reads.clone();
         let reachable = self.reachable;
         let diagnostics = self.diagnostics.len();
         let pattern_sources = self.pattern_sources.clone();
@@ -416,7 +425,6 @@ impl Inferer<'_> {
             None => self.exit_closure_narrow_boundary(),
         };
         self.scopes.restore(scopes);
-        self.const_record_reads = const_record_reads;
         self.reachable = reachable;
         self.pattern_sources = pattern_sources;
         self.last_write_spans = last_write_spans;
@@ -610,28 +618,6 @@ pub(super) fn without_undefined(ty: &Type) -> Type {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn record_read_origins_roll_back_with_trial_scopes() {
-        super::super::test_support::with_source_inferer(
-            "const seen: Record<string, { x: number }> = {}; const before = seen['a']; const v = seen['b'];",
-            |tc| {
-                tc.scopes.push();
-                let statements = tc.ast.top_level.clone();
-                tc.infer_stmt(statements[0]).unwrap();
-                tc.infer_stmt(statements[1]).unwrap();
-                let origins = tc.const_record_reads.clone();
-                assert_eq!(origins.len(), 1);
-                tc.with_expression_trial(|trial| {
-                    trial.infer_stmt(statements[2])?;
-                    assert_eq!(trial.const_record_reads.len(), 2);
-                    Ok(())
-                })
-                .unwrap();
-                assert_eq!(tc.const_record_reads, origins);
-            },
-        );
-    }
-
     use super::*;
 
     #[test]

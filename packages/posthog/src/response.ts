@@ -115,8 +115,9 @@ interface ApiCohort {
     deleted?: boolean | null;
 }
 
-// A body of the wrong shape fails the checked casts with a TypeError or
-// RangeError; callers branch on PostHogError codes, so report it as one.
+// A body of the wrong shape fails the checked casts with a TypeError, or a
+// read of a missing element with a MissingValueError; callers branch on
+// PostHogError codes, so report it as one.
 function shaped<T>(map: () => T): T {
     try {
         return map();

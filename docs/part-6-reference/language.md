@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "75aa98961d060f1550bd117aa412ffb04989088aee243291146a89f3b472ed46"
+  contentHash: "a4524644e1fd223de0be724e6dadf51e0fdf80d7f398fd336d0766bbdfc04514"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -178,8 +178,10 @@ fs.writeText("notes.md", summarize(page));
 
 ### `Record<string, V>` for runtime keys
 
-An object whose keys are known only at runtime is a `Record<string, V>`, and
-reading a missing key gives `undefined` (the read type is `V | undefined`):
+An object whose keys are known only at runtime is a `Record<string, V>`.
+Reading a key gives `V`, as in TypeScript's `--strict`. A check where you read
+a missing key sees `undefined`: `??`, `===` and `!==`, `!`, `||`, a test,
+`?.` and `typeof`. Any other read of a missing key throws `MissingValueError`:
 
 ```typescript
 const counts: Record<string, number> = {};
@@ -195,8 +197,8 @@ for (const word of words) {
 | `==` and `!=` | Strict, like `===` and `!==`, so `1 == "1"` and `x == null` are compile errors |
 | `+` with a string | Concatenates another string, a number, or an `Error`, converted as `String(x)` converts it (`"n=" + 1.5` is `"n=1.5"`, `"err " + e` is `"err Error: <message>"`). A boolean, a bigint, `null`, `undefined`, or an object is a compile error: write `String(x)` or a template literal |
 | Return types | Declared on functions and methods; arrow functions infer them |
-| `items[i]` | Out-of-range reads and writes throw `RangeError`. `items.at(i)` returns `undefined`. `push` appends |
-| `text[i]` | Reads one UTF-16 code unit as a string; out of range it throws `RangeError`. `text.charAt(i)` returns `""` |
+| `items[i]` | An out-of-range read is missing, as a record key is: checked where you read it (`items[i] ?? d`) it is `undefined`, and otherwise it throws `MissingValueError`. An out-of-range write throws `RangeError`. `items.at(i)` returns `undefined`. `push` appends |
+| `text[i]` | Reads one UTF-16 code unit as a string. Out of range it is missing, as `items[i]` is. `text.charAt(i)` returns `""` |
 | `let x: T;` | Needs an initializer unless `T` includes `undefined` |
 | Runtime APIs | The standard library and Submilli Packages, in place of Node.js APIs, browser globals, and npm |
 | Dates and times | `Temporal`, in place of `Date` |

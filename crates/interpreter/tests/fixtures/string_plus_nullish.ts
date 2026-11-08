@@ -35,5 +35,8 @@ function main(): void {
   assert(undefined + "y" === "undefinedy");
   assert("x" + absent() === "xundefined");
   const match = "a".match(/a(b)?/);
-  if (match !== null) assert("group:" + match[1] === "group:undefined");
+  if (match !== null) {
+    const group = match[1] ?? undefined;
+    assert("group:" + group === "group:undefined");
+  }
 }

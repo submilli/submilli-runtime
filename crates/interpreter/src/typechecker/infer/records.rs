@@ -290,6 +290,7 @@ impl Inferer<'_> {
                     && (!numeric_key || domain_accepts_numbers(&index.key))
                     && crate::property_keys::matches_name(&index.key, &key, &self.type_limits)
                 {
+                    self.note_missable_read();
                     values.push(index.read_ty());
                 } else {
                     self.error(span, format!("no field `{key}` on type `{receiver}`"));
@@ -309,6 +310,7 @@ impl Inferer<'_> {
                 );
                 return Type::Error;
             }
+            self.note_missable_read();
             return index.read_ty();
         }
         self.error_with_help(

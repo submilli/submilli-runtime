@@ -5908,7 +5908,7 @@ function main(): void {
             r#"function main(): string {
                 let a = [1, 2, 3];
                 try {
-                    let _ = a[10];
+                    let _: number = a[10];
                     return "no throw";
                 } catch (e: Error) {
                     return e.message;
@@ -5920,9 +5920,7 @@ function main(): void {
             pollster::block_on(cfg.run(&bytes)).expect("OOB throw is catchable, not a trap");
         assert_eq!(
             result.value.as_deref(),
-            Some(
-                "index 10 is out of range for `a` (length 3); use `a.at(10)` to get `undefined` instead"
-            )
+            Some("index 10 is out of range for `a` (length 3); use `a[10] ?? …` or `a.at(10)`")
         );
     }
 

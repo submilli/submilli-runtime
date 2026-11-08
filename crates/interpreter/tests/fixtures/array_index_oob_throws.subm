@@ -1,14 +1,15 @@
 // Out-of-range `arr[i]` read/write throws a catchable Error rather than
-// trapping uncatchably (SUB-340). In-bounds access is unaffected.
+// trapping uncatchably (SUB-340): `MissingValueError` for a read (SUB-2148),
+// `RangeError` for a write. In-bounds access is unaffected.
 
 function readOob(arr: number[], i: number): boolean {
   let threw: boolean = false;
   try {
     const v: number = arr[i];
     assert(v !== v, "unreachable: OOB read should have thrown");
-  } catch (e: Error) {
+  } catch (e: MissingValueError) {
     threw = true;
-    assert(e.message === `index ${i} is out of range for \`arr\` (length 3); use \`arr.at(${i})\` to get \`undefined\` instead`, "OOB read carries a message");
+    assert(e.message === `index ${i} is out of range for \`arr\` (length 3); use \`arr[${i}] ?? …\` or \`arr.at(${i})\``, "OOB read carries a message");
   }
   return threw;
 }
@@ -17,7 +18,7 @@ function writeOob(arr: number[], i: number): boolean {
   let threw: boolean = false;
   try {
     arr[i] = 99;
-  } catch (e: Error) {
+  } catch (e: RangeError) {
     threw = true;
     assert(e.message === `index ${i} is out of range for \`arr\` (length 3); use \`arr.push(value)\` to append instead`, "OOB write carries a message");
   }

@@ -888,6 +888,20 @@ pub struct TypedParam {
     pub default: Option<crate::DefaultValue>,
 }
 
+/// A function-local binding that holds a read which may have found no value;
+/// see [`TypedAst::maybe_missing_locals`].
+#[derive(Clone, Debug)]
+pub struct MaybeMissingLocal {
+    /// What a use at `T` throws when the value is missing; it names the read.
+    pub message: String,
+    /// Whether codegen keeps a present flag beside the binding: one typed
+    /// with a type parameter, whose instantiation may hold `undefined`, can't
+    /// tell a missing read from a present `undefined` by its value. Recorded
+    /// here because wide-slot erasure may type the binding `unknown` before
+    /// codegen sees it.
+    pub has_present_flag: bool,
+}
+
 /// Compiler intermediate representation, produced by type inference and consumed
 /// by checking, capture analysis, desugaring, and code generation.
 ///
@@ -917,6 +931,29 @@ pub struct TypedParam {
 pub struct TypedAst {
     /// Positional reads from a collected call-argument array return undefined for missing slots.
     pub call_spread_index_reads: std::collections::BTreeSet<ExprId>,
+    /// Function-local `let`/`const` declarations, by name span, that hold a
+    /// read which may have found no value, from their initializer or a later
+    /// assignment, and the temporaries of assignment expressions that pass
+    /// such a read on. The binding is stored as `T | undefined`, and a read
+    /// of it that the typechecker left at `T` throws `MissingValueError` when
+    /// the value is missing.
+    pub maybe_missing_locals: std::collections::HashMap<Span, MaybeMissingLocal>,
+    /// Every read that may find no value and reaches a check or a place
+    /// that holds `undefined`, with its written type: the type tsc reports,
+    /// before the typechecker widened it with `undefined` (unchanged where it
+    /// already held `undefined`). Tools show the written type (see
+    /// [`TypedAst::written_type`]); codegen takes a read listed here as a
+    /// check of a maybe-missing local, and as a value that may clear a
+    /// present flag. A use not listed tests the value, except a use of a
+    /// local without a present flag typed with room for `undefined`, which
+    /// takes the value as it is.
+    pub widened_missing_reads: std::collections::HashMap<ExprId, Type>,
+    /// Declarations and assignment targets, by span, whose recorded type is
+    /// the `T | undefined` storage of an unannotated local holding a
+    /// maybe-missing read, though the local has the type `T`. Only tools that
+    /// show types read it, the conformance harness among them; see
+    /// [`TypedAst::written_binding_type`].
+    pub widened_bindings: std::collections::HashSet<Span>,
     /// Typed operands written as spread arguments to a rest parameter.
     pub call_spread_values: std::collections::BTreeSet<ExprId>,
     /// Tuple sources expanded into positional call arguments; codegen evaluates each once.
@@ -1583,6 +1620,33 @@ impl TypedAst {
             }
         }
         inits
+    }
+
+    /// The type `id` has as written, before the typechecker widened a read
+    /// that may find no value with `undefined` (see
+    /// [`TypedAst::widened_missing_reads`]).
+    pub fn written_type(&self, id: ExprId) -> Result<&Type, ArenaError> {
+        let expr = self.try_expr(id)?;
+        Ok(self.widened_missing_reads.get(&id).unwrap_or(&expr.ty))
+    }
+
+    /// The type a binding declared or assigned at `span` has as written, given
+    /// the type its statement records: an unannotated local holding a
+    /// maybe-missing read is stored as `T | undefined` but has the type `T`.
+    pub fn written_binding_type(&self, span: Span, ty: &Type) -> Type {
+        if !self.widened_bindings.contains(&span) {
+            return ty.clone();
+        }
+        match ty.peel() {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .filter(|member| !matches!(member.peel(), Type::Undefined))
+                    .cloned()
+                    .collect(),
+            ),
+            _ => ty.clone(),
+        }
     }
 
     pub fn source_type(&self, id: ExprId) -> Result<&Type, ArenaError> {

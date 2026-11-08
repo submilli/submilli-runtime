@@ -3958,6 +3958,8 @@ mod tests {
             "URIError",
             "ReferenceError",
             "PermissionDeniedError",
+            "TimeoutError",
+            "MissingValueError",
         ] {
             assert!(
                 lib.contains(&format!("declare class {class} extends Error {{")),

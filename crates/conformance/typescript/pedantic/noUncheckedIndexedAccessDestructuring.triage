@@ -1,2 +1,2 @@
-line 12 missed: by-design spec §1.2 reading past an array's end throws a `RangeError`, so a destructured element is never missing
-line 11, 12 type: by-design spec §1.2 reading past an array's end throws a `RangeError`, so a destructured element is never missing
+line 11, 12, 26, 27, 30 type: by-design spec §1.2 an index read is `T`, as in tsc's `--strict` without noUncheckedIndexedAccess, and a missing element or key is decided where the read is checked
+line 12, 27, 30 missed: by-design spec §1.2 an index read is `T`, as in tsc's `--strict` without noUncheckedIndexedAccess, and a missing element or key is decided where the read is checked

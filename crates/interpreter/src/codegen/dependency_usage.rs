@@ -573,6 +573,7 @@ impl DependencyUsage {
         // call the reconstructed class constructors, so these classes must
         // reconstruct in every module.
         self.note_type(crate::mangle::prelude("Error"));
+        self.note_type(crate::mangle::prelude("MissingValueError"));
         self.note_type(crate::mangle::prelude("RangeError"));
         self.note_type(crate::mangle::prelude("ReferenceError"));
         self.note_type(crate::mangle::prelude("TypeError"));

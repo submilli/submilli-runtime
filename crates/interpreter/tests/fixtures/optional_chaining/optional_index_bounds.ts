@@ -1,5 +1,5 @@
 // An array index step inside a chain is bounds-checked like one outside it: a
-// catchable `RangeError`, not a Wasm trap the program cannot see. Without the
+// catchable `MissingValueError`, not a Wasm trap the program cannot see. Without the
 // check the chain's `array.get` runs unguarded and takes the whole process down,
 // so the `catch` below never runs.
 //
@@ -19,17 +19,20 @@ function main(): void {
   try {
     console.log(`${bag.arr[99]}`);
   } catch (e) {
-    plain = e instanceof RangeError ? "RangeError" : "other";
+    plain = e instanceof MissingValueError ? "MissingValueError" : "other";
   }
-  assert(plain === "RangeError", `non-chain index, got ${plain}`);
+  assert(plain === "MissingValueError", `non-chain index, got ${plain}`);
 
   let chained = "none";
   try {
-    console.log(`${maybe?.arr[99] ?? -1}`);
+    console.log(`${maybe?.arr[99].toFixed(0)}`);
   } catch (e) {
-    chained = e instanceof RangeError ? "RangeError" : "other";
+    chained = e instanceof MissingValueError ? "MissingValueError" : "other";
   }
-  assert(chained === "RangeError", `chain index, got ${chained}`);
+  assert(chained === "MissingValueError", `chain index, got ${chained}`);
+
+  // As the chain's last step, a missing element is the chain's `undefined`.
+  assert((maybe?.arr[99] ?? -1) === -1, "a missing last step reads as undefined");
 
   const none: Bag | null = null as Bag | null;
   assert(none?.arr[99] === undefined, "a short-circuit never reaches the index");

@@ -1,16 +1,16 @@
 // expect-error: expected `number`, got `number | undefined`
 // expect-error: expected `number`, got `string | undefined`
 // expect-error-count: 2
-function choose(counts: Record<string, number>, labels: Record<string, string>, chooseA: boolean): number {
+function choose(counts: Map<string, number>, labels: Map<string, string>, chooseA: boolean): number {
   let plays: number;
   if (chooseA) {
-    plays = counts["a"];
+    plays = counts.get("a");
   } else {
-    plays = labels["b"];
+    plays = labels.get("b");
   }
   return plays;
 }
 
 function main(): number {
-  return choose({}, {}, true);
+  return choose(new Map(), new Map(), true);
 }
