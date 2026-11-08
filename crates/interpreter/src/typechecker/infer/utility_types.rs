@@ -935,7 +935,8 @@ fn normalize_node(
 /// `None` for a type with no member list (a primitive, an array).
 pub(crate) fn keyof_type(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
     match ty.peel() {
-        Type::Unknown => return Some(Type::Never),
+        // No value of these has a key, so `k: keyof T` takes none.
+        Type::Unknown | Type::Null | Type::Undefined | Type::Void => return Some(Type::Never),
         // Every key, as tsc's `string | number | symbol` without `symbol`.
         Type::Never => return Some(Type::union(vec![Type::String, Type::Number])),
         Type::Error => return Some(Type::Error),

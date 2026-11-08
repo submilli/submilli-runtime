@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "30088cb1b901785ad42290f89e69b7dcbb6b26b5751455211e49081a23cd4cb4"
+  contentHash: "00a8ff6857a6a36ba96d4097d518b51f6b5e54b1b8108d577f904f8777934163"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -23,7 +23,7 @@ modules are on [Standard library](/docs/reference/standard-library).
 `submilli builtins` prints the catalog:
 
 ```text
-Types: Array, BigInt, Boolean, Error, Map, MissingValueError, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
+Types: Array, BigInt, Boolean, Capitalize, Error, ErrorOptions, Exclude, Extract, Lowercase, Map, MissingValueError, NoInfer, NonNullable, Number, Object, Omit, Parameters, Partial, PermissionDeniedError, Pick, QuotaExceededError, RangeError, Readonly, ReadonlyMap, ReadonlySet, Record, ReferenceError, RegExp, Required, ReturnType, Set, String, SyntaxError, TextDecoder, TextEncoder, TimeoutError, TypeError, URIError, Uint8Array, Uncapitalize, Uppercase
 Namespaces: JSON, Math, Temporal
 ```
 
@@ -38,6 +38,8 @@ Namespaces: JSON, Math, Temporal
 | `Boolean` | Type | `true` and `false` |
 | `Object` | Type | The base of every object type, with `Object.keys`, `values`, `entries`, `hasOwn`, `is` |
 | `Record<K, V>` | Type | String-keyed objects ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)) |
+| `Partial`, `Required`, `Readonly`, `Pick`, `Omit`, `Exclude`, `Extract`, `NonNullable`, `Parameters`, `ReturnType`, `NoInfer` | Type | TypeScript's utility types, over concrete types and type parameters |
+| `Uppercase`, `Lowercase`, `Capitalize`, `Uncapitalize` | Type | String literal case mappings |
 | `RegExp` | Type | Regular expressions, without lookaround or backreferences |
 | `Uint8Array` | Type | Byte arrays, with hex and base64 conversion |
 | `TextEncoder`, `TextDecoder` | Type | UTF-8 encoding and decoding |

@@ -15869,7 +15869,9 @@ fn interpolates_at_run_time(ty: &Type) -> bool {
         | Type::Unknown
         | Type::NonPrimitive
         | Type::TypeVar(_)
-        | Type::GenericParam { .. } => true,
+        | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. } => true,
         Type::Union(members) => members.iter().any(|member| {
             matches!(member.peel(), Type::Undefined | Type::Void)
                 || interpolates_at_run_time(member)
