@@ -369,7 +369,7 @@ pub enum StmtKind {
     },
     Function {
         name: Ident,
-        generics: Vec<Ident>,
+        generics: Vec<TypeParameterAnnotation>,
         params: Vec<ParamDecl>,
         /// `None` when a type predicate is declared; exactly one of `return_type` / `type_predicate` is `Some` after parse.
         return_type: Option<TypeAnnotation>,
@@ -478,7 +478,7 @@ pub enum StmtKind {
     /// Interface declaration. Single declaration site per name; no reopening.
     InterfaceDecl {
         name: Ident,
-        generics: Vec<Ident>,
+        generics: Vec<TypeParameterAnnotation>,
         extends: Vec<TypeAnnotation>,
         members: Vec<InterfaceMember>,
         doc: Option<DocComment>,
@@ -488,7 +488,7 @@ pub enum StmtKind {
     /// consumed downstream (classes.md non-goals).
     ClassDecl {
         name: Ident,
-        generics: Vec<Ident>,
+        generics: Vec<TypeParameterAnnotation>,
         extends: Option<TypeAnnotation>,
         implements: Vec<TypeAnnotation>,
         members: Vec<ClassMember>,
@@ -502,7 +502,7 @@ pub enum StmtKind {
     },
     TypeAliasDecl {
         name: Ident,
-        generics: Vec<Ident>,
+        generics: Vec<TypeParameterAnnotation>,
         ty: TypeAnnotation,
         doc: Option<DocComment>,
     },
@@ -534,6 +534,29 @@ pub enum ImportKind {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct TypeParameterAnnotation {
+    pub ident: Ident,
+    pub constraint: Option<TypeAnnotation>,
+}
+
+impl std::ops::Deref for TypeParameterAnnotation {
+    type Target = Ident;
+
+    fn deref(&self) -> &Ident {
+        &self.ident
+    }
+}
+
+impl From<Ident> for TypeParameterAnnotation {
+    fn from(ident: Ident) -> Self {
+        Self {
+            ident,
+            constraint: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImportSpecifier {
     pub imported_name: Ident,
     pub local_name: Ident,
@@ -545,7 +568,7 @@ pub enum InterfaceMember {
     Method {
         name: Ident,
         optional: bool,
-        generics: Vec<Ident>,
+        generics: Vec<TypeParameterAnnotation>,
         params: Vec<ParamDecl>,
         return_type: TypeAnnotation,
         span: Span,
@@ -607,7 +630,7 @@ pub enum ClassMember {
         name: Ident,
         optional: bool,
         modifiers: ClassModifiers,
-        generics: Vec<Ident>,
+        generics: Vec<TypeParameterAnnotation>,
         params: Vec<ParamDecl>,
         return_type: TypeAnnotation,
         body: StmtId,

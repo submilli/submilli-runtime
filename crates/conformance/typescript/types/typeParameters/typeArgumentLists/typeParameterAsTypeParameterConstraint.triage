@@ -1,0 +1,2 @@
+line 15, 18, 19 type: bug SUB-1832 rejected built-in-to-inline-object constraint calls recover to the constraint rather than the argument type
+line 15, 18, 19 extra: bug SUB-1832 built-in strings and arrays are not assignable to an inline object type with their properties, including { length: number }

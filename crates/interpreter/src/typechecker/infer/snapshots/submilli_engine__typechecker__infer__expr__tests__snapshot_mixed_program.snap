@@ -397,7 +397,10 @@ TypedAst {
             mangled_name: MangledName(
                 "main#add",
             ),
-            generics: [],
+            generics: GenericParameters {
+                names: [],
+                constraints: {},
+            },
             params: [
                 TypedParam {
                     name: Ident {
@@ -462,7 +465,10 @@ TypedAst {
             mangled_name: MangledName(
                 "main#main",
             ),
-            generics: [],
+            generics: GenericParameters {
+                names: [],
+                constraints: {},
+            },
             params: [],
             return_type: Void,
             type_predicate: None,

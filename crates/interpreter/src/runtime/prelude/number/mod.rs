@@ -503,14 +503,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Number"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Number)),
                     (
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::with_default(
                                 "radix",
                                 Type::Number,
@@ -527,7 +527,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toFixed".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::with_default(
                                 "digits",
                                 Type::Number,
@@ -544,7 +544,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toPrecision".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::with_default(
                                 "precision",
                                 Type::Number,
@@ -561,7 +561,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toExponential".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::with_default(
                                 "fractionDigits",
                                 Type::Number,
@@ -578,7 +578,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toJson".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -601,13 +601,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("NumberConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "@call".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![call_value()],
                             ret: Type::Number,
                             predicate: None,
@@ -620,7 +620,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isNaN".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
@@ -633,7 +633,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isFinite".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
@@ -646,7 +646,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isInteger".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
@@ -659,7 +659,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "isSafeInteger".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
                             ret: Type::Boolean,
                             predicate: None,
@@ -672,7 +672,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "parseInt".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("s", Type::String),
                                 crate::runtime::host::parse_int_radix_param(),
@@ -688,7 +688,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "parseFloat".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("s", Type::String)],
                             ret: Type::Number,
                             predicate: None,
@@ -836,7 +836,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("isNaN"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("value", Type::Number)],
                 ret: Type::Boolean,
                 type_predicate: None,
@@ -851,7 +851,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("isFinite"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("value", Type::Number)],
                 ret: Type::Boolean,
                 type_predicate: None,

@@ -163,7 +163,7 @@ impl<'a> Validator<'a> {
         Ok(())
     }
 
-    fn statement_metadata(&self, stmt: &Stmt) -> Result<(), SourceError> {
+    fn statement_metadata(&mut self, stmt: &'a Stmt) -> Result<(), SourceError> {
         self.span(stmt.span)?;
         match &stmt.kind {
             StmtKind::Let { name, doc, .. } | StmtKind::Const { name, doc, .. } => {
@@ -209,7 +209,7 @@ impl<'a> Validator<'a> {
                 ..
             } => {
                 self.span(name.span)?;
-                self.idents(generics)?;
+                self.type_parameters(generics)?;
                 self.doc(doc)?;
             }
             StmtKind::EnumDecl { name, members, doc } => {
@@ -282,6 +282,17 @@ impl<'a> Validator<'a> {
         Ok(())
     }
 
+    fn type_parameters(
+        &mut self,
+        parameters: &'a [crate::TypeParameterAnnotation],
+    ) -> Result<(), SourceError> {
+        for parameter in parameters {
+            self.span(parameter.span)?;
+            self.optional(&parameter.constraint)?;
+        }
+        Ok(())
+    }
+
     fn modifiers(&self, modifiers: &ClassModifiers) -> Result<(), SourceError> {
         for span in [
             modifiers.visibility_span,
@@ -318,7 +329,7 @@ impl<'a> Validator<'a> {
         Ok(())
     }
 
-    fn interface_metadata(&self, member: &InterfaceMember) -> Result<(), SourceError> {
+    fn interface_metadata(&mut self, member: &'a InterfaceMember) -> Result<(), SourceError> {
         match member {
             InterfaceMember::IndexSignature(index) => self.span(index.span)?,
             InterfaceMember::Method {
@@ -328,7 +339,7 @@ impl<'a> Validator<'a> {
                 ..
             } => {
                 self.span(name.span)?;
-                self.idents(generics)?;
+                self.type_parameters(generics)?;
                 self.doc(doc)?;
             }
             InterfaceMember::Property { name, doc, .. } => {
@@ -339,7 +350,7 @@ impl<'a> Validator<'a> {
         Ok(())
     }
 
-    fn class_metadata(&self, member: &ClassMember) -> Result<(), SourceError> {
+    fn class_metadata(&mut self, member: &'a ClassMember) -> Result<(), SourceError> {
         match member {
             ClassMember::Field {
                 name,
@@ -366,7 +377,7 @@ impl<'a> Validator<'a> {
             } => {
                 self.span(name.span)?;
                 self.modifiers(modifiers)?;
-                self.idents(generics)?;
+                self.type_parameters(generics)?;
                 self.doc(doc)?;
             }
             ClassMember::Constructor { doc, .. } => self.doc(doc)?,

@@ -1825,7 +1825,8 @@ impl CallVisitor<'_, '_> {
                     receiver_type = result_ty.clone();
                 }
                 TypedChainPart::Index { result_ty, .. }
-                | TypedChainPart::NonNull { result_ty, .. } => {
+                | TypedChainPart::NonNull { result_ty, .. }
+                | TypedChainPart::Constraint { result_ty, .. } => {
                     receiver_type = result_ty.clone();
                 }
             }
@@ -2728,7 +2729,7 @@ export function unchecked(): void { get("https://example.com"); }
                 mangled_name: crate::mangle::package_symbol("@mcp/issues", "create"),
                 declaration_span: Span::at(crate::FileId::MCP),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new("title", Type::String)],
                     ret: Type::Unknown,
                     type_predicate: None,

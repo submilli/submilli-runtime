@@ -39,7 +39,7 @@ use crate::CapabilitySchema;
 // retained sources and does not execute it. The number still gates those file
 // shapes, so a reader that asks for a runnable artifact refuses a version it
 // does not understand instead of decoding it with the wrong types.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 16;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 17;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";
@@ -795,7 +795,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/util", "greet"),
                 declaration_span: Span::new(file, 0, 12).unwrap(),
                 kind: ValueKind::Function {
-                    generics: vec!["T".to_string()],
+                    generics: interpreter::GenericParameters::unconstrained(vec!["T".to_string()]),
                     params: vec![
                         Param::with_default(
                             "name",
@@ -830,7 +830,7 @@ mod tests {
             "rename".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("name", Type::String)],
                 ret: Type::Void,
                 predicate: None,
@@ -845,7 +845,7 @@ mod tests {
                 declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     methods,
                     properties,
                     dispatch: Dispatch::Direct,

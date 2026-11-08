@@ -172,7 +172,7 @@ impl<'a> Inferer<'a> {
     fn resolve_class_reference(
         &mut self,
         class: ClassName,
-        generics: &[String],
+        generics: &crate::GenericParameters,
         args: &[TypeAnnotation],
         span: crate::Span,
     ) -> Result<Type, CompilerFailure> {
@@ -291,6 +291,7 @@ impl<'a> Inferer<'a> {
     fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
         self.check_callable_type(&resolved, annot.span);
+        self.check_named_type_constraints(&resolved, annot.span)?;
         Ok(resolved)
     }
 
@@ -448,9 +449,10 @@ impl<'a> Inferer<'a> {
                         }
                         TypeKind::Interface { generics, .. } => {
                             if args.len() != generics.len() {
-                                let written = written_type_args(text, generics);
+                                let written =
+                                    generics.select_names(written_type_args(text, generics));
                                 let header = self.render_help(
-                                    format_definition::format_interface_header(shown, written),
+                                    format_definition::format_interface_header(shown, &written),
                                 );
                                 let plural = if written.len() == 1 {
                                     "argument"
@@ -1189,7 +1191,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::VTable,
@@ -1202,7 +1204,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 index: None,
-                generics: vec!["T".to_string()],
+                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::VTable,
@@ -1214,7 +1216,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("test:ns", "ResultList"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Alias {
-                generics: Vec::new(),
+                generics: Default::default(),
                 ty: Type::Array(Box::new(Type::interface_ref(
                     crate::Package("test:ns".to_string()),
                     "SearchResult",
@@ -1236,7 +1238,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("test:ns", "searchJson"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new("query", Type::String)],
                     ret: Type::Array(Box::new(Type::interface_ref(
                         crate::Package("test:ns".to_string()),
@@ -1685,7 +1687,7 @@ mod tests {
             "get".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: t(),
                 predicate: None,
@@ -1696,7 +1698,7 @@ mod tests {
             "put".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("v", t())],
                 ret: Type::Void,
                 predicate: None,
@@ -1710,7 +1712,7 @@ mod tests {
                 mangled_name: mangled,
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Class {
-                    generics: vec!["T".to_string()],
+                    generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                     fields: BTreeMap::new(),
                     narrowing_checks: BTreeMap::new(),
                     methods,

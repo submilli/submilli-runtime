@@ -315,7 +315,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("ReadonlyMap"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Alias {
-                generics: vec!["K".to_string(), "V".to_string()],
+                generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                 ty: Type::Readonly(Box::new(Type::prelude_interface(
                     "Map".to_string(),
                     vec![Type::TypeVar("K".to_string()), Type::TypeVar("V".to_string())],
@@ -331,13 +331,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Map"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: vec!["K".to_string(), "V".to_string()],
+                generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                 methods: BTreeMap::from([
                     (
                         "get".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Union(vec![
                                 Type::TypeVar("V".to_string()),
@@ -353,7 +353,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "set".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("key", Type::TypeVar("K".to_string())),
                                 Param::new("value", Type::TypeVar("V".to_string())),
@@ -372,7 +372,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "has".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Boolean,
                             predicate: None,
@@ -385,7 +385,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "delete".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
                             ret: Type::Boolean,
                             predicate: None,
@@ -398,7 +398,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "keys".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("K".to_string())]),
                             predicate: None,
@@ -411,7 +411,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "values".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::TypeVar("V".to_string())]),
                             predicate: None,
@@ -424,7 +424,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "entries".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
                                 Type::TypeVar("K".to_string()),
@@ -440,7 +440,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "forEach".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
                                 Type::Function {
@@ -475,7 +475,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "iterator".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::prelude_interface("Iterator".to_string(), vec![Type::Tuple(vec![
                                     Type::TypeVar("K".to_string()),
@@ -491,7 +491,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "clear".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::Void,
                             predicate: None,
@@ -524,12 +524,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("MapConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "groupBy".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: vec!["K".to_string(), "T".to_string()],
+                        generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "T".to_string()]),
                         params: group_by_params(),
                         ret: Type::prelude_interface("Map".to_string(), vec![
                             Type::TypeVar("K".to_string()),
@@ -544,7 +544,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     "new".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: vec!["K".to_string(), "V".to_string()],
+                        generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                         params: vec![Param::with_default(
                             "entries",
                             Type::union(vec![

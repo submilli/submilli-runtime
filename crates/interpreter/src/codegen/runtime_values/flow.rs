@@ -819,7 +819,9 @@ fn connect_optional_chain(
                 flow.widened.insert(step.clone());
                 flow.edge(Place::CallbackReturn, step.clone());
             }
-            crate::TypedChainPart::NonNull { .. } => flow.edge(receiver.clone(), step.clone()),
+            crate::TypedChainPart::NonNull { .. } | crate::TypedChainPart::Constraint { .. } => {
+                flow.edge(receiver.clone(), step.clone());
+            }
         }
         receiver = step.clone();
         if index + 1 == parts.len() {

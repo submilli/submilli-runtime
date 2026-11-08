@@ -1443,7 +1443,7 @@ fn codegen_inner(
             body: f.body,
             return_type: f.return_type.clone(),
             params: f.params.clone(),
-            generics: f.generics.clone(),
+            generics: f.generics.to_vec(),
         });
     }
 
@@ -6254,7 +6254,8 @@ function main(): void {
                         | crate::TypedChainPart::MethodCall { args, .. } => args.clone(),
                         crate::TypedChainPart::Field { .. }
                         | crate::TypedChainPart::InterfaceProperty { .. }
-                        | crate::TypedChainPart::NonNull { .. } => Vec::new(),
+                        | crate::TypedChainPart::NonNull { .. }
+                        | crate::TypedChainPart::Constraint { .. } => Vec::new(),
                     })
                     .collect();
                 for id in to_walk {

@@ -106,14 +106,14 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Boolean"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Boolean)),
                     (
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -124,7 +124,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toJson".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -148,12 +148,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "@call".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new(),
+                        generics: Default::default(),
                         params: vec![call_value()],
                         ret: Type::Boolean,
                         predicate: None,

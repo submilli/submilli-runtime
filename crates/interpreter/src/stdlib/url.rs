@@ -48,7 +48,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Query"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: TypeKind::Alias {
-                generics: Vec::new(),
+                generics: Default::default(),
                 ty: Type::InterfaceRef {
                     mangled: crate::mangle::prelude("Map"),
                     package: crate::Package::prelude(),
@@ -80,7 +80,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "encodeQuery"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("query", query_type())],
                 ret: Type::String,
                 type_predicate: None,
@@ -97,7 +97,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "decodeQuery"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("s", Type::String)],
                 ret: query_type(),
                 type_predicate: None,
@@ -160,7 +160,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "URL"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
                 dispatch: Dispatch::Direct,
@@ -176,7 +176,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "parse"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("url", Type::String)],
                 ret: url_ref,
                 type_predicate: None,
@@ -197,7 +197,7 @@ pub fn package_declaration() -> PackageDeclaration {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "build"),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![
                     Param::new("protocol", Type::String),
                     Param::new("host", Type::String),
@@ -234,7 +234,7 @@ fn insert_string_to_string_fn(defs: &mut PackageDeclaration, name: &str, doc: &s
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::URL),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("s", Type::String)],
                 ret: Type::String,
                 type_predicate: None,

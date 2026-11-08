@@ -3222,14 +3222,12 @@ not this file. Declaration files (`.d.ts`) aren't cases, and `.tsx` files aren't
 | `types/typeParameters/recurringTypeParamForContainerOfBase01.ts` | not supported | expected `,` or `>`, on ` interface BoxOfFoo<T extends Foo<T>> { ` |
 | `types/typeParameters/typeArgumentLists/constraintSatisfactionWithAny.ts` | not supported | expected `,` or `>`, on ` function foo<T extends String>(x: T): T { return null; } ` |
 | `types/typeParameters/typeArgumentLists/constraintSatisfactionWithAny2.ts` | not supported | expected `,` or `>`, on ` function foo<Z, T extends <U>(x: U) => Z>(y: T): Z { return null as unknown a... ` |
-| `types/typeParameters/typeArgumentLists/constraintSatisfactionWithEmptyObject.ts` | not supported | expected `,` or `>`, on ` function foo<T extends Object>(x: T): void { } ` |
 | `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction.ts` | not supported | construct signatures |
 | `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction2.ts` | not supported | construct signatures |
 | `types/typeParameters/typeArgumentLists/functionConstraintSatisfaction3.ts` | not supported | construct signatures |
 | `types/typeParameters/typeArgumentLists/instantiateNonGenericTypeWithTypeArguments.ts` | not supported | expected `:` and a type for the class field, on ` x!: string; ` |
 | `types/typeParameters/typeArgumentLists/instantiationExpressionErrors.ts` | not supported | expected field name in object type, on ` let f: { <T>(): T, g<U>(): U } = null as unknown as ({ <T>(): T, g<U>(): U }); ` |
 | `types/typeParameters/typeArgumentLists/instantiationExpressions.ts` | not supported | construct signatures |
-| `types/typeParameters/typeArgumentLists/typeParameterAsTypeParameterConstraint.ts` | not supported | expected `,` or `>`, on ` function foo<T, U extends T>(x: T, y: U): U { return y; } ` |
 | `types/typeParameters/typeArgumentLists/typeParameterAsTypeParameterConstraint2.ts` | not supported | expected `,` or `>`, on ` function foo<T, U extends T>(x: T, y: U): U { return y; } // this is now an e... ` |
 | `types/typeParameters/typeArgumentLists/wrappedAndRecursiveConstraints.ts` | not supported | expected `,` or `>`, on ` class C<T extends Date> { ` |
 | `types/typeParameters/typeArgumentLists/wrappedAndRecursiveConstraints2.ts` | not supported | expected `,` or `>`, on ` class C<T extends C<T>> { // error ` |

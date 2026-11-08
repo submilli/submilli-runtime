@@ -9,6 +9,8 @@ mod classes;
 mod closure_arity;
 mod comparable;
 mod comparison_operand;
+mod constraint_literals;
+mod constraints;
 mod diagnostics;
 mod enums;
 mod evolving;
@@ -245,6 +247,9 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
+        generic_constraints: BTreeMap::new(),
+        constraint_literal_scopes: Vec::new(),
+        pending_constraint_checks: None,
         next_generic_param_id: 0,
         packages_by_name,
         type_only_packages: transitive
@@ -550,6 +555,9 @@ pub fn infer_package_checked<'a>(
         literal_argument_inference: None,
         generics_in_scope: Vec::new(),
         body_instantiations: Vec::new(),
+        generic_constraints: BTreeMap::new(),
+        constraint_literal_scopes: Vec::new(),
+        pending_constraint_checks: None,
         next_generic_param_id: 0,
         packages_by_name,
         type_only_packages,
@@ -1109,7 +1117,10 @@ pub(super) struct Inferer<'a> {
     /// The object or tuple literal argument whose slots a generic call is
     /// inferring one at a time; see [`generic::LiteralArgumentInference`].
     pub(super) literal_argument_inference: Option<generic::LiteralArgumentInference>,
-    pub(super) generics_in_scope: Vec<Vec<String>>,
+    pub(super) generics_in_scope: Vec<crate::GenericParameters>,
+    pub(super) generic_constraints: BTreeMap<u32, Type>,
+    constraint_literal_scopes: Vec<constraint_literals::ConstraintLiteralScope>,
+    pub(super) pending_constraint_checks: Option<Vec<constraints::PendingConstraintCheck>>,
     /// Empty during the signature pass; populated with fresh `GenericParam` ids at body entry.
     pub(super) body_instantiations: Vec<BTreeMap<String, Type>>,
     pub(super) packages_by_name: BTreeMap<&'a str, &'a PackageDeclaration>,
@@ -1275,6 +1286,8 @@ impl<'a> Inferer<'a> {
         self.inferred_returns = None;
         self.generics_in_scope.clear();
         self.body_instantiations.clear();
+        self.generic_constraints.clear();
+        self.pending_constraint_checks = None;
         self.next_generic_param_id = 0;
         self.namespace_bindings.clear();
         self.namespace_symbols.clear();
@@ -1409,7 +1422,7 @@ impl<'a> Inferer<'a> {
 /// [`Inferer::resolve_alias_body`] needs to resolve it in isolation.
 pub(super) struct PendingAlias {
     pub(super) name: crate::Ident,
-    pub(super) generics: Vec<String>,
+    pub(super) generics: Vec<crate::TypeParameterAnnotation>,
     pub(super) annotation: crate::TypeAnnotation,
     pub(super) doc: Option<crate::DocComment>,
 }
@@ -1620,6 +1633,7 @@ mod tests {
             registry: &registry,
             limits: &limits,
             strict_subtype: false,
+            generic_constraints: &Default::default(),
         };
         let error = crate::typechecker::rules::check_package(
             "@test/resource",

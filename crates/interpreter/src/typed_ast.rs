@@ -301,6 +301,9 @@ pub enum PostfixTarget {
 /// `optional` drives short-circuit codegen; `result_ty` is the type after this part, without `| null`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedChainPart {
+    /// Representation-only view through a proven generic constraint. Unlike
+    /// `NonNull`, this preserves nullish values for a following optional step.
+    Constraint { result_ty: Type, span: Span },
     Field {
         name: Ident,
         optional: bool,
@@ -353,7 +356,8 @@ impl TypedChainPart {
             | TypedChainPart::Index { result_ty, .. }
             | TypedChainPart::Call { result_ty, .. }
             | TypedChainPart::MethodCall { result_ty, .. }
-            | TypedChainPart::NonNull { result_ty, .. } => result_ty,
+            | TypedChainPart::NonNull { result_ty, .. }
+            | TypedChainPart::Constraint { result_ty, .. } => result_ty,
         }
     }
 
@@ -367,7 +371,8 @@ impl TypedChainPart {
             | TypedChainPart::Index { result_ty, .. }
             | TypedChainPart::Call { result_ty, .. }
             | TypedChainPart::MethodCall { result_ty, .. }
-            | TypedChainPart::NonNull { result_ty, .. } => *result_ty = ty,
+            | TypedChainPart::NonNull { result_ty, .. }
+            | TypedChainPart::Constraint { result_ty, .. } => *result_ty = ty,
         }
     }
 
@@ -379,7 +384,8 @@ impl TypedChainPart {
             | TypedChainPart::Index { span, .. }
             | TypedChainPart::Call { span, .. }
             | TypedChainPart::MethodCall { span, .. }
-            | TypedChainPart::NonNull { span, .. } => *span,
+            | TypedChainPart::NonNull { span, .. }
+            | TypedChainPart::Constraint { span, .. } => *span,
         }
     }
 
@@ -391,7 +397,7 @@ impl TypedChainPart {
             | TypedChainPart::Index { optional, .. }
             | TypedChainPart::Call { optional, .. }
             | TypedChainPart::MethodCall { optional, .. } => *optional,
-            TypedChainPart::NonNull { .. } => false,
+            TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => false,
         }
     }
 }
@@ -1083,7 +1089,7 @@ pub struct TypedFunction {
     pub mangled_name: MangledName,
     /// Body is type-checked under `Type::GenericParam` instantiations then erased
     /// to `Type::TypeVar` for the external view.
-    pub generics: Vec<String>,
+    pub generics: crate::GenericParameters,
     pub params: Vec<TypedParam>,
     pub return_type: Type,
     /// Type guard predicate. When set, `return_type` is always `Type::Boolean`.
@@ -1402,7 +1408,7 @@ pub struct TypedClassConstructor {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedClassMethod {
     pub name: Ident,
-    pub generics: Vec<String>,
+    pub generics: crate::GenericParameters,
     pub params: Vec<TypedParam>,
     pub return_type: Type,
     pub body: StmtId,
@@ -1416,7 +1422,7 @@ pub struct TypedInterfaceDecl {
     pub property_names: std::collections::BTreeSet<String>,
     pub index: Option<crate::IndexSignature>,
     pub name: Ident,
-    pub generics: Vec<String>,
+    pub generics: crate::GenericParameters,
     pub members: Vec<TypedInterfaceMember>,
     pub doc: Option<crate::DocComment>,
 }
@@ -1425,7 +1431,7 @@ pub struct TypedInterfaceDecl {
 pub enum TypedInterfaceMember {
     Method {
         name: Ident,
-        generics: Vec<String>,
+        generics: crate::GenericParameters,
         params: Vec<TypedParam>,
         return_type: Type,
         doc: Option<crate::DocComment>,
@@ -1472,7 +1478,7 @@ pub struct TypedStringEnumMember {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedTypeAliasDecl {
     pub name: Ident,
-    pub generics: Vec<String>,
+    pub generics: crate::GenericParameters,
     pub ty: Type,
     pub doc: Option<crate::DocComment>,
 }
@@ -1730,7 +1736,7 @@ mod tests {
                 span: Span::new(crate::FileId(0), 9, 10).unwrap(),
             },
             mangled_name: crate::mangle::package_symbol("main", "f"),
-            generics: vec![],
+            generics: Default::default(),
             params: vec![],
             return_type: Type::Number,
             type_predicate: None,

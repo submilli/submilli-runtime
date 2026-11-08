@@ -105,7 +105,7 @@ pub(crate) fn chain_receiver_name(
                 name.push('.');
                 name.push_str(&field.name);
             }
-            crate::TypedChainPart::NonNull { .. } => {}
+            crate::TypedChainPart::NonNull { .. } | crate::TypedChainPart::Constraint { .. } => {}
             _ => return Ok(String::new()),
         }
     }

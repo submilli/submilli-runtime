@@ -1646,7 +1646,7 @@ pub(super) fn declare_direct_fn(
             mangled_name,
             declaration_span: DiagSpan::at(crate::FileId::TEMPORAL),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params,
                 ret,
                 type_predicate: None,
@@ -2410,7 +2410,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     };
     let temporal_to_json_sig = || MethodSig {
         optional: false,
-        generics: Vec::new(),
+        generics: Default::default(),
         params: Vec::new(),
         ret: Type::String,
         predicate: None,
@@ -2450,13 +2450,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "Instant"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "add".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_instant_ref(),
                             predicate: None,
@@ -2467,7 +2467,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "subtract".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_instant_ref(),
                             predicate: None,
@@ -2478,7 +2478,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "until".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("other", super::like::like_type("Instant")),
                                 Param::with_default(
@@ -2496,7 +2496,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "since".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("other", super::like::like_type("Instant")),
                                 Param::with_default(
@@ -2514,7 +2514,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "round".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "roundTo",
                                 Type::union(vec![
@@ -2533,7 +2533,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toZonedDateTimeISO".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("tz", super::like::like_type("TimeZone"))],
                             ret: temporal_zdt_ref(),
                             predicate: None,
@@ -2544,7 +2544,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -2558,7 +2558,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "equals".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("other", super::like::like_type("Instant"))],
                             ret: Type::Boolean,
                             predicate: None,
@@ -2602,13 +2602,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "InstantConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "from".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("item", super::like::like_type("Instant"))],
                             ret: temporal_instant_ref(),
                             predicate: None,
@@ -2621,7 +2621,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "fromEpochMilliseconds".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("ms", Type::Number)],
                             ret: temporal_instant_ref(),
                             predicate: None,
@@ -2632,7 +2632,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "fromEpochNanoseconds".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("ns", Type::BigInt)],
                             ret: temporal_instant_ref(),
                             predicate: None,
@@ -2645,7 +2645,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "compare".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("a", super::like::like_type("Instant")),
                                 Param::new("b", super::like::like_type("Instant")),
@@ -2700,7 +2700,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "DurationFields"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::from([
                     ("years".to_string(), dur_field_prop("/** Calendar years. */")),
@@ -2733,7 +2733,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     mangled_name: crate::mangle::extend(&temporal_prefix, local),
                     declaration_span: Span::at(crate::FileId::PRELUDE),
                     kind: TypeKind::Interface { index: None,
-                        generics: Vec::new(),
+                        generics: Default::default(),
                         methods: BTreeMap::new(),
                         properties: names
                             .iter()
@@ -2799,7 +2799,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     declaration_span: Span::at(crate::FileId::PRELUDE),
                     kind: TypeKind::Interface {
                         index: None,
-                        generics: Vec::new(),
+                        generics: Default::default(),
                         methods: BTreeMap::new(),
                         properties: BTreeMap::from([(
                             field.to_string(),
@@ -2836,7 +2836,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 declaration_span: Span::at(crate::FileId::PRELUDE),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     methods: BTreeMap::new(),
                     properties: BTreeMap::from([
                         (
@@ -2890,7 +2890,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         declaration_span: Span::at(FileId::PRELUDE),
         kind: TypeKind::Interface {
             index: None,
-            generics: Vec::new(),
+            generics: Default::default(),
             methods: BTreeMap::new(),
             properties,
             dispatch: Dispatch::VTable,
@@ -3051,13 +3051,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "Duration"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "add".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_duration_ref(),
                             predicate: None,
@@ -3068,7 +3068,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "subtract".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_duration_ref(),
                             predicate: None,
@@ -3079,7 +3079,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "negated".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_duration_ref(),
                             predicate: None,
@@ -3090,7 +3090,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "total".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "totalOf",
                                 Type::union(vec![Type::String, temporal_total_options_ref()]),
@@ -3106,7 +3106,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "round".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "roundTo",
                                 Type::union(vec![
@@ -3125,7 +3125,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::with_default(
                                 "options",
                                 temporal_ref("DurationToStringOptions"),
@@ -3141,7 +3141,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "with".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("fields", Type::union(vec![temporal_duration_ref(), temporal_duration_fields_ref()]))],
                             ret: temporal_duration_ref(),
                             predicate: None,
@@ -3154,7 +3154,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "abs".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_duration_ref(),
                             predicate: None,
@@ -3208,13 +3208,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "DurationConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "new".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("fields", temporal_duration_fields_ref())],
                             ret: temporal_duration_ref(),
                             predicate: None,
@@ -3227,7 +3227,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "from".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "item",
                                 Type::union(vec![
@@ -3247,7 +3247,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "compare".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("a", temporal_duration_like_ref()),
                                 Param::new("b", temporal_duration_like_ref()),
@@ -3300,13 +3300,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "ZonedDateTime"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "add".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_zdt_ref(),
                             predicate: None,
@@ -3319,7 +3319,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "subtract".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("d", temporal_duration_like_ref())],
                             ret: temporal_zdt_ref(),
                             predicate: None,
@@ -3330,7 +3330,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "until".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("other", super::like::like_type("ZonedDateTime")),
                                 Param::with_default(
@@ -3348,7 +3348,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "since".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("other", super::like::like_type("ZonedDateTime")),
                                 Param::with_default(
@@ -3366,7 +3366,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "withTimeZone".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("tz", super::like::like_type("TimeZone"))],
                             ret: temporal_zdt_ref(),
                             predicate: None,
@@ -3379,7 +3379,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "with".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "fields",
                                 temporal_ref("ZonedDateTimeFields"),
@@ -3395,7 +3395,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "round".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new(
                                 "roundTo",
                                 Type::union(vec![
@@ -3414,7 +3414,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "startOfDay".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_zdt_ref(),
                             predicate: None,
@@ -3427,7 +3427,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toInstant".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_instant_ref(),
                             predicate: None,
@@ -3438,7 +3438,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toPlainDate".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_plain_date_ref(),
                             predicate: None,
@@ -3451,7 +3451,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toPlainTime".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_ref("PlainTime"),
                             predicate: None,
@@ -3464,7 +3464,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toPlainDateTime".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: temporal_ref("PlainDateTime"),
                             predicate: None,
@@ -3477,7 +3477,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "toString".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: Vec::new(),
                             ret: Type::String,
                             predicate: None,
@@ -3491,7 +3491,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "equals".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("other", super::like::like_type("ZonedDateTime"))],
                             ret: Type::Boolean,
                             predicate: None,
@@ -3607,13 +3607,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&temporal_prefix, "ZonedDateTimeConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "from".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![Param::new("item", super::like::like_type("ZonedDateTime")), super::like::overflow_param()],
                             ret: temporal_zdt_ref(),
                             predicate: None,
@@ -3626,7 +3626,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         "compare".to_string(),
                         MethodSig {
                             optional: false,
-                            generics: Vec::new(),
+                            generics: Default::default(),
                             params: vec![
                                 Param::new("a", super::like::like_type("ZonedDateTime")),
                                 Param::new("b", super::like::like_type("ZonedDateTime")),
@@ -3671,7 +3671,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "add".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new("duration", temporal_duration_like_ref())],
                     ret: self_ty.clone(),
                     predicate: None,
@@ -3682,7 +3682,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "subtract".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new("duration", temporal_duration_like_ref())],
                     ret: self_ty.clone(),
                     predicate: None,
@@ -3693,7 +3693,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "until".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![
                         Param::new("other", super::like::like_type(local)),
                         Param::with_default(
@@ -3713,7 +3713,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "since".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![
                         Param::new("other", super::like::like_type(local)),
                         Param::with_default(
@@ -3739,7 +3739,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             "with".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("fields", temporal_ref(fields_name))],
                 ret: self_ty,
                 predicate: None,
@@ -3756,7 +3756,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             "toPlainYearMonth".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: temporal_plain_year_month_ref(),
                 predicate: None,
@@ -3769,7 +3769,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             "toPlainMonthDay".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: temporal_plain_month_day_ref(),
                 predicate: None,
@@ -3812,7 +3812,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toPlainDateTime".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::with_default(
                         "time",
                         super::like::like_type("PlainTime"),
@@ -3829,7 +3829,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toZonedDateTime".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new(
                         "timeZoneOrOptions",
                         Type::Union(vec![
@@ -3924,7 +3924,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toPlainDate".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: Vec::new(),
                     ret: temporal_plain_date_ref(),
                     predicate: None,
@@ -3935,7 +3935,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toPlainTime".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: Vec::new(),
                     ret: temporal_plain_time_ref(),
                     predicate: None,
@@ -3948,7 +3948,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toZonedDateTime".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new("timeZone", super::like::like_type("TimeZone"))],
                     ret: temporal_zdt_ref(),
                     predicate: None,
@@ -3992,7 +3992,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toPlainDate".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new(
                         "fields",
                         temporal_ref("PlainYearMonthToDateFields"),
@@ -4024,7 +4024,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 "toPlainDate".to_string(),
                 MethodSig {
                     optional: false,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::new(
                         "fields",
                         temporal_ref("PlainMonthDayToDateFields"),
@@ -4059,7 +4059,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "instant"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: temporal_instant_ref(),
                 type_predicate: None,
@@ -4076,7 +4076,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "timeZoneId"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: Type::String,
                 type_predicate: None,
@@ -4093,7 +4093,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "zonedDateTimeISO"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::with_default(
                     "tz",
                     Type::union(vec![super::like::like_type("TimeZone"), Type::Undefined]),
@@ -4115,7 +4115,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 mangled_name: crate::mangle::extend(&now_prefix, name),
                 declaration_span: Span::at(FileId::PRELUDE),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: vec![Param::with_default(
                         "tz",
                         Type::union(vec![super::like::like_type("TimeZone"), Type::Undefined]),
@@ -4150,7 +4150,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::extend(&now_prefix, "zonedDateTime"),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::with_default(
                     "tz",
                     Type::union(vec![super::like::like_type("TimeZone"), Type::Undefined]),

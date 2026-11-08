@@ -505,7 +505,8 @@ pub(super) fn collect_from_expr(
                         c.collect(result_ty);
                     }
                     crate::TypedChainPart::InterfaceProperty { result_ty, .. }
-                    | crate::TypedChainPart::NonNull { result_ty, .. } => {
+                    | crate::TypedChainPart::NonNull { result_ty, .. }
+                    | crate::TypedChainPart::Constraint { result_ty, .. } => {
                         c.collect(result_ty);
                     }
                     crate::TypedChainPart::Index { idx, result_ty, .. } => {

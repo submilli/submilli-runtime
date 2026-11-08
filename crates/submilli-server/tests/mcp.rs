@@ -390,7 +390,7 @@ fn test_package_declaration(name: &str) -> PackageDeclaration {
             mangled_name: package_symbol(name, "read"),
             declaration_span: Span::at(FileId(0)),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: vec![Param::new("url", Type::String)],
                 ret: Type::String,
                 type_predicate: None,

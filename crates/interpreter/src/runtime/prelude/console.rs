@@ -130,12 +130,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             mangled_name: crate::mangle::prelude("Console"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 methods: BTreeMap::from([(
                     "log".to_string(),
                     MethodSig {
                         optional: false,
-                        generics: Vec::new(),
+                        generics: Default::default(),
                         params: vec![Param::rest("rest", Type::Array(Box::new(Type::Unknown)))],
                         ret: Type::Void,
                         predicate: None,

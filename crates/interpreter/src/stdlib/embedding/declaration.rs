@@ -133,7 +133,7 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
         "vector".to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new(),
+            generics: Default::default(),
             params: vec![Param::new("index", Type::Number)],
             ret: Type::Array(Box::new(Type::Number)),
             predicate: None,
@@ -147,7 +147,7 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
         "bytes".to_string(),
         MethodSig {
             optional: false,
-            generics: Vec::new(),
+            generics: Default::default(),
             params: vec![Param::new("index", Type::Number)],
             ret: Type::Uint8Array,
             predicate: None,
@@ -228,7 +228,7 @@ fn insert_interface(
             declaration_span: Span::at(crate::FileId::EMBEDDING),
             kind: TypeKind::Interface {
                 index: None,
-                generics: Vec::new(),
+                generics: Default::default(),
                 dispatch: if methods.is_empty() {
                     Dispatch::VTable
                 } else {
@@ -268,7 +268,7 @@ fn insert_fn(defs: &mut PackageDeclaration, name: &str, params: Vec<Param>, ret:
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::EMBEDDING),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params,
                 ret,
                 type_predicate: None,

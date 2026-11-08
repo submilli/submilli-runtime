@@ -348,12 +348,13 @@ fn symbol_named<'a>(
 fn value_types(value: &ValueSymbol, visit: &mut dyn FnMut(&Type)) {
     match &value.kind {
         ValueKind::Function {
-            generics: _,
+            generics,
             params,
             ret,
             type_predicate,
             doc: _,
         } => {
+            generics.constraints.values().for_each(&mut *visit);
             params.iter().for_each(|param| visit(&param.ty));
             visit(ret);
             if let Some(predicate) = type_predicate {
@@ -365,6 +366,12 @@ fn value_types(value: &ValueSymbol, visit: &mut dyn FnMut(&Type)) {
 }
 
 fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
+    match &symbol.kind {
+        TypeKind::Interface { generics, .. }
+        | TypeKind::Class { generics, .. }
+        | TypeKind::Alias { generics, .. } => generics.constraints.values().for_each(&mut *visit),
+        _ => {}
+    }
     match &symbol.kind {
         TypeKind::Interface {
             generics: _,
@@ -505,6 +512,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
 }
 
 fn method_types(method: &MethodSig, visit: &mut dyn FnMut(&Type)) {
+    method.generics.constraints.values().for_each(&mut *visit);
     let MethodSig {
         optional: _,
         generics: _,
@@ -856,7 +864,7 @@ pub enum EnumVariantValue {
 pub enum ValueKind {
     Function {
         /// Names appear inside `params`/`ret` as `Type::Var(name)`, resolved per call site by `TypeParamSubstitution`.
-        generics: Vec<String>,
+        generics: GenericParameters,
         params: Vec<Param>,
         ret: Type,
         /// Type-guard (`x is T`); inferer copies this into `Type::Function` at each reference site.
@@ -874,6 +882,57 @@ pub enum ValueKind {
         ty: Type,
         doc: Option<crate::DocComment>,
     },
+}
+
+/// Ordered type parameter names and their optional upper bounds. Keeping the
+/// bounds beside the names preserves unused parameters in exported signatures.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct GenericParameters {
+    pub names: Vec<String>,
+    pub constraints: Box<BTreeMap<String, Type>>,
+}
+
+impl std::ops::Deref for GenericParameters {
+    type Target = [String];
+
+    fn deref(&self) -> &[String] {
+        &self.names
+    }
+}
+
+impl GenericParameters {
+    /// Construct parameters known to have no bounds, such as built-in
+    /// declarations. Parsed declarations must resolve and retain their bounds.
+    pub fn unconstrained(names: Vec<String>) -> Self {
+        Self {
+            names,
+            constraints: Box::default(),
+        }
+    }
+    pub(crate) fn select_names(&self, names: &[String]) -> Self {
+        Self {
+            names: names.to_vec(),
+            constraints: Box::new(
+                names
+                    .iter()
+                    .filter_map(|name| {
+                        self.constraints
+                            .get(name)
+                            .map(|bound| (name.clone(), bound.clone()))
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a GenericParameters {
+    type Item = &'a String;
+    type IntoIter = std::slice::Iter<'a, String>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.names.iter()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -894,7 +953,7 @@ pub enum TypeKind {
     /// Single declaration site per name — no reopening, no `extends` in v1.
     /// Codegen has no Wasm representation for the interface itself; it only drives method dispatch.
     Interface {
-        generics: Vec<String>,
+        generics: GenericParameters,
         methods: BTreeMap<String, MethodSig>,
         /// Read via `expr.name` (not `expr.name()`). Writable unless the
         /// declaration carries a `readonly` modifier (`PropertySig.readonly`).
@@ -917,7 +976,7 @@ pub enum TypeKind {
     /// Stored `ty` is the fully resolved alias body. At use sites the inferer wraps the result in
     /// `Type::Alias { name, args, ty }` so the alias label flows through `Display`.
     Alias {
-        generics: Vec<String>,
+        generics: GenericParameters,
         ty: Type,
         doc: Option<crate::DocComment>,
     },
@@ -931,7 +990,7 @@ pub enum TypeKind {
         /// Class-level type parameters, erased at codegen (every `T`-typed slot
         /// is a boxed value slot). Substituted at use sites from the
         /// `ClassRef`'s args.
-        generics: Vec<String>,
+        generics: GenericParameters,
         fields: BTreeMap<String, FieldSig>,
         /// Runtime read guards for fields whose declaration narrows an inherited
         /// slot. Carried across packages because the consumer reconstructs the
@@ -1011,7 +1070,7 @@ pub struct MethodSig {
     /// Declared `m?(…)`: the member may be absent, so a call goes through `?.`.
     #[serde(default)]
     pub optional: bool,
-    pub generics: Vec<String>,
+    pub generics: GenericParameters,
     pub params: Vec<Param>,
     pub ret: Type,
     /// Type-guard predicate (`x is T`); `None` for ordinary methods.
@@ -1197,6 +1256,37 @@ mod tests {
     }
 
     #[test]
+    fn generic_constraints_survive_serialization_including_unused_parameters() {
+        let (ta, diagnostics) = crate::typecheck_to_typed_ast(
+            "type Empty<T extends number> = {};\nfunction identity<T extends number, U extends T>(value: U): U { return value; }\nfunction main(): void {}",
+            crate::FileId(0),
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.severity != crate::Severity::Error),
+            "{diagnostics:?}"
+        );
+        let declaration = PackageDeclaration::from_typed_ast(&ta);
+        let serialized = serde_json::to_string(&declaration).unwrap();
+        let restored: PackageDeclaration = serde_json::from_str(&serialized).unwrap();
+        let crate::ValueKind::Function { generics, .. } = &restored.values["identity"].kind else {
+            panic!("function declaration");
+        };
+        assert_eq!(generics.names, ["T", "U"]);
+        assert_eq!(generics.constraints.get("T"), Some(&Type::Number));
+        assert_eq!(
+            generics.constraints.get("U"),
+            Some(&Type::TypeVar("T".into()))
+        );
+        let crate::TypeKind::Alias { generics, .. } = &restored.types["Empty"].kind else {
+            panic!("alias declaration");
+        };
+        assert_eq!(generics.constraints.get("T"), Some(&Type::Number));
+        restored.check_type_limits().unwrap();
+    }
+
+    #[test]
     fn preserves_readonly_and_writable_object_shapes() {
         let ta =
             typed_ast("let a: { readonly x: number } = { x: 1 }; let b: { x: number } = { x: 2 };");
@@ -1329,7 +1419,7 @@ mod type_limit_checks {
             mangled_name: crate::mangle::prelude("Deep"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Alias {
-                generics: Vec::new(),
+                generics: Default::default(),
                 ty,
                 doc: None,
             },

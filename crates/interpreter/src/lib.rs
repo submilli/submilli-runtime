@@ -54,7 +54,7 @@ pub use ast::{
     InterfaceMember, LoweredLocalTypes, ObjectLiteralField, ObjectLiteralMember,
     ObjectPatternField, ParamDecl, PatternOrigin, PostfixOp, Stmt, StmtId, StmtKind, SwitchCase,
     SwitchDefault, TypeAnnotation, TypeAnnotationField, TypeAnnotationKind,
-    TypePredicateAnnotation, UnOp, Visibility,
+    TypeParameterAnnotation, TypePredicateAnnotation, UnOp, Visibility,
 };
 pub use authority::{
     AuthorityCallable, AuthorityCallableKind, AuthorityCheck, AuthorityEdge, AuthorityEffect,
@@ -81,9 +81,9 @@ pub use lexer::Lexer;
 pub use lower_patterns::lower as lower_patterns;
 pub use mangle::MangledName;
 pub use package_declaration::{
-    AccessorSig, ClassExtends, DefaultValue, Dispatch, EnumVariantValue, FieldSig, MethodSig,
-    NamespaceSymbol, PackageDeclaration, Param, PropertySig, RuntimeFunction, TypeKind, TypeSymbol,
-    ValueKind, ValueSymbol, VirtualDispatch,
+    AccessorSig, ClassExtends, DefaultValue, Dispatch, EnumVariantValue, FieldSig,
+    GenericParameters, MethodSig, NamespaceSymbol, PackageDeclaration, Param, PropertySig,
+    RuntimeFunction, TypeKind, TypeSymbol, ValueKind, ValueSymbol, VirtualDispatch,
 };
 pub use parser::parse;
 pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async, instantiate_program_async};

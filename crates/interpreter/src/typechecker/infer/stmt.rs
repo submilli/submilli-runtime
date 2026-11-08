@@ -1517,6 +1517,8 @@ impl Inferer<'_> {
                     .push(super::narrowing::PathElem::Field(name.name.clone()));
                 p
             });
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         // The value is still inferred, and its own diagnostics still surface: a
         // bad name or call in it is a second real problem the reader needs in the
         // same pass. So every rejecting arm that can name the field's write type
@@ -1824,7 +1826,9 @@ impl Inferer<'_> {
             .span;
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let evolving = self.evolving_array_receiver(receiver)?;
-        let (mut typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
+        let (typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
+        let (mut typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let evolving = evolving.filter(|_| super::evolving::array_element(&receiver_ty).is_some());
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {
@@ -2555,6 +2559,8 @@ impl Inferer<'_> {
             .span;
         let rw_op = super::diagnostics::RwOp::Compound(op);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let target_path = self
             .expr_to_reference_path(
                 self.typed_ast
@@ -2802,6 +2808,8 @@ impl Inferer<'_> {
             end: recv_span.end.max(value_span.end),
         };
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?

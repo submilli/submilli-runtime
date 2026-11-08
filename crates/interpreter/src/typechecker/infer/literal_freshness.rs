@@ -92,10 +92,9 @@ pub(super) struct LiteralFreshness {
     /// The origin of each module-level `let` and `const` of this module. One
     /// absent here (an import, a prelude constant) is [`LiteralOrigin::Unknown`].
     globals: BTreeMap<MangledName, LiteralOrigin>,
-    /// The regular literal members of each narrowed read, worked out while its
-    /// narrowing was still active: a read inside a `?:` branch or the right of
-    /// `&&` outlives the narrowing frame it was inferred under.
-    narrowed_reads: BTreeMap<ExprId, BTreeSet<Type>>,
+    /// Regular literals proved by narrowing or constraint context, retained
+    /// after the expression's inference scope has ended.
+    contextual_regular_literals: BTreeMap<ExprId, BTreeSet<Type>>,
     /// The value each temporary an assignment used as a value holds, by the
     /// temporary's name. Such a temporary is never a scope entry.
     held_values: BTreeMap<String, ExprId>,
@@ -187,6 +186,32 @@ impl ArgumentBinding {
 }
 
 impl Inferer<'_> {
+    pub(super) fn record_constraint_literal_freshness(
+        &mut self,
+        value: ExprId,
+        ty: &Type,
+        span: crate::Span,
+    ) {
+        let kinds = self.constraint_literal_kinds(span);
+        if kinds.is_empty() {
+            return;
+        }
+        if let Err(exceeded) = self.type_limits.budget().charge_copy(ty, 0) {
+            self.type_limits.record(exceeded);
+            return;
+        }
+        let regular: BTreeSet<_> = declared_literals(ty)
+            .into_iter()
+            .filter(|literal| kinds.keeps(literal))
+            .collect();
+        if !regular.is_empty() {
+            self.literal_freshness
+                .contextual_regular_literals
+                .entry(value)
+                .or_default()
+                .extend(regular);
+        }
+    }
     /// The type a function literal infers from a value it returns, `value` of
     /// type `ty`. As in tsc, only a single literal widens, and only when it is
     /// known to be fresh (`() => id(1)` is `() => number`). A union of
@@ -425,7 +450,11 @@ impl Inferer<'_> {
             declared.contains(literal) && !matches!(literal, Type::BooleanLiteral(_))
         });
         if !regular.is_empty() {
-            self.literal_freshness.narrowed_reads.insert(id, regular);
+            self.literal_freshness
+                .contextual_regular_literals
+                .entry(id)
+                .or_default()
+                .extend(regular);
         }
         Ok(())
     }
@@ -448,6 +477,9 @@ impl Inferer<'_> {
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
             // Before the pass-through below, which skips the rest of the loop.
+            if let Some(literals) = self.literal_freshness.contextual_regular_literals.get(&id) {
+                regular.extend(literals.iter().cloned());
+            }
             if let TypedExprKind::Binary {
                 op: op @ (BinOp::And | BinOp::Or),
                 lhs,
@@ -469,11 +501,6 @@ impl Inferer<'_> {
                 TypedExprKind::GlobalRef { mangled, .. } => {
                     if let Some((origin, declared_ty)) = self.global_literal_origin(mangled) {
                         regular.extend(origin.regular_members(&declared_ty));
-                    }
-                }
-                TypedExprKind::LocalNarrowRef { .. } => {
-                    if let Some(read) = self.literal_freshness.narrowed_reads.get(&id) {
-                        regular.extend(read.iter().cloned());
                     }
                 }
                 TypedExprKind::Cast { .. } | TypedExprKind::Call { .. } => {

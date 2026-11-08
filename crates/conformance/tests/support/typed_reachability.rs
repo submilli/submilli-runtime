@@ -250,7 +250,8 @@ impl Reachable {
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
-                        | TypedChainPart::NonNull { .. } => {}
+                        | TypedChainPart::NonNull { .. }
+                        | TypedChainPart::Constraint { .. } => {}
                     }
                 }
             }

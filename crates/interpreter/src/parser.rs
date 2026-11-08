@@ -1575,7 +1575,7 @@ impl<'a> Parser<'a> {
         let kw = self.advance();
         let name = self.parse_type_decl_name("a", "type alias")?;
 
-        let generics: Vec<Ident> = if matches!(self.peek().kind, TokenKind::LessThan) {
+        let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
             self.parse_generic_param_list()?
         } else {
             Vec::new()
@@ -2228,7 +2228,7 @@ impl<'a> Parser<'a> {
         Some(name)
     }
 
-    fn parse_generic_param_list(&mut self) -> Option<Vec<Ident>> {
+    fn parse_generic_param_list(&mut self) -> Option<Vec<crate::TypeParameterAnnotation>> {
         let lt = self.advance();
         if matches!(
             self.peek().kind,
@@ -2241,17 +2241,34 @@ impl<'a> Parser<'a> {
         loop {
             let name_tok = self.expect_identifier("expected generic parameter name")?;
             let name = self.ident_from_token(&name_tok);
+            let constraint = if matches!(self.peek().kind, TokenKind::Extends) {
+                self.advance();
+                Some(self.parse_type_annotation()?)
+            } else {
+                None
+            };
+            if matches!(self.peek().kind, TokenKind::Equals) {
+                let equals = self.advance();
+                self.error_at_with_help(equals.span, "generic type parameter defaults are not supported", vec!["remove the default and supply a type argument explicitly when inference cannot determine it".into()]);
+                self.parse_type_annotation()?;
+            }
             // A duplicate is reported and dropped, as `tsc` drops it: the first
             // parameter keeps the name, and the type arguments count against the
             // parameters that remain.
-            if generics.iter().any(|g: &Ident| g.name == name.name) {
+            if generics
+                .iter()
+                .any(|g: &crate::TypeParameterAnnotation| g.name == name.name)
+            {
                 self.error_at_with_help(
                     name.span,
                     format!("duplicate type parameter `{}`", name.name),
                     vec!["give each type parameter its own name".to_string()],
                 );
             } else {
-                generics.push(name);
+                generics.push(crate::TypeParameterAnnotation {
+                    ident: name,
+                    constraint,
+                });
             }
             match self.peek().kind {
                 TokenKind::Comma => {

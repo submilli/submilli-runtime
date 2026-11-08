@@ -691,6 +691,20 @@ impl Inferer<'_> {
         expr_id: ExprId,
         expected: Option<&Type>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        let Some(context) = self.deferred_constraint_literals(expr_id)? else {
+            return self.infer_expr_inner(expr_id, expected);
+        };
+        self.constraint_literal_scopes.push(context);
+        let result = self.infer_expr_inner(expr_id, expected);
+        self.constraint_literal_scopes.pop();
+        result
+    }
+
+    fn infer_expr_inner(
+        &mut self,
+        expr_id: ExprId,
+        expected: Option<&Type>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
         // A limit recorded before this expression belongs to an enclosing
         // check, whose own checkpoint reports it.
         let limit_was_pending = self.type_limits.limit_reached();
@@ -763,7 +777,7 @@ impl Inferer<'_> {
                 let canonical = if v == 0.0 { 0.0 } else { v };
                 let literal = Type::NumberLiteral(crate::types::LiteralF64(canonical));
                 // A numeric enum member type takes a number literal of its value.
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                let ty = self.literal_or_base(span, keeps_literal, expected, literal, |t| {
                     matches!(
                         t,
                         Type::NumberLiteral(_)
@@ -777,21 +791,21 @@ impl Inferer<'_> {
             }
             ExprKind::BigInt(digits) => {
                 let literal = crate::types::bigint_literal_type(&digits);
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                let ty = self.literal_or_base(span, keeps_literal, expected, literal, |t| {
                     matches!(t, Type::BigIntLiteral(_))
                 });
                 Ok((TypedExprKind::BigInt(digits), ty))
             }
             ExprKind::String(s) => {
                 let literal = Type::StringLiteral(s.clone());
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                let ty = self.literal_or_base(span, keeps_literal, expected, literal, |t| {
                     matches!(t, Type::StringLiteral(_))
                 });
                 Ok((TypedExprKind::String(s), ty))
             }
             ExprKind::Boolean(b) => {
                 let literal = Type::BooleanLiteral(b);
-                let ty = self.literal_or_base(keeps_literal, expected, literal, |t| {
+                let ty = self.literal_or_base(span, keeps_literal, expected, literal, |t| {
                     matches!(t, Type::BooleanLiteral(_))
                 });
                 Ok((TypedExprKind::Boolean(b), ty))
@@ -804,7 +818,7 @@ impl Inferer<'_> {
             ExprKind::Identifier(ident) => self.infer_identifier(ident, span),
             ExprKind::Binary { op, lhs, rhs } => self.infer_binary(op, lhs, rhs, expected, span),
             ExprKind::Unary { op, operand } => {
-                self.infer_unary_keeping_literals(op, operand, expected, keeps_literal)
+                self.infer_unary_keeping_literals(op, operand, expected, keeps_literal, span)
             }
             ExprKind::Call {
                 callee,
@@ -1011,6 +1025,7 @@ impl Inferer<'_> {
                 .insert(id, receiver);
         }
         self.record_narrowed_read_freshness(id)?;
+        self.record_constraint_literal_freshness(id, &ty, span);
         self.record_runtime_type_test(&ty)
             .map_err(|failure| failure.with_span(span))?;
         // Report an oversized type met while inferring or checking this
@@ -1072,11 +1087,13 @@ impl Inferer<'_> {
     /// expected type names a literal of its kind, else its base primitive.
     fn literal_or_base(
         &self,
+        span: Span,
         keeps_literal: bool,
         expected: Option<&Type>,
         literal: Type,
         is_literal: fn(&Type) -> bool,
     ) -> Type {
+        let keeps_literal = keeps_literal || self.constraint_literal_kinds(span).keeps(&literal);
         if self.keeps_literal_type(keeps_literal, expected, &literal)
             || expects_literal(expected, is_literal)
         {
@@ -2112,6 +2129,7 @@ impl Inferer<'_> {
         operand: ExprId,
         expected: Option<&Type>,
         keeps_literal: bool,
+        span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (kind, ty) = self.infer_unary(op, operand)?;
         if !matches!(op, UnOp::Neg) {
@@ -2125,13 +2143,13 @@ impl Inferer<'_> {
         {
             ExprKind::BigInt(digits) => {
                 let literal = Type::BigIntLiteral(crate::types::negate_bigint_digits(digits));
-                self.literal_or_base(keeps_literal, expected, literal, |t| {
+                self.literal_or_base(span, keeps_literal, expected, literal, |t| {
                     matches!(t, Type::BigIntLiteral(_))
                 })
             }
             ExprKind::Number(value) => {
                 let literal = number_literal_type(-value);
-                self.literal_or_base(keeps_literal, expected, literal, |t| {
+                self.literal_or_base(span, keeps_literal, expected, literal, |t| {
                     matches!(t, Type::NumberLiteral(_))
                 })
             }
@@ -2879,7 +2897,9 @@ impl Inferer<'_> {
                 );
             }
             let diags_before = self.diagnostics.len();
-            let (mut typed_receiver, mut recv_ty) = self.infer_expr(*receiver, None)?;
+            let (typed_receiver, recv_ty) = self.infer_expr(*receiver, None)?;
+            let (mut typed_receiver, mut recv_ty) =
+                self.constraint_receiver(typed_receiver, recv_ty, span)?;
             // A generic receiver inferred in isolation can't resolve its own type
             // parameters and reports a premature "cannot infer" error — e.g.
             // `new Map()` in `new Map().set(k, v)`. The enclosing call resolves
@@ -3047,6 +3067,7 @@ impl Inferer<'_> {
         }
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
+        let (typed_callee, callee_ty) = self.constraint_receiver(typed_callee, callee_ty, span)?;
         let (typed_callee, callee_ty) =
             self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
         // call-signature dispatch — when the callee types
@@ -3230,7 +3251,7 @@ impl Inferer<'_> {
                 Some((name, sig_params)) => self.format_signature(SignatureKind::Function {
                     name,
                     predicate: None,
-                    generics: &[],
+                    generics: &Default::default(),
                     params: sig_params,
                     ret: &ret_ty,
                     doc: lift_doc.as_ref(),
@@ -4910,7 +4931,7 @@ impl Inferer<'_> {
                 CallLift::Function { name } => self.format_signature(SignatureKind::Function {
                     name,
                     predicate: None,
-                    generics: &[],
+                    generics: &Default::default(),
                     params,
                     ret,
                     doc: None,
@@ -6065,18 +6086,42 @@ impl Inferer<'_> {
         self.push_synthetic_expr(kind, Type::String, span)
     }
 
-    /// The value of an object literal's field when it is spelled as a literal.
-    /// tsc uses such values to pick the union members a literal could be
-    /// constructing.
-    fn literal_tag_value(
+    /// A literal or a binding whose declared type has one value. Reading this
+    /// information does not infer or evaluate an expression ahead of its turn.
+    pub(super) fn literal_tag_value(
         &self,
         value: crate::ExprId,
     ) -> Result<Option<narrowing::LiteralValue>, CompilerFailure> {
+        let value = peel_parens(self.ast, value)?;
         let expr = self.ast.try_expr(value).map_err(super::arena_failure)?;
         Ok(match &expr.kind {
             crate::ExprKind::Null => Some(narrowing::LiteralValue::Null),
             crate::ExprKind::Identifier(ident) if self.names_global_undefined(&ident.name) => {
                 Some(narrowing::LiteralValue::Undefined)
+            }
+            crate::ExprKind::Identifier(ident) => {
+                let ty = match self.scopes.get(&ident.name) {
+                    Some(entry) => Some(if entry.is_const {
+                        entry.read_type()
+                    } else {
+                        entry.write_type()
+                    }),
+                    None => self
+                        .top_symbols
+                        .get(&ident.name)
+                        .and_then(|entry| match &entry.kind {
+                            ValueKind::Const { ty, .. } => Some(ty),
+                            _ => None,
+                        }),
+                };
+                ty.and_then(|ty| {
+                    let ty = self.apparent_type(ty);
+                    match ty.peel() {
+                        Type::Null => Some(narrowing::LiteralValue::Null),
+                        Type::Undefined => Some(narrowing::LiteralValue::Undefined),
+                        other => narrowing::unit_literal_value(other),
+                    }
+                })
             }
             crate::ExprKind::String(s) => Some(narrowing::LiteralValue::String(s.clone())),
             crate::ExprKind::Boolean(b) => Some(narrowing::LiteralValue::Boolean(*b)),
@@ -6326,7 +6371,7 @@ impl Inferer<'_> {
     /// still checked against the selected variant's field, so it is rejected
     /// rather than mistyped. `None` (defer to the caller's single-shape scan)
     /// for ambiguity or no match.
-    fn select_union_variant<'a>(
+    pub(super) fn select_union_variant<'a>(
         &self,
         members: &'a [Type],
         literal: &[crate::ObjectLiteralMember],
@@ -6351,6 +6396,14 @@ impl Inferer<'_> {
                         crate::ObjectLiteralMember::Field(f) if f.name.name == key => {
                             self.literal_tag_value(f.value)?
                         }
+                        crate::ObjectLiteralMember::Computed {
+                            key: property,
+                            value,
+                        } if self.literal_property_name(*property)?.as_deref()
+                            == Some(key.as_str()) =>
+                        {
+                            self.literal_tag_value(*value)?
+                        }
                         _ => None,
                     })
                 })
@@ -6369,14 +6422,22 @@ impl Inferer<'_> {
             return Ok(None);
         }
 
-        let lit_names: std::collections::BTreeSet<&str> = literal
-            .iter()
-            .filter_map(|m| match m {
-                crate::ObjectLiteralMember::Field(f) => Some(f.name.name.as_str()),
-                crate::ObjectLiteralMember::Spread { .. }
-                | crate::ObjectLiteralMember::Computed { .. } => None,
-            })
-            .collect();
+        let mut names = BTreeSet::new();
+        for member in literal {
+            match member {
+                crate::ObjectLiteralMember::Field(field) => {
+                    names.insert(field.name.name.clone());
+                }
+                crate::ObjectLiteralMember::Computed { key, .. } => {
+                    let Some(name) = self.literal_property_name(*key)? else {
+                        return Ok(None);
+                    };
+                    names.insert(name);
+                }
+                crate::ObjectLiteralMember::Spread { .. } => {}
+            }
+        }
+        let lit_names = names.iter().map(String::as_str).collect();
 
         let mut selected: Option<&Type> = None;
         for member in members {
@@ -9229,6 +9290,8 @@ impl Inferer<'_> {
         {
             return Ok(read);
         }
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if let Some(read) = self.numeric_key_read(typed_receiver, &receiver_ty, &name)? {
             return Ok(read);
         }
@@ -9880,6 +9943,8 @@ impl Inferer<'_> {
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if receiver_ty.is_structural_object() {
             let (typed_index, key_ty) = self.infer_object_key(index)?;
             let ty = self.object_index_read_type(
@@ -11614,6 +11679,8 @@ impl Inferer<'_> {
             .span;
         let rw_op = super::diagnostics::RwOp::Postfix(op);
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let target_ty: Type = if let Type::ClassRef { mangled, args, .. } = receiver_ty.peel() {
             let mangled = mangled.clone();
             let class_args = args.clone();
@@ -11842,6 +11909,8 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        let (typed_receiver, receiver_ty) =
+            self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let object = receiver_ty.is_structural_object();
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
@@ -12340,6 +12409,14 @@ impl Inferer<'_> {
             })
             .collect();
         for (part, asserted) in parts.into_iter().zip(asserted) {
+            let apparent = self.constraint_receiver_type(&receiver_ty, part.span())?;
+            if apparent != receiver_ty {
+                typed_parts.push(TypedChainPart::Constraint {
+                    result_ty: apparent.clone(),
+                    span: part.span(),
+                });
+                receiver_ty = apparent;
+            }
             // A `?.` whose receiver can't be `null` or `undefined` never
             // short-circuits, so it is the plain step and adds no
             // `| undefined`, as in tsc. A method's `?.()` can short-circuit
@@ -12398,7 +12475,11 @@ impl Inferer<'_> {
                 self.reject_nullable_chain_step(&receiver_ty, step_path.as_ref(), &part)?;
                 break;
             }
-            let effective_recv = super::narrowing::strip_nullish(&receiver_ty);
+            let effective_recv = if part.is_optional() {
+                super::narrowing::strip_nullish(&receiver_ty)
+            } else {
+                receiver_ty.clone()
+            };
             // `infer_chain_part` may rewrite the previous part
             // (InterfaceProperty + Call → MethodCall), so it gets
             // `&mut typed_parts` rather than a borrow of the last
@@ -13392,7 +13473,7 @@ impl Inferer<'_> {
                 path.chain.push(element);
                 Some(path)
             }
-            TypedChainPart::NonNull { .. } => Some(path),
+            TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => Some(path),
             TypedChainPart::Call { .. } | TypedChainPart::MethodCall { .. } => None,
         })
     }
@@ -13775,7 +13856,7 @@ impl Inferer<'_> {
         let generics = match &self.lookup_named_type(key)?.kind {
             crate::TypeKind::Interface { generics, .. }
             | crate::TypeKind::Alias { generics, .. } => generics.clone(),
-            _ => Vec::new(),
+            _ => Default::default(),
         };
         let written = crate::lower_local_types::written_type_args(key, &generics).len();
         let lifted = generics.len().saturating_sub(written);
@@ -17867,7 +17948,7 @@ function main(): void { if (result < 10) { } }
                 mangled_name: crate::mangle::package_symbol("test:ns", name),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
-                    generics,
+                    generics: crate::GenericParameters::unconstrained(generics),
                     params,
                     ret,
                     type_predicate: None,

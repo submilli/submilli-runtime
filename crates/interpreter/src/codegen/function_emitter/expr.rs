@@ -2518,7 +2518,10 @@ fn emit_chain_parts(
         let slot = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
         emitter.instruction(Instruction::LocalTee(slot));
         Some(slot)
-    } else if matches!(part, crate::TypedChainPart::NonNull { .. }) {
+    } else if matches!(
+        part,
+        crate::TypedChainPart::NonNull { .. } | crate::TypedChainPart::Constraint { .. }
+    ) {
         emitter.call_receiver
     } else {
         None
@@ -2600,6 +2603,9 @@ fn emit_chain_operation(
     check_ty: Option<&Type>,
     receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if let crate::TypedChainPart::Constraint { result_ty, .. } = part {
+        return cast::emit_coerce_to_slot(emitter, ctx, receiver_ty, result_ty);
+    }
     if let crate::TypedChainPart::MethodCall {
         iface,
         name,
@@ -3153,6 +3159,9 @@ fn emit_chain_access(
     receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match part {
+        crate::TypedChainPart::Constraint { result_ty, .. } => {
+            cast::emit_coerce_to_slot(emitter, ctx, receiver_ty, result_ty)?;
+        }
         crate::TypedChainPart::Field {
             name, result_ty, ..
         } => {

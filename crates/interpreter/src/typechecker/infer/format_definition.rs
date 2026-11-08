@@ -607,14 +607,21 @@ fn visibility_prefix(visibility: crate::Visibility) -> &'static str {
 
 pub(crate) fn format_interface_header(
     name: &str,
-    generics: &[String],
+    generics: &crate::GenericParameters,
 ) -> Result<String, RenderError> {
     header("interface", name, generics)
 }
-pub(crate) fn format_class_header(name: &str, generics: &[String]) -> Result<String, RenderError> {
+pub(crate) fn format_class_header(
+    name: &str,
+    generics: &crate::GenericParameters,
+) -> Result<String, RenderError> {
     header("class", name, generics)
 }
-fn header(kind: &str, name: &str, generics: &[String]) -> Result<String, RenderError> {
+fn header(
+    kind: &str,
+    name: &str,
+    generics: &crate::GenericParameters,
+) -> Result<String, RenderError> {
     Writer::render(RenderLimits::default(), |out| {
         out.format(format_args!("{kind} {name}"))?;
         write_generic_list(out, generics)
@@ -760,7 +767,7 @@ mod tests {
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics,
+                    generics: crate::GenericParameters::unconstrained(generics),
                     methods: m,
                     properties: p,
                     dispatch: crate::Dispatch::VTable,
@@ -784,7 +791,7 @@ mod tests {
     fn no_arg_string_ret() -> MethodSig {
         MethodSig {
             optional: false,
-            generics: vec![],
+            generics: Default::default(),
             params: vec![],
             ret: Type::String,
             predicate: None,
@@ -862,7 +869,7 @@ mod tests {
     fn array_substitutes_interface_generic() {
         let map_sig = MethodSig {
             optional: false,
-            generics: vec!["U".to_string()],
+            generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
             params: vec![Param::new(
                 "fn",
                 Type::Function {
@@ -927,7 +934,7 @@ mod tests {
     fn interface_ref_substitutes_multiple_args() {
         let get_sig = MethodSig {
             optional: false,
-            generics: vec![],
+            generics: Default::default(),
             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
             ret: Type::TypeVar("V".to_string()),
             predicate: None,
@@ -1045,7 +1052,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 index: None,
-                generics: vec![],
+                generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties: m,
                 dispatch: crate::Dispatch::Direct,
@@ -1095,7 +1102,7 @@ mod tests {
             mangled_name: mangled.clone(),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Class {
-                generics: Vec::new(),
+                generics: Default::default(),
                 fields: BTreeMap::new(),
                 narrowing_checks: BTreeMap::new(),
                 methods: BTreeMap::new(),

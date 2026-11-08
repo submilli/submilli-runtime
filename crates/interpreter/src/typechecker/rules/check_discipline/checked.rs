@@ -1710,7 +1710,7 @@ impl<'a> Walker<'a, '_> {
                     let changeable = (!is_primitive(receiver_ty)).then_some(receiver_ty);
                     self.method_call(flow, changeable, receiver_fresh, args, &name.name, *span)?
                 }
-                TypedChainPart::NonNull { .. } => flow,
+                TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => flow,
             };
             current_ty = part.result_ty();
         }

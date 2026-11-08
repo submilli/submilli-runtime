@@ -179,7 +179,7 @@ fn nested_imported_returns_and_generic_instantiations_are_checked() {
     else {
         panic!("function")
     };
-    generics.push("T".into());
+    generics.names.push("T".into());
     *ret = Type::TypeVar("T".into());
     let source = format!(
         "import {{ bad }} from \"aritydep\"; function main(): number {{ const callback = bad<({}) => number>(); return 42; }}",

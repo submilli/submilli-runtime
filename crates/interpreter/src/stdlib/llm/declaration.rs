@@ -386,7 +386,7 @@ fn insert_completion_alias(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Completion"),
             declaration_span: Span::at(crate::FileId::LLM),
             kind: TypeKind::Alias {
-                generics: vec![CALL_TYPE_PARAM.to_string()],
+                generics: crate::GenericParameters::unconstrained(vec![CALL_TYPE_PARAM.to_string()]),
                 ty: Type::union(vec![success_type(call_type_var()), failure_type()]),
                 doc: crate::doc(
                     crate::FileId::LLM,
@@ -444,7 +444,7 @@ fn insert_interface(
             declaration_span: Span::at(crate::FileId::LLM),
             kind: TypeKind::Interface {
                 index: None,
-                generics,
+                generics: crate::GenericParameters::unconstrained(generics),
                 methods: BTreeMap::new(),
                 properties,
                 dispatch: Dispatch::VTable,
@@ -511,7 +511,7 @@ fn insert_generic_fn(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::LLM),
             kind: ValueKind::Function {
-                generics,
+                generics: crate::GenericParameters::unconstrained(generics),
                 params,
                 ret,
                 type_predicate: None,

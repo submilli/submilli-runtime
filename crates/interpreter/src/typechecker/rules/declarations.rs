@@ -388,7 +388,7 @@ impl<'a> Declared<'a> {
             Self::Typed(TypedTypeDecl::Interface(declaration)) => {
                 listed_property(&declaration.members, member)
                     .or_else(|| index_value(declaration.index.as_ref()))
-                    .map(|ty| (declaration.generics.as_slice(), Some(ty)))
+                    .map(|ty| (declaration.generics.names.as_slice(), Some(ty)))
             }
             Self::Typed(
                 TypedTypeDecl::Class(_)
@@ -403,7 +403,7 @@ impl<'a> Declared<'a> {
                     index,
                     ..
                 } => Some((
-                    generics.as_slice(),
+                    generics.names.as_slice(),
                     properties
                         .get(member)
                         .map(|property| &property.ty)
@@ -421,7 +421,7 @@ impl<'a> Declared<'a> {
     fn alias(self) -> Option<(&'a [String], &'a Type)> {
         match self {
             Self::Typed(TypedTypeDecl::Alias(declaration)) => {
-                Some((declaration.generics.as_slice(), &declaration.ty))
+                Some((declaration.generics.names.as_slice(), &declaration.ty))
             }
             Self::Typed(
                 TypedTypeDecl::Interface(_)
@@ -430,7 +430,7 @@ impl<'a> Declared<'a> {
                 | TypedTypeDecl::StringEnum(_),
             ) => None,
             Self::Symbol(symbol) => match &symbol.kind {
-                TypeKind::Alias { generics, ty, .. } => Some((generics.as_slice(), ty)),
+                TypeKind::Alias { generics, ty, .. } => Some((generics.names.as_slice(), ty)),
                 TypeKind::Interface { .. }
                 | TypeKind::Class { .. }
                 | TypeKind::NumberEnum { .. }
@@ -848,7 +848,7 @@ mod tests {
                 mangled_name: mangled,
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: crate::TypeKind::Alias {
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     ty: itself.clone(),
                     doc: None,
                 },

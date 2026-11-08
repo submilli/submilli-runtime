@@ -41,7 +41,7 @@ pub(in crate::typechecker) struct NestedFunction {
 /// A nested function declaration's parts, cloned out of the AST.
 struct Declaration {
     name: Ident,
-    generics: Vec<Ident>,
+    generics: Vec<crate::TypeParameterAnnotation>,
     params: Vec<ParamDecl>,
     return_type: Option<TypeAnnotation>,
     type_predicate: Option<crate::TypePredicateAnnotation>,

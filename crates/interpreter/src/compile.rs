@@ -1473,7 +1473,7 @@ mod importless_library_tests {
             "size".to_string(),
             MethodSig {
                 optional: false,
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: Type::Number,
                 predicate: None,
@@ -1488,7 +1488,7 @@ mod importless_library_tests {
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     index: None,
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     methods,
                     properties,
                     dispatch: Dispatch::Direct,
@@ -1538,7 +1538,7 @@ mod importless_library_tests {
                 mangled_name: package_symbol(SYNTH, "Tree"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Alias {
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     ty: tree_body(),
                     doc: None,
                 },
@@ -1550,7 +1550,7 @@ mod importless_library_tests {
             mangled_name: package_symbol(SYNTH, name),
             declaration_span: Span::at(crate::FileId(0)),
             kind: ValueKind::Function {
-                generics: Vec::new(),
+                generics: Default::default(),
                 params: Vec::new(),
                 ret: ty,
                 type_predicate: None,
@@ -1606,7 +1606,7 @@ mod importless_library_tests {
                 mangled_name: package_symbol(PIED_PIPER, "greet"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: ValueKind::Function {
-                    generics: Vec::new(),
+                    generics: Default::default(),
                     params: Vec::new(),
                     ret: Type::String,
                     type_predicate: None,
