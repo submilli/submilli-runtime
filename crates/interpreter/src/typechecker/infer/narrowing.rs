@@ -771,9 +771,11 @@ pub fn strip_null(ty: &Type) -> Type {
         )),
         // `unknown` is `{} | null | undefined`, as in TypeScript.
         Type::Unknown => Type::union(vec![Type::empty_object(), Type::Undefined]),
-        // A type parameter may hold any value: `T` minus `null` is
-        // `T & ({} | undefined)`.
-        Type::GenericParam { .. } => preserve_refinement(ty, strip_null(&Type::Unknown)),
+        // A type parameter, or a form over one (`T[K]`), may hold any value:
+        // `T` minus `null` is `T & ({} | undefined)`.
+        peeled if holds_any_value_of_a_parameter(peeled) => {
+            preserve_refinement(ty, strip_null(&Type::Unknown))
+        }
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
         _ => ty.clone(),
     }
@@ -806,7 +808,9 @@ pub fn strip_undefined(ty: &Type) -> Type {
                 .collect(),
         )),
         Type::Unknown => Type::union(vec![Type::empty_object(), Type::Null]),
-        Type::GenericParam { .. } => preserve_refinement(ty, strip_undefined(&Type::Unknown)),
+        peeled if holds_any_value_of_a_parameter(peeled) => {
+            preserve_refinement(ty, strip_undefined(&Type::Unknown))
+        }
         _ => ty.clone(),
     }
 }
@@ -814,7 +818,7 @@ pub fn strip_undefined(ty: &Type) -> Type {
 /// A union member that a nullish test narrows in place: a type parameter, or
 /// a narrowing of one such as `T & ({} | null)`, whose shape `peel` hides.
 fn is_type_parameter_or_its_narrowing(member: &Type) -> bool {
-    matches!(member.peel(), Type::GenericParam { .. }) || member.refines_type_parameter()
+    holds_any_value_of_a_parameter(member.peel()) || member.refines_type_parameter()
 }
 
 /// Remove both nullish alternatives for optional access and non-null assertions.

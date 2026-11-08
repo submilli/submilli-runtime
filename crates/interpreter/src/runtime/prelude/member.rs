@@ -373,35 +373,65 @@ pub(super) async fn builtin_property(
         .iter()
         .any(|kind| crate::mangle::prelude(kind).as_str() == interface);
     let index = super::object::integer_key(&name.encode_utf16().collect::<Vec<_>>());
-    let (member, argument) = match (index, builtin_member(&interface, name)) {
-        // `at` reads an element as an index does for every index in range,
-        // and `undefined` past the end.
-        (Some(index), _) if indexed => ("at", Some(f64::from(index))),
-        (_, Some(BuiltinMember::Method)) => {
-            return Err(host::type_error(format!(
-                "Cannot read the method '{name}' of a built-in value by name"
-            )));
+    match (index, builtin_member(&interface, name)) {
+        (Some(index), _) if indexed => {
+            read_builtin_element(caller, object, &interface, index).await
         }
-        (_, Some(BuiltinMember::Property)) => (name, None),
-        (_, None) if name == "length" && indexed => (name, None),
-        (_, None) => return super::undefined::value(caller),
-    };
-    let name_value = Val::AnyRef(Some(
-        host::write_submilli_string_struct(caller, member)?.to_anyref(),
-    ));
-    let interface_value = Val::AnyRef(Some(
-        host::write_submilli_string_struct(caller, &interface)?.to_anyref(),
-    ));
-    let params = [*object, name_value, interface_value];
-    let Some(argument) = argument else {
-        return property(caller, &params).await;
-    };
+        (_, Some(BuiltinMember::Method)) => Err(host::type_error(format!(
+            "Cannot read the method '{name}' of a built-in value by name"
+        ))),
+        (_, Some(BuiltinMember::Property)) => {
+            read_builtin_property(caller, object, &interface, name).await
+        }
+        (_, None) if name == "length" && indexed => {
+            read_builtin_property(caller, object, &interface, name).await
+        }
+        (_, None) => super::undefined::value(caller),
+    }
+}
+
+/// Element `index` of a string, array or byte array, read with `at`, which
+/// reads an element as an index does for every index in range, and
+/// `undefined` past the end.
+async fn read_builtin_element(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    interface: &str,
+    index: u32,
+) -> wasmtime::Result<Val> {
+    let params = member_params(caller, object, interface, "at")?;
     let token = lookup(caller, &params).await?;
-    let argument = box_result(caller, Val::F64(argument.to_bits()))?;
+    let argument = box_result(caller, Val::F64(f64::from(index).to_bits()))?;
     let args = Val::AnyRef(Some(
         host::write_submilli_array_struct(caller, &[argument])?.to_anyref(),
     ));
     invoke(caller, &token, &args).await
+}
+
+async fn read_builtin_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    interface: &str,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let params = member_params(caller, object, interface, name)?;
+    property(caller, &params).await
+}
+
+/// The receiver, member name and interface a member lookup takes.
+fn member_params(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    interface: &str,
+    name: &str,
+) -> wasmtime::Result<[Val; 3]> {
+    let name = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, name)?.to_anyref(),
+    ));
+    let interface = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, interface)?.to_anyref(),
+    ));
+    Ok([*object, name, interface])
 }
 
 #[derive(Clone, Copy)]
@@ -490,8 +520,10 @@ fn receiver_interface(
             }
         }
     }
-    Ok(super::temporal::shared::temporal_interface(caller, &object)?
-        .map(|interface| interface.as_str().to_owned()))
+    Ok(
+        super::temporal::shared::temporal_interface(caller, &object)?
+            .map(|interface| interface.as_str().to_owned()),
+    )
 }
 
 fn box_boolean(

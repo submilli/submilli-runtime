@@ -486,11 +486,13 @@ impl Type {
         }
     }
 
-    /// Whether a member is a type parameter, whose instantiation may hold
-    /// `undefined` though the type itself doesn't name it.
+    /// Whether a member is a type parameter, or a form over one (`T[K]`),
+    /// whose instantiation may hold `undefined` though the type itself
+    /// doesn't name it.
     pub fn has_type_parameter_member(&self) -> bool {
         match self.peel() {
             Type::GenericParam { .. } | Type::TypeVar(_) => true,
+            form if form.is_type_operator() => true,
             Type::Union(members) => members.iter().any(Type::has_type_parameter_member),
             _ => false,
         }
@@ -524,9 +526,6 @@ impl Type {
         Type::union(vec![Type::String, Type::Undefined])
     }
 
-    /// Whether `receiver[key]` reads and writes the property by name at run
-    /// time: a structural object, or an erased generic receiver (`T`, whose
-    /// `o[k]` is tsc's `T[K]`).
     /// tsc's `object[index]`, while an operand mentions a type parameter.
     pub fn indexed_access(object: Type, index: Type) -> Type {
         Type::IndexedAccess {
@@ -535,6 +534,9 @@ impl Type {
         }
     }
 
+    /// Whether `receiver[key]` reads and writes the property by name at run
+    /// time: a structural object, or an erased generic receiver (`T`, whose
+    /// `o[k]` is tsc's `T[K]`).
     pub fn indexes_by_name(&self) -> bool {
         // `value !== undefined` narrows a parameter to `T & ({} | null)`,
         // which indexes as `T` does. A bound's shape (`T & number[]`) keeps

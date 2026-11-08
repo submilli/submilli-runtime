@@ -8,6 +8,12 @@ interface User { name: string; age: number }
 function field<K extends keyof User>(user: User, key: K): User[K] { return user[key]; }
 function setField<K extends keyof User>(user: User, key: K, next: User[K]): void { user[key] = next; }
 function size<T extends [number, string]>(pair: T): T["length"] { return pair.length; }
+function lookup<R extends Record<string, number>, K extends keyof R>(record: R, key: K): R[K] { return record[key]; }
+function optional<K extends keyof Profile>(profile: Profile, key: K): Profile[K] { return profile[key]; }
+interface Profile { name: string; nick?: string; note: string | undefined }
+function merge<T extends {}, K extends keyof T>(base: T, patch: Partial<T>, key: K): T[K] { return patch[key] ?? base[key]; }
+function setA<T extends { a: number }>(value: T): void { value["a"] = 5; }
+function first<T extends {}>(value: T, index: number): unknown { if (Array.isArray(value)) { return value[index]; } return "none"; }
 
 function fails(f: () => unknown): string {
   try { f(); } catch (e) {
@@ -20,9 +26,17 @@ function fails(f: () => unknown): string {
 
 function main(): void {
   const xs = [1, 2, 3];
-  assert(fails(() => read(xs, 5)) === "MissingValueError", "an index past the end is missing");
-  assert(fails(() => read(xs, -1)) === "MissingValueError", "a negative index is missing");
-  assert(fails(() => read("abc", 1.5)) === "MissingValueError", "a fractional index is missing");
+  const past: unknown = read(xs, 5);
+  const negative: unknown = read(xs, -1);
+  const fraction: unknown = read("abc", 1.5);
+  assert(past === undefined && negative === undefined && fraction === undefined, "a missing element reads undefined");
+  assert(fails(() => lookup({ a: 1 } as Record<string, number>, "b")) === "MissingValueError", "a record bound keeps missing reads");
+  const profile: Profile = { name: "p", note: undefined };
+  assert(optional(profile, "nick") === undefined && optional(profile, "note") === undefined && read({ v: undefined }, "v") === undefined, "absent optional and present undefined values");
+  assert(merge({ a: 1, b: "x" }, { a: 2 }, "a") === 2 && merge({ a: 1, b: "x" }, {}, "b") === "x", "a partial patch falls back to its base");
+  const target = { a: 1 };
+  setA(target);
+  assert(target.a === 5 && first([7, 8], 1) === 8, "a bound's property is written, and a narrowed array indexed");
   assert(fails(() => write(xs, -1, 0)) === "range" && fails(() => write(xs, 3, 0)) === "range", "writes stay in range");
   const bytes = new Uint8Array(2);
   write(bytes, 1, 300);

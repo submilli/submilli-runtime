@@ -1108,12 +1108,11 @@ impl<'a> Inferer<'a> {
         let mut current = ty;
         let mut seen = Vec::new();
         loop {
-            if let Some(ty) = self.defer_if_pending(
-                operator,
-                std::slice::from_ref(&current),
-                span,
-                || current.clone(),
-            ) {
+            if let Some(ty) =
+                self.defer_if_pending(operator, std::slice::from_ref(&current), span, || {
+                    current.clone()
+                })
+            {
                 return Ok(ty);
             }
             // Follow a chain of forms (`I["a"]` is `J["b"]`, which is
@@ -1123,7 +1122,7 @@ impl<'a> Inferer<'a> {
                 return self.normalize_at(&current, span);
             };
             if seen.contains(&current) {
-                self.error(span, format!("`{current}` refers to itself"));
+                self.error(span, super::utility_types::refers_to_itself(&current));
                 return Ok(Type::Error);
             }
             seen.push(current);

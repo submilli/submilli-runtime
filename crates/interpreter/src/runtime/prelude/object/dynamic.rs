@@ -187,22 +187,19 @@ fn set_builtin_property(
         _ => Ok(false),
     };
     // `xs[i] = v` through a generic `o[k]`: in range only, as a static write.
-    // A number that is no index (`-1`, `1.5`) is out of range there too.
+    // A number that is no index (`-1`, `1.5`, `NaN`) is out of range there too.
     let number = name
         .parse::<f64>()
         .ok()
-        .filter(|number| {
-            number.is_finite() && crate::runtime::number::format_number_js(*number) == name
-        });
-    let elements = if is_a(caller, &array)? {
-        Some(Elements::Array)
-    } else if is_a(caller, &uint8_array)? {
-        Some(Elements::Uint8)
-    } else {
-        None
-    };
-    let result = if let (Some(number), Some(elements)) = (number, elements) {
-        set_element(caller, object, elements, number, value)
+        .filter(|number| crate::runtime::number::format_number_js(*number) == name);
+    let result = if let Some(index) = number
+        && is_a(caller, &array)?
+    {
+        set_array_element(caller, object, index, value)
+    } else if let Some(index) = number
+        && is_a(caller, &uint8_array)?
+    {
+        set_uint8_element(caller, object, index, value)
     } else if name == "length" && is_a(caller, &array)? {
         let length = crate::runtime::host::read_boxed_number(caller, value, "Array#length")?;
         super::super::array::set_length(caller, object, length)
@@ -217,57 +214,63 @@ fn set_builtin_property(
     result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
 }
 
-#[derive(Clone, Copy)]
-enum Elements {
-    Array,
-    Uint8,
-}
-
-fn set_element(
+fn set_array_element(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
-    elements: Elements,
     index: f64,
     value: &Val,
 ) -> wasmtime::Result<()> {
-    let backing = match elements {
-        Elements::Array => {
-            let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
-            (storage.backing, storage.len)
-        }
-        Elements::Uint8 => {
-            let object = super::super::iterator::as_struct(caller, object, "Uint8Array")?;
-            let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
-                return Err(crate::runtime::host::fatal_host_error(
-                    "invalid Uint8Array backing",
-                ));
-            };
-            let backing = backing.unwrap_array(&mut *caller)?;
-            let len = backing.len(&mut *caller)?;
-            (backing, len)
-        }
-    };
-    let (backing, len) = backing;
-    if index.fract() != 0.0 || index < 0.0 || index >= f64::from(len) {
-        let access = match elements {
-            Elements::Array => super::super::index::IndexAccess::Write,
-            Elements::Uint8 => super::super::index::IndexAccess::FixedWrite,
-        };
-        return Err(crate::runtime::host::range_error(
-            access.message(index, len as usize, ""),
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
+    let index = existing_element(index, storage.len, super::super::index::IndexAccess::Write)?;
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+    storage
+        .backing
+        .set(&mut *caller, index, *value)
+        .map_err(crate::runtime::host::fatal_host_error)
+}
+
+/// A byte written through a generic `o[k]` wraps as a static write does.
+fn set_uint8_element(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    index: f64,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let object = super::super::iterator::as_struct(caller, object, "Uint8Array")?;
+    let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "invalid Uint8Array backing",
         ));
-    }
-    let value = match elements {
-        Elements::Array => *value,
-        Elements::Uint8 => {
-            let number = crate::runtime::host::read_boxed_number(caller, value, "Uint8Array element")?;
-            Val::I32(i32::from(crate::runtime::number::to_uint8(number)))
-        }
     };
+    let backing = backing.unwrap_array(&mut *caller)?;
+    let len = backing.len(&mut *caller)?;
+    let index = existing_element(index, len, super::super::index::IndexAccess::FixedWrite)?;
+    let number = crate::runtime::host::read_boxed_number(caller, value, "Uint8Array element")?;
     fuel::charge(&mut *caller, fuel::ELEM, 1)?;
     backing
-        .set(&mut *caller, index as u32, value)
+        .set(
+            &mut *caller,
+            index,
+            Val::I32(i32::from(crate::runtime::number::to_uint8(number))),
+        )
         .map_err(crate::runtime::host::fatal_host_error)
+}
+
+/// `index` as the position of an element below `len`, or the `RangeError` a
+/// static write past it throws.
+fn existing_element(
+    index: f64,
+    len: u32,
+    access: super::super::index::IndexAccess,
+) -> wasmtime::Result<u32> {
+    if index.fract() != 0.0 || index < 0.0 || index >= f64::from(len) {
+        return Err(crate::runtime::host::range_error(access.message(
+            index,
+            len as usize,
+            "",
+        )));
+    }
+    Ok(index as u32)
 }
 
 pub(super) fn has(

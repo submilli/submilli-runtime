@@ -262,22 +262,47 @@ impl Inferer<'_> {
         ty: &Type,
         span: Span,
     ) -> Result<(), CompilerFailure> {
-        if let Type::IndexedAccess { object, index } = ty {
+        match ty {
             // A concrete form (over a later declaration) reports a missing
             // key where it evaluates.
-            if !super::utility_types::holds_type_parameter(ty) {
-                return Ok(());
+            Type::IndexedAccess { object, index }
+                if super::utility_types::holds_type_parameter(ty) =>
+            {
+                if !self.defer_constraint_check(ty, span) {
+                    self.check_index_key(object, index, span)?;
+                }
+                Ok(())
             }
-            if let Some(pending) = &mut self.pending_constraint_checks {
-                pending.push(PendingConstraintCheck {
-                    ty: ty.clone(),
-                    span,
-                    scopes: self.generics_in_scope.clone(),
-                });
-                return Ok(());
+            Type::InterfaceRef { .. }
+            | Type::ClassRef { .. }
+            | Type::Alias { .. }
+            | Type::AliasRef { .. } => {
+                if !self.defer_constraint_check(ty, span) {
+                    self.check_argument_bounds(ty, span)?;
+                }
+                Ok(())
             }
-            return self.check_index_key(object, index, span);
+            _ => Ok(()),
         }
+    }
+
+    /// Queue the check of `ty` while a declaration binds, so every bound is
+    /// known when it runs. Whether it was queued.
+    fn defer_constraint_check(&mut self, ty: &Type, span: Span) -> bool {
+        let Some(pending) = &mut self.pending_constraint_checks else {
+            return false;
+        };
+        pending.push(PendingConstraintCheck {
+            ty: ty.clone(),
+            span,
+            scopes: self.generics_in_scope.clone(),
+        });
+        true
+    }
+
+    /// Check the arguments of an interface, class or alias application
+    /// against its parameters' bounds.
+    fn check_argument_bounds(&mut self, ty: &Type, span: Span) -> Result<(), CompilerFailure> {
         let (Type::InterfaceRef {
             mangled,
             name,
@@ -305,14 +330,6 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
-        if let Some(pending) = &mut self.pending_constraint_checks {
-            pending.push(PendingConstraintCheck {
-                ty: ty.clone(),
-                span,
-                scopes: self.generics_in_scope.clone(),
-            });
-            return Ok(());
-        }
         let Some(symbol) = self.lookup_structural_type(mangled, name) else {
             return Ok(());
         };
@@ -327,17 +344,20 @@ impl Inferer<'_> {
     }
 
     /// tsc's TS2536: `T["a"]` needs `"a"` among the keys of `T`'s bound.
-    fn check_index_key(&mut self, object: &Type, index: &Type, span: Span) -> Result<(), CompilerFailure> {
+    fn check_index_key(
+        &mut self,
+        object: &Type,
+        index: &Type,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
         let rigid = self.rigid_signature_bindings()?;
         let rigid_object = super::generic::substitute_typevars(object, &rigid, &self.type_limits)
             .map_err(type_limit_at(span))?;
         let rigid_index = super::generic::substitute_typevars(index, &rigid, &self.type_limits)
             .map_err(type_limit_at(span))?;
-        let keys = super::utility_types::normalize(
-            &Type::KeyOf(Box::new(rigid_object)),
-            self.resolver(),
-        )
-        .map_err(type_limit_at(span))?;
+        let keys =
+            super::utility_types::normalize(&Type::KeyOf(Box::new(rigid_object)), self.resolver())
+                .map_err(type_limit_at(span))?;
         if !self.satisfies_generic_constraint(&rigid_index, &keys) {
             self.error(
                 span,

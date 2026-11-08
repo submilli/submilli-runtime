@@ -574,25 +574,22 @@ fn contains_type_operator(ty: &Type) -> bool {
     false
 }
 
+/// Whether every value of `ty` is a string, array, byte array or primitive,
+/// which `o[k]` indexes as its own type rather than by name.
+fn is_builtin_value(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(is_builtin_value),
+        other => super::utility_types::apparent_interface(other).is_some(),
+    }
+}
+
 /// The type parameter (or form over one) a generic `o[k]` indexes: `T` for
 /// a narrowed `T & {}`, whose keys are `T`'s.
 pub(super) fn generic_receiver(receiver: &Type) -> &Type {
-    let receiver = match receiver.without_aliases() {
+    match receiver.without_aliases() {
         Type::Refined { original, .. } => original.without_aliases(),
         other => other,
-    };
-    // `value !== undefined` narrows `T | undefined`: the receiver is `T`.
-    if let Type::Union(members) = receiver {
-        let mut erased = members.iter().filter(|member| member.lowers_to_erased_slot());
-        if let (Some(only), None) = (erased.next(), erased.next())
-            && members.iter().all(|member| {
-                member == only || matches!(member.peel(), Type::Null | Type::Undefined)
-            })
-        {
-            return only;
-        }
     }
-    receiver
 }
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
@@ -10045,10 +10042,17 @@ impl Inferer<'_> {
     /// bounded by an array, a tuple, a string or a primitive indexes as its
     /// bound does.
     pub(super) fn is_generic_index_receiver(&self, receiver: &Type) -> bool {
+        // `Array.isArray(o)` narrows `T` to `T & unknown[]`, indexed as an
+        // array.
+        if let Type::Refined { ty: shape, .. } = receiver.without_aliases()
+            && is_builtin_value(shape)
+        {
+            return false;
+        }
         let erased = generic_receiver(receiver);
         erased.lowers_to_erased_slot()
             && !matches!(erased.peel(), Type::TypeVar(_) | Type::KeyOf(_))
-            && super::utility_types::apparent_interface(self.apparent_type(erased).peel()).is_none()
+            && !is_builtin_value(&self.apparent_type(erased))
     }
 
     /// The key a generic `o[k]` reads or writes, converted to the property
@@ -10066,9 +10070,56 @@ impl Inferer<'_> {
             .then_some((typed_index, key_ty)))
     }
 
+    /// `u[k]` with `K extends keyof User` is tsc's `User[K]`: the type of a
+    /// read through a generic key on an object without an index signature,
+    /// whose key must fit `keyof User`. `None` for any other key, and for a
+    /// record (`Record<string, V>`), whose element type the read keeps.
+    pub(super) fn generic_key_read(
+        &mut self,
+        receiver_ty: &Type,
+        key_ty: &Type,
+        span: Span,
+    ) -> Option<Type> {
+        if !super::utility_types::holds_type_parameter(key_ty)
+            || self.has_index_signature(receiver_ty)
+        {
+            return None;
+        }
+        if !self.fits_generic_key(receiver_ty, key_ty, span) {
+            return Some(Type::Error);
+        }
+        let ty = Type::indexed_access(receiver_ty.clone(), key_ty.clone());
+        self.note_generic_read(&ty);
+        Some(ty)
+    }
+
+    /// The type a chain step's generic read leaves in the typed tree: with
+    /// `undefined` where a missing key reads it ([`Self::note_generic_read`]).
+    fn chain_read_result_type(&mut self, ty: &Type) -> Type {
+        if matches!(self.pending_read, Some(PendingRead::GivesUndefined)) {
+            self.pending_read = None;
+            return Type::union(vec![ty.clone(), Type::Undefined]);
+        }
+        ty.clone()
+    }
+
+    pub(super) fn has_index_signature(&self, ty: &Type) -> bool {
+        match ty.peel() {
+            Type::Union(members) => members
+                .iter()
+                .any(|member| self.has_index_signature(member)),
+            _ => self.resolver().index_signature(ty).is_some(),
+        }
+    }
+
     /// Whether `key_ty` fits `keyof receiver_ty`, reporting tsc's TS2536 when
     /// it does not.
-    pub(super) fn fits_generic_key(&mut self, receiver_ty: &Type, key_ty: &Type, span: Span) -> bool {
+    pub(super) fn fits_generic_key(
+        &mut self,
+        receiver_ty: &Type,
+        key_ty: &Type,
+        span: Span,
+    ) -> bool {
         let keys = Type::KeyOf(Box::new(receiver_ty.clone()));
         let fits = assignable(key_ty, &keys, self.resolver());
         if !fits {
@@ -10091,17 +10142,30 @@ impl Inferer<'_> {
         let Some((typed_index, key_ty)) = self.generic_index_key(&receiver_ty, index)? else {
             return Ok((TypedExprKind::Null, Type::Error));
         };
-        // A key may be absent (`R extends Record<string, V>`): `o[k] ?? d`
-        // reads `undefined` for it, as on a record.
-        self.note_missable_read();
-        let receiver_ty = generic_receiver(&receiver_ty).clone();
+        let ty = Type::indexed_access(generic_receiver(&receiver_ty).clone(), key_ty);
+        self.note_generic_read(&ty);
         Ok((
             TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
                 index: typed_index,
             },
-            Type::indexed_access(receiver_ty, key_ty),
+            ty,
         ))
+    }
+
+    /// A generic `o[k]` may find no value: an absent optional property or a
+    /// key an index signature lacks. Where every instantiation's property
+    /// holds `undefined` (`User[K]` with an optional field among `K`'s, or an
+    /// unbounded `T[K]`) a missing key reads `undefined`, as in Node.
+    /// Otherwise (`R[K]` with `R extends Record<string, number>`) it is a
+    /// missing read, decided as one (`missing_reads`). A present `undefined`
+    /// reads as itself either way.
+    fn note_generic_read(&mut self, read_ty: &Type) {
+        if super::assignable::base_constraint(read_ty, self.resolver()).holds_undefined() {
+            self.pending_read = Some(PendingRead::GivesUndefined);
+        } else {
+            self.note_missable_read();
+        }
     }
 
     fn infer_index_access(
@@ -10133,13 +10197,7 @@ impl Inferer<'_> {
                 receiver: typed_receiver,
                 index: typed_index,
             };
-            // `u[k]` with `K extends keyof User` is tsc's `User[K]`.
-            if super::utility_types::holds_type_parameter(&key_ty) {
-                if !self.fits_generic_key(&receiver_ty, &key_ty, index_span) {
-                    return Ok((TypedExprKind::Null, Type::Error));
-                }
-                self.note_missable_read();
-                let ty = Type::indexed_access(receiver_ty, key_ty);
+            if let Some(ty) = self.generic_key_read(&receiver_ty, &key_ty, index_span) {
                 return Ok((kind, ty));
             }
             let ty = self.object_index_read_type(&receiver_ty, &key_ty, index_span);
@@ -12412,9 +12470,11 @@ impl Inferer<'_> {
         // to the context. Without one, `tags ?? []` and `onDone ?? (() => {})`
         // take their type from the left operand, as in TypeScript; other
         // operands keep their own.
-        let rhs_expected = expected
-            .filter(|_| type_admits_nullish(&lhs_ty, self.resolver()))
-            .cloned();
+        let lhs_may_be_nullish = type_admits_nullish(&lhs_ty, self.resolver())
+            || any_resolved_member(&lhs_ty, self.resolver(), &|member| {
+                matches!(member, Type::IndexedAccess { .. })
+            });
+        let rhs_expected = expected.filter(|_| lhs_may_be_nullish).cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
             && !self
                 .ast
@@ -12439,9 +12499,9 @@ impl Inferer<'_> {
         }
 
         // A poisoned operand has no knowable nullability, and naming it in the
-        // message would print `<error>` at the user.
-        let lhs_decides =
-            !type_admits_nullish(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
+        // message would print `<error>` at the user. `T[K]` may be nullish
+        // where an instantiation's property is.
+        let lhs_decides = !lhs_may_be_nullish && !matches!(lhs_ty.peel(), Type::Error);
         // The error for a left side whose syntax is never nullish says the same.
         let reported_constant = self.check_constant_nullishness(lhs)?;
         if lhs_decides && !reported_constant {
@@ -12902,11 +12962,13 @@ impl Inferer<'_> {
                         ));
                     };
                     let ty = Type::indexed_access(generic_receiver(receiver_ty).clone(), key_ty);
+                    self.note_generic_read(&ty);
+                    let result_ty = self.chain_read_result_type(&ty);
                     return Ok((
                         TypedChainPart::Index {
                             idx: typed_idx,
                             optional,
-                            result_ty: ty.clone(),
+                            result_ty,
                             span,
                         },
                         ty,
@@ -12919,12 +12981,19 @@ impl Inferer<'_> {
                 };
                 let idx_span = self.ast.try_expr(idx).map_err(super::arena_failure)?.span;
                 if receiver_ty.is_structural_object() {
-                    let ty = self.object_index_read_type(receiver_ty, &idx_ty, idx_span);
+                    let (ty, result_ty) =
+                        if let Some(ty) = self.generic_key_read(receiver_ty, &idx_ty, idx_span) {
+                            let result_ty = self.chain_read_result_type(&ty);
+                            (ty, result_ty)
+                        } else {
+                            let ty = self.object_index_read_type(receiver_ty, &idx_ty, idx_span);
+                            (ty.clone(), ty)
+                        };
                     return Ok((
                         TypedChainPart::Index {
                             idx: typed_idx,
                             optional,
-                            result_ty: ty.clone(),
+                            result_ty,
                             span,
                         },
                         ty,
@@ -14439,10 +14508,8 @@ impl Inferer<'_> {
     /// `InterfaceRef` is rejected by `unsupported_cast_target_reason` when a
     /// runtime check is actually needed. An alias or interface keeps its name
     /// around its reduced body, so a failed check names the type the program
-    /// wrote.
-    /// The shape a cast checks. A member naming an interface declared after
-    /// its own (`k: keyof B`) stays lazy while declarations bind, so it is
-    /// evaluated here.
+    /// wrote. A member naming an interface declared after its own (`k: keyof
+    /// B`) stays lazy while declarations bind, so it is evaluated here.
     fn reduce_cast_target(&self, ty: &Type) -> Type {
         let reduced = self.reduce_interfaces(ty, true);
         self.type_limits

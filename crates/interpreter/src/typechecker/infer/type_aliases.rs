@@ -255,10 +255,6 @@ impl<'a> Inferer<'a> {
         }
     }
 
-    /// Whether `operands` name a declaration the signature pass has not
-    /// finished: one it is resolving or binding now (a cycle, as in `type
-    /// Tree = { kids: Partial<Tree>[] }` or `interface Node { next:
-    /// Readonly<Node> }`), or a later one whose members are not bound yet.
     /// Run `bind` for the interface or class `name`: a form over it there is
     /// a cycle, and afterwards it is bound.
     pub(super) fn with_binding<T>(
@@ -297,6 +293,10 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// Whether `operands` name a declaration the signature pass has not
+    /// finished: one it is resolving or binding now (a cycle, as in `type
+    /// Tree = { kids: Partial<Tree>[] }` or `interface Node { next:
+    /// Readonly<Node> }`), or a later one whose members are not bound yet.
     pub(super) fn pending_declaration(&self, operands: &[Type]) -> Option<PendingDeclaration> {
         let mut referenced = BTreeSet::new();
         let mut pending: Vec<&Type> = operands.iter().collect();
@@ -350,6 +350,7 @@ impl<'a> Inferer<'a> {
     /// evaluation: a missing member (`B["zz"]`), or a cycle of forms that only
     /// name each other (`A["b"]` and `B["c"]`).
     pub(super) fn check_forward_forms(&mut self) -> Result<(), CompilerFailure> {
+        let _settled = super::utility_types::SettledForms::enter();
         for (form, span) in std::mem::take(&mut self.forward_forms) {
             let mut failures = Vec::new();
             super::utility_types::normalize_reporting(&form, self.resolver(), &mut failures)

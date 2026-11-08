@@ -233,9 +233,8 @@ impl<'a> Inferer<'a> {
                     if self.reject_bad_static_name(&statics, &static_fields, m_name, &name) {
                         continue;
                     }
-                    let m_generic_names = self.push_declared_generics(m_generics)?;
-                    let (resolved_params, resolved_ret) =
-                        self.resolve_method_signature(params, Some(return_type))?;
+                    let (m_generic_names, resolved_params, resolved_ret) =
+                        self.resolve_method_signature(m_generics, params, Some(return_type))?;
                     self.pop_signature_generics();
                     if self.reject_class_generic_in_static(
                         m_name,
@@ -325,9 +324,8 @@ impl<'a> Inferer<'a> {
                             )],
                         );
                     }
-                    let m_generic_names = self.push_declared_generics(m_generics)?;
-                    let (resolved_params, resolved_ret) =
-                        self.resolve_method_signature(params, Some(return_type))?;
+                    let (m_generic_names, resolved_params, resolved_ret) =
+                        self.resolve_method_signature(m_generics, params, Some(return_type))?;
                     self.pop_signature_generics();
                     self.check_conversion_method(
                         "class",
@@ -364,10 +362,8 @@ impl<'a> Inferer<'a> {
                     }
                     seen_constructor = true;
                     constructor_visibility = *visibility;
-                    self.resolving_method_signature = true;
-                    let resolved = self.resolve_parameter_types(params);
-                    self.resolving_method_signature = false;
-                    constructor = resolved?;
+                    constructor =
+                        self.with_method_signature(|this| this.resolve_parameter_types(params))?;
                     // Parameter properties declare a field with the param's type.
                     for (decl, resolved) in params.iter().zip(constructor.iter()) {
                         let Some(modifiers) = &decl.modifiers else {

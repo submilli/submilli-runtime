@@ -373,9 +373,36 @@ Fixed:
 - **Casts** to an interface whose members hold a forward form (`k: keyof B`, `B` declared later) evaluate it in `reduce_cast_target`, so the run-time check tests the keys.
 - **Clean code.** The relate steps are documented and named (`relate_subset_of_operand`). `form_apparent` is now `base_constraint`, and its dead `keyof` source arm is gone. `defer_if_pending`, `with_binding` and `Type::indexed_access` replace repeated code. The built-in classifier is shared (`apparent_interface`). The evaluating rehydration is `rehydrate_and_evaluate`.
 
-Accepted leniency:
-- A value fits `T["a"]` when `T`'s bound gives `a` one literal value (`T["length"]` of a pair is `2`). tsc rejects `return 2` there but accepts `return t.length`, which reads `T["length"]`. Here a member read through a bound has the bound's type (round 1), so this rule keeps `t.length` valid. It is sound: every `T` has that one value.
+Superseded in round 3: the unit-value rule for `T["a"]` was replaced by tsc's own rule (see below).
 
 Out of scope (pre-existing):
 - `f([1, "x"])` with `f<T extends [number, string]>(t: T)` infers an array, not a tuple from the bound, even without utility types. Filed as SUB-2157.
 - `Record<K, V>` with a type-parameter key stays rejected. Filed as SUB-2156.
+
+## Review round 3 (2026-11-08)
+
+Fixed:
+- **Regressions from round 2.**
+  - A record receiver (`Record<string, V>`, or any index signature) read or written with a generic key keeps its element type; only an object without one gives `User[K]`.
+  - A narrowed type parameter indexes as its narrowing (`Array.isArray(o)` then `o[i]`), and so does one bounded by a union of built-in values.
+  - An un-narrowed `T | undefined` receiver is rejected, as in tsc; only `?.` strips `null` and `undefined`.
+- **Missing reads through `T[K]`.**
+  - Codegen probes the key for a form as for a type parameter, so a present `undefined` reads as itself.
+  - Where every instantiation's property holds `undefined` (an optional field among `K`'s, or an unbounded `T`, whose base constraint is `unknown`) a missing key reads `undefined`, as in Node. Otherwise (`R extends Record<string, number>`) it is a missing read under SUB-2148's rule.
+  - The same holds in optional chains (`o?.[k] ?? d`).
+- **Relations.**
+  - tsc's rule for a target `T[K]` whose index bound is not generic replaces the round 2 unit leniency: a value fits when it fits, for writing, the property every bound key names, ignoring a type parameter's index signature. So `return 5` and `t["a"] = 5` fit `T["a"]` with `T extends { a: number }`, and so does `return t.a` (which reads the bound's type).
+  - A key fits `keyof X` by `X`'s upper bound, followed through type parameters (`concrete_upper_bound`), not by substituting bounds into `X`, which was unsound for `keyof T[K]` and `keyof Pick<T, K>`. `Pick` over generic keys is bounded by `{}`, and `NonNullable` by its operand's bound without `null` and `undefined`.
+  - `Extract` falls back to its filter when no bound member meets it.
+  - `??`, `!` and `!== undefined` narrow a form as they narrow a type parameter, and `Partial<T>[K]` without `undefined` fits `T[K]` (`patch[k] ?? base[k]`). `undefined` fits `Partial<T>[K]`.
+- **Resource bounds.** `substitute_bounds` builds under the type budget, so bounds that fan out (`P0 extends { x: P1; y: P1 }`, ...) stop with a diagnostic. Evaluations of concrete forms are memoized while forward forms are checked, so a chain of 2000 forward forms checks in 0.14 s instead of 8 s.
+- **Methods.** A static method's type-parameter bounds resolve with the method-signature exemption, so `static key<K extends keyof User>` is no cycle.
+- **Runtime.** A generic write with a `NaN` or `Infinity` key throws a `RangeError`, as a static write does.
+- **Clean code.** Misplaced doc comments, one predicate and step function for concrete forms (`is_concrete_keyof_or_index`, `keyof_step`, `refers_to_itself`), an RAII guard for the evaluation stack, split runtime element writes and built-in reads, `with_method_signature`, and one deferral helper for constraint checks.
+
+Not changed (P3), filed as follow-ups:
+- SUB-2158: `c[k]` on a class instance with a generic key stays rejected.
+- SUB-2159: `keyof (number[] | boolean[])` drops `number`.
+- SUB-2160: a circular bound through `T[K]` (`T extends U["x"], U extends { x: T }`) is accepted where tsc reports TS2313. (`(keyof T)["length"]`, the other lenient case, is now rejected.)
+- SUB-2161: bounds that fan out past the type budget are rejected though tsc accepts them.
+- By design: a read of a `Record<string, V>` without `??` throws `MissingValueError` (SUB-2148).

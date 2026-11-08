@@ -463,9 +463,8 @@ impl<'a> Inferer<'a> {
                     // Even on shadow rejection, keep resolving the
                     // sig so any downstream type errors surface in
                     // one pass.
-                    let m_generic_names = self.push_declared_generics(&m_generics)?;
-                    let (resolved_params, resolved_ret) =
-                        self.resolve_method_signature(&params, Some(&return_type))?;
+                    let (m_generic_names, resolved_params, resolved_ret) =
+                        self.resolve_method_signature(&m_generics, &params, Some(&return_type))?;
                     self.pop_signature_generics();
                     if shadow_rejected {
                         continue;
@@ -600,30 +599,42 @@ impl<'a> Inferer<'a> {
         }
     }
 
+    /// A method's generics (pushed; the caller pops them), parameters and
+    /// return type, resolved [`with_method_signature`](Self::with_method_signature).
+    pub(super) fn resolve_method_signature(
+        &mut self,
+        generics: &[crate::TypeParameterAnnotation],
+        params: &[crate::ParamDecl],
+        return_type: Option<&crate::TypeAnnotation>,
+    ) -> Result<(crate::GenericParameters, Vec<Param>, Type), CompilerFailure> {
+        self.with_method_signature(|this| {
+            let names = this.push_declared_generics(generics)?;
+            let params = this.resolve_params(params)?;
+            let ret = match return_type {
+                Some(annotation) => this.resolve_type(annotation)?,
+                None => Type::Void,
+            };
+            Ok((names, params, ret))
+        })
+    }
+
+    /// Run `resolve` with [`Inferer::resolving_method_signature`] set: a
+    /// reference there to the type being bound (`patch(changes:
+    /// Partial<User>)`) is no cycle.
+    pub(super) fn with_method_signature<T>(
+        &mut self,
+        resolve: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.resolving_method_signature = true;
+        let result = resolve(self);
+        self.resolving_method_signature = false;
+        result
+    }
+
     /// Resolves a whole parameter list. The list is resolved together because a
     /// default value has to know the *sibling* parameter names: a default is
     /// evaluated in the function's own scope, so an identifier naming a
     /// parameter refers to that parameter, never to a global of the same name.
-    /// A method's parameters and return type, with
-    /// [`Inferer::resolving_method_signature`] set while they resolve.
-    pub(super) fn resolve_method_signature(
-        &mut self,
-        params: &[crate::ParamDecl],
-        return_type: Option<&crate::TypeAnnotation>,
-    ) -> Result<(Vec<Param>, Type), CompilerFailure> {
-        self.resolving_method_signature = true;
-        let resolved = (|| {
-            let params = self.resolve_params(params)?;
-            let ret = match return_type {
-                Some(annotation) => self.resolve_type(annotation)?,
-                None => Type::Void,
-            };
-            Ok((params, ret))
-        })();
-        self.resolving_method_signature = false;
-        resolved
-    }
-
     pub(super) fn resolve_params(
         &mut self,
         params: &[crate::ParamDecl],

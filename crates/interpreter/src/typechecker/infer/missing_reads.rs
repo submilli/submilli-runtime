@@ -59,6 +59,9 @@ pub(in crate::typechecker) enum PendingRead {
     Chain(MissableChain),
     /// A read of a local that may hold a missing read.
     MaybeMissingLocal,
+    /// A generic `o[k]` whose missing key reads `undefined`, as every
+    /// instantiation's property holds it.
+    GivesUndefined,
 }
 
 /// Where an optional chain may find no value. A `?.` after a missing base or
@@ -106,6 +109,15 @@ impl Inferer<'_> {
             }
             PendingRead::MaybeMissingLocal if matches!(kind, TypedExprKind::LocalRef { .. }) => {
                 self.maybe_missing_uses.insert(id);
+            }
+            // Codegen reads `undefined` for a missing key of a read typed
+            // with room for it; the inferred type stays tsc's.
+            PendingRead::GivesUndefined if matches!(kind, TypedExprKind::IndexAccess { .. }) => {
+                let expr = self
+                    .typed_ast
+                    .try_expr_mut(id)
+                    .map_err(super::arena_failure)?;
+                expr.ty = Type::union(vec![expr.ty.clone(), Type::Undefined]);
             }
             _ => {}
         }

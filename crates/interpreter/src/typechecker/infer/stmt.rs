@@ -1938,12 +1938,16 @@ impl Inferer<'_> {
             self.infer_numeric_index(index)?
         };
         let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
-        let targets = if object && super::utility_types::holds_type_parameter(&key_ty) {
+        let targets = if object
+            && super::utility_types::holds_type_parameter(&key_ty)
+            && !self.has_index_signature(&receiver_ty)
+        {
             // `u[k] = v` with `K extends keyof User` writes tsc's `User[K]`.
-            // Each key it may be must be writable.
             if self.fits_generic_key(&receiver_ty, &key_ty, index_span) {
-                let apparent = self.apparent_type(&key_ty);
-                self.object_index_write_targets(&receiver_ty, &apparent, index_span);
+                // Each key it may be must be writable, which reports a
+                // `readonly` one; the target stays `User[K]`.
+                let bound = self.apparent_type(&key_ty);
+                let _writable = self.object_index_write_targets(&receiver_ty, &bound, index_span);
                 vec![Type::indexed_access(receiver_ty.clone(), key_ty.clone())]
             } else {
                 vec![Type::Error]
@@ -2036,7 +2040,10 @@ impl Inferer<'_> {
         }
         let key = self.generic_index_key(&receiver_ty, index)?;
         let target = match &key {
-            Some((_, key_ty)) => Type::indexed_access(super::expr::generic_receiver(&receiver_ty).clone(), key_ty.clone()),
+            Some((_, key_ty)) => Type::indexed_access(
+                super::expr::generic_receiver(&receiver_ty).clone(),
+                key_ty.clone(),
+            ),
             None => Type::Error,
         };
         let (typed_value, value_ty, reported) = self.infer_assigned_value(value, Some(&target))?;

@@ -1003,7 +1003,7 @@ pub(crate) fn has_evaluable_application(ty: &Type) -> bool {
         {
             return true;
         }
-        if matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. }) && !holds_type_parameter(ty) {
+        if is_concrete_keyof_or_index(ty) {
             return true;
         }
         crate::type_size::for_each_child(ty, |child| pending.push(child));
@@ -1011,14 +1011,22 @@ pub(crate) fn has_evaluable_application(ty: &Type) -> bool {
     false
 }
 
+/// Whether `ty` is a `keyof` or `T[K]` whose operands are concrete.
+fn is_concrete_keyof_or_index(ty: &Type) -> bool {
+    matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. }) && !holds_type_parameter(ty)
+}
+
+/// The message for a form whose evaluation only names itself.
+pub(crate) fn refers_to_itself(form: &Type) -> String {
+    format!("`{form}` refers to itself")
+}
+
 /// `ty` itself evaluated when it is a `keyof` or `T[K]` whose operands are
 /// concrete, as relations meet them inside generic members instantiated at
 /// concrete types. `None` for any other type.
 pub(crate) fn evaluate_concrete_operator(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
     let operator = ty.without_aliases();
-    if !matches!(operator, Type::KeyOf(_) | Type::IndexedAccess { .. })
-        || holds_type_parameter(operator)
-    {
+    if !is_concrete_keyof_or_index(operator) {
         return None;
     }
     Some(normalize(operator, types).unwrap_or(Type::Error))
@@ -1069,9 +1077,49 @@ thread_local! {
 /// Whether `ty` is a `keyof`, `T[K]` or utility application whose operands
 /// are concrete, which evaluates to another type.
 fn is_concrete_operator(ty: &Type) -> bool {
-    !holds_type_parameter(ty)
-        && (matches!(ty, Type::KeyOf(_) | Type::IndexedAccess { .. })
-            || ty.is_utility_application())
+    is_concrete_keyof_or_index(ty) || (ty.is_utility_application() && !holds_type_parameter(ty))
+}
+
+thread_local! {
+    /// Evaluations of concrete forms, kept while every declaration is bound
+    /// and results cannot change ([`SettledForms`]). A chain of forms over
+    /// later declarations (`I0["a"]` is `I1["a"]`, ...) then evaluates each
+    /// link once rather than once per form that reaches it.
+    static SETTLED: std::cell::RefCell<Option<std::collections::BTreeMap<Type, Result<Type, String>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Keeps the evaluations of concrete forms while it lives.
+pub(crate) struct SettledForms;
+
+impl SettledForms {
+    pub(crate) fn enter() -> Self {
+        SETTLED.with(|settled| *settled.borrow_mut() = Some(std::collections::BTreeMap::new()));
+        SettledForms
+    }
+}
+
+impl Drop for SettledForms {
+    fn drop(&mut self) {
+        SETTLED.with(|settled| *settled.borrow_mut() = None);
+    }
+}
+
+/// Keeps `form` on [`EVALUATING`] while it lives, so the entry goes even
+/// when evaluation unwinds.
+struct Evaluating;
+
+impl Evaluating {
+    fn enter(form: &Type) -> Self {
+        EVALUATING.with(|stack| stack.borrow_mut().push(form.clone()));
+        Evaluating
+    }
+}
+
+impl Drop for Evaluating {
+    fn drop(&mut self) {
+        EVALUATING.with(|stack| stack.borrow_mut().pop());
+    }
 }
 
 /// `ty` evaluated while it is a concrete form, through as many forms as it
@@ -1083,46 +1131,70 @@ fn evaluate_guarded(ty: Type, types: TypeResolver<'_>, failures: &mut Vec<String
         return ty;
     }
     if EVALUATING.with(|stack| stack.borrow().contains(&ty)) {
-        failures.push(format!("`{ty}` refers to itself"));
+        failures.push(refers_to_itself(&ty));
         return Type::Error;
     }
-    EVALUATING.with(|stack| stack.borrow_mut().push(ty.clone()));
-    let evaluated = evaluate_form(&ty, types);
-    let result = match evaluated {
-        Ok(result) if result == ty => {
-            failures.push(format!("`{ty}` refers to itself"));
-            Type::Error
+    let settled = SETTLED.with(|settled| {
+        settled
+            .borrow()
+            .as_ref()
+            .and_then(|settled| settled.get(&ty).cloned())
+    });
+    let evaluated = settled.unwrap_or_else(|| {
+        let evaluated = evaluate_unsettled(&ty, types);
+        SETTLED.with(|settled| {
+            if let Some(settled) = settled.borrow_mut().as_mut() {
+                settled.insert(ty.clone(), evaluated.clone());
+            }
+        });
+        evaluated
+    });
+    evaluated.unwrap_or_else(|reason| {
+        failures.push(reason);
+        Type::Error
+    })
+}
+
+/// [`evaluate_guarded`] for a form not evaluated before: its type, or why it
+/// has none.
+fn evaluate_unsettled(ty: &Type, types: TypeResolver<'_>) -> Result<Type, String> {
+    let _evaluating = Evaluating::enter(ty);
+    match evaluate_form(ty, types)? {
+        result if result == *ty => Err(refers_to_itself(ty)),
+        result => {
+            let mut failures = Vec::new();
+            let evaluated = evaluate_guarded(result, types, &mut failures);
+            match failures.into_iter().next() {
+                Some(reason) => Err(reason),
+                None => Ok(evaluated),
+            }
         }
-        Ok(result) => evaluate_guarded(result, types, failures),
-        Err(reason) => {
-            failures.push(reason);
-            Type::Error
-        }
-    };
-    EVALUATING.with(|stack| stack.borrow_mut().pop());
-    result
+    }
 }
 
 /// One evaluation step of `ty` when it is a lazy `keyof` or `T[K]` with
 /// concrete operands; `None` for any other type.
 pub(crate) fn evaluate_step(ty: &Type, types: TypeResolver<'_>) -> Option<Result<Type, String>> {
     let form = ty.without_aliases();
-    if !matches!(form, Type::KeyOf(_) | Type::IndexedAccess { .. }) || holds_type_parameter(form) {
+    if holds_type_parameter(form) {
         return None;
     }
-    Some(match form {
-        Type::KeyOf(operand) => keyof_type(operand, types)
-            .ok_or_else(|| format!("`keyof` needs an object type or interface, got `{operand}`")),
-        Type::IndexedAccess { object, index } => index_access_type(object, index, types),
-        _ => Ok(form.clone()),
-    })
+    match form {
+        Type::KeyOf(operand) => Some(keyof_step(operand, types)),
+        Type::IndexedAccess { object, index } => Some(index_access_type(object, index, types)),
+        _ => None,
+    }
+}
+
+fn keyof_step(operand: &Type, types: TypeResolver<'_>) -> Result<Type, String> {
+    keyof_type(operand, types)
+        .ok_or_else(|| format!("`keyof` needs an object type or interface, got `{operand}`"))
 }
 
 /// One evaluation step of a concrete form.
 fn evaluate_form(form: &Type, types: TypeResolver<'_>) -> Result<Type, String> {
     match form {
-        Type::KeyOf(operand) => keyof_type(operand, types)
-            .ok_or_else(|| format!("`keyof` needs an object type or interface, got `{operand}`")),
+        Type::KeyOf(operand) => keyof_step(operand, types),
         Type::IndexedAccess { object, index } => {
             let mut failures = Vec::new();
             let object = evaluate_guarded(object.as_ref().clone(), types, &mut failures);
