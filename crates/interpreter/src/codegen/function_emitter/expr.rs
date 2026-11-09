@@ -569,6 +569,10 @@ fn emit_expr_value(
         // InterfaceProperty land alongside their non-chain siblings'
         // refactor).
         TypedExprKind::OptionalChain { base, parts } => {
+            let present_flag = take_present_flag(emitter, id);
+            if let Some(flag) = present_flag {
+                set_present_flag(emitter, flag, true);
+            }
             let result_ty = expr.ty.clone();
             let base_ty = ctx
                 .ta
@@ -592,6 +596,7 @@ fn emit_expr_value(
                 &base_ty,
                 &result_ty,
                 ctx.ta.runtime_chain_types.get(&id).map(Vec::as_slice),
+                present_flag,
             )?;
         }
         TypedExprKind::PostfixUnary { op, target } => {
@@ -1962,7 +1967,9 @@ pub(super) fn emit_value_with_present_flag(
                 None => set_present_flag_from_value(emitter, ctx, flag, &expr.ty)?,
             }
         }
-        TypedExprKind::IndexAccess { .. } | TypedExprKind::FieldAccess { .. } => {
+        TypedExprKind::IndexAccess { .. }
+        | TypedExprKind::FieldAccess { .. }
+        | TypedExprKind::OptionalChain { .. } => {
             emitter.present_flag_request = Some((value, flag));
             emit_expr(emitter, ctx, value)?;
             // No read known to reach here leaves the request (string and
@@ -2535,6 +2542,17 @@ fn emit_postfix_unary(
                 )?;
                 return Ok(());
             }
+            if ctx.ta.has_string_index(&receiver_ty) {
+                emit_expr(emitter, ctx, *receiver)?;
+                cast::emit_box(emitter, ctx, &receiver_ty)?;
+                let object =
+                    emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+                emitter.instruction(Instruction::LocalSet(object));
+                super::emit_const_string_by_text(emitter, ctx, &name.name)?;
+                emit_record_postfix_on_stack(emitter, ctx, *receiver, object, op, target_ty)?;
+                cast::emit_cast_to(emitter, ctx, result_ty)?;
+                return Ok(());
+            }
             // Mirror AssignField + FieldAccess's vtable-dispatched calls.
             let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
                 crate::codegen::internal_failure("intrinsics declared by codegen entry")
@@ -2951,6 +2969,7 @@ fn emit_chain_parts(
     receiver_ty: &Type,
     result_ty: &Type,
     source_types: Option<&[Type]>,
+    present_flag: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if source_types.is_some_and(|types| parts.len().checked_add(1) != Some(types.len())) {
         return Err(crate::codegen::internal_failure(
@@ -3032,6 +3051,9 @@ fn emit_chain_parts(
         emitter.instruction(Instruction::LocalTee(tmp));
         emit_is_nullish(emitter, ctx)?;
         emitter.emit_if(block_ty);
+        if let Some(flag) = present_flag {
+            set_present_flag(emitter, flag, false);
+        }
         emit_undefined_for_chain_result(emitter, ctx, result_ty)?;
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(tmp));
@@ -3044,6 +3066,7 @@ fn emit_chain_parts(
             source_ty,
             check_ty,
             &receiver_name,
+            present_flag.filter(|_| next == parts.len()),
         )?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
@@ -3055,6 +3078,7 @@ fn emit_chain_parts(
             &part_result_ty,
             result_ty,
             source_types,
+            present_flag,
         )?;
         emitter.emit_end();
     } else {
@@ -3066,6 +3090,7 @@ fn emit_chain_parts(
             source_ty,
             check_ty,
             &receiver_name,
+            present_flag.filter(|_| next == parts.len()),
         )?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
@@ -3077,11 +3102,13 @@ fn emit_chain_parts(
             &part_result_ty,
             result_ty,
             source_types,
+            present_flag,
         )?;
     };
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_chain_operation(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -3090,6 +3117,7 @@ fn emit_chain_operation(
     source_ty: Option<&Type>,
     check_ty: Option<&Type>,
     receiver_name: &str,
+    present_flag: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let crate::TypedChainPart::Constraint { result_ty, .. } = part {
         return cast::emit_coerce_to_slot(emitter, ctx, receiver_ty, result_ty);
@@ -3161,6 +3189,7 @@ fn emit_chain_operation(
         &operation_ty,
         check_ty.unwrap_or(part.result_ty()),
         receiver_name,
+        present_flag,
     )?;
     Ok(())
 }
@@ -3645,6 +3674,7 @@ fn emit_chain_access(
     receiver_ty: &Type,
     check_ty: &Type,
     receiver_name: &str,
+    present_flag: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match part {
         crate::TypedChainPart::Constraint { result_ty, .. } => {
@@ -3654,7 +3684,7 @@ fn emit_chain_access(
             name, result_ty, ..
         } => {
             if ctx.ta.has_string_index(receiver_ty) {
-                let probe = stash_probed_record(emitter, ctx, check_ty, None)?;
+                let probe = stash_probed_record(emitter, ctx, check_ty, present_flag)?;
                 let Some(symbol) = ctx.require(
                     ctx.symbols.field_name_string_global_idx(&name.name),
                     "property name collected",
@@ -3729,7 +3759,7 @@ fn emit_chain_access(
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
             if receiver_ty.indexes_by_name() {
-                let probe = stash_probed_record(emitter, ctx, check_ty, None)?;
+                let probe = stash_probed_record(emitter, ctx, check_ty, present_flag)?;
                 emit_expr(emitter, ctx, *idx)?;
                 crate::codegen::cast_check::emit_operation_cast_on_stack(
                     emitter,
@@ -3766,6 +3796,9 @@ fn emit_chain_access(
                     check_ty.holds_undefined().then_some(result_ty),
                     receiver_name,
                 )?;
+                if let Some(flag) = present_flag {
+                    set_present_flag_from_value(emitter, ctx, flag, result_ty)?;
+                }
             } else if receiver_ty.is_string_shaped() {
                 emit_string_index_with_receiver_on_stack(
                     emitter,
@@ -3774,6 +3807,9 @@ fn emit_chain_access(
                     check_ty.holds_undefined().then_some(result_ty),
                     receiver_name,
                 )?;
+                if let Some(flag) = present_flag {
+                    set_present_flag_from_value(emitter, ctx, flag, result_ty)?;
+                }
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
@@ -3786,9 +3822,9 @@ fn emit_chain_access(
                         TypedExprKind::Number(index) => {
                             elements.get(*index as usize).unwrap_or(result_ty)
                         }
-                        _ => result_ty,
+                        _ => check_ty,
                     },
-                    _ => result_ty,
+                    _ => check_ty,
                 };
                 // A step the typechecker gave room for `undefined` reads a
                 // missing element as `undefined`; `check_ty` is its type
@@ -3814,8 +3850,8 @@ fn emit_chain_access(
                             receiver_ty,
                         )
                         .is_regexp_match_array()
-                            && !source_ty.holds_undefined(),
-                        present_flag: None,
+                            && !check_ty.holds_undefined(),
+                        present_flag,
                     },
                     receiver_name,
                 )?;
@@ -7805,6 +7841,18 @@ fn emit_object_index_postfix(
             .ty,
         &Type::String,
     )?;
+    emit_record_postfix_on_stack(emitter, ctx, receiver, object, op, read_ty)
+}
+
+/// The receiver and key have already been evaluated exactly once.
+fn emit_record_postfix_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    object: u32,
+    op: crate::PostfixOp,
+    read_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
     emitter.instruction(Instruction::LocalSet(key));
     emitter.instruction(Instruction::LocalGet(object));
@@ -7816,11 +7864,17 @@ fn emit_object_index_postfix(
         return Ok(());
     };
     emitter.instruction(Instruction::Call(symbol));
-    crate::codegen::cast_check::emit_operation_cast_on_stack(
+    let label = crate::codegen::bounds::receiver_name(ctx.ta, receiver)?;
+    emit_checked_record_read(
         emitter,
         ctx,
-        &Type::Unknown,
         read_ty,
+        KeyOperand::Local(key),
+        RecordProbe {
+            record: Some(object),
+            present_flag: None,
+        },
+        &label,
     )?;
     cast::emit_box(emitter, ctx, read_ty)?;
     emit_postfix_numeric(emitter, ctx, &Type::Unknown);
@@ -7922,6 +7976,7 @@ mod tests {
                         &Type::Number,
                         &Type::Number,
                         None,
+                        None,
                     )
                     .unwrap_err(),
                 );
@@ -7935,6 +7990,7 @@ mod tests {
                         &Type::Number,
                         &Type::Number,
                         Some(&[]),
+                        None,
                     )
                     .unwrap_err(),
                 );
