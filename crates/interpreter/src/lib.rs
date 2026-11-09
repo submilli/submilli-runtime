@@ -10,7 +10,7 @@ pub mod backtrace;
 pub mod capability_derivation;
 pub mod codegen;
 pub mod compile;
-mod compile_capabilities;
+pub mod compile_capabilities;
 pub mod compiler_error;
 pub mod compiler_limits;
 pub mod diagnostics;

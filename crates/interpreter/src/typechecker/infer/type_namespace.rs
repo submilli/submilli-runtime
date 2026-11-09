@@ -52,7 +52,7 @@ pub(in crate::typechecker) struct TypeNamespace<'a> {
 }
 
 impl<'a> TypeNamespace<'a> {
-    pub(super) fn new() -> Self {
+    pub(in crate::typechecker) fn new() -> Self {
         Self::default()
     }
 

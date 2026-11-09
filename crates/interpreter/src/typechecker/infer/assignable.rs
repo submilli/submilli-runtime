@@ -18,15 +18,15 @@ use super::variance::Variance;
 /// resolves by its own package, not just what the current module imported.
 #[derive(Clone, Copy)]
 pub(crate) struct TypeResolver<'a> {
-    pub(super) types: &'a TypeNamespace<'a>,
-    pub(super) registry: &'a TypeRegistry<'a>,
+    pub(in crate::typechecker) types: &'a TypeNamespace<'a>,
+    pub(in crate::typechecker) registry: &'a TypeRegistry<'a>,
     /// Records an oversized type met while resolving, for the inferer's next
     /// checkpoint; the resolver itself answers as if the type were `Error`.
     pub(crate) limits: &'a crate::type_size::TypeLimits,
     /// Relate by tsc's strict subtype relation instead of assignability; see
     /// [`strict_subtype`].
     pub(crate) strict_subtype: bool,
-    pub(super) generic_constraints: &'a BTreeMap<u32, Type>,
+    pub(in crate::typechecker) generic_constraints: &'a BTreeMap<u32, Type>,
 }
 
 /// A single way a class fails to satisfy an interface it declares it `implements`.

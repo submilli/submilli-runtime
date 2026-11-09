@@ -499,6 +499,7 @@ TypedAst {
     types: [],
     shapes: [],
     exports: [],
+    package_root_module: None,
     imported_packages: {},
     internal_modules: {},
     test_exports: [],
