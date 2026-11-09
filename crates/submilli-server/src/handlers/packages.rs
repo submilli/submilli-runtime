@@ -275,9 +275,14 @@ pub async fn blueprint_docs(
     RawQuery(query): RawQuery,
 ) -> Result<axum::response::Response, BlueprintMiss> {
     let request = docs_query(query.as_deref())?;
+    let index = index_view(query.as_deref())?;
     let (catalog, scope) = registered_blueprint(&state, &name).await?;
     Ok(requested_docs_response(request, |name| {
-        packages::lookup_with_blueprint(name, &catalog, &scope)
+        if index {
+            packages::lookup_docs_view(name, &catalog, &scope, None, packages::DocsView::Index)
+        } else {
+            packages::lookup_with_blueprint(name, &catalog, &scope)
+        }
     }))
 }
 
@@ -404,14 +409,25 @@ pub async fn session_docs(
     RawQuery(query): RawQuery,
 ) -> Result<axum::response::Response, BlueprintMiss> {
     let request = docs_query(query.as_deref())?;
+    let index = index_view(query.as_deref())?;
     let session = registered_session(&state, &session_id).await?;
     Ok(requested_docs_response(request, |name| {
-        packages::lookup_for_session(
-            name,
-            &session.catalog,
-            &session.scope,
-            session.tools.as_ref(),
-        )
+        if index {
+            packages::lookup_docs_view(
+                name,
+                &session.catalog,
+                &session.scope,
+                session.tools.as_ref(),
+                packages::DocsView::Index,
+            )
+        } else {
+            packages::lookup_for_session(
+                name,
+                &session.catalog,
+                &session.scope,
+                session.tools.as_ref(),
+            )
+        }
     }))
 }
 
@@ -1057,4 +1073,105 @@ mod configuration_tests {
             assert_eq!(error.error, "invalid_configuration");
         }
     }
+}
+
+fn invalid_functions_query(message: &str) -> BlueprintMiss {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "invalid_query", "message": message})),
+    )
+}
+
+fn index_view(query: Option<&str>) -> Result<bool, BlueprintMiss> {
+    let views: Vec<_> = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+        .filter(|(key, _)| key == "view")
+        .map(|(_, value)| value.into_owned())
+        .collect();
+    match views.as_slice() {
+        [] => Ok(false),
+        [view] if view == "full" => Ok(false),
+        [view] if view == "index" => Ok(true),
+        _ => Err(invalid_functions_query("Use view=full or view=index once")),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FunctionRequest {
+    name: String,
+    functions: Vec<String>,
+}
+
+/// GET uses one JSON-encoded `requests` array to preserve package/function grouping.
+fn functions_query(query: Option<&str>) -> Result<Vec<FunctionRequest>, BlueprintMiss> {
+    let pairs: Vec<_> = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()).collect();
+    let [(key, value)] = pairs.as_slice() else {
+        return Err(invalid_functions_query(
+            "Use one requests parameter containing a JSON array",
+        ));
+    };
+    if key != "requests" {
+        return Err(invalid_functions_query("Expected requests"));
+    }
+    let requests: Vec<FunctionRequest> = serde_json::from_str(value)
+        .map_err(|_| invalid_functions_query("Invalid requests array"))?;
+    if requests.is_empty()
+        || requests.iter().any(|r| {
+            r.name.is_empty() || r.functions.is_empty() || r.functions.iter().any(String::is_empty)
+        })
+    {
+        return Err(invalid_functions_query(
+            "Request at least one package with nonempty function or type names",
+        ));
+    }
+    Ok(requests)
+}
+
+pub async fn blueprint_functions(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let requests = functions_query(query.as_deref())?;
+    let (catalog, scope) = registered_blueprint(&state, &name).await?;
+    Ok(function_results(requests, &catalog, &scope, None))
+}
+
+pub async fn session_functions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Json<serde_json::Value>, BlueprintMiss> {
+    let requests = functions_query(query.as_deref())?;
+    let session = registered_session(&state, &id).await?;
+    Ok(function_results(
+        requests,
+        &session.catalog,
+        &session.scope,
+        session.tools.as_ref(),
+    ))
+}
+
+fn function_results(
+    requests: Vec<FunctionRequest>,
+    catalog: &crate::mcp::McpCatalog,
+    scope: &submilli_shared::docs_scope::DocsScope,
+    tools: Option<&interpreter::PackageDeclaration>,
+) -> Json<serde_json::Value> {
+    let results: Vec<_> = requests
+        .into_iter()
+        .map(|request| {
+            packages::batch_docs_entry(
+                &request.name,
+                packages::lookup_docs_view(
+                    &request.name,
+                    catalog,
+                    scope,
+                    tools,
+                    packages::DocsView::Functions(&request.functions),
+                ),
+            )
+        })
+        .collect();
+    Json(serde_json::json!({"results": results}))
 }

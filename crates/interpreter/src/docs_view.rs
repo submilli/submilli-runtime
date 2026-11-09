@@ -333,6 +333,157 @@ fn reached_types(declaration: &PackageDeclaration, roots: Vec<String>) -> BTreeS
     reached
 }
 
+/// Function names and complete descriptions in an already scoped declaration.
+pub fn function_index(declaration: &PackageDeclaration) -> String {
+    let mut lines = BTreeMap::new();
+    for (name, value) in &declaration.values {
+        index_function(&mut lines, name.clone(), value);
+    }
+    let mut pending: Vec<_> = declaration
+        .namespaces
+        .iter()
+        .map(|(name, ns)| (name.clone(), ns))
+        .collect();
+    while let Some((prefix, namespace)) = pending.pop() {
+        for (name, value) in &namespace.values {
+            index_function(&mut lines, format!("{prefix}.{name}"), value);
+        }
+        pending.extend(
+            namespace
+                .namespaces
+                .iter()
+                .map(|(name, ns)| (format!("{prefix}.{name}"), ns)),
+        );
+    }
+    lines.into_values().collect::<Vec<_>>().join("\n")
+}
+
+fn index_function(lines: &mut BTreeMap<String, String>, name: String, value: &ValueSymbol) {
+    if let ValueKind::Function { doc, .. } = &value.kind {
+        let description = doc
+            .as_ref()
+            .map(|doc| doc.summary.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        lines.insert(name.clone(), format!("{name}: {description}"));
+    }
+}
+
+/// Select visible symbols and the transitive closure of their referenced types.
+/// Callers must apply capability projection before selecting symbols.
+pub fn select_documentation(
+    declaration: &PackageDeclaration,
+    names: &[String],
+) -> Result<PackageDeclaration, String> {
+    let mut visible: BTreeSet<String> = declaration.types.keys().cloned().collect();
+    visible.extend(
+        declaration
+            .values
+            .iter()
+            .filter(|(_, value)| matches!(value.kind, ValueKind::Function { .. }))
+            .map(|(name, _)| name.clone()),
+    );
+    let mut pending: Vec<_> = declaration
+        .namespaces
+        .iter()
+        .map(|(name, ns)| (name.clone(), ns))
+        .collect();
+    while let Some((prefix, namespace)) = pending.pop() {
+        visible.extend(
+            namespace
+                .values
+                .iter()
+                .filter(|(_, value)| matches!(value.kind, ValueKind::Function { .. }))
+                .map(|(name, _)| format!("{prefix}.{name}")),
+        );
+        visible.extend(
+            namespace
+                .types
+                .keys()
+                .map(|name| format!("{prefix}.{name}")),
+        );
+        pending.extend(
+            namespace
+                .namespaces
+                .iter()
+                .map(|(name, ns)| (format!("{prefix}.{name}"), ns)),
+        );
+    }
+    if names.is_empty() {
+        return Err("Request at least one function or type".into());
+    }
+    for name in names {
+        if !visible.contains(name) {
+            let mut closest: Vec<_> = visible.iter().collect();
+            closest.sort_by_key(|candidate| edit_distance(name, candidate));
+            return Err(format!(
+                "Unknown function or type `{name}`. Closest names: {}",
+                closest
+                    .into_iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    let requested: BTreeSet<_> = names.iter().map(String::as_str).collect();
+    let mut selected = declaration.clone();
+    selected
+        .values
+        .retain(|name, _| requested.contains(name.as_str()));
+    let mut pending: Vec<_> = selected
+        .namespaces
+        .iter_mut()
+        .map(|(name, ns)| (name.clone(), ns))
+        .collect();
+    while let Some((prefix, namespace)) = pending.pop() {
+        namespace
+            .values
+            .retain(|name, _| requested.contains(format!("{prefix}.{name}").as_str()));
+        pending.extend(
+            namespace
+                .namespaces
+                .iter_mut()
+                .map(|(name, ns)| (format!("{prefix}.{name}"), ns)),
+        );
+    }
+    let roots = declaration
+        .types
+        .iter()
+        .filter(|(name, _)| requested.contains(name.as_str()))
+        .map(|(_, symbol)| symbol.mangled_name.as_str().to_owned())
+        .collect();
+    let reached = reached_types(&selected, roots);
+    selected
+        .types
+        .retain(|_, symbol| reached.contains(symbol.mangled_name.as_str()));
+    let mut pending: Vec<_> = selected.namespaces.values_mut().collect();
+    while let Some(namespace) = pending.pop() {
+        namespace
+            .types
+            .retain(|_, symbol| reached.contains(symbol.mangled_name.as_str()));
+        pending.extend(namespace.namespaces.values_mut());
+    }
+    Ok(selected)
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<_> = right.chars().collect();
+    let mut row: Vec<_> = (0..=right.len()).collect();
+    for (i, a) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, b) in right.iter().enumerate() {
+            let previous = row[j + 1];
+            row[j + 1] = (row[j] + 1)
+                .min(previous + 1)
+                .min(diagonal + usize::from(a != *b));
+            diagonal = previous;
+        }
+    }
+    row.last().copied().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,6 +560,72 @@ mod tests {
             update(draft: Draft): void {}
         }
     "#;
+
+    #[test]
+    fn selected_namespace_function_is_rendered() {
+        let mut defs = declaration("export function inspect(): string { return 'ok'; }");
+        let symbol = defs.values.remove("inspect").unwrap();
+        defs.namespaces.insert(
+            "nested".into(),
+            NamespaceSymbol {
+                name: "nested".into(),
+                mangled_prefix: symbol.mangled_name.clone(),
+                declaration_span: symbol.declaration_span,
+                values: BTreeMap::from([("inspect".into(), symbol)]),
+                types: BTreeMap::new(),
+                namespaces: BTreeMap::new(),
+                doc: None,
+            },
+        );
+        assert!(function_index(&defs).contains("nested.inspect:"));
+        let selected = select_documentation(&defs, &["nested.inspect".into()]).unwrap();
+        let text = crate::packages::render_selected_declarations(&selected);
+        assert!(text.contains("namespace nested"), "{text}");
+        assert!(text.contains("function inspect("), "{text}");
+    }
+
+    #[test]
+    fn selected_docs_follow_transitive_types_and_scope() {
+        let defs = declaration(
+            r#"
+            export interface Leaf { value: string; }
+            export interface Branch { leaf: Leaf; }
+            /** First line.
+             * Second line.
+             * @param branch input */
+            export function inspect(branch: Branch): void {}
+            export function other(): void {}
+        "#,
+        );
+        let index = function_index(&defs);
+        assert!(
+            index.contains("inspect: First line. Second line."),
+            "{index}"
+        );
+        assert!(!index.contains("@param"));
+        for names in [vec!["inspect".into()], vec!["Branch".into()]] {
+            let selected = select_documentation(&defs, &names).unwrap();
+            assert!(selected.types.contains_key("Branch"));
+            assert!(selected.types.contains_key("Leaf"));
+            assert!(!selected.values.contains_key("other"));
+        }
+        let scoped = project_declaration(
+            &declaration(SOURCE),
+            &Fixed {
+                denied: &["acme.test/write"],
+                noted: &[],
+            },
+        );
+        assert!(!function_index(&scoped.declaration).contains("createIssue"));
+        let error = select_documentation(&scoped.declaration, &["createIssue".into()]).unwrap_err();
+        assert!(
+            !error
+                .split("Closest names:")
+                .nth(1)
+                .unwrap()
+                .contains("createIssue")
+        );
+    }
 
     #[test]
     fn denied_callables_and_the_types_only_they_reach_are_removed() {

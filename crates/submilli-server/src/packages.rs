@@ -181,6 +181,98 @@ pub(crate) fn lookup_for_session(
     fallback_lookup(name, &union_candidates(catalog, scope), scope)
 }
 
+/// Render an alternate view after the same lookup and capability projection as full docs.
+pub(crate) enum DocsView<'a> {
+    Index,
+    Functions(&'a [String]),
+}
+
+pub(crate) fn lookup_docs_view(
+    name: &str,
+    catalog: &McpCatalog,
+    scope: &DocsScope,
+    tools: Option<&interpreter::PackageDeclaration>,
+    view: DocsView<'_>,
+) -> DocLookup {
+    let mut lookup = lookup_for_session(name, catalog, scope, tools);
+    if matches!(
+        lookup,
+        DocLookup::Unknown { .. } | DocLookup::McpUnknown | DocLookup::InvalidDocumentation { .. }
+    ) {
+        return lookup;
+    }
+    let canonical = match &lookup {
+        DocLookup::CorrectedHost { canonical, .. } => canonical.as_str(),
+        _ => name,
+    };
+    let mcp = canonical
+        .strip_prefix("@mcp/")
+        .and_then(|_| catalog.package(canonical));
+    let declaration = if canonical == interpreter::runtime::TOOLS_PACKAGE {
+        tools
+    } else if let Some(package) = &mcp {
+        Some(&package.defs)
+    } else {
+        scope
+            .stdlib()
+            .declaration(canonical)
+            .or_else(|| scope.package(canonical).map(|package| &package.declaration))
+    };
+    let Some(declaration) = declaration else {
+        return DocLookup::Unknown {
+            message: "Use builtins__docs for language built-ins".into(),
+            suggestion: None,
+        };
+    };
+    let text = match view {
+        DocsView::Functions(names) => {
+            match interpreter::docs_view::select_documentation(declaration, names) {
+                Ok(selected) => interpreter::packages::render_selected_declarations(&selected),
+                Err(message) => {
+                    return DocLookup::Unknown {
+                        message,
+                        suggestion: None,
+                    };
+                }
+            }
+        }
+        DocsView::Index => interpreter::docs_view::function_index(declaration),
+    };
+    match &mut lookup {
+        DocLookup::Host {
+            declarations,
+            description,
+        }
+        | DocLookup::CorrectedHost {
+            declarations,
+            description,
+            ..
+        }
+        | DocLookup::Mcp {
+            declarations,
+            description,
+        } => {
+            *declarations = text;
+            if matches!(view, DocsView::Functions(_)) {
+                description.clear();
+            }
+        }
+        DocLookup::Registry {
+            declarations,
+            documentation,
+            description,
+        } => {
+            *declarations = text;
+            if matches!(view, DocsView::Functions(_)) {
+                documentation.clear();
+                description.clear();
+            }
+        }
+        _ => {}
+    }
+    lookup
+}
+
 fn host_lookup(name: &str, scope: &DocsScope) -> Option<DocLookup> {
     scope
         .stdlib()

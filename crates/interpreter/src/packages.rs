@@ -1161,6 +1161,56 @@ pub fn render_declarations_for(defs: &PackageDeclaration, audience: DocAudience)
     out.trim_end().to_string()
 }
 
+/// Render a selected package surface, including qualified namespace members.
+pub fn render_selected_declarations(defs: &PackageDeclaration) -> String {
+    enum Part<'a> {
+        Namespace(&'a str, &'a NamespaceSymbol, usize),
+        Close(usize),
+    }
+    let defs = with_public_type_names(defs);
+    let mut top = defs.as_ref().clone();
+    // Namespace types are mirrored in the top-level map for type lookup.
+    top.types.retain(|name, _| !name.contains('.'));
+    let mut out = render_declarations_for(&top, DocAudience::Agent);
+    let mut pending: Vec<_> = defs
+        .namespaces
+        .iter()
+        .rev()
+        .map(|(name, ns)| Part::Namespace(name, ns, 0))
+        .collect();
+    while let Some(part) = pending.pop() {
+        match part {
+            Part::Close(depth) => {
+                let _ = writeln!(out, "{}}}", "  ".repeat(depth));
+            }
+            Part::Namespace(name, ns, depth) => {
+                if ns.values.is_empty() && ns.types.is_empty() && ns.namespaces.is_empty() {
+                    continue;
+                }
+                let indent = "  ".repeat(depth);
+                let _ = writeln!(out, "\n{indent}namespace {name} {{");
+                let inner = format!("{indent}  ");
+                for (name, value) in &ns.values {
+                    push_doc_for(&mut out, value_doc(&value.kind), &inner, DocAudience::Agent);
+                    render_value(&mut out, name, &value.kind, &inner);
+                }
+                for (name, symbol) in &ns.types {
+                    push_doc_for(&mut out, type_doc(&symbol.kind), &inner, DocAudience::Agent);
+                    render_type_for(&mut out, name, symbol, &inner, DocAudience::Agent);
+                }
+                pending.push(Part::Close(depth));
+                pending.extend(
+                    ns.namespaces
+                        .iter()
+                        .rev()
+                        .map(|(name, ns)| Part::Namespace(name, ns, depth + 1)),
+                );
+            }
+        }
+    }
+    out.trim().to_owned()
+}
+
 /// `defs` with each reference to a type it exports under another name, as in
 /// `export { Res as Result } from "./model"`, renamed to that public name. A
 /// reference records the name its declaring module gave the type, which the

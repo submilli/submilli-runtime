@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -350,6 +350,8 @@ pub struct PromptResponse {
 pub struct ToolDescriptions {
     pub search: &'static str,
     pub docs: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub functions: Option<&'static str>,
     /// For harnesses exposing built-ins as one tool (name omitted ⇒ list).
     pub builtins: &'static str,
     pub builtins_list: &'static str,
@@ -363,22 +365,37 @@ pub struct ToolDescriptions {
 /// placeholders. The same text the MCP surface publishes as the `execute` tool
 /// description, so a REST harness teaches its model exactly what an MCP client
 /// is taught — one source of truth for both.
+#[derive(Default, Deserialize)]
+pub struct PromptParams {
+    #[serde(default)]
+    function_docs: bool,
+}
+
 pub async fn prompt(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(params): Query<PromptParams>,
 ) -> Result<(StatusCode, Json<PromptResponse>), (StatusCode, Json<ErrorResponse>)> {
     match state.blueprints().get(&name).await.map_err(store_error)? {
         Some(blueprint) => Ok((
             StatusCode::OK,
             Json(PromptResponse {
-                prompt: submilli_shared::prompt::execute_tool_description(
+                prompt: submilli_shared::prompt::execute_tool_description_with_function_docs(
                     &blueprint,
                     submilli_shared::prompt::PromptSurface::Rest,
+                    params.function_docs,
                 ),
                 name,
                 tools: ToolDescriptions {
                     search: submilli_shared::prompt::tools::PACKAGES_SEARCH,
-                    docs: submilli_shared::prompt::tools::PACKAGES_DOCS,
+                    docs: if params.function_docs {
+                        submilli_shared::prompt::tools::PACKAGES_INDEX
+                    } else {
+                        submilli_shared::prompt::tools::PACKAGES_DOCS
+                    },
+                    functions: params
+                        .function_docs
+                        .then_some(submilli_shared::prompt::tools::PACKAGES_FUNCTIONS),
                     builtins: submilli_shared::prompt::tools::BUILTINS_MERGED,
                     builtins_list: submilli_shared::prompt::tools::BUILTINS_LIST,
                     builtins_docs: submilli_shared::prompt::tools::BUILTINS_DOCS,
