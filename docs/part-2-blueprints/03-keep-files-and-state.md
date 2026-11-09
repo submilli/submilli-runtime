@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "8dc1328edf93747667a1f1e274b68eab0c868a2af3c09d76ea1cd00eb3a525d6"
+  contentHash: "f4489becd02b3ed5e6f00dcb96cb4f5d2e6dd3ff6731d05f72e87822768f8254"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -83,6 +83,8 @@ function stat(path: string): Stat;
 function writeText(path: string, content: string): void;
 …
 ```
+
+Since v0.6.0, `mkdir` options are optional and `readText` returns `string`.
 
 Under a Blueprint that grants nothing, a program can call none of it. The
 module's operations fall under eight capabilities. List them with the
