@@ -373,8 +373,9 @@ fn admits_undefined_leaf(member: &Type) -> bool {
     )
 }
 
-/// Whether `JSON.stringify` of a `ty` may return `undefined`.
-fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
+/// Whether `JSON.stringify` of a `ty` may have no JSON text. The call is still
+/// typed `string`; that missing text is a missing read.
+fn stringify_arg_may_omit_json_text(ty: &Type, types: TypeResolver<'_>) -> bool {
     any_resolved_member(ty, types, &|member| {
         Type::stringifies_to_undefined(member) || is_constructor_binding(member, types)
     })
@@ -5709,22 +5710,23 @@ impl Inferer<'_> {
             typed_args.push(typed_space);
         }
 
-        let result_ty = if json_stringify_may_return_undefined(&arg_ty, self.resolver()) {
-            Type::union(vec![Type::String, Type::Undefined])
-        } else {
-            Type::String
-        };
+        // tsc types every `JSON.stringify` call as `string`. A result with no
+        // JSON text is a missing read: a check or a `| undefined` place takes
+        // `undefined`, and any other use throws.
         if let Some((_, Some(sources))) = &spread_args {
             let mut slots = vec![Type::Unknown; typed_args.len()];
             slots[0] = arg_ty.clone();
             typed_args = self.collect_call_arguments(sources, &slots, None, span)?;
+        }
+        if stringify_arg_may_omit_json_text(&arg_ty, self.resolver()) {
+            self.note_missable_read();
         }
         Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonStringify,
                 args: typed_args,
             },
-            result_ty,
+            Type::String,
         ))
     }
 

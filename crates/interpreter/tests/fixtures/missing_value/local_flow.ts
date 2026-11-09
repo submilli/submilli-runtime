@@ -78,7 +78,7 @@ function message(read: () => string): string {
 function main(): void {
   assert(maxOf([3, 9, 4]) === 9, "a present maximum");
   assert(message(() => String(maxOf([]))) === "`best` is missing: `xs[0]` on line 9 found no value", "written in a for...of loop");
-  assert(message(() => lastOf([])) === "`last` is missing: an index read assigned to it found no value", "written in a for loop");
+  assert(message(() => lastOf([])) === "`last` is missing: a read assigned to it found no value", "written in a for loop");
   assert(bump([1]) === 2, "a present ++");
   assert(message(() => String(bump([]))).startsWith("`v` is missing"), "++ reads the value");
   assert(notQ(["x"]) === "x" && notQ(["q"]) === "q", "a present narrowed read");
@@ -88,16 +88,16 @@ function main(): void {
   assert(message(() => String(guarded([]))).startsWith("`v` is missing"), "narrowed in ?:");
   assert(bestScore([{ a: 4 }], 0) === 4, "a `| undefined` local narrows to its value, as in tsc");
   assert(
-    message(() => String(bestScore([], 0))) === "`best` is missing: an index read assigned to it found no value",
+    message(() => String(bestScore([], 0))) === "`best` is missing: a read assigned to it found no value",
     "a `| undefined` local narrowed to `Box` checks the value",
   );
   assert(bumpNarrowed([1]) === 2, "a present compound assignment after a narrowing");
   assert(message(() => String(bumpNarrowed([]))).startsWith("`v` is missing"), "a compound assignment after a narrowing reads the value");
-  assert(message(() => String(longRead([]))) === "`v` is missing: the index read on line 64 found no value", "a read too long to quote keeps its line");
+  assert(message(() => String(longRead([]))) === "`v` is missing: the read on line 64 found no value", "a read too long to quote keeps its line");
   const r: Record<string, string> = { a: "A" };
   assert(reassigned(r, false) === "A", "the declaration's read");
   assert(
-    message(() => reassigned(r, true)) === "`v` is missing: an index read assigned to it found no value",
+    message(() => reassigned(r, true)) === "`v` is missing: a read assigned to it found no value",
     "a reassigned read is not named after the declaration's",
   );
 }

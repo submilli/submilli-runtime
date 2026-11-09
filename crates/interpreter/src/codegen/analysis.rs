@@ -1056,8 +1056,13 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::IntrinsicCall { kind, .. } => match kind {
-                Intrinsic::JsonParse | Intrinsic::JsonStringify => {
+                Intrinsic::JsonParse => {
                     self.dependency_usage.collect_json_host_values();
+                }
+                Intrinsic::JsonStringify => {
+                    self.dependency_usage.collect_json_host_values();
+                    self.string_pool
+                        .intern_text(super::function_emitter::json::NO_JSON_TEXT_MESSAGE);
                 }
                 Intrinsic::BigIntFromString => {
                     self.dependency_usage

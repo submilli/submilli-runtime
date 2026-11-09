@@ -1240,7 +1240,8 @@ impl Type {
     }
 
     /// Whether a value of the member type `leaf` has no JSON text at the
-    /// document root, so `JSON.stringify` returns `undefined` for it.
+    /// document root, so `JSON.stringify` would return `undefined` for it.
+    /// The call is typed `string`; that missing text is a missing read.
     /// Objects and arrays holding such values still produce a document.
     pub fn stringifies_to_undefined(leaf: &Type) -> bool {
         // `{}` may hold a function, as `unknown` may.
@@ -1251,6 +1252,7 @@ impl Type {
                 | Type::Unknown
                 | Type::GenericParam { .. }
                 | Type::TypeVar(_)
+                | Type::IndexedAccess { .. }
                 | Type::Function { .. }
         )
     }

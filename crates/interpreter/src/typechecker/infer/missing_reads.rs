@@ -42,9 +42,15 @@
 //! `const t = x?.f` holds it maybe missing. The same holds for a step of a
 //! chain that may be missing, the last one or one before a `?.`, where no
 //! `?.` short-circuits to give `undefined`.
+//!
+//! A `JSON.stringify` call that may have no JSON text (`undefined`, a function,
+//! `unknown`, a type parameter, or a constructor binding) is decided the same
+//! way. The call is typed `string`, as in tsc. A result with no JSON text is
+//! `undefined` at a check or a place that names `undefined`, and throws
+//! `MissingValueError` anywhere else.
 
 use crate::compiler_error::CompilerFailure;
-use crate::{ExprId, Ident, Span, Type, TypedExprKind, UnOp};
+use crate::{ExprId, Ident, Intrinsic, Span, Type, TypedExprKind, UnOp};
 
 use super::Inferer;
 
@@ -52,8 +58,8 @@ use super::Inferer;
 /// inference returns and taken once the node is pushed.
 #[derive(Clone, Debug)]
 pub(in crate::typechecker) enum PendingRead {
-    /// An index read, or a read through an index signature, that may find
-    /// no value.
+    /// An index read, a read through an index signature, or a
+    /// `JSON.stringify` call, that may find no value.
     Missable,
     /// An optional chain that may find no value; see [`MissableChain`].
     Chain(MissableChain),
@@ -76,7 +82,7 @@ pub(in crate::typechecker) struct MissableChain {
 }
 
 impl Inferer<'_> {
-    /// Marks the index read being inferred as one that may find no value. It
+    /// Marks the expression being inferred as one that may find no value. It
     /// counts only if its type has no room for `undefined`.
     pub(super) fn note_missable_read(&mut self) {
         self.pending_read = Some(PendingRead::Missable);
@@ -95,10 +101,8 @@ impl Inferer<'_> {
         let (kind, ty) = (&expr.kind, &expr.ty);
         match pending {
             PendingRead::Missable
-                if matches!(
-                    kind,
-                    TypedExprKind::IndexAccess { .. } | TypedExprKind::FieldAccess { .. }
-                ) && !ty.holds_undefined()
+                if missable_expr(kind)
+                    && !ty.holds_undefined()
                     && !matches!(ty.peel(), Type::Error | Type::Never) =>
             {
                 self.missable_reads.insert(id);
@@ -404,9 +408,9 @@ impl Inferer<'_> {
                     format!("`{text}` on line {line} found no value to destructure")
                 }
                 (_, Some(line)) => {
-                    format!("the index read on line {line} found no value to destructure")
+                    format!("the read on line {line} found no value to destructure")
                 }
-                _ => "the index read found no value to destructure".to_string(),
+                _ => "the read found no value to destructure".to_string(),
             };
         }
         match (text, line) {
@@ -421,9 +425,9 @@ impl Inferer<'_> {
             }
             (Some(text), None) => format!("`{name}` is missing: `{text}` found no value"),
             (None, Some(line)) => {
-                format!("`{name}` is missing: the index read on line {line} found no value")
+                format!("`{name}` is missing: the read on line {line} found no value")
             }
-            (None, None) => format!("`{name}` is missing: the index read it holds found no value"),
+            (None, None) => format!("`{name}` is missing: the read it holds found no value"),
         }
     }
 }
@@ -439,10 +443,24 @@ pub(super) fn widen_missing_steps(parts: &mut [crate::TypedChainPart], steps: &[
     }
 }
 
+/// Whether `kind` is an expression that may find no value: an index read, a
+/// field read through an index signature, or `JSON.stringify`.
+fn missable_expr(kind: &TypedExprKind) -> bool {
+    matches!(
+        kind,
+        TypedExprKind::IndexAccess { .. }
+            | TypedExprKind::FieldAccess { .. }
+            | TypedExprKind::IntrinsicCall {
+                kind: Intrinsic::JsonStringify,
+                ..
+            }
+    )
+}
+
 /// What a use of the maybe-missing local `name` throws when the value an
 /// assignment gave it was missing; it may hold any of several reads.
 fn assigned_missing_message(name: &str) -> String {
-    format!("`{name}` is missing: an index read assigned to it found no value")
+    format!("`{name}` is missing: a read assigned to it found no value")
 }
 
 // A null guard refines bare T to a shape containing undefined without

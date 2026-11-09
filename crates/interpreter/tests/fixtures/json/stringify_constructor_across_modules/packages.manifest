@@ -1,0 +1,4 @@
+# A constructor value passed into a module that never names the binding.
+# name       dir  deps       root
+@test/json   lib  -
+main         app  @test/json root

@@ -1157,28 +1157,13 @@ impl<'a> Inferer<'a> {
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?,
         )?;
-        let stringify = receiver_ty.spells_undefined()
-            && matches!(
-                self.typed_ast
-                    .try_expr(receiver)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .kind,
-                crate::TypedExprKind::IntrinsicCall {
-                    kind: crate::Intrinsic::JsonStringify,
-                    ..
-                }
-            );
-        let nullable = if stringify {
-            Some("`JSON.stringify` returns `undefined` when its argument is `undefined`: check the argument, or add `?? \"\"` to the result before accessing its members".to_string())
-        } else {
-            self.nullable_receiver_fix(
-                recv_span,
-                recv_path.as_ref(),
-                receiver_ty,
-                name,
-                MemberSide::Read,
-            )
-        };
+        let nullable = self.nullable_receiver_fix(
+            recv_span,
+            recv_path.as_ref(),
+            receiver_ty,
+            name,
+            MemberSide::Read,
+        );
         let (message, mut help) = match nullable {
             Some(fix) => (
                 format!(
