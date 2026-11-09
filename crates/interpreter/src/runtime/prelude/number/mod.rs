@@ -46,8 +46,8 @@ const GLOBAL_CONSTANTS: [(&str, f64); 2] = [("NaN", f64::NAN), ("Infinity", f64:
 
 /// `Number(value)`: a boxed `number` is returned as it is; a `$string` parses
 /// with JS `Number(...)` semantics; a `$bigint` converts to f64 (∞ on
-/// overflow); `undefined` is `NaN`. A string may be a `$string` subtype, such
-/// as a key `Object.keys` returns. Anything else mirrors the Wasm wrapper's
+/// overflow); a boxed boolean is 1 or 0; `undefined` is `NaN`. A string may be
+/// a `$string` subtype, such as a key `Object.keys` returns. Anything else mirrors the Wasm wrapper's
 /// failed cast as a catchable error.
 fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<f64> {
     if super::undefined::is_undefined(caller, value)? {
@@ -72,6 +72,14 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
         };
         return Ok(f64::from_bits(bits));
     }
+    if wasmtime::StructType::eq(&st.ty(&*caller)?, &intr.boxed_boolean) {
+        let Val::I32(value) = st.field(&mut *caller, 1)? else {
+            return Err(crate::runtime::host::fatal_host_error(
+                "Number(value): boxed boolean payload is not an i32",
+            ));
+        };
+        return Ok(f64::from(value != 0));
+    }
     if st.matches_ty(&*caller, &intr.string)? {
         let s = read_string_arg(caller, value, "Number(string)")?;
         return Ok(crate::runtime::number::string_to_number_js(&s));
@@ -90,11 +98,11 @@ fn number_ctor_call(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime
         );
     }
     Err(crate::runtime::host::type_error(
-        "Number(value): expected a number, string, bigint, or undefined",
+        "Number(value): expected a number, boolean, string, bigint, or undefined",
     ))
 }
 
-/// `Number(value)`'s parameter. Booleans, `null` and objects stay out: their
+/// `Number(value)`'s parameter. `null` and objects stay out: their
 /// JavaScript conversions surprise (`Number(null)` and `Number([])` are 0).
 /// An omitted argument is 0 and an explicit `undefined` is `NaN`, as in
 /// JavaScript.
@@ -103,6 +111,7 @@ fn call_value() -> Param {
         "value",
         Type::Union(vec![
             Type::Number,
+            Type::Boolean,
             Type::String,
             Type::BigInt,
             Type::Undefined,
@@ -612,7 +621,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Convert a `number`, `string`, `bigint`, or `undefined` to a `number`.\n * - A number is returned as it is; called with no argument, the result is 0.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
+                                "/**\n * Convert a `number`, `boolean`, `string`, `bigint`, or `undefined` to a `number`.\n * - A number is returned as it is; called with no argument, the result is 0.\n * - A boolean becomes 1 for true or 0 for false.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
                             ),
                         },
                     ),

@@ -1364,9 +1364,10 @@ impl Inferer<'_> {
             }
             let error_span = close_match.argument_span.unwrap_or(span);
             let (expected, got) = self.close_match_mismatch(sub, close_match);
-            self.error_with_help(
+            self.error_type_mismatch(
                 error_span,
-                format!("expected `{expected}`, got `{got}`"),
+                &expected,
+                &got,
                 self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
             );
             reported.push(error_span);
@@ -2439,11 +2440,7 @@ impl Inferer<'_> {
             }
             let help =
                 self.render_help_list(super::type_diff::type_mismatch_help(&param, &check.arg_ty));
-            self.error_with_help(
-                span,
-                format!("expected `{param}`, got `{}`", check.arg_ty),
-                help,
-            );
+            self.error_type_mismatch(span, &param, &check.arg_ty, help);
         }
         Ok(())
     }
@@ -2929,11 +2926,7 @@ impl Inferer<'_> {
                 help.extend(
                     self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
                 );
-                self.error_with_help(
-                    arg_span,
-                    super::diagnostics::mismatch_message(&expected, &got),
-                    help,
-                );
+                self.error_type_mismatch(arg_span, &expected, &got, help);
             }
         };
         Ok(())

@@ -1,0 +1,3 @@
+@appworld/venmo venmo -
+@appworld/supervisor supervisor -
+app app @appworld/venmo,@appworld/supervisor root
