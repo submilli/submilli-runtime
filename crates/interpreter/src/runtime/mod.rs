@@ -256,6 +256,8 @@ pub struct StoreData {
     /// The JSON properties of each host-backed value's backing struct, built on
     /// first use; see [`crate::stdlib::abi::json_properties`].
     pub(crate) host_views: Option<HostViews>,
+    /// Bodies paired with the immutable host-owned vtable globals.
+    pub(crate) host_vtable_bodies: Vec<prelude::vtable::HostVtableBodies>,
     /// An immutable global keeps the store's undefined value rooted across calls.
     pub(crate) undefined_value: Option<wasmtime::Global>,
     /// The bound-receiver closure environment type, built on first use for the
@@ -370,6 +372,7 @@ impl StoreData {
             host_abi: None,
             intrinsic_types: None,
             host_views: None,
+            host_vtable_bodies: Vec::new(),
             undefined_value: None,
             closure_receiver_type: None,
             call_metadata_type: None,
@@ -540,12 +543,11 @@ impl Default for RuntimeConfig {
 impl RuntimeConfig {
     /// The native stack a thread running programs under this config needs.
     ///
-    /// `max_wasm_stack` is an interpreter budget, but a host call that re-enters
-    /// Wasm (a callback passed to `map`, say) nests interpreter frames on the
-    /// thread's own stack. The engine charges each crossing 4 KiB of the budget;
-    /// this bounds re-entry depth, not the thread's available native stack. Debug
-    /// builds have measured about 64 KiB per crossing, so this reservation allows
-    /// 128 KiB per crossing, with an 8 MiB minimum for setup and shallow calls.
+    /// The engine charges its heap stacks and measured native re-entry against
+    /// `max_wasm_stack`. Built-in host walks also use the native stack, bounded
+    /// separately by their depth limits. Keep a conservative reservation for
+    /// those walks and for host work between engine entries, including debug
+    /// builds, with an 8 MiB minimum for setup and shallow calls.
     ///
     /// Embedders must provide this stack on every thread that polls execution,
     /// including after an async task migrates between workers. The runners do not
