@@ -1,10 +1,15 @@
 """Protect the checker gate against false passes, especially expected failures."""
 
+from contextlib import ExitStack
+import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
+import urllib.error
 
 
 path = Path(__file__).resolve().parents[1] / "check.py"
@@ -55,6 +60,92 @@ class ResultTests(unittest.TestCase):
         self.assertTrue(checks.assess_result(
             case, 12, "Invariant NeverWitness is violated.\nState 1:"
         )[0])
+
+
+class DownloadTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        self.destination = self.directory / "tool.jar"
+        contexts = ExitStack()
+        self.addCleanup(contexts.close)
+        self.urlopen = contexts.enter_context(mock.patch.object(checks.urllib.request, "urlopen"))
+        self.sleep = contexts.enter_context(mock.patch.object(checks.time, "sleep"))
+        self.stderr = contexts.enter_context(mock.patch.object(checks.sys, "stderr", io.StringIO()))
+
+    def http_error(self, code):
+        return urllib.error.HTTPError("https://example.test/tool.jar", code, "failure", {}, io.BytesIO())
+
+    def test_transient_http_errors_retry_with_longer_timeout(self):
+        for code in checks.RETRYABLE_HTTP_STATUS:
+            with self.subTest(code=code):
+                self.urlopen.reset_mock()
+                self.sleep.reset_mock()
+                self.urlopen.side_effect = [self.http_error(code), io.BytesIO(b"complete")]
+                checks.download_tool("https://example.test/tool.jar", self.destination)
+                self.assertEqual(self.destination.read_bytes(), b"complete")
+                self.assertEqual(self.urlopen.call_count, 2)
+                self.assertEqual(self.urlopen.call_args.kwargs["timeout"], 180)
+                self.sleep.assert_called_once_with(2)
+        self.assertIn("retrying in 2s", self.stderr.getvalue())
+
+    def test_retry_limit_and_backoff(self):
+        for error in [self.http_error(504), urllib.error.URLError("connection reset"),
+                      TimeoutError("timed out"), checks.socket.timeout("socket timed out"), ConnectionResetError("reset"),
+                      checks.http.client.IncompleteRead(b"partial")]:
+            with self.subTest(error=type(error).__name__):
+                self.urlopen.reset_mock()
+                self.sleep.reset_mock()
+                self.urlopen.side_effect = error
+                with self.assertRaises(type(error)):
+                    checks.download_tool("https://example.test/tool.jar", self.destination)
+                self.assertEqual(self.urlopen.call_count, 3)
+                self.assertEqual(self.sleep.call_args_list, [mock.call(2), mock.call(4)])
+
+    def test_permanent_http_error_is_not_retried(self):
+        self.urlopen.side_effect = self.http_error(404)
+        with self.assertRaises(urllib.error.HTTPError):
+            checks.download_tool("https://example.test/tool.jar", self.destination)
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.sleep.assert_not_called()
+
+    def test_partial_body_is_replaced_on_retry(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.side_effect = [b"partial body longer than success", checks.socket.timeout("read timed out")]
+        self.urlopen.side_effect = [response, io.BytesIO(b"ok")]
+        checks.download_tool("https://example.test/tool.jar", self.destination)
+        self.assertEqual(self.destination.read_bytes(), b"ok")
+        response.__exit__.assert_called_once()
+
+    def test_local_write_error_is_not_retried(self):
+        self.urlopen.return_value = io.BytesIO(b"ok")
+        with mock.patch.object(Path, "open", side_effect=PermissionError("read only")):
+            with self.assertRaises(PermissionError):
+                checks.download_tool("https://example.test/tool.jar", self.destination)
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.sleep.assert_not_called()
+
+    def test_only_verified_download_is_cached(self):
+        pin = {"release": "test", "url": "https://example.test/tool.jar",
+               "sha256": hashlib.sha256(b"verified").hexdigest()}
+        (self.directory / "toolchain.json").write_text(json.dumps(pin))
+        with mock.patch.object(checks, "ROOT", self.directory), \
+                mock.patch.object(checks.tempfile, "gettempdir", return_value=str(self.directory)):
+            self.urlopen.return_value = io.BytesIO(b"wrong")
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                checks.tool_jar(None)
+            cache = self.directory / "submilli-tla-tools"
+            self.assertEqual(list(cache.iterdir()), [])
+            self.sleep.assert_not_called()
+            self.assertEqual(self.urlopen.call_count, 1)
+            self.urlopen.side_effect = [self.http_error(504), io.BytesIO(b"verified")]
+            jar = checks.tool_jar(None)
+            self.assertEqual(jar.read_bytes(), b"verified")
+            self.urlopen.reset_mock()
+            self.assertEqual(checks.tool_jar(None), jar)
+            self.urlopen.assert_not_called()
 
 
 class ConfigurationTests(unittest.TestCase):
