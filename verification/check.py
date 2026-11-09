@@ -3,20 +3,26 @@
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 
 ROOT = Path(__file__).resolve().parent
 COMPLETE = "Model checking completed. No error has been found."
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_TIMEOUT = 180
+RETRYABLE_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 INVARIANT_EXIT = 12  # TLC 1.7.4: EC.ExitStatus.VIOLATION_SAFETY.
 
 
@@ -59,7 +65,7 @@ def main():
                 print("See {}".format(output / case["name"] / "tlc.log"), file=sys.stderr)
                 return 1
         return 0
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, http.client.IncompleteRead) as error:
         print("Verification failed: {}".format(error), file=sys.stderr)
         return 1
 
@@ -106,12 +112,35 @@ def tool_jar(override):
     # Verify before publishing; a partial or concurrently downloaded jar is never run.
     with tempfile.TemporaryDirectory(prefix="download-", dir=cache) as temporary:
         downloaded = Path(temporary) / "tla2tools.jar"
-        with urllib.request.urlopen(pin["url"], timeout=60) as source:
-            with downloaded.open("wb") as target:
-                shutil.copyfileobj(source, target)
+        download_tool(pin["url"], downloaded)
         check_digest(downloaded, pin["sha256"])
         os.replace(downloaded, jar)
     return jar
+
+
+def download_tool(url, destination):
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            # Opening with wb discards any partial response from the last attempt.
+            with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as source:
+                with destination.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+            return
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in RETRYABLE_HTTP_STATUS or attempt == DOWNLOAD_ATTEMPTS:
+                raise
+            reason = str(error)
+        except (urllib.error.URLError, TimeoutError, socket.timeout, ConnectionError,
+                http.client.IncompleteRead) as error:
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise
+            reason = str(error)
+        delay = 2 ** attempt
+        print("Download {} failed (attempt {}/{}): {}; retrying in {}s".format(
+            url, attempt, DOWNLOAD_ATTEMPTS, reason, delay
+        ), file=sys.stderr, flush=True)
+        time.sleep(delay)
 
 
 def check_digest(path, expected):
