@@ -1735,7 +1735,7 @@ impl<'a> Inferer<'a> {
     /// Remove the generic "expected `T`, got `U`" an expression reported under
     /// its contextual type, when the caller reports the same mismatch better.
     pub(super) fn drop_contextual_mismatch(&mut self, span: Span, expected: &Type, got: &Type) {
-        let message = mismatch_message(&expected, &got);
+        let message = self.mismatch_message(expected, got);
         if let Some(index) = self
             .diagnostics
             .iter()

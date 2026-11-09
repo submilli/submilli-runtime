@@ -1051,11 +1051,7 @@ impl Inferer<'_> {
                 }
             }
             let shown = self.reported_result_type(&kind, &ty, want)?;
-            self.error_with_help(
-                span,
-                super::diagnostics::mismatch_message(&want, &shown),
-                help,
-            );
+            self.error_type_mismatch(span, want, &shown, help);
         }
         self.check_expression_arity(&kind, &ty, span);
         self.note_tested_read_after_inference(expr_id, &ty)?;
@@ -5231,7 +5227,7 @@ impl Inferer<'_> {
                 if let Some(want) = expected
                     && !super::assignable(&element, want, self.resolver())
                 {
-                    self.error(span, super::diagnostics::mismatch_message(want, &element));
+                    self.error_type_mismatch(span, want, &element, vec![]);
                 }
             }
             None if !matches!(source_ty, Type::Error) => {
@@ -5286,7 +5282,7 @@ impl Inferer<'_> {
             if let Some(want) = fixed.get(start + offset).or(rest)
                 && !super::assignable(element_ty, want, self.resolver())
             {
-                self.error(span, super::diagnostics::mismatch_message(want, element_ty));
+                self.error_type_mismatch(span, want, element_ty, vec![]);
             }
         }
         Ok(projected)
@@ -6899,10 +6895,7 @@ impl Inferer<'_> {
                             value_span,
                             &expected_field.ty,
                             &value_ty,
-                            format!(
-                                "field `{}`: expected `{}`, got `{}`",
-                                field.name.name, expected_field.ty, value_ty,
-                            ),
+                            format!("field `{}`: ", field.name.name),
                             already_errored,
                         );
                     }
@@ -7158,11 +7151,13 @@ impl Inferer<'_> {
                         && interface_target.is_some()
                         && !assignable(&existing_field.ty, &want_field.read_ty(), self.resolver())
                     {
-                        let message = format!(
-                            "spread field `{name}`: expected `{}`, got `{}`",
-                            want_field.ty, existing_field.ty,
+                        self.error_type_mismatch_with_context(
+                            span,
+                            &format!("spread field `{name}`: "),
+                            &want_field.ty,
+                            &existing_field.ty,
+                            vec![],
                         );
-                        self.error(span, message);
                     }
                     existing_field.optional = want_field.optional;
                     if interface_target.is_some() {
@@ -8033,10 +8028,7 @@ impl Inferer<'_> {
                         None if already_errored => {}
                         // Only a pinned element type is left here, for an element
                         // its own check didn't report.
-                        None => self.error(
-                            elem_span,
-                            super::diagnostics::mismatch_message(running, &elem_ty),
-                        ),
+                        None => self.error_type_mismatch(elem_span, running, &elem_ty, vec![]),
                     }
                     typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                 }
@@ -8142,22 +8134,17 @@ impl Inferer<'_> {
                                             &source_ty,
                                         ),
                                     );
-                                    self.error_with_help(
+                                    self.error_type_mismatch(
                                         self.ast
                                             .try_expr(value)
                                             .map_err(super::arena_failure)?
                                             .span,
-                                        super::diagnostics::mismatch_message(
-                                            expected_source.peel(),
-                                            &source_ty,
-                                        ),
+                                        expected_source.peel(),
+                                        &source_ty,
                                         help,
                                     );
                                 } else {
-                                    self.error(
-                                        spread_span,
-                                        super::diagnostics::mismatch_message(&running, &elem_t),
-                                    );
+                                    self.error_type_mismatch(spread_span, running, &elem_t, vec![]);
                                 }
                             }
                             Some(_) => {}
@@ -8623,11 +8610,13 @@ impl Inferer<'_> {
             .try_expr(source)
             .map_err(super::arena_failure)?
             .span;
+        let original_message = self.mismatch_message(hint, actual);
+        let replacement_message = self.mismatch_message(hint.peel(), actual);
         let _: () = if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
-            && diagnostic.message == super::diagnostics::mismatch_message(&hint, &actual)
+            && diagnostic.message == original_message
         {
-            diagnostic.message = super::diagnostics::mismatch_message(hint.peel(), &actual);
+            diagnostic.message = replacement_message;
         };
         Ok(())
     }
@@ -8637,19 +8626,20 @@ impl Inferer<'_> {
         span: Span,
         expected: &Type,
         actual: &Type,
-        message: String,
+        context: String,
         already_errored: bool,
     ) {
         if !already_errored {
-            self.error(span, message);
+            self.error_type_mismatch_with_context(span, &context, expected, actual, vec![]);
             return;
         }
         // Keep the inner diagnostic's help and location while adding slot context.
+        let original_message = self.mismatch_message(expected, actual);
         if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
-            && diagnostic.message == super::diagnostics::mismatch_message(&expected, &actual)
+            && diagnostic.message == original_message
         {
-            diagnostic.message = message;
+            diagnostic.message = format!("{context}{original_message}");
         }
     }
 
@@ -8723,7 +8713,7 @@ impl Inferer<'_> {
                 continue;
             }
             if !already_errored && !assignable(actual, want, self.resolver()) {
-                self.error(span, super::diagnostics::mismatch_message(&want, &actual));
+                self.error_type_mismatch(span, want, actual, vec![]);
             }
             *actual = want.clone();
         }
@@ -9195,10 +9185,7 @@ impl Inferer<'_> {
             elem_ty
         } else {
             if self.error_count() == errors_before {
-                self.error(
-                    elem_span,
-                    super::diagnostics::mismatch_message(&expected_ty, &elem_ty),
-                );
+                self.error_type_mismatch(elem_span, expected_ty, &elem_ty, vec![]);
             }
             expected_ty.clone()
         };
@@ -11085,9 +11072,12 @@ impl Inferer<'_> {
                         && !is_cast_operand
                         && !assignable(h, own_param, self.resolver())
                     {
-                        self.error(
+                        self.error_type_mismatch_with_context(
                             p.name.span,
-                            format!("parameter `{}`: expected `{}`, got `{}`", p.name.name, h, t),
+                            &format!("parameter `{}`: ", p.name.name),
+                            h,
+                            t,
+                            vec![],
                         );
                         params_reported = true;
                     }
@@ -11193,7 +11183,13 @@ impl Inferer<'_> {
                     && !type_contains_type_var(hr)
                     && !assignable(&t, hr, self.resolver())
                 {
-                    self.error(ann.span, format!("return type: expected `{hr}`, got `{t}`"));
+                    self.error_type_mismatch_with_context(
+                        ann.span,
+                        "return type: ",
+                        hr,
+                        &t,
+                        vec![],
+                    );
                 }
                 annotated_ret = Some(t.clone());
                 Some(t)
@@ -11857,10 +11853,7 @@ impl Inferer<'_> {
             // the result, mirror `infer_assign`'s rejection.
             let fits = self.postfix_write_fits(&result_ty, &entry.ty);
             if !matches!(entry.ty, Type::Error) && !fits {
-                self.error(
-                    span,
-                    super::diagnostics::mismatch_message(&entry.ty, &result_ty),
-                );
+                self.error_type_mismatch(span, &entry.ty, &result_ty, vec![]);
             }
             // A rejected write leaves the declared type, as in TypeScript, and
             // so does a write to a `never` binding, which tsc keeps `never`.
@@ -12097,10 +12090,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&target_ty);
         if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
-            self.error(
-                name.span,
-                super::diagnostics::mismatch_message(&target_ty, &result_ty),
-            );
+            self.error_type_mismatch(name.span, &target_ty, &result_ty, vec![]);
         }
         if let Some(mut path) = self.expr_to_reference_path(
             self.typed_ast
@@ -12158,7 +12148,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
-            self.error(span, super::diagnostics::mismatch_message(&ty, &result_ty));
+            self.error_type_mismatch(span, &ty, &result_ty, vec![]);
         }
         self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone(), None)?;
         Ok((
@@ -12259,10 +12249,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
-            self.error(
-                span,
-                super::diagnostics::mismatch_message(&elem_ty, &result_ty),
-            );
+            self.error_type_mismatch(span, &elem_ty, &result_ty, vec![]);
         }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
@@ -17718,16 +17705,13 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    // `Number(boolean)` goes through the standard call-signature dispatch —
-    // the union parameter `number | string | bigint | undefined` rejects
-    // `boolean` via the standard assignability diagnostic.
+    // `null` remains outside Number's accepted argument union, even though
+    // JavaScript also converts it to a number.
     #[test]
     fn number_call_with_wrong_type_diagnoses() {
-        let (_, diags) = run("function main(): void { let n = Number(true); }");
-        assert!(
-            !diags.is_empty(),
-            "expected an assignability diagnostic for Number(boolean), got none"
-        );
+        let (_, diags) = run("function main(): void { let n = Number(null); }");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("got `null`"), "{diags:?}");
     }
 
     #[test]

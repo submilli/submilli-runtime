@@ -57,7 +57,7 @@ fn same_name_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderE
 /// A named type's name, and the declaration it stands for: an alias of a
 /// class, interface or enum stands for that type, so it and the type it names
 /// are one.
-fn named_identity(ty: &Type) -> Option<(&str, &MangledName)> {
+pub(super) fn named_identity(ty: &Type) -> Option<(&str, &MangledName)> {
     match ty {
         Type::Alias {
             name, mangled, ty, ..

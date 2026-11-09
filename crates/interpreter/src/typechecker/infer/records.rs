@@ -620,7 +620,7 @@ impl Inferer<'_> {
             if let Some(hint) = &hint
                 && !assignable(&value_ty, hint, self.resolver())
             {
-                self.error(span, super::diagnostics::mismatch_message(&hint, &value_ty));
+                self.error_type_mismatch(span, hint, &value_ty, vec![]);
             }
             // A fresh literal widens as it would without a hint.
             let asks_for_type = hint

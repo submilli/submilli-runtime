@@ -120,6 +120,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
     let bindings = super::binding_analysis::analyze(&ast).unwrap();
     let mut tc = super::Inferer {
         source,
+        diagnostic_sources: None,
         package_name,
         ast: &ast,
         typed_ast: crate::TypedAst::with_package(package_name),

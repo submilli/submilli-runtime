@@ -1467,10 +1467,7 @@ impl Inferer<'_> {
             && !assignable(&result_ty, check_ty, self.resolver())
         {
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-            self.error(
-                value_span,
-                format!("expected `{check_ty}`, got `{result_ty}`"),
-            );
+            self.error_type_mismatch(value_span, check_ty, &result_ty, vec![]);
         }
         let synth_binary = self
             .typed_ast
@@ -1573,10 +1570,7 @@ impl Inferer<'_> {
             StaticWrite::Resolved { mangled, ty } => {
                 let (typed_value, value_ty) = self.infer_expr(value, Some(&ty))?;
                 if !assignable(&value_ty, &ty, self.resolver()) {
-                    self.error(
-                        value_span,
-                        super::diagnostics::mismatch_message(&ty, &value_ty),
-                    );
+                    self.error_type_mismatch(value_span, &ty, &value_ty, vec![]);
                 }
                 return Ok(TypedStmtKind::AssignGlobal {
                     ident: name,
@@ -1672,11 +1666,7 @@ impl Inferer<'_> {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
                     ));
-                    self.error_with_help(
-                        value_span,
-                        super::diagnostics::mismatch_message(&field_ty, &value_ty),
-                        help,
-                    );
+                    self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
                     receiver: typed_receiver,
@@ -1720,11 +1710,7 @@ impl Inferer<'_> {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
                     ));
-                    self.error_with_help(
-                        value_span,
-                        super::diagnostics::mismatch_message(&field_ty, &value_ty),
-                        help,
-                    );
+                    self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
                     receiver: typed_receiver,
@@ -1775,11 +1761,7 @@ impl Inferer<'_> {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
                     ));
-                    self.error_with_help(
-                        value_span,
-                        super::diagnostics::mismatch_message(&field_ty, &value_ty),
-                        help,
-                    );
+                    self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
                     receiver: typed_receiver,
@@ -1966,11 +1948,7 @@ impl Inferer<'_> {
         {
             let help =
                 self.render_help_list(super::type_diff::type_mismatch_help(target, &value_ty));
-            self.error_with_help(
-                value_span,
-                super::diagnostics::mismatch_message(&target, &value_ty),
-                help,
-            );
+            self.error_type_mismatch(value_span, target, &value_ty, help);
         }
         let current_element = evolving
             .as_ref()
@@ -2087,10 +2065,7 @@ impl Inferer<'_> {
             && !matches!(value_ty, Type::Error)
             && !self.fits_index_write(&value_ty, &target)
         {
-            self.error(
-                value_span,
-                super::diagnostics::mismatch_message(&target, &value_ty),
-            );
+            self.error_type_mismatch(value_span, &target, &value_ty, vec![]);
         }
         let Some((typed_index, _)) = key else {
             return Ok(TypedStmtKind::Expr(typed_value));
@@ -2458,10 +2433,7 @@ impl Inferer<'_> {
                 && !reported
                 && !assignable(&value_ty, entry.write_type(), self.resolver())
             {
-                self.error(
-                    value_span,
-                    super::diagnostics::mismatch_message(entry.write_type(), &value_ty),
-                );
+                self.error_type_mismatch(value_span, entry.write_type(), &value_ty, vec![]);
             }
             self.scopes.reset_parameter_read_type(&target.name);
             let annotated = self.is_local_annotated(&target.name);
@@ -2503,10 +2475,7 @@ impl Inferer<'_> {
                         self.infer_assigned_value(value, hint)?;
                     let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
-                        self.error(
-                            value_span,
-                            super::diagnostics::mismatch_message(&ty, &value_ty),
-                        );
+                        self.error_type_mismatch(value_span, &ty, &value_ty, vec![]);
                     }
                     let annotated = self.is_global_annotated(&mangled);
                     let flow_ty = self.assigned_flow_type(&ty, annotated, typed_value, value_ty)?;
@@ -2670,10 +2639,7 @@ impl Inferer<'_> {
                 && !matches!(check_ty, Type::Error)
                 && !assignable(&result_ty, check_ty, self.resolver())
             {
-                self.error(
-                    value_span,
-                    super::diagnostics::mismatch_message(check_ty, &result_ty),
-                );
+                self.error_type_mismatch(value_span, check_ty, &result_ty, vec![]);
             }
             let synth_binary = self
                 .typed_ast
@@ -3013,10 +2979,7 @@ impl Inferer<'_> {
             && !matches!(rw.write, Type::Error)
             && !assignable(&result_ty, &rw.write, self.resolver())
         {
-            self.error(
-                value_span,
-                super::diagnostics::mismatch_message(&rw.write, &result_ty),
-            );
+            self.error_type_mismatch(value_span, &rw.write, &result_ty, vec![]);
         }
         let synth_binary = self
             .typed_ast
@@ -3108,10 +3071,7 @@ impl Inferer<'_> {
             && !matches!(check_ty, Type::Error)
             && !assignable(&result_ty, check_ty, self.resolver())
         {
-            self.error(
-                value_span,
-                super::diagnostics::mismatch_message(check_ty, &result_ty),
-            );
+            self.error_type_mismatch(value_span, check_ty, &result_ty, vec![]);
         }
         let synth_binary = self
             .typed_ast

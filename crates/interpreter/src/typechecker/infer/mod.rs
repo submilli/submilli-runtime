@@ -31,6 +31,7 @@ mod likely_mistakes;
 mod literal_freshness;
 mod literal_prebinding;
 mod lookup;
+mod mismatch;
 mod missing_reads;
 pub(in crate::typechecker) mod module_symbols;
 mod namespace_symbol;
@@ -160,6 +161,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
     let bindings = binding_analysis::analyze(ast)?;
     let mut tc = Inferer {
         source,
+        diagnostic_sources: None,
         package_name,
         ast,
         typed_ast: TypedAst::with_package(package_name),
@@ -477,6 +479,7 @@ pub fn infer_package_checked<'a>(
         .collect();
     let mut tc = Inferer {
         source: first_source,
+        diagnostic_sources: Some(sources),
         package_name,
         ast: first_ast,
         typed_ast: TypedAst::with_package(package_name),
@@ -939,6 +942,7 @@ pub(super) struct Inferer<'a> {
     /// A preliminary initializer pass does not recursively start more trials.
     prebinding_parameter_types: bool,
     pub(super) source: &'a str,
+    diagnostic_sources: Option<&'a crate::Sources>,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
     pub(super) typed_ast: TypedAst,
