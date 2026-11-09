@@ -937,7 +937,7 @@ pub struct TypedAst {
     /// such a read on. The binding is stored as `T | undefined`, and a read
     /// of it that the typechecker left at `T` throws `MissingValueError` when
     /// the value is missing.
-    pub maybe_missing_locals: std::collections::HashMap<Span, MaybeMissingLocal>,
+    pub maybe_missing_locals: std::collections::BTreeMap<Span, MaybeMissingLocal>,
     /// Every read that may find no value and reaches a check or a place
     /// that holds `undefined`, with its written type: the type tsc reports,
     /// before the typechecker widened it with `undefined` (unchanged where it
@@ -947,7 +947,7 @@ pub struct TypedAst {
     /// present flag. A use not listed tests the value, except a use of a
     /// local without a present flag typed with room for `undefined`, which
     /// takes the value as it is.
-    pub widened_missing_reads: std::collections::HashMap<ExprId, Type>,
+    pub widened_missing_reads: std::collections::BTreeMap<ExprId, Type>,
     /// Generic reads (`o[k]` typed `T[K]`) whose missing key reads
     /// `undefined`: every instantiation's property holds it (an optional
     /// field among `K`'s, or an unbounded `T`). Their type stays tsc's;
@@ -959,7 +959,7 @@ pub struct TypedAst {
     /// maybe-missing read, though the local has the type `T`. Only tools that
     /// show types read it, the conformance harness among them; see
     /// [`TypedAst::written_binding_type`].
-    pub widened_bindings: std::collections::HashSet<Span>,
+    pub widened_bindings: std::collections::BTreeSet<Span>,
     /// Typed operands written as spread arguments to a rest parameter.
     pub call_spread_values: std::collections::BTreeSet<ExprId>,
     /// Tuple sources expanded into positional call arguments; codegen evaluates each once.
@@ -1702,6 +1702,59 @@ impl TypedAst {
 mod tests {
     use super::{TypedAst, TypedExpr, TypedExprKind, TypedParam, TypedStmt, TypedStmtKind};
     use crate::{BinOp, Ident, Span, Type, UnOp};
+
+    #[test]
+    fn missing_read_side_tables_are_ordered() {
+        let spans = [
+            Span::new(crate::FileId(0), 1, 2).unwrap(),
+            Span::new(crate::FileId(0), 1, 3).unwrap(),
+            Span::new(crate::FileId(0), 4, 4).unwrap(),
+            Span::at(crate::FileId(1)),
+        ];
+        let ids = [
+            crate::ExprId(0),
+            crate::ExprId(1),
+            crate::ExprId(2),
+            crate::ExprId(3),
+        ];
+        let mut forward = TypedAst::new();
+        let mut reverse = TypedAst::with_package("main");
+        for (ast, order) in [(&mut forward, [0, 1, 2, 3]), (&mut reverse, [3, 2, 1, 0])] {
+            for index in order {
+                let span = spans[index];
+                ast.maybe_missing_locals.insert(
+                    span,
+                    super::MaybeMissingLocal {
+                        message: format!("missing read {index}"),
+                        has_present_flag: index == 0,
+                    },
+                );
+                ast.widened_bindings.insert(span);
+                ast.widened_missing_reads.insert(ids[index], Type::Number);
+            }
+        }
+        assert_eq!(
+            forward
+                .maybe_missing_locals
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            spans
+        );
+        assert_eq!(
+            forward
+                .widened_missing_reads
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(
+            forward.widened_bindings.iter().copied().collect::<Vec<_>>(),
+            spans
+        );
+        assert_eq!(format!("{forward:?}"), format!("{reverse:?}"));
+    }
 
     #[test]
     fn arena_round_trip_for_typed_exprs() {
