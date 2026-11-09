@@ -1831,10 +1831,10 @@ fn operations_charge_for_the_input_they_process() {
             &format!("usage-console-{n}"),
             &format!("function main(): number {{ {input} console.log(s); return 0; }}"),
         ) - baseline;
-        // Previously only 2 CALL + COPY(n): conversion and output were free.
+        // Snapshot the one-element rest array, then convert and write the string.
         assert_eq!(
             actual,
-            2 * CALL + COPY.cost(n) + SCAN.cost(n) + IO.cost(n + 1)
+            2 * CALL + ELEM.cost(1) + COPY.cost(n) + SCAN.cost(n) + IO.cost(n + 1)
         );
     }
 
