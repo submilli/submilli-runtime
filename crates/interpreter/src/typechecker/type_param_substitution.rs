@@ -49,6 +49,12 @@ pub struct TypeParamSubstitution {
     /// union parameter while its type parameter was unbound: each must fit
     /// the parameter once inference is done, as tsc checks the argument then.
     close_matches: Vec<CloseMatch>,
+    /// Replace each bound variable by its binding as it stands, without
+    /// following a binding into another or substituting inside it: an
+    /// alias instantiated with arguments that mention the caller's own type
+    /// parameters (`type B<K, T> = A<K, T>`) keeps them apart from the
+    /// alias's (see [`Self::instantiation`]).
+    simultaneous: bool,
 }
 
 /// An argument member that must fit the union parameter `param` once
@@ -86,6 +92,18 @@ impl TypeParamSubstitution {
     }
 
     /// Mismatched lengths silently truncate to the shorter — caller validates arity.
+    /// [`from_pairs`](Self::from_pairs) for instantiating a declaration's
+    /// body: every parameter is replaced by its argument at once, so an
+    /// argument naming a type parameter of the same name as another of the
+    /// declaration's (`Sel<K, "a">` for `type Sel<T, K> = Pick<T, K>`) is
+    /// never substituted again.
+    pub fn instantiation(generics: &[String], type_args: &[Type]) -> Self {
+        Self {
+            simultaneous: true,
+            ..Self::from_pairs(generics, type_args)
+        }
+    }
+
     pub fn from_pairs(generics: &[String], type_args: &[Type]) -> Self {
         Self {
             bindings: generics
@@ -101,6 +119,7 @@ impl TypeParamSubstitution {
             several_literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
+            simultaneous: false,
         }
     }
 
@@ -119,6 +138,7 @@ impl TypeParamSubstitution {
             several_literal_candidates: Default::default(),
             whole_union_fallbacks: Default::default(),
             close_matches: Vec::new(),
+            simultaneous: false,
         }
     }
 
@@ -387,6 +407,7 @@ impl TypeParamSubstitution {
             several_literal_candidates,
             whole_union_fallbacks,
             close_matches: _,
+            simultaneous: _,
         } = before;
         let names: std::collections::BTreeSet<String> = self
             .bindings
@@ -460,6 +481,13 @@ impl TypeParamSubstitution {
         budget: &mut TypeBudget<'_>,
         substituting: &mut Vec<String>,
     ) -> Result<Type, TypeTooLarge> {
+        if self.simultaneous
+            && let Type::TypeVar(name) = ty
+            && let Some(bound) = self.bindings.get(name)
+        {
+            budget.charge_copy(bound, depth)?;
+            return Ok(bound.clone());
+        }
         let open_before = substituting.len();
         let applied = self
             .chase_binding(ty, budget, substituting)
@@ -777,6 +805,9 @@ impl<'a> Unifier<'a> {
             return Ok(());
         }
 
+        if let Some(result) = self.unify_type_operator(param_ty, unpeeled_arg) {
+            return result;
+        }
         if let Some(types) = self.alias_ref_expansion(param_ty, arg_ty) {
             return self.unify_expanded(param_ty, arg_ty, types);
         }
@@ -2083,6 +2114,51 @@ impl<'a> Unifier<'a> {
         }
     }
 
+    /// A parameter that is a utility over a type parameter, `keyof T` or
+    /// `T[K]`. A matching application unifies argument by argument; `Partial`,
+    /// `Readonly` and `Required` reverse their mapping (tsc's reverse mapped
+    /// type), and `Exclude`, `Extract`, `NonNullable`, `Pick` and `Omit` take
+    /// the argument as a candidate for `T`. The rest, like `NoInfer`, bind
+    /// nothing. `None` for any other parameter.
+    #[allow(clippy::result_large_err)]
+    fn unify_type_operator(
+        &mut self,
+        param_ty: &Type,
+        arg_ty: &Type,
+    ) -> Option<Result<(), UnifyError>> {
+        use crate::typechecker::infer::utility_types::{Utility, deferred_application, utility};
+        if matches!(param_ty, Type::KeyOf(_) | Type::IndexedAccess { .. }) {
+            return Some(Ok(()));
+        }
+        let (applied, params) = deferred_application(param_ty)?;
+        if let Type::Alias { mangled, args, .. } | Type::AliasRef { mangled, args, .. } = arg_ty
+            && utility(mangled) == Some(applied)
+            && args.len() == params.len()
+        {
+            return Some(
+                params
+                    .iter()
+                    .zip(args)
+                    .try_for_each(|(param, arg)| self.unify(param, arg)),
+            );
+        }
+        let operand = params.first()?;
+        Some(match applied {
+            Utility::Partial | Utility::Readonly | Utility::Required => {
+                let reversed = reverse_mapped(applied, arg_ty.peel());
+                self.unify(operand, &reversed)
+            }
+            // `Pick<T, K>` and `Omit<T, K>` hold `T`'s fields, so the
+            // argument is a candidate for `T`, as tsc infers it.
+            Utility::Exclude
+            | Utility::Extract
+            | Utility::NonNullable
+            | Utility::Pick
+            | Utility::Omit => self.unify(operand, arg_ty),
+            _ => Ok(()),
+        })
+    }
+
     /// The registry to expand with when one side is a recursion back-edge, and
     /// `None` otherwise. A back-edge is a *name*, so `peel` stops at it and the
     /// structural arms never see the body — left alone, the pair falls through
@@ -2148,6 +2224,43 @@ impl<'a> Unifier<'a> {
             });
         }
         self.unify(&expanded_param, &expanded_arg)
+    }
+}
+
+/// The `T` whose `Partial<T>`, `Readonly<T>` or `Required<T>` is `ty`: the
+/// modifier the utility adds is removed from each field, and arrays map
+/// element by element. Other types are their own source.
+fn reverse_mapped(utility: crate::typechecker::infer::utility_types::Utility, ty: &Type) -> Type {
+    use crate::typechecker::infer::utility_types::Utility;
+    let element = |element: &Type| match utility {
+        Utility::Partial => crate::typechecker::infer::narrowing::strip_undefined(element),
+        _ => element.clone(),
+    };
+    match ty {
+        Type::Object { fields, index } => Type::Object {
+            fields: fields
+                .iter()
+                .map(|(name, field)| {
+                    let mut field = field.clone();
+                    match utility {
+                        Utility::Partial => field.optional = false,
+                        Utility::Readonly => field.readonly = false,
+                        _ => {}
+                    }
+                    (name.clone(), field)
+                })
+                .collect(),
+            index: index.clone(),
+        },
+        Type::Array(inner) => Type::Array(Box::new(element(inner))),
+        Type::Readonly(inner) if utility == Utility::Readonly => inner.as_ref().clone(),
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| reverse_mapped(utility, member))
+                .collect(),
+        ),
+        _ => ty.clone(),
     }
 }
 

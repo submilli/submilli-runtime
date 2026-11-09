@@ -1,0 +1,68 @@
+=== nullishCoalescingOperatorInParameterInitializer.2.ts ===
+
+// https://github.com/microsoft/TypeScript/issues/36295
+const a = (): string | undefined => undefined;
+>a : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>(): string | undefined => undefined : () => string | undefined
+>                                    : ^^^^^^^^^^^^^^^^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+((b: string = a() ?? "d") => { let a; })();
+>((b: string = a() ?? "d") => { let a; })() : void
+>                                           : ^^^^
+>((b: string = a() ?? "d") => { let a; }) : (b?: string) => void
+>                                         : ^^^^^^^^^^^^^^^^^^^^
+>(b: string = a() ?? "d") => { let a; } : (b?: string) => void
+>                                       : ^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>a() ?? "d" : string
+>           : ^^^^^^
+>a() : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>a : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"d" : "d"
+>    : ^^^
+>a : any
+>  : ^^^
+
+
+const x = "";
+>x : ""
+>  : ^^
+>"" : ""
+>   : ^^
+
+((b: string = a() ?? "d", d: string = x) => { let x; })();
+>((b: string = a() ?? "d", d: string = x) => { let x; })() : void
+>                                                          : ^^^^
+>((b: string = a() ?? "d", d: string = x) => { let x; }) : (b?: string, d?: string) => void
+>                                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(b: string = a() ?? "d", d: string = x) => { let x; } : (b?: string, d?: string) => void
+>                                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
+>a() ?? "d" : string
+>           : ^^^^^^
+>a() : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>a : () => string | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>"d" : "d"
+>    : ^^^
+>d : string
+>  : ^^^^^^
+>x : ""
+>  : ^^
+>x : any
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

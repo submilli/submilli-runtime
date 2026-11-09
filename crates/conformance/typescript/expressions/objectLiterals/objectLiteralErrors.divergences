@@ -1,0 +1,57 @@
+types: 38 of 111 tsc entries compared, 14 differ
+
+line 14: e11
+  tsc:  { 1: number; }
+  ours: { "1": number }
+
+line 14: { 1.0: 0, '1': 0 }
+  tsc:  { 1: number; }
+  ours: { "1": number }
+
+line 15: e12
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 15: { 0: 0, 0: 0 }
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 16: e13
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 16: { 0: 0, 0: 0 }
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 17: e14
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 17: { 0: 0, 0x0: 0 }
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 18: e14_2
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 18: { 0: 0, 0o0: 0 }
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 19: e15
+  tsc:  { 100: number; }
+  ours: { "100": number }
+
+line 19: { "100": 0, 1e2: 0 }
+  tsc:  { 100: number; }
+  ours: { "100": number }
+
+line 20: e16
+  tsc:  { 32: number; }
+  ours: { "32": number }
+
+line 20: { 0x20: 0, 3.2e1: 0 }
+  tsc:  { 32: number; }
+  ours: { "32": number }

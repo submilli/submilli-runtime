@@ -1,4 +1,5 @@
 compoundAdditionAssignmentLHSCannotBeAssigned.ts(6,1): error TS2322: Type 'string' is not assignable to type 'boolean'.
 compoundAdditionAssignmentLHSCannotBeAssigned.ts(9,1): error TS2322: Type 'string' is not assignable to type 'number'.
+compoundAdditionAssignmentLHSCannotBeAssigned.ts(12,1): error TS2322: Type 'string' is not assignable to type 'E'.
 compoundAdditionAssignmentLHSCannotBeAssigned.ts(15,1): error TS2322: Type 'string' is not assignable to type '{ a: string; }'.
 compoundAdditionAssignmentLHSCannotBeAssigned.ts(18,1): error TS2322: Type 'string' is not assignable to type 'void'.

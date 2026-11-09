@@ -1,0 +1,21 @@
+=== globalThisTypeIndexAccess.ts ===
+
+const w_e: (typeof globalThis)["globalThis"] = null as unknown as ((typeof globalThis)["globalThis"]);
+>w_e : typeof globalThis
+>    : ^^^^^^^^^^^^^^^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+>null as unknown as ((typeof globalThis)["globalThis"]) : typeof globalThis
+>                                                       : ^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>globalThis : typeof globalThis
+>           : ^^^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

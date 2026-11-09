@@ -1,0 +1,782 @@
+=== subtypesOfTypeParameterWithConstraints2.ts ===
+// checking whether other types are subtypes of type parameters with constraints
+
+function f1<T extends U, U>(x: T, y: U): void {
+>f1 : <T extends U, U>(x: T, y: U) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+    let r = true ? x : y;
+>r : U
+>  : ^
+>true ? x : y : U
+>             : ^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+    let r_2 = true ? y : x;
+>r_2 : U
+>    : ^
+>true ? y : x : U
+>             : ^
+>true : true
+>     : ^^^^
+>y : U
+>  : ^
+>x : T
+>  : ^
+
+}
+
+// V > U > T
+function f2<T extends U, U extends V, V>(x: T, y: U, z: V): void {
+>f2 : <T extends U, U extends V, V>(x: T, y: U, z: V) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>x : T
+>  : ^
+>y : U
+>  : ^
+>z : V
+>  : ^
+
+    let r = true ? x : y;
+>r : U
+>  : ^
+>true ? x : y : U
+>             : ^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>y : U
+>  : ^
+
+    let r_2 = true ? y : x;
+>r_2 : U
+>    : ^
+>true ? y : x : U
+>             : ^
+>true : true
+>     : ^^^^
+>y : U
+>  : ^
+>x : T
+>  : ^
+
+
+    // ok
+    let r2 = true ? z : y;
+>r2 : V
+>   : ^
+>true ? z : y : V
+>             : ^
+>true : true
+>     : ^^^^
+>z : V
+>  : ^
+>y : U
+>  : ^
+
+    let r2_2 = true ? y : z;
+>r2_2 : V
+>     : ^
+>true ? y : z : V
+>             : ^
+>true : true
+>     : ^^^^
+>y : U
+>  : ^
+>z : V
+>  : ^
+
+
+    // ok
+    let r2a = true ? z : x;
+>r2a : V
+>    : ^
+>true ? z : x : V
+>             : ^
+>true : true
+>     : ^^^^
+>z : V
+>  : ^
+>x : T
+>  : ^
+
+    let r2b = true ? x : z;
+>r2b : V
+>    : ^
+>true ? x : z : V
+>             : ^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>z : V
+>  : ^
+
+}
+
+// Date > U > T
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+interface I1 { foo: number; }
+>I1 : I1
+>   : ^^
+>foo : number
+>    : ^^^^^^
+
+class C1 { foo: number; }
+>C1 : C1
+>   : ^^
+>foo : number
+>    : ^^^^^^
+
+class C2<T> { foo: T; }
+>C2 : C2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+>foo : T
+>    : ^
+
+enum E { A }
+>E : E
+>  : ^
+>A : E.A
+>  : ^^^
+
+function f(): void { }
+>f : () => void
+>  : ^^^^^^^^^^
+
+/*pruned*/;
+
+
+class c { baz: string }
+>c : c
+>  : ^
+>baz : string
+>    : ^^^^^^
+
+/*pruned*/;
+
+
+
+function f4<T extends Number>(x: T): void {
+>f4 : <T extends Number>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r0 = true ? x : null; // ok
+>r0 : T | null
+>   : ^^^^^^^^
+>true ? x : null : T | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+    let r0_2 = true ? null : x; // ok
+>r0_2 : T | null
+>     : ^^^^^^^^
+>true ? null : x : T | null
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+
+    let u: typeof undefined = null as unknown as (typeof undefined);
+>u : undefined
+>  : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>null as unknown as (typeof undefined) : undefined
+>                                      : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+    let r0b = true ? u : x; // ok
+>r0b : T | undefined
+>    : ^^^^^^^^^^^^^
+>true ? u : x : T | undefined
+>             : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>u : undefined
+>  : ^^^^^^^^^
+>x : T
+>  : ^
+
+    let r0b_2 = true ? x : u; // ok
+>r0b_2 : T | undefined
+>      : ^^^^^^^^^^^^^
+>true ? x : u : T | undefined
+>             : ^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>u : undefined
+>  : ^^^^^^^^^
+
+}
+
+function f5<T extends Number>(x: T): void {
+>f5 : <T extends Number>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r1 = true ? 1 : x; // ok
+>r1 : number | T
+>   : ^^^^^^^^^^
+>true ? 1 : x : T | 1
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>1 : 1
+>  : ^
+>x : T
+>  : ^
+
+    let r1_2 = true ? x : 1; // ok
+>r1_2 : number | T
+>     : ^^^^^^^^^^
+>true ? x : 1 : T | 1
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>1 : 1
+>  : ^
+
+}
+
+function f6<T extends String>(x: T): void {
+>f6 : <T extends String>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r2 = true ? '' : x; // ok
+>r2 : string | T
+>   : ^^^^^^^^^^
+>true ? '' : x : "" | T
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>'' : ""
+>   : ^^
+>x : T
+>  : ^
+
+    let r2_2 = true ? x : ''; // ok
+>r2_2 : string | T
+>     : ^^^^^^^^^^
+>true ? x : '' : "" | T
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>'' : ""
+>   : ^^
+
+}
+
+function f7<T extends Boolean>(x: T): void {
+>f7 : <T extends Boolean>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r3 = true ? true : x; // ok
+>r3 : boolean | T
+>   : ^^^^^^^^^^^
+>true ? true : x : true | T
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+
+    let r3_2 = true ? x : true; // ok
+>r3_2 : boolean | T
+>     : ^^^^^^^^^^^
+>true ? x : true : true | T
+>                : ^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>true : true
+>     : ^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+function f9<T extends RegExp>(x: T): void {
+>f9 : <T extends RegExp>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r5 = true ? /1/ : x; // ok
+>r5 : RegExp
+>   : ^^^^^^
+>true ? /1/ : x : RegExp
+>               : ^^^^^^
+>true : true
+>     : ^^^^
+>/1/ : RegExp
+>    : ^^^^^^
+>x : T
+>  : ^
+
+    let r5_2 = true ? x : /1/; // ok
+>r5_2 : RegExp
+>     : ^^^^^^
+>true ? x : /1/ : RegExp
+>               : ^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>/1/ : RegExp
+>    : ^^^^^^
+
+}
+
+function f10<T extends { foo: number }>(x: T): void {
+>f10 : <T extends { foo: number; }>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>foo : number
+>    : ^^^^^^
+>x : T
+>  : ^
+
+    let r6 = true ? { foo: 1 } : x; // ok
+>r6 : { foo: number; }
+>   : ^^^^^^^^^^^^^^^^
+>true ? { foo: 1 } : x : { foo: number; }
+>                      : ^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>{ foo: 1 } : { foo: number; }
+>           : ^^^^^^^^^^^^^^^^
+>foo : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+>x : T
+>  : ^
+
+    let r6_2 = true ? x : { foo: 1 }; // ok
+>r6_2 : { foo: number; }
+>     : ^^^^^^^^^^^^^^^^
+>true ? x : { foo: 1 } : { foo: number; }
+>                      : ^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>{ foo: 1 } : { foo: number; }
+>           : ^^^^^^^^^^^^^^^^
+>foo : number
+>    : ^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+function f11<T extends () => void>(x: T): void {
+>f11 : <T extends () => void>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r7 = true ? () => { } : x; // ok
+>r7 : () => void
+>   : ^^^^^^^^^^
+>true ? () => { } : x : () => void
+>                     : ^^^^^^^^^^
+>true : true
+>     : ^^^^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+>x : T
+>  : ^
+
+    let r7_2 = true ? x : () => { }; // ok
+>r7_2 : () => void
+>     : ^^^^^^^^^^
+>true ? x : () => { } : () => void
+>                     : ^^^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>() => { } : () => void
+>          : ^^^^^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+function f13<T extends I1>(x: T): void {
+>f13 : <T extends I1>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let i1: I1 = null as unknown as (I1);
+>i1 : I1
+>   : ^^
+>null as unknown as (I1) : I1
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    let r9 = true ? i1 : x; // ok
+>r9 : I1
+>   : ^^
+>true ? i1 : x : I1
+>              : ^^
+>true : true
+>     : ^^^^
+>i1 : I1
+>   : ^^
+>x : T
+>  : ^
+
+    let r9_2 = true ? x : i1; // ok
+>r9_2 : I1
+>     : ^^
+>true ? x : i1 : I1
+>              : ^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>i1 : I1
+>   : ^^
+
+}
+
+function f14<T extends C1>(x: T): void {
+>f14 : <T extends C1>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    /*pruned*/;
+    /*pruned*/;              // ok
+    /*pruned*/;                // ok
+}
+
+function f15<T extends C2<number>>(x: T): void {
+>f15 : <T extends C2<number>>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    /*pruned*/;
+    /*pruned*/;              // ok
+    /*pruned*/;                // ok
+}
+
+function f16<T extends E>(x: T): void {
+>f16 : <T extends E>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    /*pruned*/;             // ok
+    /*pruned*/;               // ok
+
+    let r14 = true ? E.A : x; // ok
+>r14 : E
+>    : ^
+>true ? E.A : x : E
+>               : ^
+>true : true
+>     : ^^^^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+>x : T
+>  : ^
+
+    let r14_2 = true ? x : E.A; // ok
+>r14_2 : E
+>      : ^
+>true ? x : E.A : E
+>               : ^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>E.A : E
+>    : ^
+>E : typeof E
+>  : ^^^^^^^^
+>A : E
+>  : ^
+
+}
+
+function f17<T extends typeof f>(x: T): void {
+>f17 : <T extends typeof f>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>f : () => void
+>  : ^^^^^^^^^^
+>x : T
+>  : ^
+
+    let af: typeof f = null as unknown as (typeof f);
+>af : () => void
+>   : ^^^^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+>null as unknown as (typeof f) : () => void
+>                              : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>f : () => void
+>  : ^^^^^^^^^^
+
+    let r15 = true ? af : x; // ok
+>r15 : () => void
+>    : ^^^^^^^^^^
+>true ? af : x : () => void
+>              : ^^^^^^^^^^
+>true : true
+>     : ^^^^
+>af : () => void
+>   : ^^^^^^^^^^
+>x : T
+>  : ^
+
+    let r15_2 = true ? x : af; // ok
+>r15_2 : () => void
+>      : ^^^^^^^^^^
+>true ? x : af : () => void
+>              : ^^^^^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>af : () => void
+>   : ^^^^^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+function f19<T>(x: T): void {
+>f19 : <T>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    function f17<U extends T>(a: U): void {
+>f17 : <U extends T>(a: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>U : U
+>  : ^
+>a : U
+>  : ^
+
+        let r17 = true ? x : a; // ok
+>r17 : T
+>    : ^
+>true ? x : a : T
+>             : ^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>a : U
+>  : ^
+
+        let r17_2 = true ? a : x; // ok
+>r17_2 : T
+>      : ^
+>true ? a : x : T
+>             : ^
+>true : true
+>     : ^^^^
+>a : U
+>  : ^
+>x : T
+>  : ^
+
+    }
+
+    function f18<V extends U, U extends T>(a: V): void {
+>f18 : <V extends U, U extends T>(a: V) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>V : V
+>  : ^
+>U : U
+>  : ^
+>a : V
+>  : ^
+
+        let r18 = true ? x : a; // ok
+>r18 : T
+>    : ^
+>true ? x : a : T
+>             : ^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>a : V
+>  : ^
+
+        let r18_2 = true ? a : x; // ok
+>r18_2 : T
+>      : ^
+>true ? a : x : T
+>             : ^
+>true : true
+>     : ^^^^
+>a : V
+>  : ^
+>x : T
+>  : ^
+
+    }
+}
+
+function f20<T extends Number>(x: T): void {
+>f20 : <T extends Number>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    /*pruned*/;                        // ok
+    /*pruned*/;                          // ok
+}
+
+function f21<T extends Number>(x: T): void {
+>f21 : <T extends Number>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    let r20 = true ? {} : x; // ok
+>r20 : {}
+>    : ^^
+>true ? {} : x : T | {}
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>{} : {}
+>   : ^^
+>x : T
+>  : ^
+
+    let r20_2 = true ? x : {}; // ok
+>r20_2 : {}
+>      : ^^
+>true ? x : {} : T | {}
+>              : ^^^^^^
+>true : true
+>     : ^^^^
+>x : T
+>  : ^
+>{} : {}
+>   : ^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

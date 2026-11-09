@@ -1,0 +1,3 @@
+line 30, 34 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`y = x` on line 29, `z = y` on line 33)
+line 96 type: artifact an object literal checked against a declared type lists that type's optional fields it omits
+line 103, 104, 105, 106 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`x1 = { a: 1, b: 1, c: 1, d: 1 }` on line 99)

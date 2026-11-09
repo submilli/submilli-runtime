@@ -25,7 +25,7 @@ function f3(): void {
     let x = getStringOrNumber();
     let y: number = null as unknown as (number);
     if (typeof x === "string") {
-        /*pruned*/;                            
+        let n = (z => x.length + y + z)(y = 1);
     }
 }
 
@@ -67,12 +67,12 @@ function f4(): void {
                          
  
 
-/*pruned*/;          
-                                                
-                       
+function f6(): void {
+    let v: number = null as unknown as (number);
+    /*pruned*/;        
                     
          
-                         
- 
+    v; // still undefined
+}
 
 function main(): void {}

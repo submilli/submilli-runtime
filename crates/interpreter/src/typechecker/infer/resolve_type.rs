@@ -68,8 +68,10 @@ impl<'a> Inferer<'a> {
                     &generics,
                     &resolved_args,
                 );
-            sub.apply(&ty, &self.type_limits)
-                .map_err(super::type_limit_at(span))?
+            let body = sub
+                .apply(&ty, &self.type_limits)
+                .map_err(super::type_limit_at(span))?;
+            self.normalize_at(&body, span)?
         };
         let alias = Type::alias_ty(
             package,
@@ -820,6 +822,9 @@ impl<'a> Inferer<'a> {
             TypeAnnotationKind::BigIntLiteral(digits) => crate::types::bigint_literal_type(digits),
             TypeAnnotationKind::BooleanLiteral(b) => Type::BooleanLiteral(*b),
             TypeAnnotationKind::KeyOf(operand) => self.resolve_keyof(operand)?,
+            TypeAnnotationKind::IndexedAccess { object, index } => {
+                self.resolve_indexed_access(object, index)?
+            }
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,
         })
     }
@@ -1024,71 +1029,110 @@ impl<'a> Inferer<'a> {
         })
     }
 
-    /// `keyof T` as the union of `T`'s member names, resolved eagerly to string literal
-    /// types. Matches TypeScript: methods count as members alongside properties, and
-    /// `keyof` of a type with no members is `never` — which `Type::union` already
-    /// produces from an empty vector. `unknown` has no members either.
-    ///
-    /// Only concrete operands are supported. `keyof T` for a type parameter has no
-    /// eager answer and would need a deferred type node, so it is rejected by name
-    /// rather than resolved to something narrower than it should be.
+    /// `keyof T`: for a concrete `T` the union of its member names, as
+    /// [`utility_types::keyof_type`](super::utility_types::keyof_type) reads
+    /// them; over a type parameter the symbolic [`Type::KeyOf`], which
+    /// instantiation evaluates.
     fn resolve_keyof(&mut self, operand: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type(operand)?;
-        if matches!(resolved.peel(), Type::Unknown) {
-            return Ok(Type::Never);
+        // Over a type parameter the key set is unknown until instantiation,
+        // and over a later declaration until its members are bound.
+        if let Some(ty) = self.defer_if_pending(
+            "keyof",
+            std::slice::from_ref(&resolved),
+            operand.span,
+            || Type::KeyOf(Box::new(resolved.clone())),
+        ) {
+            return Ok(ty);
         }
-        if let Some(index) = self.resolver().index_signature(&resolved) {
-            if matches!(index.key.peel(), Type::String) {
-                return Ok(if index.string_keyof_includes_number {
-                    Type::union(vec![Type::String, Type::Number])
-                } else {
-                    Type::String
-                });
-            }
-            let mut keys = self
-                .member_names_of(&resolved)
-                .unwrap_or_default()
-                .into_iter()
-                .map(Type::StringLiteral)
-                .collect::<Vec<_>>();
-            keys.push(*index.key);
-            return Ok(Type::union(keys));
+        if super::utility_types::holds_type_parameter(&resolved) {
+            return Ok(Type::KeyOf(Box::new(resolved)));
         }
-        let Some(names) = self.member_names_of(&resolved) else {
-            if !matches!(resolved.peel(), Type::Error) {
-                self.error_with_help(
-                    operand.span,
-                    format!("`keyof` needs an object type or interface, got `{resolved}`"),
-                    keyof_help(&resolved),
-                );
-            }
-            return Ok(Type::Error);
-        };
-        Ok(Type::union(
-            names.into_iter().map(Type::StringLiteral).collect(),
-        ))
+        if let Some(keys) = super::utility_types::keyof_type(&resolved, self.resolver()) {
+            return Ok(keys);
+        }
+        if !matches!(resolved.peel(), Type::Error) {
+            self.error(
+                operand.span,
+                format!("`keyof` needs an object type or interface, got `{resolved}`"),
+            );
+        }
+        Ok(Type::Error)
     }
 
-    /// The member names `keyof` reports, or `None` if the type has no member list to
-    /// read. Interfaces flatten inherited members at declaration time, so the two maps
-    /// on the symbol are the whole surface.
-    fn member_names_of(&self, ty: &Type) -> Option<Vec<String>> {
-        match ty.peel() {
-            Type::Object { fields, .. } => Some(fields.keys().cloned().collect()),
-            Type::InterfaceRef { .. } => {
-                let (mangled, _package, name, _args) = ty.interface_routing()?;
-                let sym = self.lookup_structural_type(&mangled, name)?;
-                let TypeKind::Interface {
-                    methods,
-                    properties,
-                    ..
-                } = &sym.kind
-                else {
-                    return None;
-                };
-                Some(properties.keys().chain(methods.keys()).cloned().collect())
+    /// `T[K]`: the type of `T`'s property `K`, as tsc computes it. A type
+    /// computation, not a read: `Record<string, V>[string]` is `V`.
+    fn resolve_indexed_access(
+        &mut self,
+        object: &TypeAnnotation,
+        index: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
+        let object_ty = self.resolve_type(object)?;
+        let index_ty = self.resolve_type(index)?;
+        let operands = [object_ty.clone(), index_ty.clone()];
+        if let Some(ty) = self.defer_if_pending("T[K]", &operands, index.span, || {
+            Type::indexed_access(object_ty.clone(), index_ty.clone())
+        }) {
+            return Ok(ty);
+        }
+        // Over a type parameter the property is unknown until instantiation.
+        if super::utility_types::holds_type_parameter(&object_ty)
+            || super::utility_types::holds_type_parameter(&index_ty)
+        {
+            // Its key is checked against `keyof T` with the other written
+            // constraints (`check_named_type_constraints`).
+            return Ok(Type::indexed_access(object_ty, index_ty));
+        }
+        let property =
+            match super::utility_types::index_access_type(&object_ty, &index_ty, self.resolver()) {
+                Ok(ty) => ty,
+                Err(message) => {
+                    self.error(index.span, message);
+                    return Ok(Type::Error);
+                }
+            };
+        self.settle_written_form(property, "T[K]", index.span)
+    }
+
+    /// A form's evaluation where it is written. One still naming a later
+    /// declaration stays lazy and is checked once every declaration is bound;
+    /// one naming the declaration being bound (`interface J { b: I["a"] }`
+    /// with `I["a"]` being `J["b"]`) is a cycle; any other is evaluated to the
+    /// end, reporting why it has none.
+    pub(super) fn settle_written_form(
+        &mut self,
+        ty: Type,
+        operator: &str,
+        span: crate::Span,
+    ) -> Result<Type, CompilerFailure> {
+        let mut current = ty;
+        let mut seen = Vec::new();
+        loop {
+            if let Some(ty) =
+                self.defer_if_pending(operator, std::slice::from_ref(&current), span, || {
+                    current.clone()
+                })
+            {
+                return Ok(ty);
             }
-            _ => None,
+            // Follow a chain of forms (`I["a"]` is `J["b"]`, which is
+            // `K["c"]`) one step at a time, so one reaching the declaration
+            // being bound is reported as the cycle it is.
+            let Some(step) = super::utility_types::evaluate_step(&current, self.resolver()) else {
+                return self.normalize_at(&current, span);
+            };
+            if seen.contains(&current) {
+                self.error(span, super::utility_types::refers_to_itself(&current));
+                return Ok(Type::Error);
+            }
+            seen.push(current);
+            match step {
+                Ok(next) => current = next,
+                Err(reason) => {
+                    self.error(span, reason);
+                    return Ok(Type::Error);
+                }
+            }
         }
     }
 }
@@ -1159,18 +1203,6 @@ impl TypeofRoot {
             _ => TypeofRoot::OtherType,
         }
     }
-}
-
-/// Why `keyof` of a type parameter has no answer: its key set is not known.
-fn keyof_help(operand: &Type) -> Vec<String> {
-    if !matches!(operand.peel(), Type::TypeVar(_) | Type::GenericParam { .. }) {
-        return Vec::new();
-    }
-    vec![
-        "`keyof` of a type parameter is not supported: generics are erased, so `keyof` \
-         needs a concrete object type"
-            .to_string(),
-    ]
 }
 
 #[cfg(test)]
@@ -1621,14 +1653,16 @@ mod tests {
     }
 
     #[test]
-    fn keyof_rejects_an_operand_with_no_members() {
+    fn keyof_of_a_primitive_reads_its_interface() {
+        // As in tsc, `keyof number` is the keys of `Number`, so `"x"` is
+        // rejected and `"toFixed"` accepted.
         let (_ta, diags) = run("function main(): void { const k: keyof number = \"x\"; }");
         assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("needs an object type or interface")),
-            "expected a `keyof` operand diagnostic: {diags:?}"
+            diags.iter().any(|d| d.message.contains("got `\"x\"`")),
+            "expected `\"x\"` rejected: {diags:?}"
         );
+        let (_ta, diags) = run("function main(): void { const k: keyof number = \"toFixed\"; }");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
     }
 
     /// `keyof` is contextual, not reserved — TypeScript allows it as an identifier.
@@ -1824,6 +1858,31 @@ mod invariant_tests {
     }
 }
 
+/// Whether a form over a type parameter may fill a template hole, as tsc
+/// decides from its constraint: a string mapping always (`on${Capitalize<K>}`),
+/// a filter of a valid hole (`id_${Extract<keyof T, string>}`), and `T[K]` or
+/// `ReturnType<F>` as leniently as a bare `T`. An object utility
+/// (`Partial<T>`), a parameter list and a bare `keyof T`, which may hold a
+/// `symbol`, may not.
+fn valid_form_hole(form: &Type) -> bool {
+    use super::utility_types::{Utility, deferred_application};
+    match form {
+        Type::KeyOf(_) => false,
+        Type::IndexedAccess { .. } => true,
+        _ => match deferred_application(form) {
+            Some((utility, _)) if utility.is_string_mapping() => true,
+            Some((Utility::Extract, [operand, filter])) => {
+                valid_template_hole(filter) || valid_template_hole(operand)
+            }
+            Some((Utility::Exclude | Utility::NonNullable | Utility::NoInfer, [operand, ..])) => {
+                valid_template_hole(operand)
+            }
+            Some((Utility::ReturnType, _)) => true,
+            _ => false,
+        },
+    }
+}
+
 fn valid_template_hole(ty: &Type) -> bool {
     match ty.peel() {
         Type::String
@@ -1839,6 +1898,7 @@ fn valid_template_hole(ty: &Type) -> bool {
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
         | Type::Never => true,
+        form if form.is_type_operator() => valid_form_hole(form),
         Type::TemplateLiteral { substitutions, .. } | Type::Union(substitutions) => {
             substitutions.iter().all(valid_template_hole)
         }

@@ -96,7 +96,14 @@ const re = /./g
 >/./g : RegExp
 >     : ^^^^^^
 
-/*pruned*/;
+let match: RegExpExecArray | null = null as unknown as (RegExpExecArray | null);
+>match : RegExpExecArray | null
+>      : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (RegExpExecArray | null) : RegExpExecArray | null
+>                                            : ^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 /*pruned*/;
 

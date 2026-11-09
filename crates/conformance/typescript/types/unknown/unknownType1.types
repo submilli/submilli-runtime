@@ -3,8 +3,8 @@
 // In an intersection everything absorbs unknown
 
 /*pruned*/;                 // null
-/*pruned*/;                 // undefined
-/*pruned*/;                        // never
+/*pruned*/;                      // undefined
+/*pruned*/;                             // never
 /*pruned*/;                   // string
 /*pruned*/;                     // string[]
 /*pruned*/;                    // unknown
@@ -285,7 +285,12 @@ function f22(x: unknown): void {
 >x : unknown
 >  : ^^^^^^^
 
-    /*pruned*/;          // Error
+    let v3: object = x;  // Error
+>v3 : object
+>   : ^^^^^^
+>x : unknown
+>  : ^^^^^^^
+
     let v4: string = x;  // Error
 >v4 : string
 >   : ^^^^^^
@@ -314,18 +319,75 @@ function f22(x: unknown): void {
 
 // Type parameter 'T extends unknown' not related to object
 
-/*pruned*/;
+function f23<T extends unknown>(x: T): void {
+>f23 : <T extends unknown>(x: T) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
 
+    let y: object = x;  // Error
+>y : object
+>  : ^^^^^^
+>x : T
+>  : ^
 
+}
 
 // Anything fresh but primitive assignable to { [x: string]: unknown }
 
-/*pruned*/;
+function f24(x: { [x: string]: unknown }): void {
+>f24 : (x: { [x: string]: unknown; }) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : { [x: string]: unknown; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
 
+    x = {};
+>x = {} : {}
+>       : ^^
+>x : { [x: string]: unknown; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
 
+    x = { a: 5 };
+>x = { a: 5 } : { a: number; }
+>             : ^^^^^^^^^^^^^^
+>x : { [x: string]: unknown; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{ a: 5 } : { a: number; }
+>         : ^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>5 : 5
+>  : ^
 
+    x = [1, 2, 3]; // Error
+>x = [1, 2, 3] : number[]
+>              : ^^^^^^^^
+>x : { [x: string]: unknown; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>[1, 2, 3] : number[]
+>          : ^^^^^^^^
+>1 : 1
+>  : ^
+>2 : 2
+>  : ^
+>3 : 3
+>  : ^
 
+    x = 123;  // Error
+>x = 123 : 123
+>        : ^^^
+>x : { [x: string]: unknown; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>123 : 123
+>    : ^^^
 
+}
 
 // Locals of type unknown always considered initialized
 
@@ -392,10 +454,31 @@ function f28(x: unknown): void {
 
 // Type parameter with explicit 'unknown' constraint not assignable to '{}'
 
-/*pruned*/;
+function f30<T, U extends unknown>(t: T, u: U): void {
+>f30 : <T, U extends unknown>(t: T, u: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
 
+    let x: {} = t;
+>x : {}
+>  : ^^
+>t : T
+>  : ^
 
+    let y: {} = u;
+>y : {}
+>  : ^^
+>u : U
+>  : ^
 
+}
 
 // Repro from #26796
 
@@ -403,9 +486,19 @@ function f28(x: unknown): void {
 /*pruned*/;
 /*pruned*/;                                 // false
 
-/*pruned*/;
+function oops<T extends unknown>(arg: T): {} {
+>oops : <T extends unknown>(arg: T) => {}
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>arg : T
+>    : ^
 
+    return arg;  // Error
+>arg : T
+>    : ^
 
+}
 
 
 function main(): void {}

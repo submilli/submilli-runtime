@@ -58,3 +58,7 @@ compoundArithmeticAssignmentWithInvalidOperands.ts(52,7): error TS2363: The righ
 compoundArithmeticAssignmentWithInvalidOperands.ts(53,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundArithmeticAssignmentWithInvalidOperands.ts(54,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
 compoundArithmeticAssignmentWithInvalidOperands.ts(55,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundArithmeticAssignmentWithInvalidOperands.ts(58,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundArithmeticAssignmentWithInvalidOperands.ts(59,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundArithmeticAssignmentWithInvalidOperands.ts(60,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.
+compoundArithmeticAssignmentWithInvalidOperands.ts(61,7): error TS2363: The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.

@@ -13,7 +13,7 @@ interface I { bar: string; }
 let f: I = x;
 
 let g: { baz: string } = 1;
-/*pruned*/;               
+let g2: { 0: number } = 1;
 
 /*pruned*/;                      
 /**/; 

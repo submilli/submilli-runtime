@@ -1,0 +1,53 @@
+types: 29 of 88 tsc entries compared, 11 differ
+
+line 6: [5, 6]
+  tsc:  [number, number]
+  ours: number[]
+
+line 7: [1]
+  tsc:  [number]
+  ours: number[]
+
+line 8: [3, 4]
+  tsc:  [number, number]
+  ours: number[]
+
+line 9: [3]
+  tsc:  [number]
+  ours: number[]
+
+line 9: [5, 6]
+  tsc:  [number, number]
+  ours: number[]
+
+line 10: [1, 2]
+  tsc:  [number, number]
+  ours: number[]
+
+line 10: [3, 4]
+  tsc:  [number, number]
+  ours: number[]
+
+line 10: [5, 6]
+  tsc:  [number, number]
+  ours: number[]
+
+line 11: [1, 2]
+  tsc:  [number, number]
+  ours: number[]
+
+line 11: [3, 4]
+  tsc:  [number, number]
+  ours: number[]
+
+line 11: [5, 6]
+  tsc:  [number, number]
+  ours: number[]
+
+errors:
+line 6: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 7: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 8: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 9: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 10: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 11: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)

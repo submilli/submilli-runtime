@@ -1,0 +1,9 @@
+types: 19 of 41 tsc entries compared, 2 differ
+
+line 4: x
+  tsc:  T
+  ours: (T & ({} | null)) | null
+
+line 5: x
+  tsc:  T
+  ours: (T & ({} | null)) | undefined

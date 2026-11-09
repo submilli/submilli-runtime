@@ -42,7 +42,14 @@ let d: void = null as unknown as (void);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
+let e: E = null as unknown as (E);
+>e : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 // operator <
 let r1a1 = a < b;
@@ -75,7 +82,16 @@ let r1a1_3 = a < d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;         // no error, expected
+let r1a1_4 = a < e; // no error, expected
+>r1a1_4 : boolean
+>       : ^^^^^^^
+>a < e : boolean
+>      : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r1b1 = b < a;
 >r1b1 : boolean
@@ -107,7 +123,16 @@ let r1b1_3 = b < d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r1b1_4 = b < e;
+>r1b1_4 : boolean
+>       : ^^^^^^^
+>b < e : boolean
+>      : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r1c1 = c < a;
 >r1c1 : boolean
@@ -139,7 +164,16 @@ let r1c1_3 = c < d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r1c1_4 = c < e;
+>r1c1_4 : boolean
+>       : ^^^^^^^
+>c < e : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r1d1 = d < a;
 >r1d1 : boolean
@@ -171,12 +205,57 @@ let r1d1_3 = d < c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r1d1_4 = d < e;
+>r1d1_4 : boolean
+>       : ^^^^^^^
+>d < e : boolean
+>      : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;       // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r1e1 = e < a; // no error, expected
+>r1e1 : boolean
+>     : ^^^^^^^
+>e < a : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r1e1_2 = e < b;
+>r1e1_2 : boolean
+>       : ^^^^^^^
+>e < b : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r1e1_3 = e < c;
+>r1e1_3 : boolean
+>       : ^^^^^^^
+>e < c : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r1e1_4 = e < d;
+>r1e1_4 : boolean
+>       : ^^^^^^^
+>e < d : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator >
 let r2a1 = a > b;
@@ -209,7 +288,16 @@ let r2a1_3 = a > d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;         // no error, expected
+let r2a1_4 = a > e; // no error, expected
+>r2a1_4 : boolean
+>       : ^^^^^^^
+>a > e : boolean
+>      : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r2b1 = b > a;
 >r2b1 : boolean
@@ -241,7 +329,16 @@ let r2b1_3 = b > d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r2b1_4 = b > e;
+>r2b1_4 : boolean
+>       : ^^^^^^^
+>b > e : boolean
+>      : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r2c1 = c > a;
 >r2c1 : boolean
@@ -273,7 +370,16 @@ let r2c1_3 = c > d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r2c1_4 = c > e;
+>r2c1_4 : boolean
+>       : ^^^^^^^
+>c > e : boolean
+>      : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r2d1 = d > a;
 >r2d1 : boolean
@@ -305,12 +411,57 @@ let r2d1_3 = d > c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r2d1_4 = d > e;
+>r2d1_4 : boolean
+>       : ^^^^^^^
+>d > e : boolean
+>      : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;       // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r2e1 = e > a; // no error, expected
+>r2e1 : boolean
+>     : ^^^^^^^
+>e > a : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r2e1_2 = e > b;
+>r2e1_2 : boolean
+>       : ^^^^^^^
+>e > b : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r2e1_3 = e > c;
+>r2e1_3 : boolean
+>       : ^^^^^^^
+>e > c : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r2e1_4 = e > d;
+>r2e1_4 : boolean
+>       : ^^^^^^^
+>e > d : boolean
+>      : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator <=
 let r3a1 = a <= b;
@@ -343,7 +494,16 @@ let r3a1_3 = a <= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;          // no error, expected
+let r3a1_4 = a <= e; // no error, expected
+>r3a1_4 : boolean
+>       : ^^^^^^^
+>a <= e : boolean
+>       : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r3b1 = b <= a;
 >r3b1 : boolean
@@ -375,7 +535,16 @@ let r3b1_3 = b <= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r3b1_4 = b <= e;
+>r3b1_4 : boolean
+>       : ^^^^^^^
+>b <= e : boolean
+>       : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r3c1 = c <= a;
 >r3c1 : boolean
@@ -407,7 +576,16 @@ let r3c1_3 = c <= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r3c1_4 = c <= e;
+>r3c1_4 : boolean
+>       : ^^^^^^^
+>c <= e : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r3d1 = d <= a;
 >r3d1 : boolean
@@ -439,12 +617,57 @@ let r3d1_3 = d <= c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r3d1_4 = d <= e;
+>r3d1_4 : boolean
+>       : ^^^^^^^
+>d <= e : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;        // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r3e1 = e <= a; // no error, expected
+>r3e1 : boolean
+>     : ^^^^^^^
+>e <= a : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r3e1_2 = e <= b;
+>r3e1_2 : boolean
+>       : ^^^^^^^
+>e <= b : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r3e1_3 = e <= c;
+>r3e1_3 : boolean
+>       : ^^^^^^^
+>e <= c : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r3e1_4 = e <= d;
+>r3e1_4 : boolean
+>       : ^^^^^^^
+>e <= d : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator >=
 let r4a1 = a >= b;
@@ -477,7 +700,16 @@ let r4a1_3 = a >= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;          // no error, expected
+let r4a1_4 = a >= e; // no error, expected
+>r4a1_4 : boolean
+>       : ^^^^^^^
+>a >= e : boolean
+>       : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r4b1 = b >= a;
 >r4b1 : boolean
@@ -509,7 +741,16 @@ let r4b1_3 = b >= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r4b1_4 = b >= e;
+>r4b1_4 : boolean
+>       : ^^^^^^^
+>b >= e : boolean
+>       : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r4c1 = c >= a;
 >r4c1 : boolean
@@ -541,7 +782,16 @@ let r4c1_3 = c >= d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r4c1_4 = c >= e;
+>r4c1_4 : boolean
+>       : ^^^^^^^
+>c >= e : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r4d1 = d >= a;
 >r4d1 : boolean
@@ -573,12 +823,57 @@ let r4d1_3 = d >= c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r4d1_4 = d >= e;
+>r4d1_4 : boolean
+>       : ^^^^^^^
+>d >= e : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;        // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r4e1 = e >= a; // no error, expected
+>r4e1 : boolean
+>     : ^^^^^^^
+>e >= a : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r4e1_2 = e >= b;
+>r4e1_2 : boolean
+>       : ^^^^^^^
+>e >= b : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r4e1_3 = e >= c;
+>r4e1_3 : boolean
+>       : ^^^^^^^
+>e >= c : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r4e1_4 = e >= d;
+>r4e1_4 : boolean
+>       : ^^^^^^^
+>e >= d : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator ==
 let r5a1 = a == b;
@@ -611,7 +906,16 @@ let r5a1_3 = a == d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;          // no error, expected
+let r5a1_4 = a == e; // no error, expected
+>r5a1_4 : boolean
+>       : ^^^^^^^
+>a == e : boolean
+>       : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r5b1 = b == a;
 >r5b1 : boolean
@@ -643,7 +947,16 @@ let r5b1_3 = b == d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r5b1_4 = b == e;
+>r5b1_4 : boolean
+>       : ^^^^^^^
+>b == e : boolean
+>       : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r5c1 = c == a;
 >r5c1 : boolean
@@ -675,7 +988,16 @@ let r5c1_3 = c == d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r5c1_4 = c == e;
+>r5c1_4 : boolean
+>       : ^^^^^^^
+>c == e : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r5d1 = d == a;
 >r5d1 : boolean
@@ -707,12 +1029,57 @@ let r5d1_3 = d == c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r5d1_4 = d == e;
+>r5d1_4 : boolean
+>       : ^^^^^^^
+>d == e : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;        // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r5e1 = e == a; // no error, expected
+>r5e1 : boolean
+>     : ^^^^^^^
+>e == a : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r5e1_2 = e == b;
+>r5e1_2 : boolean
+>       : ^^^^^^^
+>e == b : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r5e1_3 = e == c;
+>r5e1_3 : boolean
+>       : ^^^^^^^
+>e == c : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r5e1_4 = e == d;
+>r5e1_4 : boolean
+>       : ^^^^^^^
+>e == d : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator !=
 let r6a1 = a != b;
@@ -745,7 +1112,16 @@ let r6a1_3 = a != d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;          // no error, expected
+let r6a1_4 = a != e; // no error, expected
+>r6a1_4 : boolean
+>       : ^^^^^^^
+>a != e : boolean
+>       : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r6b1 = b != a;
 >r6b1 : boolean
@@ -777,7 +1153,16 @@ let r6b1_3 = b != d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r6b1_4 = b != e;
+>r6b1_4 : boolean
+>       : ^^^^^^^
+>b != e : boolean
+>       : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r6c1 = c != a;
 >r6c1 : boolean
@@ -809,7 +1194,16 @@ let r6c1_3 = c != d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r6c1_4 = c != e;
+>r6c1_4 : boolean
+>       : ^^^^^^^
+>c != e : boolean
+>       : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r6d1 = d != a;
 >r6d1 : boolean
@@ -841,12 +1235,57 @@ let r6d1_3 = d != c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r6d1_4 = d != e;
+>r6d1_4 : boolean
+>       : ^^^^^^^
+>d != e : boolean
+>       : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;        // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r6e1 = e != a; // no error, expected
+>r6e1 : boolean
+>     : ^^^^^^^
+>e != a : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r6e1_2 = e != b;
+>r6e1_2 : boolean
+>       : ^^^^^^^
+>e != b : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r6e1_3 = e != c;
+>r6e1_3 : boolean
+>       : ^^^^^^^
+>e != c : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r6e1_4 = e != d;
+>r6e1_4 : boolean
+>       : ^^^^^^^
+>e != d : boolean
+>       : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator ===
 let r7a1 = a === b;
@@ -879,7 +1318,16 @@ let r7a1_3 = a === d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;           // no error, expected
+let r7a1_4 = a === e; // no error, expected
+>r7a1_4 : boolean
+>       : ^^^^^^^
+>a === e : boolean
+>        : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r7b1 = b === a;
 >r7b1 : boolean
@@ -911,7 +1359,16 @@ let r7b1_3 = b === d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r7b1_4 = b === e;
+>r7b1_4 : boolean
+>       : ^^^^^^^
+>b === e : boolean
+>        : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r7c1 = c === a;
 >r7c1 : boolean
@@ -943,7 +1400,16 @@ let r7c1_3 = c === d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r7c1_4 = c === e;
+>r7c1_4 : boolean
+>       : ^^^^^^^
+>c === e : boolean
+>        : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r7d1 = d === a;
 >r7d1 : boolean
@@ -975,12 +1441,57 @@ let r7d1_3 = d === c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r7d1_4 = d === e;
+>r7d1_4 : boolean
+>       : ^^^^^^^
+>d === e : boolean
+>        : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;         // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r7e1 = e === a; // no error, expected
+>r7e1 : boolean
+>     : ^^^^^^^
+>e === a : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r7e1_2 = e === b;
+>r7e1_2 : boolean
+>       : ^^^^^^^
+>e === b : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r7e1_3 = e === c;
+>r7e1_3 : boolean
+>       : ^^^^^^^
+>e === c : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r7e1_4 = e === d;
+>r7e1_4 : boolean
+>       : ^^^^^^^
+>e === d : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 // operator !==
 let r8a1 = a !== b;
@@ -1013,7 +1524,16 @@ let r8a1_3 = a !== d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;           // no error, expected
+let r8a1_4 = a !== e; // no error, expected
+>r8a1_4 : boolean
+>       : ^^^^^^^
+>a !== e : boolean
+>        : ^^^^^^^
+>a : number
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r8b1 = b !== a;
 >r8b1 : boolean
@@ -1045,7 +1565,16 @@ let r8b1_3 = b !== d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r8b1_4 = b !== e;
+>r8b1_4 : boolean
+>       : ^^^^^^^
+>b !== e : boolean
+>        : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>e : E
+>  : ^
+
 
 let r8c1 = c !== a;
 >r8c1 : boolean
@@ -1077,7 +1606,16 @@ let r8c1_3 = c !== d;
 >d : void
 >  : ^^^^
 
-/*pruned*/;
+let r8c1_4 = c !== e;
+>r8c1_4 : boolean
+>       : ^^^^^^^
+>c !== e : boolean
+>        : ^^^^^^^
+>c : string
+>  : ^^^^^^
+>e : E
+>  : ^
+
 
 let r8d1 = d !== a;
 >r8d1 : boolean
@@ -1109,12 +1647,57 @@ let r8d1_3 = d !== c;
 >c : string
 >  : ^^^^^^
 
-/*pruned*/;
+let r8d1_4 = d !== e;
+>r8d1_4 : boolean
+>       : ^^^^^^^
+>d !== e : boolean
+>        : ^^^^^^^
+>d : void
+>  : ^^^^
+>e : E
+>  : ^
 
-/*pruned*/;         // no error, expected
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+
+let r8e1 = e !== a; // no error, expected
+>r8e1 : boolean
+>     : ^^^^^^^
+>e !== a : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>a : number
+>  : ^^^^^^
+
+let r8e1_2 = e !== b;
+>r8e1_2 : boolean
+>       : ^^^^^^^
+>e !== b : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>b : boolean
+>  : ^^^^^^^
+
+let r8e1_3 = e !== c;
+>r8e1_3 : boolean
+>       : ^^^^^^^
+>e !== c : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>c : string
+>  : ^^^^^^
+
+let r8e1_4 = e !== d;
+>r8e1_4 : boolean
+>       : ^^^^^^^
+>e !== d : boolean
+>        : ^^^^^^^
+>e : E
+>  : ^
+>d : void
+>  : ^^^^
+
 
 function main(): void {}
 >main : () => void

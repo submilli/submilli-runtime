@@ -1,0 +1,9 @@
+types: 2 of 4 tsc entries compared, 2 differ
+
+line 2: v
+  tsc:  { 0(): void; }
+  ours: { "0": () => void }
+
+line 2: { 0() { } }
+  tsc:  { 0(): void; }
+  ours: { "0": () => void }

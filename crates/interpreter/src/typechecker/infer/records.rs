@@ -814,7 +814,9 @@ impl Inferer<'_> {
                 .kind
                 .clone()
             {
-                self.bind_interface(name, generics, members, extends, doc)?;
+                self.with_binding(name.name.clone(), |this| {
+                    this.bind_interface(name, generics, members, extends, doc)
+                })?;
             }
         }
         Ok(true)

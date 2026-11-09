@@ -1,0 +1,64 @@
+=== typeParameterDirectlyConstrainedToItself.ts ===
+// all of the below should be errors
+
+class C<T extends T> { }
+>C : C<T>
+>  : ^^^^
+>T : T
+>  : ^
+
+class C2<T, U extends U> { }
+>C2 : C2<T, U>
+>   : ^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+
+interface I<T extends T> { }
+>I : I<T>
+>  : ^^^^
+>T : T
+>  : ^
+
+interface I2<T, U extends U> { }
+>I2 : I2<T, U>
+>   : ^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+
+function f<T extends T>(): void { }
+>f : <T>() => void
+>  : ^^^^^^^^^^^^^
+>T : T
+>  : ^
+
+function f2<T, U extends U>(): void { }
+>f2 : <T, U>() => void
+>   : ^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+
+
+/**/;
+
+
+
+
+
+
+
+/*pruned*/;
+/*pruned*/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

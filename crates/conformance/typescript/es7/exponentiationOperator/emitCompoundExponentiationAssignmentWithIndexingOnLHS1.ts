@@ -13,7 +13,7 @@ let i2 = 0;
 /*pruned*/;                        
 
 let array3 = [2, 2, 3];
-/*pruned*/;        
-/*pruned*/;                                          
+let j0 = 0, j1 = 1;
+array3[j0++] **= array3[j1++] **= array3[j0++] **= 1;
 
 function main(): void {}

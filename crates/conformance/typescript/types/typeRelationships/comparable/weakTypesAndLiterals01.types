@@ -38,14 +38,34 @@ let aOrB: "A" | "B" = null as unknown as ("A" | "B");
 >                : ^^^^^^^
 
 
-/*pruned*/;
+const f = (arg: LiteralsOrWeakTypes) => {
+>f : (arg: LiteralsOrWeakTypes) => WeakTypes | "A" | "B"
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(arg: LiteralsOrWeakTypes) => {     if (arg === "A") {         return arg;     }     else {         return arg;     } } : (arg: LiteralsOrWeakTypes) => WeakTypes | "A" | "B"
+>                                                                                                                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>arg : LiteralsOrWeakTypes
+>    : ^^^^^^^^^^^^^^^^^^^
 
+    if (arg === "A") {
+>arg === "A" : boolean
+>            : ^^^^^^^
+>arg : LiteralsOrWeakTypes
+>    : ^^^^^^^^^^^^^^^^^^^
+>"A" : "A"
+>    : ^^^
 
+        return arg;
+>arg : { toLowerCase?(): string; } | { toUpperCase?(): string; otherOptionalProp?: number; } | "A"
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+    }
+    else {
+        return arg;
+>arg : WeakTypes | "B"
+>    : ^^^^^^^^^^^^^^^
 
-
-
-
+    }
+}
 
 const g = (arg: WeakTypes) => {
 >g : (arg: WeakTypes) => WeakTypes

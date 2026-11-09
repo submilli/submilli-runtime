@@ -8,14 +8,14 @@ enum E {
 
 /*pruned*/;                           
 let b: number = null as unknown as (number);
-/*pruned*/;                       
+let c: E = null as unknown as (E);
 
 // operator **
 /*pruned*/;     
+let r2 = c ** b;
+let r3 = c ** c;
 /*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
-/*pruned*/;     
+let r5 = b ** c;
 /*pruned*/;       
 let r7 = E.a ** b;
 let r8 = E.a ** E.b;

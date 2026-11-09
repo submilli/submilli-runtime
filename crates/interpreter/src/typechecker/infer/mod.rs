@@ -55,6 +55,7 @@ mod type_namespace;
 mod type_predicate;
 mod type_registry;
 mod union_call;
+pub(crate) mod utility_types;
 mod value_operand;
 pub(crate) mod variance;
 
@@ -285,6 +286,10 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: BTreeSet::new(),
+        binding_types: Vec::new(),
+        resolving_method_signature: false,
+        forward_forms: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
@@ -589,6 +594,10 @@ pub fn infer_package_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: BTreeSet::new(),
+        binding_types: Vec::new(),
+        resolving_method_signature: false,
+        forward_forms: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
@@ -1189,6 +1198,21 @@ pub(super) struct Inferer<'a> {
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
     /// finished, and for a true cycle infinite) body.
     pub(super) alias_resolution_stack: Vec<String>,
+    /// Interfaces and classes of this module whose members the signature
+    /// pass has not bound yet. A utility, `keyof` or `T[K]` over one stays
+    /// lazy until it is used.
+    pub(super) unbound_types: BTreeSet<String>,
+    /// The interfaces and classes the signature pass is binding now. A
+    /// utility, `keyof` or `T[K]` over one is a cycle (SUB-2154).
+    pub(super) binding_types: Vec<String>,
+    /// Set while a method's or constructor's signature resolves. A reference
+    /// to the type being bound there (`patch(changes: Partial<User>)`) is no
+    /// cycle: run-time checks never expand method types, so it stays lazy.
+    pub(super) resolving_method_signature: bool,
+    /// Forms kept lazy over a declaration bound later, with where each was
+    /// written: checked once every declaration is bound, so a missing member
+    /// or a cycle through them is reported there.
+    pub(super) forward_forms: Vec<(Type, Span)>,
     /// Nested annotation and alias-body resolutions in progress. Alias chains
     /// resolve recursively, so their length is bounded before the stack is.
     pub(super) type_resolution_depth: u32,

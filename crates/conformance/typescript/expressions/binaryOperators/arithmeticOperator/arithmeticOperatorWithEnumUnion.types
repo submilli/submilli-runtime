@@ -37,14 +37,48 @@ let b: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
+let c: E | F = null as unknown as (E | F);
+>c : E | F
+>  : ^^^^^
+>null as unknown as (E | F) : E | F
+>                           : ^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 // operator *
 /*pruned*/;
+let ra2 = c * b;
+>ra2 : number
+>    : ^^^^^^
+>c * b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let ra3 = c * c;
+>ra3 : number
+>    : ^^^^^^
+>c * c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let ra5 = b * c;
+>ra5 : number
+>    : ^^^^^^
+>b * c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let ra7 = E.a * b;
 >ra7 : number
@@ -124,10 +158,37 @@ let ra12 = 1 * E.b;
 
 // operator /
 /*pruned*/;
+let rb2 = c / b;
+>rb2 : number
+>    : ^^^^^^
+>c / b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rb3 = c / c;
+>rb3 : number
+>    : ^^^^^^
+>c / c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rb5 = b / c;
+>rb5 : number
+>    : ^^^^^^
+>b / c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rb7 = E.a / b;
 >rb7 : number
@@ -207,10 +268,37 @@ let rb12 = 1 / E.b;
 
 // operator %
 /*pruned*/;
+let rc2 = c % b;
+>rc2 : number
+>    : ^^^^^^
+>c % b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rc3 = c % c;
+>rc3 : number
+>    : ^^^^^^
+>c % c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rc5 = b % c;
+>rc5 : number
+>    : ^^^^^^
+>b % c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rc7 = E.a % b;
 >rc7 : number
@@ -290,10 +378,37 @@ let rc12 = 1 % E.b;
 
 // operator -
 /*pruned*/;
+let rd2 = c - b;
+>rd2 : number
+>    : ^^^^^^
+>c - b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rd3 = c - c;
+>rd3 : number
+>    : ^^^^^^
+>c - c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rd5 = b - c;
+>rd5 : number
+>    : ^^^^^^
+>b - c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rd7 = E.a - b;
 >rd7 : number
@@ -373,10 +488,37 @@ let rd12 = 1 - E.b;
 
 // operator <<
 /*pruned*/;
+let re2 = c << b;
+>re2 : number
+>    : ^^^^^^
+>c << b : number
+>       : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let re3 = c << c;
+>re3 : number
+>    : ^^^^^^
+>c << c : number
+>       : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let re5 = b << c;
+>re5 : number
+>    : ^^^^^^
+>b << c : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let re7 = E.a << b;
 >re7 : number
@@ -456,10 +598,37 @@ let re12 = 1 << E.b;
 
 // operator >>
 /*pruned*/;
+let rf2 = c >> b;
+>rf2 : number
+>    : ^^^^^^
+>c >> b : number
+>       : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rf3 = c >> c;
+>rf3 : number
+>    : ^^^^^^
+>c >> c : number
+>       : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rf5 = b >> c;
+>rf5 : number
+>    : ^^^^^^
+>b >> c : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rf7 = E.a >> b;
 >rf7 : number
@@ -539,10 +708,37 @@ let rf12 = 1 >> E.b;
 
 // operator >>>
 /*pruned*/;
+let rg2 = c >>> b;
+>rg2 : number
+>    : ^^^^^^
+>c >>> b : number
+>        : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rg3 = c >>> c;
+>rg3 : number
+>    : ^^^^^^
+>c >>> c : number
+>        : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rg5 = b >>> c;
+>rg5 : number
+>    : ^^^^^^
+>b >>> c : number
+>        : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rg7 = E.a >>> b;
 >rg7 : number
@@ -622,10 +818,37 @@ let rg12 = 1 >>> E.b;
 
 // operator &
 /*pruned*/;
+let rh2 = c & b;
+>rh2 : number
+>    : ^^^^^^
+>c & b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rh3 = c & c;
+>rh3 : number
+>    : ^^^^^^
+>c & c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rh5 = b & c;
+>rh5 : number
+>    : ^^^^^^
+>b & c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rh7 = E.a & b;
 >rh7 : number
@@ -705,10 +928,37 @@ let rh12 = 1 & E.b;
 
 // operator ^
 /*pruned*/;
+let ri2 = c ^ b;
+>ri2 : number
+>    : ^^^^^^
+>c ^ b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let ri3 = c ^ c;
+>ri3 : number
+>    : ^^^^^^
+>c ^ c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let ri5 = b ^ c;
+>ri5 : number
+>    : ^^^^^^
+>b ^ c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let ri7 = E.a ^ b;
 >ri7 : number
@@ -788,10 +1038,37 @@ let ri12 = 1 ^ E.b;
 
 // operator |
 /*pruned*/;
+let rj2 = c | b;
+>rj2 : number
+>    : ^^^^^^
+>c | b : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>b : number
+>  : ^^^^^^
+
+let rj3 = c | c;
+>rj3 : number
+>    : ^^^^^^
+>c | c : number
+>      : ^^^^^^
+>c : E | F
+>  : ^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let rj5 = b | c;
+>rj5 : number
+>    : ^^^^^^
+>b | c : number
+>      : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E | F
+>  : ^^^^^
+
 /*pruned*/;
 let rj7 = E.a | b;
 >rj7 : number

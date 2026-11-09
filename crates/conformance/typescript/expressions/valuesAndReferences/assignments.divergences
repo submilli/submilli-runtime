@@ -1,1 +1,9 @@
-types: 0 of 18 tsc entries compared, 0 differ
+types: 2 of 21 tsc entries compared, 2 differ
+
+line 25: v
+  tsc:  any
+  ours: unknown
+
+line 26: v
+  tsc:  any
+  ours: unknown

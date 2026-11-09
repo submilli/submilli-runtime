@@ -218,10 +218,14 @@ impl Inferer<'_> {
                     .filter(|ty| !matches!(ty, Type::Error))
                     .collect(),
             ),
-            Type::GenericParam { .. } => Type::Refined {
-                original: Box::new(ty.clone()),
-                ty: Box::new(asserted.clone()),
-            },
+            // A type parameter, or a form over one (`Readonly<T>`), narrows by
+            // refinement: `T & C`.
+            erased if erased.is_type_operator() || matches!(erased, Type::GenericParam { .. }) => {
+                Type::Refined {
+                    original: Box::new(ty.clone()),
+                    ty: Box::new(asserted.clone()),
+                }
+            }
             _ if assignable(ty, asserted, self.resolver()) => ty.clone(),
             // A readonly array is still an array at runtime, so a guard for `T[]`
             // (`Array.isArray`) keeps it, readonly. The false branch keeps it too,

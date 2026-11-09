@@ -1,0 +1,13 @@
+types: 149 of 278 tsc entries compared, 2 differ
+
+line 156: r20
+  tsc:  {}
+  ours: {} | T
+
+line 157: r20_2
+  tsc:  {}
+  ours: {} | T
+
+errors:
+line 139: ours: a nested function cannot be generic (tsc accepts)
+line 144: ours: a nested function cannot be generic (tsc accepts)

@@ -9,9 +9,15 @@ interface Runnable {
 
 }
 
-/*pruned*/;
+interface Refrigerator extends Runnable {
+>Refrigerator : Refrigerator
+>             : ^^^^^^^^^^^^
 
+    makesFoodGoBrrr: boolean;
+>makesFoodGoBrrr : boolean
+>                : ^^^^^^^
 
+}
 
 let x: string = null as unknown as (string);
 >x : string
@@ -21,7 +27,14 @@ let x: string = null as unknown as (string);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
+let y: "foo" | Refrigerator = null as unknown as ("foo" | Refrigerator);
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ("foo" | Refrigerator) : Refrigerator | "foo"
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 let b: boolean = null as unknown as (boolean);
 >b : boolean
@@ -31,9 +44,42 @@ let b: boolean = null as unknown as (boolean);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+b = x === y;
+>b = x === y : boolean
+>            : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x === y : boolean
+>        : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+b = "foo" === y
+>b = "foo" === y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" === y : boolean
+>            : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+b = y === "foo";
+>b = y === "foo" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y === "foo" : boolean
+>            : ^^^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
 b = "foo" === "bar";
 >b = "foo" === "bar" : boolean
 >                    : ^^^^^^^
@@ -70,12 +116,67 @@ b = x === "bar";
 >"bar" : "bar"
 >      : ^^^^^
 
-/*pruned*/;
-/*pruned*/;
+b = y === "bar";
+>b = y === "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y === "bar" : boolean
+>            : ^^^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
 
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+b = "bar" === y;
+>b = "bar" === y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" === y : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+
+b = x !== y;
+>b = x !== y : boolean
+>            : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>x !== y : boolean
+>        : ^^^^^^^
+>x : string
+>  : ^^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+b = "foo" !== y
+>b = "foo" !== y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"foo" !== y : boolean
+>            : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+b = y !== "foo";
+>b = y !== "foo" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y !== "foo" : boolean
+>            : ^^^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+
 b = "foo" !== "bar";
 >b = "foo" !== "bar" : boolean
 >                    : ^^^^^^^
@@ -112,8 +213,30 @@ b = x !== "bar";
 >"bar" : "bar"
 >      : ^^^^^
 
-/*pruned*/;
-/*pruned*/;
+b = y !== "bar";
+>b = y !== "bar" : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>y !== "bar" : boolean
+>            : ^^^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+
+b = "bar" !== y;
+>b = "bar" !== y : boolean
+>                : ^^^^^^^
+>b : boolean
+>  : ^^^^^^^
+>"bar" !== y : boolean
+>            : ^^^^^^^
+>"bar" : "bar"
+>      : ^^^^^
+>y : Refrigerator | "foo"
+>  : ^^^^^^^^^^^^^^^^^^^^
+
 
 
 function main(): void {}

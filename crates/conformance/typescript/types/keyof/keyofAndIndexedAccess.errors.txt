@@ -1,0 +1,13 @@
+keyofAndIndexedAccess.ts(7,5): error TS2564: Property 'name' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(8,5): error TS2564: Property 'width' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(9,5): error TS2564: Property 'height' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(10,5): error TS2564: Property 'visible' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(14,5): error TS2564: Property 'tag' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(18,5): error TS2564: Property 'name' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(19,5): error TS2564: Property 'price' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(23,5): error TS2564: Property 'visible' has no initializer and is not definitely assigned in the constructor.
+keyofAndIndexedAccess.ts(210,24): error TS2322: Type 'T[keyof T]' is not assignable to type 'object'.   Type 'T[string] | T[number] | T[symbol]' is not assignable to type 'object'.     Type 'T[string]' is not assignable to type 'object'.
+keyofAndIndexedAccess.ts(216,24): error TS2322: Type 'T[K]' is not assignable to type 'object'.   Type 'T[keyof T]' is not assignable to type 'object'.     Type 'T[string] | T[number] | T[symbol]' is not assignable to type 'object'.       Type 'T[string]' is not assignable to type 'object'.
+keyofAndIndexedAccess.ts(321,5): error TS2322: Type 'T' is not assignable to type '{}'.
+keyofAndIndexedAccess.ts(322,5): error TS2322: Type 'T[keyof T]' is not assignable to type '{}'.   Type 'T[string] | T[number] | T[symbol]' is not assignable to type '{}'.     Type 'T[string]' is not assignable to type '{}'.
+keyofAndIndexedAccess.ts(323,5): error TS2322: Type 'T[K]' is not assignable to type '{}'.   Type 'T[keyof T]' is not assignable to type '{}'.     Type 'T[string] | T[number] | T[symbol]' is not assignable to type '{}'.       Type 'T[string]' is not assignable to type '{}'.

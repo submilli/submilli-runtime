@@ -1,13 +1,82 @@
 === contextuallyTypedIifeStrict.ts ===
 // arrow
-/*pruned*/;
+(jake => { })("build");
+>(jake => { })("build") : void
+>                       : ^^^^
+>(jake => { }) : (jake: string) => void
+>              : ^^^^^^^^^^^^^^^^^^^^^^
+>jake => { } : (jake: string) => void
+>            : ^^^^^^^^^^^^^^^^^^^^^^
+>jake : string
+>     : ^^^^^^
+>"build" : "build"
+>        : ^^^^^^^
+
 // function expression
-/*pruned*/;
+(function (cats) { })("lol");
+>(function (cats) { })("lol") : void
+>                             : ^^^^
+>(function (cats) { }) : (cats: string) => void
+>                      : ^^^^^^^^^^^^^^^^^^^^^^
+>function (cats) { } : (cats: string) => void
+>                    : ^^^^^^^^^^^^^^^^^^^^^^
+>cats : string
+>     : ^^^^^^
+>"lol" : "lol"
+>      : ^^^^^
+
 // Lots of Irritating Superfluous Parentheses
-/*pruned*/;
-/*pruned*/;
+(function (x) { } ("!"));
+>(function (x) { } ("!")) : void
+>                         : ^^^^
+>function (x) { } ("!") : void
+>                       : ^^^^
+>function (x) { } : (x: string) => void
+>                 : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"!" : "!"
+>    : ^^^
+
+((((function (y) { }))))("-");
+>((((function (y) { }))))("-") : void
+>                              : ^^^^
+>((((function (y) { })))) : (y: string) => void
+>                         : ^^^^^^^^^^^^^^^^^^^
+>(((function (y) { }))) : (y: string) => void
+>                       : ^^^^^^^^^^^^^^^^^^^
+>((function (y) { })) : (y: string) => void
+>                     : ^^^^^^^^^^^^^^^^^^^
+>(function (y) { }) : (y: string) => void
+>                   : ^^^^^^^^^^^^^^^^^^^
+>function (y) { } : (y: string) => void
+>                 : ^^^^^^^^^^^^^^^^^^^
+>y : string
+>  : ^^^^^^
+>"-" : "-"
+>    : ^^^
+
 // multiple arguments
-/*pruned*/;
+((a, b, c) => { })("foo", 101, false);
+>((a, b, c) => { })("foo", 101, false) : void
+>                                      : ^^^^
+>((a, b, c) => { }) : (a: string, b: number, c: boolean) => void
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(a, b, c) => { } : (a: string, b: number, c: boolean) => void
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : boolean
+>  : ^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>101 : 101
+>    : ^^^
+>false : false
+>      : ^^^^^
+
 // default parameters
 ((m: number = 10) => m + 1)(12);
 >((m: number = 10) => m + 1)(12) : number
@@ -108,8 +177,44 @@
 /*pruned*/;
 /*pruned*/;
 // destructuring parameters (with defaults too!)
-/*pruned*/;
-/*pruned*/;
+(({ q }) => q)({ q : 13 });
+>(({ q }) => q)({ q : 13 }) : number
+>                           : ^^^^^^
+>(({ q }) => q) : ({ q }: { q: number; }) => number
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>({ q }) => q : ({ q }: { q: number; }) => number
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>q : number
+>  : ^^^^^^
+>q : number
+>  : ^^^^^^
+>{ q : 13 } : { q: number; }
+>           : ^^^^^^^^^^^^^^
+>q : number
+>  : ^^^^^^
+>13 : 13
+>   : ^^
+
+(({ p = 14 }) => p)({ p : 15 });
+>(({ p = 14 }) => p)({ p : 15 }) : number
+>                                : ^^^^^^
+>(({ p = 14 }) => p) : ({ p }: { p: number; }) => number
+>                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>({ p = 14 }) => p : ({ p }: { p: number; }) => number
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+>14 : 14
+>   : ^^
+>p : number
+>  : ^^^^^^
+>{ p : 15 } : { p: number; }
+>           : ^^^^^^^^^^^^^^
+>p : number
+>  : ^^^^^^
+>15 : 15
+>   : ^^
+
 (({ r = 17 } = { r: 18 }) => r)({r : 19});
 >(({ r = 17 } = { r: 18 }) => r)({r : 19}) : number
 >                                          : ^^^^^^

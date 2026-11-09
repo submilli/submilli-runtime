@@ -2,7 +2,7 @@
 
 let t1 = 10;
 let t2 = 10;
-/**/; 
+let s;
 
 // With templateHead
 `hello ${t1 ** t2}`;
@@ -10,21 +10,21 @@ let t2 = 10;
 `hello ${t1 + t2 ** t1}`;
 `hello ${t1 ** t2 + t1}`;
 `hello ${t1 + t2 ** t2 + t1 }`;
-/*pruned*/;                         
-/*pruned*/;                             
+`hello ${typeof (t1 ** t2 ** t1) }`;
+`hello ${1 + typeof (t1 ** t2 ** t1) }`;
 
 `hello ${t1 ** t2}${t1 ** t2}`;
 `hello ${t1 ** t2 ** t1}${t1 ** t2 ** t1}`;
 `hello ${t1 + t2 ** t1}${t1 + t2 ** t1}`;
 `hello ${t1 ** t2 + t1}${t1 ** t2 + t1}`;
 `hello ${t1 + t2 ** t2 + t1}${t1 + t2 ** t2 + t1}`;
-/*pruned*/;                                                    
+`hello ${typeof (t1 ** t2 ** t1) }${typeof (t1 ** t2 ** t1) }`;
 
 `hello ${t1 ** t2} hello world ${t1 ** t2}`;
 `hello ${t1 ** t2 ** t1} hello world ${t1 ** t2 ** t1}`;
 `hello ${t1 + t2 ** t1} hello world ${t1 + t2 ** t1}`;
 `hello ${t1 ** t2 + t1} hello world ${t1 ** t2 + t1}`;
 `hello ${t1 + t2 ** t2 + t1} hello world ${t1 + t2 ** t2 + t1}`;
-/*pruned*/;                                                                 
+`hello ${typeof (t1 ** t2 ** t1) } hello world ${typeof (t1 ** t2 ** t1) }`;
 
 function main(): void {}

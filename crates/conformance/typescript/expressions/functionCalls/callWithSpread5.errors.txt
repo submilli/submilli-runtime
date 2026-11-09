@@ -1,0 +1,2 @@
+callWithSpread5.ts(7,4): error TS2345: Argument of type 'number | undefined' is not assignable to parameter of type 'number'.   Type 'undefined' is not assignable to type 'number'.
+callWithSpread5.ts(8,4): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.

@@ -125,7 +125,38 @@ function f3(): void {
 >"string" : "string"
 >         : ^^^^^^^^
 
-        /*pruned*/;
+        let n = (z => x.length + y + z)(y = 1);
+>n : number
+>  : ^^^^^^
+>(z => x.length + y + z)(y = 1) : number
+>                               : ^^^^^^
+>(z => x.length + y + z) : (z: number) => number
+>                        : ^^^^^^^^^^^^^^^^^^^^^
+>z => x.length + y + z : (z: number) => number
+>                      : ^^^^^^^^^^^^^^^^^^^^^
+>z : number
+>  : ^^^^^^
+>x.length + y + z : number
+>                 : ^^^^^^
+>x.length + y : number
+>             : ^^^^^^
+>x.length : number
+>         : ^^^^^^
+>x : string
+>  : ^^^^^^
+>length : number
+>       : ^^^^^^
+>y : number
+>  : ^^^^^^
+>z : number
+>  : ^^^^^^
+>y = 1 : 1
+>      : ^
+>y : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
     }
 }
 
@@ -269,13 +300,26 @@ function f4(): void {
 
 
 
-/*pruned*/;
+function f6(): void {
+>f6 : () => void
+>   : ^^^^^^^^^^
+
+    let v: number = null as unknown as (number);
+>v : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    /*pruned*/;
 
 
+    v; // still undefined
+>v : number
+>  : ^^^^^^
 
-
-
-
+}
 
 function main(): void {}
 >main : () => void

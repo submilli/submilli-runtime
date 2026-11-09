@@ -1,0 +1,5 @@
+types: 15 of 33 tsc entries compared, 1 differ
+
+line 8: a
+  tsc:  any
+  ours: unknown

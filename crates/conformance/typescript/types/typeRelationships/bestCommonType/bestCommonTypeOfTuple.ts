@@ -11,18 +11,18 @@ enum E2 { two }
 
 
 let t1: [(x: number) => string, (x: number) => number] = null as unknown as ([(x: number) => string, (x: number) => number]);
-/*pruned*/;                                      
+let t2: [E1, E2] = null as unknown as ([E1, E2]);
 /*pruned*/;                                                
-/*pruned*/;                                                      
+let t4: [E1, E2, number] = null as unknown as ([E1, E2, number]);
 
 // no error
 t1 = [f1, f2];
-/*pruned*/;           
+t2 = [E1.one, E2.two];
 /*pruned*/;         
-/*pruned*/;               
+t4 = [E1.one, E2.two, 20];
 let e1 = t1[2];  // {}
-/*pruned*/;      // {}
+let e2 = t2[2];  // {}
 /*pruned*/;      // any
-/*pruned*/;      // number
+let e4 = t4[3];  // number
 
 function main(): void {}

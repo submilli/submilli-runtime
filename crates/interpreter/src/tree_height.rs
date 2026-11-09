@@ -897,6 +897,10 @@ impl<'a> AnnotationChildren<'a> {
             | TypeAnnotationKind::Optional(inner)
             | TypeAnnotationKind::Readonly(inner)
             | TypeAnnotationKind::KeyOf(inner) => children.trailing = Some(inner),
+            TypeAnnotationKind::IndexedAccess { object, index } => {
+                children.trailing = Some(object);
+                children.key = Some(index);
+            }
             TypeAnnotationKind::Object { fields, index } => {
                 children.fields = fields.iter();
                 children.trailing = index.as_ref().map(|index| &index.value);

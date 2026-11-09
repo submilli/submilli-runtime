@@ -1,0 +1,2 @@
+controlFlowGenericTypes.ts(84,11): error TS2339: Property 'foo' does not exist on type 'MyUnion'.   Property 'foo' does not exist on type 'AA'.
+controlFlowGenericTypes.ts(159,16): error TS18048: 'obj' is possibly 'undefined'.

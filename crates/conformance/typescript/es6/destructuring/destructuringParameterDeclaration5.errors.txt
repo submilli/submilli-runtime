@@ -1,0 +1,7 @@
+destructuringParameterDeclaration5.ts(10,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+destructuringParameterDeclaration5.ts(15,5): error TS2564: Property 'foo' has no initializer and is not definitely assigned in the constructor.
+destructuringParameterDeclaration5.ts(20,5): error TS2564: Property 'bar' has no initializer and is not definitely assigned in the constructor.
+destructuringParameterDeclaration5.ts(48,6): error TS2741: Property 'foo' is missing in type 'Class' but required in type 'D'.
+destructuringParameterDeclaration5.ts(49,4): error TS2345: Argument of type '{}' is not assignable to parameter of type '{ y: D; }'.   Property 'y' is missing in type '{}' but required in type '{ y: D; }'.
+destructuringParameterDeclaration5.ts(50,6): error TS2322: Type 'number' is not assignable to type 'D'.
+destructuringParameterDeclaration5.ts(51,6): error TS2322: Type 'string' is not assignable to type 'D'.

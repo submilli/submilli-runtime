@@ -1919,6 +1919,15 @@ impl Inferer<'_> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let evolving = self.evolving_array_receiver(receiver)?;
         let (typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
+        if self.is_generic_index_receiver(&receiver_ty) {
+            return self.infer_generic_index_write(
+                typed_receiver,
+                receiver_ty,
+                index,
+                value,
+                recv_span,
+            );
+        }
         let (mut typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let evolving = evolving.filter(|_| super::evolving::array_element(&receiver_ty).is_some());
@@ -1928,24 +1937,37 @@ impl Inferer<'_> {
         } else {
             self.infer_numeric_index(index)?
         };
-        let targets = if object {
-            self.object_index_write_targets(
-                &receiver_ty,
-                &key_ty,
-                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
-            )
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        let targets = if object
+            && super::utility_types::holds_type_parameter(&key_ty)
+            && !self.has_index_signature(&receiver_ty)
+        {
+            // `u[k] = v` with `K extends keyof User` writes tsc's `User[K]`.
+            if self.fits_generic_key(&receiver_ty, &key_ty, index_span) {
+                let keys = self.apparent_type(&key_ty);
+                self.report_readonly_keys(&receiver_ty, &keys, index_span);
+                vec![Type::indexed_access(receiver_ty.clone(), key_ty.clone())]
+            } else {
+                vec![Type::Error]
+            }
+        } else if object {
+            self.object_index_write_targets(&receiver_ty, &key_ty, index_span)
         } else {
             vec![self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span)]
         };
         let mut elem_ty = self.common_index_write_type(&targets);
-        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never)).then_some(&elem_ty);
+        // A write through `User[K]` takes the bound's property as its context.
+        let context = super::assignable::write_context(&elem_ty, self.resolver());
+        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never))
+            .then_some(context.as_ref())
+            .flatten();
         let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint)?;
         let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
         if evolving.is_none()
             && !reported
             && !matches!(value_ty, Type::Error)
             && let Some(target) = targets.iter().find(|target| {
-                !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
+                !matches!(target, Type::Error) && !self.fits_index_write(&value_ty, target)
             })
         {
             let help =
@@ -1977,7 +1999,6 @@ impl Inferer<'_> {
                 recv_span,
             )?;
         }
-        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
         self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
         self.narrow_keyed_field_after_write(
             typed_receiver,
@@ -1996,6 +2017,95 @@ impl Inferer<'_> {
             index: typed_index,
             value: typed_value,
             elem_ty,
+        })
+    }
+
+    /// Report a write through `receiver[keys]` where some key names a
+    /// property some member of `receiver` does not let one write: a
+    /// `readonly` field or property, or a getter without a setter (tsc's
+    /// TS2540). Reports once per write.
+    fn report_readonly_keys(&mut self, receiver: &Type, keys: &Type, span: Span) {
+        let receivers = super::utility_types::members(receiver);
+        for key in super::utility_types::members(keys) {
+            let Type::StringLiteral(name) = key.peel() else {
+                continue;
+            };
+            let readonly = receivers.iter().any(|member| {
+                self.union_member_field_write(member, name)
+                    .is_some_and(|write| !write.writable)
+            });
+            if readonly {
+                self.error(span, format!("cannot assign to readonly property `{name}`"));
+                return;
+            }
+        }
+    }
+
+    /// Whether `value_ty` may be written where an index write stores
+    /// `target`: assignable to it, or, for `T[K]`, to the declared bound's
+    /// property, as tsc writes it.
+    fn fits_index_write(&self, value_ty: &Type, target: &Type) -> bool {
+        assignable(value_ty, target, self.resolver())
+            || super::assignable::fits_bound_property_write(value_ty, target, self.resolver())
+    }
+
+    /// `o[k] = v` on a type parameter `T`: `v` must fit tsc's `T[K]`, and the
+    /// run time writes the property by name on the erased object.
+    fn infer_generic_index_write(
+        &mut self,
+        typed_receiver: ExprId,
+        receiver_ty: Type,
+        index: ExprId,
+        value: ExprId,
+        recv_span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+        let through_readonly = matches!(
+            super::utility_types::deferred_application(receiver_ty.peel()),
+            Some((super::utility_types::Utility::Readonly, _))
+        );
+        if through_readonly {
+            self.error(
+                recv_span,
+                format!("cannot assign through `{receiver_ty}`, which only permits reading"),
+            );
+        }
+        let key = self.generic_index_key(&receiver_ty, index)?;
+        let generic_receiver = super::expr::generic_receiver(&receiver_ty).clone();
+        // A literal key writes the bound's property, which may be `readonly`
+        // (`t["a"] = 5` with `T extends { readonly a: number }`).
+        if let Some((_, key_ty)) = &key
+            && !through_readonly
+            && !super::utility_types::holds_type_parameter(key_ty)
+        {
+            let bound = self.apparent_type(&generic_receiver);
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+            self.report_readonly_keys(&bound, key_ty, index_span);
+        }
+        let target = match &key {
+            Some((_, key_ty)) => Type::indexed_access(generic_receiver, key_ty.clone()),
+            None => Type::Error,
+        };
+        let context = super::assignable::write_context(&target, self.resolver());
+        let (typed_value, value_ty, reported) =
+            self.infer_assigned_value(value, context.as_ref())?;
+        if !reported
+            && !matches!(value_ty, Type::Error)
+            && !self.fits_index_write(&value_ty, &target)
+        {
+            self.error(
+                value_span,
+                super::diagnostics::mismatch_message(&target, &value_ty),
+            );
+        }
+        let Some((typed_index, _)) = key else {
+            return Ok(TypedStmtKind::Expr(typed_value));
+        };
+        Ok(TypedStmtKind::AssignIndex {
+            receiver: typed_receiver,
+            index: typed_index,
+            value: typed_value,
+            elem_ty: target,
         })
     }
 

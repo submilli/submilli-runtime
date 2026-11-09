@@ -60,31 +60,134 @@ generic<object>(b); // expect error
 >  : ^^^^^^
 
 
-/*pruned*/;
+function bound<T extends object>(t: T): void {
+>bound : <T extends object>(t: T) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    let o: object = t; // ok
+>o : object
+>  : ^^^^^^
+>t : T
+>  : ^
+
+}
+
+bound({});
+>bound({}) : void
+>          : ^^^^
+>bound : <T extends object>(t: T) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+bound(a);
+>bound(a) : void
+>         : ^^^^
+>bound : <T extends object>(t: T) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : {}
+>  : ^^
+
+bound(123); // expect error
+>bound(123) : void
+>           : ^^^^
+>bound : <T extends object>(t: T) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>123 : 123
+>    : ^^^
+
+bound(b); // expect error
+>bound(b) : void
+>         : ^^^^
+>bound : <T extends object>(t: T) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string
+>  : ^^^^^^
 
 
-
-/**/;
-/**/;
-/*pruned*/; // expect error
-/**/;     // expect error
-
-/*pruned*/;
-
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;       // expect error
-/*pruned*/;       // expect error
-
-/*pruned*/;
+function bound2<T extends object>(): void {}
+>bound2 : <T extends object>() => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
 
 
+bound2<{}>();
+>bound2<{}>() : void
+>             : ^^^^
+>bound2 : <T extends object>() => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;
+bound2<Object>();
+>bound2<Object>() : void
+>                 : ^^^^
+>bound2 : <T extends object>() => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;                                                // error
-/*pruned*/;                                            // ok
-/*pruned*/;                                                       // ok
+bound2<number>(); // expect error
+>bound2<number>() : void
+>                 : ^^^^
+>bound2 : <T extends object>() => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+bound2<string>(); // expect error
+>bound2<string>() : void
+>                 : ^^^^
+>bound2 : <T extends object>() => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+function bound3<T extends {}>(t: T): void {
+>bound3 : <T extends {}>(t: T) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>t : T
+>  : ^
+
+    let o: object = t; // ok
+>o : object
+>  : ^^^^^^
+>t : T
+>  : ^
+
+}
+
+interface Proxy<T extends object> {}
+>Proxy : Proxy<T>
+>      : ^^^^^^^^
+>T : T
+>  : ^
+
+
+let x: Proxy<number> = null as unknown as (Proxy<number>); // error
+>x : Proxy<number>
+>  : ^^^^^^^^^^^^^
+>null as unknown as (Proxy<number>) : Proxy<number>
+>                                   : ^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y: Proxy<null> = null as unknown as (Proxy<null>); // ok
+>y : Proxy<null>
+>  : ^^^^^^^^^^^
+>null as unknown as (Proxy<null>) : Proxy<null>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let z: Proxy<undefined> = null as unknown as (Proxy<undefined>) ; // ok
+>z : Proxy<undefined>
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as (Proxy<undefined>) : Proxy<undefined>
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 
 interface Blah {
@@ -97,7 +200,14 @@ interface Blah {
 
 }
 
-/*pruned*/;                                            // ok
+let u: Proxy<Blah> = null as unknown as (Proxy<Blah>); // ok
+>u : Proxy<Blah>
+>  : ^^^^^^^^^^^
+>null as unknown as (Proxy<Blah>) : Proxy<Blah>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 
 function main(): void {}

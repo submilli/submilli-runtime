@@ -54,9 +54,38 @@ stringDictionary = undefinedProperties; // error
 >                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;                         // error
+let probablyArray: { [key: number]: string } = null as unknown as ({ [key: number]: string });
+>probablyArray : { [key: number]: string; }
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>key : number
+>    : ^^^^^^
+>null as unknown as ({ [key: number]: string }) : { [key: number]: string; }
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>key : number
+>    : ^^^^^^
+
+let numberLiteralKeys: { 1?: string } = null as unknown as ({ 1?: string });
+>numberLiteralKeys : { 1?: string; }
+>                  : ^^^^^^^^^^^^^^^
+>1 : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ 1?: string }) : { 1?: string; }
+>                                    : ^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>1 : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+probablyArray = numberLiteralKeys;  // error
+>probablyArray = numberLiteralKeys : { 1?: string; }
+>                                  : ^^^^^^^^^^^^^^^
+>probablyArray : { [key: number]: string; }
+>              : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>numberLiteralKeys : { 1?: string; }
+>                  : ^^^^^^^^^^^^^^^
+
 
 let optionalUndefined: { k1?: undefined } = null as unknown as ({ k1?: undefined });
 >optionalUndefined : { k1?: undefined; }

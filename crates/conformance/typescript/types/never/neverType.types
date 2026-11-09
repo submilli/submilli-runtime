@@ -94,25 +94,116 @@ function infiniteLoop2(): never {
     }
 }
 
-/*pruned*/;
+function move1(direction: "up" | "down"): 1 | -1 {
+>move1 : (direction: "up" | "down") => 1 | -1
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>direction : "up" | "down"
+>          : ^^^^^^^^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
 
+    switch (direction) {
+>direction : "up" | "down"
+>          : ^^^^^^^^^^^^^
 
+        case "up":
+>"up" : "up"
+>     : ^^^^
 
+            return 1;
+>1 : 1
+>  : ^
 
+        case "down":
+>"down" : "down"
+>       : ^^^^^^
 
+            return -1;
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
 
+    }
+    return error("Should never get here");
+>error("Should never get here") : never
+>                               : ^^^^^
+>error : (message: string) => never
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"Should never get here" : "Should never get here"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^
 
+}
 
+function move2(direction: "up" | "down"): 1 | -1 {
+>move2 : (direction: "up" | "down") => 1 | -1
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>direction : "up" | "down"
+>          : ^^^^^^^^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
 
-/*pruned*/;
+    return direction === "up" ? 1 :
+>direction === "up" ? 1 :         direction === "down" ? -1 :         error("Should never get here") : 1 | -1
+>                                                                                                    : ^^^^^^
+>direction === "up" : boolean
+>                   : ^^^^^^^
+>direction : "up" | "down"
+>          : ^^^^^^^^^^^^^
+>"up" : "up"
+>     : ^^^^
+>1 : 1
+>  : ^
 
+        direction === "down" ? -1 :
+>direction === "down" ? -1 :         error("Should never get here") : -1
+>                                                                   : ^^
+>direction === "down" : boolean
+>                     : ^^^^^^^
+>direction : "down"
+>          : ^^^^^^
+>"down" : "down"
+>       : ^^^^^^
+>-1 : -1
+>   : ^^
+>1 : 1
+>  : ^
 
+        error("Should never get here");
+>error("Should never get here") : never
+>                               : ^^^^^
+>error : (message: string) => never
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"Should never get here" : "Should never get here"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^
 
+}
 
+function check<T>(x: T | undefined): NonNullable<T> {
+>check : <T>(x: T | undefined) => NonNullable<T>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T | undefined
+>  : ^^^^^^^^^^^^^
 
-/*pruned*/;
+    return x || error("Undefined value");
+>x || error("Undefined value") : NonNullable<T>
+>                              : ^^^^^^^^^^^^^^
+>x : T | undefined
+>  : ^^^^^^^^^^^^^
+>error("Undefined value") : never
+>                         : ^^^^^
+>error : (message: string) => never
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>"Undefined value" : "Undefined value"
+>                  : ^^^^^^^^^^^^^^^^^
 
-
+}
 
 class C {
 >C : C

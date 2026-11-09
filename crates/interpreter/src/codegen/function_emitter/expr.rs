@@ -602,7 +602,7 @@ fn emit_expr_value(
                     .ta
                     .source_type(*receiver)
                     .map_err(crate::codegen::arena_failure)?
-                    .is_structural_object()
+                    .indexes_by_name()
             {
                 emit_object_index_postfix(
                     emitter,
@@ -968,7 +968,13 @@ fn emit_index_access(
     // `emit_value_with_present_flag`); a string or `Uint8Array` element is
     // never `undefined`, so its value tells. Taken before anything nested is
     // emitted, so no nested read can take it.
-    let present_flag = take_present_flag(emitter, id);
+    let mut present_flag = take_present_flag(emitter, id);
+    let missing_reads_undefined = ctx.ta.missing_reads_undefined.contains(&id);
+    // Such a read always finds a value (see `checked_ty` below): a local
+    // holding it is present.
+    if missing_reads_undefined && let Some(flag) = present_flag.take() {
+        set_present_flag(emitter, flag, true);
+    }
     let recv_ty = ctx
         .ta
         .source_type(*receiver)
@@ -976,13 +982,20 @@ fn emit_index_access(
         .clone();
     // The typechecker's type for the read, which a wide slot may have
     // erased from `result_ty`: a read typed with room for `undefined` gives
-    // it for a missing element, and any other throws.
-    let missing_gives_undefined = ctx
+    // it for a missing element, and any other throws. A generic read whose
+    // missing key reads `undefined` is checked as one typed `T[K] |
+    // undefined`.
+    let source_ty = ctx
         .ta
         .source_type(id)
-        .map_err(crate::codegen::arena_failure)?
-        .holds_undefined();
-    if recv_ty.is_structural_object() {
+        .map_err(crate::codegen::arena_failure)?;
+    let checked_ty = if missing_reads_undefined {
+        Type::union(vec![source_ty.clone(), Type::Undefined])
+    } else {
+        source_ty.clone()
+    };
+    let missing_gives_undefined = checked_ty.holds_undefined();
+    if recv_ty.indexes_by_name() {
         emit_expr(emitter, ctx, *receiver)?;
         cast::emit_box(
             emitter,
@@ -992,11 +1005,7 @@ fn emit_index_access(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?;
-        let checked_ty = ctx
-            .ta
-            .source_type(id)
-            .map_err(crate::codegen::arena_failure)?;
-        let probe = stash_probed_record(emitter, ctx, checked_ty, present_flag)?;
+        let probe = stash_probed_record(emitter, ctx, &checked_ty, present_flag)?;
         emit_expr(emitter, ctx, *index)?;
         crate::codegen::cast_check::emit_operation_cast_on_stack(
             emitter,
@@ -1019,12 +1028,12 @@ fn emit_index_access(
         emit_checked_record_read(
             emitter,
             ctx,
-            checked_ty,
+            &checked_ty,
             KeyOperand::Local(key),
             probe,
             &receiver_name(ctx.ta, *receiver)?,
         )?;
-        cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
+        cast::emit_coerce_to_slot(emitter, ctx, &checked_ty, result_ty)?;
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(
@@ -3719,7 +3728,7 @@ fn emit_chain_access(
             emit_object_property_read_as(emitter, ctx, rcv_local, &name.name, result_ty, check_ty)?;
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
-            if receiver_ty.is_structural_object() {
+            if receiver_ty.indexes_by_name() {
                 let probe = stash_probed_record(emitter, ctx, check_ty, None)?;
                 emit_expr(emitter, ctx, *idx)?;
                 crate::codegen::cast_check::emit_operation_cast_on_stack(

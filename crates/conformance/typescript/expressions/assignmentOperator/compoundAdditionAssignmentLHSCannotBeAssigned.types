@@ -45,8 +45,22 @@ x2 += '';
 >   : ^^
 
 
-/*pruned*/;
-/**/;
+let x3: E = null as unknown as (E);
+>x3 : E
+>   : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x3 += '';
+>x3 += '' : string
+>         : ^^^^^^
+>x3 : E
+>   : ^
+>'' : ""
+>   : ^^
+
 
 let x4: {a: string} = null as unknown as ({a: string});
 >x4 : { a: string; }

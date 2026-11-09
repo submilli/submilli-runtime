@@ -324,8 +324,12 @@ fn collect_signature_named_types(
             collect_signature_named_types(package_name, original, out);
             collect_signature_named_types(package_name, ty, out);
         }
-        Type::Array(elem) | Type::Readonly(elem) => {
+        Type::Array(elem) | Type::Readonly(elem) | Type::KeyOf(elem) => {
             collect_signature_named_types(package_name, elem, out);
+        }
+        Type::IndexedAccess { object, index } => {
+            collect_signature_named_types(package_name, object, out);
+            collect_signature_named_types(package_name, index, out);
         }
         Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
             for element in elements {

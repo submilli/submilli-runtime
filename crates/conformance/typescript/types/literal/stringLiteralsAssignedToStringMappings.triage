@@ -1,0 +1,2 @@
+line 2 extra: by-design spec §Appendix a string mapping such as `Uppercase<string>` has no run-time check, so an `as` cast to one is rejected
+line 10, 13, 16, 17 type: artifact a string mapping leaves a `${number}` template hole as it is, where tsc keeps the mapping around it (`Uppercase<Lowercase<`${number}`>>`); the same values are accepted and rejected

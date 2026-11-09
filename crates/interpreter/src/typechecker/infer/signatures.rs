@@ -61,7 +61,9 @@ impl<'a> Inferer<'a> {
                     continue;
                 }
                 let span = name.span;
-                self.bind_class(name, generics, extends, implements, members, doc)?;
+                self.with_binding(name.name.clone(), |this| {
+                    this.bind_class(name, generics, extends, implements, members, doc)
+                })?;
                 self.type_size_checkpoint(Some(span))?;
             }
         }
@@ -134,6 +136,12 @@ impl<'a> Inferer<'a> {
             self.resolve_alias_body(&name)?;
         }
         self.validate_bound_interfaces(&top_level, &skip)?;
+        // Lazy member forms exist only where forward forms were kept.
+        let kept_lazy = !self.forward_forms.is_empty();
+        self.check_forward_forms()?;
+        if kept_lazy {
+            self.settle_member_types()?;
+        }
         self.check_pending_indexes();
         self.check_pending_constraints()?;
         Ok(true)
@@ -160,7 +168,7 @@ impl<'a> Inferer<'a> {
                 .clone();
             match stmt.kind {
                 StmtKind::InterfaceDecl { name, generics, .. } => {
-                    if self.types.contains(&name.name) {
+                    if self.types.blocking_type(&name.name).is_some() {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: name.span,
@@ -195,9 +203,10 @@ impl<'a> Inferer<'a> {
                             },
                         },
                     );
+                    self.unbound_types.insert(name.name.clone());
                 }
                 StmtKind::ClassDecl { name, generics, .. } => {
-                    if self.types.contains(&name.name) {
+                    if self.types.blocking_type(&name.name).is_some() {
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
                             span: name.span,
@@ -237,6 +246,7 @@ impl<'a> Inferer<'a> {
                             },
                         },
                     );
+                    self.unbound_types.insert(name.name.clone());
                 }
                 StmtKind::TypeAliasDecl {
                     name,
@@ -248,7 +258,7 @@ impl<'a> Inferer<'a> {
                         skip.insert(name.name.clone());
                         continue;
                     }
-                    if let Some(prev) = self.types.lookup(&name.name) {
+                    if let Some(prev) = self.types.blocking_type(&name.name) {
                         let prev_span = prev.declaration_span;
                         self.diagnostics.push(Diagnostic {
                             severity: Severity::Error,
@@ -458,10 +468,8 @@ impl<'a> Inferer<'a> {
                     // Even on shadow rejection, keep resolving the
                     // sig so any downstream type errors surface in
                     // one pass.
-                    let m_generic_names = self.push_declared_generics(&m_generics)?;
-                    let resolved_params: Vec<Param> = self.resolve_params(&params)?;
-                    let resolved_ret = self.resolve_type(&return_type)?;
-                    self.pop_signature_generics();
+                    let (m_generic_names, resolved_params, resolved_ret) =
+                        self.resolve_method_signature(&m_generics, &params, Some(&return_type))?;
                     if shadow_rejected {
                         continue;
                     }
@@ -593,6 +601,41 @@ impl<'a> Inferer<'a> {
         } else {
             false
         }
+    }
+
+    /// A method's generics, parameters and return type, resolved
+    /// [`with_method_signature`](Self::with_method_signature).
+    pub(super) fn resolve_method_signature(
+        &mut self,
+        generics: &[crate::TypeParameterAnnotation],
+        params: &[crate::ParamDecl],
+        return_type: Option<&crate::TypeAnnotation>,
+    ) -> Result<(crate::GenericParameters, Vec<Param>, Type), CompilerFailure> {
+        let names = self.with_method_signature(|this| this.push_declared_generics(generics))?;
+        let resolved = self.with_method_signature(|this| {
+            let params = this.resolve_params(params)?;
+            let ret = match return_type {
+                Some(annotation) => this.resolve_type(annotation)?,
+                None => Type::Void,
+            };
+            Ok((params, ret))
+        });
+        self.pop_signature_generics();
+        let (params, ret) = resolved?;
+        Ok((names, params, ret))
+    }
+
+    /// Run `resolve` with [`Inferer::resolving_method_signature`] set: a
+    /// reference there to the type being bound (`patch(changes:
+    /// Partial<User>)`) is no cycle.
+    pub(super) fn with_method_signature<T>(
+        &mut self,
+        resolve: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.resolving_method_signature = true;
+        let result = resolve(self);
+        self.resolving_method_signature = false;
+        result
     }
 
     /// Resolves a whole parameter list. The list is resolved together because a

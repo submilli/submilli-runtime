@@ -2,6 +2,12 @@ genericTypeReferenceWithoutTypeArgument2.ts(9,8): error TS2314: Generic type 'I<
 genericTypeReferenceWithoutTypeArgument2.ts(9,32): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(11,13): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(11,44): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(13,11): error TS1268: An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.
+genericTypeReferenceWithoutTypeArgument2.ts(13,14): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(13,18): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(13,47): error TS1268: An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.
+genericTypeReferenceWithoutTypeArgument2.ts(13,50): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(13,54): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(15,13): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(15,28): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(15,52): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
@@ -15,4 +21,5 @@ genericTypeReferenceWithoutTypeArgument2.ts(19,38): error TS2314: Generic type '
 genericTypeReferenceWithoutTypeArgument2.ts(19,62): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(21,17): error TS2689: Cannot extend an interface 'I'. Did you mean 'implements'?
 genericTypeReferenceWithoutTypeArgument2.ts(24,21): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
+genericTypeReferenceWithoutTypeArgument2.ts(34,22): error TS2314: Generic type 'I<T>' requires 1 type argument(s).
 genericTypeReferenceWithoutTypeArgument2.ts(37,10): error TS2304: Cannot find name 'C'.

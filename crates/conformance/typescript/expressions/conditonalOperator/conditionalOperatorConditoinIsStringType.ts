@@ -61,7 +61,7 @@ let resultIsBoolean3 = condString.toUpperCase ? exprBoolean1 : exprBoolean2;
 let resultIsNumber3 = condString + "string" ? exprNumber1 : exprNumber2;
 let resultIsString3 = foo() ? exprString1 : exprString2;
 /*pruned*/;                                                    
-/*pruned*/;                                                                    // union
+let resultIsStringOrBoolean3 = typeof condString ? exprString1 : exprBoolean1; // union
 let resultIsStringOrBoolean4 = condString.toUpperCase ? exprString1 : exprBoolean1; // union
 
 function main(): void {}

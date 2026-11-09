@@ -1,0 +1,257 @@
+=== subtypesOfTypeParameterWithConstraints4.ts ===
+// checking whether other types are subtypes of type parameters with constraints
+
+class Foo { foo: number; }
+>Foo : Foo
+>    : ^^^
+>foo : number
+>    : ^^^^^^
+
+function f<T extends Foo, U extends Foo, V>(t: T, u: U, v: V): void {
+>f : <T extends Foo, U extends Foo, V>(t: T, u: U, v: V) => void
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    // ok
+    let r = true ? t : u;
+>r : T | U
+>  : ^^^^^
+>true ? t : u : T | U
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    let r_2 = true ? u : t;
+>r_2 : T | U
+>    : ^^^^^
+>true ? u : t : T | U
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+
+    // ok
+    let r2 = true ? t : v;
+>r2 : T | V
+>   : ^^^^^
+>true ? t : v : T | V
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    let r2_2 = true ? v : t;
+>r2_2 : T | V
+>     : ^^^^^
+>true ? v : t : T | V
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+
+    // ok
+    let r3 = true ? v : u;
+>r3 : U | V
+>   : ^^^^^
+>true ? v : u : U | V
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>v : V
+>  : ^
+>u : U
+>  : ^
+
+    let r3_2 = true ? u : v;
+>r3_2 : U | V
+>     : ^^^^^
+>true ? u : v : U | V
+>             : ^^^^^
+>true : true
+>     : ^^^^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+
+    // ok
+    let r4 = true ? t : new Foo();
+>r4 : Foo
+>   : ^^^
+>true ? t : new Foo() : Foo
+>                     : ^^^
+>true : true
+>     : ^^^^
+>t : T
+>  : ^
+>new Foo() : Foo
+>          : ^^^
+>Foo : typeof Foo
+>    : ^^^^^^^^^^
+
+    let r4_2 = true ? new Foo() : t;
+>r4_2 : Foo
+>     : ^^^
+>true ? new Foo() : t : Foo
+>                     : ^^^
+>true : true
+>     : ^^^^
+>new Foo() : Foo
+>          : ^^^
+>Foo : typeof Foo
+>    : ^^^^^^^^^^
+>t : T
+>  : ^
+
+
+    // ok
+    let r5 = true ? u : new Foo();
+>r5 : Foo
+>   : ^^^
+>true ? u : new Foo() : Foo
+>                     : ^^^
+>true : true
+>     : ^^^^
+>u : U
+>  : ^
+>new Foo() : Foo
+>          : ^^^
+>Foo : typeof Foo
+>    : ^^^^^^^^^^
+
+    let r5_2 = true ? new Foo() : u;
+>r5_2 : Foo
+>     : ^^^
+>true ? new Foo() : u : Foo
+>                     : ^^^
+>true : true
+>     : ^^^^
+>new Foo() : Foo
+>          : ^^^
+>Foo : typeof Foo
+>    : ^^^^^^^^^^
+>u : U
+>  : ^
+
+
+    // ok
+    let r6 = true ? v : new Foo();
+>r6 : Foo | V
+>   : ^^^^^^^
+>true ? v : new Foo() : Foo | V
+>                     : ^^^^^^^
+>true : true
+>     : ^^^^
+>v : V
+>  : ^
+>new Foo() : Foo
+>          : ^^^
+>Foo : typeof Foo
+>    : ^^^^^^^^^^
+
+    let r6_2 = true ? new Foo() : v;
+>r6_2 : Foo | V
+>     : ^^^^^^^
+>true ? new Foo() : v : Foo | V
+>                     : ^^^^^^^
+>true : true
+>     : ^^^^
+>new Foo() : Foo
+>          : ^^^
+>Foo : typeof Foo
+>    : ^^^^^^^^^^
+>v : V
+>  : ^
+
+
+}
+
+class B1<T> {
+>B1 : B1<T>
+>   : ^^^^^
+>T : T
+>  : ^
+
+    foo: T;
+>foo : T
+>    : ^
+
+}
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -3735,8 +3735,23 @@ impl<'a> Parser<'a> {
             }
             let open = self.advance();
             if !matches!(self.peek().kind, TokenKind::RightBracket) {
-                self.error_at(open.span, "expected `]` to close array type");
-                return None;
+                // `T[K]`, an indexed access type. The index is a whole type,
+                // unions included.
+                let index = self.parse_type_annotation()?;
+                if !matches!(self.peek().kind, TokenKind::RightBracket) {
+                    self.error_at(open.span, "expected `]` to close indexed access type");
+                    return None;
+                }
+                let close = self.advance();
+                let span = self.span(ty.span.start, close.span.end);
+                ty = TypeAnnotation {
+                    kind: TypeAnnotationKind::IndexedAccess {
+                        object: Box::new(ty),
+                        index: Box::new(index),
+                    },
+                    span,
+                };
+                continue;
             }
             let close = self.advance();
             let span = self.span(ty.span.start, close.span.end);
@@ -4935,7 +4950,15 @@ impl<'a> Parser<'a> {
             self.tokens.get(i).map(|t| &t.kind),
             Some(TokenKind::LeftBracket)
         ) {
-            i += 1;
+            if matches!(
+                self.tokens.get(i + 1).map(|t| &t.kind),
+                Some(TokenKind::RightBracket)
+            ) {
+                i += 2;
+                continue;
+            }
+            // `T[K]`: an indexed access type, whose index is a whole type.
+            i = self.scan_past_type_annotation_at_depth(i + 1, TypePos::Anywhere, depth + 1)?;
             if !matches!(
                 self.tokens.get(i).map(|t| &t.kind),
                 Some(TokenKind::RightBracket)

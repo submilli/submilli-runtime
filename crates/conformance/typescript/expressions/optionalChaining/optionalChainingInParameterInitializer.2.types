@@ -1,0 +1,70 @@
+=== optionalChainingInParameterInitializer.2.ts ===
+
+// https://github.com/microsoft/TypeScript/issues/36295
+const a = (): { d: string } | undefined => undefined;
+>a : () => { d: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(): { d: string } | undefined => undefined : () => { d: string; } | undefined
+>                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d : string
+>  : ^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+((b: string | undefined = a()?.d) => { let a; })();
+>((b: string | undefined = a()?.d) => { let a; })() : void
+>                                                   : ^^^^
+>((b: string | undefined = a()?.d) => { let a; }) : (b?: string | undefined) => void
+>                                                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(b: string | undefined = a()?.d) => { let a; } : (b?: string | undefined) => void
+>                                               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>a()?.d : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a() : { d: string; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : () => { d: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>a : any
+>  : ^^^
+
+
+const x = "";
+>x : ""
+>  : ^^
+>"" : ""
+>   : ^^
+
+((b: string | undefined = a()?.d, d: string = x) => { let x; })();
+>((b: string | undefined = a()?.d, d: string = x) => { let x; })() : void
+>                                                                  : ^^^^
+>((b: string | undefined = a()?.d, d: string = x) => { let x; }) : (b?: string | undefined, d?: string) => void
+>                                                                : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(b: string | undefined = a()?.d, d: string = x) => { let x; } : (b?: string | undefined, d?: string) => void
+>                                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>a()?.d : string | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>a() : { d: string; } | undefined
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : () => { d: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>d : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>d : string
+>  : ^^^^^^
+>x : ""
+>  : ^^
+>x : any
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -8,9 +8,9 @@ let stringDictionary: { [key: string]: string } = null as unknown as ({ [key: st
 stringDictionary = optionalProperties;  // ok
 stringDictionary = undefinedProperties; // error
 
-/*pruned*/;                                                                                   
-/*pruned*/;                                                                 
-/*pruned*/;                         // error
+let probablyArray: { [key: number]: string } = null as unknown as ({ [key: number]: string });
+let numberLiteralKeys: { 1?: string } = null as unknown as ({ 1?: string });
+probablyArray = numberLiteralKeys;  // error
 
 let optionalUndefined: { k1?: undefined } = null as unknown as ({ k1?: undefined });
 let dict: { [key: string]: string } = optionalUndefined; // error

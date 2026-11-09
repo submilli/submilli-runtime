@@ -1,0 +1,183 @@
+=== voidOperatorWithAnyOtherType.ts ===
+// void  operator on any type
+
+/*pruned*/;
+let ANY1;
+>ANY1 : any
+>     : ^^^
+
+/*pruned*/;
+let obj: () => {} = null as unknown as (() => {});
+>obj : () => {}
+>    : ^^^^^^^^
+>null as unknown as (() => {}) : () => {}
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let obj1 = {x:"",y:1};
+>obj1 : { x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{x:"",y:1} : { x: string; y: number; }
+>           : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>"" : ""
+>   : ^^
+>y : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+
+/*pruned*/;
+
+
+
+/**/;
+
+
+
+
+
+
+/*pruned*/;
+
+
+/*pruned*/;
+
+// any type var
+let ResultIsAny1 = void ANY1;
+>ResultIsAny1 : undefined
+>             : ^^^^^^^^^
+>void ANY1 : undefined
+>          : ^^^^^^^^^
+>ANY1 : any
+>     : ^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let ResultIsAny5 = void obj;
+>ResultIsAny5 : undefined
+>             : ^^^^^^^^^
+>void obj : undefined
+>         : ^^^^^^^^^
+>obj : () => {}
+>    : ^^^^^^^^
+
+let ResultIsAny6 = void obj1;
+>ResultIsAny6 : undefined
+>             : ^^^^^^^^^
+>void obj1 : undefined
+>          : ^^^^^^^^^
+>obj1 : { x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+// any type literal
+let ResultIsAny7 = void undefined;
+>ResultIsAny7 : undefined
+>             : ^^^^^^^^^
+>void undefined : undefined
+>               : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let ResultIsAny8 = void null;
+>ResultIsAny8 : undefined
+>             : ^^^^^^^^^
+>void null : undefined
+>          : ^^^^^^^^^
+
+
+// any type expressions
+/*pruned*/;
+let ResultIsAny10 = void obj1.x;
+>ResultIsAny10 : undefined
+>              : ^^^^^^^^^
+>void obj1.x : undefined
+>            : ^^^^^^^^^
+>obj1.x : string
+>       : ^^^^^^
+>obj1 : { x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+let ResultIsAny11 = void obj1.y;
+>ResultIsAny11 : undefined
+>              : ^^^^^^^^^
+>void obj1.y : undefined
+>            : ^^^^^^^^^
+>obj1.y : number
+>       : ^^^^^^
+>obj1 : { x: string; y: number; }
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>y : number
+>  : ^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+let ResultIsAny17 = void (null + undefined);
+>ResultIsAny17 : undefined
+>              : ^^^^^^^^^
+>void (null + undefined) : undefined
+>                        : ^^^^^^^^^
+>(null + undefined) : any
+>                   : ^^^
+>null + undefined : any
+>                 : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+let ResultIsAny18 = void (null + null);
+>ResultIsAny18 : undefined
+>              : ^^^^^^^^^
+>void (null + null) : undefined
+>                   : ^^^^^^^^^
+>(null + null) : any
+>              : ^^^
+>null + null : any
+>            : ^^^
+
+let ResultIsAny19 = void (undefined + undefined);
+>ResultIsAny19 : undefined
+>              : ^^^^^^^^^
+>void (undefined + undefined) : undefined
+>                             : ^^^^^^^^^
+>(undefined + undefined) : any
+>                        : ^^^
+>undefined + undefined : any
+>                      : ^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+>undefined : undefined
+>          : ^^^^^^^^^
+
+
+// multiple void  operators
+/*pruned*/;
+/*pruned*/;
+
+// miss assignment operators
+/**/;
+void ANY1;
+>void ANY1 : undefined
+>          : ^^^^^^^^^
+>ANY1 : any
+>     : ^^^
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/**/;
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

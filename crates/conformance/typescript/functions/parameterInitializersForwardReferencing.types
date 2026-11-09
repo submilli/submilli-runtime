@@ -23,17 +23,33 @@ function inside(a = b): void {
 >b : any
 >  : ^^^
 
-    /**/;
+    let b;
+>b : any
+>  : ^^^
+
 }
 
 function outside(): void {
 >outside : () => void
 >        : ^^^^^^^^^^
 
-    /**/;
-    /*pruned*/;
+    let b;
+>b : any
+>  : ^^^
 
+    function inside(a: undefined = b): void { // Still an error because b is declared inside the function
+>inside : (a?: undefined) => void
+>       : ^^^^^^^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+>b : undefined
+>  : ^^^^^^^^^
 
+        let b;
+>b : any
+>  : ^^^
+
+    }
 }
 
 function defaultArgFunction(a: () => number = function () { return b; }, b: number = 1): void { }
@@ -96,10 +112,10 @@ class C {
 }
 
 // Function expressions
-let x = (a = b, b = c, c = d) => { /**/;  };
+let x = (a = b, b = c, c = d) => { let d; };
 >x : (a?: any, b?: any, c?: any) => void
 >  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
->(a = b, b = c, c = d) => { /**/;  } : (a?: any, b?: any, c?: any) => void
+>(a = b, b = c, c = d) => { let d; } : (a?: any, b?: any, c?: any) => void
 >                                    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 >a : any
 >  : ^^^
@@ -110,6 +126,8 @@ let x = (a = b, b = c, c = d) => { /**/;  };
 >c : any
 >  : ^^^
 >c : any
+>  : ^^^
+>d : any
 >  : ^^^
 >d : any
 >  : ^^^

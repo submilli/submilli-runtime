@@ -1,0 +1,5 @@
+types: 33 of 98 tsc entries compared, 0 differ
+
+errors:
+line 32: ours: unsupported Record key type `K` (tsc accepts)
+line 84: ours: cannot read field `length` on `unknown` (tsc accepts)

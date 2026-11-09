@@ -1,0 +1,17 @@
+typeParameterIndirectlyConstrainedToItself.ts(2,19): error TS2313: Type parameter 'U' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(2,32): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(3,20): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(3,33): error TS2313: Type parameter 'U' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(3,46): error TS2313: Type parameter 'V' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(5,23): error TS2313: Type parameter 'U' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(5,36): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(6,24): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(6,37): error TS2313: Type parameter 'U' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(6,50): error TS2313: Type parameter 'V' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(8,22): error TS2313: Type parameter 'U' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(8,35): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(9,23): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(9,36): error TS2313: Type parameter 'U' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(9,49): error TS2313: Type parameter 'V' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(22,32): error TS2313: Type parameter 'T' has a circular constraint.
+typeParameterIndirectlyConstrainedToItself.ts(22,45): error TS2313: Type parameter 'V' has a circular constraint.

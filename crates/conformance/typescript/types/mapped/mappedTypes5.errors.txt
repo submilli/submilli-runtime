@@ -1,0 +1,3 @@
+mappedTypes5.ts(9,9): error TS2322: Type 'Partial<T>' is not assignable to type 'Readonly<T>'.
+mappedTypes5.ts(11,9): error TS2322: Type 'Partial<Readonly<T>>' is not assignable to type 'Readonly<T>'.
+mappedTypes5.ts(12,9): error TS2322: Type 'Readonly<Partial<T>>' is not assignable to type 'Readonly<T>'.

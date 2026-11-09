@@ -1,1 +1,5 @@
-types: 142 of 145 tsc entries compared, 0 differ
+types: 184 of 194 tsc entries compared, 1 differ
+
+line 5: s
+  tsc:  any
+  ours: unknown

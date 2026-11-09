@@ -1,0 +1,11 @@
+=== parserVariableDeclaration9.ts ===
+let a;
+>a : any
+>  : ^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

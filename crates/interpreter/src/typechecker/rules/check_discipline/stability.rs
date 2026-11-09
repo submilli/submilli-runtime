@@ -30,6 +30,8 @@ pub(super) fn is_primitive(ty: &Type) -> bool {
         | Type::Tuple(_)
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
         | Type::InterfaceRef { .. }
         | Type::ClassRef { .. }
         | Type::AliasRef { .. }

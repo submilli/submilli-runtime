@@ -1,0 +1,145 @@
+types: 133 of 181 tsc entries compared, 36 differ
+
+line 11: v00_2
+  tsc:  keyof T
+  ours: "a" | "b"
+
+line 11: null as unknown as (keyof T)
+  tsc:  keyof T
+  ours: "a" | "b"
+
+line 12: v00_3
+  tsc:  keyof TP
+  ours: "a" | "b"
+
+line 12: null as unknown as (keyof TP)
+  tsc:  keyof TP
+  ours: "a" | "b"
+
+line 13: v00_4
+  tsc:  keyof TR
+  ours: "a" | "b"
+
+line 13: null as unknown as (keyof TR)
+  tsc:  keyof TR
+  ours: "a" | "b"
+
+line 14: v00_5
+  tsc:  keyof TPR
+  ours: "a" | "b"
+
+line 14: null as unknown as (keyof TPR)
+  tsc:  keyof TPR
+  ours: "a" | "b"
+
+line 18: v01_3
+  tsc:  Pick<T, keyof T>
+  ours: Pick<T, "a" | "b">
+
+line 18: null as unknown as (Pick<T, keyof T>)
+  tsc:  Pick<T, keyof T>
+  ours: Pick<T, "a" | "b">
+
+line 19: v01_4
+  tsc:  Pick<Pick<T, keyof T>, keyof T>
+  ours: Pick<Pick<T, "a" | "b">, "a" | "b">
+
+line 19: null as unknown as (Pick<Pick<T, keyof T>, keyof T>)
+  tsc:  Pick<Pick<T, keyof T>, keyof T>
+  ours: Pick<Pick<T, "a" | "b">, "a" | "b">
+
+line 25: v02_5
+  tsc:  Pick<TP, keyof TP>
+  ours: Pick<TP, "a" | "b">
+
+line 25: null as unknown as (Pick<TP, keyof TP>)
+  tsc:  Pick<TP, keyof TP>
+  ours: Pick<TP, "a" | "b">
+
+line 31: v03_5
+  tsc:  Pick<TR, keyof TR>
+  ours: Pick<TR, "a" | "b">
+
+line 31: null as unknown as (Pick<TR, keyof TR>)
+  tsc:  Pick<TR, keyof TR>
+  ours: Pick<TR, "a" | "b">
+
+line 40: v04_8
+  tsc:  Pick<TPR, keyof T>
+  ours: Pick<TPR, "a" | "b">
+
+line 40: null as unknown as (Pick<TPR, keyof T>)
+  tsc:  Pick<TPR, keyof T>
+  ours: Pick<TPR, "a" | "b">
+
+line 50: b00_2
+  tsc:  keyof B
+  ours: "a" | "b"
+
+line 50: null as unknown as (keyof B)
+  tsc:  keyof B
+  ours: "a" | "b"
+
+line 51: b00_3
+  tsc:  keyof BP
+  ours: "a" | "b"
+
+line 51: null as unknown as (keyof BP)
+  tsc:  keyof BP
+  ours: "a" | "b"
+
+line 52: b00_4
+  tsc:  keyof BR
+  ours: "a" | "b"
+
+line 52: null as unknown as (keyof BR)
+  tsc:  keyof BR
+  ours: "a" | "b"
+
+line 53: b00_5
+  tsc:  keyof BPR
+  ours: "a" | "b"
+
+line 53: null as unknown as (keyof BPR)
+  tsc:  keyof BPR
+  ours: "a" | "b"
+
+line 57: b01_3
+  tsc:  Pick<B, keyof B>
+  ours: Pick<B, "a" | "b">
+
+line 57: null as unknown as (Pick<B, keyof B>)
+  tsc:  Pick<B, keyof B>
+  ours: Pick<B, "a" | "b">
+
+line 58: b01_4
+  tsc:  Pick<Pick<B, keyof B>, keyof B>
+  ours: Pick<Pick<B, "a" | "b">, "a" | "b">
+
+line 58: null as unknown as (Pick<Pick<B, keyof B>, keyof B>)
+  tsc:  Pick<Pick<B, keyof B>, keyof B>
+  ours: Pick<Pick<B, "a" | "b">, "a" | "b">
+
+line 64: b02_5
+  tsc:  Pick<BP, keyof BP>
+  ours: Pick<BP, "a" | "b">
+
+line 64: null as unknown as (Pick<BP, keyof BP>)
+  tsc:  Pick<BP, keyof BP>
+  ours: Pick<BP, "a" | "b">
+
+line 70: b03_5
+  tsc:  Pick<BR, keyof BR>
+  ours: Pick<BR, "a" | "b">
+
+line 70: null as unknown as (Pick<BR, keyof BR>)
+  tsc:  Pick<BR, keyof BR>
+  ours: Pick<BR, "a" | "b">
+
+line 79: b04_8
+  tsc:  Pick<BPR, keyof BPR>
+  ours: Pick<BPR, "a" | "b">
+
+line 79: null as unknown as (Pick<BPR, keyof BPR>)
+  tsc:  Pick<BPR, keyof BPR>
+  ours: Pick<BPR, "a" | "b">

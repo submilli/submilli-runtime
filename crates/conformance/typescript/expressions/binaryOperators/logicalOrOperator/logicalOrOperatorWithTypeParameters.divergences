@@ -1,1 +1,25 @@
-types: 41 of 49 tsc entries compared, 0 differ
+types: 59 of 77 tsc entries compared, 6 differ
+
+line 20: r1
+  tsc:  T
+  ours: U | (T & {})
+
+line 20: t || u
+  tsc:  T
+  ours: U | (T & {})
+
+line 21: t || u
+  tsc:  T
+  ours: U | (T & {})
+
+line 22: r3
+  tsc:  T
+  ours: { a: string } | (T & {})
+
+line 22: t || { a: '' }
+  tsc:  T
+  ours: { a: string } | (T & {})
+
+line 23: t || u
+  tsc:  T
+  ours: U | (T & {})

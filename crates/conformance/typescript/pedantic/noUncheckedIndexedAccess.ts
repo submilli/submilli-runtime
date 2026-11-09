@@ -45,27 +45,27 @@ strMap[0] = undefined;
 /*pruned*/;                     
 
 // Numeric lookups are unaffected
-/*pruned*/;                                                                            
+const numMap: { [s: number]: boolean } = null as unknown as ({ [s: number]: boolean });
 // All of these should be ok
-/*pruned*/;                        
-/*pruned*/;                                  
-/*pruned*/;                                 
-/*pruned*/;                                     
-/*pruned*/;                                     
+const num_ok1: boolean = numMap[0];
+const num_ok2: boolean = numMap[0 as number];
+const num_ok3: boolean = numMap[0 as 0 | 1];
+const num_ok4: boolean = numMap[NumericEnum1.A];
+const num_ok5: boolean = numMap[NumericEnum2.A];
 
 // Generics
-/*pruned*/;                                                             
-                   
-                       
- 
-/*pruned*/;                                                             
-                
-                        
- 
-/*pruned*/;                                           
-                   
-                       
- 
+function generic1<T extends { [s: string]: boolean }>(arg: T): boolean {
+    // Should error
+    return arg["blah"];
+}
+function generic2<T extends { [s: string]: boolean }>(arg: T): boolean {
+    // Should OK
+    return arg["blah"]!;
+}
+function generic3<T extends string>(arg: T): boolean {
+    // Should error
+    return strMap[arg];
+}
 
 // Element access into known properties is ok
 const obj1: { x: string, y: number, [key: string]: string | number } = null as unknown as ({ x: string, y: number, [key: string]: string | number });

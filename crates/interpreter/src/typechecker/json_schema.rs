@@ -258,7 +258,10 @@ fn walk(
             path,
             "enums need their variants resolved — use a union of literals",
         )),
-        Type::TypeVar(_) | Type::GenericParam { .. } => Err(reject(
+        Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. } => Err(reject(
             path,
             "generic type parameters are erased — the schema is emitted at compile time",
         )),

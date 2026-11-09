@@ -1,4 +1,4 @@
-types: 96 of 170 tsc entries compared, 18 differ
+types: 129 of 222 tsc entries compared, 26 differ
 
 line 16: strMap["foo"]
   tsc:  boolean | undefined
@@ -60,6 +60,38 @@ line 33: strMap.bar
   tsc:  boolean | undefined
   ours: boolean
 
+line 50: numMap[0]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 51: numMap[0 as number]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 52: numMap[0 as 0 | 1]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 53: numMap[NumericEnum1.A]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 54: numMap[NumericEnum2.A]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 59: arg["blah"]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 63: arg["blah"]
+  tsc:  boolean | undefined
+  ours: boolean
+
+line 67: strMap[arg]
+  tsc:  boolean | undefined
+  ours: boolean
+
 line 76: obj1[yy]
   tsc:  string | number | undefined
   ours: number | string
@@ -86,4 +118,11 @@ line 25: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boole
 line 26: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
 line 27: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
 line 28: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 50: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 51: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 52: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 53: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 54: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 59: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
+line 67: tsc TS2322: Type 'boolean | undefined' is not assignable to type 'boolean'.   Type 'undefined' is not assignable to type 'boolean'. (we accept)
 line 83: tsc TS2322: Type 'number | boolean | undefined' is not assignable to type 'number | boolean'.   Type 'undefined' is not assignable to type 'number | boolean'. (we accept)

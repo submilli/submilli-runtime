@@ -1796,6 +1796,19 @@ fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
     .then_some("Array<string | undefined>")
 }
 
+/// The `lib.es5.d.ts` text of a built-in utility type, whose alias body is an
+/// application of itself.
+fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
+    match body {
+        Type::AliasRef {
+            mangled,
+            name: applied,
+            ..
+        } if applied == name => crate::runtime::prelude::utility_types::declaration_text(mangled),
+        _ => None,
+    }
+}
+
 /// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
@@ -1865,6 +1878,9 @@ fn render_ts_type(
                 let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
+        }
+        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
+            let _ = writeln!(out, "{indent}{export_prefix}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
             let _ = writeln!(
@@ -2185,6 +2201,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Error => "never".to_string(),
         Type::Never => "never".to_string(),
         Type::TypeVar(name) | Type::GenericParam { name, .. } => name.clone(),
+        Type::KeyOf(_) | Type::IndexedAccess { .. } => ty.to_string(),
         Type::InterfaceRef { name, args, .. }
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
@@ -2209,7 +2226,9 @@ fn ts_named_type(name: &str, args: &[Type]) -> String {
 fn ts_type_array_element(ty: &Type) -> String {
     match ty {
         Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => ts_type(ty),
-        Type::Function { .. } | Type::Union(_) | Type::Readonly(_) => format!("({})", ts_type(ty)),
+        Type::Function { .. } | Type::Union(_) | Type::Readonly(_) | Type::KeyOf(_) => {
+            format!("({})", ts_type(ty))
+        }
         _ => ts_type(ty),
     }
 }
@@ -2424,6 +2443,9 @@ fn render_type_for(
                 let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
+        }
+        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
+            let _ = writeln!(out, "{indent}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
             let _ = writeln!(

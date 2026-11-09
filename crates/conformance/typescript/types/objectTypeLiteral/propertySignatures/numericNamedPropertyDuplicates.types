@@ -1,0 +1,60 @@
+=== numericNamedPropertyDuplicates.ts ===
+/**/;
+
+
+
+
+
+
+interface I {
+>I : I
+>  : ^
+
+    2: number;
+>2 : number
+>  : ^^^^^^
+
+    2.: number;
+>2. : number
+>   : ^^^^^^
+
+}
+
+let a: {
+>a : { 1: number; }
+>  : ^^^^^^^^^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     1: number;     1: number; }) : { 1: number; }
+>                                                       : ^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+});
+
+/**/;
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

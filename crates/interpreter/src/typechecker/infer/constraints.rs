@@ -42,6 +42,16 @@ impl Inferer<'_> {
             };
             current = bound;
         }
+        // A bound kept lazy over a declaration bound later, or over the
+        // class a static method belongs to (`P extends Partial<Own>`),
+        // evaluates where it is read.
+        let evaluated;
+        if super::utility_types::has_evaluable_application(current) {
+            evaluated = self
+                .type_limits
+                .type_or_error(super::utility_types::normalize(current, self.resolver()));
+            current = &evaluated;
+        }
         if let Type::Refined {
             original,
             ty: shape,
@@ -62,6 +72,12 @@ impl Inferer<'_> {
             }
             return shape.as_ref().clone();
         }
+        // A form reads through its base constraint: `p.a` on `Partial<T>`
+        // with `T extends { a: number }` is `number | undefined` (tsc keeps
+        // `T["a"] | undefined`).
+        if current.without_aliases().is_type_operator() {
+            return super::assignable::base_constraint(current, self.resolver());
+        }
         if let Type::Union(members) = current.without_aliases() {
             let mut budget = self.type_limits.budget();
             let mut apparent_members = Vec::new();
@@ -80,6 +96,7 @@ impl Inferer<'_> {
 
     /// The static proof permits a representation-only cast. The original
     /// expression still has its erased slot, including for primitive bounds.
+    /// A form with no members to read is reported here.
     pub(super) fn constraint_receiver(
         &mut self,
         value: ExprId,
@@ -90,6 +107,7 @@ impl Inferer<'_> {
         if apparent == ty {
             return Ok((value, ty));
         }
+        self.report_unreadable_form(&ty, &apparent, span);
         let value = self.push_synthetic_expr(
             TypedExprKind::Cast {
                 value,
@@ -100,6 +118,25 @@ impl Inferer<'_> {
             span,
         )?;
         Ok((value, apparent))
+    }
+
+    /// Report a receiver that is a form whose bound has no evaluation
+    /// (`Pick<T, "length">` with `T extends number[]`): its apparent type is
+    /// `Error`, so it has no members to read. An `Error` from anything else
+    /// (an unknown bound, a type limit) was reported where it arose.
+    pub(super) fn report_unreadable_form(&mut self, ty: &Type, apparent: &Type, span: Span) {
+        let has_form = super::utility_types::members(ty)
+            .iter()
+            .any(|member| member.without_aliases().is_type_operator());
+        let unreadable = super::utility_types::members(apparent)
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Error));
+        if has_form && unreadable {
+            self.error(
+                span,
+                format!("`{ty}` has no members to read: its bound has no evaluation"),
+            );
+        }
     }
 
     /// Both direct member reads and optional chains expose the bound's shape
@@ -156,7 +193,11 @@ impl Inferer<'_> {
             let expected =
                 super::generic::substitute_typevars(&expected, &rigid, &self.type_limits)
                     .map_err(type_limit_at(span))?;
-            if !self.satisfies_generic_constraint(&actual, &expected) {
+            // `keyof T` and utilities in a bound evaluate once `T` is known,
+            // though the message names the bound as written (`keyof User`).
+            let evaluated = super::utility_types::normalize(&expected, self.resolver())
+                .map_err(type_limit_at(span))?;
+            if !self.satisfies_generic_constraint(&actual, &evaluated) {
                 self.error_with_help(
                     span,
                     format!("Type `{actual}` does not satisfy the constraint `{expected}`"),
@@ -170,6 +211,11 @@ impl Inferer<'_> {
     }
 
     pub(super) fn satisfies_generic_constraint(&self, actual: &Type, expected: &Type) -> bool {
+        if let Type::Union(members) = actual.peel() {
+            return members
+                .iter()
+                .all(|member| self.satisfies_generic_constraint(member, expected));
+        }
         // This is a type-level proof, not an assignment of one closure ABI to
         // another. A `never[]` rest accepts every fixed parameter type by
         // contravariance, as used by ReturnType/Parameters without `any`.
@@ -213,6 +259,8 @@ impl Inferer<'_> {
             let bound = substitution
                 .apply(bound, &self.type_limits)
                 .map_err(type_limit_at(span))?;
+            let bound = super::utility_types::normalize(&bound, self.resolver())
+                .map_err(type_limit_at(span))?;
             if !self.satisfies_generic_constraint(&actual, &bound) {
                 substitution.insert(name.clone(), bound);
                 inferred_fallbacks.push(name.clone());
@@ -221,46 +269,97 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Check a written named type's arguments against its parameters'
+    /// bounds. A utility application is checked once, where it is resolved
+    /// ([`Self::check_application_constraints`]), so it is skipped here.
     pub(super) fn check_named_type_constraints(
         &mut self,
         ty: &Type,
         span: Span,
     ) -> Result<(), CompilerFailure> {
-        let (Type::InterfaceRef {
-            mangled,
-            name,
-            args,
-            ..
-        }
-        | Type::ClassRef {
-            mangled,
-            name,
-            args,
-            ..
-        }
-        | Type::Alias {
-            mangled,
-            name,
-            args,
-            ..
-        }
-        | Type::AliasRef {
-            mangled,
-            name,
-            args,
-            ..
-        }) = ty
-        else {
+        if ty.is_utility_application()
+            || matches!(ty, Type::Alias { mangled, .. } if super::utility_types::utility(mangled).is_some())
+        {
             return Ok(());
+        }
+        self.check_application_constraints(ty, span)
+    }
+
+    /// Check an application's arguments against its parameters' bounds, and
+    /// a `T[K]` form's key against `keyof T`. Inside a declaration the check
+    /// waits until every bound is known.
+    pub(super) fn check_application_constraints(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        match ty {
+            // Only a generic form: a concrete one (over a later declaration)
+            // reports a missing key where it evaluates.
+            Type::IndexedAccess { object, index }
+                if super::utility_types::holds_type_parameter(ty) =>
+            {
+                if !self.defer_constraint_check(ty, span) {
+                    self.check_index_key(object, index, span)?;
+                }
+                Ok(())
+            }
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::ClassRef {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::Alias {
+                mangled,
+                name,
+                args,
+                ..
+            }
+            | Type::AliasRef {
+                mangled,
+                name,
+                args,
+                ..
+            } => {
+                if !self.defer_constraint_check(ty, span) {
+                    self.check_argument_bounds(mangled, name, args, span)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Queue the check of `ty` while a declaration binds, so every bound is
+    /// known when it runs. Whether it was queued.
+    fn defer_constraint_check(&mut self, ty: &Type, span: Span) -> bool {
+        let Some(pending) = &mut self.pending_constraint_checks else {
+            return false;
         };
-        if let Some(pending) = &mut self.pending_constraint_checks {
-            pending.push(PendingConstraintCheck {
-                ty: ty.clone(),
-                span,
-                scopes: self.generics_in_scope.clone(),
-            });
-            return Ok(());
-        }
+        pending.push(PendingConstraintCheck {
+            ty: ty.clone(),
+            span,
+            scopes: self.generics_in_scope.clone(),
+        });
+        true
+    }
+
+    /// Check the arguments of an interface, class or alias application
+    /// against its parameters' bounds.
+    fn check_argument_bounds(
+        &mut self,
+        mangled: &crate::MangledName,
+        name: &str,
+        args: &[Type],
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
         let Some(symbol) = self.lookup_structural_type(mangled, name) else {
             return Ok(());
         };
@@ -270,8 +369,41 @@ impl Inferer<'_> {
             | TypeKind::Alias { generics, .. } => generics.clone(),
             _ => return Ok(()),
         };
-        let substitution = TypeParamSubstitution::from_pairs(&parameters, args);
+        // The arguments' own type parameters become rigid first, so one named
+        // like a parameter of the application (`Pick<K, "a">` with the user's
+        // `K`) is never chased into that parameter's binding.
+        let rigid = self.rigid_signature_bindings()?;
+        let args = args
+            .iter()
+            .map(|arg| super::generic::substitute_typevars(arg, &rigid, &self.type_limits))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(type_limit_at(span))?;
+        let substitution = TypeParamSubstitution::from_pairs(&parameters, &args);
         self.check_generic_constraints(&parameters, &substitution, &[], span)
+    }
+
+    /// tsc's TS2536: `T["a"]` needs `"a"` among the keys of `T`'s bound.
+    fn check_index_key(
+        &mut self,
+        object: &Type,
+        index: &Type,
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        let rigid = self.rigid_signature_bindings()?;
+        let rigid_object = super::generic::substitute_typevars(object, &rigid, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        let rigid_index = super::generic::substitute_typevars(index, &rigid, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        let keys =
+            super::utility_types::normalize(&Type::KeyOf(Box::new(rigid_object)), self.resolver())
+                .map_err(type_limit_at(span))?;
+        if !self.satisfies_generic_constraint(&rigid_index, &keys) {
+            self.error(
+                span,
+                format!("Type `{index}` cannot be used to index type `{object}`"),
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn check_pending_constraints(&mut self) -> Result<(), CompilerFailure> {
@@ -280,7 +412,7 @@ impl Inferer<'_> {
         let result = (|| {
             for check in pending {
                 self.generics_in_scope = check.scopes;
-                self.check_named_type_constraints(&check.ty, check.span)?;
+                self.check_application_constraints(&check.ty, check.span)?;
             }
             Ok(())
         })();

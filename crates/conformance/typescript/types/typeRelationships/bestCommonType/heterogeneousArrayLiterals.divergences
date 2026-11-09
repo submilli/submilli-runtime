@@ -1,0 +1,17 @@
+types: 172 of 227 tsc entries compared, 4 differ
+
+line 8: [{}, 1]
+  tsc:  (number | {})[]
+  ours: {}[]
+
+line 9: [{}, Object]
+  tsc:  (ObjectConstructor | {})[]
+  ours: {}[]
+
+line 14: [{ foo: 1, bar: '' }, { foo: 2 }]
+  tsc:  ({ foo: number; bar: string; } | { foo: number; })[]
+  ours: ({ bar: string; foo: number } | { bar?: undefined; foo: number })[]
+
+line 15: [{ foo: 1, bar: '' }, { foo: '' }]
+  tsc:  ({ foo: number; bar: string; } | { foo: string; })[]
+  ours: ({ bar: string; foo: number } | { bar?: undefined; foo: string })[]

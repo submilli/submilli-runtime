@@ -1,0 +1,5 @@
+typeParameterUsedAsTypeParameterConstraint4.ts(16,8): error TS2304: Cannot find name 'W'.
+typeParameterUsedAsTypeParameterConstraint4.ts(20,43): error TS2304: Cannot find name 'V'.
+typeParameterUsedAsTypeParameterConstraint4.ts(21,47): error TS2304: Cannot find name 'X'.
+typeParameterUsedAsTypeParameterConstraint4.ts(29,44): error TS2304: Cannot find name 'W'.
+typeParameterUsedAsTypeParameterConstraint4.ts(30,47): error TS2304: Cannot find name 'Y'.

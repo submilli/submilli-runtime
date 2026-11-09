@@ -1,0 +1,2 @@
+line 7 missed: by-design spec §Appendix there is no `intrinsic` keyword, so `intrinsic` is an ordinary name
+line 22 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

@@ -771,9 +771,11 @@ pub fn strip_null(ty: &Type) -> Type {
         )),
         // `unknown` is `{} | null | undefined`, as in TypeScript.
         Type::Unknown => Type::union(vec![Type::empty_object(), Type::Undefined]),
-        // A type parameter may hold any value: `T` minus `null` is
-        // `T & ({} | undefined)`.
-        Type::GenericParam { .. } => preserve_refinement(ty, strip_null(&Type::Unknown)),
+        // A type parameter, or a form over one (`T[K]`), may hold any value:
+        // `T` minus `null` is `T & ({} | undefined)`.
+        peeled if holds_any_value_of_a_parameter(peeled) => {
+            preserve_refinement(ty, strip_null(&Type::Unknown))
+        }
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.
         _ => ty.clone(),
     }
@@ -806,15 +808,18 @@ pub fn strip_undefined(ty: &Type) -> Type {
                 .collect(),
         )),
         Type::Unknown => Type::union(vec![Type::empty_object(), Type::Null]),
-        Type::GenericParam { .. } => preserve_refinement(ty, strip_undefined(&Type::Unknown)),
+        peeled if holds_any_value_of_a_parameter(peeled) => {
+            preserve_refinement(ty, strip_undefined(&Type::Unknown))
+        }
         _ => ty.clone(),
     }
 }
 
-/// A union member that a nullish test narrows in place: a type parameter, or
-/// a narrowing of one such as `T & ({} | null)`, whose shape `peel` hides.
+/// A union member that a nullish test narrows in place: a type parameter or
+/// a form over one (`T[K]`), or a narrowing of one such as `T & ({} |
+/// null)`, whose shape `peel` hides.
 fn is_type_parameter_or_its_narrowing(member: &Type) -> bool {
-    matches!(member.peel(), Type::GenericParam { .. }) || member.refines_type_parameter()
+    holds_any_value_of_a_parameter(member.peel()) || member.refines_type_parameter()
 }
 
 /// Remove both nullish alternatives for optional access and non-null assertions.
@@ -1142,8 +1147,10 @@ pub fn truthy_part(ty: &Type) -> Type {
         .filter(|m| truthiness_class(m) != TruthinessClass::AlwaysFalsy)
         .map(|m| match m.without_aliases() {
             Type::Boolean => Type::BooleanLiteral(true),
-            // A truthy `T` is `T & {}`, as in TypeScript.
+            // A truthy `T` is `T & {}`, as in TypeScript, and so is a truthy
+            // form over one (`Extract<T, string | undefined> & {}`).
             Type::GenericParam { .. } => intersect_with(m, TypeFacts::TRUTHY),
+            _ if holds_any_value_of_a_parameter(m.peel()) => intersect_with(m, TypeFacts::TRUTHY),
             _ => m.clone(),
         })
         .collect();
@@ -1308,6 +1315,8 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::Unknown
         | Type::TypeVar(_)
         | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
         | Type::AliasRef { .. } => false,
 
         // Peeled by the caller.
@@ -1346,7 +1355,7 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
             }
             // `Array.isArray` pins an `object` to an array.
             Type::NonPrimitive if matches!(asserted, Type::Array(_)) => return asserted,
-            Type::GenericParam { .. } => {
+            form if holds_any_value_of_a_parameter(form) => {
                 return Type::Refined {
                     original: Box::new(ty.clone()),
                     ty: Box::new(asserted),
@@ -1358,7 +1367,7 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
     if matches!(peeled, Type::Unknown) && tests_only_presence(facts) {
         return recombine_unknown(intersect_with(&unknown_as_union(), facts));
     }
-    if matches!(peeled, Type::GenericParam { .. }) && tests_only_presence(facts) {
+    if holds_any_value_of_a_parameter(peeled) && tests_only_presence(facts) {
         return preserve_refinement(ty, intersect_with(&Type::Unknown, facts));
     }
     match peeled {
@@ -1402,6 +1411,13 @@ fn typeof_object_narrowing(ty: &Type, peeled: &Type) -> Option<Type> {
     }
 }
 
+/// A body type parameter, or a utility, `keyof T` or `T[K]` over one: a type
+/// whose values a test narrows by refinement (`T & {}`), as it knows none of
+/// them statically.
+fn holds_any_value_of_a_parameter(peeled: &Type) -> bool {
+    peeled.lowers_to_erased_slot() && !matches!(peeled, Type::TypeVar(_))
+}
+
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
     if let Type::Refined {
         original,
@@ -1419,7 +1435,7 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
         }
         return Type::Unknown;
     }
-    if matches!(peeled, Type::GenericParam { .. }) {
+    if holds_any_value_of_a_parameter(peeled) {
         return preserve_refinement(ty, subtract(&Type::Unknown, facts));
     }
     // A `void` result may hold any value, so no test rules it out: `typeof
@@ -1822,9 +1838,9 @@ fn join_flow_types(left: &Type, right: &Type) -> Type {
 /// erased operand from folding to a constant.
 pub fn has_erased_member(ty: &Type) -> bool {
     match ty.peel() {
-        Type::TypeVar(_) | Type::GenericParam { .. } => true,
         Type::Union(members) => members.iter().any(has_erased_member),
-        _ => false,
+        // A type parameter, or a form over one such as `Readonly<T>`.
+        member => member.lowers_to_erased_slot(),
     }
 }
 

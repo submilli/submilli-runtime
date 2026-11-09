@@ -26,170 +26,170 @@ line, a name it declares, or the type `tsc` printed. It is approximate, and
 `COVERAGE_SAMPLE=<feature>` prints what it counted. It shows a feature that
 pruning nearly removed.
 
-Upstream: 5055 TypeScript tests. Suite: 903 TypeScript cases, 714 test262 cases.
+Upstream: 5055 TypeScript tests. Suite: 995 TypeScript cases, 715 test262 cases.
 
 ## Types
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `number` | §1.1 | done | 1514 | 364 | 1150 | 0 | 4207 | 1 of 1 | — | — |  |
-| `string` | §1.1 | done | 1566 | 367 | 1199 | 0 | 3540 | 1 of 1 | — | — |  |
-| `boolean` | §1.1 | done | 493 | 154 | 339 | 0 | 2552 | 1 of 1 | — | — |  |
-| `null` | §1.1 | done | 401 | 115 | 286 | 0 | 1631 | 1 of 1 | — | — |  |
-| `undefined` | §1.1 | done | 386 | 159 | 227 | 0 | 1447 | 1 of 1 | — | — |  |
-| `void` | §1.1 | done | 521 | 80 | 441 | 0 | 1359 | 1 of 1 | — | — |  |
-| `never` | §1.1 | done | 74 | 16 | 58 | 0 | 159 | 1 of 1 | — | — |  |
-| `bigint` | §1.1 | done | 16 | 3 | 13 | 0 | 50 | 1 of 1 | 16 | 71 |  |
-| Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 25 | 7 | 18 | 0 | 31 | 4 of 4 | — | — |  |
-| Numeric separators (`1_000`) | §1.1 | done | 11 | 6 | 5 | 0 | 70 | 1 of 1 | — | — |  |
-| `unknown` | §2.11 | done | 77 | 16 | 61 | 0 | 1045 | 1 of 1 | — | — |  |
-| `object` | §2.11 | done | 67 | 21 | 46 | 0 | 80 | 1 of 1 | — | — |  |
-| Object types (`{ x: T }`) | §1.2 | done | 1575 | 300 | 1275 | 0 | 1716 | 1 of 1 | — | — |  |
-| Optional properties (`a?: T`) | §1.2 | done | 129 | 46 | 83 | 0 | 57 | 1 of 1 | — | — |  |
-| Object literal shorthand (`{ x }`) | §1.2 | done | 83 | 12 | 71 | 0 | 16 | 1 of 1 | — | — |  |
-| Arrays (`T[]`) | §1.2 | done | 833 | 204 | 629 | 0 | 760 | 1 of 1 | 73 | 296 |  |
-| Optional tuple elements | §1.2 | done | 10 | 3 | 7 | 0 | 1 | 1 of 1 | — | — |  |
+| `number` | §1.1 | done | 1514 | 402 | 1112 | 0 | 4694 | 1 of 1 | — | — |  |
+| `string` | §1.1 | done | 1566 | 415 | 1151 | 0 | 4038 | 1 of 1 | — | — |  |
+| `boolean` | §1.1 | done | 493 | 166 | 327 | 0 | 2817 | 1 of 1 | — | — |  |
+| `null` | §1.1 | done | 401 | 128 | 273 | 0 | 1796 | 1 of 1 | — | — |  |
+| `undefined` | §1.1 | done | 386 | 176 | 210 | 0 | 1563 | 1 of 1 | — | — |  |
+| `void` | §1.1 | done | 521 | 97 | 424 | 0 | 1692 | 1 of 1 | — | — |  |
+| `never` | §1.1 | done | 74 | 23 | 51 | 0 | 179 | 1 of 1 | — | — |  |
+| `bigint` | §1.1 | done | 16 | 5 | 11 | 0 | 53 | 1 of 1 | 16 | 71 |  |
+| Radix literals (`0x`/`0b`/`0o`) | §1.1 | done | 25 | 10 | 15 | 0 | 46 | 4 of 4 | — | — |  |
+| Numeric separators (`1_000`) | §1.1 | done | 11 | 6 | 5 | 0 | 73 | 1 of 1 | — | — |  |
+| `unknown` | §2.11 | done | 77 | 20 | 57 | 0 | 1178 | 1 of 1 | — | — |  |
+| `object` | §2.11 | done | 67 | 24 | 43 | 0 | 87 | 1 of 1 | — | — |  |
+| Object types (`{ x: T }`) | §1.2 | done | 1575 | 350 | 1225 | 0 | 2027 | 1 of 1 | — | — |  |
+| Optional properties (`a?: T`) | §1.2 | done | 129 | 54 | 75 | 0 | 60 | 1 of 1 | — | — |  |
+| Object literal shorthand (`{ x }`) | §1.2 | done | 83 | 17 | 66 | 0 | 26 | 1 of 1 | — | — |  |
+| Arrays (`T[]`) | §1.2 | done | 833 | 226 | 607 | 0 | 926 | 1 of 1 | 73 | 297 |  |
+| Optional tuple elements | §1.2 | done | 10 | 4 | 6 | 0 | 2 | 1 of 1 | — | — |  |
 | Optional methods | §1.2 | done | 33 | 7 | 26 | 0 | 3 | 1 of 1 | — | — |  |
-| Tuples (`[T, U]`) | §1.2 | done | 153 | 43 | 110 | 0 | 257 | 1 of 1 | — | — |  |
-| `readonly` arrays and tuples | §1.2 | done | 24 | 5 | 19 | 0 | 43 | 1 of 1 | — | — |  |
-| Union types (`A | B`) | §1.2 | done | 462 | 198 | 264 | 0 | 2382 | 1 of 1 | — | — |  |
-| Type aliases (`type X = …`) | §1.2 | done | 319 | 70 | 249 | 0 | 599 | 1 of 1 | — | — |  |
-| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 295 | 83 | 212 | 0 | 1490 | 2 of 2 | — | — |  |
+| Tuples (`[T, U]`) | §1.2 | done | 153 | 54 | 99 | 0 | 321 | 1 of 1 | — | — |  |
+| `readonly` arrays and tuples | §1.2 | done | 24 | 7 | 17 | 0 | 50 | 1 of 1 | — | — |  |
+| Union types (`A | B`) | §1.2 | done | 462 | 224 | 238 | 0 | 2697 | 1 of 1 | — | — |  |
+| Type aliases (`type X = …`) | §1.2 | done | 319 | 93 | 226 | 0 | 785 | 1 of 1 | — | — |  |
+| Literal types (`"foo"`, `42`, `true`) | §1.2 | done | 295 | 102 | 193 | 0 | 1744 | 2 of 2 | — | — |  |
 
 ## Declarations
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `let` | §1.3 | done | 550 | 153 | 397 | 0 | 4645 | 1 of 1 | — | — |  |
-| `const` | §1.3 | done | 789 | 133 | 656 | 0 | 593 | 1 of 1 | — | — |  |
-| Several declarators (`let a = 0, b = 1;`) | §1.3 | done | 128 | 4 | 124 | 0 | 4 | 2 of 2 | — | — |  |
-| Type inference on `let`/`const` | §1.3 | done | 2223 | 505 | 1718 | 0 | 3750 | 1 of 1 | — | — |  |
+| `let` | §1.3 | done | 550 | 173 | 377 | 0 | 5256 | 1 of 1 | — | — |  |
+| `const` | §1.3 | done | 789 | 155 | 634 | 0 | 684 | 1 of 1 | — | — |  |
+| Several declarators (`let a = 0, b = 1;`) | §1.3 | done | 128 | 9 | 119 | 0 | 10 | 2 of 2 | — | — |  |
+| Type inference on `let`/`const` | §1.3 | done | 2223 | 554 | 1669 | 0 | 4179 | 1 of 1 | — | — |  |
 
 ## Functions
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Function declarations | §1.4 | done | 1567 | 288 | 1279 | 0 | 1154 | 1 of 1 | — | — |  |
-| Nested function declarations | §1.4 | done | 67 | 11 | 56 | 0 | 14 | 1 of 1 | — | — |  |
-| Arrow functions | §1.4 | done | 625 | 134 | 491 | 0 | 330 | 1 of 1 | — | — |  |
-| Closures (function expressions and arrows in a function) | §1.4 | done | 242 | 43 | 199 | 0 | 76 | 1 of 1 | — | — |  |
-| Optional parameters (`x?: T`) | §1.4 | done | 132 | 27 | 105 | 0 | 76 | 1 of 1 | — | — |  |
-| Default parameters (`x = val`) | §1.4 | done | 135 | 33 | 102 | 0 | 115 | 1 of 1 | — | — |  |
-| Rest parameters (`...args`) | §2.9 | done | 241 | 29 | 212 | 0 | 38 | 1 of 1 | — | — |  |
-| Trailing commas | §1.4 | done | 22 | 1 | 21 | 0 | 10 | 5 of 5 | — | — |  |
+| Function declarations | §1.4 | done | 1567 | 346 | 1221 | 0 | 1577 | 1 of 1 | — | — |  |
+| Nested function declarations | §1.4 | done | 67 | 14 | 53 | 0 | 23 | 1 of 1 | — | — |  |
+| Arrow functions | §1.4 | done | 625 | 158 | 467 | 0 | 380 | 1 of 1 | — | — |  |
+| Closures (function expressions and arrows in a function) | §1.4 | done | 242 | 53 | 189 | 0 | 97 | 1 of 1 | — | — |  |
+| Optional parameters (`x?: T`) | §1.4 | done | 132 | 29 | 103 | 0 | 81 | 1 of 1 | — | — |  |
+| Default parameters (`x = val`) | §1.4 | done | 135 | 37 | 98 | 0 | 129 | 1 of 1 | — | — |  |
+| Rest parameters (`...args`) | §2.9 | done | 241 | 39 | 202 | 0 | 48 | 1 of 1 | — | — |  |
+| Trailing commas | §1.4 | done | 22 | 2 | 20 | 0 | 10 | 5 of 5 | — | — |  |
 
 ## Control flow
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `if` / `else` | §1.5 | done | 288 | 111 | 177 | 0 | 577 | 1 of 1 | — | — |  |
+| `if` / `else` | §1.5 | done | 288 | 120 | 168 | 0 | 610 | 1 of 1 | — | — |  |
 | `while` | §1.5 | done | 54 | 16 | 38 | 0 | 53 | 1 of 1 | — | — |  |
 | `do…while` | §1.5 | done | 19 | 4 | 15 | 0 | 25 | 1 of 1 | — | — |  |
-| `for` (C-style) | §1.5 | done | 58 | 10 | 48 | 0 | 45 | 2 of 2 | — | — |  |
-| `for…of` | §1.5 | done | 215 | 58 | 157 | 0 | 114 | 1 of 1 | — | — |  |
-| `switch` | §1.5 | done | 58 | 23 | 35 | 0 | 123 | 1 of 1 | — | — |  |
-| `break` / `continue` | §1.5 | done | 97 | 26 | 71 | 0 | 26 | 2 of 2 | — | — |  |
+| `for` (C-style) | §1.5 | done | 58 | 11 | 47 | 0 | 46 | 2 of 2 | — | — |  |
+| `for…of` | §1.5 | done | 215 | 62 | 153 | 0 | 123 | 1 of 1 | — | — |  |
+| `switch` | §1.5 | done | 58 | 25 | 33 | 0 | 131 | 1 of 1 | — | — |  |
+| `break` / `continue` | §1.5 | done | 97 | 28 | 69 | 0 | 26 | 2 of 2 | — | — |  |
 
 ## Operators
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `void` expression | §1.6 | done | 41 | 11 | 30 | 0 | 59 | 1 of 1 | — | — |  |
-| Arithmetic (`+ - * / % **`) | §1.6 | done | 378 | 132 | 246 | 0 | 1064 | 6 of 6 | — | — |  |
-| Strict equality (`===`, `!==`) | §1.6 | done | 223 | 113 | 110 | 0 | 737 | 2 of 2 | — | — |  |
-| Loose equality (`==`, `!=`) | §1.6 | done | 89 | 34 | 55 | 0 | 258 | 2 of 2 | — | — |  |
-| Comparison (`< > <= >=`) | §1.6 | done | 111 | 30 | 81 | 0 | 441 | 4 of 4 | — | — |  |
-| Logical (`&&`, `||`, `!`) | §1.6 | done | 225 | 94 | 131 | 0 | 560 | 3 of 3 | — | — |  |
-| Unary arithmetic (`+x`, `-x`) | §1.6 | done | 105 | 38 | 67 | 0 | 188 | 2 of 2 | — | — |  |
-| Ternary (`? :`) | §1.6 | done | 110 | 51 | 59 | 0 | 247 | 1 of 1 | — | — |  |
-| Assignment (`=`, `+=`, …) | §1.6 | done | 719 | 196 | 523 | 0 | 1184 | 7 of 7 | — | — |  |
-| Postfix `++` / `--` | §1.6 | done | 88 | 28 | 60 | 0 | 158 | 2 of 2 | — | — |  |
-| `typeof x === "T"` narrowing | §1.6 | done | 84 | 54 | 30 | 0 | 287 | 7 of 7 | — | — |  |
-| `x === null` narrowing | §1.6 | done | 33 | 16 | 17 | 0 | 72 | 2 of 2 | — | — |  |
+| `void` expression | §1.6 | done | 41 | 12 | 29 | 0 | 70 | 1 of 1 | — | — |  |
+| Arithmetic (`+ - * / % **`) | §1.6 | done | 378 | 131 | 247 | 0 | 1055 | 6 of 6 | — | — |  |
+| Strict equality (`===`, `!==`) | §1.6 | done | 223 | 118 | 105 | 0 | 803 | 2 of 2 | — | — |  |
+| Loose equality (`==`, `!=`) | §1.6 | done | 89 | 34 | 55 | 0 | 292 | 2 of 2 | — | — |  |
+| Comparison (`< > <= >=`) | §1.6 | done | 111 | 30 | 81 | 0 | 489 | 4 of 4 | — | — |  |
+| Logical (`&&`, `||`, `!`) | §1.6 | done | 225 | 98 | 127 | 0 | 588 | 3 of 3 | — | — |  |
+| Unary arithmetic (`+x`, `-x`) | §1.6 | done | 105 | 37 | 68 | 0 | 183 | 2 of 2 | — | — |  |
+| Ternary (`? :`) | §1.6 | done | 110 | 57 | 53 | 0 | 310 | 1 of 1 | — | — |  |
+| Assignment (`=`, `+=`, …) | §1.6 | done | 719 | 218 | 501 | 0 | 1485 | 7 of 7 | — | — |  |
+| Postfix `++` / `--` | §1.6 | done | 88 | 26 | 62 | 0 | 146 | 2 of 2 | — | — |  |
+| `typeof x === "T"` narrowing | §1.6 | done | 84 | 55 | 29 | 0 | 302 | 7 of 7 | — | — |  |
+| `x === null` narrowing | §1.6 | done | 33 | 17 | 16 | 0 | 74 | 2 of 2 | — | — |  |
 | `Array.isArray(x)` narrowing | §1.6 | done | 2 | 1 | 1 | 0 | 1 | 1 of 1 | — | — |  |
-| `instanceof` | §2.2 | done | 42 | 13 | 29 | 0 | 19 | 2 of 2 | — | — |  |
-| `in` operator | §1.6 | done | 28 | 9 | 19 | 0 | 19 | 1 of 1 | — | — |  |
-| Nullish coalescing (`??`) | §1.6 | done | 45 | 19 | 26 | 0 | 55 | 1 of 1 | — | — |  |
-| Optional chaining (`?.`) | §1.6 | done | 46 | 12 | 34 | 0 | 144 | 1 of 1 | — | — |  |
-| Spread in array and object literals | §2.5 | done | 156 | 42 | 114 | 0 | 202 | 2 of 2 | — | — |  |
-| `as` casts | §2.11 | done | 124 | 27 | 97 | 0 | 45 | 1 of 1 | — | — |  |
-| Type predicates (`x is T`) | §2.11 | done | 52 | 14 | 38 | 0 | 11 | 1 of 1 | — | — |  |
-| Non-null assertion (`x!`) | §2.11 | done | 24 | 8 | 16 | 0 | 17 | 1 of 1 | — | — |  |
+| `instanceof` | §2.2 | done | 42 | 14 | 28 | 0 | 22 | 2 of 2 | — | — |  |
+| `in` operator | §1.6 | done | 28 | 11 | 17 | 0 | 22 | 1 of 1 | — | — |  |
+| Nullish coalescing (`??`) | §1.6 | done | 45 | 20 | 25 | 0 | 57 | 1 of 1 | — | — |  |
+| Optional chaining (`?.`) | §1.6 | done | 46 | 13 | 33 | 0 | 146 | 1 of 1 | — | — |  |
+| Spread in array and object literals | §2.5 | done | 156 | 50 | 106 | 0 | 245 | 2 of 2 | — | — |  |
+| `as` casts | §2.11 | done | 124 | 36 | 88 | 0 | 54 | 1 of 1 | — | — |  |
+| Type predicates (`x is T`) | §2.11 | done | 52 | 16 | 36 | 0 | 12 | 1 of 1 | — | — |  |
+| Non-null assertion (`x!`) | §2.11 | done | 24 | 10 | 14 | 0 | 19 | 1 of 1 | — | — |  |
 
 ## Error handling
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| `try` / `catch` / `finally` | §1.8 | done | 27 | 8 | 19 | 0 | 36 | 2 of 2 | — | — |  |
-| `throw` | §1.8 | done | 52 | 21 | 31 | 0 | 58 | 1 of 1 | — | — |  |
-| `catch` binding | §1.8 | done | 20 | 8 | 12 | 0 | 19 | 1 of 1 | — | — |  |
+| `try` / `catch` / `finally` | §1.8 | done | 27 | 9 | 18 | 0 | 37 | 2 of 2 | — | — |  |
+| `throw` | §1.8 | done | 52 | 22 | 30 | 0 | 59 | 1 of 1 | — | — |  |
+| `catch` binding | §1.8 | done | 20 | 9 | 11 | 0 | 20 | 1 of 1 | — | — |  |
 | Typed subclass `catch` (`catch (e: MyError)`) | §1.8 | n/a | — | — | — | — | — | — | — | — | a Submilli extension: TypeScript allows only `unknown` or `any` on a `catch` variable |
 | Multiple `catch` clauses | §1.8 | n/a | — | — | — | — | — | — | — | — | a Submilli extension: TypeScript allows one `catch` per `try` |
 | Custom error classes | §1.8 | done | 2 | 0 | 2 | 0 | 10 | 1 of 1 | — | — |  |
-| Built-in error classes | §1.8 | done | 36 | 16 | 20 | 0 | 23 | 1 of 1 | 26 | 103 |  |
+| Built-in error classes | §1.8 | done | 36 | 17 | 19 | 0 | 24 | 1 of 1 | 26 | 103 |  |
 
 ## Classes
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Class declarations | §2.2 | done | 2037 | 232 | 1805 | 0 | 501 | 1 of 1 | — | — |  |
-| `constructor` | §2.2 | done | 396 | 59 | 337 | 0 | 34 | 1 of 1 | — | — |  |
-| Instance methods | §2.2 | done | 764 | 59 | 705 | 0 | 74 | 1 of 1 | — | — |  |
-| Instance properties | §2.2 | done | 905 | 141 | 764 | 0 | 180 | 1 of 1 | — | — |  |
-| Field initializers | §2.2 | done | 291 | 40 | 251 | 0 | 23 | 1 of 1 | — | — |  |
-| Parameter properties | §2.2 | done | 125 | 26 | 99 | 0 | 24 | 1 of 1 | — | — |  |
-| Single inheritance (`extends`) | §2.2 | done | 528 | 65 | 463 | 0 | 55 | 1 of 1 | — | — |  |
-| Generic classes | §2.2 | done | 280 | 46 | 234 | 0 | 13 | 1 of 1 | — | — |  |
-| `public` / `private` / `readonly` | §2.2 | done | 392 | 82 | 310 | 0 | 63 | 3 of 3 | — | — |  |
+| Class declarations | §2.2 | done | 2037 | 268 | 1769 | 0 | 585 | 1 of 1 | — | — |  |
+| `constructor` | §2.2 | done | 396 | 67 | 329 | 0 | 35 | 1 of 1 | — | — |  |
+| Instance methods | §2.2 | done | 764 | 64 | 700 | 0 | 74 | 1 of 1 | — | — |  |
+| Instance properties | §2.2 | done | 905 | 163 | 742 | 0 | 237 | 1 of 1 | — | — |  |
+| Field initializers | §2.2 | done | 291 | 42 | 249 | 0 | 24 | 1 of 1 | — | — |  |
+| Parameter properties | §2.2 | done | 125 | 29 | 96 | 0 | 24 | 1 of 1 | — | — |  |
+| Single inheritance (`extends`) | §2.2 | done | 528 | 75 | 453 | 0 | 57 | 1 of 1 | — | — |  |
+| Generic classes | §2.2 | done | 280 | 69 | 211 | 0 | 25 | 1 of 1 | — | — |  |
+| `public` / `private` / `readonly` | §2.2 | done | 392 | 89 | 303 | 0 | 63 | 3 of 3 | — | — |  |
 | `static` methods | §2.2 | done | 240 | 37 | 203 | 0 | 46 | 1 of 1 | — | — |  |
-| `static` fields | §2.2 | done | 253 | 17 | 236 | 0 | 38 | 2 of 2 | — | — |  |
-| Getters / setters | §2.2 | done | 295 | 18 | 277 | 0 | 15 | 2 of 2 | — | — |  |
-| `this` in class methods | §2.2 | done | 344 | 37 | 307 | 0 | 112 | 1 of 1 | — | — |  |
+| `static` fields | §2.2 | done | 253 | 19 | 234 | 0 | 39 | 2 of 2 | — | — |  |
+| Getters / setters | §2.2 | done | 295 | 20 | 275 | 0 | 15 | 2 of 2 | — | — |  |
+| `this` in class methods | §2.2 | done | 344 | 43 | 301 | 0 | 118 | 1 of 1 | — | — |  |
 
 ## Interfaces
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Interface declarations | §2.3 | done | 897 | 152 | 745 | 0 | 463 | 1 of 1 | — | — |  |
-| `implements` | §2.3 | done | 78 | 19 | 59 | 0 | 12 | 1 of 1 | — | — |  |
+| Interface declarations | §2.3 | done | 897 | 176 | 721 | 0 | 561 | 1 of 1 | — | — |  |
+| `implements` | §2.3 | done | 78 | 20 | 58 | 0 | 12 | 1 of 1 | — | — |  |
 
 ## Generics
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Generic functions | §2.1 | done | 607 | 93 | 514 | 0 | 198 | 1 of 1 | — | — |  |
-| Generic types | §2.1 | done | 302 | 37 | 265 | 0 | 96 | 1 of 1 | — | — |  |
-| Explicit type arguments | §2.1 | done | 135 | 37 | 98 | 0 | 55 | 1 of 1 | — | — |  |
+| Generic functions | §2.1 | done | 607 | 138 | 469 | 0 | 510 | 1 of 1 | — | — |  |
+| Generic types | §2.1 | done | 302 | 59 | 243 | 0 | 147 | 1 of 1 | — | — |  |
+| Explicit type arguments | §2.1 | done | 135 | 44 | 91 | 0 | 63 | 1 of 1 | — | — |  |
 
 ## Enums
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Numeric enums | §1.2 | done | 245 | 73 | 172 | 0 | 336 | 1 of 1 | — | — |  |
-| String enums | §1.2 | done | 21 | 4 | 17 | 0 | 14 | 1 of 1 | — | — |  |
+| Numeric enums | §1.2 | done | 245 | 76 | 169 | 0 | 343 | 1 of 1 | — | — |  |
+| String enums | §1.2 | done | 21 | 6 | 15 | 0 | 20 | 1 of 1 | — | — |  |
 
 ## Modules
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
 | Imports of host tools | §1.10 | n/a | — | — | — | — | — | — | — | — | Submilli-specific: `submilli:*` packages have no upstream counterpart |
-| `export` on top-level declarations (ignored) | §1.10 | done | 763 | 87 | 676 | 0 | 39 | 1 of 1 | — | — |  |
+| `export` on top-level declarations (ignored) | §1.10 | done | 763 | 90 | 673 | 0 | 42 | 1 of 1 | — | — |  |
 
 ## Destructuring
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| Destructuring defaults | §1.6 | done | 74 | 27 | 47 | 0 | 71 | 1 of 1 | — | — |  |
-| Object destructuring | §1.6 | done | 183 | 38 | 145 | 0 | 95 | 2 of 2 | — | — |  |
-| Array destructuring | §1.6 | done | 142 | 45 | 97 | 0 | 99 | 2 of 2 | — | — |  |
-| Rest in destructuring | §2.6 | done | 48 | 14 | 34 | 0 | 19 | 2 of 2 | — | — |  |
+| Destructuring defaults | §1.6 | done | 74 | 28 | 46 | 0 | 73 | 1 of 1 | — | — |  |
+| Object destructuring | §1.6 | done | 183 | 43 | 140 | 0 | 111 | 2 of 2 | — | — |  |
+| Array destructuring | §1.6 | done | 142 | 50 | 92 | 0 | 110 | 2 of 2 | — | — |  |
+| Rest in destructuring | §2.6 | done | 48 | 18 | 30 | 0 | 24 | 2 of 2 | — | — |  |
 
 ## Strings
 
 | Feature | Spec | Status | Upstream tests | In the suite | Excluded | Not yet dealt with | Lines checked | Forms checked | test262 cases | test262 checks | Note |
 |:--|:--|:--|--:|--:|--:|--:|--:|--:|--:|--:|:--|
-| String literals | §1.7 | done | 1902 | 392 | 1510 | 0 | 1475 | 2 of 2 | — | — |  |
-| Template literals | §1.7 | done | 280 | 75 | 205 | 0 | 426 | 1 of 1 | — | — |  |
+| String literals | §1.7 | done | 1902 | 438 | 1464 | 0 | 1724 | 2 of 2 | — | — |  |
+| Template literals | §1.7 | done | 280 | 72 | 208 | 0 | 375 | 1 of 1 | — | — |  |
 | String methods | §1.7 | done | — | — | — | — | — | — | 87 | 555 |  |
 
 ## Built-ins
@@ -203,11 +203,11 @@ Upstream: 5055 TypeScript tests. Suite: 903 TypeScript cases, 714 test262 cases.
 | `Boolean` | §1.6 | done | — | — | — | — | — | — | 6 | 34 |  |
 | `Number` and numeric globals | §1.6 | done | — | — | — | — | — | — | 51 | 314 |  |
 | URI functions | §1.6 | done | — | — | — | — | — | — | 129 | 219 |  |
-| `Object` statics | §1.6 | done | — | — | — | — | — | — | 52 | 179 |  |
+| `Object` statics | §1.6 | done | — | — | — | — | — | — | 51 | 173 |  |
 | `JSON` | §1.6 | done | — | — | — | — | — | — | 26 | 60 |  |
 | `Math` | §1.10 | done | — | — | — | — | — | — | 60 | 234 |  |
-| `RegExp` | §1.7 | done | — | — | — | — | — | — | 47 | 230 |  |
-| `Temporal` | §1.7 | done | — | — | — | — | — | — | 41 | 288 |  |
+| `RegExp` | §1.7 | done | — | — | — | — | — | — | 47 | 237 |  |
+| `Temporal` | §1.7 | done | — | — | — | — | — | — | 43 | 306 |  |
 | `PermissionDeniedError` | §1.8 | n/a | — | — | — | — | — | — | — | — | Submilli-specific: capability denials have no upstream counterpart |
 
 ## Not listed

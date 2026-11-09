@@ -1,0 +1,4 @@
+destructuringArrayBindingPatternAndAssignment2.ts(10,51): error TS2322: Type 'number' is not assignable to type 'boolean'.
+destructuringArrayBindingPatternAndAssignment2.ts(23,5): error TS2322: Type 'number[]' is not assignable to type '[number, number]'.   Target requires 2 element(s) but source may have fewer.
+destructuringArrayBindingPatternAndAssignment2.ts(24,5): error TS2322: Type 'number[]' is not assignable to type '[string, string]'.   Target requires 2 element(s) but source may have fewer.
+destructuringArrayBindingPatternAndAssignment2.ts(35,5): error TS2488: Type 'F' must have a '[Symbol.iterator]()' method that returns an iterator.

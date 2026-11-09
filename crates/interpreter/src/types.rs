@@ -446,6 +446,19 @@ pub enum Type {
     /// TypeScript. Every object, array, function and class instance is one. It
     /// has `{}`'s members and, like `{}`, lowers as `unknown`.
     NonPrimitive,
+    /// `keyof T` while its operand mentions a type parameter (tsc's
+    /// IndexType). A concrete operand resolves to the union of its keys, so
+    /// this only appears in generic signatures and bodies, and lowers like a
+    /// type parameter.
+    KeyOf(Box<Type>),
+    /// `T[K]` while an operand mentions a type parameter (tsc's
+    /// IndexedAccessType). Concrete operands resolve to the property type, so
+    /// this only appears in generic signatures and bodies, and lowers like a
+    /// type parameter.
+    IndexedAccess {
+        object: Box<Type>,
+        index: Box<Type>,
+    },
 }
 
 impl Type {
@@ -473,11 +486,13 @@ impl Type {
         }
     }
 
-    /// Whether a member is a type parameter, whose instantiation may hold
-    /// `undefined` though the type itself doesn't name it.
+    /// Whether a member is a type parameter, or a form over one (`T[K]`),
+    /// whose instantiation may hold `undefined` though the type itself
+    /// doesn't name it.
     pub fn has_type_parameter_member(&self) -> bool {
         match self.peel() {
             Type::GenericParam { .. } | Type::TypeVar(_) => true,
+            form if form.is_type_operator() => true,
             Type::Union(members) => members.iter().any(Type::has_type_parameter_member),
             _ => false,
         }
@@ -509,6 +524,53 @@ impl Type {
 
     pub fn regexp_element() -> Type {
         Type::union(vec![Type::String, Type::Undefined])
+    }
+
+    /// tsc's `object[index]`, while an operand mentions a type parameter.
+    pub fn indexed_access(object: Type, index: Type) -> Type {
+        Type::IndexedAccess {
+            object: Box::new(object),
+            index: Box::new(index),
+        }
+    }
+
+    /// Whether `receiver[key]` reads and writes the property by name at run
+    /// time: a structural object, or an erased generic receiver (`T`, whose
+    /// `o[k]` is tsc's `T[K]`).
+    pub fn indexes_by_name(&self) -> bool {
+        // A narrowed parameter (`T & ({} | null)` after `value !==
+        // undefined`, `(T | undefined) & object` after `?.`) indexes as `T`
+        // does. A bound's shape (`T & number[]`) keeps its own
+        // representation.
+        let refined = match self.without_aliases() {
+            Type::Refined { original, ty } => {
+                let erased = match original.without_aliases() {
+                    Type::Union(members) => members.iter().all(|member| {
+                        member.lowers_to_erased_slot()
+                            || matches!(member.peel(), Type::Null | Type::Undefined)
+                    }),
+                    original => original.lowers_to_erased_slot(),
+                };
+                erased && !ty.indexes_by_element()
+            }
+            _ => false,
+        };
+        refined || self.is_structural_object() || self.lowers_to_erased_slot()
+    }
+
+    /// Whether every value of `self` is a string, array, tuple or byte array,
+    /// read by element.
+    fn indexes_by_element(&self) -> bool {
+        match self.peel() {
+            Type::Union(members) => members.iter().all(Type::indexes_by_element),
+            Type::Array(_)
+            | Type::Tuple(_)
+            | Type::Uint8Array
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::TemplateLiteral { .. } => true,
+            _ => false,
+        }
     }
 
     /// A receiver whose computed string keys use the object property carrier.
@@ -749,6 +811,30 @@ impl Type {
             crate::mangle::prelude("RangeError"),
             Vec::new(),
         )
+    }
+
+    /// Whether a value of this type sits in the erased generic slot, as a
+    /// type parameter's does: a type parameter itself, `keyof T`, `T[K]`, or
+    /// a utility application over a type parameter (`Partial<T>`).
+    pub fn lowers_to_erased_slot(&self) -> bool {
+        let ty = self.peel();
+        matches!(ty, Type::TypeVar(_) | Type::GenericParam { .. }) || ty.is_type_operator()
+    }
+
+    /// Whether this is an application of a built-in utility type (`Partial<…>`),
+    /// over a type parameter or over the concrete type codegen substituted for
+    /// one.
+    pub fn is_utility_application(&self) -> bool {
+        matches!(self, Type::AliasRef { mangled, .. }
+            if crate::typechecker::infer::utility_types::utility(mangled).is_some())
+    }
+
+    /// Whether this is `keyof T`, `T[K]` or a utility application over a
+    /// type parameter: a type computed from type parameters, known only once
+    /// a call instantiates them.
+    pub fn is_type_operator(&self) -> bool {
+        matches!(self, Type::KeyOf(_) | Type::IndexedAccess { .. })
+            || crate::typechecker::infer::utility_types::deferred_application(self).is_some()
     }
 
     /// Remove display aliases while retaining generic guard identity.

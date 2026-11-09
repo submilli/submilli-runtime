@@ -1,0 +1,8 @@
+types: 44 of 117 tsc entries compared, 0 differ
+
+errors:
+line 34: ours: expected `Class`, got `number` (tsc accepts)
+line 35: ours: expected `Class`, got `{}` (tsc accepts)
+line 36: ours: expected `Class`, got `string` (tsc accepts)
+line 43: ours: expected `Class`, got `{}` (tsc accepts)
+line 46: ours: expected `D`, got `SubClass` (tsc accepts)

@@ -1,0 +1,250 @@
+=== callWithSpread3.ts ===
+const s2: [string, string] = null as unknown as ([string, string]);
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+>null as unknown as ([string, string]) : [string, string]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const s3: [string, string, string] = null as unknown as ([string, string, string]);
+>s3 : [string, string, string]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as ([string, string, string]) : [string, string, string]
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+const s_: string[] = null as unknown as (string[]);
+>s_ : string[]
+>   : ^^^^^^^^
+>null as unknown as (string[]) : string[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+const n_: number[] = null as unknown as (number[]);
+>n_ : number[]
+>   : ^^^^^^^^
+>null as unknown as (number[]) : number[]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+
+function fs2(a: string, b: string): void { }
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+function fs2_(a: string, b: string, ...c: string[]): void { }
+>fs2_ : (a: string, b: string, ...c: string[]) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>c : string[]
+>  : ^^^^^^^^
+
+function fs2n_(a: string, b: string, ...c: number[]): void { }
+>fs2n_ : (a: string, b: string, ...c: number[]) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>c : number[]
+>  : ^^^^^^^^
+
+function fs5(a: string, b: string, c: string, d: string, e: string): void { }
+>fs5 : (a: string, b: string, c: string, d: string, e: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : string
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+>c : string
+>  : ^^^^^^
+>d : string
+>  : ^^^^^^
+>e : string
+>  : ^^^^^^
+
+
+// error
+fs2('a', ...s2); // error on ...s2
+>fs2('a', ...s2) : void
+>                : ^^^^
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+
+fs2('a', 'b', 'c', ...s2); // error on 'c' and ...s2
+>fs2('a', 'b', 'c', ...s2) : void
+>                          : ^^^^
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>'b' : "b"
+>    : ^^^
+>'c' : "c"
+>    : ^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+
+fs2('a', 'b', ...s2, 'c'); // error on ...s2 and 'c'
+>fs2('a', 'b', ...s2, 'c') : void
+>                          : ^^^^
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>'b' : "b"
+>    : ^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+>'c' : "c"
+>    : ^^^
+
+fs2('a', 'b', 'c', ...s2, 'd'); // error on 'c', ...s2 and 'd'
+>fs2('a', 'b', 'c', ...s2, 'd') : void
+>                               : ^^^^
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+>'b' : "b"
+>    : ^^^
+>'c' : "c"
+>    : ^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+>'d' : "d"
+>    : ^^^
+
+fs2(...s2, 'a'); // error on 'a'
+>fs2(...s2, 'a') : void
+>                : ^^^^
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+>'a' : "a"
+>    : ^^^
+
+fs2(...s3); // error on ...s3
+>fs2(...s3) : void
+>           : ^^^^
+>fs2 : (a: string, b: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s3 : string
+>      : ^^^^^^
+>s3 : [string, string, string]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+
+fs2_(...s_); // error on ...s_
+>fs2_(...s_) : void
+>            : ^^^^
+>fs2_ : (a: string, b: string, ...c: string[]) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s_ : string
+>      : ^^^^^^
+>s_ : string[]
+>   : ^^^^^^^^
+
+/*pruned*/;    // error on ...s2n_
+fs2_(...s_, ...s_); // error on ...s_
+>fs2_(...s_, ...s_) : void
+>                   : ^^^^
+>fs2_ : (a: string, b: string, ...c: string[]) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s_ : string
+>      : ^^^^^^
+>s_ : string[]
+>   : ^^^^^^^^
+>...s_ : string
+>      : ^^^^^^
+>s_ : string[]
+>   : ^^^^^^^^
+
+fs2_(...s_, ...s_, ...s_); // error on ...s_
+>fs2_(...s_, ...s_, ...s_) : void
+>                          : ^^^^
+>fs2_ : (a: string, b: string, ...c: string[]) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s_ : string
+>      : ^^^^^^
+>s_ : string[]
+>   : ^^^^^^^^
+>...s_ : string
+>      : ^^^^^^
+>s_ : string[]
+>   : ^^^^^^^^
+>...s_ : string
+>      : ^^^^^^
+>s_ : string[]
+>   : ^^^^^^^^
+
+// fs2n_(...s2, ...s_); //           FIXME: should be a type error
+/*pruned*/;    // error on ...s2_
+
+// ok
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+fs2n_(...s2);
+>fs2n_(...s2) : void
+>             : ^^^^
+>fs2n_ : (a: string, b: string, ...c: number[]) => void
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+
+// fs2n_(...s2, ...n_); // FIXME: should compile
+fs5(...s2, "foo", ...s2);
+>fs5(...s2, "foo", ...s2) : void
+>                         : ^^^^
+>fs5 : (a: string, b: string, c: string, d: string, e: string) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+>"foo" : "foo"
+>      : ^^^^^
+>...s2 : string
+>      : ^^^^^^
+>s2 : [string, string]
+>   : ^^^^^^^^^^^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

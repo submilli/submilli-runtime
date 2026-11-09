@@ -10,7 +10,14 @@ enum E { a, b, c }
 >  : ^^^
 
 
-/*pruned*/;
+let a: E = null as unknown as (E);
+>a : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 let b: number = null as unknown as (number);
 >b : number
 >  : ^^^^^^
@@ -21,8 +28,26 @@ let b: number = null as unknown as (number);
 
 
 // operator <
-/*pruned*/;
-/*pruned*/;
+let ra1 = a < b;
+>ra1 : boolean
+>    : ^^^^^^^
+>a < b : boolean
+>      : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let ra2 = b < a;
+>ra2 : boolean
+>    : ^^^^^^^
+>b < a : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let ra3 = E.a < b;
 >ra3 : boolean
 >    : ^^^^^^^
@@ -81,8 +106,26 @@ let ra6 = 0 < E.a;
 
 
 // operator >
-/*pruned*/;
-/*pruned*/;
+let rb1 = a > b;
+>rb1 : boolean
+>    : ^^^^^^^
+>a > b : boolean
+>      : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rb2 = b > a;
+>rb2 : boolean
+>    : ^^^^^^^
+>b > a : boolean
+>      : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let rb3 = E.a > b;
 >rb3 : boolean
 >    : ^^^^^^^
@@ -141,8 +184,26 @@ let rb6 = 0 > E.a;
 
 
 // operator <=
-/*pruned*/;
-/*pruned*/;
+let rc1 = a <= b;
+>rc1 : boolean
+>    : ^^^^^^^
+>a <= b : boolean
+>       : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rc2 = b <= a;
+>rc2 : boolean
+>    : ^^^^^^^
+>b <= a : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let rc3 = E.a <= b;
 >rc3 : boolean
 >    : ^^^^^^^
@@ -201,8 +262,26 @@ let rc6 = 0 <= E.a;
 
 
 // operator >=
-/*pruned*/;
-/*pruned*/;
+let rd1 = a >= b;
+>rd1 : boolean
+>    : ^^^^^^^
+>a >= b : boolean
+>       : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rd2 = b >= a;
+>rd2 : boolean
+>    : ^^^^^^^
+>b >= a : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let rd3 = E.a >= b;
 >rd3 : boolean
 >    : ^^^^^^^
@@ -261,8 +340,26 @@ let rd6 = 0 >= E.a;
 
 
 // operator ==
-/*pruned*/;
-/*pruned*/;
+let re1 = a == b;
+>re1 : boolean
+>    : ^^^^^^^
+>a == b : boolean
+>       : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let re2 = b == a;
+>re2 : boolean
+>    : ^^^^^^^
+>b == a : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let re3 = E.a == b;
 >re3 : boolean
 >    : ^^^^^^^
@@ -321,8 +418,26 @@ let re6 = 0 == E.a;
 
 
 // operator !=
-/*pruned*/;
-/*pruned*/;
+let rf1 = a != b;
+>rf1 : boolean
+>    : ^^^^^^^
+>a != b : boolean
+>       : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rf2 = b != a;
+>rf2 : boolean
+>    : ^^^^^^^
+>b != a : boolean
+>       : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let rf3 = E.a != b;
 >rf3 : boolean
 >    : ^^^^^^^
@@ -381,8 +496,26 @@ let rf6 = 0 != E.a;
 
 
 // operator ===
-/*pruned*/;
-/*pruned*/;
+let rg1 = a === b;
+>rg1 : boolean
+>    : ^^^^^^^
+>a === b : boolean
+>        : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rg2 = b === a;
+>rg2 : boolean
+>    : ^^^^^^^
+>b === a : boolean
+>        : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let rg3 = E.a === b;
 >rg3 : boolean
 >    : ^^^^^^^
@@ -441,8 +574,26 @@ let rg6 = 0 === E.a;
 
 
 // operator !==
-/*pruned*/;
-/*pruned*/;
+let rh1 = a !== b;
+>rh1 : boolean
+>    : ^^^^^^^
+>a !== b : boolean
+>        : ^^^^^^^
+>a : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let rh2 = b !== a;
+>rh2 : boolean
+>    : ^^^^^^^
+>b !== a : boolean
+>        : ^^^^^^^
+>b : number
+>  : ^^^^^^
+>a : E
+>  : ^
+
 let rh3 = E.a !== b;
 >rh3 : boolean
 >    : ^^^^^^^

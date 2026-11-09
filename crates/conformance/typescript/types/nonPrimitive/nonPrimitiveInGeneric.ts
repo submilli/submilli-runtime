@@ -11,38 +11,38 @@ generic<object>(a);
 generic<object>(123); // expect error
 generic<object>(b); // expect error
 
-/*pruned*/;                                   
-                            
- 
+function bound<T extends object>(t: T): void {
+    let o: object = t; // ok
+}
 
-/**/;     
-/**/;    
-/*pruned*/; // expect error
-/**/;     // expect error
+bound({});
+bound(a);
+bound(123); // expect error
+bound(b); // expect error
 
-/*pruned*/;                                 
+function bound2<T extends object>(): void {}
 
-/*pruned*/;  
-/*pruned*/;      
-/*pruned*/;       // expect error
-/*pruned*/;       // expect error
+bound2<{}>();
+bound2<Object>();
+bound2<number>(); // expect error
+bound2<string>(); // expect error
 
-/*pruned*/;                                
-                            
- 
+function bound3<T extends {}>(t: T): void {
+    let o: object = t; // ok
+}
 
-/*pruned*/;                         
+interface Proxy<T extends object> {}
 
-/*pruned*/;                                                // error
-/*pruned*/;                                            // ok
-/*pruned*/;                                                       // ok
+let x: Proxy<number> = null as unknown as (Proxy<number>); // error
+let y: Proxy<null> = null as unknown as (Proxy<null>); // ok
+let z: Proxy<undefined> = null as unknown as (Proxy<undefined>) ; // ok
 
 
 interface Blah {
     foo: number;
 }
 
-/*pruned*/;                                            // ok
+let u: Proxy<Blah> = null as unknown as (Proxy<Blah>); // ok
 
 
 function main(): void {}

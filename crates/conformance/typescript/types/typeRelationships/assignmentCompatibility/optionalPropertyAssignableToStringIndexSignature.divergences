@@ -1,1 +1,16 @@
-types: 23 of 39 tsc entries compared, 0 differ
+types: 31 of 52 tsc entries compared, 3 differ
+
+line 12: numberLiteralKeys
+  tsc:  { 1?: string; }
+  ours: { "1"?: string }
+
+line 12: null as unknown as ({ 1?: string })
+  tsc:  { 1?: string; }
+  ours: { "1"?: string }
+
+line 13: numberLiteralKeys
+  tsc:  { 1?: string; }
+  ours: { "1"?: string }
+
+errors:
+line 13: tsc TS2322: Type '{ 1?: string | undefined; }' is not assignable to type '{ [key: number]: string; }'.   Property '1' is incompatible with index signature.     Type 'string | undefined' is not assignable to type 'string'.       Type 'undefined' is not assignable to type 'string'. (we accept)

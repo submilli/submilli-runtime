@@ -1,0 +1,50 @@
+=== objectLiteralShorthandProperties.ts ===
+let a, b, c;
+>a : any
+>  : ^^^
+>b : any
+>  : ^^^
+>c : any
+>  : ^^^
+
+
+let x1 = {
+>x1 : { a: undefined; }
+>   : ^^^^^^^^^^^^^^^^^
+>{     a } : { a: undefined; }
+>          : ^^^^^^^^^^^^^^^^^
+
+    a
+>a : undefined
+>  : ^^^^^^^^^
+
+};
+
+let x2 = {
+>x2 : { a: undefined; }
+>   : ^^^^^^^^^^^^^^^^^
+>{     a, } : { a: undefined; }
+>           : ^^^^^^^^^^^^^^^^^
+
+    a,
+>a : undefined
+>  : ^^^^^^^^^
+
+}
+
+/**/;
+
+
+
+
+
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,111 @@
+=== mappedTypesAndObjects.ts ===
+
+function f1<T>(x: Partial<T>, y: Readonly<T>): void {
+>f1 : <T>(x: Partial<T>, y: Readonly<T>) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : Partial<T>
+>  : ^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+    let obj: {} = null as unknown as ({});
+>obj : {}
+>    : ^^
+>null as unknown as ({}) : {}
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    obj = x;
+>obj = x : Partial<T>
+>        : ^^^^^^^^^^
+>obj : {}
+>    : ^^
+>x : Partial<T>
+>  : ^^^^^^^^^^
+
+    obj = y;
+>obj = y : Readonly<T>
+>        : ^^^^^^^^^^^
+>obj : {}
+>    : ^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+}
+
+function f2<T>(x: Partial<T>, y: Readonly<T>): void {
+>f2 : <T>(x: Partial<T>, y: Readonly<T>) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : Partial<T>
+>  : ^^^^^^^^^^
+>y : Readonly<T>
+>  : ^^^^^^^^^^^
+
+    /*pruned*/;
+    /**/;
+    /**/;
+}
+
+function f3<T>(x: Partial<T>): void {
+>f3 : <T>(x: Partial<T>) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : Partial<T>
+>  : ^^^^^^^^^^
+
+    x = {};
+>x = {} : {}
+>       : ^^
+>x : Partial<T>
+>  : ^^^^^^^^^^
+>{} : {}
+>   : ^^
+
+}
+
+// Repro from #12900
+
+/*pruned*/;
+
+
+
+
+
+/*pruned*/;
+
+
+
+interface Something { name: string, value: string };
+>Something : Something
+>          : ^^^^^^^^^
+>name : string
+>     : ^^^^^^
+>value : string
+>      : ^^^^^^
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+
+
+// Repro from #13747
+
+/*pruned*/;
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

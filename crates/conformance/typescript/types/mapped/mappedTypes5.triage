@@ -1,0 +1,1 @@
+line 40, 41, 59, 60 extra: by-design spec §Appendix there is no prototype chain, so there is no `Object.create`

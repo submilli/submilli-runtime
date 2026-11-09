@@ -1,0 +1,53 @@
+types: 44 of 71 tsc entries compared, 12 differ
+
+line 26: a
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 29: null as unknown as ({ 1: number; 1.1: string; })
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 34: a
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 35: a
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 36: a
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 37: a
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 39: b
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 39: { 1: 1, 1.1: "" }
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 44: b
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 45: b
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 46: b
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+line 47: b
+  tsc:  { 1: number; 1.1: string; }
+  ours: { "1": number; "1.1": string }
+
+errors:
+line 5: ours: property `1` has no initializer and is not assigned in the constructor (tsc accepts)
+line 6: ours: property `1.1` has no initializer and is not assigned in the constructor (tsc accepts)

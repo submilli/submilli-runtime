@@ -1,0 +1,101 @@
+types: 40 of 76 tsc entries compared, 25 differ
+
+line 5: { 0: 2 }
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 7: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 7: foo()
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 7: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 7: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 8: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 8: foo()
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 8: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 8: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 9: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 9: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 9: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 9: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 10: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 10: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 10: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 10: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 11: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 11: foo()
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 11: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 11: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 12: foo()
+  tsc:  { 0: number; }
+  ours: number
+
+line 12: foo()
+  tsc:  { 0: number; }
+  ours: { "0": number }
+
+line 12: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }
+
+line 12: foo
+  tsc:  () => { 0: number; }
+  ours: () => { "0": number }

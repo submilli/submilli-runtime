@@ -1,0 +1,521 @@
+=== mappedTypeModifiers.ts ===
+
+type T = { a: number, b: string };
+>T : T
+>  : ^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+type TP = { a?: number, b?: string };
+>TP : TP
+>   : ^^
+>a : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+type TR = { readonly a: number, readonly b: string };
+>TR : TR
+>   : ^^
+>a : number
+>  : ^^^^^^
+>b : string
+>  : ^^^^^^
+
+type TPR = { readonly a?: number, readonly b?: string };
+>TPR : TPR
+>    : ^^^
+>a : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+>b : string | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+
+let v00: "a" | "b" = null as unknown as ("a" | "b");
+>v00 : "a" | "b"
+>    : ^^^^^^^^^
+>null as unknown as ("a" | "b") : "a" | "b"
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v00_2: keyof T = null as unknown as (keyof T);
+>v00_2 : keyof T
+>      : ^^^^^^^
+>null as unknown as (keyof T) : keyof T
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v00_3: keyof TP = null as unknown as (keyof TP);
+>v00_3 : keyof TP
+>      : ^^^^^^^^
+>null as unknown as (keyof TP) : keyof TP
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v00_4: keyof TR = null as unknown as (keyof TR);
+>v00_4 : keyof TR
+>      : ^^^^^^^^
+>null as unknown as (keyof TR) : keyof TR
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v00_5: keyof TPR = null as unknown as (keyof TPR);
+>v00_5 : keyof TPR
+>      : ^^^^^^^^^
+>null as unknown as (keyof TPR) : keyof TPR
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let v01: T = null as unknown as (T);
+>v01 : T
+>    : ^
+>null as unknown as (T) : T
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v01_3: Pick<T, keyof T> = null as unknown as (Pick<T, keyof T>);
+>v01_3 : Pick<T, keyof T>
+>      : ^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<T, keyof T>) : Pick<T, keyof T>
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v01_4: Pick<Pick<T, keyof T>, keyof T> = null as unknown as (Pick<Pick<T, keyof T>, keyof T>);
+>v01_4 : Pick<Pick<T, keyof T>, keyof T>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<Pick<T, keyof T>, keyof T>) : Pick<Pick<T, keyof T>, keyof T>
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let v02: TP = null as unknown as (TP);
+>v02 : TP
+>    : ^^
+>null as unknown as (TP) : TP
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v02_3: Partial<T> = null as unknown as (Partial<T>);
+>v02_3 : Partial<T>
+>      : ^^^^^^^^^^
+>null as unknown as (Partial<T>) : Partial<T>
+>                                : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v02_5: Pick<TP, keyof TP> = null as unknown as (Pick<TP, keyof TP>);
+>v02_5 : Pick<TP, keyof TP>
+>      : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<TP, keyof TP>) : Pick<TP, keyof TP>
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let v03: TR = null as unknown as (TR);
+>v03 : TR
+>    : ^^
+>null as unknown as (TR) : TR
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v03_3: Readonly<T> = null as unknown as (Readonly<T>);
+>v03_3 : Readonly<T>
+>      : ^^^^^^^^^^^
+>null as unknown as (Readonly<T>) : Readonly<T>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v03_5: Pick<TR, keyof TR> = null as unknown as (Pick<TR, keyof TR>);
+>v03_5 : Pick<TR, keyof TR>
+>      : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<TR, keyof TR>) : Pick<TR, keyof TR>
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let v04: TPR = null as unknown as (TPR);
+>v04 : TPR
+>    : ^^^
+>null as unknown as (TPR) : TPR
+>                         : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v04_3: Partial<TR> = null as unknown as (Partial<TR>);
+>v04_3 : Partial<TR>
+>      : ^^^^^^^^^^^
+>null as unknown as (Partial<TR>) : Partial<TR>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v04_4: Readonly<TP> = null as unknown as (Readonly<TP>);
+>v04_4 : Readonly<TP>
+>      : ^^^^^^^^^^^^
+>null as unknown as (Readonly<TP>) : Readonly<TP>
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v04_5: Partial<Readonly<T>> = null as unknown as (Partial<Readonly<T>>);
+>v04_5 : Partial<Readonly<T>>
+>      : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Partial<Readonly<T>>) : Partial<Readonly<T>>
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let v04_6: Readonly<Partial<T>> = null as unknown as (Readonly<Partial<T>>);
+>v04_6 : Readonly<Partial<T>>
+>      : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Readonly<Partial<T>>) : Readonly<Partial<T>>
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let v04_8: Pick<TPR, keyof T> = null as unknown as (Pick<TPR, keyof T>);
+>v04_8 : Pick<TPR, keyof T>
+>      : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<TPR, keyof T>) : Pick<TPR, keyof T>
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+/*pruned*/;
+
+type B = { a: { x: number }, b: { x: string } };
+>B : B
+>  : ^
+>a : { x: number; }
+>  : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>b : { x: string; }
+>  : ^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+type BP = { a?: { x: number }, b?: { x: string } };
+>BP : BP
+>   : ^^
+>a : { x: number; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>b : { x: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+type BR = { readonly a: { x: number }, readonly b: { x: string } };
+>BR : BR
+>   : ^^
+>a : { x: number; }
+>  : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>b : { x: string; }
+>  : ^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+type BPR = { readonly a?: { x: number }, readonly b?: { x: string } };
+>BPR : BPR
+>    : ^^^
+>a : { x: number; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>b : { x: string; } | undefined
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+
+
+let b00: "a" | "b" = null as unknown as ("a" | "b");
+>b00 : "a" | "b"
+>    : ^^^^^^^^^
+>null as unknown as ("a" | "b") : "a" | "b"
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b00_2: keyof B = null as unknown as (keyof B);
+>b00_2 : keyof B
+>      : ^^^^^^^
+>null as unknown as (keyof B) : keyof B
+>                             : ^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b00_3: keyof BP = null as unknown as (keyof BP);
+>b00_3 : keyof BP
+>      : ^^^^^^^^
+>null as unknown as (keyof BP) : keyof BP
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b00_4: keyof BR = null as unknown as (keyof BR);
+>b00_4 : keyof BR
+>      : ^^^^^^^^
+>null as unknown as (keyof BR) : keyof BR
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b00_5: keyof BPR = null as unknown as (keyof BPR);
+>b00_5 : keyof BPR
+>      : ^^^^^^^^^
+>null as unknown as (keyof BPR) : keyof BPR
+>                               : ^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let b01: B = null as unknown as (B);
+>b01 : B
+>    : ^
+>null as unknown as (B) : B
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b01_3: Pick<B, keyof B> = null as unknown as (Pick<B, keyof B>);
+>b01_3 : Pick<B, keyof B>
+>      : ^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<B, keyof B>) : Pick<B, keyof B>
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b01_4: Pick<Pick<B, keyof B>, keyof B> = null as unknown as (Pick<Pick<B, keyof B>, keyof B>);
+>b01_4 : Pick<Pick<B, keyof B>, keyof B>
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<Pick<B, keyof B>, keyof B>) : Pick<Pick<B, keyof B>, keyof B>
+>                                                     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let b02: BP = null as unknown as (BP);
+>b02 : BP
+>    : ^^
+>null as unknown as (BP) : BP
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b02_3: Partial<B> = null as unknown as (Partial<B>);
+>b02_3 : Partial<B>
+>      : ^^^^^^^^^^
+>null as unknown as (Partial<B>) : Partial<B>
+>                                : ^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b02_5: Pick<BP, keyof BP> = null as unknown as (Pick<BP, keyof BP>);
+>b02_5 : Pick<BP, keyof BP>
+>      : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<BP, keyof BP>) : Pick<BP, keyof BP>
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let b03: BR = null as unknown as (BR);
+>b03 : BR
+>    : ^^
+>null as unknown as (BR) : BR
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b03_3: Readonly<B> = null as unknown as (Readonly<B>);
+>b03_3 : Readonly<B>
+>      : ^^^^^^^^^^^
+>null as unknown as (Readonly<B>) : Readonly<B>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b03_5: Pick<BR, keyof BR> = null as unknown as (Pick<BR, keyof BR>);
+>b03_5 : Pick<BR, keyof BR>
+>      : ^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<BR, keyof BR>) : Pick<BR, keyof BR>
+>                                        : ^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let b04: BPR = null as unknown as (BPR);
+>b04 : BPR
+>    : ^^^
+>null as unknown as (BPR) : BPR
+>                         : ^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b04_3: Partial<BR> = null as unknown as (Partial<BR>);
+>b04_3 : Partial<BR>
+>      : ^^^^^^^^^^^
+>null as unknown as (Partial<BR>) : Partial<BR>
+>                                 : ^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b04_4: Readonly<BP> = null as unknown as (Readonly<BP>);
+>b04_4 : Readonly<BP>
+>      : ^^^^^^^^^^^^
+>null as unknown as (Readonly<BP>) : Readonly<BP>
+>                                  : ^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b04_5: Partial<Readonly<B>> = null as unknown as (Partial<Readonly<B>>);
+>b04_5 : Partial<Readonly<B>>
+>      : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Partial<Readonly<B>>) : Partial<Readonly<B>>
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let b04_6: Readonly<Partial<B>> = null as unknown as (Readonly<Partial<B>>);
+>b04_6 : Readonly<Partial<B>>
+>      : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Readonly<Partial<B>>) : Readonly<Partial<B>>
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+let b04_8: Pick<BPR, keyof BPR> = null as unknown as (Pick<BPR, keyof BPR>);
+>b04_8 : Pick<BPR, keyof BPR>
+>      : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown as (Pick<BPR, keyof BPR>) : Pick<BPR, keyof BPR>
+>                                          : ^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+type Foo = { prop: number, [x: string]: number };
+>Foo : Foo
+>    : ^^^
+>prop : number
+>     : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+
+function f1(x: Partial<Foo>): void {
+>f1 : (x: Partial<Foo>) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Partial<Foo>
+>  : ^^^^^^^^^^^^
+
+    x.prop; // ok
+>x.prop : number | undefined
+>       : ^^^^^^^^^^^^^^^^^^
+>x : Partial<Foo>
+>  : ^^^^^^^^^^^^
+>prop : number | undefined
+>     : ^^^^^^^^^^^^^^^^^^
+
+    (x["other"] || 0).toFixed();
+>(x["other"] || 0).toFixed() : string
+>                            : ^^^^^^
+>(x["other"] || 0).toFixed : (fractionDigits?: number) => string
+>                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(x["other"] || 0) : number
+>                  : ^^^^^^
+>x["other"] || 0 : number
+>                : ^^^^^^
+>x["other"] : number | undefined
+>           : ^^^^^^^^^^^^^^^^^^
+>x : Partial<Foo>
+>  : ^^^^^^^^^^^^
+>"other" : "other"
+>        : ^^^^^^^
+>0 : 0
+>  : ^
+>toFixed : (fractionDigits?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+function f2(x: Readonly<Foo>): void {
+>f2 : (x: Readonly<Foo>) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x : Readonly<Foo>
+>  : ^^^^^^^^^^^^^
+
+    x.prop; // ok
+>x.prop : number
+>       : ^^^^^^
+>x : Readonly<Foo>
+>  : ^^^^^^^^^^^^^
+>prop : number
+>     : ^^^^^^
+
+    x["other"].toFixed();
+>x["other"].toFixed() : string
+>                     : ^^^^^^
+>x["other"].toFixed : (fractionDigits?: number) => string
+>                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>x["other"] : number
+>           : ^^^^^^
+>x : Readonly<Foo>
+>  : ^^^^^^^^^^^^^
+>"other" : "other"
+>        : ^^^^^^^
+>toFixed : (fractionDigits?: number) => string
+>        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+}
+
+/*pruned*/;
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

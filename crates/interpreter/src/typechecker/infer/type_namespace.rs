@@ -72,8 +72,12 @@ impl<'a> TypeNamespace<'a> {
         self.entries.get_mut(name).and_then(|e| e.sym.as_mut())
     }
 
-    pub(super) fn contains(&self, name: &str) -> bool {
-        self.entries.contains_key(name)
+    /// The existing type a new declaration or import of `name` collides
+    /// with. A built-in utility type (`Partial`, `Parameters`, …) is a global
+    /// that module scope shadows, as in tsc, so it blocks nothing.
+    pub(super) fn blocking_type(&self, name: &str) -> Option<&TypeSymbol> {
+        self.lookup(name)
+            .filter(|sym| super::utility_types::utility(&sym.mangled_name).is_none())
     }
 
     pub(super) fn insert(&mut self, name: String, package_name: String, sym: TypeSymbol) {

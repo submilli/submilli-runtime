@@ -1,0 +1,80 @@
+types: 209 of 483 tsc entries compared, 15 differ
+
+line 138: x => x[key]
+  tsc:  (x: T) => T[K]
+  ours: (arg0: T) => T[K]
+
+line 148: { name: "foo", width: 5, height: 10, visible: true }
+  tsc:  { name: string; width: number; height: number; visible: true; }
+  ours: { height: number; name: string; visible: boolean; width: number }
+
+line 153: { name: "foo", width: 5, height: 10, visible: true }
+  tsc:  { name: string; width: number; height: number; visible: true; }
+  ours: { height: number; name: string; visible: boolean; width: number }
+
+line 187: k
+  tsc:  string | number | symbol
+  ours: keyof T
+
+line 192: k
+  tsc:  string | number | symbol
+  ours: K
+
+line 307: x2
+  tsc:  T[keyof S2]
+  ours: T["a" | "b"]
+
+line 308: x2
+  tsc:  T[keyof S2]
+  ours: T["a" | "b"]
+
+line 310: x2
+  tsc:  T[keyof S2]
+  ours: T["a" | "b"]
+
+line 310: x1
+  tsc:  string
+  ours: S2[K]
+
+line 311: x2
+  tsc:  T[keyof S2]
+  ours: T["a" | "b"]
+
+line 312: x1
+  tsc:  string
+  ours: S2[K]
+
+line 313: x2
+  tsc:  T[keyof S2]
+  ours: T["a" | "b"]
+
+line 314: x1
+  tsc:  string
+  ours: S2[K]
+
+line 315: x2
+  tsc:  T[keyof S2]
+  ours: T["a" | "b"]
+
+line 497: newId
+  tsc:  T[K]
+  ours: T[K] & {}
+
+errors:
+line 148: ours: expected `Shape`, got `{ height: number; name: string; visible: boolean; width: number }` (tsc accepts)
+line 149: ours: cannot index into non-array type `Shape` (tsc accepts)
+line 153: ours: expected `Shape`, got `{ height: number; name: string; visible: boolean; width: number }` (tsc accepts)
+line 154: ours: cannot index into non-array type `Shape` (tsc accepts)
+line 186: ours: cannot cast `string` to `keyof T`: no assignable direction between these types (tsc accepts)
+line 187: ours: cannot cast `keyof T` to `string`: no assignable direction between these types (tsc accepts)
+line 191: ours: cannot cast `string` to `keyof T`: no assignable direction between these types (tsc accepts)
+line 192: ours: cannot cast `K` to `string`: no assignable direction between these types (tsc accepts)
+line 310: ours: expected `T["a" | "b"]`, got `S2[K]` (tsc accepts)
+line 311: ours: expected `T["a" | "b"]`, got `S2[K]` (tsc accepts)
+line 313: ours: expected `S2[K]`, got `T["a" | "b"]` (tsc accepts)
+line 489: ours: unsupported Record key type `K` (tsc accepts)
+line 492: ours: unsupported Record key type `T[K]` (tsc accepts)
+line 493: ours: unsupported Record key type `K` (tsc accepts)
+line 495: ours: Type `K` cannot be used to index type `T` (tsc accepts)
+line 497: ours: Type `K` cannot be used to index type `T` (tsc accepts)
+line 545: ours: no method `freeze` on `ObjectConstructor` (tsc accepts)

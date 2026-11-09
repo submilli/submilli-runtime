@@ -1,3 +1,5 @@
 propertyAccessNumericLiterals.ts(8,1): error TS1121: Octal literals are not allowed. Use the syntax '0o0'.
 propertyAccessNumericLiterals.ts(9,1): error TS1489: Decimals with leading zeros are not allowed.
+propertyAccessNumericLiterals.ts(10,2): error TS6188: Numeric separators are not allowed here.
 propertyAccessNumericLiterals.ts(12,1): error TS1489: Decimals with leading zeros are not allowed.
+propertyAccessNumericLiterals.ts(13,3): error TS6188: Numeric separators are not allowed here.

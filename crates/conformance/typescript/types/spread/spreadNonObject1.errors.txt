@@ -1,0 +1,1 @@
+spreadNonObject1.ts(10,17): error TS2698: Spread types may only be created from object types.
