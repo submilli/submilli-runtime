@@ -674,6 +674,14 @@ fn connect_expression(
             flow.widened.insert(target.clone());
             flow.edge(Place::CallbackReturn, target);
         }
+        TypedExprKind::IntrinsicCall {
+            kind: crate::Intrinsic::JsonStringify,
+            ..
+        } if ast.widened_missing_reads.contains_key(&id) => {
+            // A held missing JSON text must stay wide through captured locals
+            // and their narrowing regions, just as an indexed read does.
+            flow.widened.insert(target);
+        }
         TypedExprKind::IndexAccess { receiver, .. }
             if ast
                 .try_expr(*receiver)

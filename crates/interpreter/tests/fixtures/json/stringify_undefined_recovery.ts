@@ -6,5 +6,5 @@ function main(): void {
   assert(format(undefined) === "", "coalescing handles missing JSON");
   assert(format("author") === '"author"', "defined values retain their JSON");
   const values: string[] = [];
-  assert("author=" + JSON.stringify(values.at(0)) === "author=undefined", "concatenation accepts undefined");
+  assert("author=" + values.at(0) === "author=undefined", "concatenation accepts undefined");
 }

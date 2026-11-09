@@ -2380,9 +2380,9 @@ fn json_package_declaration() -> PackageDeclaration {
                         rest: false,
                     },
                 ],
-                ret: Type::union(vec![Type::String, Type::Undefined]),
+                ret: Type::String,
                 type_predicate: None,
-                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string, or return undefined when it has no JSON representation. */"),
+                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string. An `undefined` or function value has no JSON text: the call throws `MissingValueError` where the result is read as `string`, and is `undefined` at a check or where the type includes `undefined`. */"),
             },
         },
     );
@@ -3524,7 +3524,7 @@ mod tests {
     fn builtin_docs_handles_json_intrinsic() {
         let docs = builtin_docs("JSON").expect("JSON built-in");
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
         ));
         assert!(docs.contains("function parse(text: string): unknown;"));
     }
@@ -4128,7 +4128,7 @@ mod tests {
         assert!(docs.contains("declare namespace Temporal {"));
         assert!(docs.contains("declare namespace JSON {"));
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
         ));
         assert!(docs.contains("interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}"));
         assert!(docs.contains("interface IArguments {}"));

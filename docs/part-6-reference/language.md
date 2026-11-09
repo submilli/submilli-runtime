@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a4524644e1fd223de0be724e6dadf51e0fdf80d7f398fd336d0766bbdfc04514"
+  contentHash: "b7adf89b1ed22858cc06091f7db83b28c76452cd83bf7f0466770b51a788ee09"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -150,10 +150,13 @@ callback as `() => void` does not change its runtime result.
 
 ### JSON and stored values
 
-JSON has no undefined value. `JSON.stringify` omits undefined object
-properties, writes undefined array elements as JSON null, and returns
-undefined for top-level undefined. Parsing JSON null produces null. HTTP calls use undefined for no body and
-explicit null for the JSON body `null`.
+JSON has no undefined value. `JSON.stringify` is `string` for every argument.
+It omits undefined object properties and writes undefined array elements as
+JSON null. A top-level `undefined` or function has no JSON text: a check, or
+a place whose type names `undefined` (`string | undefined`, not `unknown`),
+reads that as `undefined`; anywhere else the call throws `MissingValueError`.
+Parsing JSON null produces null.
+HTTP calls use undefined for no body and explicit null for the JSON body `null`.
 
 Generated input schemas include only JSON-representable members of a union.
 An `a: string | undefined` property stays required; `a?: string` is optional.

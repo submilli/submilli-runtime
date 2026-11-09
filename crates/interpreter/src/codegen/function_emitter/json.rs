@@ -8,11 +8,15 @@ use crate::codegen::symbol_table::may_hold_null;
 use crate::{ExprId, Type};
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
 
+/// Thrown when `JSON.stringify` has no JSON text and the call is typed `string`.
+pub(crate) const NO_JSON_TEXT_MESSAGE: &str = "`JSON.stringify` has no JSON text for this value (it is `undefined` or a function); use `JSON.stringify(value) ?? …` or check the value first";
+
 pub(super) fn emit_stringify(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     args: &[ExprId],
-    result_ty: &Type,
+    slot_ty: &Type,
+    source_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let [arg, rest @ ..] = args else {
         return Err(crate::codegen::internal_failure(
@@ -40,21 +44,55 @@ pub(super) fn emit_stringify(
         emitter.instruction(Instruction::LocalSet(arg_local));
         emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
     }
-    // Erasure can widen the operand to unknown while the checked expression
-    // still promises a string. Restore that result representation at the edge.
-    let emitted_ty = if may_stringify_undefined(ctx, &arg_ty) {
+    // A value with no JSON text is `undefined` only where the typechecker
+    // widened the call. Anywhere else it throws, then the string is pinned
+    // before the slot coercion: erasure can widen that slot to `unknown`
+    // while the call still promises a string.
+    let may_be_undefined = may_stringify_undefined(ctx, &arg_ty);
+    if may_be_undefined && !source_ty.holds_undefined() {
+        emit_reject_missing_json_text(emitter, ctx)?;
+        return super::cast::emit_coerce_to_slot(emitter, ctx, &Type::String, slot_ty);
+    }
+    let emitted_ty = if may_be_undefined {
         Type::union(vec![Type::String, Type::Undefined])
     } else {
         Type::String
     };
-    super::cast::emit_coerce_to_slot(emitter, ctx, &emitted_ty, result_ty)
+    super::cast::emit_coerce_to_slot(emitter, ctx, &emitted_ty, slot_ty)
+}
+
+/// With a `string | undefined` JSON text on the stack, throws when it is
+/// `undefined` and leaves the string.
+fn emit_reject_missing_json_text(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics registered"))?;
+    let value = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.object),
+    }))?;
+    emitter.instruction(Instruction::LocalSet(value));
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.undefined,
+    )));
+    emitter.emit_if(BlockType::Empty);
+    crate::codegen::throw::emit_missing_value_error_throw(emitter, ctx, NO_JSON_TEXT_MESSAGE);
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intrinsics.string,
+    )));
+    Ok(())
 }
 
 /// Serializes an on-stack value to a string or the undefined singleton when it
-/// has no JSON representation.
-/// Shared by `JSON.stringify` codegen and `main`'s output shim (for the structured
-/// returns it routes here — primitives take the `toString` path instead).
-pub(crate) fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
+/// has no JSON text.
+fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
     if !may_stringify_undefined(ctx, arg_ty) {
         emit_defined_stringify_value(emitter, ctx, arg_ty);
         return;
@@ -739,11 +777,20 @@ mod tests {
     fn invalid_json_arity_is_an_internal_failure_before_reading_arguments() {
         with_context(&TypedAst::new(), &SymbolTable::default(), |ctx| {
             let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
-            assert_internal(emit_stringify(&mut emitter, ctx, &[], &Type::String).unwrap_err());
+            assert_internal(
+                emit_stringify(&mut emitter, ctx, &[], &Type::String, &Type::String).unwrap_err(),
+            );
             assert_internal(emit_parse(&mut emitter, ctx, &[]).unwrap_err());
             let invalid = crate::ExprId(u32::MAX);
             assert_internal(
-                emit_stringify(&mut emitter, ctx, &[invalid; 4], &Type::String).unwrap_err(),
+                emit_stringify(
+                    &mut emitter,
+                    ctx,
+                    &[invalid; 4],
+                    &Type::String,
+                    &Type::String,
+                )
+                .unwrap_err(),
             );
             assert_internal(emit_parse(&mut emitter, ctx, &[invalid; 2]).unwrap_err());
             ctx.check_failure().unwrap();

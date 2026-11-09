@@ -324,7 +324,11 @@ fn emit_expr_value(
             )?;
         }
         TypedExprKind::IntrinsicCall { kind, args } => {
-            emit_intrinsic_call(emitter, ctx, *kind, args, &expr.ty)?;
+            let source_ty = ctx
+                .ta
+                .source_type(id)
+                .map_err(crate::codegen::arena_failure)?;
+            emit_intrinsic_call(emitter, ctx, *kind, args, &expr.ty, source_ty)?;
         }
         TypedExprKind::MethodCall {
             receiver,
@@ -6954,6 +6958,7 @@ fn emit_intrinsic_call(
     kind: Intrinsic,
     args: &[ExprId],
     result_ty: &Type,
+    source_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match kind {
         Intrinsic::Assert => {
@@ -6999,7 +7004,7 @@ fn emit_intrinsic_call(
             emit_undefined(emitter, ctx)?;
         }
         Intrinsic::JsonStringify => {
-            super::json::emit_stringify(emitter, ctx, args, result_ty)?;
+            super::json::emit_stringify(emitter, ctx, args, result_ty, source_ty)?;
         }
         Intrinsic::JsonParse => {
             super::json::emit_parse(emitter, ctx, args)?;
@@ -7937,8 +7942,15 @@ mod tests {
             |ctx| {
                 let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
                 assert_internal(
-                    emit_intrinsic_call(&mut emitter, ctx, Intrinsic::Assert, &[], &Type::Void)
-                        .unwrap_err(),
+                    emit_intrinsic_call(
+                        &mut emitter,
+                        ctx,
+                        Intrinsic::Assert,
+                        &[],
+                        &Type::Void,
+                        &Type::Void,
+                    )
+                    .unwrap_err(),
                 );
                 assert_internal(
                     emit_intrinsic_call(
@@ -7946,6 +7958,7 @@ mod tests {
                         ctx,
                         Intrinsic::BigIntFromString,
                         &[],
+                        &Type::BigInt,
                         &Type::BigInt,
                     )
                     .unwrap_err(),

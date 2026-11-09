@@ -136,6 +136,34 @@ fn static_value_tag(name: &str) -> String {
     }
 }
 
+fn record_function_value_tags(defs: &PackageDeclaration, symbols: &mut SymbolTable) {
+    fn walk(
+        values: &BTreeMap<String, ValueSymbol>,
+        namespaces: &BTreeMap<String, crate::NamespaceSymbol>,
+        defs: &PackageDeclaration,
+        symbols: &mut SymbolTable,
+    ) {
+        for value in values.values() {
+            let ty = match &value.kind {
+                ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => ty,
+                ValueKind::Function { .. } => continue,
+            };
+            if value.name.starts_with(|c: char| c.is_ascii_uppercase())
+                && let Some(symbol) = static_interface_of(defs, ty)
+            {
+                symbols.record_static_value_tag(
+                    symbol.mangled_name.clone(),
+                    static_value_tag(&value.name),
+                );
+            }
+        }
+        for namespace in namespaces.values() {
+            walk(&namespace.values, &namespace.namespaces, defs, symbols);
+        }
+    }
+    walk(&defs.values, &defs.namespaces, defs, symbols);
+}
+
 /// The `Dispatch::Static` interface `ty` names in `defs`, if any. Constructor
 /// and namespace receiver bindings (`console`, `Map`, `Temporal.Instant`) are
 /// typed by these; every call site drops the receiver, so the bindings are
@@ -1017,6 +1045,11 @@ fn codegen_inner(
             &mut import_section,
             &mut symbols,
         )?;
+    }
+    // A module may receive a constructor (`NumberConstructor`) without naming
+    // the binding. Record the function tag anyway so `JSON.stringify` omits it.
+    for defs in dependencies {
+        record_function_value_tags(defs, &mut symbols);
     }
     function_adapters::import_shared_closure_caches(
         &adapter_metas,

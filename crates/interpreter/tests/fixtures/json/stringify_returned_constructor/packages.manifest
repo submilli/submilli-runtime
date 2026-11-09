@@ -1,0 +1,4 @@
+# The consumer never names Number. The returned constructor must still omit.
+# name          dir       deps           root
+@test/provider  provider  -
+main            app       @test/provider root

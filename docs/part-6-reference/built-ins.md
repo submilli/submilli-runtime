@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "44c2c58f96e733db4c2be41fbcb1b3d32e7fd5aeb063775c66fab55af295d741"
+  contentHash: "a52a50226266e726b043140b19fa2a5980ceafa4a0885c552e618e569bfa9932"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -46,7 +46,7 @@ Namespaces: JSON, Math, Temporal
 | `Error` | Error class | The base error class. `throw` takes `Error` and its subclasses |
 | `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null` or `undefined`, invalid UTF-8, an invalid URL |
 | `RangeError` | Error class | Out-of-range values: an array index written past the end, bigint division by zero, invalid Temporal values, and argument-size caps |
-| `MissingValueError` | Error class | A read that finds no value and no check: an array or string index out of range, a key a record doesn't have, or a regex group that didn't take part ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)) |
+| `MissingValueError` | Error class | A read that finds no value and no check: an array or string index out of range, a key a record doesn't have, or a regex group that didn't take part ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)). `JSON.stringify` of a value with no JSON text throws it too ([Language](/docs/reference/language#json-and-stored-values)) |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
 | `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
 | `ReferenceError` | Error class | Reading or writing a module variable, static field, or parameter before its declaration or initialization has run |
@@ -753,7 +753,7 @@ Constructor object for `Uint8Array`.
 | Function | Capability | Description |
 | --- | --- | --- |
 | `parse(text: string): unknown` |  | Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. |
-| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string \| undefined` |  | Serialize a value to a JSON string, or return undefined when it has no JSON representation. |
+| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string` |  | Serialize a value to a JSON string. An `undefined` or function value has no JSON text: the call throws `MissingValueError` where the result is read as `string`, and is `undefined` at a check or where the type names `undefined` (not `unknown`). |
 
 ## `Math`
 

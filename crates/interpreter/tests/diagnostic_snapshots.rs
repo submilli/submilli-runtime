@@ -153,13 +153,6 @@ fn b4_let_missing_initializer_help() {
 }
 
 #[test]
-fn stringify_undefined_suggests_coalescing_result() {
-    insta::assert_snapshot!(render_all(
-        "function format(value: string | undefined): string {\n  return JSON.stringify(value).slice(0, 400);\n}\nfunction main(): void {}\n"
-    ));
-}
-
-#[test]
 fn b4_const_missing_initializer_help() {
     insta::assert_snapshot!(render_inside_main("  const x: number;"));
 }
