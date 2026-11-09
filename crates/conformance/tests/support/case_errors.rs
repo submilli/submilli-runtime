@@ -42,6 +42,7 @@ const SHARED_SYNTAX_CHECKS: &[&str] = &[
     "line break is not allowed before `=>`",
     "a setter's parameter can't",
     "`\"use strict\"` directive",
+    "the left-hand side of `for…in` cannot be a destructuring pattern",
 ];
 
 /// Errors from any phase that name a feature we lack.
