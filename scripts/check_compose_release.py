@@ -1,6 +1,7 @@
 """Check whether the Compose guide's pinned runtime image can be exercised."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -10,6 +11,7 @@ from publish_chart import IMAGE_REPOSITORY, VERSION, Registry
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MCP_SERVER_NAME = "io.github.submilli/submilli-runtime"
 
 
 def main(arguments=None):
@@ -18,6 +20,8 @@ def main(arguments=None):
                         help="Read the guide and workspace version from this checkout")
     parser.add_argument("--print-target", action="store_true")
     parser.add_argument("--require-published", action="store_true")
+    parser.add_argument("--skip-registry", action="store_true",
+                        help="Check local release metadata without querying GHCR")
     parser.add_argument("--runtime-tag", default="")
     args = parser.parse_args(arguments)
     document = args.source_root / "docs/part-4-server/06-deploy-with-compose.md"
@@ -29,7 +33,23 @@ def main(arguments=None):
         return
 
     manifest = args.source_root / "Cargo.toml"
-    ready = image_ready(tag[1:], workspace_version(manifest.read_text()), args.require_published)
+    version = workspace_version(manifest.read_text())
+    metadata_path = args.source_root / "server.json"
+    if args.source_root.resolve() == ROOT.resolve() or metadata_path.exists():
+        release_metadata(args.source_root, version)
+        metadata_checked = True
+    else:
+        # The verifier runs from the current workflow revision against old
+        # release checkouts, which predate MCP registry metadata.
+        metadata_checked = False
+    if args.skip_registry:
+        if metadata_checked:
+            print(f"Compose release metadata is consistent: {image}")
+        else:
+            print(f"Compose image is from a legacy source without MCP registry metadata: {image}")
+        return
+
+    ready = image_ready(tag[1:], version, args.require_published)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with open(output, "a", encoding="utf-8") as file:
@@ -80,6 +100,44 @@ def workspace_version(manifest):
     if version is None or re.fullmatch(VERSION, version.group(1)) is None:
         raise ValueError("Cargo.toml must declare workspace.package.version")
     return version.group(1)
+
+
+def release_metadata(source_root, version):
+    metadata_path = source_root / "server.json"
+    try:
+        metadata = json.loads(metadata_path.read_text())
+    except FileNotFoundError as error:
+        raise ValueError("server.json must exist when metadata validation is required") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"server.json must contain valid JSON: {error.msg}") from error
+    if not isinstance(metadata, dict):
+        raise ValueError("server.json must contain an object")
+    if metadata.get("name") != MCP_SERVER_NAME:
+        raise ValueError(f"server.json name must be {MCP_SERVER_NAME}")
+    if metadata.get("version") != version:
+        raise ValueError("server.json version must match workspace.package.version")
+
+    image = f"ghcr.io/{IMAGE_REPOSITORY}:{version}"
+    packages = metadata.get("packages")
+    if not isinstance(packages, list) or not any(
+        package.get("registryType") == "oci"
+        and package.get("identifier") == image
+        and package.get("version") == version
+        for package in packages if isinstance(package, dict)
+    ):
+        raise ValueError("server.json must declare the versioned runtime OCI package")
+
+    dockerfile = (source_root / "Dockerfile").read_text()
+    runtime = re.search(r"^FROM .* AS runtime\s*$\n(.*?)(?=^FROM |\Z)", dockerfile,
+                        re.MULTILINE | re.DOTALL)
+    if runtime is None:
+        raise ValueError("Dockerfile must define a runtime stage")
+    labels = runtime.group(1)
+    if 'org.opencontainers.image.version="${VERSION}"' not in labels:
+        raise ValueError("Dockerfile must label the image with VERSION")
+    label = f'io.modelcontextprotocol.server.name="{MCP_SERVER_NAME}"'
+    if label not in labels:
+        raise ValueError("Dockerfile MCP server name label must match server.json")
 
 
 def image_ready(version, current_version, require_published=False):
