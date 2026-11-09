@@ -39,6 +39,16 @@ function main(): void {
   assert(loopMessage.length > 0, "the depth bound is a catchable RangeError");
   assert(JSON.stringify(m) === "{\"a\":1,\"b\":2}", "and the next stringify still works");
 
+  let nested: unknown = 0;
+  let expected = "0";
+  for (let i = 0; i < 100; i = i + 1) {
+    const parent = new Map<string, unknown>();
+    parent.set("child", nested);
+    nested = parent;
+    expected = "{\"child\":" + expected + "}";
+  }
+  assert(JSON.stringify(nested) === expected, "100 nested Maps share the bounded host walk");
+
   const s = new Set<number>();
   s.add(7);
   let setMessage = "";

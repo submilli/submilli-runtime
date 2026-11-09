@@ -9,8 +9,8 @@
 //! the host with no codegen change.
 //!
 //! [`dispatch_vtable_slot`] is the **consumer**: given a `(ref $Object)`, it reads
-//! field 0 (`$VTable`), pulls the slot funcref and `call_ref`s it — the array slots
-//! use it to re-enter each element's own slot, exactly as the Wasm bodies did.
+//! field 0 (`$VTable`) and invokes the registered Rust body for a host-owned
+//! slot. Generated and custom slots run through their own function references.
 //!
 //! The slot algorithms mirror the Wasm bodies they replace (`prelude::string` and
 //! `prelude::array`) byte-for-byte: the FNV-1a hash and JSON escaping must agree so
@@ -36,6 +36,24 @@ use crate::runtime::prelude::keep::keep_all;
 
 const FNV_OFFSET: u32 = 0x811c_9dc5;
 const FNV_PRIME: u32 = 0x0100_0193;
+
+type HostVtableBody = dyn for<'a, 'b> Fn(
+        &'a mut Caller<'b, StoreData>,
+        &'a [Val],
+        &'a mut [Val],
+    ) -> Box<dyn std::future::Future<Output = wasmtime::Result<()>> + Send + 'a>
+    + Send
+    + Sync;
+
+struct HostVtableFunction {
+    func: Func,
+    body: std::sync::Arc<HostVtableBody>,
+}
+
+pub(crate) struct HostVtableBodies {
+    global: Global,
+    slots: [std::sync::Arc<HostVtableBody>; 4],
+}
 
 /// Direct handles to the three host-owned vtable globals, returned by
 /// [`install_vtable_module`] so they can be cached in `HostAbi` — host fns read
@@ -104,17 +122,17 @@ fn define_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
     name: &str,
-    slots: [Func; 4],
+    slots: [HostVtableFunction; 4],
 ) -> wasmtime::Result<Global> {
     let pre = StructRefPre::new(&mut *store, intr.vtable.clone());
     let vtable = StructRef::new(
         &mut *store,
         &pre,
         &[
-            Val::FuncRef(Some(slots[0])),
-            Val::FuncRef(Some(slots[1])),
-            Val::FuncRef(Some(slots[2])),
-            Val::FuncRef(Some(slots[3])),
+            Val::FuncRef(Some(slots[0].func)),
+            Val::FuncRef(Some(slots[1].func)),
+            Val::FuncRef(Some(slots[2].func)),
+            Val::FuncRef(Some(slots[3].func)),
         ],
     )?;
     let gty = GlobalType::new(
@@ -127,6 +145,12 @@ fn define_vtable(
     let global = Global::new(&mut *store, gty, Val::AnyRef(Some(vtable.to_anyref())))?;
     let field = crate::mangle::prelude(name);
     linker.define(&mut *store, super::MODULE_NAME, field.as_str(), global)?;
+    let bodies = &mut store.data_mut().host_vtable_bodies;
+    bodies.try_reserve(1).map_err(fatal_host_error)?;
+    bodies.push(HostVtableBodies {
+        global,
+        slots: slots.map(|slot| slot.body),
+    });
     Ok(global)
 }
 
@@ -134,9 +158,9 @@ fn define_vtable(
 // Consumer
 // ---------------------------------------------------------------------------
 
-/// Re-enter `object`'s vtable `slot` via `call_ref`: read field 0 (`$VTable`),
-/// pull the slot funcref, and call it with `object` as the leading argument
-/// followed by `extra` (e.g. `equals`' second operand). Returns the slot's result.
+/// Invoke `object`'s vtable `slot`, using its registered Rust body for a host
+/// vtable or its function reference otherwise. `object` leads the arguments,
+/// followed by `extra` (e.g. `equals`' second operand).
 pub(crate) async fn dispatch_vtable_slot(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
@@ -166,13 +190,56 @@ pub(crate) async fn dispatch_vtable_slot(
     args.try_reserve_exact(count).map_err(fatal_host_error)?;
     args.push(*object);
     args.extend_from_slice(extra);
-    let mut out = [Val::null_any_ref()];
     enter_walk(caller)?;
-    let call_result = func.call_async(&mut *caller, &args, &mut out).await;
+    let call_result = call_vtable_slot(caller, &vt, func, slot, &args).await;
     leave_walk(caller);
-    call_result?;
+    call_result
+}
+
+/// Host-owned slots share the bounded host walk, so nested built-ins can call
+/// the same body without adding an engine entry at every level. Identity checks
+/// keep generated and custom hooks on the engine's normal execution path.
+async fn call_vtable_slot(
+    caller: &mut Caller<'_, StoreData>,
+    vtable: &Rooted<StructRef>,
+    func: Func,
+    slot: usize,
+    args: &[Val],
+) -> wasmtime::Result<Val> {
+    let body = host_vtable_body(caller, vtable, slot)?;
+    let mut out = [Val::null_any_ref()];
+    if let Some(body) = body {
+        crate::runtime::host::check_host_abi(&func.ty(&*caller), args, &out)?;
+        fuel::charge_call(&mut *caller)?;
+        std::pin::Pin::from(body(caller, args, &mut out)).await?;
+    } else {
+        func.call_async(&mut *caller, args, &mut out).await?;
+    }
     let [result] = out;
     Ok(result)
+}
+
+fn host_vtable_body(
+    caller: &mut Caller<'_, StoreData>,
+    vtable: &Rooted<StructRef>,
+    slot: usize,
+) -> wasmtime::Result<Option<std::sync::Arc<HostVtableBody>>> {
+    // Global reads and reference comparisons invoke no callbacks and cannot
+    // change the registry, so each index remains within this fixed length.
+    for index in 0..caller.data().host_vtable_bodies.len() {
+        let entry = &caller.data().host_vtable_bodies[index];
+        let global = entry.global;
+        let body = entry.slots.get(slot).cloned();
+        let Val::AnyRef(Some(candidate)) = global.get(&mut *caller) else {
+            return Err(fatal_host_error("host vtable global is not an object"));
+        };
+        if Rooted::ref_eq(&*caller, vtable, &candidate)? {
+            return body
+                .map(Some)
+                .ok_or_else(|| fatal_host_error("invalid host vtable slot"));
+        }
+    }
+    Ok(None)
 }
 
 /// Undefined shares the object vtable but has no structural fields. Its JSON
@@ -242,7 +309,11 @@ fn leave_walk(caller: &mut Caller<'_, StoreData>) {
 
 /// Direct guest `call_ref` bypasses the dispatcher. Establish its outer scope;
 /// nested host dispatches and generated structural bodies own their own entries.
-fn host_vtable_func<F>(store: &mut Store<StoreData>, ty: wasmtime::FuncType, body: F) -> Func
+fn host_vtable_func<F>(
+    store: &mut Store<StoreData>,
+    ty: wasmtime::FuncType,
+    body: F,
+) -> HostVtableFunction
 where
     F: for<'a, 'b> Fn(
             &'a mut Caller<'b, StoreData>,
@@ -254,9 +325,10 @@ where
         + Sync
         + 'static,
 {
-    let body = std::sync::Arc::new(body);
-    fuel::host_func_async(store, ty, move |mut caller, params, results| {
-        let body = std::sync::Arc::clone(&body);
+    let body: std::sync::Arc<HostVtableBody> = std::sync::Arc::new(body);
+    let registered_body = std::sync::Arc::clone(&body);
+    let func = fuel::host_func_async(store, ty, move |mut caller, params, results| {
+        let body = std::sync::Arc::clone(&registered_body);
         Box::new(async move {
             let outer = caller.data().vtable_walk_depth == 0;
             if outer {
@@ -268,7 +340,8 @@ where
             }
             result
         })
-    })
+    });
+    HostVtableFunction { func, body }
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +351,7 @@ where
 fn build_string_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -437,7 +510,7 @@ pub(super) fn string_equals(
 fn build_array_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let raw_string = intr.raw_string.clone();
     let string_ty = intr.string.clone();
     let to_string = host_vtable_func(
@@ -596,7 +669,7 @@ async fn array_hash(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime:
 fn build_object_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -1020,7 +1093,7 @@ fn json_number(n: f64) -> String {
 fn build_boxed_number_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -1084,7 +1157,7 @@ fn build_boxed_number_vtable(
 fn build_boxed_boolean_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -1161,7 +1234,7 @@ fn boxed_boolean_spell(
 fn build_bigint_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -1273,7 +1346,7 @@ fn bigint_equals(
 fn build_uint8array_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -1374,7 +1447,7 @@ fn uint8array_equals(
 fn build_closure_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = object_object_slot(store, intr.to_string_fn.clone());
     let to_json = host_vtable_func(
         &mut *store,
@@ -1412,7 +1485,7 @@ fn build_closure_vtable(
 fn build_regex_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = host_vtable_func(
         &mut *store,
         intr.to_string_fn.clone(),
@@ -1436,7 +1509,7 @@ fn build_regex_vtable(
 fn build_opaque_vtable(
     store: &mut Store<StoreData>,
     intr: &IntrinsicTypes,
-) -> wasmtime::Result<[Func; 4]> {
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
     let to_string = object_object_slot(store, intr.to_string_fn.clone());
     let to_json = host_value_json_slot(store, intr);
     let equals = ref_identity_equals_slot(store, intr);
@@ -1462,7 +1535,7 @@ fn regex_to_string(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtime::
 }
 
 /// Slot returning the literal `[object Object]`.
-fn object_object_slot(store: &mut Store<StoreData>, ty: wasmtime::FuncType) -> Func {
+fn object_object_slot(store: &mut Store<StoreData>, ty: wasmtime::FuncType) -> HostVtableFunction {
     host_vtable_func(&mut *store, ty, |caller, _params, results| {
         Box::new(async move {
             let st = write_submilli_string_struct(&mut *caller, "[object Object]")?;
@@ -1473,7 +1546,10 @@ fn object_object_slot(store: &mut Store<StoreData>, ty: wasmtime::FuncType) -> F
 }
 
 /// `toJson` slot returning the literal `{}`.
-fn empty_object_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+fn empty_object_json_slot(
+    store: &mut Store<StoreData>,
+    intr: &IntrinsicTypes,
+) -> HostVtableFunction {
     host_vtable_func(
         &mut *store,
         intr.to_json_fn.clone(),
@@ -1489,7 +1565,7 @@ fn empty_object_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -
 
 /// `toJson` slot of a host-backed value: the properties its interface's
 /// getters read, or `{}` for a value no interface describes.
-fn host_value_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+fn host_value_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> HostVtableFunction {
     host_vtable_func(
         &mut *store,
         intr.to_json_fn.clone(),
@@ -1508,7 +1584,10 @@ fn host_value_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> 
 }
 
 /// `equals` slot with `ref.eq` semantics (null == null, otherwise identity).
-fn ref_identity_equals_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+fn ref_identity_equals_slot(
+    store: &mut Store<StoreData>,
+    intr: &IntrinsicTypes,
+) -> HostVtableFunction {
     host_vtable_func(
         &mut *store,
         intr.equals_fn.clone(),
@@ -1527,7 +1606,7 @@ fn ref_identity_equals_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes)
 }
 
 /// Fallback hash for opaque host values without identity metadata.
-fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> HostVtableFunction {
     host_vtable_func(
         &mut *store,
         intr.hash_fn.clone(),
@@ -1540,7 +1619,7 @@ fn zero_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
     )
 }
 
-fn identity_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> Func {
+fn identity_hash_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> HostVtableFunction {
     host_vtable_func(
         &mut *store,
         intr.hash_fn.clone(),

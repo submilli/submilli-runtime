@@ -55,4 +55,18 @@ function main(): void {
     mirror = [mirror];
   }
   assert(nested === mirror, "100 levels of acyclic nesting still compares");
+
+  const seen = new Set<unknown[]>();
+  seen.add(nested);
+  assert(seen.has(mirror), "deep structural hashing agrees with equality");
+
+  let hashMessage = "";
+  try {
+    seen.add(a);
+    assert(false, "hashing a cyclic array should not return");
+  } catch (e: RangeError) {
+    hashMessage = e.message;
+  }
+  assert(hashMessage === message, "hashing shares the catchable walk bound");
+  assert(seen.has(mirror), "a rejected hash leaves the next lookup usable");
 }

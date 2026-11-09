@@ -45,13 +45,22 @@ pub(super) async fn map(
     caller: &mut Caller<'_, StoreData>,
     value: &Val,
 ) -> wasmtime::Result<Output> {
+    let mut output = Output::new(caller);
+    append_map(caller, value, &mut output).await?;
+    Ok(output)
+}
+
+async fn append_map(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+    output: &mut Output,
+) -> wasmtime::Result<()> {
     let entries = super::super::map::live_entries(caller, value)?;
     let held: Vec<Val> = entries
         .iter()
         .flat_map(|&(key, child)| [key, child])
         .collect();
     keep_all(caller, &held)?;
-    let mut output = Output::new(caller);
     output.append(caller, &[123])?;
     let mut first = true;
     for (key, child) in entries {
@@ -60,10 +69,9 @@ pub(super) async fn map(
         }
         let key = map_key_text(caller, &key).await?;
         output.append_key(caller, &mut first, &key)?;
-        append_value(caller, child, &mut output, true).await?;
+        append_value(caller, child, output, true).await?;
     }
-    output.append(caller, &[125])?;
-    Ok(output)
+    output.append(caller, &[125])
 }
 
 /// `String(key)`: what a `Map` key reads as when it names a JSON property.
@@ -158,7 +166,12 @@ fn append_value<'a>(
         }
         let is_array = super::super::collection::is_a(caller, &value, &intr.array)?;
         let is_object = json && uses_default_object_json(caller, &value)?;
-        if !is_array && !is_object {
+        let is_map = json
+            && matches!(
+                super::collection_backing_kind(caller, &value)?,
+                Some(super::CollectionBacking::Map)
+            );
+        if !is_array && !is_object && !is_map {
             let text = dispatch_vtable_slot(caller, &value, usize::from(json), &[]).await?;
             let units = read_serializer_text(caller, &text)?;
             return output.append(caller, &units);
@@ -167,6 +180,8 @@ fn append_value<'a>(
         enter_walk(caller)?;
         let result = if is_array {
             append_array(caller, &value, output, json).await
+        } else if is_map {
+            append_map(caller, &value, output).await
         } else {
             append_object(caller, &value, output, true).await
         };
