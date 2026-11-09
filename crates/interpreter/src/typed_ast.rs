@@ -1040,6 +1040,9 @@ pub struct TypedAst {
     /// truth for visibility — `TypedFunction`/`TypedGlobal` carry no `is_exported`
     /// flag. Built but not yet consumed for surface projection in single-file mode.
     pub exports: Vec<ExportEntry>,
+    /// Root module path. Package rule checking requires it to report module
+    /// diagnostics in path order; a script has `None`.
+    pub package_root_module: Option<crate::ModulePath>,
     /// External package names that were resolved from explicit imports in this
     /// module. This is deliberately package-level, not symbol-level: embedders
     /// use it to install only the package modules the typed program imports.

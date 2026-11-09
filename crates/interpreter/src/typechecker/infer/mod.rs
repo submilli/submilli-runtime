@@ -51,9 +51,9 @@ pub mod stmt;
 mod switch_stmt;
 pub(crate) mod type_aliases;
 mod type_diff;
-mod type_namespace;
+pub(in crate::typechecker) mod type_namespace;
 mod type_predicate;
-mod type_registry;
+pub(in crate::typechecker) mod type_registry;
 mod union_call;
 pub(crate) mod utility_types;
 mod value_operand;
@@ -446,7 +446,6 @@ pub fn infer_package_checked<'a>(
     };
 
     let mut inferred_modules: BTreeMap<ModulePath, ModuleSymbols> = BTreeMap::new();
-    let mut module_exports: BTreeMap<ModulePath, Vec<crate::ExportEntry>> = BTreeMap::new();
     let mut root_public_exports = Vec::new();
     let mut package_declaration = PackageDeclaration::with_package(package_name);
     let first_module = order.first().ok_or_else(|| {
@@ -603,6 +602,7 @@ pub fn infer_package_checked<'a>(
         diagnostic_failure: Default::default(),
     };
 
+    tc.typed_ast.package_root_module = Some(root_module.clone());
     for module in order {
         let (file, ast) = module_map.get(&module).copied().ok_or_else(|| {
             CompileError::from(inference_failure("module absent from inference map"))
@@ -734,7 +734,6 @@ pub fn infer_package_checked<'a>(
                 .internal_modules
                 .insert(module.clone(), module_symbols.internal_exports());
         }
-        module_exports.insert(module.clone(), exports);
         inferred_modules.insert(module, module_symbols);
     }
 
@@ -773,11 +772,6 @@ pub fn infer_package_checked<'a>(
     }
     tc.typed_ast.exports = root_public_exports;
     package_declaration.refresh_shapes();
-    let module_surfaces = module_exports.iter().filter_map(|(module, exports)| {
-        inferred_modules
-            .get(module)
-            .map(|symbols| crate::typechecker::rules::PackageModuleSurface { symbols, exports })
-    });
     let dependencies: Vec<&PackageDeclaration> = tc
         .packages_by_name
         .values()
@@ -785,11 +779,8 @@ pub fn infer_package_checked<'a>(
         .copied()
         .collect();
     let rule_diagnostics = crate::typechecker::rules::check_package(
-        package_name,
         &tc.typed_ast,
         &package_declaration,
-        tc.resolver(),
-        module_surfaces,
         &dependencies,
     )
     .map_err(|error| {
@@ -1671,23 +1662,13 @@ mod tests {
                 .any(|diagnostic| diagnostic.severity == crate::Severity::Error),
             "{diagnostics:?}"
         );
-        let types = TypeNamespace::new();
-        let registry = TypeRegistry::new();
         let limits = crate::type_size::TypeLimits::with_work_allowance(0);
-        let resolver = assignable::TypeResolver {
-            types: &types,
-            registry: &registry,
-            limits: &limits,
-            strict_subtype: false,
-            generic_constraints: &Default::default(),
-        };
-        let error = crate::typechecker::rules::check_package(
-            "@test/resource",
+        let error = crate::typechecker::rules::check_package_rules(
             &typed_ast,
             &package,
-            resolver,
-            std::iter::empty(),
             &[],
+            true,
+            &limits,
         )
         .unwrap_err();
         assert!(

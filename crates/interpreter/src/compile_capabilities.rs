@@ -39,7 +39,7 @@ struct CapabilityLookup<'a> {
 /// `dependencies` are the packages `package` imports from and `transitive`
 /// the ones those build on: a class from either can declare a method that a
 /// call reaches through inheritance.
-pub(crate) fn derive_package_requirements(
+pub fn derive_package_requirements(
     package: &PackageDeclaration,
     ta: &TypedAst,
     stdlib_defs: &[PackageDeclaration],

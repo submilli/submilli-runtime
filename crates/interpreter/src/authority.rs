@@ -175,7 +175,7 @@ struct CapabilityCallee<'a> {
 }
 
 /// Build the authority graph for one already-typechecked package.
-pub(crate) fn analyse<'a>(
+pub fn analyse<'a>(
     declaration: &'a PackageDeclaration,
     ta: &'a TypedAst,
     sources: &'a Sources,
