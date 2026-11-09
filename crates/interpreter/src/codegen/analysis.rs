@@ -1221,6 +1221,8 @@ impl CodegenAnalysis {
                 }
                 PostfixTarget::Field { receiver, name, .. } => {
                     self.note_postfix_target(&expr.ty)?;
+                    self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
+                    self.string_pool.intern_text(&name.name);
                     let receiver_ty = ta
                         .source_type(*receiver)
                         .map_err(crate::codegen::arena_failure)?;
@@ -1240,6 +1242,7 @@ impl CodegenAnalysis {
                 } => {
                     self.note_postfix_target(elem_ty)?;
                     self.note_index_check(ta, Some(*receiver))?;
+                    self.note_missing_key(&bounds::receiver_name(ta, *receiver)?);
                 }
             },
             TypedExprKind::NonNullAssert { .. } => {

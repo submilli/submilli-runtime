@@ -12028,7 +12028,7 @@ impl Inferer<'_> {
                     })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
-                        optional: true,
+                        optional: false,
                         readonly: index.readonly,
                         method: false,
                     })

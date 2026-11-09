@@ -796,14 +796,8 @@ impl Inferer<'_> {
     ) -> Result<(Type, bool), CompilerFailure> {
         // The binding isn't in scope yet; it is a `let`/`const` local.
         let can_hold = !self.captured_locals.contains(&name.span);
-        // A value the local's present flag can't follow is read at its own
-        // type, throwing there if missing, and the local narrows to it. A
-        // local that can't hold a read keeps no flag, so it takes any read
-        // as maybe `undefined`.
         let absorbed = match hint {
-            Some(hint) if !can_hold || self.present_flag_can_follow(typed_value, hint) => {
-                self.absorb_missing_into(typed_value, hint)?
-            }
+            Some(hint) => self.absorb_missing_into(typed_value, hint)?,
             _ => false,
         };
         let holds_missing = absorbed && can_hold;
@@ -2425,22 +2419,17 @@ impl Inferer<'_> {
             let maybe_missing_storage = entry.maybe_missing_storage();
             let can_hold =
                 entry.can_hold_missing_read(self.captured_locals.contains(&entry.decl_span));
-            // A value the local's present flag can't follow is read at its
-            // own type, throwing there if missing.
-            let can_follow = self.present_flag_can_follow(typed_value, entry.write_type());
             // An unannotated local holding a maybe-missing read takes another
             // one as it is.
             let absorbed = if maybe_missing_storage.is_some() {
-                if can_follow && self.absorb_missing(typed_value)? {
+                if self.absorb_missing(typed_value)? {
                     self.hold_assigned_read(&target.name, entry.decl_span, typed_value)?;
                 }
                 false
             } else {
                 // A local that can't hold a read keeps no flag, so it takes
                 // any read as maybe `undefined`.
-                !entry.is_const
-                    && (!can_hold || can_follow)
-                    && self.absorb_missing_into(typed_value, entry.write_type())?
+                !entry.is_const && self.absorb_missing_into(typed_value, entry.write_type())?
             };
             // A local whose type names `undefined` takes a missing read. It
             // reads as `T` from here, as tsc narrows it, holding the read maybe
@@ -2908,7 +2897,7 @@ impl Inferer<'_> {
                     })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
-                        optional: true,
+                        optional: false,
                         readonly: index.readonly,
                         method: false,
                     })

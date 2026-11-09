@@ -119,16 +119,14 @@ function capChain<V>(rs: Record<string, V>[]): V | undefined {
   return f();
 }
 
-// A generic local holding a read is reassigned a chain, which its flag
-// can't follow: the chain is read at its own type.
+// A generic local holding a read carries presence through a reassigned chain.
 function reassignedChain<V>(xs: V[], rs: Record<string, V>[]): string {
   let v = xs[0];
   v = rs[0]?.foo;
   return `${v}`;
 }
 
-// After a branch merge, a local without a flag takes a missing read as
-// `undefined` (it may hold a real one); a generic local's flag throws.
+// After a branch merge, both generic and concrete unions admit undefined.
 function mergedPlain(xs: number[], c: boolean): string {
   let v: number | undefined;
   if (c) v = xs[3];
@@ -200,6 +198,6 @@ function main(): void {
   assert(throws(() => reassignedChain<number>([1], [{}])) === "MissingValueError", "a chain to a missing key");
   assert(mergedPlain([1], true) === "undefined", "a merge without a flag");
   assert(mergedPlain([1], false) === "undefined", "a merge without a flag, unassigned");
-  assert(throws(() => mergedGeneric<number>([1], true)) === "MissingValueError", "a merge with a flag");
+  assert(mergedGeneric<number>([1], true) === "undefined", "a merge with a flag");
   assert(mergedGeneric<number>([1], false) === "undefined", "a merge with a flag, unassigned");
 }

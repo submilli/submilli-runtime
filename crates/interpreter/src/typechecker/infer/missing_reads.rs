@@ -108,7 +108,11 @@ impl Inferer<'_> {
                 self.missable_chains.insert(id, chain);
             }
             PendingRead::MaybeMissingLocal if matches!(kind, TypedExprKind::LocalRef { .. }) => {
+                let accepts_undefined = missing_local_use_names_undefined(ty);
                 self.maybe_missing_uses.insert(id);
+                if accepts_undefined {
+                    self.widen_with_undefined(id)?;
+                }
             }
             PendingRead::GivesUndefined if matches!(kind, TypedExprKind::IndexAccess { .. }) => {
                 self.typed_ast.missing_reads_undefined.insert(id);
@@ -254,10 +258,7 @@ impl Inferer<'_> {
         value: ExprId,
         bound: &Type,
     ) -> Result<Option<Type>, CompilerFailure> {
-        if annotated
-            || !self.local_can_hold_missing_read(&name.name, name.span)
-            || !self.present_flag_can_follow(value, bound)
-        {
+        if annotated || !self.local_can_hold_missing_read(&name.name, name.span) {
             return Ok(None);
         }
         let Some(read) = self.missing_read_origin(value)? else {
@@ -268,19 +269,6 @@ impl Inferer<'_> {
         self.widen_with_undefined(value)?;
         self.typed_ast.widened_bindings.insert(name.span);
         Ok(Some(Type::union(vec![bound.clone(), Type::Undefined])))
-    }
-
-    /// Whether `value` can set the present flag a local of type `local_ty`
-    /// would need to hold it: always, unless the local is typed with a type
-    /// parameter, which tells a missing value from a present `undefined` by
-    /// that flag (`hold_read`), and `value` is an optional chain, which can't
-    /// report presence. Such a chain is read at its own type instead.
-    pub(super) fn present_flag_can_follow(&self, value: ExprId, local_ty: &Type) -> bool {
-        !local_ty.has_type_parameter_member()
-            || self
-                .typed_ast
-                .try_expr(value)
-                .is_ok_and(|expr| !matches!(expr.kind, TypedExprKind::OptionalChain { .. }))
     }
 
     /// Whether the local `name` declared at `decl_span` can hold a
@@ -455,4 +443,16 @@ pub(super) fn widen_missing_steps(parts: &mut [crate::TypedChainPart], steps: &[
 /// assignment gave it was missing; it may hold any of several reads.
 fn assigned_missing_message(name: &str) -> String {
     format!("`{name}` is missing: an index read assigned to it found no value")
+}
+
+// A null guard refines bare T to a shape containing undefined without
+// making missing reads acceptable. Inspect its original type instead.
+fn missing_local_use_names_undefined(ty: &Type) -> bool {
+    match ty {
+        Type::Refined { original, .. } => missing_local_use_names_undefined(original),
+        Type::Alias { ty, .. } | Type::Readonly(ty) => missing_local_use_names_undefined(ty),
+        Type::Union(members) => members.iter().any(missing_local_use_names_undefined),
+        Type::Undefined | Type::Void => true,
+        _ => false,
+    }
 }
