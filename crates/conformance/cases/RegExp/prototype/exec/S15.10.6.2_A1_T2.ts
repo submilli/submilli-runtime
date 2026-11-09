@@ -23,8 +23,8 @@ function main(): void {
   assertSameValue(captures, 6, "six capture groups");
   assertSameValue(g1, "1", "capture 1");
   assertSameValue(g2, "1", "capture 2");
-  assertSameValue(g3, undefined, "capture 3 did not participate");
+  assert(g3 === undefined, "capture 3 did not participate");
   assertSameValue(g4, "23", "capture 4");
-  assertSameValue(g5, undefined, "capture 5 did not participate");
+  assert(g5 === undefined, "capture 5 did not participate");
   assertSameValue(g6, "23", "capture 6");
 }

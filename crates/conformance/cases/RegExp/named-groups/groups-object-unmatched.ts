@@ -18,7 +18,7 @@ function main(): void {
   assertSameValue(matched, "ab", "full match");
   assertSameValue(index, 0, "match offset");
   assertSameValue(g1, "a", "capture 1");
-  assertSameValue(g2, undefined, "capture 2 did not participate");
+  assert(g2 === undefined, "capture 2 did not participate");
   assertSameValue(named["a"], "a", "named capture a");
-  assertSameValue(named["x"], undefined, "unmatched named capture x is undefined");
+  assert(named["x"] === undefined, "unmatched named capture x is undefined");
 }
