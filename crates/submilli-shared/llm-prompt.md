@@ -49,7 +49,7 @@ metric — improving this prompt is a primary lever.
 
 Run a Submilli program: a strict TypeScript subset, compiled to WebAssembly.
 
-Before your first program, call `{t_docs}` with every package and module you will import, and use those declarations rather than guessing APIs. `{t_search}` finds packages, and `{t_builtins_docs}` declares the built-ins.
+Before your first program, call `{t_docs}` with every package and module you will import, and use those declarations rather than guessing APIs. `{t_search}` finds packages, and `{t_builtins_docs}` declares the built-ins.{function_docs}
 
 Programs are synchronous: never `async`, `await` or `Promise`. Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module ({stdlib_modules}). Built-ins need no import: `console`, {builtins} (there is no `Date`).
 
