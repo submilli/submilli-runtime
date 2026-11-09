@@ -2734,37 +2734,220 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
-        if matches!(self.peek().kind, TokenKind::Let | TokenKind::Const)
-            && matches!(self.peek_at(1).kind, TokenKind::Identifier)
-            && matches!(self.peek_at(2).kind, TokenKind::In)
-        {
-            self.error_at_with_help(
-                self.peek_at(2).span,
-                "`for…in` is not supported",
-                vec![
-                    "use `for (const k of Object.keys(obj))` to iterate the object's own keys"
-                        .to_string(),
-                ],
-            );
-            // Consume the rejected header and body so recovery does not treat
-            // its `const` as a separate declaration with a missing initializer.
-            for _ in 0..3 {
-                self.advance();
-            }
-            self.parse_expression()?;
-            if !matches!(self.peek().kind, TokenKind::RightParen) {
-                self.error_at_peek("expected `)` after `for…in` object");
-                return None;
-            }
-            self.advance();
-            self.parse_loop_body()?;
-            return None;
+        if self.scan_for_in_head() {
+            return self.parse_for_in_tail(kw);
         }
         if self.scan_for_of_shape() {
             self.parse_for_of_tail(kw)
         } else {
             self.parse_c_for_tail(kw)
         }
+    }
+
+    /// Whether the header opens `for (let k in …`, `for (const k in …` or
+    /// `for (k in …`.
+    fn scan_for_in_head(&self) -> bool {
+        let name_at = usize::from(matches!(
+            self.peek().kind,
+            TokenKind::Let | TokenKind::Const
+        ));
+        matches!(self.peek_at(name_at).kind, TokenKind::Identifier)
+            && matches!(self.peek_at(name_at + 1).kind, TokenKind::In)
+    }
+
+    /// `for (k in obj)` iterates the keys of `obj` that `Object.keys` lists, and
+    /// none when `obj` is nullish. It becomes a `for-of` over those keys, with
+    /// `obj` held first so it runs once. A loop variable declared outside the
+    /// loop receives each key from a fresh binding the loop declares.
+    fn parse_for_in_tail(&mut self, kw: Token) -> Option<StmtId> {
+        let binding_kind = match self.peek().kind {
+            TokenKind::Let => Some(crate::BindingKind::Let),
+            TokenKind::Const => Some(crate::BindingKind::Const),
+            _ => None,
+        };
+        if binding_kind.is_some() {
+            self.advance();
+        }
+        let name_tok = self.advance();
+        let name = self.ident_from_token(&name_tok);
+        self.advance();
+
+        let object = self.parse_expression()?;
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)` after `for…in` object");
+            return None;
+        }
+        self.advance();
+        let body = self.parse_loop_body()?;
+        let body_span = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?.span;
+        let loop_span = self.span(kw.span.start, body_span.end);
+
+        let held = self.hold_for_in_object(object)?;
+        let keys = self.for_in_keys(&held)?;
+        let (binding_kind, binding, body) = if let Some(kind) = binding_kind {
+            (kind, name, body)
+        } else {
+            let (key, body) = self.copy_key_to_outer(name, body, body_span)?;
+            (crate::BindingKind::Const, key, body)
+        };
+        let for_of = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::ForOf {
+                    binding_kind,
+                    name: binding,
+                    ty: None,
+                    iter: keys,
+                    body,
+                },
+                span: loop_span,
+            }),
+            &mut self.fatal,
+        )?;
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(vec![held.statement, for_of]),
+                span: loop_span,
+            }),
+            &mut self.fatal,
+        )
+    }
+
+    /// For `for (k in obj)` with `k` declared outside the loop: the loop binds a
+    /// fresh key, and its body starts by copying that key into `k`. Nested
+    /// loops share the key's name: each copies before its body runs.
+    fn copy_key_to_outer(
+        &mut self,
+        outer: Ident,
+        body: StmtId,
+        body_span: Span,
+    ) -> Option<(Ident, StmtId)> {
+        let span = outer.span;
+        let key = Ident {
+            name: FOR_IN_KEY.to_string(),
+            span,
+        };
+        let key_expr = self.synthetic_expr(span, ExprKind::Identifier(key.clone()))?;
+        let copy = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Assign {
+                    target: outer,
+                    value: key_expr,
+                },
+                span,
+            }),
+            &mut self.fatal,
+        )?;
+        let body = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(vec![copy, body]),
+                span: body_span,
+            }),
+            &mut self.fatal,
+        )?;
+        Some((key, body))
+    }
+
+    /// `let #for_in_object = object;`, so the guard and `Object.keys` read one
+    /// evaluation. It is a `let`, never reassigned: a `const` alias of a
+    /// type-parameter value breaks the guard's narrowing (SUB-2171). `#` cannot
+    /// start a source identifier.
+    fn hold_for_in_object(&mut self, object: ExprId) -> Option<HeldForInObject> {
+        let span = parse_arena_result(self.ast.try_expr(object), &mut self.fatal)?.span;
+        let name = Ident {
+            name: FOR_IN_OBJECT.to_string(),
+            span,
+        };
+        let statement = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Let {
+                    name: name.clone(),
+                    ty: None,
+                    value: object,
+                    doc: None,
+                },
+                span,
+            }),
+            &mut self.fatal,
+        )?;
+        Some(HeldForInObject { name, statement })
+    }
+
+    /// `held === undefined || held === null ? [] : Object.keys(held)`, which
+    /// puts `held`'s span on every synthesized node so a diagnostic about it
+    /// points at the `for…in` object.
+    fn for_in_keys(&mut self, held: &HeldForInObject) -> Option<ExprId> {
+        let span = held.name.span;
+        let undefined = self.synthetic_expr(
+            span,
+            ExprKind::Identifier(Ident {
+                name: "undefined".to_string(),
+                span,
+            }),
+        )?;
+        self.ast.synthetic_undefined.insert(undefined);
+        let null = self.synthetic_expr(span, ExprKind::Null)?;
+        let is_undefined = self.held_equals(held, undefined)?;
+        let is_null = self.held_equals(held, null)?;
+        let cond = self.synthetic_expr(
+            span,
+            ExprKind::Binary {
+                op: BinOp::Or,
+                lhs: is_undefined,
+                rhs: is_null,
+            },
+        )?;
+        let none = self.synthetic_expr(span, ExprKind::ArrayLiteral { elements: vec![] })?;
+        let namespace = self.synthetic_expr(
+            span,
+            ExprKind::Identifier(Ident {
+                name: "Object".to_string(),
+                span,
+            }),
+        )?;
+        let callee = self.synthetic_expr(
+            span,
+            ExprKind::FieldAccess {
+                receiver: namespace,
+                name: Ident {
+                    name: "keys".to_string(),
+                    span,
+                },
+            },
+        )?;
+        let argument = self.synthetic_expr(span, ExprKind::Identifier(held.name.clone()))?;
+        let keys = self.synthetic_expr(
+            span,
+            ExprKind::Call {
+                callee,
+                type_args: None,
+                args: vec![argument],
+            },
+        )?;
+        self.synthetic_expr(
+            span,
+            ExprKind::Ternary {
+                cond,
+                then_: none,
+                else_: keys,
+            },
+        )
+    }
+
+    fn held_equals(&mut self, held: &HeldForInObject, other: ExprId) -> Option<ExprId> {
+        let object =
+            self.synthetic_expr(held.name.span, ExprKind::Identifier(held.name.clone()))?;
+        self.synthetic_expr(
+            held.name.span,
+            ExprKind::Binary {
+                op: BinOp::Eq,
+                lhs: object,
+                rhs: other,
+            },
+        )
+    }
+
+    fn synthetic_expr(&mut self, span: Span, kind: ExprKind) -> Option<ExprId> {
+        parse_arena_result(self.ast.try_push_expr(Expr { kind, span }), &mut self.fatal)
     }
 
     // Counts bracket/angle depth to skip past optional type annotations.
@@ -6963,6 +7146,17 @@ fn mixed_logical_help(prev: BinOp, next: BinOp) -> String {
 }
 
 const LOGICAL_AND_PREC: u8 = 2;
+
+/// The bindings a lowered `for…in` declares. `#` cannot start a source
+/// identifier, so neither can clash with a user's name.
+const FOR_IN_OBJECT: &str = "#for_in_object";
+const FOR_IN_KEY: &str = "#for_in_key";
+
+/// The `for…in` object, held in a variable so it is evaluated once.
+struct HeldForInObject {
+    name: Ident,
+    statement: StmtId,
+}
 
 /// One side of a loose comparison that is always nullish.
 #[derive(Clone, Copy)]
