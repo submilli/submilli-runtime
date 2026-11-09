@@ -320,18 +320,18 @@ impl Inferer<'_> {
     /// `ty` narrowed to what `current` still holds: each member of `ty` that
     /// `current` admits, or else the members of `current` within it.
     fn narrowed_within(&self, ty: &Type, current: &Type) -> Type {
-        let current_members = narrowing::union_members(current);
+        let current_members = type_members(current);
         Type::union(
-            narrowing::union_members(ty)
+            type_members(ty)
                 .into_iter()
                 .flat_map(|member| {
-                    if super::assignable(member, current, self.resolver()) {
-                        return vec![member.clone()];
+                    if super::assignable(&member, current, self.resolver()) {
+                        return vec![member];
                     }
                     current_members
                         .iter()
-                        .filter(|held| super::assignable(held, member, self.resolver()))
-                        .map(|held| (*held).clone())
+                        .filter(|held| super::assignable(held, &member, self.resolver()))
+                        .cloned()
                         .collect()
                 })
                 .collect(),
@@ -341,12 +341,8 @@ impl Inferer<'_> {
     /// The members of `ty` that `current` admits. The initializer was typed
     /// where the `const` was declared; a guard since may have narrowed further.
     fn members_admitted_by(&self, ty: &Type, current: &Type) -> Type {
-        let members = match ty.peel() {
-            Type::Union(members) => members.clone(),
-            _ => vec![ty.clone()],
-        };
         Type::union(
-            members
+            type_members(ty)
                 .into_iter()
                 .filter(|member| super::assignable(member, current, self.resolver()))
                 .collect(),
@@ -456,6 +452,14 @@ impl Inferer<'_> {
         let field = self.assignment_target_fields(receiver)?.remove(name)?;
         field.readonly.then(|| field.read_ty())
     }
+}
+
+/// Like [`narrowing::union_members`], but a narrowed type parameter such as
+/// `T & ({} | null)` splits into `T & {}` and `null`, so each piece keeps the
+/// parameter instead of being peeled down to its shape.
+fn type_members(ty: &Type) -> Vec<Type> {
+    ty.refinement_pieces()
+        .unwrap_or_else(|| narrowing::union_members(ty).into_iter().cloned().collect())
 }
 
 /// The element a constant index reads from a `readonly` array or tuple.
