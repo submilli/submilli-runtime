@@ -252,9 +252,9 @@ impl Applier {
     /// Before a run: applies a save the watcher has not reached yet, so the run uses
     /// the file as it is now. A file the last apply already read is left as it was.
     pub(crate) async fn catch_up(&self) {
-        // An apply that already read the file marks it seen before it logs the
-        // version, so wait for it to finish: the run then gets that version.
-        drop(self.turn.lock().await);
+        // Keep the turn through the seen check: otherwise a watcher can mark
+        // the file seen after we release the turn but before its apply finishes.
+        let _turn = self.turn.lock().await;
         let Ok(yaml) = std::fs::read_to_string(&self.path) else {
             return;
         };
@@ -265,12 +265,17 @@ impl Applier {
             .as_deref()
             == Some(&yaml);
         if !seen {
-            self.apply_file().await;
+            self.apply_and_report(Moment::Save).await;
         }
     }
 
     async fn apply_file_at(&self, moment: Moment) -> Outcome {
         let _turn = self.turn.lock().await;
+        self.apply_and_report(moment).await
+    }
+
+    /// Both callers hold `turn` through checking, applying and reporting.
+    async fn apply_and_report(&self, moment: Moment) -> Outcome {
         let was_refused = self.lock_status().refused.is_some();
         let outcome = self.check_and_apply(moment).await;
         self.report(&outcome, was_refused);

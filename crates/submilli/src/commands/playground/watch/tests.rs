@@ -581,6 +581,41 @@ async fn a_run_started_during_an_apply_waits_for_its_version() {
     applying.await.unwrap();
 }
 
+#[tokio::test]
+async fn catch_up_applies_an_unseen_save_once_and_reports_a_refusal() {
+    let fixture = Fixture::new(PINNED).await;
+    let saved = PINNED.replace("amount < 500", "amount < 100");
+    let file = fixture.dir.path().join("demo.yaml");
+    std::fs::write(&file, &saved).unwrap();
+    tokio::time::timeout(Duration::from_secs(20), fixture.applier.catch_up())
+        .await
+        .expect("catch_up applies without reacquiring its own turn");
+    assert_eq!(fixture.status().version, Some(2));
+    assert!(fixture.status().refused.is_none());
+    assert_eq!(fixture.current().bytes, saved);
+    assert_eq!(
+        fixture.registered().await,
+        submilli_blueprint::parse(&saved).unwrap()
+    );
+
+    fixture.applier.catch_up().await;
+    assert_eq!(
+        fixture.versions(),
+        [1, 2],
+        "the same save is not logged twice"
+    );
+
+    std::fs::write(&file, "name: [").unwrap();
+    fixture.applier.catch_up().await;
+    assert!(fixture.status().refused.is_some());
+    assert_eq!(fixture.status().version, Some(2));
+    assert_eq!(
+        fixture.current().bytes,
+        saved,
+        "a refusal keeps the last applied version"
+    );
+}
+
 // An explicit `default: deny` reads as a different blueprint from an absent default,
 // so it is a new version; the classifier finds nothing that changes what programs may
 // do, so the version is `unknown` and says so.
