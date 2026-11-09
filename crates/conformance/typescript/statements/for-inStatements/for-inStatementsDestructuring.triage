@@ -1,2 +1,2 @@
-line 2 missed: by-design spec §Appendix `for...in` is never supported; we reject the line for that
-line 2 extra: by-design spec §Appendix `for...in` is never supported; we reject the line for that
+line 2 missed: bug SUB-2169 a destructuring `for…in` head is reported as a declaration missing its initializer, where tsc reports TS2491
+line 2 extra: bug SUB-2169 a destructuring `for…in` head is reported as a declaration missing its initializer, where tsc reports TS2491

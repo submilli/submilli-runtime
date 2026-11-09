@@ -3391,7 +3391,10 @@ pub(super) struct LoopBodyOutcome {
     /// cannot hold there.
     pub next_pass: Option<narrowing::NarrowEnv>,
     pub reaches_back_edge: bool,
-    pub direct_evolving_reads: std::collections::BTreeSet<narrowing::ReferencePath>,
+    /// Evolving paths whose in-progress type this pass observes before the body
+    /// finishes growing them: read directly, or carried out of the loop by a
+    /// `break`.
+    pub observed_evolving: std::collections::BTreeSet<narrowing::ReferencePath>,
 }
 
 /// A `while` or `for` condition's check as it first runs.
@@ -3501,7 +3504,7 @@ fn widen_entry_to_cover_next_pass(
             next_pass_falsifies(
                 view,
                 next_pass.get(*path),
-                outcome.direct_evolving_reads.contains(*path),
+                outcome.observed_evolving.contains(path),
             )
         })
         .map(|(path, view)| (path.clone(), view.clone()))
@@ -3536,12 +3539,13 @@ fn widen_entry_to_cover_next_pass(
 fn next_pass_falsifies(
     view: &narrowing::NarrowedView,
     post: Option<&narrowing::NarrowedView>,
-    direct_read_in_body: bool,
+    observed_in_pass: bool,
 ) -> bool {
     // A fresh empty array's element type is learned from growth in this pass.
     // If the body only grows it or reads its length, a second pass cannot
-    // change a typed read. Other reads may see prior iterations' elements.
-    if !direct_read_in_body
+    // change a typed read. Other reads, and a `break` that leaves the loop
+    // before the growth, may see prior iterations' elements.
+    if !observed_in_pass
         && view.evolving == Some(narrowing::EvolvingType::Array)
         && super::evolving::array_element(&view.narrowed_ty) == Some(Type::Never)
         && post.is_some_and(|post| post.evolving == Some(narrowing::EvolvingType::Array))
@@ -3616,7 +3620,8 @@ impl Inferer<'_> {
         let cached_len = self.loop_entry_adjustments.get(&body).map_or(0, Vec::len);
 
         loop {
-            let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, tail)?;
+            let outcome =
+                self.run_body_pass(body, &entry_env, body_span, breaks_len, continues_len, tail)?;
             let outer_falsified = self.drop_narrowings_the_body_falsifies(
                 body,
                 &outcome,
@@ -3770,7 +3775,7 @@ impl Inferer<'_> {
                     && next_pass_falsifies(
                         view,
                         next_pass.get(*path),
-                        outcome.direct_evolving_reads.contains(*path),
+                        outcome.observed_evolving.contains(path),
                     )
             })
             .map(|(path, view)| (path.clone(), view.clone()))
@@ -3870,6 +3875,7 @@ impl Inferer<'_> {
         body: StmtId,
         entry_env: &narrowing::NarrowEnv,
         body_span: Span,
+        breaks_base: usize,
         continues_base: usize,
         tail: LoopTail,
     ) -> Result<LoopBodyOutcome, CompilerFailure> {
@@ -3880,6 +3886,7 @@ impl Inferer<'_> {
         self.loop_depth -= 1;
         let body_end_reachable = self.reachable;
         let (_, mut assigned) = self.pop_narrow_frame_capture()?;
+        let evolving_break_paths = self.evolving_break_paths_since(breaks_base)?;
         let (continues, continued_assignments) = self.continue_exits_since(continues_base)?;
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
@@ -3911,10 +3918,11 @@ impl Inferer<'_> {
             }
             (_, edge) => edge,
         };
-        let direct_evolving_reads = self
+        let mut observed_evolving = self
             .loop_direct_evolving_reads
             .pop()
             .ok_or_else(|| super::inference_failure("loop read collector"))?;
+        observed_evolving.extend(evolving_break_paths);
         Ok(LoopBodyOutcome {
             update: typed_update,
             head_edge,
@@ -3922,7 +3930,7 @@ impl Inferer<'_> {
             body: self.wrap_narrow_regions(typed_body, entry_env, body_span)?,
             assigned,
             next_pass,
-            direct_evolving_reads,
+            observed_evolving,
         })
     }
 
@@ -4256,6 +4264,25 @@ impl Inferer<'_> {
             })
             .map_err(crate::typechecker::arena_failure)?;
         Ok((typed, post))
+    }
+
+    fn evolving_break_paths_since(
+        &self,
+        base_len: usize,
+    ) -> Result<std::collections::BTreeSet<narrowing::ReferencePath>, CompilerFailure> {
+        let frame = self
+            .pending_joins
+            .last()
+            .ok_or_else(|| super::inference_failure("missing loop pending-join frame"))?;
+        let exits = frame.breaks.get(base_len..).ok_or_else(|| {
+            super::inference_failure("break snapshot offset exceeds pending transfers")
+        })?;
+        Ok(exits
+            .iter()
+            .flat_map(|(env, _)| env.iter())
+            .filter(|(_, view)| view.evolving.is_some())
+            .map(|(path, _)| path.clone())
+            .collect())
     }
 
     fn continue_exits_since(
