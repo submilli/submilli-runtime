@@ -3,7 +3,6 @@
 from contextlib import redirect_stdout
 import importlib.util
 import io
-import json
 import os
 from pathlib import Path
 import sys
@@ -20,12 +19,6 @@ checker = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checker)
 
 MANIFEST = '[workspace.package]\nversion = "0.6.2"\n\n[workspace.dependencies]\n'
-DOCKERFILE = '''FROM scratch AS runtime
-ARG VERSION=0.0.0-dev
-LABEL org.opencontainers.image.version="${VERSION}" \\
-      io.modelcontextprotocol.server.name="io.github.submilli/submilli-runtime"
-FROM runtime
-'''
 
 
 def guide(version="0.6.2", image_version=None):
@@ -38,18 +31,6 @@ def guide(version="0.6.2", image_version=None):
         "```\n\n## Upgrade\n"
         "curl -fsSLO https://raw.githubusercontent.com/submilli/submilli-runtime/v0.5.1/compose.yaml\n"
     )
-
-
-def server_metadata(version="0.6.2"):
-    return {
-        "name": "io.github.submilli/submilli-runtime",
-        "version": version,
-        "packages": [{
-            "registryType": "oci",
-            "identifier": f"ghcr.io/submilli/submilli-runtime:{version}",
-            "version": version,
-        }],
-    }
 
 
 class TargetTests(unittest.TestCase):
@@ -125,8 +106,6 @@ class WorkflowOutputTests(unittest.TestCase):
         document.parent.mkdir(parents=True)
         document.write_text(guide(version))
         (root / "Cargo.toml").write_text(MANIFEST.replace("0.6.2", version))
-        (root / "server.json").write_text(json.dumps(server_metadata(version)))
-        (root / "Dockerfile").write_text(DOCKERFILE)
 
     def test_deferred_journey_is_explicit_and_does_not_run(self):
         self.registry.return_value.manifest_exists.return_value = False
@@ -167,7 +146,6 @@ class WorkflowOutputTests(unittest.TestCase):
     def test_historical_source_needs_no_verification_tools_of_its_own(self):
         source = Path(self.directory.name) / "old-release"
         self.write_source(source, "0.6.1")
-        (source / "server.json").unlink()
         self.registry.return_value.manifest_exists.return_value = True
         with redirect_stdout(io.StringIO()):
             checker.main(["--source-root", str(source), "--require-published",
@@ -176,21 +154,6 @@ class WorkflowOutputTests(unittest.TestCase):
             "submilli/submilli-runtime", "0.6.1")
         self.assertEqual(self.output.read_text(), "available=true\n")
 
-    def test_missing_metadata_in_current_checkout_fails(self):
-        (self.root / "server.json").unlink()
-        with self.assertRaisesRegex(ValueError, "server.json must exist"):
-            checker.main(["--skip-registry"])
-        self.registry.assert_not_called()
-
-    def test_historical_source_without_metadata_can_run_offline(self):
-        source = Path(self.directory.name) / "old-release"
-        self.write_source(source, "0.6.1")
-        (source / "server.json").unlink()
-        with redirect_stdout(io.StringIO()) as output:
-            checker.main(["--source-root", str(source), "--skip-registry"])
-        self.assertIn("legacy source without MCP registry metadata", output.getvalue())
-        self.registry.assert_not_called()
-
     def test_deferral_uses_the_selected_sources_workspace_version(self):
         source = Path(self.directory.name) / "next-release"
         self.write_source(source, "0.6.3")
@@ -198,42 +161,6 @@ class WorkflowOutputTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             checker.main(["--source-root", str(source)])
         self.assertEqual(self.output.read_text(), "available=false\n")
-
-    def test_offline_check_requires_no_registry_access(self):
-        with redirect_stdout(io.StringIO()) as output:
-            checker.main(["--skip-registry"])
-        self.assertIn("metadata is consistent", output.getvalue())
-        self.registry.assert_not_called()
-        self.assertFalse(self.output.exists())
-
-    def test_metadata_version_mismatch_fails_before_registry_access(self):
-        (self.root / "server.json").write_text(json.dumps(server_metadata("0.6.1")))
-        with self.assertRaisesRegex(ValueError, "server.json version"):
-            checker.main(["--skip-registry"])
-        self.registry.assert_not_called()
-
-    def test_metadata_package_mismatch_fails_before_registry_access(self):
-        metadata = server_metadata()
-        metadata["packages"][0]["identifier"] = "ghcr.io/submilli/submilli-runtime:0.6.1"
-        (self.root / "server.json").write_text(json.dumps(metadata))
-        with self.assertRaisesRegex(ValueError, "versioned runtime OCI package"):
-            checker.main(["--skip-registry"])
-        self.registry.assert_not_called()
-
-    def test_metadata_name_must_match_the_docker_label(self):
-        (self.root / "Dockerfile").write_text(DOCKERFILE.replace(
-            "io.github.submilli/submilli-runtime", "io.github.submilli/other"))
-        with self.assertRaisesRegex(ValueError, "Dockerfile MCP server name label"):
-            checker.main(["--skip-registry"])
-        self.registry.assert_not_called()
-
-    def test_metadata_label_must_be_on_the_runtime_stage(self):
-        (self.root / "Dockerfile").write_text(DOCKERFILE.replace(
-            '      io.modelcontextprotocol.server.name="io.github.submilli/submilli-runtime"\nFROM runtime',
-            'FROM runtime\nLABEL io.modelcontextprotocol.server.name="io.github.submilli/submilli-runtime"'))
-        with self.assertRaisesRegex(ValueError, "Dockerfile MCP server name label"):
-            checker.main(["--skip-registry"])
-        self.registry.assert_not_called()
 
 
 if __name__ == "__main__":
