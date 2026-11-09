@@ -17705,16 +17705,13 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    // `Number(boolean)` goes through the standard call-signature dispatch —
-    // the union parameter `number | string | bigint | undefined` rejects
-    // `boolean` via the standard assignability diagnostic.
+    // `null` remains outside Number's accepted argument union, even though
+    // JavaScript also converts it to a number.
     #[test]
     fn number_call_with_wrong_type_diagnoses() {
-        let (_, diags) = run("function main(): void { let n = Number(true); }");
-        assert!(
-            !diags.is_empty(),
-            "expected an assignability diagnostic for Number(boolean), got none"
-        );
+        let (_, diags) = run("function main(): void { let n = Number(null); }");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("got `null`"), "{diags:?}");
     }
 
     #[test]
