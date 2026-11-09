@@ -2146,11 +2146,9 @@ impl Inferer<'_> {
         ))
     }
 
-    /// `"field" in obj`. LHS must be a string literal; RHS
-    /// receiver must be `unknown`, an `Object`, or a union of objects.
-    /// Result is `boolean`. The narrowing-engine side is driven from
-    /// `predicate_envs_in_operator` — this method only enforces the
-    /// type-level shape.
+    /// `key in obj` accepts string or number keys and converts numbers to strings.
+    /// Result is `boolean`. Known literal keys drive field-presence narrowing
+    /// through `predicate_envs_in_operator`.
     fn infer_in_operator(
         &mut self,
         lhs: ExprId,
@@ -2158,20 +2156,36 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
-        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, Some(&Type::String))?;
-        if !assignable(&lhs_ty, &Type::String, self.resolver()) {
+        let (typed_lhs, lhs_ty) = self.infer_object_key(lhs)?;
+        if !assignable(
+            &lhs_ty,
+            &Type::union(vec![Type::String, Type::Number]),
+            self.resolver(),
+        ) {
             self.error(
                 lhs_span,
-                "`in` operator requires a string on the left".into(),
+                "`in` operator requires a string or number on the left".into(),
             );
+        } else if let Some(keys) = super::records::finite_string_keys(&lhs_ty, self.resolver())
+            && let [key] = keys.as_slice()
+        {
+            // Conversion of a single known key preserves its literal identity
+            // for field-presence narrowing, without replacing its evaluation.
+            self.typed_ast
+                .try_expr_mut(typed_lhs)
+                .map_err(super::arena_failure)?
+                .ty = Type::StringLiteral(key.clone());
         }
         let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None)?;
+        let is_receiver = |ty: &Type| {
+            Self::is_field_bearing(ty) || matches!(ty.peel(), Type::Array(_) | Type::Tuple(_))
+        };
         let receiver_ok = match rhs_ty.peel() {
             Type::Unknown | Type::NonPrimitive | Type::Error => true,
-            ty if Self::is_field_bearing(ty) => true,
+            ty if is_receiver(ty) => true,
             // A union discriminated by field presence is the reason `in` exists;
             // its members are as often named (interfaces, classes) as inline.
-            Type::Union(members) => members.iter().all(Self::is_field_bearing),
+            Type::Union(members) => members.iter().all(is_receiver),
             _ => false,
         };
         if !receiver_ok {

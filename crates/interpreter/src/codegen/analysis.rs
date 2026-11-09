@@ -1002,11 +1002,13 @@ impl CodegenAnalysis {
                 {
                     self.dependency_usage.collect_bigint_host_value("cmp");
                 }
+                let lhs = ta.try_expr(*lhs).map_err(crate::codegen::arena_failure)?;
+                let presence_key = match (&lhs.kind, lhs.ty.peel()) {
+                    (TypedExprKind::String(name), _) | (_, Type::StringLiteral(name)) => Some(name),
+                    _ => None,
+                };
                 if matches!(op, BinOp::In)
-                    && let TypedExprKind::String(name) = &ta
-                        .try_expr(*lhs)
-                        .map_err(crate::codegen::arena_failure)?
-                        .kind
+                    && let Some(name) = presence_key
                 {
                     self.extra_field_names.push(name.clone());
                     self.extra_field_names

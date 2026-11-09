@@ -1225,8 +1225,8 @@ impl<'a> Inferer<'a> {
             .typed_ast
             .try_expr(lhs_id)
             .map_err(crate::typechecker::arena_failure)?;
-        let field_name = match &lhs.kind {
-            TypedExprKind::String(s) => s.clone(),
+        let field_name = match (&lhs.kind, lhs.ty.peel()) {
+            (TypedExprKind::String(s), _) | (_, Type::StringLiteral(s)) => s.clone(),
             _ => return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
         };
         let rhs = self
@@ -1245,7 +1245,7 @@ impl<'a> Inferer<'a> {
 
         let (true_ty, false_ty) =
             narrowing::narrow_field_presence(&path_ty, &field_name, &|member, field| {
-                self.member_shape(member)?.get(field).cloned()
+                self.presence_member_field(member, field)
             });
 
         let source_kind = self
@@ -1293,6 +1293,17 @@ impl<'a> Inferer<'a> {
             },
         );
         Ok((true_env, false_env))
+    }
+
+    fn presence_member_field(&self, member: &Type, field: &str) -> Option<crate::ObjectField> {
+        if !matches!(member.peel(), Type::Array(_) | Type::Tuple(_)) {
+            return self.member_shape(member)?.get(field).cloned();
+        }
+        if crate::property_keys::canonical_number(field) {
+            return Some(crate::ObjectField::optional(Type::Unknown));
+        }
+        (self.find_property(member, field).is_some() || self.find_method(member, field).is_some())
+            .then(|| crate::ObjectField::required(Type::Unknown))
     }
 
     fn narrow_present_field(

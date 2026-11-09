@@ -442,7 +442,29 @@ enum BuiltinMember {
 
 /// How the prelude interface `interface` (a mangled name) declares `name`.
 fn builtin_member(interface: &str, name: &str) -> Option<BuiltinMember> {
-    static MEMBERS: LazyLock<HashMap<String, HashMap<String, BuiltinMember>>> =
+    builtin_members().get(interface)?.get(name).copied()
+}
+
+/// Presence checks inspect declarations without reading a property or binding a method.
+pub(super) fn has_builtin_member(
+    caller: &mut Caller<'_, StoreData>,
+    interface: &str,
+    key: &[u16],
+) -> wasmtime::Result<bool> {
+    let Some(members) = builtin_members().get(interface) else {
+        return Ok(false);
+    };
+    for name in members.keys() {
+        crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::SCAN, name.len() as u64)?;
+        if name.encode_utf16().eq(key.iter().copied()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn builtin_members() -> &'static HashMap<String, BTreeMap<String, BuiltinMember>> {
+    static MEMBERS: LazyLock<HashMap<String, BTreeMap<String, BuiltinMember>>> =
         LazyLock::new(|| {
             let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
             let mut members = HashMap::new();
@@ -455,7 +477,7 @@ fn builtin_member(interface: &str, name: &str) -> Option<BuiltinMember> {
                 else {
                     continue;
                 };
-                let entry: &mut HashMap<String, BuiltinMember> = members
+                let entry: &mut BTreeMap<String, BuiltinMember> = members
                     .entry(symbol.mangled_name.as_str().to_owned())
                     .or_default();
                 entry.extend(
@@ -471,7 +493,7 @@ fn builtin_member(interface: &str, name: &str) -> Option<BuiltinMember> {
             }
             members
         });
-    MEMBERS.get(interface)?.get(name).copied()
+    &MEMBERS
 }
 
 fn require_receiver(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<()> {

@@ -279,6 +279,33 @@ pub(super) fn has(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
+    let array = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+        .array
+        .clone();
+    if super::super::collection::is_a(caller, object, &array)? {
+        let len = crate::runtime::array_storage::ArrayStorage::read(caller, object)?.len;
+        fuel::charge(&mut *caller, fuel::SCAN, key.len() as u64)?;
+        if super::integer_key(&key).is_some_and(|index| index < len)
+            || "length".encode_utf16().eq(key.iter().copied())
+        {
+            return Ok(true);
+        }
+        let regex_match = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+            .regex_match_box
+            .clone();
+        if super::super::collection::is_a(caller, object, &regex_match)?
+            && ["index", "input", "groups"]
+                .iter()
+                .any(|name| name.encode_utf16().eq(key.iter().copied()))
+        {
+            return Ok(true);
+        }
+        return super::super::member::has_builtin_member(
+            caller,
+            crate::mangle::prelude("Array").as_str(),
+            &key,
+        );
+    }
     if let Some(property) = find(caller, object, &key, false)? {
         return field_is_present(caller, &property.name, &property.value);
     }
