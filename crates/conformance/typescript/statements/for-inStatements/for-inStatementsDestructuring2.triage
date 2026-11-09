@@ -1,2 +1,0 @@
-line 2 missed: bug SUB-2169 a destructuring `for…in` head is reported as a declaration missing its initializer, where tsc reports TS2491
-line 2 extra: bug SUB-2169 a destructuring `for…in` head is reported as a declaration missing its initializer, where tsc reports TS2491
