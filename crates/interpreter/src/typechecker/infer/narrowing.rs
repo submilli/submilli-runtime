@@ -890,7 +890,7 @@ pub fn narrow_field_presence(
                 .collect();
             (Type::union(has), Type::union(lacks))
         }
-        Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
+        Type::InterfaceRef { .. } | Type::ClassRef { .. } | Type::Array(_) | Type::Tuple(_) => {
             let absent = if lookup(receiver_ty, field).is_some_and(|f| !f.optional) {
                 Type::Error
             } else {
