@@ -33,6 +33,7 @@ pub mod intrinsics;
 #[cfg(test)]
 mod invariant_tests;
 mod nullish;
+mod number_remainder;
 pub mod recursive_validators;
 mod runtime_descriptors;
 mod runtime_values;
@@ -1536,6 +1537,12 @@ fn codegen_inner(
         &mut next_func_idx,
     )?;
 
+    let number_remainder_signature = next_index(&mut next_type_idx)?;
+    types
+        .ty()
+        .function([ValType::F64, ValType::F64], [ValType::F64]);
+    symbols.number_remainder_function = Some(next_index(&mut next_func_idx)?);
+
     // Recursive runtime validators. Allocate signatures and indices, then
     // register each back-edge key so structural checks can call its plan.
     let object_ref_null = ValType::Ref(RefType {
@@ -1674,6 +1681,7 @@ fn codegen_inner(
         );
     }
     functions.function(field_lookup_signature);
+    functions.function(number_remainder_signature);
     for &sig_idx in &runtime_validator_sigs {
         functions.function(sig_idx);
     }
@@ -2079,6 +2087,7 @@ fn codegen_inner(
     }
 
     code.function(&field_lookup::body(&ctx)?);
+    code.function(&number_remainder::body());
     for (validator_id, plan) in recursive_validators.plans.iter().enumerate() {
         let validator = ctx.checking_standalone(&plan.key, || {
             cast_check::emit_runtime_validator_body(
@@ -3632,8 +3641,8 @@ function main(): string {
     #[test]
     fn string_runtime_imported_from_prelude() {
         let bytes = compile("function main(): void { }");
-        // User functions, module start, output shim, and shared field lookup.
-        assert_eq!(function_count(&bytes), 4);
+        // User functions, module start, output shim, field lookup, and numeric remainder.
+        assert_eq!(function_count(&bytes), 5);
         let stable_imports: Vec<_> = imports(&bytes)
             .into_iter()
             .filter(|(_, name)| !is_sub421_temporal_getter_import(name))
@@ -3791,8 +3800,8 @@ function main(): string {
     #[test]
     fn module_with_strings_keeps_runtime_imports() {
         let bytes = compile(r#"let x: string = "hi"; function main(): void { }"#);
-        // User functions, module start, output shim, and shared field lookup.
-        assert_eq!(function_count(&bytes), 4);
+        // User functions, module start, output shim, field lookup, and numeric remainder.
+        assert_eq!(function_count(&bytes), 5);
         let imp = imports(&bytes);
         assert!(imp.contains(&(
             crate::runtime::prelude::MODULE_NAME.to_string(),
@@ -3815,8 +3824,8 @@ function main(): string {
     fn helper_emits_function_body_but_is_not_exported() {
         let bytes = compile("function main(): void { } function helper(): void { }");
         instantiate_against_prelude(&bytes);
-        // User functions, module start, output shim, and shared field lookup.
-        assert_eq!(function_count(&bytes), 5);
+        // User functions, module start, output shim, field lookup, and numeric remainder.
+        assert_eq!(function_count(&bytes), 6);
         assert_eq!(
             export_names(&bytes),
             vec!["main".to_string(), "__main_output".to_string()]
@@ -4737,8 +4746,8 @@ function main(): number { return counter + max_iterations; }"#,
             start_function_idx(&bytes),
             Some(imported_func_count(&bytes))
         );
-        // User functions, module start, output shim, and shared field lookup.
-        assert_eq!(function_count(&bytes), 4);
+        // User functions, module start, output shim, field lookup, and numeric remainder.
+        assert_eq!(function_count(&bytes), 5);
     }
 
     #[test]
@@ -4808,6 +4817,75 @@ function main(): number { return counter + max_iterations; }"#,
             run_main_f64("function main(): number { return 10 % -3; }"),
             1.0
         );
+    }
+
+    #[test]
+    fn number_remainder_helper_matches_native_fmod_for_binary64_operands() {
+        // Exercise raw binary64 inputs directly; language-level fixtures cover
+        // operator lowering and the boxed user-function ABI separately.
+        let mut types = TypeSection::new();
+        types
+            .ty()
+            .function([ValType::F64, ValType::F64], [ValType::F64]);
+        let mut functions = FunctionSection::new();
+        functions.function(0);
+        let mut exports = ExportSection::new();
+        exports.export("remainder", wasm_encoder::ExportKind::Func, 0);
+        let mut code = CodeSection::new();
+        code.function(&super::number_remainder::body());
+        let mut module = Module::new();
+        module.section(&types);
+        module.section(&functions);
+        module.section(&exports);
+        module.section(&code);
+        let (mut store, instance) = link_consumer(&module.finish());
+        let function = instance
+            .get_func(&mut store, "remainder")
+            .expect("remainder exported");
+        let mut state = 0x2201_5eed_0123_4567_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            f64::from_bits(state)
+        };
+        let edges = [
+            0.0,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            f64::from_bits((1 << 52) - 1),
+            1.0,
+            -1.0,
+            3.0,
+            1e17,
+            1e308,
+            1e-308,
+        ];
+        let pairs = edges
+            .into_iter()
+            .flat_map(|left| edges.into_iter().map(move |right| (left, right)))
+            .chain((0..4096).map(|_| (next(), next())));
+        for (left, right) in pairs {
+            let args = [
+                wasmtime::Val::F64(left.to_bits()),
+                wasmtime::Val::F64(right.to_bits()),
+            ];
+            let mut results = [wasmtime::Val::F64(0)];
+            pollster::block_on(function.call_async(&mut store, &args, &mut results))
+                .expect("remainder executes");
+            let actual = results[0].f64().expect("number result");
+            let expected = left % right;
+            if expected.is_nan() {
+                assert!(actual.is_nan(), "{left:?} % {right:?}: {actual:?}");
+            } else {
+                assert_eq!(actual.to_bits(), expected.to_bits(), "{left:?} % {right:?}");
+            }
+        }
     }
 
     #[test]

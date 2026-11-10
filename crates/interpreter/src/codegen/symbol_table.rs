@@ -39,6 +39,7 @@ pub struct ClassGuardLayout {
 #[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
     pub(crate) field_lookup_function: Option<u32>,
+    pub(crate) number_remainder_function: Option<u32>,
     pub(crate) resultless_functions: BTreeSet<u32>,
     /// Declared defaults of a host function's Wasm parameters, by position.
     host_parameter_defaults: BTreeMap<u32, Vec<Option<crate::DefaultValue>>>,
