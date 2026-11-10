@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "d52cfb3c22dc390005ab418a990482352cf4caaefc5992d704d7b474c5d9b2e9"
+  contentHash: "c657ecc2b8b8c61bd529895abf807c220ffe1e0a09b4baab0819a66ca96fe453"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -560,7 +560,6 @@ Result of [`download`] — what was written, where, and the response metadata.
 | `readonly finalUrl: string` | Final URL after any redirects. |
 | `readonly path: string` | The VFS path the file was written to — echoes the `path` argument. |
 | `readonly status: number` | HTTP status code (e.g. `200`). |
-| `toString(): string` | Concise description — `"Download(200, 1024 bytes -> /workspace/file.csv)"`. |
 
 ### `Headers`
 

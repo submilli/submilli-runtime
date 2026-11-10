@@ -3,7 +3,7 @@
   "name": "io.github.submilli/submilli-runtime",
   "title": "Submilli Runtime",
   "description": "Run agent-written TypeScript under Blueprint-defined permissions through a local MCP server.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "repository": {
     "source": "github",
     "url": "https://github.com/submilli/submilli-runtime"
@@ -11,8 +11,8 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/submilli/submilli-runtime:0.6.1",
-      "version": "0.6.1",
+      "identifier": "ghcr.io/submilli/submilli-runtime:0.6.2",
+      "version": "0.6.2",
       "runtimeHint": "docker",
       "runtimeArguments": [
         {

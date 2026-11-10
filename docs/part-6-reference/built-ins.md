@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a52a50226266e726b043140b19fa2a5980ceafa4a0885c552e618e569bfa9932"
+  contentHash: "43b03f068457dd5aaf7e15b9974c6ed3c108908345e2b9debe73782aeff62005"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -294,6 +294,16 @@ Constructor object for `boolean`.
 | --- | --- |
 | `(value?: unknown): boolean` | Convert any value to a boolean by its truthiness: `false`, `0`, `NaN`, `""`, `0n`, `null` and `undefined` are `false`; everything else is `true`. |
 
+## `Capitalize`
+
+### `Capitalize`
+
+Convert first character of string literal type to uppercase.
+
+```typescript
+type Capitalize<S extends string> = intrinsic;
+```
+
 ## `Error`
 
 The built-in error class.
@@ -313,6 +323,36 @@ Options for an error constructor, as in `new Error(message, { cause })`.
 | Member | Description |
 | --- | --- |
 | `cause?: unknown` | The error that led to the new one, stored as its `cause`. |
+
+## `Exclude`
+
+### `Exclude`
+
+Exclude from `T` those types that are assignable to `U`.
+
+```typescript
+type Exclude<T, U> = T extends U ? never : T;
+```
+
+## `Extract`
+
+### `Extract`
+
+Extract from `T` those types that are assignable to `U`.
+
+```typescript
+type Extract<T, U> = T extends U ? T : never;
+```
+
+## `Lowercase`
+
+### `Lowercase`
+
+Convert string literal type to lowercase.
+
+```typescript
+type Lowercase<S extends string> = intrinsic;
+```
 
 ## `Map`
 
@@ -347,11 +387,31 @@ Constructor object for `Map`.
 
 ## `MissingValueError`
 
-A read found no value (`extends Error`): an array or string index out of range, a key a record does not have, or a regex group that did not take part in the match. Check the read where it happens: `r[k] ?? fallback`, `k in r`, or `a.at(i)`.
+A read found no value (`extends Error`): an array or string index out of range, a key a record does not have, or a regex group that did not take part in the match.
 
 | Member | Description |
 | --- | --- |
 | `constructor(message?: string, options?: ErrorOptions)` |  |
+
+## `NoInfer`
+
+### `NoInfer`
+
+Marker for non-inference type position: `T` is not inferred from it.
+
+```typescript
+type NoInfer<T> = intrinsic;
+```
+
+## `NonNullable`
+
+### `NonNullable`
+
+Exclude `null` and `undefined` from `T`.
+
+```typescript
+type NonNullable<T> = T & {};
+```
 
 ## `Number`
 
@@ -384,7 +444,7 @@ Constructor object for `number`.
 | `readonly NEGATIVE_INFINITY: number` | Same value as `-Infinity`. |
 | `readonly NaN: number` | Same value as the global `NaN`. |
 | `readonly POSITIVE_INFINITY: number` | Same value as the global `Infinity`. |
-| `(value?: number \| bigint \| string): number` | Convert a `number`, `string`, `bigint`, or `undefined` to a `number`. |
+| `(value?: number \| bigint \| string \| boolean): number` | Convert a `number`, `boolean`, `string`, `bigint`, or `undefined` to a `number`. |
 | `isFinite(value: unknown): boolean` | Returns `true` when `value` is neither `NaN` nor ±`Infinity`. |
 | `isInteger(value: unknown): boolean` | Returns `true` when `value` is a finite whole number. |
 | `isNaN(value: unknown): boolean` | Returns `true` when `value` is `NaN`. |
@@ -420,6 +480,36 @@ Constructor object for `Object` — the enumeration statics (`keys`/`values`/`en
 | `keys(obj: unknown): string[]` | Returns the object's field names in canonical sorted order (the same order JSON output uses). |
 | `values(obj: unknown): unknown[]` | Returns the object's field values, aligned with `Object.keys` order. |
 
+## `Omit`
+
+### `Omit`
+
+Construct a type with the properties of `T` except for those in type `K`.
+
+```typescript
+type Omit<T, K extends string | number> = Pick<T, Exclude<keyof T, K>>;
+```
+
+## `Parameters`
+
+### `Parameters`
+
+Obtain the parameters of a function type in a tuple.
+
+```typescript
+type Parameters<T extends (...args: never[]) => unknown> = T extends (...args: infer P) => unknown ? P : never;
+```
+
+## `Partial`
+
+### `Partial`
+
+Make all properties in `T` optional.
+
+```typescript
+type Partial<T> = { [P in keyof T]?: T[P] };
+```
+
 ## `PermissionDeniedError`
 
 The built-in permission-denial class (`extends Error`, `name` = `"PermissionDeniedError"`).
@@ -430,6 +520,16 @@ The built-in permission-denial class (`extends Error`, `name` = `"PermissionDeni
 | `capability: string` | The denied capability name (e.g. `"fs.read"`, `"http.get"`). |
 | `reason: string` | The policy-supplied denial reason. |
 | `constructor(message: string, caller: string, capability: string, reason: string)` |  |
+
+## `Pick`
+
+### `Pick`
+
+From `T`, pick a set of properties whose keys are in the union `K`.
+
+```typescript
+type Pick<T, K extends keyof T> = { [P in K]: T[P] };
+```
 
 ## `QuotaExceededError`
 
@@ -446,6 +546,16 @@ The built-in range-error class (`extends Error`, `name` = `"RangeError"`).
 | Member | Description |
 | --- | --- |
 | `constructor(message?: string, options?: ErrorOptions)` |  |
+
+## `Readonly`
+
+### `Readonly`
+
+Make all properties in `T` readonly.
+
+```typescript
+type Readonly<T> = { readonly [P in keyof T]: T[P] };
+```
 
 ## `ReadonlyMap`
 
@@ -471,10 +581,10 @@ type ReadonlySet<T> = ReadonlySet<T>;
 
 ### `Record`
 
-Record<K, V> accepts string keys.
+Record<K, V> accepts string, number, enum, literal-union, and template-pattern keys.
 
 ```typescript
-type Record<K extends string, V> = { [P in K]: V };
+type Record<K extends string | number, V> = { [P in K]: V };
 ```
 
 ## `ReferenceError`
@@ -513,8 +623,29 @@ Constructor object for `RegExp`.
 
 | Member | Description |
 | --- | --- |
+| `(source: string \| RegExp, flags?: string): RegExp` | Compile a pattern as `new RegExp` does. |
 | `escape(string: string): string` | Returns `string` with every character that has a meaning in a pattern escaped, so `new RegExp(RegExp.escape(s))` matches `s` literally. |
-| `new (source: string, flags?: string): RegExp` | Construct a new `RegExp` from `source` and `flags`. |
+| `new (source: string \| RegExp, flags?: string): RegExp` | Construct a fresh `RegExp` from a pattern string or an existing regex. |
+
+## `Required`
+
+### `Required`
+
+Make all properties in `T` required.
+
+```typescript
+type Required<T> = { [P in keyof T]-?: T[P] };
+```
+
+## `ReturnType`
+
+### `ReturnType`
+
+Obtain the return type of a function type.
+
+```typescript
+type ReturnType<T extends (...args: never[]) => unknown> = T extends (...args: never[]) => infer R ? R : never;
+```
 
 ## `Set`
 
@@ -608,7 +739,7 @@ Constructor object for `string`.
 
 | Member | Description |
 | --- | --- |
-| `(value?: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `""`. |
+| `(value?: unknown): string` | Convert any value to its string representation: `"null"` and `"undefined"` for those values, otherwise the value's `toString()` method. |
 | `fromCharCode(...codes: number[]): string` | Builds a string from UTF-16 code units — one unit per argument. |
 | `fromCodePoint(...codePoints: number[]): string` | Builds a string from Unicode code points; astral code points (> U+FFFF) encode as surrogate pairs. |
 
@@ -748,12 +879,32 @@ Constructor object for `Uint8Array`.
 | `new (values?: number \| number[]): Uint8Array` | Build a new `Uint8Array`. |
 | `of(...values: number[]): Uint8Array` | Build a `Uint8Array` from the supplied byte values — `Uint8Array.of(1, 2, 3)`. |
 
+## `Uncapitalize`
+
+### `Uncapitalize`
+
+Convert first character of string literal type to lowercase.
+
+```typescript
+type Uncapitalize<S extends string> = intrinsic;
+```
+
+## `Uppercase`
+
+### `Uppercase`
+
+Convert string literal type to uppercase.
+
+```typescript
+type Uppercase<S extends string> = intrinsic;
+```
+
 ## `JSON`
 
 | Function | Capability | Description |
 | --- | --- | --- |
 | `parse(text: string): unknown` |  | Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. |
-| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string` |  | Serialize a value to a JSON string. An `undefined` or function value has no JSON text: the call throws `MissingValueError` where the result is read as `string`, and is `undefined` at a check or where the type names `undefined` (not `unknown`). |
+| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string` |  | Serialize a value to a JSON string. |
 
 ## `Math`
 
@@ -838,10 +989,10 @@ A span of time, expressed as separate calendar (`years`/`months`/`weeks`/`days`)
 | `readonly weeks: number` | Calendar-weeks slot. |
 | `readonly years: number` | Calendar-years slot. |
 | `abs(): Temporal.Duration` | Returns a Duration with every slot's absolute value (a non-negative Duration). |
-| `add(d: Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Returns `this + d` as a new Duration. |
+| `add(d: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Returns `this + d` as a new Duration. |
 | `negated(): Temporal.Duration` | Returns a Duration with every field's sign flipped. |
 | `round(roundTo: string \| Temporal.DurationRoundOptions): Temporal.Duration` | Rounds this Duration — `round("hour")` (smallestUnit shorthand) or `round({ smallestUnit, largestUnit, roundingMode, roundingIncrement, relativeTo })`. |
-| `subtract(d: Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Returns `this - d` as a new Duration. |
+| `subtract(d: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Returns `this - d` as a new Duration. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toString(options?: Temporal.DurationToStringOptions): string` | Returns the ISO 8601 duration form (e.g. `"PT1H30M"`), optionally rounded/formatted. |
 | `total(totalOf: string \| Temporal.DurationTotalOptions): number` | Total length of this Duration in a unit — `total("hours")` or `total({ unit, relativeTo })`. |
@@ -853,7 +1004,7 @@ Options for `Temporal.Duration.compare(...)`.
 
 | Member | Description |
 | --- | --- |
-| `readonly relativeTo?: Temporal.PlainDate \| Temporal.ZonedDateTime` | Anchor (PlainDate or ZonedDateTime) — required to compare calendar durations. |
+| `readonly relativeTo?: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime` | Anchor (PlainDate or ZonedDateTime) — required to compare calendar durations. |
 
 ### `Temporal.DurationConstructor`
 
@@ -861,7 +1012,7 @@ Constructor object for `Temporal.Duration`.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.Duration \| Temporal.DurationFields, b: Temporal.Duration \| Temporal.DurationFields, options?: Temporal.DurationCompareOptions): number` | Compares two Durations: `-1`, `0`, or `1`. |
+| `compare(a: string \| Temporal.Duration \| Temporal.DurationFields, b: string \| Temporal.Duration \| Temporal.DurationFields, options?: Temporal.DurationCompareOptions): number` | Compares two Durations: `-1`, `0`, or `1`. |
 | `from(item: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Build a Duration from an ISO 8601 string (e.g. `"PT1H30M"`), an existing Duration, or a fields bag (`{ hours: 1 }`). |
 | `new (fields: Temporal.DurationFields): Temporal.Duration` | Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). |
 
@@ -889,7 +1040,7 @@ Options for `Temporal.Duration.round(...)`.
 | Member | Description |
 | --- | --- |
 | `readonly largestUnit?: string` | Largest unit to balance into (e.g. `"hour"`). |
-| `readonly relativeTo?: Temporal.PlainDate \| Temporal.ZonedDateTime` | Anchor (PlainDate or ZonedDateTime) — required to round calendar units. |
+| `readonly relativeTo?: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime` | Anchor (PlainDate or ZonedDateTime) — required to round calendar units. |
 | `readonly roundingIncrement?: number` | Round to a multiple of this increment (default 1). |
 | `readonly roundingMode?: string` | `"halfExpand"` (default), `"ceil"`, `"floor"`, `"trunc"`, `"halfEven"`, … |
 | `readonly smallestUnit?: string` | Smallest unit to keep (e.g. `"second"`). |
@@ -910,7 +1061,7 @@ Options for `Temporal.Duration.prototype.total(...)`.
 
 | Member | Description |
 | --- | --- |
-| `readonly relativeTo?: Temporal.PlainDate \| Temporal.ZonedDateTime` | Anchor (PlainDate or ZonedDateTime) — required for calendar units. |
+| `readonly relativeTo?: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime` | Anchor (PlainDate or ZonedDateTime) — required for calendar units. |
 | `readonly unit: string` | The unit to total into (e.g. `"hours"`, `"days"`). |
 
 ### `Temporal.Instant`
@@ -921,15 +1072,15 @@ A point in time, to nanosecond precision.
 | --- | --- |
 | `readonly epochMilliseconds: number` | Milliseconds since the Unix epoch (1970-01-01T00:00:00Z). |
 | `readonly epochNanoseconds: bigint` | Nanoseconds since the Unix epoch as a `bigint` (full precision). |
-| `add(d: Temporal.Duration \| Temporal.DurationFields): Temporal.Instant` | Returns a new Instant `d` later. |
-| `equals(other: Temporal.Instant): boolean` | `true` if `this` and `other` refer to the same instant. |
+| `add(d: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Instant` | Returns a new Instant `d` later. |
+| `equals(other: string \| Temporal.Instant \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` refer to the same instant. |
 | `round(roundTo: string \| Temporal.InstantRoundOptions): Temporal.Instant` | Rounds this Instant to the requested time unit and increment. |
-| `since(other: Temporal.Instant, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the Duration from `other` to `this` (positive if `this` is later). |
-| `subtract(d: Temporal.Duration \| Temporal.DurationFields): Temporal.Instant` | Returns a new Instant `d` earlier. |
+| `since(other: string \| Temporal.Instant \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the Duration from `other` to `this` (positive if `this` is later). |
+| `subtract(d: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Instant` | Returns a new Instant `d` earlier. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toString(): string` | Returns the ISO 8601 representation (e.g. `"2024-03-09T15:30:45.123Z"`). |
-| `toZonedDateTimeISO(tz: string): Temporal.ZonedDateTime` | Project this Instant onto the IANA time zone `tz`. |
-| `until(other: Temporal.Instant, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the Duration from `this` to `other` (positive if `other` is later). |
+| `toZonedDateTimeISO(tz: string \| Temporal.ZonedDateTime): Temporal.ZonedDateTime` | Project this Instant onto the IANA time zone `tz`. |
+| `until(other: string \| Temporal.Instant \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the Duration from `this` to `other` (positive if `other` is later). |
 
 ### `Temporal.InstantConstructor`
 
@@ -937,8 +1088,8 @@ Constructor object for `Temporal.Instant`.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.Instant, b: Temporal.Instant): number` | Orders two Instants: -1, 0, or 1. |
-| `from(iso: string): Temporal.Instant` | Parse an ISO 8601 instant string (e.g. `"2024-03-09T15:30:45.123Z"`). |
+| `compare(a: string \| Temporal.Instant \| Temporal.ZonedDateTime, b: string \| Temporal.Instant \| Temporal.ZonedDateTime): number` | Orders two Instants: -1, 0, or 1. |
+| `from(item: string \| Temporal.Instant \| Temporal.ZonedDateTime): Temporal.Instant` | Parse an ISO 8601 instant string (e.g. `"2024-03-09T15:30:45.123Z"`). |
 | `fromEpochMilliseconds(ms: number): Temporal.Instant` | Construct an Instant from milliseconds since the Unix epoch. |
 | `fromEpochNanoseconds(ns: bigint): Temporal.Instant` | Construct an Instant from nanoseconds since the Unix epoch (full precision). |
 
@@ -971,17 +1122,17 @@ A calendar date (year, month, day) with no time or time zone.
 | `readonly weekOfYear: number` | ISO week number. |
 | `readonly year: number` | Calendar year. |
 | `readonly yearOfWeek: number` | ISO week-numbering year. |
-| `add(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDate` | Returns a new value with `duration` added. |
-| `equals(other: Temporal.PlainDate): boolean` | `true` if `this` and `other` denote the same value. |
-| `since(other: Temporal.PlainDate, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
-| `subtract(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDate` | Returns a new value with `duration` subtracted. |
+| `add(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDate` | Returns a new value with `duration` added. |
+| `equals(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` denote the same value. |
+| `since(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
+| `subtract(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDate` | Returns a new value with `duration` subtracted. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
-| `toPlainDateTime(time?: Temporal.PlainTime): Temporal.PlainDateTime` | Combines this date with `time` (default midnight) into a `PlainDateTime`. |
+| `toPlainDateTime(time?: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime): Temporal.PlainDateTime` | Combines this date with `time` (default midnight) into a `PlainDateTime`. |
 | `toPlainMonthDay(): Temporal.PlainMonthDay` | The month-and-day part as a `PlainMonthDay`. |
 | `toPlainYearMonth(): Temporal.PlainYearMonth` | The year-and-month part as a `PlainYearMonth`. |
 | `toString(): string` | The ISO 8601 string form. |
-| `toZonedDateTime(timeZoneOrOptions: string \| Temporal.PlainDateToZonedOptions): Temporal.ZonedDateTime` | Interprets this date in a time zone — pass a zone id (midnight) or `{ timeZone, plainTime? |
-| `until(other: Temporal.PlainDate, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
+| `toZonedDateTime(timeZoneOrOptions: string \| Temporal.ZonedDateTime \| Temporal.PlainDateToZonedOptions): Temporal.ZonedDateTime` | Interprets this date in a time zone — pass a zone id (midnight) or `{ timeZone, plainTime? |
+| `until(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
 | `with(fields: Temporal.PlainDateFields): Temporal.PlainDate` | Returns a copy with the listed fields replaced; unlisted fields are kept. |
 
 ### `Temporal.PlainDateConstructor`
@@ -990,8 +1141,8 @@ Constructor object, accessed via the `Temporal` binding.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.PlainDate, b: Temporal.PlainDate): number` | Orders two values: -1, 0, or 1. |
-| `from(iso: string): Temporal.PlainDate` | Parse an ISO 8601 string into this Plain type. |
+| `compare(a: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, b: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
+| `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainDate` | Convert a Temporal value, ISO string, or ISO fields bag. |
 
 ### `Temporal.PlainDateFields`
 
@@ -1028,18 +1179,18 @@ A calendar date and wall-clock time with no time zone.
 | `readonly weekOfYear: number` | ISO week number. |
 | `readonly year: number` | Calendar year. |
 | `readonly yearOfWeek: number` | ISO week-numbering year. |
-| `add(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDateTime` | Returns a new value with `duration` added. |
-| `equals(other: Temporal.PlainDateTime): boolean` | `true` if `this` and `other` denote the same value. |
-| `since(other: Temporal.PlainDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
-| `subtract(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDateTime` | Returns a new value with `duration` subtracted. |
+| `add(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDateTime` | Returns a new value with `duration` added. |
+| `equals(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` denote the same value. |
+| `since(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
+| `subtract(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainDateTime` | Returns a new value with `duration` subtracted. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toPlainDate(): Temporal.PlainDate` | The calendar-date part as a `PlainDate`. |
 | `toPlainMonthDay(): Temporal.PlainMonthDay` | The month-and-day part as a `PlainMonthDay`. |
 | `toPlainTime(): Temporal.PlainTime` | The wall-clock-time part as a `PlainTime`. |
 | `toPlainYearMonth(): Temporal.PlainYearMonth` | The year-and-month part as a `PlainYearMonth`. |
 | `toString(): string` | The ISO 8601 string form. |
-| `toZonedDateTime(timeZone: string): Temporal.ZonedDateTime` | Interprets this wall clock in `timeZone`, resolving DST gaps with `compatible` disambiguation. |
-| `until(other: Temporal.PlainDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
+| `toZonedDateTime(timeZone: string \| Temporal.ZonedDateTime): Temporal.ZonedDateTime` | Interprets this wall clock in `timeZone`, resolving DST gaps with `compatible` disambiguation. |
+| `until(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
 | `with(fields: Temporal.PlainDateTimeFields): Temporal.PlainDateTime` | Returns a copy with the listed fields replaced; unlisted fields are kept. |
 
 ### `Temporal.PlainDateTimeConstructor`
@@ -1048,8 +1199,8 @@ Constructor object, accessed via the `Temporal` binding.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.PlainDateTime, b: Temporal.PlainDateTime): number` | Orders two values: -1, 0, or 1. |
-| `from(iso: string): Temporal.PlainDateTime` | Parse an ISO 8601 string into this Plain type. |
+| `compare(a: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, b: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
+| `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainDateTime` | Convert a Temporal value, ISO string, or ISO fields bag. |
 
 ### `Temporal.PlainDateTimeFields`
 
@@ -1073,8 +1224,8 @@ Options for `PlainDate.toZonedDateTime`.
 
 | Member | Description |
 | --- | --- |
-| `readonly plainTime?: Temporal.PlainTime` | Wall-clock time; defaults to midnight when omitted. |
-| `readonly timeZone: string` | IANA time-zone id (e.g. `"America/New_York"`). |
+| `readonly plainTime?: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime` | Wall-clock time; defaults to midnight when omitted. |
+| `readonly timeZone: string \| Temporal.ZonedDateTime` | IANA time-zone id (e.g. `"America/New_York"`). |
 
 ### `Temporal.PlainMonthDay`
 
@@ -1085,7 +1236,7 @@ A calendar month and day with no year or time zone (e.g. `06-07`).
 | `readonly day: number` | Day of the month (1–31). |
 | `readonly month: number` | Calendar month (1–12). |
 | `readonly monthCode: string` | ISO month code, e.g. `"M06"`. |
-| `equals(other: Temporal.PlainMonthDay): boolean` | `true` if `this` and `other` denote the same value. |
+| `equals(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainMonthDay \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` denote the same value. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toPlainDate(fields: Temporal.PlainMonthDayToDateFields): Temporal.PlainDate` | Adds a `year` to make a `PlainDate`; a Feb-29 month-day constrains to Feb-28 in a non-leap year. |
 | `toString(): string` | The ISO 8601 string form. |
@@ -1097,7 +1248,7 @@ Constructor object, accessed via the `Temporal` binding.
 
 | Member | Description |
 | --- | --- |
-| `from(iso: string): Temporal.PlainMonthDay` | Parse an ISO 8601 string into this Plain type. |
+| `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainMonthDay \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainMonthDay` | Convert a Temporal value, ISO string, or ISO fields bag. |
 
 ### `Temporal.PlainMonthDayFields`
 
@@ -1128,13 +1279,13 @@ A wall-clock time (hour, minute, second, nanosecond) with no date or time zone.
 | `readonly minute: number` | Minute of the hour (0–59). |
 | `readonly nanosecond: number` | Nanoseconds within the second (0–999_999_999). |
 | `readonly second: number` | Second of the minute (0–59). |
-| `add(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainTime` | Returns a new value with `duration` added. |
-| `equals(other: Temporal.PlainTime): boolean` | `true` if `this` and `other` denote the same value. |
-| `since(other: Temporal.PlainTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
-| `subtract(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainTime` | Returns a new value with `duration` subtracted. |
+| `add(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainTime` | Returns a new value with `duration` added. |
+| `equals(other: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` denote the same value. |
+| `since(other: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
+| `subtract(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainTime` | Returns a new value with `duration` subtracted. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toString(): string` | The ISO 8601 string form. |
-| `until(other: Temporal.PlainTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
+| `until(other: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
 | `with(fields: Temporal.PlainTimeFields): Temporal.PlainTime` | Returns a copy with the listed fields replaced; unlisted fields are kept. |
 
 ### `Temporal.PlainTimeConstructor`
@@ -1143,8 +1294,8 @@ Constructor object, accessed via the `Temporal` binding.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.PlainTime, b: Temporal.PlainTime): number` | Orders two values: -1, 0, or 1. |
-| `from(iso: string): Temporal.PlainTime` | Parse an ISO 8601 string into this Plain type. |
+| `compare(a: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime, b: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
+| `from(item: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainTime` | Convert a Temporal value, ISO string, or ISO fields bag. |
 
 ### `Temporal.PlainTimeFields`
 
@@ -1172,14 +1323,14 @@ A calendar year and month with no day or time zone (e.g. `2026-06`).
 | `readonly monthCode: string` | ISO month code, e.g. `"M06"`. |
 | `readonly monthsInYear: number` | Months in this year. |
 | `readonly year: number` | Calendar year. |
-| `add(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainYearMonth` | Returns a new value with `duration` added. |
-| `equals(other: Temporal.PlainYearMonth): boolean` | `true` if `this` and `other` denote the same value. |
-| `since(other: Temporal.PlainYearMonth, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
-| `subtract(duration: Temporal.Duration \| Temporal.DurationFields): Temporal.PlainYearMonth` | Returns a new value with `duration` subtracted. |
+| `add(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainYearMonth` | Returns a new value with `duration` added. |
+| `equals(other: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` denote the same value. |
+| `since(other: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `other` since which `this` occurs. |
+| `subtract(duration: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.PlainYearMonth` | Returns a new value with `duration` subtracted. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toPlainDate(fields: Temporal.PlainYearMonthToDateFields): Temporal.PlainDate` | Adds a `day` to make a `PlainDate`; the day constrains to the month length. |
 | `toString(): string` | The ISO 8601 string form. |
-| `until(other: Temporal.PlainYearMonth, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
+| `until(other: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | The `Duration` from `this` until `other`. |
 | `with(fields: Temporal.PlainYearMonthFields): Temporal.PlainYearMonth` | Returns a copy with the listed fields replaced; unlisted fields are kept. |
 
 ### `Temporal.PlainYearMonthConstructor`
@@ -1188,8 +1339,8 @@ Constructor object, accessed via the `Temporal` binding.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.PlainYearMonth, b: Temporal.PlainYearMonth): number` | Orders two values: -1, 0, or 1. |
-| `from(iso: string): Temporal.PlainYearMonth` | Parse an ISO 8601 string into this Plain type. |
+| `compare(a: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime, b: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
+| `from(item: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainYearMonth` | Convert a Temporal value, ISO string, or ISO fields bag. |
 
 ### `Temporal.PlainYearMonthFields`
 
@@ -1250,21 +1401,21 @@ An Instant paired with an IANA time zone.
 | `readonly weekOfYear: number` | ISO week number. |
 | `readonly year: number` | Calendar year in this time zone. |
 | `readonly yearOfWeek: number` | ISO week-numbering year. |
-| `add(d: Temporal.Duration \| Temporal.DurationFields): Temporal.ZonedDateTime` | Returns a new ZonedDateTime `d` later. |
-| `equals(other: Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` have the same instant **and** the same time-zone id. |
+| `add(d: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.ZonedDateTime` | Returns a new ZonedDateTime `d` later. |
+| `equals(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime): boolean` | `true` if `this` and `other` have the same instant **and** the same time-zone id. |
 | `round(roundTo: string \| Temporal.ZonedDateTimeRoundOptions): Temporal.ZonedDateTime` | Rounds this ZonedDateTime in its time zone, from day through nanosecond precision. |
-| `since(other: Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the calendar-aware Duration from `other` to `this`. |
+| `since(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the calendar-aware Duration from `other` to `this`. |
 | `startOfDay(): Temporal.ZonedDateTime` | Returns the first valid instant on this date in the current time zone. |
-| `subtract(d: Temporal.Duration \| Temporal.DurationFields): Temporal.ZonedDateTime` | Returns a new ZonedDateTime `d` earlier. |
+| `subtract(d: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.ZonedDateTime` | Returns a new ZonedDateTime `d` earlier. |
 | `toInstant(): Temporal.Instant` | Drops the time-zone, returns the underlying Instant. |
 | `toJSON(): string` | Returns the ISO string form used by JSON.stringify. |
 | `toPlainDate(): Temporal.PlainDate` | The wall-clock calendar date in this time zone, as a tz-free `PlainDate`. |
 | `toPlainDateTime(): Temporal.PlainDateTime` | The wall-clock date and time in this time zone, as a tz-free `PlainDateTime`. |
 | `toPlainTime(): Temporal.PlainTime` | The wall-clock time in this time zone, as a tz-free `PlainTime` (with nanosecond precision). |
 | `toString(): string` | Returns the ISO 8601 form with bracketed tz (e.g. `"2024-03-09T12:00:00+00:00[UTC]"`). |
-| `until(other: Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the calendar-aware Duration from `this` to `other`. |
+| `until(other: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime, options?: Temporal.SinceUntilOptions): Temporal.Duration` | Returns the calendar-aware Duration from `this` to `other`. |
 | `with(fields: Temporal.ZonedDateTimeFields): Temporal.ZonedDateTime` | Returns a copy with the listed wall-clock fields replaced (keeping the time zone); unlisted fields are kept. |
-| `withTimeZone(tz: string): Temporal.ZonedDateTime` | Same instant, different IANA time zone. |
+| `withTimeZone(tz: string \| Temporal.ZonedDateTime): Temporal.ZonedDateTime` | Same instant, different IANA time zone. |
 
 ### `Temporal.ZonedDateTimeConstructor`
 
@@ -1272,8 +1423,8 @@ Constructor object for `Temporal.ZonedDateTime`.
 
 | Member | Description |
 | --- | --- |
-| `compare(a: Temporal.ZonedDateTime, b: Temporal.ZonedDateTime): number` | Orders two ZonedDateTimes by their exact instant: -1, 0, or 1. |
-| `from(iso: string): Temporal.ZonedDateTime` | Parse an ISO 8601 zoned datetime with bracketed tz (e.g. `"2026-01-15T10:00:00-05:00[America/New_York]"`). |
+| `compare(a: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime, b: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime): number` | Orders two ZonedDateTimes by their exact instant: -1, 0, or 1. |
+| `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.ZonedDateTime` | Parse an ISO 8601 zoned datetime with bracketed tz (e.g. `"2026-01-15T10:00:00-05:00[America/New_York]"`). |
 
 ### `Temporal.ZonedDateTimeFields`
 
@@ -1304,11 +1455,11 @@ Options for `Temporal.ZonedDateTime.round(...)`.
 | Function | Capability | Description |
 | --- | --- | --- |
 | `instant(): Temporal.Instant` |  | The current wall-clock instant. |
-| `plainDateISO(tz?: string): Temporal.PlainDate` |  | Today's date in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
-| `plainDateTimeISO(tz?: string): Temporal.PlainDateTime` |  | The current date and wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
-| `plainTimeISO(tz?: string): Temporal.PlainTime` |  | The current wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
+| `plainDateISO(tz?: string \| Temporal.ZonedDateTime): Temporal.PlainDate` |  | Today's date in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
+| `plainDateTimeISO(tz?: string \| Temporal.ZonedDateTime): Temporal.PlainDateTime` |  | The current date and wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
+| `plainTimeISO(tz?: string \| Temporal.ZonedDateTime): Temporal.PlainTime` |  | The current wall-clock time in `tz`, or the system (local) zone if `tz` is omitted / undefined. |
 | `timeZoneId(): string` |  | The system IANA time-zone id (or `"UTC"` if the system zone can't be detected). |
-| `zonedDateTime(tz?: string): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is undefined. |
-| `zonedDateTimeISO(tz?: string): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is omitted / undefined. |
+| `zonedDateTime(tz?: string \| Temporal.ZonedDateTime): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is undefined. |
+| `zonedDateTimeISO(tz?: string \| Temporal.ZonedDateTime): Temporal.ZonedDateTime` |  | The current ZonedDateTime in `tz`, or the system zone if `tz` is omitted / undefined. |
 
 <!-- /generated:builtins -->
