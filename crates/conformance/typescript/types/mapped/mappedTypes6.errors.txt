@@ -1,0 +1,10 @@
+mappedTypes6.ts(27,5): error TS2322: Type 'T' is not assignable to type 'Required<T>'.
+mappedTypes6.ts(28,5): error TS2322: Type 'Partial<T>' is not assignable to type 'Required<T>'.
+mappedTypes6.ts(31,5): error TS2322: Type 'Partial<T>' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'Partial<T>'.
+mappedTypes6.ts(96,1): error TS2741: Property 'b' is missing in type '{ a: number; }' but required in type 'Foo'.
+mappedTypes6.ts(108,1): error TS2739: Type '{ a: number; }' is missing the following properties from type 'Required<Foo>': b, c, d
+mappedTypes6.ts(109,1): error TS2739: Type '{ a: number; b: number; }' is missing the following properties from type 'Required<Foo>': c, d
+mappedTypes6.ts(110,1): error TS2741: Property 'd' is missing in type '{ a: number; b: number; c: number; }' but required in type 'Required<Foo>'.
+mappedTypes6.ts(120,4): error TS2540: Cannot assign to 'b' because it is a read-only property.
+mappedTypes6.ts(123,4): error TS2540: Cannot assign to 'a' because it is a read-only property.
+mappedTypes6.ts(124,4): error TS2540: Cannot assign to 'b' because it is a read-only property.

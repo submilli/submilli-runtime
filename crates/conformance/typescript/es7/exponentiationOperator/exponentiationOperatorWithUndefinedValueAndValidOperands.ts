@@ -11,11 +11,11 @@ enum E {
 let b: number = null as unknown as (number);
 
 // operator *
-/*pruned*/;         
+/*pruned*/;              
 let rk2 = undefined ** b;
 let rk3 = undefined ** 1;
 let rk4 = undefined ** E.a;
-/*pruned*/;         
+/*pruned*/;              
 let rk6 = b ** undefined;
 let rk7 = 0 ** undefined;
 let rk8 = E.b ** undefined;

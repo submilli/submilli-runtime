@@ -24,14 +24,48 @@ let b: number = null as unknown as (number);
 >null as unknown : unknown
 >                : ^^^^^^^
 
-/*pruned*/;
+let c: E = null as unknown as (E);
+>c : E
+>  : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 // operator **
 /*pruned*/;
+let r2 = c ** b;
+>r2 : number
+>   : ^^^^^^
+>c ** b : number
+>       : ^^^^^^
+>c : E
+>  : ^
+>b : number
+>  : ^^^^^^
+
+let r3 = c ** c;
+>r3 : number
+>   : ^^^^^^
+>c ** c : number
+>       : ^^^^^^
+>c : E
+>  : ^
+>c : E
+>  : ^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let r5 = b ** c;
+>r5 : number
+>   : ^^^^^^
+>b ** c : number
+>       : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : E
+>  : ^
+
 /*pruned*/;
 let r7 = E.a ** b;
 >r7 : number

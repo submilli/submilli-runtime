@@ -203,6 +203,7 @@ pub fn prelude_package_declaration() -> PackageDeclaration {
     super::iterator::declare_types(&mut defs);
     super::error::declare_types(&mut defs);
     super::temporal::shared::declare_types(&mut defs);
+    super::utility_types::declare_types(&mut defs);
 
     // namespace bindings.
 
@@ -339,23 +340,35 @@ mod tests {
                 "BigIntConstructor",
                 "Boolean",
                 "BooleanConstructor",
+                "Capitalize",
                 "Console",
                 "Error",
                 "ErrorOptions",
+                "Exclude",
+                "Extract",
                 "Iterable",
                 "Iterator",
                 "IteratorResult",
                 "IteratorReturnResult",
                 "IteratorYieldResult",
+                "Lowercase",
                 "Map",
                 "MapConstructor",
+                "MissingValueError",
+                "NoInfer",
+                "NonNullable",
                 "Number",
                 "NumberConstructor",
                 "Object",
                 "ObjectConstructor",
+                "Omit",
+                "Parameters",
+                "Partial",
                 "PermissionDeniedError",
+                "Pick",
                 "QuotaExceededError",
                 "RangeError",
+                "Readonly",
                 "ReadonlyMap",
                 "ReadonlySet",
                 "ReferenceError",
@@ -363,6 +376,8 @@ mod tests {
                 "RegExpConstructor",
                 "RegExpExecArray",
                 "RegExpMatchArray",
+                "Required",
+                "ReturnType",
                 "Set",
                 "SetConstructor",
                 "String",
@@ -410,12 +425,21 @@ mod tests {
                 "URIError",
                 "Uint8Array",
                 "Uint8ArrayConstructor",
+                "Uncapitalize",
+                "Uppercase",
             ]
         );
         for name in &names {
-            // The `IteratorResult` family and the readonly collection views
-            // are `TypeKind::Alias`, not `Interface`. Skip them here — the
-            // kind invariant only applies to the interface declarations.
+            // The `IteratorResult` family, the readonly collection views and
+            // the utility types are `TypeKind::Alias`, not `Interface`. Skip
+            // them here — the kind invariant only applies to the interface
+            // declarations.
+            if crate::typechecker::infer::utility_types::utility(&crate::mangle::prelude(name))
+                .is_some()
+            {
+                assert!(matches!(&defs.types[*name].kind, TypeKind::Alias { .. }));
+                continue;
+            }
             if matches!(
                 *name,
                 "IteratorResult"
@@ -433,6 +457,7 @@ mod tests {
                 "Error"
                     | "QuotaExceededError"
                     | "TimeoutError"
+                    | "MissingValueError"
                     | "RangeError"
                     | "ReferenceError"
                     | "TypeError"

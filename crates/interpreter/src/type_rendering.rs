@@ -229,6 +229,30 @@ fn write_node<'a>(
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
         Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(display_type_name(name)),
+        Type::KeyOf(inner) => {
+            let parens = matches!(
+                inner.as_ref(),
+                Type::Union(_) | Type::Function { .. } | Type::Refined { .. }
+            );
+            out.push(if parens { "keyof (" } else { "keyof " })?;
+            if parens {
+                push(frames, Frame::Text(")"))?;
+            }
+            push(frames, Frame::Type(inner, child))
+        }
+        Type::IndexedAccess { object, index } => {
+            let parens = matches!(
+                object.as_ref(),
+                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } | Type::KeyOf(_)
+            );
+            if parens {
+                out.push("(")?;
+            }
+            push(frames, Frame::Text("]"))?;
+            push(frames, Frame::Type(index, child))?;
+            push(frames, Frame::Text(if parens { ")[" } else { "[" }))?;
+            push(frames, Frame::Type(object, child))
+        }
         Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
             out.push(display_type_name(name))?;
             match ty.enum_member_name() {
@@ -289,7 +313,9 @@ fn write_node<'a>(
             let parens = match inner.as_ref() {
                 // `ReadonlyMap<K, V>[]` needs no parentheses.
                 Type::Readonly(element) => !matches!(element.as_ref(), Type::InterfaceRef { .. }),
-                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } => true,
+                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } | Type::KeyOf(_) => {
+                    true
+                }
                 _ => false,
             };
             if parens {

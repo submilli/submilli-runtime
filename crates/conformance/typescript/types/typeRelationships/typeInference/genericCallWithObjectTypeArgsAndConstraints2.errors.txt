@@ -1,0 +1,5 @@
+genericCallWithObjectTypeArgsAndConstraints2.ts(6,5): error TS2564: Property 'x' has no initializer and is not definitely assigned in the constructor.
+genericCallWithObjectTypeArgsAndConstraints2.ts(9,5): error TS2564: Property 'y' has no initializer and is not definitely assigned in the constructor.
+genericCallWithObjectTypeArgsAndConstraints2.ts(32,14): error TS2345: Argument of type 'null' is not assignable to parameter of type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'null'.
+genericCallWithObjectTypeArgsAndConstraints2.ts(37,13): error TS2345: Argument of type 'null' is not assignable to parameter of type 'Base'.
+genericCallWithObjectTypeArgsAndConstraints2.ts(38,13): error TS2345: Argument of type 'null' is not assignable to parameter of type 'Base'.

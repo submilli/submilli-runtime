@@ -290,6 +290,7 @@ impl Inferer<'_> {
                     && (!numeric_key || domain_accepts_numbers(&index.key))
                     && crate::property_keys::matches_name(&index.key, &key, &self.type_limits)
                 {
+                    self.note_missable_read();
                     values.push(index.read_ty());
                 } else {
                     self.error(span, format!("no field `{key}` on type `{receiver}`"));
@@ -309,6 +310,7 @@ impl Inferer<'_> {
                 );
                 return Type::Error;
             }
+            self.note_missable_read();
             return index.read_ty();
         }
         self.error_with_help(
@@ -618,7 +620,7 @@ impl Inferer<'_> {
             if let Some(hint) = &hint
                 && !assignable(&value_ty, hint, self.resolver())
             {
-                self.error(span, super::diagnostics::mismatch_message(&hint, &value_ty));
+                self.error_type_mismatch(span, hint, &value_ty, vec![]);
             }
             // A fresh literal widens as it would without a hint.
             let asks_for_type = hint
@@ -812,7 +814,9 @@ impl Inferer<'_> {
                 .kind
                 .clone()
             {
-                self.bind_interface(name, generics, members, extends, doc)?;
+                self.with_binding(name.name.clone(), |this| {
+                    this.bind_interface(name, generics, members, extends, doc)
+                })?;
             }
         }
         Ok(true)

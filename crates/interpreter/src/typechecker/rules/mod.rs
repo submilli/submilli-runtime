@@ -21,9 +21,8 @@ mod super_call;
 mod unreachable;
 
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
-use crate::{Diagnostic, ExportEntry, PackageDeclaration, Type, TypedAst, tree_height};
+use crate::{Diagnostic, PackageDeclaration, Type, TypedAst, tree_height};
 
-use super::infer::module_symbols::ModuleSymbols;
 use declarations::TypeDeclarations;
 
 /// [`check_script`] for a script whose types are all its own: one imported
@@ -46,9 +45,29 @@ pub fn check_script(
     super::infer::check_declaration_types(dependencies.iter().copied())?;
     let declarations = TypeDeclarations::for_script(ta, dependencies);
     let mut diags = Vec::new();
-    run_rules(ta, &declarations, Source::Script, &mut diags).map_err(|fatal| CompileError {
-        diagnostics: diags.clone(),
-        fatal: Some(fatal),
+    run_rules(ta, &declarations, Source::Script, true, &mut diags).map_err(|fatal| {
+        CompileError {
+            diagnostics: diags.clone(),
+            fatal: Some(fatal),
+        }
+    })?;
+    Ok(diags)
+}
+
+/// Checks only the rules specific to Submilli on a script typed by either front end.
+pub fn check_script_submilli(
+    ta: &TypedAst,
+    dependencies: &[&PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError> {
+    tree_height::check_typed(ta, CompilerStage::Infer)?;
+    super::infer::check_declaration_types(dependencies.iter().copied())?;
+    let declarations = TypeDeclarations::for_script(ta, dependencies);
+    let mut diags = Vec::new();
+    run_rules(ta, &declarations, Source::Script, false, &mut diags).map_err(|fatal| {
+        CompileError {
+            diagnostics: diags.clone(),
+            fatal: Some(fatal),
+        }
     })?;
     Ok(diags)
 }
@@ -73,42 +92,107 @@ pub fn capability_binding_type(
     }
 }
 
-pub(in crate::typechecker) struct PackageModuleSurface<'a> {
-    pub(in crate::typechecker) symbols: &'a ModuleSymbols,
-    pub(in crate::typechecker) exports: &'a [ExportEntry],
-}
-
 /// Checks a package. `dependencies` are the packages it was inferred against,
 /// the ones it cannot import from included.
-pub(in crate::typechecker) fn check_package<'a>(
-    package_name: &str,
+pub fn check_package(
     typed_ast: &TypedAst,
     package: &PackageDeclaration,
-    resolver: super::infer::assignable::TypeResolver<'_>,
-    modules: impl IntoIterator<Item = PackageModuleSurface<'a>>,
     dependencies: &[&PackageDeclaration],
 ) -> Result<Vec<Diagnostic>, CompileError> {
+    check_package_rules(
+        typed_ast,
+        package,
+        dependencies,
+        true,
+        &crate::type_size::TypeLimits::default(),
+    )
+}
+
+/// Checks only the rules specific to Submilli on a package typed by either front end.
+pub fn check_package_submilli(
+    typed_ast: &TypedAst,
+    package: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError> {
+    check_package_rules(
+        typed_ast,
+        package,
+        dependencies,
+        false,
+        &crate::type_size::TypeLimits::default(),
+    )
+}
+
+pub(in crate::typechecker) fn check_package_rules(
+    typed_ast: &TypedAst,
+    package: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+    include_typescript: bool,
+    limits: &crate::type_size::TypeLimits,
+) -> Result<Vec<Diagnostic>, CompileError> {
     tree_height::check_typed(typed_ast, CompilerStage::Infer)?;
+    let root_module = typed_ast.package_root_module.as_ref().ok_or_else(|| {
+        CompileError::from(super::invariant_failure(
+            "package TypedAst lacks its root module path",
+        ))
+    })?;
+    super::infer::check_declaration_types(
+        std::iter::once(package).chain(dependencies.iter().copied()),
+    )?;
+    let mut registry = super::infer::type_registry::TypeRegistry::new();
+    for declaration in std::iter::once(package).chain(dependencies.iter().copied()) {
+        for symbol in declaration
+            .runtime_types
+            .values()
+            .chain(declaration.types.values())
+        {
+            registry.insert_borrowed(symbol);
+        }
+    }
+    let namespace = super::infer::type_namespace::TypeNamespace::new();
+    let constraints = Default::default();
+    let resolver = super::infer::assignable::TypeResolver {
+        types: &namespace,
+        registry: &registry,
+        limits,
+        strict_subtype: false,
+        generic_constraints: &constraints,
+    };
     let mut diags = Vec::new();
     finalizers::run(typed_ast, package, resolver, &mut diags).map_err(|fatal| CompileError {
         diagnostics: diags.clone(),
         fatal: Some(fatal),
     })?;
     let exports = &typed_ast.exports;
-    let module_surfaces: Vec<_> = modules
-        .into_iter()
-        .map(|module| (module.symbols, module.exports))
-        .collect();
-    exported_signature_types::run_modules(package_name, "module", &module_surfaces, &mut diags);
-    exported_signature_types::run(package_name, "package", package, exports, &mut diags);
+    exported_signature_types::run_modules(
+        &package.package_name,
+        "module",
+        typed_ast,
+        package,
+        root_module,
+        &mut diags,
+    );
+    exported_signature_types::run(
+        &package.package_name,
+        "package",
+        package,
+        exports,
+        &mut diags,
+    );
     exported_docs::run(typed_ast, package, exports, &mut diags);
     let declarations = TypeDeclarations::for_package(package, dependencies);
-    run_rules(typed_ast, &declarations, Source::Package, &mut diags)
-        .and_then(|()| check_discipline::run(typed_ast, &mut diags))
-        .map_err(|fatal| CompileError {
-            diagnostics: diags.clone(),
-            fatal: Some(fatal),
-        })?;
+    run_rules(
+        typed_ast,
+        &declarations,
+        Source::Package,
+        include_typescript,
+        &mut diags,
+    )
+    .and_then(|()| check_discipline::run(typed_ast, &mut diags))
+    .map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
     Ok(diags)
 }
 
@@ -123,13 +207,16 @@ fn run_rules(
     ta: &TypedAst,
     declarations: &TypeDeclarations<'_>,
     source: Source,
+    include_typescript: bool,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), CompilerFailure> {
-    missing_return::run(ta, declarations, diags)?;
-    unreachable::run(ta, declarations, diags)?;
-    return_outside_function::run(ta, diags)?;
-    fallthrough::run(ta, declarations, diags)?;
-    definite_assignment::run(ta, diags)?;
+    if include_typescript {
+        missing_return::run(ta, declarations, diags)?;
+        unreachable::run(ta, declarations, diags)?;
+        return_outside_function::run(ta, diags)?;
+        fallthrough::run(ta, declarations, diags)?;
+        definite_assignment::run(ta, diags)?;
+    }
     super_call::run(ta, diags)?;
     if source == Source::Script {
         // Inference reports a package that declares `main`.
@@ -278,5 +365,87 @@ pub(crate) mod test_util {
             .cloned()
             .chain(crate::stdlib::stdlib_package_declarations())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod public_entry_tests {
+    use super::test_util::{infer_script, run_package};
+    use super::{check_package, check_package_submilli, check_script, check_script_submilli};
+
+    #[test]
+    fn submilli_script_check_omits_typescript_rules() {
+        let (typed_ast, inference) =
+            infer_script("function main(): void { return; const value = 1; }");
+        assert!(
+            !inference
+                .iter()
+                .any(|diagnostic| diagnostic.severity == crate::Severity::Error),
+            "{inference:?}"
+        );
+        let full = check_script(&typed_ast, &[]).unwrap();
+        assert!(
+            full.iter()
+                .any(|diagnostic| diagnostic.message.contains("unreachable"))
+        );
+        assert!(check_script_submilli(&typed_ast, &[]).unwrap().is_empty());
+        let (without_main, _) = infer_script("function helper(): void {}");
+        assert!(
+            check_script_submilli(&without_main, &[])
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("main"))
+        );
+    }
+
+    #[test]
+    fn package_entry_needs_only_tree_and_declarations() {
+        let (typed_ast, package, inference) = run_package(
+            "@test/public-rules",
+            &[
+                ("lib", "export function entry(): void {}"),
+                ("other", "export function helper(): void {}"),
+            ],
+            &[],
+        );
+        assert!(
+            !inference
+                .iter()
+                .any(|diagnostic| diagnostic.severity == crate::Severity::Error),
+            "{inference:?}"
+        );
+        assert_eq!(
+            check_package(&typed_ast, &package, &[]).unwrap(),
+            check_package_submilli(&typed_ast, &package, &[]).unwrap()
+        );
+        assert_eq!(
+            typed_ast.package_root_module,
+            Some(crate::ModulePath::from("lib"))
+        );
+        let mut without_root = typed_ast.clone();
+        without_root.package_root_module = None;
+        assert!(check_package(&without_root, &package, &[]).is_err());
+    }
+
+    #[test]
+    fn package_entry_checks_private_module_signature_types() {
+        let (typed_ast, package, _) = run_package(
+            "@test/private-type",
+            &[
+                ("lib", "export function entry(): void {}"),
+                (
+                    "other",
+                    "interface Hidden { value: string } export function expose(value: Hidden): void {}",
+                ),
+            ],
+            &[],
+        );
+        let diagnostics = check_package_submilli(&typed_ast, &package, &[]).unwrap();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("private type `Hidden`")),
+            "{diagnostics:?}"
+        );
     }
 }

@@ -90,7 +90,8 @@ pub fn emit_statement(
             boxed,
             ..
         } => {
-            emit_expr(emitter, ctx, *value)?;
+            let present_flag = present_flag_for(emitter, ctx, name)?;
+            super::expr::emit_value_with_present_flag(emitter, ctx, *value, present_flag)?;
             let value_ty = ctx
                 .ta
                 .try_expr(*value)
@@ -121,6 +122,7 @@ pub fn emit_statement(
                         field_index: 0,
                     });
                     super::binding_cells::mark_initialized(emitter, slot, box_idx);
+                    note_maybe_missing_slot(emitter, ctx, name, slot, ty, present_flag);
                     return Ok(());
                 }
                 emitter.instruction(Instruction::I32Const(1));
@@ -131,9 +133,11 @@ pub fn emit_statement(
                 });
                 let slot = emitter.define_local(name, box_val)?;
                 emitter.instruction(Instruction::LocalSet(slot));
+                note_maybe_missing_slot(emitter, ctx, name, slot, ty, present_flag);
             } else {
                 let slot = emitter.define_local(name, ctx.symbols.value_type(ty)?)?;
                 emitter.instruction(Instruction::LocalSet(slot));
+                note_maybe_missing_slot(emitter, ctx, name, slot, ty, present_flag);
             }
         }
         TypedStmtKind::ReboxLocal { ident, ty } => {
@@ -150,7 +154,8 @@ pub fn emit_statement(
             name, ty, value, ..
         } => {
             // captured const is copied into closure env, not boxed
-            emit_expr(emitter, ctx, *value)?;
+            let present_flag = present_flag_for(emitter, ctx, name)?;
+            super::expr::emit_value_with_present_flag(emitter, ctx, *value, present_flag)?;
             let value_ty = ctx
                 .ta
                 .try_expr(*value)
@@ -160,6 +165,7 @@ pub fn emit_statement(
             cast::emit_coerce_to_slot(emitter, ctx, &value_ty, ty)?;
             let slot = emitter.define_local(name, ctx.symbols.value_type(ty)?)?;
             emitter.instruction(Instruction::LocalSet(slot));
+            note_maybe_missing_slot(emitter, ctx, name, slot, ty, present_flag);
         }
         TypedStmtKind::AssignLocal {
             ident,
@@ -186,7 +192,8 @@ pub fn emit_statement(
                     .ty
                     .clone();
                 emitter.instruction(Instruction::LocalGet(slot));
-                emit_expr(emitter, ctx, *value)?;
+                let present_flag = emitter.present_flag(slot);
+                super::expr::emit_value_with_present_flag(emitter, ctx, *value, present_flag)?;
                 cast::emit_coerce_to_slot(emitter, ctx, &value_ty, target_ty)?;
                 let initialization = ctx.ta.parameter_initializations.contains(&id);
                 if !initialization {
@@ -200,7 +207,8 @@ pub fn emit_statement(
                     super::binding_cells::mark_initialized(emitter, slot, box_idx);
                 }
             } else {
-                emit_expr(emitter, ctx, *value)?;
+                let present_flag = emitter.present_flag(slot);
+                super::expr::emit_value_with_present_flag(emitter, ctx, *value, present_flag)?;
                 let value_ty = ctx
                     .ta
                     .try_expr(*value)
@@ -336,12 +344,15 @@ pub fn emit_statement(
         } => {
             emitter.push_scope();
             if path.chain.is_empty() {
-                let shadow_val = ctx.symbols.value_type(&cast_info.to_ty)?;
-                let shadow = emitter.add_anonymous_local(shadow_val)?;
-                emit_expr(emitter, ctx, *source)?;
-                cast::emit_narrowing_cast(emitter, ctx, cast_info)?;
-                emitter.instruction(Instruction::LocalSet(shadow));
-                emitter.install_narrow_shadow(&binding.name, shadow, shadow_val)?;
+                // See `reads_maybe_missing_local`: such a local takes no shadow.
+                if !super::expr::reads_maybe_missing_local(emitter, ctx, *source)? {
+                    let shadow_val = ctx.symbols.value_type(&cast_info.to_ty)?;
+                    let shadow = emitter.add_anonymous_local(shadow_val)?;
+                    emit_expr(emitter, ctx, *source)?;
+                    cast::emit_narrowing_cast(emitter, ctx, cast_info)?;
+                    emitter.instruction(Instruction::LocalSet(shadow));
+                    emitter.install_narrow_shadow(&binding.name, shadow, shadow_val)?;
+                }
             } else {
                 // The predicate proved a field-path value that may already have
                 // changed while evaluating the rest of the condition. Defer its
@@ -634,7 +645,7 @@ fn emit_assign_index(
         .ta
         .source_type(receiver)
         .map_err(crate::codegen::arena_failure)?
-        .is_structural_object()
+        .indexes_by_name()
     {
         let object = emit_operand_once(emitter, ctx, receiver)?;
         let key = emit_operand_once(emitter, ctx, index)?;
@@ -1291,4 +1302,44 @@ fn emit_string_compare(
         emitter.instruction(Instruction::Call(string_eq_idx));
     }
     Ok(())
+}
+
+/// Records `slot`, the local `name` declares with storage `ty`, when it holds
+/// a read that may have found no value (see `typechecker::infer::missing_reads`).
+fn note_maybe_missing_slot(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    name: &crate::Ident,
+    slot: u32,
+    ty: &Type,
+    present_flag: Option<u32>,
+) {
+    if let Some(local) = ctx.ta.maybe_missing_locals.get(&name.span) {
+        emitter.maybe_missing_slots.insert(
+            slot,
+            super::MaybeMissingSlot {
+                message: local.message.clone(),
+                storage: ty.clone(),
+                present_flag,
+            },
+        );
+    }
+}
+
+/// The present flag of the local `name`, when it holds a maybe-missing read
+/// typed with a type parameter (see `MaybeMissingSlot::present_flag`).
+fn present_flag_for(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    name: &crate::Ident,
+) -> Result<Option<u32>, crate::compiler_error::CompilerFailure> {
+    if ctx
+        .ta
+        .maybe_missing_locals
+        .get(&name.span)
+        .is_some_and(|local| local.has_present_flag)
+    {
+        return Ok(Some(emitter.add_anonymous_local(ValType::I32)?));
+    }
+    Ok(None)
 }

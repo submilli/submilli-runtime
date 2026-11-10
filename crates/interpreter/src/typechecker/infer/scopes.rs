@@ -39,6 +39,13 @@ pub(super) struct ScopeEntry {
     pub(super) nested_function: Option<usize>,
     /// Where the literal types in `ty` came from; see `literal_freshness`.
     pub(super) literal_origin: LiteralOrigin,
+    /// For a local holding a read that may find no value, the span of that
+    /// read; see `missing_reads`.
+    pub(super) missing_read: Option<Span>,
+    /// Whether a `let` or `const` statement declares it, rather than a
+    /// parameter or loop: only such a local can hold a maybe-missing read,
+    /// since codegen tracks it from its declaration.
+    pub(super) is_statement_local: bool,
 }
 
 impl ScopeEntry {
@@ -56,6 +63,23 @@ impl ScopeEntry {
 
     pub(super) fn storage_type(&self) -> &Type {
         self.storage_ty.as_ref().unwrap_or(&self.ty)
+    }
+
+    /// The widened storage of an unannotated local holding a maybe-missing
+    /// read, `T | undefined`. A local whose own type names `undefined` needs
+    /// no widening.
+    pub(super) fn maybe_missing_storage(&self) -> Option<Type> {
+        let storage = self.storage_type();
+        (self.missing_read.is_some() && !storage.holds_undefined())
+            .then(|| Type::union(vec![storage.clone(), Type::Undefined]))
+    }
+
+    /// Whether this local can hold a maybe-missing read: a `let`/`const`
+    /// local no closure captures. One typed with a type parameter, whose
+    /// instantiation may hold `undefined`, tells a missing value from a
+    /// present `undefined` by a present flag codegen keeps beside it.
+    pub(super) fn can_hold_missing_read(&self, captured: bool) -> bool {
+        self.is_statement_local && !captured
     }
 }
 
@@ -212,6 +236,8 @@ impl Scopes {
                     decl_scope,
                     nested_function,
                     literal_origin,
+                    missing_read: None,
+                    is_statement_local: false,
                 },
             );
         }
@@ -225,6 +251,25 @@ impl Scopes {
 
     pub(super) fn get(&self, name: &str) -> Option<&ScopeEntry> {
         self.stack.iter().rev().find_map(|s| s.bindings.get(name))
+    }
+
+    /// Marks the binding `name` just declared in the innermost scope as a
+    /// `let`/`const` statement's.
+    pub(super) fn mark_statement_local(&mut self, name: &str) {
+        if let Some(entry) = self
+            .stack
+            .last_mut()
+            .and_then(|scope| scope.bindings.get_mut(name))
+        {
+            entry.is_statement_local = true;
+        }
+    }
+
+    pub(super) fn get_mut(&mut self, name: &str) -> Option<&mut ScopeEntry> {
+        self.stack
+            .iter_mut()
+            .rev()
+            .find_map(|s| s.bindings.get_mut(name))
     }
 
     pub(super) fn get_binding(&self, name: &str, scope: narrowing::ScopeId) -> Option<&ScopeEntry> {

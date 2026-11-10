@@ -6,5 +6,8 @@ function main(): void {
   assertSameValue(JSON.stringify(false), "false");
   assertSameValue(JSON.stringify("str"), "\"str\"");
   assertSameValue(JSON.stringify(123), "123");
-  assertSameValue(JSON.stringify(undefined), undefined);
+  // A check sees the missing JSON text as undefined. A use typed `string`
+  // throws MissingValueError; `Object.is` takes `unknown`, which does not
+  // accept that missing result (SUB-2190).
+  assert(JSON.stringify(undefined) === undefined);
 }

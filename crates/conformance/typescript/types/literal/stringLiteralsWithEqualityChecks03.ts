@@ -3,31 +3,31 @@ interface Runnable {
     isRunning: boolean;
 }
 
-/*pruned*/;                              
-                             
- 
+interface Refrigerator extends Runnable {
+    makesFoodGoBrrr: boolean;
+}
 
 let x: string = null as unknown as (string);
-/*pruned*/;                                                             
+let y: "foo" | Refrigerator = null as unknown as ("foo" | Refrigerator);
 
 let b: boolean = null as unknown as (boolean);
-/*pruned*/; 
-/*pruned*/;    
-/*pruned*/;     
+b = x === y;
+b = "foo" === y
+b = y === "foo";
 b = "foo" === "bar";
 b = "bar" === x;
 b = x === "bar";
-/*pruned*/;     
-/*pruned*/;     
+b = y === "bar";
+b = "bar" === y;
 
-/*pruned*/; 
-/*pruned*/;    
-/*pruned*/;     
+b = x !== y;
+b = "foo" !== y
+b = y !== "foo";
 b = "foo" !== "bar";
 b = "bar" !== x;
 b = x !== "bar";
-/*pruned*/;     
-/*pruned*/;     
+b = y !== "bar";
+b = "bar" !== y;
 
 
 function main(): void {}

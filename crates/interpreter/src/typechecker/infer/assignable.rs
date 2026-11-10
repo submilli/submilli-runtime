@@ -18,15 +18,15 @@ use super::variance::Variance;
 /// resolves by its own package, not just what the current module imported.
 #[derive(Clone, Copy)]
 pub(crate) struct TypeResolver<'a> {
-    pub(super) types: &'a TypeNamespace<'a>,
-    pub(super) registry: &'a TypeRegistry<'a>,
+    pub(in crate::typechecker) types: &'a TypeNamespace<'a>,
+    pub(in crate::typechecker) registry: &'a TypeRegistry<'a>,
     /// Records an oversized type met while resolving, for the inferer's next
     /// checkpoint; the resolver itself answers as if the type were `Error`.
     pub(crate) limits: &'a crate::type_size::TypeLimits,
     /// Relate by tsc's strict subtype relation instead of assignability; see
     /// [`strict_subtype`].
     pub(crate) strict_subtype: bool,
-    pub(super) generic_constraints: &'a BTreeMap<u32, Type>,
+    pub(in crate::typechecker) generic_constraints: &'a BTreeMap<u32, Type>,
 }
 
 /// A single way a class fails to satisfy an interface it declares it `implements`.
@@ -749,6 +749,20 @@ fn assignable_rec(
     if !types.limits.spend_work(1) {
         return false;
     }
+    if let Some(actual) = super::utility_types::evaluate_concrete_operator(actual, types) {
+        return assignable_rec(&actual, expected, types, seen);
+    }
+    if let Some(expected) = super::utility_types::evaluate_concrete_operator(expected, types) {
+        return assignable_rec(actual, &expected, types, seen);
+    }
+    // `NoInfer<X>` is `X` and `NonNullable<X>` is `X & {}`, before the
+    // refinement rules below compare `X & {}` piecewise.
+    if let Some(expected) = rewrite_to_operand_form(expected) {
+        return assignable_rec(actual, &expected, types, seen);
+    }
+    if let Some(actual) = rewrite_to_operand_form(actual) {
+        return assignable_rec(&actual, expected, types, seen);
+    }
     // `unknown` and a type parameter fit a union that holds every value, as
     // in TypeScript.
     if matches!(actual.peel(), Type::Unknown | Type::GenericParam { .. })
@@ -766,6 +780,30 @@ fn assignable_rec(
             && assignable_rec(actual, ty, types, seen);
     }
     if let Type::Refined { original, ty } = actual.without_aliases() {
+        // `Partial<T>[K]` without `undefined` is `T[K]`: `patch[k] ?? base[k]`.
+        if let Some(MappedProperty::Optional(property)) = mapped_property(original)
+            && !ty.holds_undefined()
+            && assignable_rec(&property, expected, types, seen)
+        {
+            return true;
+        }
+        // A narrowed form (`Extract<T, string | undefined> & {}`) also holds
+        // only the members of its apparent type that the narrowing admits.
+        // So does a narrowed bounded type parameter: `T & {}` with `T extends
+        // string | null` holds only `string`.
+        let bounded_parameter = matches!(original.without_aliases(), Type::GenericParam { id, .. }
+            if types.generic_constraints.contains_key(id));
+        if (original.is_type_operator() || bounded_parameter) && !mentions_signature_var(original) {
+            let bound = upper_bound(original, types, 0);
+            let admitted: Vec<Type> = super::utility_types::members(&bound)
+                .into_iter()
+                .filter(|member| assignable_rec(member, ty, types, seen))
+                .collect();
+            if !admitted.is_empty() && assignable_rec(&Type::union(admitted), expected, types, seen)
+            {
+                return true;
+            }
+        }
         return assignable_rec(original, expected, types, seen)
             || assignable_rec(ty, expected, types, seen);
     }
@@ -795,6 +833,11 @@ fn assignable_rec(
     if same_alias_instance(actual, expected) {
         return true;
     }
+    // Before a union target is split: `Uppercase<T>` fits `"FOO" | "BAR"`
+    // through its bound only as a whole.
+    if let Some(related) = relate_type_operators(actual, expected, types, seen) {
+        return related;
+    }
     // Keep named pairs on the active proof path: expanding a back-edge can
     // change its inline spelling without changing the alias instantiation.
     if seen
@@ -820,6 +863,9 @@ fn assignable_rec(
     }
     if drops_readonly(actual, expected) || readonly_meets_mutator(actual, expected, types) {
         return false;
+    }
+    if let Some(chain) = super::utility_types::symbolic_chain(expected) {
+        return fits_symbolic_mapping(&chain, actual);
     }
     if matches!(actual, Type::Alias { .. }) || matches!(expected, Type::Alias { .. }) {
         let pair = (actual.clone(), expected.clone());
@@ -1526,6 +1572,11 @@ pub(crate) fn expand_alias_ref(ty: &Type, types: TypeResolver) -> Type {
     else {
         return ty.clone();
     };
+    // A utility's alias body is an application of itself: its evaluation is
+    // the body to compare against.
+    if super::utility_types::utility(mangled).is_some() {
+        return super::type_aliases::alias_ref_body(mangled, name, args, types);
+    }
     let Some(sym) = types.lookup(mangled, name) else {
         return ty.clone();
     };
@@ -1763,6 +1814,790 @@ pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Opt
         index: types.index_signature(ty),
         fields: types.interface_data_shape(mangled, name, args)?,
     })
+}
+
+/// A deferred utility application, `keyof T` or `T[K]` on either side. Like a
+/// type parameter they are wildcards while they mention a signature
+/// `TypeVar`. Otherwise the rules apply in order:
+/// 1. trivial pairs (`never`, an every-value target, identity, a union target
+///    holding the form);
+/// 2. the keys of a mapped utility on either side ([`mapped_keys`]), then
+///    pairs of the same shape ([`relate_same_shape`]);
+/// 3. a subset of its operand as the source ([`relate_subset_of_operand`]);
+/// 4. a property of a mapped utility as the source ([`mapped_property`]);
+/// 5. a form as the target ([`relate_into_form`]), which holds only what the
+///    identities tsc proves for any `T` put into it;
+/// 6. a form as the source ([`relate_out_of_form`]), by its base constraint.
+///
+/// `None` when neither side is such a form.
+fn relate_type_operators(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> Option<bool> {
+    let (actual, expected) = (actual.without_aliases(), expected.without_aliases());
+    let actual_form = actual.is_type_operator();
+    let expected_form = expected.is_type_operator();
+    if !actual_form && !expected_form {
+        return None;
+    }
+    if (actual_form && mentions_signature_var(actual))
+        || (expected_form && mentions_signature_var(expected))
+    {
+        return Some(true);
+    }
+    if matches!(actual.peel(), Type::Error | Type::Never)
+        || matches!(expected.peel(), Type::Error | Type::Unknown)
+        || expected.holds_every_value()
+        || actual == expected
+    {
+        return Some(true);
+    }
+    if actual_form
+        && let Type::Union(members) = expected.peel()
+        && members
+            .iter()
+            .any(|member| assignable_rec(actual, member, types, seen))
+    {
+        return Some(true);
+    }
+    // The keys of a mapped utility are its key type, on either side. A
+    // concrete key outside it may still be one of the bound's keys
+    // (`"b"` in `keyof Omit<T, "a">`), which `relate_into_form` tries.
+    if let Some(keys) = mapped_keys(expected) {
+        let fits = assignable_rec(actual, &keys, types, seen);
+        if fits || actual_form {
+            return Some(fits);
+        }
+    }
+    if let Some(keys) = mapped_keys(actual) {
+        return Some(assignable_rec(&keys, expected, types, seen));
+    }
+    if let Some(related) = relate_same_shape(actual, expected, types, seen) {
+        return Some(related);
+    }
+    if relate_subset_of_operand(actual, expected, types, seen) {
+        return Some(true);
+    }
+    // A property of `Readonly<T>`, `Required<T>` or `Pick<T, K>` is `T`'s
+    // (narrower, for `Required`), and one of `Partial<T>` may be absent, a
+    // form target included: `p[k]` on `Pick<T, K>` fits `T[K]`.
+    if let Some(property) = mapped_property(actual) {
+        let property = match property {
+            MappedProperty::Same(property) => property,
+            MappedProperty::Optional(property) => Type::union(vec![property, Type::Undefined]),
+        };
+        return Some(assignable_rec(&property, expected, types, seen));
+    }
+    if expected_form {
+        return Some(relate_into_form(actual, expected, types, seen));
+    }
+    Some(relate_out_of_form(actual, expected, types, seen))
+}
+
+/// Two forms of the same shape. `keyof` against `keyof` (contravariant) and
+/// homomorphic wrappings of one `T` (by optionality) decide. `T[K]` against
+/// `T[K]` (covariant in both) and one utility on both sides (through its
+/// arguments) only prove: `None` when they do not, for the later rules.
+fn relate_same_shape(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> Option<bool> {
+    use super::utility_types::{Utility, deferred_application};
+    // A narrower type has more keys, and `Partial`, `Readonly` and
+    // `Required` keep their operand's keys.
+    if let (Type::KeyOf(actual_operand), Type::KeyOf(expected_operand)) = (actual, expected) {
+        let (actual_base, expected_base) = (
+            homomorphic_base(actual_operand),
+            homomorphic_base(expected_operand),
+        );
+        return Some(
+            actual_base == expected_base || assignable_rec(expected_base, actual_base, types, seen),
+        );
+    }
+    if let (
+        Type::IndexedAccess {
+            object: actual_object,
+            index: actual_index,
+        },
+        Type::IndexedAccess {
+            object: expected_object,
+            index: expected_index,
+        },
+    ) = (actual, expected)
+        && assignable_rec(actual_object, expected_object, types, seen)
+        && assignable_rec(actual_index, expected_index, types, seen)
+    {
+        return Some(true);
+    }
+    // tsc relates generic mapped types by their modifiers: `Readonly<T>`
+    // fits `Partial<T>`, and `T` fits `Readonly<T>`.
+    if let (Some((actual_base, actual_optional)), Some((expected_base, expected_optional))) =
+        (homomorphic_wrapping(actual), homomorphic_wrapping(expected))
+        && actual_base == expected_base
+    {
+        return Some(match (actual_optional, expected_optional) {
+            (_, Optionality::Optional) => true,
+            (Optionality::Optional, _) => false,
+            (_, Optionality::Required) => actual_optional == Optionality::Required,
+            (_, Optionality::Unchanged) => true,
+        });
+    }
+    // Utilities that preserve assignability: `Uppercase<U>` fits
+    // `Uppercase<T>` when `U` fits `T`.
+    let (Some((left, left_args)), Some((right, right_args))) =
+        (deferred_application(actual), deferred_application(expected))
+    else {
+        return None;
+    };
+    if left != right || left_args.len() != right_args.len() {
+        return None;
+    }
+    let covariant = match (left, left_args, right_args) {
+        (Utility::Exclude | Utility::Extract, [left, left_filter], [right, right_filter]) => {
+            left_filter == right_filter && assignable_rec(left, right, types, seen)
+        }
+        (
+            Utility::Exclude
+            | Utility::Extract
+            | Utility::Pick
+            | Utility::Omit
+            | Utility::Parameters,
+            _,
+            _,
+        ) => false,
+        _ => left_args
+            .iter()
+            .zip(right_args)
+            .all(|(left, right)| assignable_rec(left, right, types, seen)),
+    };
+    covariant.then_some(true)
+}
+
+/// A subset of its operand (`Readonly`, `Required`, `Exclude`, `Extract`) fits
+/// wherever the operand does, a form target included: `Extract<keyof T, "b">`
+/// fits `keyof T`.
+fn relate_subset_of_operand(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    use super::utility_types::{Utility, deferred_application};
+    matches!(
+        deferred_application(actual),
+        Some((
+            Utility::Readonly | Utility::Required | Utility::Exclude | Utility::Extract,
+            [operand, ..],
+        )) if assignable_rec(operand, expected, types, seen)
+    )
+}
+
+/// A form as the target: it holds only what the identities tsc proves for
+/// every `T` put into it (`X` and `{}` fit `Partial<X>`), a key fits
+/// `keyof T` when it is a key of `T`'s bound, and a value fits `T["a"]` when
+/// the bound gives `a` that one value.
+fn relate_into_form(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    use super::utility_types::{Utility, deferred_application};
+    if let Some((utility, args)) = deferred_application(expected) {
+        return match (utility, args) {
+            (Utility::Partial, _) if actual.is_empty_object() => true,
+            (
+                Utility::Partial | Utility::Readonly | Utility::Pick | Utility::Omit,
+                [operand, ..],
+            ) => operand == actual,
+            _ => false,
+        };
+    }
+    if let Type::KeyOf(operand) = expected
+        && !actual.is_type_operator()
+    {
+        // A wider operand has fewer keys, so its upper bound's keys fit every
+        // instantiation: `"b"` fits `keyof T["a"]` with `T extends { a: { b:
+        // number } }`.
+        let bound = concrete_upper_bound(operand, types);
+        if matches!(bound.peel(), Type::Error) {
+            return false;
+        }
+        return super::utility_types::keyof_type(&bound, types)
+            .is_some_and(|keys| assignable_rec(actual, &keys, types, seen));
+    }
+    if let Type::IndexedAccess { object, index } = expected
+        && !actual.is_type_operator()
+    {
+        // A property of `Partial<T>` may be absent: `patch[k] = undefined`.
+        if matches!(actual.peel(), Type::Undefined)
+            && matches!(deferred_application(object), Some((Utility::Partial, _)))
+        {
+            return true;
+        }
+        // A property the declared bound gives one value has it in every
+        // instantiation (`T["length"]` of a pair is `2`), so `t.length`
+        // fits. tsc accepts any value of the bound's property type here,
+        // which a narrower `T` can contradict.
+        return bound_properties(object, index, types).is_some_and(|properties| {
+            properties.iter().all(|property| {
+                let unit = property.peel();
+                (unit.is_literal_type() || matches!(unit, Type::Null | Type::Undefined))
+                    && assignable_rec(actual, unit, types, seen)
+            })
+        });
+    }
+    false
+}
+
+/// Whether `actual` may be written to the property `target` (`T[K]`)
+/// names: tsc's rule once the index's bound names no type parameter. The
+/// value must fit, for writing, the property each bound key names in the
+/// declared bound (all of them, for a union of keys). So `t["a"] = 5`
+/// writes `T["a"]` with `T extends { a: number }`, as `t.a = 5` does.
+pub(super) fn fits_bound_property_write(actual: &Type, target: &Type, types: TypeResolver) -> bool {
+    indexed_bound_properties(target, types).is_some_and(|properties| {
+        properties
+            .iter()
+            .all(|property| assignable(actual, property, types))
+    })
+}
+
+/// The type a write to `target` (`T[K]`) is checked against, as the value's
+/// context: the declared bound's property when every bound key names the
+/// same one, `None` when they differ, and `target` itself otherwise.
+pub(super) fn write_context(target: &Type, types: TypeResolver) -> Option<Type> {
+    let Some(properties) = indexed_bound_properties(target, types) else {
+        return Some(target.clone());
+    };
+    match properties.split_first() {
+        Some((first, rest)) if rest.iter().all(|property| property == first) => Some(first.clone()),
+        _ => None,
+    }
+}
+
+/// [`bound_properties`] of the form `target` (`T[K]`).
+fn indexed_bound_properties(target: &Type, types: TypeResolver) -> Option<Vec<Type>> {
+    // A write through `Pick<T, K>[K]` or `Readonly<T>[K]` writes `T[K]`,
+    // as tsc rewrites it. `Required<T>[K]` keeps its own bound, whose
+    // property holds no `undefined`.
+    if let Some(property) = written_property(target) {
+        return indexed_bound_properties(&property, types);
+    }
+    let Type::IndexedAccess { object, index } = target.without_aliases() else {
+        return None;
+    };
+    bound_properties(object, index, types)
+}
+
+/// The properties `object[index]` names in its declared bounds, one per key
+/// of the index's bound, which must all be literal. A type parameter's index
+/// signature does not count: a narrower `T` may declare the key with a
+/// narrower type. `None` when a bound is unknown.
+fn bound_properties(object: &Type, index: &Type, types: TypeResolver) -> Option<Vec<Type>> {
+    use super::utility_types::{index_access_type, members};
+    let object_bound = declared_bound(object, types)?;
+    let index_bound = concrete_upper_bound(index, types);
+    if has_no_concrete_bound(&object_bound) || has_no_concrete_bound(&index_bound) {
+        return None;
+    }
+    let keys = members(&index_bound);
+    if keys.is_empty() || !keys.iter().all(Type::is_literal_type) {
+        return None;
+    }
+    let object_bound = if object_bound == *object {
+        object_bound
+    } else {
+        without_index_signature(object_bound, types)
+    };
+    keys.iter()
+        .map(|key| index_access_type(&object_bound, key, types).ok())
+        .collect()
+}
+
+/// Whether `ty` is still a type parameter or form, or has no bound at all.
+fn has_no_concrete_bound(ty: &Type) -> bool {
+    let open = ty.without_aliases();
+    open.lowers_to_erased_slot() || matches!(open, Type::Error | Type::Unknown)
+}
+
+/// The bound tsc reads a property of `ty` through: a type parameter's
+/// declared bound, as written, with the type parameters it names left in
+/// place (`T extends { a: U }` gives `{ a: U }`). A form's base constraint
+/// substitutes every bound, which is exact only when those bounds name no
+/// other type parameter. Any other type is its own.
+fn declared_bound(ty: &Type, types: TypeResolver) -> Option<Type> {
+    let open = ty.without_aliases();
+    if let Type::GenericParam { id, .. } = open {
+        let mut bound = types.generic_constraints.get(id)?.clone();
+        for _ in 0..crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH {
+            let Type::GenericParam { id, .. } = bound.without_aliases() else {
+                return declared_bound(&bound, types);
+            };
+            bound = types.generic_constraints.get(id)?.clone();
+        }
+        return None;
+    }
+    if open.is_type_operator() {
+        return closed_bounds(open, types).then(|| base_constraint(open, types));
+    }
+    Some(ty.clone())
+}
+
+/// Whether every type parameter in `ty` has a bound naming no other.
+fn closed_bounds(ty: &Type, types: TypeResolver) -> bool {
+    let mut closed = true;
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if let Type::GenericParam { id, .. } = ty
+            && types
+                .generic_constraints
+                .get(id)
+                .is_some_and(super::utility_types::holds_type_parameter)
+        {
+            closed = false;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    closed
+}
+
+/// `ty` without its index signature, so only declared properties are read.
+fn without_index_signature(ty: Type, types: TypeResolver) -> Type {
+    match ty.peel() {
+        Type::Object { fields, .. } => Type::Object {
+            fields: fields.clone(),
+            index: None,
+        },
+        Type::InterfaceRef { .. } if types.index_signature(&ty).is_some() => {
+            match expand_interface_data_shape(&ty, types) {
+                Some(Type::Object { fields, .. }) => Type::Object {
+                    fields,
+                    index: None,
+                },
+                _ => ty,
+            }
+        }
+        _ => ty,
+    }
+}
+
+/// [`upper_bound`], followed through a type parameter it reaches: `T["a"]`
+/// with `T extends { a: T }` is bounded by `T`, and so by `{ a: T }`. A
+/// parameter's own bound is no parameter, so one more step suffices.
+fn concrete_upper_bound(ty: &Type, types: TypeResolver) -> Type {
+    let bound = upper_bound(ty, types, 0);
+    if matches!(bound.without_aliases(), Type::GenericParam { .. }) && bound != *ty {
+        return upper_bound(&bound, types, 0);
+    }
+    bound
+}
+
+/// A form as the source, by its base constraint ([`base_constraint`]).
+fn relate_out_of_form(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    let constraint = base_constraint(actual, types);
+    // A constraint of `never` (`T[keyof T]` with `T` unbounded has no keys
+    // to read) proves nothing about the values the form holds. Nor does one
+    // that has no evaluation, which is `Error` and would fit anything.
+    if constraint.is_type_operator() || matches!(constraint.peel(), Type::Never | Type::Error) {
+        return false;
+    }
+    assignable_rec(&constraint, expected, types, seen)
+}
+
+/// tsc's identities for the keys of a mapped utility: `keyof Pick<T, K>` is
+/// `K`, `keyof Omit<T, K>` is `Exclude<keyof T, K>`, and `Partial`,
+/// `Readonly` and `Required` keep `T`'s keys. `None` for any other type.
+fn mapped_keys(form: &Type) -> Option<Type> {
+    use super::utility_types::{Utility, deferred, deferred_application};
+    let Type::KeyOf(operand) = form.without_aliases() else {
+        return None;
+    };
+    match deferred_application(operand)? {
+        (Utility::Pick, [_, keys]) => Some(keys.clone()),
+        (Utility::Omit, [object, keys]) => Some(deferred(
+            Utility::Exclude,
+            vec![Type::KeyOf(Box::new(object.clone())), keys.clone()],
+        )),
+        (Utility::Partial | Utility::Readonly | Utility::Required, [object]) => {
+            Some(Type::KeyOf(Box::new(object.clone())))
+        }
+        _ => None,
+    }
+}
+
+/// `M<T>[K]` as `T[K]` for a write, where `M` is `Pick` or `Readonly`.
+fn written_property(form: &Type) -> Option<Type> {
+    use super::utility_types::{Utility, deferred_application};
+    let Type::IndexedAccess { object, index } = form.without_aliases() else {
+        return None;
+    };
+    let mut object = object.as_ref();
+    let mut mapped = false;
+    while let Some((Utility::Readonly | Utility::Pick, [operand, ..])) =
+        deferred_application(object)
+    {
+        object = operand;
+        mapped = true;
+    }
+    mapped.then(|| Type::indexed_access(object.clone(), index.as_ref().clone()))
+}
+
+/// A property of a mapped utility, `M<T>[K]`, as `T[K]`.
+enum MappedProperty {
+    /// `Readonly`, `Required` (narrower) and `Pick` read `T`'s property.
+    Same(Type),
+    /// `Partial` makes it optional.
+    Optional(Type),
+}
+
+/// `M<T>[K]` as `T[K]` for `M` a mapped utility; `None` for any other form.
+fn mapped_property(form: &Type) -> Option<MappedProperty> {
+    use super::utility_types::{Utility, deferred_application};
+    let Type::IndexedAccess { object, index } = form.without_aliases() else {
+        return None;
+    };
+    let mut object = object.as_ref();
+    let mut mapped = false;
+    loop {
+        match deferred_application(object) {
+            Some((Utility::Readonly | Utility::Required | Utility::Pick, [operand, ..])) => {
+                object = operand;
+                mapped = true;
+            }
+            Some((Utility::Partial, [operand])) => {
+                return Some(MappedProperty::Optional(Type::indexed_access(
+                    operand.clone(),
+                    index.as_ref().clone(),
+                )));
+            }
+            _ => break,
+        }
+    }
+    mapped
+        .then(|| MappedProperty::Same(Type::indexed_access(object.clone(), index.as_ref().clone())))
+}
+
+/// `NoInfer<X>` as `X`, and `NonNullable<X>` as the narrowing's `X & {}`, for
+/// an application that still mentions a type parameter.
+fn rewrite_to_operand_form(ty: &Type) -> Option<Type> {
+    use super::utility_types::{Utility, deferred_application};
+    match deferred_application(ty) {
+        Some((Utility::NoInfer, [operand])) => Some(operand.clone()),
+        Some((Utility::NonNullable, [operand])) => Some(Type::Refined {
+            original: Box::new(operand.clone()),
+            ty: Box::new(Type::empty_object()),
+        }),
+        _ => None,
+    }
+}
+
+/// The type `ty` wraps in `Partial`, `Readonly` and `Required`, or `ty` itself.
+fn homomorphic_base(ty: &Type) -> &Type {
+    homomorphic_wrapping(ty).map_or(ty, |(base, _)| base)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Optionality {
+    /// Properties as the base declares them.
+    Unchanged,
+    /// Every property optional (`Partial`).
+    Optional,
+    /// Every property required (`Required`).
+    Required,
+}
+
+/// The type `ty` wraps in `Partial`, `Readonly` and `Required`, and the
+/// optionality the outermost of them leaves. A type that is no such wrapping
+/// is its own base, unchanged. `None` when that base holds no type
+/// parameter, since only deferred wrappings need this.
+fn homomorphic_wrapping(ty: &Type) -> Option<(&Type, Optionality)> {
+    use super::utility_types::{Utility, deferred_application};
+    let (base, optionality) = match deferred_application(ty) {
+        Some((Utility::Partial, [operand])) => {
+            (homomorphic_wrapping(operand)?.0, Optionality::Optional)
+        }
+        Some((Utility::Required, [operand])) => {
+            (homomorphic_wrapping(operand)?.0, Optionality::Required)
+        }
+        Some((Utility::Readonly, [operand])) => homomorphic_wrapping(operand)?,
+        Some(_) => return None,
+        None => (ty, Optionality::Unchanged),
+    };
+    super::utility_types::holds_type_parameter(base).then_some((base, optionality))
+}
+
+/// Whether a signature `TypeVar` occurs anywhere in `ty`, refinements and
+/// template holes included, which [`super::expr::type_contains_type_var`]
+/// does not look into.
+fn mentions_signature_var(ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if matches!(ty, Type::TypeVar(_)) {
+            return true;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+    }
+    false
+}
+
+/// What every instantiation of the form `ty` is assignable to, tsc's base
+/// constraint. A type parameter's bound stands in for it only where the form
+/// grows with it; where it shrinks (`keyof T`, `Pick`'s keys, `Exclude`'s
+/// filter, a parameter list) the form's own upper bound does. So
+/// `T[keyof T]` with `T extends { a: number }` is `unknown`, not `number`.
+pub(super) fn base_constraint(ty: &Type, types: TypeResolver) -> Type {
+    use super::utility_types::{Utility, deferred_application, index_access_type};
+    let upper = |operand: &Type| concrete_upper_bound(operand, types);
+    let evaluate = |ty: Type| super::utility_types::normalize(&ty, types).unwrap_or(Type::Error);
+    // `Pick<T, K>[K]` is `T[K]` (`Partial` adds `undefined`).
+    if let Some(property) = mapped_property(ty) {
+        return match property {
+            MappedProperty::Same(property) => base_constraint(&property, types),
+            MappedProperty::Optional(property) => {
+                Type::union(vec![base_constraint(&property, types), Type::Undefined])
+            }
+        };
+    }
+    match ty.without_aliases() {
+        // A narrower `T` has more keys: only every key bounds `keyof T`.
+        Type::KeyOf(_) => Type::union(vec![Type::String, Type::Number]),
+        Type::IndexedAccess { object, index } => {
+            index_access_type(&upper(object), &upper(index), types).unwrap_or(Type::Unknown)
+        }
+        operator => match deferred_application(operator) {
+            // A member `Exclude` keeps lies under a bound member it keeps.
+            Some((Utility::Exclude, [operand, filter])) => {
+                let operand = upper(operand);
+                if super::utility_types::holds_type_parameter(filter) {
+                    return operand;
+                }
+                evaluate(super::utility_types::deferred(
+                    Utility::Exclude,
+                    vec![operand, filter.clone()],
+                ))
+            }
+            // Each bound member that fits the filter, else the filter's
+            // members that fit the bound member (tsc's member & filter): with
+            // `T extends string | number`, `Extract<T, "a" | number>` is
+            // bounded by `"a" | number`.
+            Some((Utility::Extract, [operand, filter])) => {
+                let operand = upper(operand);
+                if matches!(operand.peel(), Type::Unknown)
+                    || super::utility_types::holds_type_parameter(filter)
+                {
+                    return upper(filter);
+                }
+                let filter_members = super::utility_types::members(filter);
+                let bounded: Vec<Type> = super::utility_types::members(&operand)
+                    .into_iter()
+                    .flat_map(|member| {
+                        if assignable(&member, filter, types) {
+                            vec![member]
+                        } else {
+                            filter_members
+                                .iter()
+                                .filter(|part| assignable(part, &member, types))
+                                .cloned()
+                                .collect()
+                        }
+                    })
+                    .collect();
+                // No bound member meets the filter: the filter still bounds
+                // what `Extract` keeps.
+                if bounded.is_empty() {
+                    return upper(filter);
+                }
+                Type::union(bounded)
+            }
+            // `Pick<X, keyof X>` is `X`'s homomorphic copy. Any other `Pick`
+            // holds the keys every instantiation of its key type includes,
+            // as tsc reads it: none for a bare `K`, and `"b"` for
+            // `Extract<keyof T, "b">` with `T extends { a; b }`.
+            Some((Utility::Pick, [object, Type::KeyOf(keys_of)])) if keys_of.as_ref() == object => {
+                upper(object)
+            }
+            Some((Utility::Pick, [object, keys])) => evaluate(super::utility_types::deferred(
+                Utility::Pick,
+                vec![upper(object), lower_keys(keys, types)],
+            )),
+            // The operand's bound without `null` and `undefined`: with `T
+            // extends { next: T | null }`, `NonNullable<T["next"]>` is
+            // bounded by `T`, so by its bound.
+            Some((Utility::NonNullable, [operand])) => {
+                let kept = Type::union(
+                    super::utility_types::members(&upper(operand))
+                        .into_iter()
+                        .filter(|member| !matches!(member.peel(), Type::Null | Type::Undefined))
+                        .collect(),
+                );
+                upper(&kept)
+            }
+            // A narrower function may take more parameters.
+            Some((Utility::Parameters, _)) => Type::Unknown,
+            Some((utility, args)) => evaluate(super::utility_types::deferred(
+                utility,
+                args.iter().map(&upper).collect(),
+            )),
+            // Not a form: callers pass only forms.
+            None => substitute_bounds(operator, types),
+        },
+    }
+}
+
+/// The keys every instantiation of the key type `keys` includes: `keyof T`
+/// holds at least its bound's keys, `Extract` and `Exclude` keep what they
+/// keep of those, and a bare type parameter may be `never`.
+fn lower_keys(keys: &Type, types: TypeResolver) -> Type {
+    use super::utility_types::{
+        Utility, deferred, deferred_application, holds_type_parameter, keyof_type, normalize,
+    };
+    // A lower bound that has no evaluation guarantees no key.
+    let evaluate = |ty: Type| normalize(&ty, types).unwrap_or(Type::Never);
+    let open = keys.without_aliases();
+    if !holds_type_parameter(open) {
+        return keys.clone();
+    }
+    match open {
+        Type::KeyOf(operand) => {
+            keyof_type(&concrete_upper_bound(operand, types), types).unwrap_or(Type::Never)
+        }
+        Type::Union(members) => Type::union(
+            members
+                .iter()
+                .map(|member| lower_keys(member, types))
+                .collect(),
+        ),
+        other => match deferred_application(other) {
+            Some((Utility::Extract, [operand, filter])) if !holds_type_parameter(filter) => {
+                evaluate(deferred(
+                    Utility::Extract,
+                    vec![lower_keys(operand, types), filter.clone()],
+                ))
+            }
+            Some((Utility::Exclude, [operand, filter])) => evaluate(deferred(
+                Utility::Exclude,
+                vec![
+                    lower_keys(operand, types),
+                    concrete_upper_bound(filter, types),
+                ],
+            )),
+            _ => Type::Never,
+        },
+    }
+}
+
+/// What every instantiation of `ty` is assignable to: a form's base
+/// constraint, a type parameter's bound followed through bounds that are
+/// themselves forms (`K extends keyof T` is bounded by every key), and any
+/// other type with its type parameters replaced by their bounds.
+fn upper_bound(ty: &Type, types: TypeResolver, depth: u32) -> Type {
+    if depth > crate::compiler_limits::MAX_TYPE_RESOLUTION_DEPTH {
+        return Type::Error;
+    }
+    if ty.without_aliases().is_type_operator() {
+        return base_constraint(ty, types);
+    }
+    if let Type::GenericParam { id, .. } = ty.without_aliases()
+        && let Some(bound) = types.generic_constraints.get(id)
+        && (bound.without_aliases().is_type_operator()
+            || matches!(bound.without_aliases(), Type::GenericParam { .. }))
+    {
+        return upper_bound(bound, types, depth + 1);
+    }
+    substitute_bounds(ty, types)
+}
+
+/// `ty` with each body type parameter replaced by its bound (`unknown` when it
+/// has none). An upper bound only where `ty` grows with its parameters; for
+/// forms such as `keyof T`, [`upper_bound`] is. A parameter met again inside
+/// its own bound (`T extends { left: T | null }`) stays itself, as the bound
+/// states it, so each bound is substituted once per path.
+///
+/// Bounds that name each other (`P0 extends { x: P1; y: P1 }`, ...) copy
+/// each bound per path, so the result builds under the type budget and is
+/// `Error` past it.
+pub(super) fn substitute_bounds(ty: &Type, types: TypeResolver) -> Type {
+    fn replace(
+        ty: &Type,
+        types: TypeResolver,
+        open: &mut Vec<u32>,
+        budget: &mut crate::type_size::TypeBudget<'_>,
+        depth: u32,
+    ) -> Result<Type, crate::type_size::TypeTooLarge> {
+        budget.charge(depth)?;
+        match ty {
+            Type::GenericParam { id, .. } if open.contains(id) => Ok(ty.clone()),
+            Type::GenericParam { id, .. } => match types.generic_constraints.get(id) {
+                Some(bound) => {
+                    open.push(*id);
+                    let replaced = replace(bound, types, open, budget, depth);
+                    open.pop();
+                    replaced
+                }
+                None => Ok(Type::Unknown),
+            },
+            _ => crate::type_size::map_children(ty, |child| {
+                replace(child, types, open, budget, depth.saturating_add(1))
+            }),
+        }
+    }
+    let mut budget = types.limits.budget();
+    match replace(ty, types, &mut Vec::new(), &mut budget, 1) {
+        Ok(ty) => ty,
+        Err(exceeded) => {
+            types.limits.record(exceeded);
+            Type::Error
+        }
+    }
+}
+
+/// Whether `actual` fits a symbolic string mapping such as `Uppercase<string>`:
+/// only strings the mapping leaves unchanged do, so `"ABC"` fits and `"abc"`
+/// and `string` do not.
+fn fits_symbolic_mapping(chain: &[super::utility_types::Utility], actual: &Type) -> bool {
+    use super::utility_types::{Utility, chain_preserves, symbolic_chain};
+    // The mappings are idempotent, so whatever `m` produces is a fixed point
+    // of `m`: `Uppercase<Lowercase<string>>` fits `Uppercase<string>`.
+    if let Some(actual_chain) = symbolic_chain(actual) {
+        return actual_chain == chain || (chain.len() == 1 && actual_chain.last() == chain.last());
+    }
+    match actual.without_aliases() {
+        Type::Never | Type::Error => true,
+        Type::StringLiteral(text) => chain_preserves(chain, text),
+        Type::StringEnum {
+            member: Some(member),
+            ..
+        } => chain_preserves(chain, &member.value),
+        Type::TemplateLiteral {
+            parts,
+            substitutions,
+        } => {
+            if let [mapping @ (Utility::Capitalize | Utility::Uncapitalize)] = chain {
+                // Only the first character is mapped.
+                return match parts.first() {
+                    Some(head) if !head.is_empty() => chain_preserves(&[*mapping], head),
+                    _ => substitutions
+                        .first()
+                        .is_none_or(|hole| fits_symbolic_mapping(chain, hole)),
+                };
+            }
+            parts.iter().all(|part| chain_preserves(chain, part))
+                && substitutions
+                    .iter()
+                    .all(|hole| fits_symbolic_mapping(chain, hole))
+        }
+        _ => false,
+    }
 }
 
 /// Whether `ty` is an interface whose values only the host builds, such as

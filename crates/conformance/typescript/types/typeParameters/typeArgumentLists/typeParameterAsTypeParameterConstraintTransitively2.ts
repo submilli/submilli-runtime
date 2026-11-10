@@ -19,7 +19,7 @@ foo(a, b, a);
 foo(a, { foo: 1, bar: '', hm: true }, b);
 /*pruned*/;                                                           
 
-/*pruned*/;                                                                            
+function foo2<T extends A, U extends A, V extends A>(x: T, y: U, z: V): V { return z; }
 //function foo2<T extends A, U extends T, V extends U>(x: T, y: U, z: V): V { return z; }
 foo(b, a, c);
 foo(c, c, a);

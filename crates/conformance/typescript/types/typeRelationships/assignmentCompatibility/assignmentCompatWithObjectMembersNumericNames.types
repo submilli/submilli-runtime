@@ -1,0 +1,219 @@
+=== assignmentCompatWithObjectMembersNumericNames.ts ===
+// members N and M of types S and T have the same name, same accessibility, same optionality, and N is assignable M
+// numeric named properties work correctly, no errors expected
+
+class S { 1: string; }
+>S : S
+>  : ^
+>1 : string
+>  : ^^^^^^
+
+class T { 1.: string; }
+>T : T
+>  : ^
+>1. : string
+>   : ^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+
+interface S2 { 1: string; bar?: string }
+>S2 : S2
+>   : ^^
+>1 : string
+>  : ^^^^^^
+>bar : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+
+interface T2 { 1.0: string; baz?: string }
+>T2 : T2
+>   : ^^
+>1.0 : string
+>    : ^^^^^^
+>baz : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+
+let s2: S2 = null as unknown as (S2);
+>s2 : S2
+>   : ^^
+>null as unknown as (S2) : S2
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let t2: T2 = null as unknown as (T2);
+>t2 : T2
+>   : ^^
+>null as unknown as (T2) : T2
+>                        : ^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+
+let a: { 1.: string; bar?: string } = null as unknown as ({ 1.: string; bar?: string });
+>a : { 1: string; bar?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1. : string
+>   : ^^^^^^
+>bar : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ 1.: string; bar?: string }) : { 1: string; bar?: string; }
+>                                                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>1. : string
+>   : ^^^^^^
+>bar : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+
+let b: { 1.0: string; baz?: string } = null as unknown as ({ 1.0: string; baz?: string });
+>b : { 1: string; baz?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1.0 : string
+>    : ^^^^^^
+>baz : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+>null as unknown as ({ 1.0: string; baz?: string }) : { 1: string; baz?: string; }
+>                                                   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>1.0 : string
+>    : ^^^^^^
+>baz : string | undefined
+>    : ^^^^^^^^^^^^^^^^^^
+
+
+let a2 = { 1.0: '' };
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+>{ 1.0: '' } : { 1: string; }
+>            : ^^^^^^^^^^^^^^
+>1.0 : string
+>    : ^^^^^^
+>'' : ""
+>   : ^^
+
+let b2 = { 1: '' };
+>b2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+>{ 1: '' } : { 1: string; }
+>          : ^^^^^^^^^^^^^^
+>1 : string
+>  : ^^^^^^
+>'' : ""
+>   : ^^
+
+
+/**/;
+/**/;
+/**/;
+/**/;
+
+s2 = t2;
+>s2 = t2 : T2
+>        : ^^
+>s2 : S2
+>   : ^^
+>t2 : T2
+>   : ^^
+
+t2 = s2;
+>t2 = s2 : S2
+>        : ^^
+>t2 : T2
+>   : ^^
+>s2 : S2
+>   : ^^
+
+/**/;
+s2 = b;
+>s2 = b : { 1: string; baz?: string; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s2 : S2
+>   : ^^
+>b : { 1: string; baz?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+s2 = a2;
+>s2 = a2 : { 1: string; }
+>        : ^^^^^^^^^^^^^^
+>s2 : S2
+>   : ^^
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+
+
+a = b;
+>a = b : { 1: string; baz?: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { 1: string; bar?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { 1: string; baz?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+b = a;
+>b = a : { 1: string; bar?: string; }
+>      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>b : { 1: string; baz?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : { 1: string; bar?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+/**/;
+a = s2;
+>a = s2 : S2
+>       : ^^
+>a : { 1: string; bar?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>s2 : S2
+>   : ^^
+
+a = a2;
+>a = a2 : { 1: string; }
+>       : ^^^^^^^^^^^^^^
+>a : { 1: string; bar?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+
+
+a2 = b2;
+>a2 = b2 : { 1: string; }
+>        : ^^^^^^^^^^^^^^
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+>b2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+
+b2 = a2;
+>b2 = a2 : { 1: string; }
+>        : ^^^^^^^^^^^^^^
+>b2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+
+a2 = b;
+>a2 = b : { 1: string; baz?: string; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+>b : { 1: string; baz?: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+a2 = t2;
+>a2 = t2 : T2
+>        : ^^
+>a2 : { 1: string; }
+>   : ^^^^^^^^^^^^^^
+>t2 : T2
+>   : ^^
+
+/**/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

@@ -1,0 +1,438 @@
+=== isomorphicMappedTypeInference.ts ===
+
+type Box<T> = {
+>Box : Box<T>
+>    : ^^^^^^
+>T : T
+>  : ^
+
+    value: T;
+>value : T
+>      : ^
+
+}
+
+/*pruned*/;
+
+
+
+function box<T>(x: T): Box<T> {
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+    return { value: x };
+>{ value: x } : { value: T; }
+>             : ^^^^^^^^^^^^^
+>value : T
+>      : ^
+>x : T
+>  : ^
+
+}
+
+function unbox<T>(x: Box<T>): T {
+>unbox : <T>(x: Box<T>) => T
+>      : ^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : Box<T>
+>  : ^^^^^^
+
+    return x.value;
+>x.value : T
+>        : ^
+>x : Box<T>
+>  : ^^^^^^
+>value : T
+>      : ^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+
+
+/*pruned*/;
+
+
+
+
+
+function f1(): void {
+>f1 : () => void
+>   : ^^^^^^^^^^
+
+    let v = {
+>v : { a: number; b: string; c: boolean; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         a: 42,         b: "hello",         c: true     } : { a: number; b: string; c: boolean; }
+>                                                           : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        a: 42,
+>a : number
+>  : ^^^^^^
+>42 : 42
+>   : ^^
+
+        b: "hello",
+>b : string
+>  : ^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+        c: true
+>c : boolean
+>  : ^^^^^^^
+>true : true
+>     : ^^^^
+
+    };
+    /*pruned*/;
+    /*pruned*/;
+}
+
+function f2(): void {
+>f2 : () => void
+>   : ^^^^^^^^^^
+
+    let b = {
+>b : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         a: box(42),         b: box("hello"),         c: box(true)     } : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>                                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        a: box(42),
+>a : Box<number>
+>  : ^^^^^^^^^^^
+>box(42) : Box<number>
+>        : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        b: box("hello"),
+>b : Box<string>
+>  : ^^^^^^^^^^^
+>box("hello") : Box<string>
+>             : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+        c: box(true)
+>c : Box<boolean>
+>  : ^^^^^^^^^^^^
+>box(true) : Box<boolean>
+>          : ^^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+    };
+    /*pruned*/;
+    /*pruned*/;
+}
+
+function f3(): void {
+>f3 : () => void
+>   : ^^^^^^^^^^
+
+    let b = {
+>b : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         a: box(42),         b: box("hello"),         c: box(true)     } : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>                                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        a: box(42),
+>a : Box<number>
+>  : ^^^^^^^^^^^
+>box(42) : Box<number>
+>        : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        b: box("hello"),
+>b : Box<string>
+>  : ^^^^^^^^^^^
+>box("hello") : Box<string>
+>             : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+        c: box(true)
+>c : Box<boolean>
+>  : ^^^^^^^^^^^^
+>box(true) : Box<boolean>
+>          : ^^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+    };
+    /*pruned*/;
+}
+
+function f4(): void {
+>f4 : () => void
+>   : ^^^^^^^^^^
+
+    let b = {
+>b : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         a: box(42),         b: box("hello"),         c: box(true)     } : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>                                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        a: box(42),
+>a : Box<number>
+>  : ^^^^^^^^^^^
+>box(42) : Box<number>
+>        : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        b: box("hello"),
+>b : Box<string>
+>  : ^^^^^^^^^^^
+>box("hello") : Box<string>
+>             : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+        c: box(true)
+>c : Box<boolean>
+>  : ^^^^^^^^^^^^
+>box(true) : Box<boolean>
+>          : ^^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+    };
+    /*pruned*/;
+    /*pruned*/;
+}
+
+/*pruned*/;
+
+
+
+function f5(s: string): void {
+>f5 : (s: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+    /*pruned*/;
+
+
+
+
+    /*pruned*/;
+    /*pruned*/;
+}
+
+function makeDictionary<T>(obj: { [x: string]: T }): { [x: string]: T; } {
+>makeDictionary : <T>(obj: { [x: string]: T; }) => { [x: string]: T; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>obj : { [x: string]: T; }
+>    : ^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>x : string
+>  : ^^^^^^
+
+    return obj;
+>obj : { [x: string]: T; }
+>    : ^^^^^^^^^^^^^^^^^^^
+
+}
+
+function f6(s: string): void {
+>f6 : (s: string) => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>s : string
+>  : ^^^^^^
+
+    let b = makeDictionary({
+>b : { [x: string]: Box<number> | Box<string> | Box<boolean>; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>makeDictionary({         a: box(42),         b: box("hello"),         c: box(true)     }) : { [x: string]: Box<number> | Box<string> | Box<boolean>; }
+>                                                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>makeDictionary : <T>(obj: { [x: string]: T; }) => { [x: string]: T; }
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{         a: box(42),         b: box("hello"),         c: box(true)     } : { a: Box<number>; b: Box<string>; c: Box<boolean>; }
+>                                                                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        a: box(42),
+>a : Box<number>
+>  : ^^^^^^^^^^^
+>box(42) : Box<number>
+>        : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>42 : 42
+>   : ^^
+
+        b: box("hello"),
+>b : Box<string>
+>  : ^^^^^^^^^^^
+>box("hello") : Box<string>
+>             : ^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>"hello" : "hello"
+>        : ^^^^^^^
+
+        c: box(true)
+>c : Box<boolean>
+>  : ^^^^^^^^^^^^
+>box(true) : Box<boolean>
+>          : ^^^^^^^^^^^^
+>box : <T>(x: T) => Box<T>
+>    : ^^^^^^^^^^^^^^^^^^^
+>true : true
+>     : ^^^^
+
+    });
+    /*pruned*/;
+    /*pruned*/;
+}
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+type Foo = {
+>Foo : Foo
+>    : ^^^
+
+    a?: number;
+>a : number | undefined
+>  : ^^^^^^^^^^^^^^^^^^
+
+    readonly b: string;
+>b : string
+>  : ^^^^^^
+
+}
+
+function f10(foo: Foo): void {
+>f10 : (foo: Foo) => void
+>    : ^^^^^^^^^^^^^^^^^^
+>foo : Foo
+>    : ^^^
+
+    /*pruned*/;             // { a: number, readonly b: string }
+    /*pruned*/;          // { a?: number, b: string }
+    /*pruned*/;                     // { a: number, b: string }
+}
+
+// Repro from #12606
+
+/*pruned*/;
+/*pruned*/;
+
+
+
+/**
+ * Given a spec object recursively mapping properties to functions, creates a function
+ * producing an object of the same structure, by mapping each property to the result
+ * of calling its associated function with the supplied arguments.
+ */
+/*pruned*/;
+
+// Infers g1: (...args: any[]) => { sum: number, nested: { mul: string } }
+/*pruned*/;
+
+
+
+
+
+
+// Infers g2: (...args: any[]) => { foo: { bar: { baz: boolean } } }
+/*pruned*/;
+
+// Repro from #12633
+
+/*pruned*/;
+let o = {a: 5, b: 7};
+>o : { a: number; b: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>{a: 5, b: 7} : { a: number; b: number; }
+>             : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : number
+>  : ^^^^^^
+>5 : 5
+>  : ^
+>b : number
+>  : ^^^^^^
+>7 : 7
+>  : ^
+
+/*pruned*/;
+/*pruned*/;
+
+// Inferring to { [P in K]: X }, where K extends keyof T, produces same inferences as
+// inferring to { [P in keyof T]: X }.
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+// Repro from #29765
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

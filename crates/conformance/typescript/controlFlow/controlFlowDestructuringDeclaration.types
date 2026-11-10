@@ -270,11 +270,35 @@ function f6(): void {
 
 }
 
-/*pruned*/;
+function f7(): void {
+>f7 : () => void
+>   : ^^^^^^^^^^
 
+    let o: { [x: string]: number } = { x: 1 };
+>o : { [x: string]: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>{ x: 1 } : { x: number; }
+>         : ^^^^^^^^^^^^^^
+>x : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
 
+    let { x }: { [x: string]: string | number } = o;
+>x : string | number
+>  : ^^^^^^^^^^^^^^^
+>x : string
+>  : ^^^^^^
+>o : { [x: string]: number; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^
 
+    x;
+>x : number
+>  : ^^^^^^
 
+}
 
 
 function main(): void {}

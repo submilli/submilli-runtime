@@ -1,0 +1,8 @@
+types: 80 of 115 tsc entries compared, 0 differ
+
+errors:
+line 15: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 16: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 17: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 19: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)
+line 20: ours: A spread argument must either have a tuple type or be passed to a rest parameter (tsc accepts)

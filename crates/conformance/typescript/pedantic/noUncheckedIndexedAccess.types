@@ -295,27 +295,143 @@ strMap[0] = undefined;
 /*pruned*/;
 
 // Numeric lookups are unaffected
-/*pruned*/;
+const numMap: { [s: number]: boolean } = null as unknown as ({ [s: number]: boolean });
+>numMap : { [s: number]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>s : number
+>  : ^^^^^^
+>null as unknown as ({ [s: number]: boolean }) : { [s: number]: boolean; }
+>                                              : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+>s : number
+>  : ^^^^^^
+
 // All of these should be ok
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
-/*pruned*/;
+const num_ok1: boolean = numMap[0];
+>num_ok1 : boolean
+>        : ^^^^^^^
+>numMap[0] : boolean | undefined
+>          : ^^^^^^^^^^^^^^^^^^^
+>numMap : { [s: number]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 : 0
+>  : ^
+
+const num_ok2: boolean = numMap[0 as number];
+>num_ok2 : boolean
+>        : ^^^^^^^
+>numMap[0 as number] : boolean | undefined
+>                    : ^^^^^^^^^^^^^^^^^^^
+>numMap : { [s: number]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 as number : number
+>            : ^^^^^^
+>0 : 0
+>  : ^
+
+const num_ok3: boolean = numMap[0 as 0 | 1];
+>num_ok3 : boolean
+>        : ^^^^^^^
+>numMap[0 as 0 | 1] : boolean | undefined
+>                   : ^^^^^^^^^^^^^^^^^^^
+>numMap : { [s: number]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>0 as 0 | 1 : 0 | 1
+>           : ^^^^^
+>0 : 0
+>  : ^
+
+const num_ok4: boolean = numMap[NumericEnum1.A];
+>num_ok4 : boolean
+>        : ^^^^^^^
+>numMap[NumericEnum1.A] : boolean | undefined
+>                       : ^^^^^^^^^^^^^^^^^^^
+>numMap : { [s: number]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumericEnum1.A : NumericEnum1.A
+>               : ^^^^^^^^^^^^^^
+>NumericEnum1 : typeof NumericEnum1
+>             : ^^^^^^^^^^^^^^^^^^^
+>A : NumericEnum1.A
+>  : ^^^^^^^^^^^^^^
+
+const num_ok5: boolean = numMap[NumericEnum2.A];
+>num_ok5 : boolean
+>        : ^^^^^^^
+>numMap[NumericEnum2.A] : boolean | undefined
+>                       : ^^^^^^^^^^^^^^^^^^^
+>numMap : { [s: number]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>NumericEnum2.A : NumericEnum2.A
+>               : ^^^^^^^^^^^^^^
+>NumericEnum2 : typeof NumericEnum2
+>             : ^^^^^^^^^^^^^^^^^^^
+>A : NumericEnum2.A
+>  : ^^^^^^^^^^^^^^
+
 
 // Generics
-/*pruned*/;
+function generic1<T extends { [s: string]: boolean }>(arg: T): boolean {
+>generic1 : <T extends { [s: string]: boolean; }>(arg: T) => boolean
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>s : string
+>  : ^^^^^^
+>arg : T
+>    : ^
 
+    // Should error
+    return arg["blah"];
+>arg["blah"] : boolean | undefined
+>            : ^^^^^^^^^^^^^^^^^^^
+>arg : T
+>    : ^
+>"blah" : "blah"
+>       : ^^^^^^
 
+}
+function generic2<T extends { [s: string]: boolean }>(arg: T): boolean {
+>generic2 : <T extends { [s: string]: boolean; }>(arg: T) => boolean
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>s : string
+>  : ^^^^^^
+>arg : T
+>    : ^
 
-/*pruned*/;
+    // Should OK
+    return arg["blah"]!;
+>arg["blah"]! : boolean
+>             : ^^^^^^^
+>arg["blah"] : boolean | undefined
+>            : ^^^^^^^^^^^^^^^^^^^
+>arg : T
+>    : ^
+>"blah" : "blah"
+>       : ^^^^^^
 
+}
+function generic3<T extends string>(arg: T): boolean {
+>generic3 : <T extends string>(arg: T) => boolean
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>arg : T
+>    : ^
 
+    // Should error
+    return strMap[arg];
+>strMap[arg] : boolean | undefined
+>            : ^^^^^^^^^^^^^^^^^^^
+>strMap : { [s: string]: boolean; }
+>       : ^^^^^^^^^^^^^^^^^^^^^^^^^
+>arg : T
+>    : ^
 
-/*pruned*/;
-
-
-
+}
 
 // Element access into known properties is ok
 const obj1: { x: string, y: number, [key: string]: string | number } = null as unknown as ({ x: string, y: number, [key: string]: string | number });

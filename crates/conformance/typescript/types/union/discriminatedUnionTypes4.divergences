@@ -1,0 +1,36 @@
+types: 53 of 106 tsc entries compared, 8 differ
+
+line 28: animal
+  tsc:  { type: `${AnimalType.cat}`; meow: string; }
+  ours: { meow: string; type: "cat" }
+
+line 29: animal
+  tsc:  { type: `${AnimalType.dog}`; bark: string; }
+  ours: { bark: string; type: "dog" }
+
+line 30: animal
+  tsc:  { type: `${AnimalType.dog}`; bark: string; }
+  ours: { bark: string; type: "dog" }
+
+line 32: animal
+  tsc:  never
+  ours: { bark: string; type: "dog" }
+
+line 39: animal
+  tsc:  { type: `${AnimalType.cat}`; meow: string; }
+  ours: { meow: string; type: "cat" }
+
+line 42: animal
+  tsc:  { type: `${AnimalType.dog}`; bark: string; }
+  ours: { bark: string; type: "dog" }
+
+line 52: animal
+  tsc:  { type: `${AnimalType.cat}`; meow: string; }
+  ours: { meow: string; type: "cat" }
+
+line 55: animal
+  tsc:  { type: `${AnimalType.dog}`; bark: string; }
+  ours: { bark: string; type: "dog" }
+
+errors:
+line 32: ours: expected `never`, got `{ bark: string; type: "dog" }` (tsc accepts)

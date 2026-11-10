@@ -22,3 +22,6 @@ compoundAdditionAssignmentWithInvalidOperands.ts(31,7): error TS18050: The value
 compoundAdditionAssignmentWithInvalidOperands.ts(34,1): error TS2365: Operator '+=' cannot be applied to types 'number' and 'void'.
 compoundAdditionAssignmentWithInvalidOperands.ts(35,1): error TS2365: Operator '+=' cannot be applied to types 'number' and 'boolean'.
 compoundAdditionAssignmentWithInvalidOperands.ts(36,1): error TS2365: Operator '+=' cannot be applied to types 'number' and '{}'.
+compoundAdditionAssignmentWithInvalidOperands.ts(39,1): error TS2365: Operator '+=' cannot be applied to types 'E' and 'void'.
+compoundAdditionAssignmentWithInvalidOperands.ts(40,1): error TS2365: Operator '+=' cannot be applied to types 'E' and 'boolean'.
+compoundAdditionAssignmentWithInvalidOperands.ts(41,1): error TS2365: Operator '+=' cannot be applied to types 'E' and '{}'.

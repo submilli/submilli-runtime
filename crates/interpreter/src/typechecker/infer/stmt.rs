@@ -378,6 +378,14 @@ impl Inferer<'_> {
                     ty: value_ty,
                     widened,
                 } = self.infer_returned_value_with_widened(v, hint.as_ref())?;
+                // Returning reads the value: a missing one becomes `undefined`
+                // only when the declared return type names it. An inferred
+                // return type has no such contract, so the read decides here.
+                if self.inferred_returns.is_none()
+                    && let Some(declared) = &hint
+                {
+                    self.absorb_missing_into(id, declared)?;
+                }
                 // A closure in a `void` context may return `unknown` (see
                 // `infer_arrow`), so a `void` value it returns is run and
                 // `undefined` returned in its place.
@@ -529,6 +537,8 @@ impl Inferer<'_> {
             true,
         )?;
         self.drop_selected_default_mismatch(component_hint.as_ref(), value, &value_ty)?;
+        let (value_ty, holds_missing) =
+            self.absorb_initializer(&name, hint.as_ref(), typed_value, value_ty)?;
         // A `let` is reassignable, so a fresh literal type widens: `const a = 1;
         // let b = a;` binds `number`, not `1`. A literal type the value got from
         // a declaration stays (`let v = c` with `c: "x"` is `"x"`), and an
@@ -557,19 +567,26 @@ impl Inferer<'_> {
             name.span,
             origin,
         );
+        self.scopes.mark_statement_local(&name.name);
         // A destructured parameter's binding narrows its siblings as a
         // destructured `const` does, while no write reaches it.
         if ty.is_none() && self.reads_pattern_parameter(value)? {
             self.record_aliased_condition(&name.name, typed_value);
         }
-        let flow_ty = match self.pattern_binding_flow_type(value)? {
-            Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
-        };
-        self.narrow_local_initializer(&name, &bound, flow_ty)?;
+        if holds_missing {
+            self.hold_initializer_read(&name.name, name.span, typed_value)?;
+        }
+        let storage = self.settle_local_initializer(
+            &name,
+            ty.is_some(),
+            value,
+            typed_value,
+            value_ty,
+            &bound,
+        )?;
         Ok(TypedStmtKind::Let {
             name,
-            ty: bound,
+            ty: storage.unwrap_or(bound),
             value: typed_value,
             boxed: false,
             doc,
@@ -594,6 +611,7 @@ impl Inferer<'_> {
             self.scopes
                 .insert_uninitialized(name.name.clone(), declared.clone(), name.span);
         }
+        self.scopes.mark_statement_local(&name.name);
         let storage = self
             .scopes
             .get(&name.name)
@@ -723,6 +741,8 @@ impl Inferer<'_> {
             hint.is_none(),
         )?;
         self.drop_selected_default_mismatch(component_hint.as_ref(), value, &value_ty)?;
+        let (value_ty, holds_missing) =
+            self.absorb_initializer(&name, hint.as_ref(), typed_value, value_ty)?;
         let origin = self.initializer_literal_origin(ty.is_some(), typed_value, &value_ty)?;
         let bound = hint.unwrap_or_else(|| value_ty.clone());
         let bound = self.evolving_storage_type(&name, bound);
@@ -734,32 +754,94 @@ impl Inferer<'_> {
             name.span,
             origin,
         );
-        if crate::lower_patterns::is_pattern_value(&name.name) {
+        self.scopes.mark_statement_local(&name.name);
+        let is_pattern_value = crate::lower_patterns::is_pattern_value(&name.name);
+        if is_pattern_value {
             self.pattern_sources.insert(name.name.clone(), typed_value);
         }
         if ty.is_none() {
             self.record_aliased_condition(&name.name, typed_value);
         }
-        if let Some(entry) = self.scopes.get(&name.name) {
-            self.record_const_record_read(
-                narrowing::BindingId::Local {
-                    name: name.name.clone(),
-                    decl_scope: entry.decl_scope,
-                },
-                typed_value,
-            )?;
+        if holds_missing {
+            self.hold_initializer_read(&name.name, name.span, typed_value)?;
         }
-        let flow_ty = match self.pattern_binding_flow_type(value)? {
-            Some(flow_ty) => flow_ty,
-            None => self.assigned_flow_type(&bound, ty.is_some(), typed_value, value_ty)?,
-        };
-        self.narrow_local_initializer(&name, &bound, flow_ty)?;
+        let storage = self.settle_local_initializer(
+            &name,
+            ty.is_some(),
+            value,
+            typed_value,
+            value_ty,
+            &bound,
+        )?;
         Ok(TypedStmtKind::Const {
             name,
-            ty: bound,
+            ty: storage.unwrap_or(bound),
             value: typed_value,
             doc,
         })
+    }
+
+    /// An annotated `let`/`const` initializer whose annotation names
+    /// `undefined` takes a missing value. The local then reads as `T`, as tsc
+    /// narrows it, holding the read maybe missing (`hold_initializer_read`);
+    /// one that can't hold it (`ScopeEntry::can_hold_missing_read`) starts
+    /// out maybe `undefined`. Returns the initializer's flow type and whether
+    /// the local holds the read.
+    fn absorb_initializer(
+        &mut self,
+        name: &Ident,
+        hint: Option<&Type>,
+        typed_value: ExprId,
+        value_ty: Type,
+    ) -> Result<(Type, bool), CompilerFailure> {
+        // The binding isn't in scope yet; it is a `let`/`const` local.
+        let can_hold = !self.captured_locals.contains(&name.span);
+        let absorbed = match hint {
+            Some(hint) => self.absorb_missing_into(typed_value, hint)?,
+            _ => false,
+        };
+        let holds_missing = absorbed && can_hold;
+        let value_ty = if absorbed && !holds_missing {
+            Type::union(vec![value_ty, Type::Undefined])
+        } else {
+            value_ty
+        };
+        Ok((value_ty, holds_missing))
+    }
+
+    /// The end of a local `let`/`const` declaration, once `name` is in scope
+    /// with type `bound`: decides whether it holds a maybe-missing read (see
+    /// `missing_reads`) and installs its initial narrowing. `value` is the
+    /// source initializer, `typed_value` its typed node and `value_ty` its
+    /// flow type. Returns the widened storage of an unannotated maybe-missing
+    /// local.
+    fn settle_local_initializer(
+        &mut self,
+        name: &Ident,
+        annotated: bool,
+        value: ExprId,
+        typed_value: ExprId,
+        value_ty: Type,
+        bound: &Type,
+    ) -> Result<Option<Type>, CompilerFailure> {
+        let storage = if crate::lower_patterns::is_pattern_value(&name.name) {
+            None
+        } else {
+            self.bind_maybe_missing_local(name, annotated, typed_value, bound)?
+        };
+        let flow_ty = match self.pattern_binding_flow_type(value)? {
+            Some(flow_ty) => flow_ty,
+            None => self.assigned_flow_type(bound, annotated, typed_value, value_ty)?,
+        };
+        // A local holding a maybe-missing read reads as `T`: its value was
+        // widened only to be stored, and each use is decided by itself.
+        let flow_ty = if storage.is_some() {
+            narrowing::strip_undefined(&flow_ty)
+        } else {
+            flow_ty
+        };
+        self.narrow_local_initializer(name, bound, flow_ty)?;
+        Ok(storage)
     }
 
     fn infer_if_statement(
@@ -776,6 +858,7 @@ impl Inferer<'_> {
             .span;
         self.note_if_condition_ands(condition, then_body_span)?;
         let (typed_cond, cond_ty) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed_cond)?;
         let cond_span = self
             .ast
             .try_expr(condition)
@@ -1384,10 +1467,7 @@ impl Inferer<'_> {
             && !assignable(&result_ty, check_ty, self.resolver())
         {
             let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
-            self.error(
-                value_span,
-                format!("expected `{check_ty}`, got `{result_ty}`"),
-            );
+            self.error_type_mismatch(value_span, check_ty, &result_ty, vec![]);
         }
         let synth_binary = self
             .typed_ast
@@ -1490,10 +1570,7 @@ impl Inferer<'_> {
             StaticWrite::Resolved { mangled, ty } => {
                 let (typed_value, value_ty) = self.infer_expr(value, Some(&ty))?;
                 if !assignable(&value_ty, &ty, self.resolver()) {
-                    self.error(
-                        value_span,
-                        super::diagnostics::mismatch_message(&ty, &value_ty),
-                    );
+                    self.error_type_mismatch(value_span, &ty, &value_ty, vec![]);
                 }
                 return Ok(TypedStmtKind::AssignGlobal {
                     ident: name,
@@ -1584,15 +1661,12 @@ impl Inferer<'_> {
                 };
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
+                let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
                     ));
-                    self.error_with_help(
-                        value_span,
-                        super::diagnostics::mismatch_message(&field_ty, &value_ty),
-                        help,
-                    );
+                    self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
                     receiver: typed_receiver,
@@ -1631,15 +1705,12 @@ impl Inferer<'_> {
                 };
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
+                let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
                     ));
-                    self.error_with_help(
-                        value_span,
-                        super::diagnostics::mismatch_message(&field_ty, &value_ty),
-                        help,
-                    );
+                    self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
                     receiver: typed_receiver,
@@ -1685,15 +1756,12 @@ impl Inferer<'_> {
                 };
                 let (typed_value, value_ty, reported) =
                     self.infer_assigned_value(value, Some(&field_ty))?;
+                let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
                     let help = self.render_help_list(super::type_diff::type_mismatch_help(
                         &field_ty, &value_ty,
                     ));
-                    self.error_with_help(
-                        value_span,
-                        super::diagnostics::mismatch_message(&field_ty, &value_ty),
-                        help,
-                    );
+                    self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
                     receiver: typed_receiver,
@@ -1827,6 +1895,15 @@ impl Inferer<'_> {
         let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
         let evolving = self.evolving_array_receiver(receiver)?;
         let (typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
+        if self.is_generic_index_receiver(&receiver_ty) {
+            return self.infer_generic_index_write(
+                typed_receiver,
+                receiver_ty,
+                index,
+                value,
+                recv_span,
+            );
+        }
         let (mut typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let evolving = evolving.filter(|_| super::evolving::array_element(&receiver_ty).is_some());
@@ -1836,32 +1913,42 @@ impl Inferer<'_> {
         } else {
             self.infer_numeric_index(index)?
         };
-        let targets = if object {
-            self.object_index_write_targets(
-                &receiver_ty,
-                &key_ty,
-                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
-            )
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        let targets = if object
+            && super::utility_types::holds_type_parameter(&key_ty)
+            && !self.has_index_signature(&receiver_ty)
+        {
+            // `u[k] = v` with `K extends keyof User` writes tsc's `User[K]`.
+            if self.fits_generic_key(&receiver_ty, &key_ty, index_span) {
+                let keys = self.apparent_type(&key_ty);
+                self.report_readonly_keys(&receiver_ty, &keys, index_span);
+                vec![Type::indexed_access(receiver_ty.clone(), key_ty.clone())]
+            } else {
+                vec![Type::Error]
+            }
+        } else if object {
+            self.object_index_write_targets(&receiver_ty, &key_ty, index_span)
         } else {
             vec![self.indexed_write_elem_ty(&receiver_ty, recv_span, recv_span)]
         };
         let mut elem_ty = self.common_index_write_type(&targets);
-        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never)).then_some(&elem_ty);
+        // A write through `User[K]` takes the bound's property as its context.
+        let context = super::assignable::write_context(&elem_ty, self.resolver());
+        let hint = (evolving.is_none() && !matches!(elem_ty, Type::Never))
+            .then_some(context.as_ref())
+            .flatten();
         let (typed_value, value_ty, reported) = self.infer_assigned_value(value, hint)?;
+        let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
         if evolving.is_none()
             && !reported
             && !matches!(value_ty, Type::Error)
             && let Some(target) = targets.iter().find(|target| {
-                !matches!(target, Type::Error) && !assignable(&value_ty, target, self.resolver())
+                !matches!(target, Type::Error) && !self.fits_index_write(&value_ty, target)
             })
         {
             let help =
                 self.render_help_list(super::type_diff::type_mismatch_help(target, &value_ty));
-            self.error_with_help(
-                value_span,
-                super::diagnostics::mismatch_message(&target, &value_ty),
-                help,
-            );
+            self.error_type_mismatch(value_span, target, &value_ty, help);
         }
         let current_element = evolving
             .as_ref()
@@ -1884,7 +1971,6 @@ impl Inferer<'_> {
                 recv_span,
             )?;
         }
-        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
         self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
         self.narrow_keyed_field_after_write(
             typed_receiver,
@@ -1903,6 +1989,92 @@ impl Inferer<'_> {
             index: typed_index,
             value: typed_value,
             elem_ty,
+        })
+    }
+
+    /// Report a write through `receiver[keys]` where some key names a
+    /// property some member of `receiver` does not let one write: a
+    /// `readonly` field or property, or a getter without a setter (tsc's
+    /// TS2540). Reports once per write.
+    fn report_readonly_keys(&mut self, receiver: &Type, keys: &Type, span: Span) {
+        let receivers = super::utility_types::members(receiver);
+        for key in super::utility_types::members(keys) {
+            let Type::StringLiteral(name) = key.peel() else {
+                continue;
+            };
+            let readonly = receivers.iter().any(|member| {
+                self.union_member_field_write(member, name)
+                    .is_some_and(|write| !write.writable)
+            });
+            if readonly {
+                self.error(span, format!("cannot assign to readonly property `{name}`"));
+                return;
+            }
+        }
+    }
+
+    /// Whether `value_ty` may be written where an index write stores
+    /// `target`: assignable to it, or, for `T[K]`, to the declared bound's
+    /// property, as tsc writes it.
+    fn fits_index_write(&self, value_ty: &Type, target: &Type) -> bool {
+        assignable(value_ty, target, self.resolver())
+            || super::assignable::fits_bound_property_write(value_ty, target, self.resolver())
+    }
+
+    /// `o[k] = v` on a type parameter `T`: `v` must fit tsc's `T[K]`, and the
+    /// run time writes the property by name on the erased object.
+    fn infer_generic_index_write(
+        &mut self,
+        typed_receiver: ExprId,
+        receiver_ty: Type,
+        index: ExprId,
+        value: ExprId,
+        recv_span: Span,
+    ) -> Result<TypedStmtKind, CompilerFailure> {
+        let value_span = self.ast.try_expr(value).map_err(super::arena_failure)?.span;
+        let through_readonly = matches!(
+            super::utility_types::deferred_application(receiver_ty.peel()),
+            Some((super::utility_types::Utility::Readonly, _))
+        );
+        if through_readonly {
+            self.error(
+                recv_span,
+                format!("cannot assign through `{receiver_ty}`, which only permits reading"),
+            );
+        }
+        let key = self.generic_index_key(&receiver_ty, index)?;
+        let generic_receiver = super::expr::generic_receiver(&receiver_ty).clone();
+        // A literal key writes the bound's property, which may be `readonly`
+        // (`t["a"] = 5` with `T extends { readonly a: number }`).
+        if let Some((_, key_ty)) = &key
+            && !through_readonly
+            && !super::utility_types::holds_type_parameter(key_ty)
+        {
+            let bound = self.apparent_type(&generic_receiver);
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+            self.report_readonly_keys(&bound, key_ty, index_span);
+        }
+        let target = match &key {
+            Some((_, key_ty)) => Type::indexed_access(generic_receiver, key_ty.clone()),
+            None => Type::Error,
+        };
+        let context = super::assignable::write_context(&target, self.resolver());
+        let (typed_value, value_ty, reported) =
+            self.infer_assigned_value(value, context.as_ref())?;
+        if !reported
+            && !matches!(value_ty, Type::Error)
+            && !self.fits_index_write(&value_ty, &target)
+        {
+            self.error_type_mismatch(value_span, &target, &value_ty, vec![]);
+        }
+        let Some((typed_index, _)) = key else {
+            return Ok(TypedStmtKind::Expr(typed_value));
+        };
+        Ok(TypedStmtKind::AssignIndex {
+            receiver: typed_receiver,
+            index: typed_index,
+            value: typed_value,
+            elem_ty: target,
         })
     }
 
@@ -2219,6 +2391,33 @@ impl Inferer<'_> {
                 .then(|| entry.write_type().clone());
             let (typed_value, value_ty, reported) =
                 self.infer_assigned_value(value, hint.as_ref())?;
+            let maybe_missing_storage = entry.maybe_missing_storage();
+            let can_hold =
+                entry.can_hold_missing_read(self.captured_locals.contains(&entry.decl_span));
+            // An unannotated local holding a maybe-missing read takes another
+            // one as it is.
+            let absorbed = if maybe_missing_storage.is_some() {
+                if self.absorb_missing(typed_value)? {
+                    self.hold_assigned_read(&target.name, entry.decl_span, typed_value)?;
+                }
+                false
+            } else {
+                // A local that can't hold a read keeps no flag, so it takes
+                // any read as maybe `undefined`.
+                !entry.is_const && self.absorb_missing_into(typed_value, entry.write_type())?
+            };
+            // A local whose type names `undefined` takes a missing read. It
+            // reads as `T` from here, as tsc narrows it, holding the read maybe
+            // missing; one that can't hold it reads as maybe `undefined`.
+            let holds_missing = absorbed && can_hold;
+            let value_ty = if holds_missing {
+                self.hold_assigned_read(&target.name, entry.decl_span, typed_value)?;
+                value_ty
+            } else if absorbed {
+                Type::union(vec![value_ty, Type::Undefined])
+            } else {
+                value_ty
+            };
             if entry.requires_assignment
                 && let Some(env) = self.narrow_scopes.last_mut()
             {
@@ -2234,10 +2433,7 @@ impl Inferer<'_> {
                 && !reported
                 && !assignable(&value_ty, entry.write_type(), self.resolver())
             {
-                self.error(
-                    value_span,
-                    super::diagnostics::mismatch_message(entry.write_type(), &value_ty),
-                );
+                self.error_type_mismatch(value_span, entry.write_type(), &value_ty, vec![]);
             }
             self.scopes.reset_parameter_read_type(&target.name);
             let annotated = self.is_local_annotated(&target.name);
@@ -2250,9 +2446,13 @@ impl Inferer<'_> {
                 flow_ty,
                 Some(value),
             )?;
+            if maybe_missing_storage.is_some() {
+                self.typed_ast.widened_bindings.insert(target.span);
+            }
+            let target_ty = maybe_missing_storage.unwrap_or_else(|| entry.storage_type().clone());
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
-                target_ty: entry.storage_type().clone(),
+                target_ty,
                 value: typed_value,
                 boxed: false,
                 narrowed_shadow_ty,
@@ -2273,11 +2473,9 @@ impl Inferer<'_> {
                     let hint = self.evolving_binding_path(&target).is_none().then_some(&ty);
                     let (typed_value, value_ty, reported) =
                         self.infer_assigned_value(value, hint)?;
+                    let value_ty = self.absorb_into_declared(hint, typed_value, value_ty)?;
                     if !reported && !assignable(&value_ty, &ty, self.resolver()) {
-                        self.error(
-                            value_span,
-                            super::diagnostics::mismatch_message(&ty, &value_ty),
-                        );
+                        self.error_type_mismatch(value_span, &ty, &value_ty, vec![]);
                     }
                     let annotated = self.is_global_annotated(&mangled);
                     let flow_ty = self.assigned_flow_type(&ty, annotated, typed_value, value_ty)?;
@@ -2388,13 +2586,23 @@ impl Inferer<'_> {
             let (synth_lhs, lhs_ty) = if let Some(view) = self.lookup_narrowed_view(&lhs_path) {
                 let binding = view.binding.clone();
                 let narrowed_ty = view.narrowed_ty.clone();
+                // A narrowing never proves a maybe-missing local present, so
+                // the read is the local itself, which codegen checks.
+                let kind = if entry.missing_read.is_some() {
+                    TypedExprKind::LocalRef {
+                        ident: target.clone(),
+                        boxed: false,
+                    }
+                } else {
+                    TypedExprKind::LocalNarrowRef {
+                        binding,
+                        path: lhs_path,
+                    }
+                };
                 let id = self
                     .typed_ast
                     .try_push_expr(TypedExpr {
-                        kind: TypedExprKind::LocalNarrowRef {
-                            binding,
-                            path: lhs_path,
-                        },
+                        kind,
                         span: target.span,
                         ty: narrowed_ty.clone(),
                     })
@@ -2431,10 +2639,7 @@ impl Inferer<'_> {
                 && !matches!(check_ty, Type::Error)
                 && !assignable(&result_ty, check_ty, self.resolver())
             {
-                self.error(
-                    value_span,
-                    super::diagnostics::mismatch_message(check_ty, &result_ty),
-                );
+                self.error_type_mismatch(value_span, check_ty, &result_ty, vec![]);
             }
             let synth_binary = self
                 .typed_ast
@@ -2452,9 +2657,16 @@ impl Inferer<'_> {
                 result_ty,
                 None,
             )?;
+            let target_ty = match entry.maybe_missing_storage() {
+                Some(storage) => {
+                    self.typed_ast.widened_bindings.insert(target.span);
+                    storage
+                }
+                None => entry.storage_type().clone(),
+            };
             return Ok(TypedStmtKind::AssignLocal {
                 ident: target,
-                target_ty: entry.storage_type().clone(),
+                target_ty,
                 value: synth_binary,
                 boxed: false,
                 narrowed_shadow_ty,
@@ -2651,7 +2863,7 @@ impl Inferer<'_> {
                     })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
-                        optional: true,
+                        optional: false,
                         readonly: index.readonly,
                         method: false,
                     })
@@ -2767,10 +2979,7 @@ impl Inferer<'_> {
             && !matches!(rw.write, Type::Error)
             && !assignable(&result_ty, &rw.write, self.resolver())
         {
-            self.error(
-                value_span,
-                super::diagnostics::mismatch_message(&rw.write, &result_ty),
-            );
+            self.error_type_mismatch(value_span, &rw.write, &result_ty, vec![]);
         }
         let synth_binary = self
             .typed_ast
@@ -2862,10 +3071,7 @@ impl Inferer<'_> {
             && !matches!(check_ty, Type::Error)
             && !assignable(&result_ty, check_ty, self.resolver())
         {
-            self.error(
-                value_span,
-                super::diagnostics::mismatch_message(check_ty, &result_ty),
-            );
+            self.error_type_mismatch(value_span, check_ty, &result_ty, vec![]);
         }
         let synth_binary = self
             .typed_ast
@@ -3134,7 +3340,10 @@ pub(super) struct LoopBodyOutcome {
     /// cannot hold there.
     pub next_pass: Option<narrowing::NarrowEnv>,
     pub reaches_back_edge: bool,
-    pub direct_evolving_reads: std::collections::BTreeSet<narrowing::ReferencePath>,
+    /// Evolving paths whose in-progress type this pass observes before the body
+    /// finishes growing them: read directly, or carried out of the loop by a
+    /// `break`.
+    pub observed_evolving: std::collections::BTreeSet<narrowing::ReferencePath>,
 }
 
 /// A `while` or `for` condition's check as it first runs.
@@ -3244,7 +3453,7 @@ fn widen_entry_to_cover_next_pass(
             next_pass_falsifies(
                 view,
                 next_pass.get(*path),
-                outcome.direct_evolving_reads.contains(*path),
+                outcome.observed_evolving.contains(path),
             )
         })
         .map(|(path, view)| (path.clone(), view.clone()))
@@ -3279,12 +3488,13 @@ fn widen_entry_to_cover_next_pass(
 fn next_pass_falsifies(
     view: &narrowing::NarrowedView,
     post: Option<&narrowing::NarrowedView>,
-    direct_read_in_body: bool,
+    observed_in_pass: bool,
 ) -> bool {
     // A fresh empty array's element type is learned from growth in this pass.
     // If the body only grows it or reads its length, a second pass cannot
-    // change a typed read. Other reads may see prior iterations' elements.
-    if !direct_read_in_body
+    // change a typed read. Other reads, and a `break` that leaves the loop
+    // before the growth, may see prior iterations' elements.
+    if !observed_in_pass
         && view.evolving == Some(narrowing::EvolvingType::Array)
         && super::evolving::array_element(&view.narrowed_ty) == Some(Type::Never)
         && post.is_some_and(|post| post.evolving == Some(narrowing::EvolvingType::Array))
@@ -3359,7 +3569,8 @@ impl Inferer<'_> {
         let cached_len = self.loop_entry_adjustments.get(&body).map_or(0, Vec::len);
 
         loop {
-            let outcome = self.run_body_pass(body, &entry_env, body_span, continues_len, tail)?;
+            let outcome =
+                self.run_body_pass(body, &entry_env, body_span, breaks_len, continues_len, tail)?;
             let outer_falsified = self.drop_narrowings_the_body_falsifies(
                 body,
                 &outcome,
@@ -3513,7 +3724,7 @@ impl Inferer<'_> {
                     && next_pass_falsifies(
                         view,
                         next_pass.get(*path),
-                        outcome.direct_evolving_reads.contains(*path),
+                        outcome.observed_evolving.contains(path),
                     )
             })
             .map(|(path, view)| (path.clone(), view.clone()))
@@ -3613,6 +3824,7 @@ impl Inferer<'_> {
         body: StmtId,
         entry_env: &narrowing::NarrowEnv,
         body_span: Span,
+        breaks_base: usize,
         continues_base: usize,
         tail: LoopTail,
     ) -> Result<LoopBodyOutcome, CompilerFailure> {
@@ -3623,6 +3835,7 @@ impl Inferer<'_> {
         self.loop_depth -= 1;
         let body_end_reachable = self.reachable;
         let (_, mut assigned) = self.pop_narrow_frame_capture()?;
+        let evolving_break_paths = self.evolving_break_paths_since(breaks_base)?;
         let (continues, continued_assignments) = self.continue_exits_since(continues_base)?;
         assigned.extend(continued_assignments);
         let mut back_edge = join_reachable_envs(body_end_reachable.then_some(body_post), continues);
@@ -3654,10 +3867,11 @@ impl Inferer<'_> {
             }
             (_, edge) => edge,
         };
-        let direct_evolving_reads = self
+        let mut observed_evolving = self
             .loop_direct_evolving_reads
             .pop()
             .ok_or_else(|| super::inference_failure("loop read collector"))?;
+        observed_evolving.extend(evolving_break_paths);
         Ok(LoopBodyOutcome {
             update: typed_update,
             head_edge,
@@ -3665,7 +3879,7 @@ impl Inferer<'_> {
             body: self.wrap_narrow_regions(typed_body, entry_env, body_span)?,
             assigned,
             next_pass,
-            direct_evolving_reads,
+            observed_evolving,
         })
     }
 
@@ -3682,6 +3896,7 @@ impl Inferer<'_> {
         let mats_len = self.pending_post_if_materializations.len();
         self.enter_loop_head(state, body_span)?;
         let (typed_condition, _) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed_condition)?;
         let (true_env, _) = self.predicate_envs(typed_condition)?;
         let after = self.condition_can_hold(typed_condition)?.then(|| {
             let mut after = self.snapshot_active_narrowings(0).0;
@@ -3828,6 +4043,7 @@ impl Inferer<'_> {
         let diagnostics_from = self.diagnostics.len();
         self.clause_write_scopes.push(Default::default());
         let (typed, ty) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed)?;
         let cond_span = self
             .ast
             .try_expr(condition)
@@ -3863,6 +4079,7 @@ impl Inferer<'_> {
             .map_err(super::arena_failure)?
             .span;
         let (typed, ty) = self.infer_expr(condition, None)?;
+        self.absorb_missing_in_test(typed)?;
         self.check_condition_ty(&ty, cond_span);
         self.check_constant_truthiness(condition)?;
         let (_, false_env) = self.predicate_envs(typed)?;
@@ -3996,6 +4213,25 @@ impl Inferer<'_> {
             })
             .map_err(crate::typechecker::arena_failure)?;
         Ok((typed, post))
+    }
+
+    fn evolving_break_paths_since(
+        &self,
+        base_len: usize,
+    ) -> Result<std::collections::BTreeSet<narrowing::ReferencePath>, CompilerFailure> {
+        let frame = self
+            .pending_joins
+            .last()
+            .ok_or_else(|| super::inference_failure("missing loop pending-join frame"))?;
+        let exits = frame.breaks.get(base_len..).ok_or_else(|| {
+            super::inference_failure("break snapshot offset exceeds pending transfers")
+        })?;
+        Ok(exits
+            .iter()
+            .flat_map(|(env, _)| env.iter())
+            .filter(|(_, view)| view.evolving.is_some())
+            .map(|(path, _)| path.clone())
+            .collect())
     }
 
     fn continue_exits_since(

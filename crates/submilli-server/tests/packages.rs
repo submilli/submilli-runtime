@@ -976,3 +976,63 @@ async fn docs_query_rejects_ambiguous_names_and_preserves_decoded_names() {
     assert_eq!(actual, names);
     assert_eq!(body["results"][1]["found"], false);
 }
+
+#[tokio::test]
+async fn function_docs_batch_and_default_compatibility() {
+    let (_, original) = get("/packages/docs?name=submilli:crypto").await;
+    let (_, explicit) = get("/packages/docs?name=submilli:crypto&view=full").await;
+    assert_eq!(original, explicit);
+    let (status, index) =
+        get("/packages/docs?names[]=submilli:crypto&names[]=submilli:http&view=index").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(index["results"].as_array().unwrap().len(), 2);
+    let text = index["results"][0]["text"].as_str().unwrap();
+    assert!(text.contains("sha256:"), "{text}");
+    assert!(!text.contains("function sha256("));
+    let requests = serde_json::json!([
+        {"name":"submilli:crypto", "functions":["sha256"]},
+        {"name":"submilli:http", "functions":["get"]},
+        {"name":"submilli:crypto", "functions":["sha25"]}
+    ]);
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("requests", &requests.to_string())
+        .finish();
+    let (status, result) = get(&format!("/packages/functions?{query}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(result["results"][0]["found"], true, "{result}");
+    assert_eq!(result["results"][1]["found"], true, "{result}");
+    assert_eq!(result["results"][2]["found"], false);
+    assert!(
+        result["results"][2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("sha256")
+    );
+    assert!(
+        !result["results"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("function sha512")
+    );
+    let (_, prompt) = get("/prompt").await;
+    let (_, enabled) = get("/prompt?function_docs=true").await;
+    assert!(prompt["tools"].get("functions").is_none());
+    assert!(
+        !prompt["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("packages__functions")
+    );
+    assert!(
+        enabled["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("packages__functions")
+    );
+    for query in ["", "requests=[]", "requests=invalid"] {
+        assert_eq!(
+            get(&format!("/packages/functions?{query}")).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}

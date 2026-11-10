@@ -18,6 +18,7 @@ use crate::{
 
 use super::assignable::{TypeResolver, strict_subtype};
 use super::format_signature::SignatureKind;
+use super::missing_reads::PendingRead;
 use super::namespace_symbol;
 use super::reserved::{is_reserved_object_field, override_field_signature, reserved_field_message};
 use super::stmt::StaticWrite;
@@ -144,9 +145,26 @@ pub(super) fn typeof_result_type() -> Type {
 /// `type Status = "a" | "b"` and a plain `"a" | "b"` hint behave identically.
 fn expects_literal(expected: Option<&Type>, is_literal: fn(&Type) -> bool) -> bool {
     match expected.map(crate::types::Type::peel) {
-        Some(Type::Union(ms)) => ms.iter().any(|m| names_literal(m.peel(), is_literal)),
-        Some(ty) => names_literal(ty, is_literal),
+        Some(Type::Union(ms)) => ms.iter().any(|m| is_literal_context(m, is_literal)),
+        Some(_) => expected.is_some_and(|ty| is_literal_context(ty, is_literal)),
         None => false,
+    }
+}
+
+/// Whether `ty` keeps a literal `is_literal` accepts: a literal type, and, as
+/// in tsc, a template literal type, a string mapping (`Uppercase<string>`)
+/// for strings, and `keyof T` for strings and numbers.
+fn is_literal_context(ty: &Type, is_literal: fn(&Type) -> bool) -> bool {
+    let string = || is_literal(&Type::StringLiteral(String::new()));
+    if super::utility_types::symbolic_chain(ty).is_some() {
+        return string();
+    }
+    match ty.peel() {
+        Type::TemplateLiteral { .. } => string(),
+        Type::KeyOf(_) => {
+            string() || is_literal(&Type::NumberLiteral(crate::types::LiteralF64(0.0)))
+        }
+        peeled => names_literal(peeled, is_literal),
     }
 }
 
@@ -318,6 +336,16 @@ pub(super) fn type_admits_nullish(ty: &Type, types: TypeResolver<'_>) -> bool {
     type_admits_null(ty, types) || type_admits_undefined(ty, types)
 }
 
+/// [`type_admits_nullish`], with a `T[K]` member nullish where its base
+/// constraint is (an optional property among `K`'s, or an unbounded `T`).
+pub(super) fn may_be_nullish(ty: &Type, types: TypeResolver<'_>) -> bool {
+    type_admits_nullish(ty, types)
+        || any_resolved_member(ty, types, &|member| {
+            matches!(member, Type::IndexedAccess { .. })
+                && type_admits_nullish(&super::assignable::base_constraint(member, types), types)
+        })
+}
+
 /// The `typeof` result a tag names, for each tag narrowing understands.
 pub(super) fn typeof_tag_kind(tag: &str) -> Option<crate::TypeofTagKind> {
     Some(match tag {
@@ -345,8 +373,9 @@ fn admits_undefined_leaf(member: &Type) -> bool {
     )
 }
 
-/// Whether `JSON.stringify` of a `ty` may return `undefined`.
-fn json_stringify_may_return_undefined(ty: &Type, types: TypeResolver<'_>) -> bool {
+/// Whether `JSON.stringify` of a `ty` may have no JSON text. The call is still
+/// typed `string`; that missing text is a missing read.
+fn stringify_arg_may_omit_json_text(ty: &Type, types: TypeResolver<'_>) -> bool {
     any_resolved_member(ty, types, &|member| {
         Type::stringifies_to_undefined(member) || is_constructor_binding(member, types)
     })
@@ -544,34 +573,48 @@ pub(super) fn is_type_parameter_position(hint: &Type) -> bool {
     matches!(hint.peel(), Type::TypeVar(_) | Type::GenericParam { .. })
 }
 
-/// Whether a type parameter occurs anywhere in `ty`. Unlike
-/// [`mentions_type_var`], it also counts body-internal `GenericParam`s and
-/// looks through refinements: a type argument written inside a generic is
-/// built from either.
-fn holds_type_parameter(ty: &Type) -> bool {
-    match ty {
-        Type::TypeVar(_) | Type::GenericParam { .. } => true,
-        Type::Array(inner) | Type::Readonly(inner) => holds_type_parameter(inner),
-        Type::Refined { ty: inner, .. } => holds_type_parameter(inner),
-        Type::Tuple(elements) => elements.iter().any(holds_type_parameter),
-        Type::Function { params, ret, .. } => {
-            params.iter().any(holds_type_parameter) || holds_type_parameter(ret)
+/// Whether `ty` holds `keyof T`, `T[K]` or a utility over a type parameter.
+fn contains_type_operator(ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if ty.is_type_operator() {
+            return true;
         }
-        Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|i| holds_type_parameter(&i.value))
-                || fields.values().any(|f| holds_type_parameter(&f.ty))
-        }
-        Type::InterfaceRef { args, .. }
-        | Type::ClassRef { args, .. }
-        | Type::AliasRef { args, .. } => args.iter().any(holds_type_parameter),
-        Type::Alias {
-            args, ty: inner, ..
-        } => args.iter().any(holds_type_parameter) || holds_type_parameter(inner),
-        Type::Union(members) => members.iter().any(holds_type_parameter),
-        _ => false,
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
     }
+    false
+}
+
+/// Whether every value of `ty` is a string, array, byte array or primitive,
+/// which `o[k]` indexes as its own type rather than by name.
+fn is_builtin_value(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(is_builtin_value),
+        other => super::utility_types::apparent_interface(other).is_some(),
+    }
+}
+
+/// The type parameter (or form over one) a generic `o[k]` indexes: `T` for
+/// a narrowed `T & {}`, whose keys are `T`'s.
+pub(super) fn generic_receiver(receiver: &Type) -> &Type {
+    let Type::Refined { original, .. } = receiver.without_aliases() else {
+        return receiver.without_aliases();
+    };
+    // `o?.[k]` on `T | undefined` refines it to `(T | undefined) & {}`,
+    // which holds only `T`'s values.
+    if let Type::Union(members) = original.without_aliases() {
+        let mut erased = members
+            .iter()
+            .filter(|member| member.lowers_to_erased_slot());
+        if let (Some(only), None) = (erased.next(), erased.next())
+            && members.iter().all(|member| {
+                member == only || matches!(member.peel(), Type::Null | Type::Undefined)
+            })
+        {
+            return only.without_aliases();
+        }
+    }
+    original.without_aliases()
 }
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
@@ -579,7 +622,8 @@ pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bo
     let recurse = |ty: &Type| mentions_type_var(ty, wanted);
     match ty {
         Type::TypeVar(name) => wanted(name),
-        Type::Array(elem) | Type::Readonly(elem) => recurse(elem),
+        Type::Array(elem) | Type::Readonly(elem) | Type::KeyOf(elem) => recurse(elem),
+        Type::IndexedAccess { object, index } => recurse(object) || recurse(index),
         Type::Tuple(elems) => elems.iter().any(recurse),
         Type::Function { params, ret, .. } => params.iter().any(recurse) || recurse(ret),
         Type::Object { fields, index } => {
@@ -718,9 +762,11 @@ impl Inferer<'_> {
         // recursion back-edge, which carries no body to read. Rehydrating first
         // is what lets the hint reach the second level of a recursive shape.
         let rehydrated_hint = expected.and_then(|want| {
-            super::type_aliases::type_has_alias_ref(want).then(|| {
+            (super::type_aliases::type_has_alias_ref(want)
+                || super::utility_types::has_evaluable_application(want))
+            .then(|| {
                 self.type_limits
-                    .type_or_error(self.rehydrate_alias_refs(want))
+                    .type_or_error(self.rehydrate_and_evaluate(want))
             })
         });
         let expected = rehydrated_hint.as_ref().or(expected);
@@ -762,6 +808,9 @@ impl Inferer<'_> {
         // An arrow or object literal whose own errors explain its mismatch
         // with `expected` isn't reported again as a whole.
         let mut reported_in_parts = false;
+        // A read nested inside notes itself to its own `infer_expr`; what is
+        // pending now belongs to no node.
+        self.pending_read = None;
         // Propagate once after dispatch: per-arm `?` creates large temporary
         // results that inflate every recursive frame in debug builds.
         let (kind, ty) = (match expr.kind {
@@ -950,6 +999,7 @@ impl Inferer<'_> {
             }
         })?;
         let static_receiver = self.pending_static_receiver.take();
+        let pending_read = self.pending_read.take();
         // an expression's type must be free of bare recursion
         // back-edges — codegen lowers `AliasRef` to the universal
         // `$Object`, but the equivalent inline alias-to-object peels to
@@ -957,7 +1007,7 @@ impl Inferer<'_> {
         // Rehydrate any `AliasRef` (read out of a recursive alias's body
         // via field / index / call) back to the inline `Alias` form.
         let ty = self
-            .rehydrate_alias_refs(&ty)
+            .rehydrate_and_evaluate(&ty)
             .map_err(super::type_limit_at(span))?;
         // The expression's own type may compose several values of the
         // largest size.
@@ -1002,11 +1052,7 @@ impl Inferer<'_> {
                 }
             }
             let shown = self.reported_result_type(&kind, &ty, want)?;
-            self.error_with_help(
-                span,
-                super::diagnostics::mismatch_message(&want, &shown),
-                help,
-            );
+            self.error_type_mismatch(span, want, &shown, help);
         }
         self.check_expression_arity(&kind, &ty, span);
         self.note_tested_read_after_inference(expr_id, &ty)?;
@@ -1024,6 +1070,7 @@ impl Inferer<'_> {
                 .inherited_static_receivers
                 .insert(id, receiver);
         }
+        self.record_pending_read(pending_read, id)?;
         self.record_narrowed_read_freshness(id)?;
         self.record_constraint_literal_freshness(id, &ty, span);
         self.record_runtime_type_test(&ty)
@@ -1152,15 +1199,24 @@ impl Inferer<'_> {
                 name: ident.name.clone(),
                 decl_scope: entry.decl_scope,
             });
-            if let Some(read) = self.narrowed_read(path) {
-                return Ok(read);
+            let narrowed = self.narrowed_read(path);
+            let read_ty = match narrowed {
+                Some(read) if entry.missing_read.is_none() => return Ok(read),
+                // A narrowing never proves a maybe-missing local present: the
+                // read keeps the narrowed type but still checks the value. A
+                // narrowing that rules out every value leaves the local's type.
+                Some((_, ty)) if !super::narrowing::is_ruled_out(&ty) => ty,
+                _ => entry.read_type().clone(),
+            };
+            if entry.missing_read.is_some() {
+                self.pending_read = Some(PendingRead::MaybeMissingLocal);
             }
             return Ok((
                 TypedExprKind::LocalRef {
                     ident: ident.clone(),
                     boxed: false,
                 },
-                entry.read_type().clone(),
+                read_ty,
             ));
         }
         // `JSON` is a compiler-intrinsic namespace
@@ -1946,6 +2002,11 @@ impl Inferer<'_> {
         if self.is_global_nan(typed_lhs)? || self.is_global_nan(typed_rhs)? {
             self.error_nan_comparison(op, span);
         }
+        // `===` and `!==` check both sides: a missing value is `undefined`,
+        // which strict equality compares like any other value. The operands
+        // were related at their written types above.
+        self.absorb_missing(typed_lhs)?;
+        self.absorb_missing(typed_rhs)?;
         Ok((
             TypedExprKind::Binary {
                 op,
@@ -1982,6 +2043,14 @@ impl Inferer<'_> {
             None
         };
         let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+        // `x || d` tests `x`: a missing left side is falsy and takes `d`,
+        // including through a `&&` there. `x && …` checks `x` only where its
+        // result is itself tested, which `absorb_missing_in_test` handles.
+        let lhs_ty = if op == BinOp::Or && self.absorb_missing_in_test(typed_lhs)? {
+            Type::union(vec![lhs_ty, Type::Undefined])
+        } else {
+            lhs_ty
+        };
         self.check_constant_truthiness(lhs)?;
         let mut condition_error = false;
         if matches!(lhs_ty.peel(), Type::Unknown) {
@@ -2074,11 +2143,9 @@ impl Inferer<'_> {
         ))
     }
 
-    /// `"field" in obj`. LHS must be a string literal; RHS
-    /// receiver must be `unknown`, an `Object`, or a union of objects.
-    /// Result is `boolean`. The narrowing-engine side is driven from
-    /// `predicate_envs_in_operator` — this method only enforces the
-    /// type-level shape.
+    /// `key in obj` accepts string or number keys and converts numbers to strings.
+    /// Result is `boolean`. Known literal keys drive field-presence narrowing
+    /// through `predicate_envs_in_operator`.
     fn infer_in_operator(
         &mut self,
         lhs: ExprId,
@@ -2086,20 +2153,36 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let lhs_span = self.ast.try_expr(lhs).map_err(super::arena_failure)?.span;
-        let (typed_lhs, lhs_ty) = self.infer_expr(lhs, Some(&Type::String))?;
-        if !assignable(&lhs_ty, &Type::String, self.resolver()) {
+        let (typed_lhs, lhs_ty) = self.infer_object_key(lhs)?;
+        if !assignable(
+            &lhs_ty,
+            &Type::union(vec![Type::String, Type::Number]),
+            self.resolver(),
+        ) {
             self.error(
                 lhs_span,
-                "`in` operator requires a string on the left".into(),
+                "`in` operator requires a string or number on the left".into(),
             );
+        } else if let Some(keys) = super::records::finite_string_keys(&lhs_ty, self.resolver())
+            && let [key] = keys.as_slice()
+        {
+            // Conversion of a single known key preserves its literal identity
+            // for field-presence narrowing, without replacing its evaluation.
+            self.typed_ast
+                .try_expr_mut(typed_lhs)
+                .map_err(super::arena_failure)?
+                .ty = Type::StringLiteral(key.clone());
         }
         let (typed_rhs, rhs_ty) = self.infer_expr(rhs, None)?;
+        let is_receiver = |ty: &Type| {
+            Self::is_field_bearing(ty) || matches!(ty.peel(), Type::Array(_) | Type::Tuple(_))
+        };
         let receiver_ok = match rhs_ty.peel() {
             Type::Unknown | Type::NonPrimitive | Type::Error => true,
-            ty if Self::is_field_bearing(ty) => true,
+            ty if is_receiver(ty) => true,
             // A union discriminated by field presence is the reason `in` exists;
             // its members are as often named (interfaces, classes) as inline.
-            Type::Union(members) => members.iter().all(Self::is_field_bearing),
+            Type::Union(members) => members.iter().all(is_receiver),
             _ => false,
         };
         if !receiver_ok {
@@ -2168,6 +2251,12 @@ impl Inferer<'_> {
                 // The operand keeps a literal type, which can decide the result:
                 // `!true` is `false`.
                 let (id, operand_ty) = self.infer_expr_keeping_literals(operand, None, true)?;
+                // `!x` tests `x`: a missing operand is falsy.
+                let operand_ty = if self.absorb_missing_in_test(id)? {
+                    Type::union(vec![operand_ty, Type::Undefined])
+                } else {
+                    operand_ty
+                };
                 self.check_constant_truthiness(operand)?;
                 if matches!(operand_ty.peel(), Type::Unknown) {
                     // `!x` on un-narrowed `unknown` rejected
@@ -2319,9 +2408,12 @@ impl Inferer<'_> {
             self.report_evolving_read(&ident, span);
         }
         let (kind, ty) = self.resolve_ident(ident, span)?;
+        // A local holding a maybe-missing read is read, checked and cast to
+        // `ty` by codegen itself (see `missing_reads`).
         let storage = if let TypedExprKind::LocalRef { ident, .. } = &kind {
             self.scopes
                 .get(&ident.name)
+                .filter(|entry| entry.missing_read.is_none())
                 .map(|entry| entry.storage_type().clone())
         } else {
             None
@@ -2387,6 +2479,12 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (value, value_ty) = self.infer_expr(operand, None)?;
+        // `typeof x` checks `x`: a missing value is `"undefined"`.
+        let value_ty = if self.absorb_missing(value)? {
+            Type::union(vec![value_ty, Type::Undefined])
+        } else {
+            value_ty
+        };
         let name = Ident {
             name: format!("#typeof_{}", self.typed_ast.exprs_len()),
             span,
@@ -2501,6 +2599,8 @@ impl Inferer<'_> {
             return Ok(None);
         };
         let (typed_operand, _) = self.infer_expr(operand_id, None)?;
+        // `typeof x` checks `x`: a missing value is `"undefined"`.
+        self.absorb_missing(typed_operand)?;
         // Retained refinements cannot prove the kind of a later live read.
         let tag = if let Some(kind) = typeof_tag_kind(&tag) {
             kind
@@ -4196,11 +4296,30 @@ impl Inferer<'_> {
         if is_type_parameter_position(target_ty) {
             return Ok(());
         }
+        // `keyof T`, `T[K]` and a utility over `T` need `T`'s structure, which
+        // its descriptor's predicate does not carry (SUB-2152).
+        if contains_type_operator(target_ty) {
+            self.checked_call_error(
+                type_args_written,
+                target_ty,
+                span,
+                format!(
+                    "`{callee}<{target_ty}>` cannot be checked at run time: `{target_ty}` \
+                     computes a type from a type parameter, whose descriptor carries only a \
+                     predicate"
+                ),
+                vec![format!(
+                    "pass the type parameter itself (`{callee}<T>`), call it at a concrete \
+                     type — `{example}` — or {alternative}."
+                )],
+            );
+            return Err(());
+        }
         // A type built from a type parameter (`T[]`, `{ item: T }`) gets a
         // descriptor assembled here, whose predicate tests through the
         // caller's. That is enough for a call that only checks; a schema
         // cannot be described where `T` is unknown.
-        if holds_type_parameter(target_ty) {
+        if super::utility_types::holds_type_parameter(target_ty) {
             if !checked.sends_schema() {
                 return Ok(());
             }
@@ -5085,7 +5204,12 @@ impl Inferer<'_> {
         rest: bool,
     ) -> Result<ExprId, CompilerFailure> {
         if !self.ast.call_spread_args.contains(&arg) {
-            return Ok(self.infer_expr(arg, expected)?.0);
+            let typed = self.infer_expr(arg, expected)?.0;
+            // A parameter whose type names `undefined` takes a missing value.
+            if let Some(param) = expected {
+                self.absorb_missing_into(typed, param)?;
+            }
+            return Ok(typed);
         }
         let span = self.ast.try_expr(arg).map_err(super::arena_failure)?.span;
         let (typed, source_ty) = self.infer_expr(arg, None)?;
@@ -5104,7 +5228,7 @@ impl Inferer<'_> {
                 if let Some(want) = expected
                     && !super::assignable(&element, want, self.resolver())
                 {
-                    self.error(span, super::diagnostics::mismatch_message(want, &element));
+                    self.error_type_mismatch(span, want, &element, vec![]);
                 }
             }
             None if !matches!(source_ty, Type::Error) => {
@@ -5159,7 +5283,7 @@ impl Inferer<'_> {
             if let Some(want) = fixed.get(start + offset).or(rest)
                 && !super::assignable(element_ty, want, self.resolver())
             {
-                self.error(span, super::diagnostics::mismatch_message(want, element_ty));
+                self.error_type_mismatch(span, want, element_ty, vec![]);
             }
         }
         Ok(projected)
@@ -5296,7 +5420,12 @@ impl Inferer<'_> {
         let arg = *args
             .get(position)
             .ok_or_else(|| super::inference_failure("missing call argument"))?;
-        self.infer_expr(arg, hint)
+        let (typed, ty) = self.infer_expr(arg, hint)?;
+        // A parameter whose type names `undefined` takes a missing value.
+        if let Some(param) = hint {
+            self.absorb_missing_into(typed, param)?;
+        }
+        Ok((typed, ty))
     }
 
     /// [`Self::bind_param_call_args`] for a callee known only by its
@@ -5581,22 +5710,23 @@ impl Inferer<'_> {
             typed_args.push(typed_space);
         }
 
-        let result_ty = if json_stringify_may_return_undefined(&arg_ty, self.resolver()) {
-            Type::union(vec![Type::String, Type::Undefined])
-        } else {
-            Type::String
-        };
+        // tsc types every `JSON.stringify` call as `string`. A result with no
+        // JSON text is a missing read: a check or a `| undefined` place takes
+        // `undefined`, and any other use throws.
         if let Some((_, Some(sources))) = &spread_args {
             let mut slots = vec![Type::Unknown; typed_args.len()];
             slots[0] = arg_ty.clone();
             typed_args = self.collect_call_arguments(sources, &slots, None, span)?;
+        }
+        if stringify_arg_may_omit_json_text(&arg_ty, self.resolver()) {
+            self.note_missable_read();
         }
         Ok((
             TypedExprKind::IntrinsicCall {
                 kind: Intrinsic::JsonStringify,
                 args: typed_args,
             },
-            result_ty,
+            Type::String,
         ))
     }
 
@@ -6727,6 +6857,13 @@ impl Inferer<'_> {
                         },
                     )?;
                     self.object_this_hint = previous_hint;
+                    // An optional field takes a missing value as `undefined`.
+                    let value_ty = match &hint {
+                        Some(hint) if self.absorb_missing_into(typed_value, hint)? => {
+                            Type::union(vec![value_ty, Type::Undefined])
+                        }
+                        _ => value_ty,
+                    };
                     let in_type_parameter_position = expected_field_ty
                         .as_ref()
                         .is_some_and(is_type_parameter_position);
@@ -6760,10 +6897,7 @@ impl Inferer<'_> {
                             value_span,
                             &expected_field.ty,
                             &value_ty,
-                            format!(
-                                "field `{}`: expected `{}`, got `{}`",
-                                field.name.name, expected_field.ty, value_ty,
-                            ),
+                            format!("field `{}`: ", field.name.name),
                             already_errored,
                         );
                     }
@@ -7019,11 +7153,13 @@ impl Inferer<'_> {
                         && interface_target.is_some()
                         && !assignable(&existing_field.ty, &want_field.read_ty(), self.resolver())
                     {
-                        let message = format!(
-                            "spread field `{name}`: expected `{}`, got `{}`",
-                            want_field.ty, existing_field.ty,
+                        self.error_type_mismatch_with_context(
+                            span,
+                            &format!("spread field `{name}`: "),
+                            &want_field.ty,
+                            &existing_field.ty,
+                            vec![],
                         );
-                        self.error(span, message);
                     }
                     existing_field.optional = want_field.optional;
                     if interface_target.is_some() {
@@ -7063,7 +7199,11 @@ impl Inferer<'_> {
             Vec::with_capacity(merged.len());
         let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
             std::collections::BTreeMap::new();
-        for (name, (field, source)) in merged {
+        for (name, (mut field, source)) in merged {
+            // A generic interface's member at its arguments (`Readonly<T>` at
+            // `I<{ a: number }>`) is laid out as the type it stands for.
+            field.ty = super::utility_types::normalize(&field.ty, self.resolver())
+                .map_err(super::type_limit_at(span))?;
             field_origins.push(crate::TypedObjectFieldOrigin {
                 name: Ident {
                     name: name.clone(),
@@ -7890,10 +8030,7 @@ impl Inferer<'_> {
                         None if already_errored => {}
                         // Only a pinned element type is left here, for an element
                         // its own check didn't report.
-                        None => self.error(
-                            elem_span,
-                            super::diagnostics::mismatch_message(running, &elem_ty),
-                        ),
+                        None => self.error_type_mismatch(elem_span, running, &elem_ty, vec![]),
                     }
                     typed_elements.push(crate::TypedArrayElement::Value(typed_id));
                 }
@@ -7999,22 +8136,17 @@ impl Inferer<'_> {
                                             &source_ty,
                                         ),
                                     );
-                                    self.error_with_help(
+                                    self.error_type_mismatch(
                                         self.ast
                                             .try_expr(value)
                                             .map_err(super::arena_failure)?
                                             .span,
-                                        super::diagnostics::mismatch_message(
-                                            expected_source.peel(),
-                                            &source_ty,
-                                        ),
+                                        expected_source.peel(),
+                                        &source_ty,
                                         help,
                                     );
                                 } else {
-                                    self.error(
-                                        spread_span,
-                                        super::diagnostics::mismatch_message(&running, &elem_t),
-                                    );
+                                    self.error_type_mismatch(spread_span, running, &elem_t, vec![]);
                                 }
                             }
                             Some(_) => {}
@@ -8480,11 +8612,13 @@ impl Inferer<'_> {
             .try_expr(source)
             .map_err(super::arena_failure)?
             .span;
+        let original_message = self.mismatch_message(hint, actual);
+        let replacement_message = self.mismatch_message(hint.peel(), actual);
         let _: () = if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
-            && diagnostic.message == super::diagnostics::mismatch_message(&hint, &actual)
+            && diagnostic.message == original_message
         {
-            diagnostic.message = super::diagnostics::mismatch_message(hint.peel(), &actual);
+            diagnostic.message = replacement_message;
         };
         Ok(())
     }
@@ -8494,19 +8628,20 @@ impl Inferer<'_> {
         span: Span,
         expected: &Type,
         actual: &Type,
-        message: String,
+        context: String,
         already_errored: bool,
     ) {
         if !already_errored {
-            self.error(span, message);
+            self.error_type_mismatch_with_context(span, &context, expected, actual, vec![]);
             return;
         }
         // Keep the inner diagnostic's help and location while adding slot context.
+        let original_message = self.mismatch_message(expected, actual);
         if let Some(diagnostic) = self.diagnostics.last_mut()
             && diagnostic.span == span
-            && diagnostic.message == super::diagnostics::mismatch_message(&expected, &actual)
+            && diagnostic.message == original_message
         {
-            diagnostic.message = message;
+            diagnostic.message = format!("{context}{original_message}");
         }
     }
 
@@ -8580,7 +8715,7 @@ impl Inferer<'_> {
                 continue;
             }
             if !already_errored && !assignable(actual, want, self.resolver()) {
-                self.error(span, super::diagnostics::mismatch_message(&want, &actual));
+                self.error_type_mismatch(span, want, actual, vec![]);
             }
             *actual = want.clone();
         }
@@ -9052,10 +9187,7 @@ impl Inferer<'_> {
             elem_ty
         } else {
             if self.error_count() == errors_before {
-                self.error(
-                    elem_span,
-                    super::diagnostics::mismatch_message(&expected_ty, &elem_ty),
-                );
+                self.error_type_mismatch(elem_span, expected_ty, &elem_ty, vec![]);
             }
             expected_ty.clone()
         };
@@ -9403,6 +9535,7 @@ impl Inferer<'_> {
             && let Some(index) = self.resolver().index_signature(&receiver_ty)
             && crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
         {
+            self.note_missable_read();
             return Ok((
                 TypedExprKind::FieldAccess {
                     receiver: typed_receiver,
@@ -9434,6 +9567,7 @@ impl Inferer<'_> {
                 } else if let Some(index) = index.as_ref().filter(|index| {
                     crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
                 }) {
+                    self.note_missable_read();
                     index.read_ty()
                 } else {
                     // An object literal still resolves the prelude `Object`
@@ -9905,6 +10039,9 @@ impl Inferer<'_> {
         };
         let typed_index =
             self.push_synthetic_expr(TypedExprKind::Number(index), Type::Number, name.span)?;
+        if numeric_key_may_miss(receiver_ty, index) {
+            self.note_missable_read();
+        }
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -9926,6 +10063,158 @@ impl Inferer<'_> {
         self.infer_expr(index, Some(&Type::Number))
     }
 
+    /// Whether `o[k]` on `receiver` is tsc's symbolic `T[K]`, read or written
+    /// by name at run time: the receiver is a type parameter, a utility over
+    /// one or an indexed access, or a narrowing of one (`T & {}`). A receiver
+    /// bounded by an array, a tuple, a string or a primitive indexes as its
+    /// bound does.
+    pub(super) fn is_generic_index_receiver(&self, receiver: &Type) -> bool {
+        // `Array.isArray(o)` narrows `T` to `T & unknown[]`, indexed as an
+        // array.
+        if let Type::Refined { ty: shape, .. } = receiver.without_aliases()
+            && is_builtin_value(shape)
+        {
+            return false;
+        }
+        let erased = generic_receiver(receiver);
+        erased.lowers_to_erased_slot()
+            && !matches!(erased.peel(), Type::TypeVar(_) | Type::KeyOf(_))
+            && !is_builtin_value(&self.apparent_type(erased))
+    }
+
+    /// The key a generic `o[k]` reads or writes, converted to the property
+    /// name, and its type, which must fit `keyof T`.
+    pub(super) fn generic_index_key(
+        &mut self,
+        receiver_ty: &Type,
+        index: ExprId,
+    ) -> Result<Option<(ExprId, Type)>, CompilerFailure> {
+        let receiver_ty = generic_receiver(receiver_ty);
+        let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+        let (typed_index, key_ty) = self.infer_object_key(index)?;
+        Ok(self
+            .fits_generic_key(receiver_ty, &key_ty, index_span)
+            .then_some((typed_index, key_ty)))
+    }
+
+    /// `u[k]` with `K extends keyof User` is tsc's `User[K]`: the type of a
+    /// read through a generic key on an object without an index signature,
+    /// whose key must fit `keyof User`. `None` for any other key, and for a
+    /// record (`Record<string, V>`), whose element type the read keeps.
+    pub(super) fn generic_key_read(
+        &mut self,
+        receiver_ty: &Type,
+        key_ty: &Type,
+        span: Span,
+    ) -> Option<Type> {
+        if !super::utility_types::holds_type_parameter(key_ty)
+            || self.has_index_signature(receiver_ty)
+        {
+            return None;
+        }
+        if !self.fits_generic_key(receiver_ty, key_ty, span) {
+            return Some(Type::Error);
+        }
+        Some(Type::indexed_access(receiver_ty.clone(), key_ty.clone()))
+    }
+
+    /// Whether `ty`, or a member of it, has an index signature.
+    pub(super) fn has_index_signature(&self, ty: &Type) -> bool {
+        match ty.peel() {
+            Type::Union(members) => self.has_index_signature_member(members),
+            _ => self.has_index_signature_member(std::slice::from_ref(ty)),
+        }
+    }
+
+    /// Whether `key_ty` fits `keyof receiver_ty`, reporting tsc's TS2536 when
+    /// it does not.
+    pub(super) fn fits_generic_key(
+        &mut self,
+        receiver_ty: &Type,
+        key_ty: &Type,
+        span: Span,
+    ) -> bool {
+        let keys = Type::KeyOf(Box::new(receiver_ty.clone()));
+        let fits = assignable(key_ty, &keys, self.resolver());
+        if !fits {
+            self.error(
+                span,
+                format!("Type `{key_ty}` cannot be used to index type `{receiver_ty}`"),
+            );
+        }
+        fits
+    }
+
+    /// `o[k]` on a type parameter `T`: tsc's `T[K]`, read by name at run
+    /// time from the erased object. The key must fit `keyof T`.
+    fn infer_generic_index_access(
+        &mut self,
+        typed_receiver: ExprId,
+        receiver_ty: Type,
+        index: ExprId,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let Some((typed_index, key_ty)) = self.generic_index_key(&receiver_ty, index)? else {
+            return Ok((TypedExprKind::Null, Type::Error));
+        };
+        // A key that names no type parameter reads through the bound, as
+        // tsc reads `r[k]` with `k: string` and `R extends Record<string,
+        // number>`: as `number`.
+        if !super::utility_types::holds_type_parameter(&key_ty) {
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
+            let (typed_receiver, bound) =
+                self.constraint_receiver(typed_receiver, receiver_ty.clone(), index_span)?;
+            if bound.is_structural_object() {
+                let ty = self.object_index_read_type(&bound, &key_ty, index_span);
+                let kind = TypedExprKind::IndexAccess {
+                    receiver: typed_receiver,
+                    index: typed_index,
+                };
+                return self.narrowed_index_read(kind, ty);
+            }
+        }
+        let ty = Type::indexed_access(generic_receiver(&receiver_ty).clone(), key_ty);
+        self.note_generic_read(&ty);
+        Ok((
+            TypedExprKind::IndexAccess {
+                receiver: typed_receiver,
+                index: typed_index,
+            },
+            ty,
+        ))
+    }
+
+    /// A generic `o[k]` may find no value: an absent optional property or a
+    /// key an index signature lacks. Where every instantiation's property
+    /// holds `undefined` (`User[K]` with an optional field among `K`'s, or an
+    /// unbounded `T[K]`) a missing key reads `undefined`, as in Node.
+    /// Otherwise (`R[K]` with `R extends Record<string, number>`) it is a
+    /// missing read, decided as one (`missing_reads`). A present `undefined`
+    /// reads as itself either way.
+    fn note_generic_read(&mut self, read_ty: &Type) {
+        if self.generic_read_gives_undefined(read_ty) {
+            self.pending_read = Some(PendingRead::GivesUndefined);
+        } else {
+            self.note_missable_read();
+        }
+    }
+
+    /// Whether every instantiation's property holds `undefined`, so a
+    /// missing key reads it.
+    fn generic_read_gives_undefined(&self, read_ty: &Type) -> bool {
+        super::assignable::base_constraint(read_ty, self.resolver()).holds_undefined()
+    }
+
+    /// The type a chain step's generic read leaves in the typed tree: with
+    /// `undefined` where a missing key reads it, and otherwise a missing
+    /// read for the chain to decide.
+    fn chain_read_result_type(&mut self, ty: &Type) -> Type {
+        if self.generic_read_gives_undefined(ty) {
+            return Type::union(vec![ty.clone(), Type::Undefined]);
+        }
+        self.note_missable_read();
+        ty.clone()
+    }
+
     fn infer_index_access(
         &mut self,
         receiver: ExprId,
@@ -9943,25 +10232,31 @@ impl Inferer<'_> {
         // messages anchored on the user's pattern bracket.
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
+        if self.is_generic_index_receiver(&receiver_ty) {
+            return self.infer_generic_index_access(typed_receiver, receiver_ty, index);
+        }
         let (typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if receiver_ty.is_structural_object() {
             let (typed_index, key_ty) = self.infer_object_key(index)?;
-            let ty = self.object_index_read_type(
-                &receiver_ty,
-                &key_ty,
-                self.ast.try_expr(index).map_err(super::arena_failure)?.span,
-            );
+            let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
             let kind = TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
                 index: typed_index,
             };
+            if let Some(ty) = self.generic_key_read(&receiver_ty, &key_ty, index_span) {
+                self.note_generic_read(&ty);
+                return Ok((kind, ty));
+            }
+            let ty = self.object_index_read_type(&receiver_ty, &key_ty, index_span);
             return self.narrowed_index_read(kind, ty);
         }
         // Peel: an array or tuple reached through an alias (`type Pair = [A, B]`)
         // is indexable on the same terms as the type it names.
         let elem_ty = match receiver_ty.peel() {
-            ty if ty.is_regexp_match_array() => regexp_index_element(self.ast, index)?,
+            // A match group reads as `string`, as in tsc's `--strict`; a group
+            // that did not take part is a missing value (see `missing_reads`).
+            ty if ty.is_regexp_match_array() => Type::String,
             Type::Array(elem) => (**elem).clone(),
             // tuple indexing must be a non-negative integer
             // literal that's in range. Out-of-range or non-literal
@@ -10124,6 +10419,9 @@ impl Inferer<'_> {
             }
         };
         let (typed_index, _) = self.infer_numeric_index(index)?;
+        if index_read_may_miss(self.ast, &receiver_ty, index)? {
+            self.note_missable_read();
+        }
         let kind = TypedExprKind::IndexAccess {
             receiver: typed_receiver,
             index: typed_index,
@@ -10776,9 +11074,12 @@ impl Inferer<'_> {
                         && !is_cast_operand
                         && !assignable(h, own_param, self.resolver())
                     {
-                        self.error(
+                        self.error_type_mismatch_with_context(
                             p.name.span,
-                            format!("parameter `{}`: expected `{}`, got `{}`", p.name.name, h, t),
+                            &format!("parameter `{}`: ", p.name.name),
+                            h,
+                            t,
+                            vec![],
                         );
                         params_reported = true;
                     }
@@ -10884,7 +11185,13 @@ impl Inferer<'_> {
                     && !type_contains_type_var(hr)
                     && !assignable(&t, hr, self.resolver())
                 {
-                    self.error(ann.span, format!("return type: expected `{hr}`, got `{t}`"));
+                    self.error_type_mismatch_with_context(
+                        ann.span,
+                        "return type: ",
+                        hr,
+                        &t,
+                        vec![],
+                    );
                 }
                 annotated_ret = Some(t.clone());
                 Some(t)
@@ -10976,6 +11283,11 @@ impl Inferer<'_> {
         let (typed_body, body_ret) = match body {
             ArrowBody::Expr(e) => {
                 let (id, t) = self.infer_returned_value(e, ret_hint.as_ref())?;
+                // A declared return type that names `undefined` takes a
+                // missing value, as a `return` statement's does.
+                if let Some(declared) = &annotated_ret {
+                    self.absorb_missing_into(id, declared)?;
+                }
                 self.validate_type_predicate_return(id, span)?;
                 // Re-emit the seeded regions inside the body, over a fresh read
                 // of the `const` — the closure then captures the ordinary
@@ -11543,10 +11855,7 @@ impl Inferer<'_> {
             // the result, mirror `infer_assign`'s rejection.
             let fits = self.postfix_write_fits(&result_ty, &entry.ty);
             if !matches!(entry.ty, Type::Error) && !fits {
-                self.error(
-                    span,
-                    super::diagnostics::mismatch_message(&entry.ty, &result_ty),
-                );
+                self.error_type_mismatch(span, &entry.ty, &result_ty, vec![]);
             }
             // A rejected write leaves the declared type, as in TypeScript, and
             // so does a write to a `never` binding, which tsc keeps `never`.
@@ -11566,9 +11875,13 @@ impl Inferer<'_> {
                 TypedExprKind::PostfixUnary {
                     op,
                     target: crate::PostfixTarget::Local {
+                        // A local holding a maybe-missing read is stored as
+                        // `T | undefined`.
+                        // The binding's own type otherwise: a defaulted
+                        // parameter's storage still admits the omission.
+                        target_ty: entry.maybe_missing_storage().unwrap_or(entry.ty),
                         ident: target,
                         boxed: false,
-                        target_ty: entry.ty,
                     },
                 },
                 result_ty,
@@ -11724,7 +12037,7 @@ impl Inferer<'_> {
                     })
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
-                        optional: true,
+                        optional: false,
                         readonly: index.readonly,
                         method: false,
                     })
@@ -11779,10 +12092,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&target_ty);
         if !matches!(target_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &target_ty) {
-            self.error(
-                name.span,
-                super::diagnostics::mismatch_message(&target_ty, &result_ty),
-            );
+            self.error_type_mismatch(name.span, &target_ty, &result_ty, vec![]);
         }
         if let Some(mut path) = self.expr_to_reference_path(
             self.typed_ast
@@ -11840,7 +12150,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&operand_ty);
         if !matches!(ty, Type::Error) && !self.postfix_write_fits(&result_ty, &ty) {
-            self.error(span, super::diagnostics::mismatch_message(&ty, &result_ty));
+            self.error_type_mismatch(span, &ty, &result_ty, vec![]);
         }
         self.renarrow_global_after_write(&name, &mangled, &ty, result_ty.clone(), None)?;
         Ok((
@@ -11941,10 +12251,7 @@ impl Inferer<'_> {
         }
         let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
-            self.error(
-                span,
-                super::diagnostics::mismatch_message(&elem_ty, &result_ty),
-            );
+            self.error_type_mismatch(span, &elem_ty, &result_ty, vec![]);
         }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
@@ -11976,6 +12283,7 @@ impl Inferer<'_> {
         _span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let (typed_cond, cond_ty) = self.infer_expr(cond, None)?;
+        self.absorb_missing_in_test(typed_cond)?;
         let cond_span = self.ast.try_expr(cond).map_err(super::arena_failure)?.span;
         self.check_condition_ty(&cond_ty, cond_span);
         self.check_constant_truthiness(cond)?;
@@ -12198,15 +12506,20 @@ impl Inferer<'_> {
         let lhs_context =
             self.left_operand_context(lhs, expected, &[Type::Null, Type::Undefined])?;
         let (typed_lhs, lhs_ty) = self.infer_with_soft_context(lhs, lhs_context)?;
+        // A left side that may be missing is `undefined` here when it is.
+        let lhs_ty = if self.absorb_missing(typed_lhs)? {
+            Type::union(vec![lhs_ty, Type::Undefined])
+        } else {
+            lhs_ty
+        };
         // The right side runs only where the left is `null` or `undefined`.
         let rhs_env = self.nullish_operand_env(typed_lhs)?;
         // An unreachable right side is never the result, so it is not held
         // to the context. Without one, `tags ?? []` and `onDone ?? (() => {})`
         // take their type from the left operand, as in TypeScript; other
         // operands keep their own.
-        let rhs_expected = expected
-            .filter(|_| type_admits_nullish(&lhs_ty, self.resolver()))
-            .cloned();
+        let lhs_may_be_nullish = may_be_nullish(&lhs_ty, self.resolver());
+        let rhs_expected = expected.filter(|_| lhs_may_be_nullish).cloned();
         let fallback_hint = (cannot_be_typed_alone(self.ast, rhs)?
             && !self
                 .ast
@@ -12232,8 +12545,7 @@ impl Inferer<'_> {
 
         // A poisoned operand has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        let lhs_decides =
-            !type_admits_nullish(&lhs_ty, self.resolver()) && !matches!(lhs_ty.peel(), Type::Error);
+        let lhs_decides = !lhs_may_be_nullish && !matches!(lhs_ty.peel(), Type::Error);
         // The error for a left side whose syntax is never nullish says the same.
         let reported_constant = self.check_constant_nullishness(lhs)?;
         if lhs_decides && !reported_constant {
@@ -12371,9 +12683,14 @@ impl Inferer<'_> {
         } else {
             self.infer_expr(base, None)?
         };
+        // A base that may be missing is checked by the `?.` after it. The
+        // chain keeps the type tsc gives it, so the missing value is decided
+        // where the chain goes, as for the base itself; see `missing_reads`.
+        let base_may_miss =
+            parts.first().is_some_and(ChainPart::is_optional) && self.may_be_missing(typed_base);
         // The namespace rejection subsumes the redundancy warning — a namespace
         // receiver is non-nullable too, and two diagnostics for one `?` is noise.
-        if !self.reported_namespace_chain_base(base, &base_ty, &parts)? {
+        if !self.reported_namespace_chain_base(base, &base_ty, &parts)? && !base_may_miss {
             self.warn_redundant_leading_optional(
                 &base_ty,
                 self.ast.try_expr(base).map_err(super::arena_failure)?.span,
@@ -12408,11 +12725,41 @@ impl Inferer<'_> {
                 None => asserts_tail,
             })
             .collect();
-        for (part, asserted) in parts.into_iter().zip(asserted) {
+        // A step whose element or key may be missing gives `undefined` where
+        // the chain's result already has room for it: at the last step, or
+        // before a `?.` that short-circuits on it.
+        let ends_or_short_circuits: Vec<bool> = (0..parts.len())
+            .map(|index| parts.get(index + 1).is_none_or(ChainPart::is_optional))
+            .collect();
+        // Whether the current step's receiver may be a missing value: the
+        // base, or a step before it. A `?.` on it checks it, but adds no
+        // `undefined` to the chain's type, which stays tsc's.
+        let mut receiver_may_miss = base_may_miss;
+        // The steps whose result may be missing and reaches a check: the
+        // `?.` after it, or one around the whole chain for the last step.
+        // Each reads as `T | undefined` once a check takes the chain.
+        let mut missing_steps: Vec<usize> = Vec::new();
+        // Whether a `?.` can short-circuit on a `null` or `undefined` its
+        // receiver's type allows, which adds `undefined` to the chain's type.
+        let mut adds_undefined = false;
+        for ((part, asserted), ends_or_short_circuits) in
+            parts.into_iter().zip(asserted).zip(ends_or_short_circuits)
+        {
+            let checks_missing_receiver = part.is_optional() && receiver_may_miss;
             let apparent = self.constraint_receiver_type(&receiver_ty, part.span())?;
+            self.report_unreadable_form(&receiver_ty, &apparent, part.span());
             if apparent != receiver_ty {
+                // A receiver this step's `?.` checks may be missing: the view
+                // keeps room for `undefined`, which the `?.` then skips.
+                // `receiver_ty` stays the bound, so the chain's type stays
+                // tsc's.
+                let result_ty = if checks_missing_receiver {
+                    Type::union(vec![apparent.clone(), Type::Undefined])
+                } else {
+                    apparent.clone()
+                };
                 typed_parts.push(TypedChainPart::Constraint {
-                    result_ty: apparent.clone(),
+                    result_ty,
                     span: part.span(),
                 });
                 receiver_ty = apparent;
@@ -12429,12 +12776,17 @@ impl Inferer<'_> {
                 });
             let part = if part.is_optional()
                 && !may_skip_method_call
+                && !checks_missing_receiver
                 && !type_admits_nullish(&receiver_ty, self.resolver())
             {
                 part.as_plain_step()
             } else {
                 part
             };
+            // A receiver whose type also allows `null` or `undefined` can
+            // short-circuit on those too.
+            adds_undefined |= part.is_optional()
+                && (!checks_missing_receiver || type_admits_nullish(&receiver_ty, self.resolver()));
             if part.is_optional() && short_circuit_span.is_none() {
                 short_circuit_span = Some(part.span());
                 self.push_narrow_frame(super::narrowing::NarrowEnv::new());
@@ -12485,13 +12837,31 @@ impl Inferer<'_> {
             // `&mut typed_parts` rather than a borrow of the last
             // element. It returns the new part to push and the
             // resulting type.
-            let (mut typed_part, next_ty) = self.infer_chain_part(
+            self.pending_read = None;
+            let (mut typed_part, mut next_ty) = self.infer_chain_part(
                 &effective_recv,
                 step_path.as_ref(),
                 part,
                 &mut typed_parts,
                 &mut pending_method,
             )?;
+            let missable = matches!(self.pending_read.take(), Some(PendingRead::Missable))
+                && !asserted
+                && !next_ty.holds_undefined()
+                && !matches!(next_ty.peel(), Type::Error | Type::Never);
+            receiver_may_miss = false;
+            if missable && ends_or_short_circuits {
+                if adds_undefined {
+                    // The chain's result already has room for `undefined`.
+                    next_ty = Type::union(vec![next_ty, Type::Undefined]);
+                    typed_part.set_result_ty(next_ty.clone());
+                } else {
+                    // Its index among the typed parts, which a method call
+                    // folds with its callee.
+                    missing_steps.push(typed_parts.len());
+                    receiver_may_miss = true;
+                }
+            }
             step_path = self.extend_chain_path(step_path, &typed_part)?;
             receiver_ty = self.narrow_step_result(
                 step_path.as_ref(),
@@ -12513,11 +12883,25 @@ impl Inferer<'_> {
 
         // A chain with no step left that can short-circuit has no `undefined`
         // branch to add.
-        let final_ty = if short_circuit_span.is_some() {
+        let final_ty = if adds_undefined {
             Type::union(vec![receiver_ty, Type::Undefined])
         } else {
             receiver_ty
         };
+        if final_ty.holds_undefined() {
+            // The chain's result has room for a missing value's `undefined`.
+            if base_may_miss {
+                self.absorb_missing(typed_base)?;
+            }
+            super::missing_reads::widen_missing_steps(&mut typed_parts, &missing_steps);
+        } else if base_may_miss || !missing_steps.is_empty() {
+            // A chain whose base or a step may find no value is itself a read
+            // a check around it can catch; see `missing_reads`.
+            self.pending_read = Some(PendingRead::Chain(super::missing_reads::MissableChain {
+                base: base_may_miss,
+                steps: missing_steps,
+            }));
+        }
         Ok((
             TypedExprKind::OptionalChain {
                 base: typed_base,
@@ -12558,6 +12942,9 @@ impl Inferer<'_> {
                         Type::Number,
                         name.span,
                     )?;
+                    if numeric_key_may_miss(receiver_ty, index) {
+                        self.note_missable_read();
+                    }
                     *pending_method = None;
                     return Ok((
                         TypedChainPart::Index {
@@ -12605,6 +12992,32 @@ impl Inferer<'_> {
                 optional,
                 span,
             } => {
+                // `o?.[k]` on a type parameter reads `T[K]` by name, as `o[k]`.
+                if self.is_generic_index_receiver(receiver_ty) {
+                    let Some((typed_idx, key_ty)) = self.generic_index_key(receiver_ty, idx)?
+                    else {
+                        return Ok((
+                            TypedChainPart::Index {
+                                idx,
+                                optional,
+                                result_ty: Type::Error,
+                                span,
+                            },
+                            Type::Error,
+                        ));
+                    };
+                    let ty = Type::indexed_access(generic_receiver(receiver_ty).clone(), key_ty);
+                    let result_ty = self.chain_read_result_type(&ty);
+                    return Ok((
+                        TypedChainPart::Index {
+                            idx: typed_idx,
+                            optional,
+                            result_ty,
+                            span,
+                        },
+                        ty,
+                    ));
+                }
                 let (typed_idx, idx_ty) = if receiver_ty.is_structural_object() {
                     self.infer_object_key(idx)?
                 } else {
@@ -12612,12 +13025,19 @@ impl Inferer<'_> {
                 };
                 let idx_span = self.ast.try_expr(idx).map_err(super::arena_failure)?.span;
                 if receiver_ty.is_structural_object() {
-                    let ty = self.object_index_read_type(receiver_ty, &idx_ty, idx_span);
+                    let (ty, result_ty) =
+                        if let Some(ty) = self.generic_key_read(receiver_ty, &idx_ty, idx_span) {
+                            let result_ty = self.chain_read_result_type(&ty);
+                            (ty, result_ty)
+                        } else {
+                            let ty = self.object_index_read_type(receiver_ty, &idx_ty, idx_span);
+                            (ty.clone(), ty)
+                        };
                     return Ok((
                         TypedChainPart::Index {
                             idx: typed_idx,
                             optional,
-                            result_ty: ty.clone(),
+                            result_ty,
                             span,
                         },
                         ty,
@@ -12633,7 +13053,7 @@ impl Inferer<'_> {
                     );
                 }
                 let elem_ty = match receiver_ty.peel() {
-                    ty if ty.is_regexp_match_array() => regexp_index_element(self.ast, idx)?,
+                    ty if ty.is_regexp_match_array() => Type::String,
                     Type::Array(elem) => *elem.clone(),
                     Type::Uint8Array => Type::Number,
                     Type::Tuple(elements) => {
@@ -12675,6 +13095,9 @@ impl Inferer<'_> {
                         Type::Error
                     }
                 };
+                if index_read_may_miss(self.ast, receiver_ty, idx)? {
+                    self.note_missable_read();
+                }
                 (
                     TypedChainPart::Index {
                         idx: typed_idx,
@@ -12985,7 +13408,7 @@ impl Inferer<'_> {
         }
         // A poisoned receiver has no knowable nullability, and naming it in the
         // message would print `<error>` at the user.
-        if type_admits_nullish(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
+        if may_be_nullish(base_ty, self.resolver()) || matches!(base_ty.peel(), Type::Error) {
             return;
         }
         self.diagnostics.push(crate::Diagnostic {
@@ -13116,9 +13539,13 @@ impl Inferer<'_> {
             fresh_shapes
         };
         let mut per_member_tys: Vec<Type> = Vec::with_capacity(members.len());
+        let mut through_index_signature = false;
         for m in members {
             match self.union_member_field_read_ty(m, name) {
-                Ok(ty) => per_member_tys.push(ty),
+                Ok(ty) => {
+                    through_index_signature |= self.reads_through_index_signature(m, name);
+                    per_member_tys.push(ty);
+                }
                 Err(_) if is_fresh_literal_member(m, fresh_shapes) => {
                     per_member_tys.push(Type::Undefined);
                 }
@@ -13135,6 +13562,10 @@ impl Inferer<'_> {
                     return Type::Error;
                 }
             }
+        }
+        // A member that backs the name with its index signature may not have it.
+        if through_index_signature {
+            self.note_missable_read();
         }
         Type::union(per_member_tys)
     }
@@ -13278,6 +13709,7 @@ impl Inferer<'_> {
                 if let Some(index) = index.as_ref().filter(|index| {
                     crate::property_keys::matches_name(&index.key, &name.name, &self.type_limits)
                 }) {
+                    self.note_missable_read();
                     return ChainField::plain(index.read_ty());
                 }
                 if let Some(found) = self.chain_method_lookup(receiver_ty, name, span) {
@@ -13371,6 +13803,7 @@ impl Inferer<'_> {
                         )
                     })
                 {
+                    self.note_missable_read();
                     return ChainField::plain(index.read_ty());
                 }
                 self.report_missing_field(span, receiver_ty, &name.name);
@@ -14119,9 +14552,12 @@ impl Inferer<'_> {
     /// `InterfaceRef` is rejected by `unsupported_cast_target_reason` when a
     /// runtime check is actually needed. An alias or interface keeps its name
     /// around its reduced body, so a failed check names the type the program
-    /// wrote.
+    /// wrote. A member naming an interface declared after its own (`k: keyof
+    /// B`) stays lazy while declarations bind, so it is evaluated here.
     fn reduce_cast_target(&self, ty: &Type) -> Type {
-        self.reduce_interfaces(ty, true)
+        let reduced = self.reduce_interfaces(ty, true);
+        self.type_limits
+            .type_or_error(super::utility_types::normalize(&reduced, self.resolver()))
     }
 
     fn reduce_interfaces(&self, ty: &Type, cast_target: bool) -> Type {
@@ -14503,6 +14939,11 @@ fn unsupported_cast_target_reason(
     types: super::assignable::TypeResolver,
     seen: &mut Vec<Type>,
 ) -> Option<&'static str> {
+    // `Uppercase<string>` is a `string` the mapping leaves unchanged, a set no
+    // run-time string test describes.
+    if super::utility_types::symbolic_chain(target_ty).is_some() {
+        return Some("string mapping types have no run-time check");
+    }
     let peeled = target_ty.peel();
     match peeled {
         Type::TemplateLiteral { .. } => None,
@@ -14554,6 +14995,13 @@ fn unsupported_cast_target_reason(
         // A recursion back-edge: expand the alias and check its body once.
         // `seen` breaks the cycle so a re-encounter is assumed supported,
         // matching the per-alias recursive validator codegen emits.
+        // A utility over a type parameter is erased like the parameter.
+        Type::AliasRef { mangled, args, .. }
+            if super::utility_types::utility(mangled).is_some()
+                && args.iter().any(super::utility_types::holds_type_parameter) =>
+        {
+            Some("generic type parameters are erased at runtime")
+        }
         Type::AliasRef { .. } => {
             if seen.iter().any(|s| s == peeled) {
                 return None;
@@ -14570,9 +15018,10 @@ fn unsupported_cast_target_reason(
         Type::NumberEnum { .. } | Type::StringEnum { .. } => {
             Some("enum targets need a per-variant value check at runtime")
         }
-        Type::TypeVar(_) | Type::GenericParam { .. } => {
-            Some("generic type parameters are erased at runtime")
-        }
+        Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. } => Some("generic type parameters are erased at runtime"),
         Type::Never => Some("`never` has no runtime values"),
         Type::Error => None,
         Type::Alias { ty: underlying, .. }
@@ -14688,36 +15137,52 @@ fn tuple_key_element(tuple: &crate::types::TupleType, slot: Option<usize>) -> Op
     Some(Type::union(elements))
 }
 
-/// Destructuring lowers each position to a literal index read, so it shares
-/// the whole-match guarantee with an explicit `[0]` read.
-fn regexp_index_element(ast: &crate::Ast, index: ExprId) -> Result<Type, CompilerFailure> {
-    let index = peel_parens(ast, index)?;
-    let index = match &ast.try_expr(index).map_err(super::arena_failure)?.kind {
-        ExprKind::Unary {
-            op: UnOp::Neg | UnOp::Pos,
-            operand,
-        } => peel_parens(ast, *operand)?,
-        _ => index,
-    };
-    Ok(
-        match &ast.try_expr(index).map_err(super::arena_failure)?.kind {
-            ExprKind::Number(n) if *n == 0.0 => Type::String,
-            _ => Type::regexp_element(),
-        },
-    )
+/// Whether an index read of `receiver` at `index` may find no element: any
+/// read of an array (alone or in a union with tuples), string or
+/// `Uint8Array`, and a regex match group other than the whole match `[0]`,
+/// whose group may not have taken part. A tuple's index is a literal the
+/// typechecker has already checked against its arity.
+fn index_read_may_miss(
+    ast: &crate::Ast,
+    receiver: &Type,
+    index: ExprId,
+) -> Result<bool, CompilerFailure> {
+    let receiver = receiver.peel();
+    if receiver.is_regexp_match_array() {
+        let whole_match = matches!(
+            ast.try_expr(peel_parens(ast, index)?).map_err(super::arena_failure)?.kind,
+            ExprKind::Number(n) if n == 0.0
+        );
+        return Ok(!whole_match);
+    }
+    Ok(match receiver {
+        Type::Array(_) | Type::Uint8Array => true,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Array(_))),
+        Type::Tuple(_) => false,
+        other => other.is_string_shaped(),
+    })
+}
+
+/// Whether `receiver["<index>"]`, a numeric key read, may find no element,
+/// as [`index_read_may_miss`] decides for an index.
+fn numeric_key_may_miss(receiver: &Type, index: f64) -> bool {
+    match receiver.peel() {
+        ty if ty.is_regexp_match_array() => index != 0.0,
+        Type::Tuple(_) => false,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::Array(_))),
+        _ => true,
+    }
 }
 
 fn numeric_key_element(receiver_ty: &Type, index: f64) -> Option<Type> {
     let slot = (index >= 0.0 && index.fract() == 0.0).then_some(index as usize);
     let elem_ty = match receiver_ty.peel() {
-        _ if receiver_ty.is_string_shaped() => Type::String,
-        _ if receiver_ty.is_regexp_match_array() => {
-            if index == 0.0 {
-                Type::String
-            } else {
-                Type::regexp_element()
-            }
-        }
+        // A match group reads as `string` too; see `index_read_may_miss`.
+        _ if receiver_ty.is_string_shaped() || receiver_ty.is_regexp_match_array() => Type::String,
         Type::Array(elem) => (**elem).clone(),
         Type::Uint8Array => Type::Number,
         // A tuple has no element at a key that names no slot, as tsc
@@ -15635,7 +16100,9 @@ fn interpolates_at_run_time(ty: &Type) -> bool {
             matches!(member.peel(), Type::Undefined | Type::Void)
                 || interpolates_at_run_time(member)
         }),
-        _ => false,
+        // `keyof T`, `T[K]` and a utility over `T` (`Exclude<keyof T, K>`)
+        // hold what an instantiation holds.
+        form => form.is_type_operator(),
     }
 }
 
@@ -17144,7 +17611,43 @@ mod tests {
         let TypedStmtKind::Let { ty, .. } = &ta.try_stmt(stmts[1]).unwrap().kind else {
             panic!("expected Let");
         };
-        assert_eq!(*ty, Type::Number);
+        // The read is `number`. The local holds it maybe missing, so it is
+        // stored as `number | undefined` (see `missing_reads`).
+        assert_eq!(*ty, Type::union(vec![Type::Number, Type::Undefined]));
+    }
+
+    #[test]
+    fn index_reads_are_typed_as_their_element_and_a_check_joins_the_default() {
+        let ta = run_clean(
+            "function main(): void {
+                const r: Record<string, number> = {};
+                const k: string = 'a';
+                const joined = r[k] ?? 'd';
+                const element: number = r[k];
+                const dotted: number = r.key;
+                const m = /(a)/.exec('a');
+                if (m !== null) { const group: string = m[1]; }
+            }",
+        );
+        let const_ty = |wanted: &str| {
+            (0..ta.stmts_len())
+                .find_map(
+                    |i| match &ta.try_stmt(crate::StmtId(i as u32)).unwrap().kind {
+                        TypedStmtKind::Const { name, ty, .. } if name.name == wanted => {
+                            Some(ty.clone())
+                        }
+                        _ => None,
+                    },
+                )
+                .unwrap_or_else(|| panic!("no const `{wanted}`"))
+        };
+        assert_eq!(
+            const_ty("joined"),
+            Type::union(vec![Type::Number, Type::StringLiteral("d".into())])
+        );
+        assert_eq!(const_ty("element"), Type::Number);
+        assert_eq!(const_ty("dotted"), Type::Number);
+        assert_eq!(const_ty("group"), Type::String);
     }
 
     #[test]
@@ -17204,16 +17707,13 @@ function main(): void { if (result < 10) { } }
         );
     }
 
-    // `Number(boolean)` goes through the standard call-signature dispatch —
-    // the union parameter `number | string | bigint | undefined` rejects
-    // `boolean` via the standard assignability diagnostic.
+    // `null` remains outside Number's accepted argument union, even though
+    // JavaScript also converts it to a number.
     #[test]
     fn number_call_with_wrong_type_diagnoses() {
-        let (_, diags) = run("function main(): void { let n = Number(true); }");
-        assert!(
-            !diags.is_empty(),
-            "expected an assignability diagnostic for Number(boolean), got none"
-        );
+        let (_, diags) = run("function main(): void { let n = Number(null); }");
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        assert!(diags[0].message.contains("got `null`"), "{diags:?}");
     }
 
     #[test]

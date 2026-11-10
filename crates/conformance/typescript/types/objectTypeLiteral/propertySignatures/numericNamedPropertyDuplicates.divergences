@@ -1,0 +1,14 @@
+types: 3 of 11 tsc entries compared, 2 differ
+
+line 14: a
+  tsc:  { 1: number; }
+  ours: { "1": number }
+
+line 17: null as unknown as ({ 1: number; 1: number; })
+  tsc:  { 1: number; }
+  ours: { "1": number }
+
+errors:
+line 10: tsc TS2300: Duplicate identifier '2'. (we accept)
+line 15: tsc TS2300: Duplicate identifier '1'. (we accept)
+line 18: tsc TS2300: Duplicate identifier '1'. (we accept)

@@ -251,10 +251,38 @@ x4 += {};
 >   : ^^
 
 
-/*pruned*/;
-/**/;
-/*pruned*/;
-/**/;
+let x5: E = null as unknown as (E);
+>x5 : E
+>   : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+x5 += a;
+>x5 += a : any
+>        : ^^^
+>x5 : E
+>   : ^
+>a : void
+>  : ^^^^
+
+x5 += true;
+>x5 += true : any
+>           : ^^^
+>x5 : E
+>   : ^
+>true : true
+>     : ^^^^
+
+x5 += {};
+>x5 += {} : any
+>         : ^^^
+>x5 : E
+>   : ^
+>{} : {}
+>   : ^^
+
 
 function main(): void {}
 >main : () => void

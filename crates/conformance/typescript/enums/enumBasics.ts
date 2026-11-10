@@ -12,17 +12,17 @@ let x: number = E1.A;
 
 // Enum object type is anonymous with properties of the enum type and numeric indexer
 /*pruned*/;
-/**/;     
-                     
-                     
-                     
-                                 
-                         
-                     
-                     
-                     
-                                 
-   
+let e_2: {
+    readonly A: E1.A;
+    readonly B: E1.B;
+    readonly C: E1.C;
+    readonly [n: number]: string;
+} = null as unknown as ({
+    readonly A: E1.A;
+    readonly B: E1.B;
+    readonly C: E1.C;
+    readonly [n: number]: string;
+});
 /*pruned*/;                                         
 
 // Reverse mapping of enum returns string name of property 

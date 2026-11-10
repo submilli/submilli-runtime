@@ -267,14 +267,30 @@ function f8<T>(x: T): void {
     }
 }
 
-/*pruned*/;
+function f9<T extends object>(x: T): void {
+>f9 : <T extends object>(x: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
 
+    if (x) {
+>x : T
+>  : ^
 
+        x; // {}
+>x : T
+>  : ^
 
+    }
+    else {
+        x; // never
+>x : never
+>  : ^^^^^
 
-
-
-
+    }
+}
 
 function main(): void {}
 >main : () => void

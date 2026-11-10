@@ -1,0 +1,52 @@
+=== switchWithConstrainedTypeVariable.ts ===
+
+// Repro from #20840
+
+function function1<T extends 'a' | 'b'>(key: T): void {
+>function1 : <T extends "a" | "b">(key: T) => void
+>          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>key : T
+>    : ^
+
+  switch (key) {
+>key : T
+>    : ^
+
+    case 'a':
+>'a' : "a"
+>    : ^^^
+
+      key.toLowerCase();
+>key.toLowerCase() : string
+>                  : ^^^^^^
+>key.toLowerCase : () => string
+>                : ^^^^^^^^^^^^
+>key : "a"
+>    : ^^^
+>toLowerCase : () => string
+>            : ^^^^^^^^^^^^
+
+      break;
+    default:
+      key.toLowerCase();
+>key.toLowerCase() : string
+>                  : ^^^^^^
+>key.toLowerCase : () => string
+>                : ^^^^^^^^^^^^
+>key : "b"
+>    : ^^^
+>toLowerCase : () => string
+>            : ^^^^^^^^^^^^
+
+      break;
+  }
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

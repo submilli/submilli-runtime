@@ -10,7 +10,7 @@ pub mod backtrace;
 pub mod capability_derivation;
 pub mod codegen;
 pub mod compile;
-mod compile_capabilities;
+pub mod compile_capabilities;
 pub mod compiler_error;
 pub mod compiler_limits;
 pub mod diagnostics;
@@ -97,10 +97,10 @@ pub use typechecker::{capability_binding_type, capture, check, desugar, infer, i
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,
     FieldNarrowingTest, FinalizerArgumentCheck, ForOfKind, GenericArgument, GlobalKind,
-    InterfaceCarrier, InterfaceNarrowingTest, InternalModuleExports, Intrinsic, PostfixTarget,
-    TypedArrayElement, TypedAst, TypedCatchClause, TypedChainPart, TypedClassAccessor,
-    TypedClassConstructor, TypedClassDecl, TypedClassField, TypedClassMethod, TypedExpr,
-    TypedExprKind, TypedFunction, TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember,
+    InterfaceCarrier, InterfaceNarrowingTest, InternalModuleExports, Intrinsic, MaybeMissingLocal,
+    PostfixTarget, TypedArrayElement, TypedAst, TypedCatchClause, TypedChainPart,
+    TypedClassAccessor, TypedClassConstructor, TypedClassDecl, TypedClassField, TypedClassMethod,
+    TypedExpr, TypedExprKind, TypedFunction, TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember,
     TypedNumberEnumDecl, TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource,
     TypedObjectLiteralField, TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind,
     TypedStringEnumDecl, TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue,

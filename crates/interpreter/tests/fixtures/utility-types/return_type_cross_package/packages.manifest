@@ -1,0 +1,2 @@
+@test/music lib -
+main app @test/music root

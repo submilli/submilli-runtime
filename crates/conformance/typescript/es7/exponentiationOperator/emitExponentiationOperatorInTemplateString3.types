@@ -12,7 +12,10 @@ let t2 = 10;
 >10 : 10
 >   : ^^
 
-/**/;
+let s;
+>s : any
+>  : ^^^
+
 
 // With TemplateTail
 `${t1 ** t2} world`;
@@ -85,8 +88,46 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;
-/*pruned*/;
+`${typeof (t1 ** t2 ** t1) } world`;
+>`${typeof (t1 ** t2 ** t1) } world` : string
+>                                    : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
+`${1 + typeof (t1 ** t2 ** t1) } world`;
+>`${1 + typeof (t1 ** t2 ** t1) } world` : string
+>                                        : ^^^^^^
+>1 + typeof (t1 ** t2 ** t1) : string
+>                            : ^^^^^^
+>1 : 1
+>  : ^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
 
 `${t1 ** t2}${t1 ** t2} world`;
 >`${t1 ** t2}${t1 ** t2} world` : string
@@ -208,7 +249,38 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;
+`${typeof (t1 ** t2 ** t1) }${typeof (t1 ** t2 ** t1) } world`;
+>`${typeof (t1 ** t2 ** t1) }${typeof (t1 ** t2 ** t1) } world` : string
+>                                                               : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
 
 `${t1 ** t2} hello world ${t1 ** t2} !!`;
 >`${t1 ** t2} hello world ${t1 ** t2} !!` : string
@@ -330,7 +402,38 @@ let t2 = 10;
 >t1 : number
 >   : ^^^^^^
 
-/*pruned*/;
+`${typeof (t1 ** t2 ** t1) } hello world ${typeof (t1 ** t2 ** t1)} !!`;
+>`${typeof (t1 ** t2 ** t1) } hello world ${typeof (t1 ** t2 ** t1)} !!` : string
+>                                                                        : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
 
 
 function main(): void {}

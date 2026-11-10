@@ -1,0 +1,17 @@
+types: 7 of 19 tsc entries compared, 4 differ
+
+line 9: ["4"] as S[]
+  tsc:  `${number}`[]
+  ours: S[]
+
+line 9: ["4"]
+  tsc:  "4"[]
+  ours: string[]
+
+line 9: function (s) { const a = { ...s, y: 6 }; }
+  tsc:  (s: `${number}`) => void
+  ours: (arg0: S) => void
+
+line 10: s
+  tsc:  `${number}`
+  ours: S

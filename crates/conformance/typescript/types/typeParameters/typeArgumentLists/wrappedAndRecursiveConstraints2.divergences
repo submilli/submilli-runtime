@@ -1,0 +1,25 @@
+types: 5 of 14 tsc entries compared, 5 differ
+
+line 6: c
+  tsc:  C<number>
+  ours: C<C<number>>
+
+line 6: new C(1)
+  tsc:  C<number>
+  ours: C<C<number>>
+
+line 7: c_2
+  tsc:  C<C<string>>
+  ours: C<C<C<string>>>
+
+line 7: new C(new C(''))
+  tsc:  C<C<string>>
+  ours: C<C<C<string>>>
+
+line 7: new C('')
+  tsc:  C<string>
+  ours: C<C<string>>
+
+errors:
+line 6: ours: expected `C<number>`, got `number` (tsc accepts)
+line 7: ours: expected `C<string>`, got `string` (tsc accepts)

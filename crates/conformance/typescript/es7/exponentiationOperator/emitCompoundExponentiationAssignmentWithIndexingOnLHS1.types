@@ -72,8 +72,50 @@ let array3 = [2, 2, 3];
 >3 : 3
 >  : ^
 
-/*pruned*/;
-/*pruned*/;
+let j0 = 0, j1 = 1;
+>j0 : number
+>   : ^^^^^^
+>0 : 0
+>  : ^
+>j1 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+
+array3[j0++] **= array3[j1++] **= array3[j0++] **= 1;
+>array3[j0++] **= array3[j1++] **= array3[j0++] **= 1 : number
+>                                                     : ^^^^^^
+>array3[j0++] : number
+>             : ^^^^^^
+>array3 : number[]
+>       : ^^^^^^^^
+>j0++ : number
+>     : ^^^^^^
+>j0 : number
+>   : ^^^^^^
+>array3[j1++] **= array3[j0++] **= 1 : number
+>                                    : ^^^^^^
+>array3[j1++] : number
+>             : ^^^^^^
+>array3 : number[]
+>       : ^^^^^^^^
+>j1++ : number
+>     : ^^^^^^
+>j1 : number
+>   : ^^^^^^
+>array3[j0++] **= 1 : number
+>                   : ^^^^^^
+>array3[j0++] : number
+>             : ^^^^^^
+>array3 : number[]
+>       : ^^^^^^^^
+>j0++ : number
+>     : ^^^^^^
+>j0 : number
+>   : ^^^^^^
+>1 : 1
+>  : ^
+
 
 function main(): void {}
 >main : () => void

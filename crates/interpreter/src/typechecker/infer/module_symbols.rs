@@ -46,22 +46,6 @@ impl ModuleSymbols {
             .and_then(|(exported, sym)| exported.then_some(sym))
     }
 
-    pub(in crate::typechecker) fn exported_values(
-        &self,
-    ) -> impl Iterator<Item = &ValueSymbol> + Clone {
-        self.values
-            .values()
-            .filter_map(|(exported, sym)| exported.then_some(sym))
-    }
-
-    pub(in crate::typechecker) fn exported_types(
-        &self,
-    ) -> impl Iterator<Item = &TypeSymbol> + Clone {
-        self.types
-            .values()
-            .filter_map(|(exported, sym)| exported.then_some(sym))
-    }
-
     pub(in crate::typechecker) fn exported_value_map(&self) -> BTreeMap<String, ValueSymbol> {
         self.values
             .iter()

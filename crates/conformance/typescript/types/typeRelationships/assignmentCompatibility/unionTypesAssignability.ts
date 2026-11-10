@@ -57,7 +57,7 @@ unionNumberString = str; // ok
 unionNumberString = null;
 
 // undefined
-/*pruned*/;    
+/*pruned*/;         
 unionNumberString = undefined;
 
 // type parameters
@@ -67,7 +67,7 @@ function foo<T, U>(t: T, u: U): void {
     /*pruned*/;                                
     /**/;  // ok
     /**/;  // ok
-    /**/;    
+    /*pruned*/;   
     /**/;  // error U not assignable to T
     /**/;  // error T not assignable to U
 }

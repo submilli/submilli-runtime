@@ -4,7 +4,7 @@ enum Color { R, G, B }
 function f1(x: Color | string): void {
     if (typeof x === "number") {
         let y = x;
-        /*pruned*/;                                 
+        let y_2: Color = null as unknown as (Color);
     }
     else {
         let z = x;
@@ -19,7 +19,7 @@ function f2(x: Color | string | string[]): void {
     }
     if (typeof x === "number") {
         let z = x;
-        /*pruned*/;                                 
+        let z_2: Color = null as unknown as (Color);
     }
     else {
         let w = x;
@@ -31,7 +31,7 @@ function f2(x: Color | string | string[]): void {
     }
     else {
         let b = x;
-        /*pruned*/;                                                       
+        let b_2: Color | string[] = null as unknown as (Color | string[]);
     }
 }
 

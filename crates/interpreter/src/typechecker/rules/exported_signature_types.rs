@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::lower_local_types::{display_type_name, is_local_type_name};
-use crate::typechecker::infer::module_symbols::ModuleSymbols;
 use crate::{
-    Diagnostic, ExportEntry, MangledName, Package, PackageDeclaration, Severity, Type, TypeKind,
-    TypeSymbol, ValueKind, ValueSymbol,
+    Diagnostic, ExportEntry, ExportKind, MangledName, ModulePath, Package, PackageDeclaration,
+    Severity, Type, TypeKind, TypeSymbol, TypedAst, ValueKind, ValueSymbol,
 };
 
 pub(crate) fn run(
@@ -28,22 +27,45 @@ pub(crate) fn run(
 /// Checks each module's exported signatures. A type any module of the package
 /// exports is public to every module: an importer's callers can import it from
 /// where it is declared.
-pub(in crate::typechecker) fn run_modules(
+pub(super) fn run_modules(
     package_name: &str,
     level: &str,
-    modules: &[(&ModuleSymbols, &[ExportEntry])],
+    typed_ast: &TypedAst,
+    package: &PackageDeclaration,
+    root_path: &ModulePath,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let exported_anywhere: BTreeSet<MangledName> = modules
-        .iter()
-        .flat_map(|(surface, exports)| exported_type_mangles(surface.exported_types(), exports))
+    let exported_anywhere: BTreeSet<MangledName> = package
+        .types
+        .values()
+        .chain(
+            typed_ast
+                .internal_modules
+                .values()
+                .flat_map(|module| module.types.values()),
+        )
+        .map(|symbol| symbol.mangled_name.clone())
+        .chain(
+            typed_ast
+                .exports
+                .iter()
+                .filter(|entry| entry.kind == ExportKind::Type)
+                .map(|entry| entry.target.clone()),
+        )
         .collect();
-    for (surface, _) in modules {
+    let mut modules: Vec<_> = typed_ast
+        .internal_modules
+        .iter()
+        .map(|(path, surface)| (path.clone(), &surface.values, &surface.types))
+        .collect();
+    modules.push((root_path.clone(), &package.values, &package.types));
+    modules.sort_by(|left, right| left.0.cmp(&right.0));
+    for (_, values, types) in modules {
         run_symbols(
             package_name,
             level,
-            surface.exported_values(),
-            surface.exported_types(),
+            values.values(),
+            types.values(),
             &exported_anywhere,
             diagnostics,
         );
@@ -324,8 +346,12 @@ fn collect_signature_named_types(
             collect_signature_named_types(package_name, original, out);
             collect_signature_named_types(package_name, ty, out);
         }
-        Type::Array(elem) | Type::Readonly(elem) => {
+        Type::Array(elem) | Type::Readonly(elem) | Type::KeyOf(elem) => {
             collect_signature_named_types(package_name, elem, out);
+        }
+        Type::IndexedAccess { object, index } => {
+            collect_signature_named_types(package_name, object, out);
+            collect_signature_named_types(package_name, index, out);
         }
         Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
             for element in elements {

@@ -311,7 +311,7 @@ pub(super) fn write_synthetic_params(
 fn write_intrinsic(out: &mut Writer, kind: Intrinsic) -> Result<(), RenderError> {
     if matches!(kind, Intrinsic::JsonStringify) {
         return out.push(
-            "JSON.stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined",
+            "JSON.stringify<T>(value: T, replacer?: null, space?: number | string | null): string",
         );
     }
     if matches!(kind, Intrinsic::JsonParse) {

@@ -57,9 +57,23 @@ let t1: [(x: number) => string, (x: number) => number] = null as unknown as ([(x
 >x : number
 >  : ^^^^^^
 
+let t2: [E1, E2] = null as unknown as ([E1, E2]);
+>t2 : [E1, E2]
+>   : ^^^^^^^^
+>null as unknown as ([E1, E2]) : [E1, E2]
+>                              : ^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
+let t4: [E1, E2, number] = null as unknown as ([E1, E2, number]);
+>t4 : [E1, E2, number]
+>   : ^^^^^^^^^^^^^^^^
+>null as unknown as ([E1, E2, number]) : [E1, E2, number]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 // no error
 t1 = [f1, f2];
@@ -74,9 +88,49 @@ t1 = [f1, f2];
 >f2 : (x: number) => number
 >   : ^^^^^^^^^^^^^^^^^^^^^
 
+t2 = [E1.one, E2.two];
+>t2 = [E1.one, E2.two] : [E1, E2]
+>                      : ^^^^^^^^
+>t2 : [E1, E2]
+>   : ^^^^^^^^
+>[E1.one, E2.two] : [E1, E2]
+>                 : ^^^^^^^^
+>E1.one : E1
+>       : ^^
+>E1 : typeof E1
+>   : ^^^^^^^^^
+>one : E1
+>    : ^^
+>E2.two : E2
+>       : ^^
+>E2 : typeof E2
+>   : ^^^^^^^^^
+>two : E2
+>    : ^^
+
 /*pruned*/;
-/*pruned*/;
-/*pruned*/;
+t4 = [E1.one, E2.two, 20];
+>t4 = [E1.one, E2.two, 20] : [E1, E2, number]
+>                          : ^^^^^^^^^^^^^^^^
+>t4 : [E1, E2, number]
+>   : ^^^^^^^^^^^^^^^^
+>[E1.one, E2.two, 20] : [E1, E2, number]
+>                     : ^^^^^^^^^^^^^^^^
+>E1.one : E1
+>       : ^^
+>E1 : typeof E1
+>   : ^^^^^^^^^
+>one : E1
+>    : ^^
+>E2.two : E2
+>       : ^^
+>E2 : typeof E2
+>   : ^^^^^^^^^
+>two : E2
+>    : ^^
+>20 : 20
+>   : ^^
+
 let e1 = t1[2];  // {}
 >e1 : undefined
 >   : ^^^^^^^^^
@@ -87,9 +141,27 @@ let e1 = t1[2];  // {}
 >2 : 2
 >  : ^
 
-/*pruned*/;      // {}
+let e2 = t2[2];  // {}
+>e2 : undefined
+>   : ^^^^^^^^^
+>t2[2] : undefined
+>      : ^^^^^^^^^
+>t2 : [E1, E2]
+>   : ^^^^^^^^
+>2 : 2
+>  : ^
+
 /*pruned*/;      // any
-/*pruned*/;      // number
+let e4 = t4[3];  // number
+>e4 : undefined
+>   : ^^^^^^^^^
+>t4[3] : undefined
+>      : ^^^^^^^^^
+>t4 : [E1, E2, number]
+>   : ^^^^^^^^^^^^^^^^
+>3 : 3
+>  : ^
+
 
 function main(): void {}
 >main : () => void

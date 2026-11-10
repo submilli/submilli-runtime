@@ -26,6 +26,9 @@ const HTTP_MODULE: &str = "submilli:http";
 /// its model the same thing. Keep them here, not inline, so the two surfaces
 /// can't drift.
 pub mod tools {
+    pub const PACKAGES_INDEX: &str = "Read package readmes and function descriptions for names: string[]. Fetch selected declarations with packages__functions.";
+    pub const PACKAGES_FUNCTIONS: &str = "Fetch function or type declarations and all referenced package types. Supply requests: [{name, functions}] to select from multiple packages in one call.";
+
     pub const PACKAGES_SEARCH: &str = "Search available packages by name, description, or exported \
         symbol name — stdlib modules (e.g. \"submilli:crypto\"), this blueprint's declared registry \
         packages (e.g. \"@submilli/github\"), and its discovered @mcp/<server> packages (results \
@@ -80,6 +83,8 @@ pub fn prompt_template() -> &'static str {
     body.split("\n---").next().unwrap_or(body).trim()
 }
 
+const FUNCTION_DOCS_GUIDANCE: &str = " Then call `submilli__typescript__packages__functions` with `requests: [{name, functions}]` to fetch the functions you will use and their referenced types; the package docs above are an index, not signatures.";
+
 /// Discovery vocabulary exposed by the consumer of the prompt.
 #[derive(Clone, Copy)]
 pub enum PromptSurface {
@@ -90,6 +95,15 @@ pub enum PromptSurface {
 /// The `execute` tool description for a blueprint: the canonical prompt with
 /// policy-dependent library listings and guidance resolved.
 pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -> String {
+    execute_tool_description_with_function_docs(blueprint, surface, false)
+}
+
+/// Render discovery instructions for clients exposing selective function docs.
+pub fn execute_tool_description_with_function_docs(
+    blueprint: &Blueprint,
+    surface: PromptSurface,
+    function_docs: bool,
+) -> String {
     let scope = DocsScope::for_blueprint(blueprint, &[]);
     let http_visible = scope.allows(HTTP_MODULE);
     let sandbox = if scope.allows("submilli:fs") || scope.allows("submilli:code") {
@@ -168,6 +182,14 @@ pub fn execute_tool_description(blueprint: &Blueprint, surface: PromptSurface) -
             },
         )
         .replace("{t_search}", search)
+        .replace(
+            "{function_docs}",
+            if function_docs {
+                FUNCTION_DOCS_GUIDANCE
+            } else {
+                ""
+            },
+        )
         .replace("{t_docs}", docs)
         .replace("{t_builtins_docs}", builtins)
         .replace(

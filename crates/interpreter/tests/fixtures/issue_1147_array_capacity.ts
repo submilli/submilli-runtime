@@ -40,7 +40,7 @@ function main(): void {
     assert(sum === 6);
 
     let readThrew = false;
-    try { const value = small[3]; } catch (e) { readThrew = true; }
+    try { const value: number = small[3]; } catch (e) { readThrew = true; }
     assert(readThrew);
     let appendThrew = false;
     try { small[small.length] = 4; } catch (e) { appendThrew = true; }

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// the diagnostic renderer maps them to a virtual path via [`reserved_path`].
 ///
 /// [`reserved_path`]: FileId::reserved_path
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FileId(pub u32);
 
 impl FileId {
@@ -79,7 +79,7 @@ impl FileId {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Span {
     pub file: FileId,
     pub start: u32,

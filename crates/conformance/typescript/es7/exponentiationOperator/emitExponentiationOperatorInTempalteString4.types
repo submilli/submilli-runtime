@@ -12,7 +12,10 @@ let t2 = 10;
 >10 : 10
 >   : ^^
 
-/**/;
+let s;
+>s : any
+>  : ^^^
+
 
 // With TemplateTail
 `${t1 ** -t2} world`;
@@ -67,7 +70,24 @@ let t2 = 10;
 >   : ^^^^^^
 
 /*pruned*/;
-/*pruned*/;
+`${typeof (t1 ** t2 ** t1) } world`;
+>`${typeof (t1 ** t2 ** t1) } world` : string
+>                                    : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
 
 // TempateHead & TemplateTail are empt
 `${t1 ** -t2} hello world ${t1 ** -t2}`;
@@ -162,7 +182,38 @@ let t2 = 10;
 >   : ^^^^^^
 
 /*pruned*/;
-/*pruned*/;
+`${typeof (t1 ** t2 ** t1)} hello world ${typeof (t1 ** t2 ** t1)}`;
+>`${typeof (t1 ** t2 ** t1)} hello world ${typeof (t1 ** t2 ** t1)}` : string
+>                                                                    : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
 
 // With templateHead
 `hello ${(-t1) ** t2 - t1}`;
@@ -205,7 +256,24 @@ let t2 = 10;
 >   : ^^^^^^
 
 /*pruned*/;
-/*pruned*/;
+`hello ${typeof (t1 ** t2 ** t1)}`;
+>`hello ${typeof (t1 ** t2 ** t1)}` : string
+>                                   : ^^^^^^
+>typeof (t1 ** t2 ** t1) : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                        : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>(t1 ** t2 ** t1) : number
+>                 : ^^^^^^
+>t1 ** t2 ** t1 : number
+>               : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+>t2 ** t1 : number
+>         : ^^^^^^
+>t2 : number
+>   : ^^^^^^
+>t1 : number
+>   : ^^^^^^
+
 
 function main(): void {}
 >main : () => void

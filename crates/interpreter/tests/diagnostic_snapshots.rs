@@ -120,7 +120,7 @@ fn b2_intrinsic_arity_lifts_signature() {
 
 #[test]
 fn b2_number_coercion_type_mismatch_lifts_signature() {
-    insta::assert_snapshot!(render_inside_main("  let x = Number(true);"));
+    insta::assert_snapshot!(render_inside_main("  let x = Number(null);"));
 }
 
 #[test]
@@ -150,20 +150,6 @@ fn b4_missing_main_help() {
 #[test]
 fn b4_let_missing_initializer_help() {
     insta::assert_snapshot!(render_inside_main("  let x: number;\n  console.log(x);"));
-}
-
-#[test]
-fn for_in_suggests_object_keys() {
-    insta::assert_snapshot!(render_inside_main(
-        "  const obj = { key: 1 };\n  for (const k in obj) console.log(k);"
-    ));
-}
-
-#[test]
-fn stringify_undefined_suggests_coalescing_result() {
-    insta::assert_snapshot!(render_all(
-        "function format(value: string | undefined): string {\n  return JSON.stringify(value).slice(0, 400);\n}\nfunction main(): void {}\n"
-    ));
 }
 
 #[test]
@@ -438,21 +424,7 @@ function main(): void {
 }
 
 #[test]
-fn record_read_explains_undefined_directly() {
-    insta::assert_snapshot!(render_inside_main(
-        "  const seen: Record<string, { x: number }> = {};\n  const key: string = 'missing';\n  console.log(seen[key].x);"
-    ));
-}
-
-#[test]
-fn regex_capture_read_keeps_undefined_help() {
-    insta::assert_snapshot!(render_inside_main(
-        "  const match = /(a)?b/.exec(\"b\");\n  if (match !== null) console.log(match[1].length);"
-    ));
-}
-
-#[test]
-fn regex_other_positions_remain_optional() {
+fn regex_group_reads_are_strings() {
     for read in [
         "match[1]",
         "match[-1]",
@@ -464,25 +436,8 @@ fn regex_other_positions_remain_optional() {
         let output = render_all(&format!(
             "function read(match: RegExpExecArray, index: number): string {{\n  return {read};\n}}\nfunction main(): void {{}}\n"
         ));
-        assert!(
-            output.contains("expected `string`, got `string | undefined`"),
-            "{read}: {output}"
-        );
+        assert!(!output.contains("error"), "{read}: {output}");
     }
-}
-
-#[test]
-fn record_read_explains_undefined_through_const() {
-    insta::assert_snapshot!(render_inside_main(
-        "  const seen: Record<string, { x: number }> = {};\n  const key: string = 'missing';\n  const v = seen[key];\n  console.log(v.x);"
-    ));
-}
-
-#[test]
-fn record_read_explains_undefined_in_key_loop() {
-    insta::assert_snapshot!(render_inside_main(
-        "  const seen: Record<string, { x: number }> = {};\n  for (const key of Object.keys(seen)) {\n    const v = seen[key];\n    console.log(v.x);\n  }"
-    ));
 }
 
 #[test]
@@ -490,48 +445,4 @@ fn record_read_unrelated_undefined_keeps_existing_help() {
     insta::assert_snapshot!(render_all(
         "function read(v: { x: number } | undefined): void {\n  console.log(v.x);\n}\nfunction main(): void {}\n"
     ));
-}
-
-#[test]
-fn record_read_origin_tracks_annotated_and_global_constants() {
-    let output = render_all(
-        "interface Seen { x: number; }\ninterface Index { [key: string]: Seen; }\nconst seen: Index = {};\nconst global: Seen | undefined = seen['global'];\nfunction main(): void {\n  const local: Seen | undefined = seen['local'];\n  console.log(local.x, global.x);\n}\n",
-    );
-    assert!(
-        output.contains("`local` is `seen['local']`: reading a record by key"),
-        "{output}"
-    );
-    assert!(
-        output.contains("`global` is `seen['global']`: reading a record by key"),
-        "{output}"
-    );
-}
-
-#[test]
-fn record_read_origin_does_not_misattribute_other_absence() {
-    for body in [
-        "  const xs: ({ x: number } | undefined)[] = [];\n  const v = xs[0];\n  console.log(v.x);",
-        "  const seen: Record<string, { x: number }> = {};\n  let v = seen['key'];\n  v = undefined;\n  console.log(v.x);",
-        "  const seen: { known?: { x: number }; [key: string]: { x: number } | undefined } = {};\n  const v = seen['known'];\n  console.log(v.x);",
-        "  const seen: Record<string, { x: number }> = {};\n  const v = seen['key'];\n  { const v: { x: number } | undefined = undefined; console.log(v.x); }",
-    ] {
-        let output = render_inside_main(body);
-        assert!(output.contains("error:"), "{output}");
-        assert!(!output.contains("reading a record by key"), "{output}");
-    }
-}
-
-#[test]
-fn record_read_origin_handles_unions_of_records() {
-    let output = render_all(
-        "function read(seen: Record<string, { x: number }> | Record<string, { x: string }>, key: string): void {\n  console.log(seen[key].x);\n  const v = seen[key];\n  console.log(v.x);\n}\nfunction main(): void {}\n",
-    );
-    assert!(
-        output.contains("`seen[key]`: reading a record by key"),
-        "{output}"
-    );
-    assert!(
-        output.contains("`v` is `seen[key]`: reading a record by key"),
-        "{output}"
-    );
 }

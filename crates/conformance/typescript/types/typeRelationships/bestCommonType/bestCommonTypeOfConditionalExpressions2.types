@@ -66,13 +66,55 @@ function foo<T, U>(t: T, u: U): T | U {
 
 }
 
-/*pruned*/;
+function foo2<T extends U, U>(t: T, u: U): U { // Error for referencing own type parameter
+>foo2 : <T extends U, U>(t: T, u: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
 
+    return true ? t : u; // Ok because BCT(T, U) = U
+>true ? t : u : U
+>             : ^
+>true : true
+>     : ^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
 
+}
 
-/*pruned*/;
+function foo3<T extends U, U extends V, V>(t: T, u: U): U {
+>foo3 : <T extends U, U extends V, V>(t: T, u: U) => U
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
 
+    return true ? t : u;
+>true ? t : u : U
+>             : ^
+>true : true
+>     : ^^^^
+>t : T
+>  : ^
+>u : U
+>  : ^
 
+}
 
 function main(): void {}
 >main : () => void

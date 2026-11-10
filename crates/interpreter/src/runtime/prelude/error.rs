@@ -65,10 +65,11 @@ pub(crate) enum BuiltinErrorClass {
     Reference,
     PermissionDenied,
     Timeout,
+    MissingValue,
 }
 
 impl BuiltinErrorClass {
-    const SUBCLASSES: [Self; 8] = [
+    const SUBCLASSES: [Self; 9] = [
         Self::Range,
         Self::QuotaExceeded,
         Self::Type,
@@ -77,6 +78,7 @@ impl BuiltinErrorClass {
         Self::Reference,
         Self::PermissionDenied,
         Self::Timeout,
+        Self::MissingValue,
     ];
 
     pub(crate) fn name_text(self) -> &'static str {
@@ -90,6 +92,7 @@ impl BuiltinErrorClass {
             Self::Reference => "ReferenceError",
             Self::PermissionDenied => "PermissionDeniedError",
             Self::Timeout => "TimeoutError",
+            Self::MissingValue => "MissingValueError",
         }
     }
 
@@ -106,7 +109,8 @@ impl BuiltinErrorClass {
             | Self::Syntax
             | Self::Uri
             | Self::Reference
-            | Self::Timeout => &[],
+            | Self::Timeout
+            | Self::MissingValue => &[],
             Self::PermissionDenied => &["caller", "capability", "reason"],
         }
     }
@@ -129,6 +133,7 @@ impl BuiltinErrorClass {
             Self::Reference => handles.reference_error_vtable,
             Self::PermissionDenied => handles.permission_denied_vtable,
             Self::Timeout => handles.timeout_vtable,
+            Self::MissingValue => handles.missing_value_vtable,
         }
     }
 
@@ -141,7 +146,8 @@ impl BuiltinErrorClass {
             | Self::Syntax
             | Self::Uri
             | Self::Reference
-            | Self::Timeout => handles.error_field_names,
+            | Self::Timeout
+            | Self::MissingValue => handles.error_field_names,
             Self::PermissionDenied => handles.permission_denied_field_names,
         }
     }
@@ -156,7 +162,8 @@ impl BuiltinErrorClass {
             | Self::Uri
             | Self::Reference
             | Self::PermissionDenied
-            | Self::Timeout => handles.error_subclass_type.clone(),
+            | Self::Timeout
+            | Self::MissingValue => handles.error_subclass_type.clone(),
         }
     }
 }
@@ -173,6 +180,7 @@ pub(crate) struct ErrorHost {
     pub reference_vtable: Global,
     pub permission_denied_vtable: Global,
     pub timeout_vtable: Global,
+    pub missing_value_vtable: Global,
     pub field_names: Global,
     pub permission_denied_field_names: Global,
     pub tag: Tag,
@@ -377,6 +385,7 @@ pub(crate) fn install_store_bound(
         reference_vtable,
         permission_denied_vtable,
         timeout_vtable,
+        missing_value_vtable,
     ] = BuiltinErrorClass::SUBCLASSES.map(|class| {
         install_subclass_vtable(
             linker,
@@ -398,6 +407,7 @@ pub(crate) fn install_store_bound(
         reference_vtable: reference_vtable?,
         permission_denied_vtable: permission_denied_vtable?,
         timeout_vtable: timeout_vtable?,
+        missing_value_vtable: missing_value_vtable?,
         field_names,
         permission_denied_field_names,
         tag,
@@ -614,6 +624,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         BuiltinErrorClass::Reference,
         BuiltinErrorClass::PermissionDenied,
         BuiltinErrorClass::Timeout,
+        BuiltinErrorClass::MissingValue,
     ] {
         let mut init_params = vec![object_ref.clone()];
         init_params.extend(ctor_params(class, &string_ref, &nullable_object));
@@ -1181,6 +1192,34 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 implements: Vec::new(),
                 doc: doc(
                     "/** A wait outside the program ran out of time (`extends Error`): an application tool the harness did not answer within the blueprint's `tool_call_timeout`. The call did not complete; retry it, or report it. */",
+                ),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "MissingValueError".to_string(),
+        TypeSymbol {
+            name: "MissingValueError".to_string(),
+            mangled_name: crate::mangle::prelude("MissingValueError"),
+            declaration_span: Span::at(crate::FileId::PRELUDE),
+            kind: TypeKind::Class {
+                generics: Default::default(),
+                // No own fields — `cause`/`message`/`name` are inherited from `Error`.
+                fields: BTreeMap::new(),
+                narrowing_checks: BTreeMap::new(),
+                methods: BTreeMap::new(),
+                method_visibility: BTreeMap::new(),
+                accessors: Vec::new(),
+                constructor: message_and_options_params(),
+                constructor_visibility: crate::Visibility::Public,
+                statics: BTreeMap::new(),
+                static_visibility: BTreeMap::new(),
+                static_fields: BTreeMap::new(),
+                extends: Some(crate::ClassExtends::plain(crate::mangle::prelude("Error"))),
+                implements: Vec::new(),
+                doc: doc(
+                    "/** A read found no value (`extends Error`): an array or string index out of range, a key a record does not have, or a regex group that did not take part in the match. Check the read where it happens: `r[k] ?? fallback`, `k in r`, or `a.at(i)`. */",
                 ),
             },
         },

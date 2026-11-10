@@ -1,0 +1,13 @@
+types: 5 of 10 tsc entries compared, 3 differ
+
+line 3: a
+  tsc:  any
+  ours: unknown
+
+line 3: b
+  tsc:  any
+  ours: unknown
+
+line 3: c
+  tsc:  any
+  ours: unknown

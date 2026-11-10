@@ -62,6 +62,16 @@ pub(crate) fn emit_reference_error_throw(
     emit_builtin_error_throw(emitter, ctx, "ReferenceError#constructor", message);
 }
 
+/// Raise a `MissingValueError` carrying `message`, under the same interning
+/// contract as [`emit_type_error_throw`].
+pub(crate) fn emit_missing_value_error_throw(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    message: &str,
+) {
+    emit_builtin_error_throw(emitter, ctx, "MissingValueError#constructor", message);
+}
+
 fn emit_builtin_error_throw(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,

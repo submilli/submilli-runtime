@@ -1,0 +1,5 @@
+types: 23 of 62 tsc entries compared, 0 differ
+
+errors:
+line 16: ours: rest parameter `a` type must be an array, got `arrayString` (tsc accepts)
+line 17: ours: rest parameter `a` type must be an array, got `stringOrNumArray` (tsc accepts)

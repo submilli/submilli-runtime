@@ -605,7 +605,9 @@ fn entries_by_line(typed: &TypedAst, source: &str) -> EntriesByLine {
         } else {
             Claim::of(&e.kind, i, text, retained)
         };
-        Some((e.span, text, claim, e.ty.clone()))
+        // A read the typechecker widened where it may find no value has its
+        // written type, as tsc reports it.
+        Some((e.span, text, claim, typed.written_type(id).unwrap().clone()))
     });
     let names = bindings(typed, &reachable)
         .into_iter()
@@ -809,7 +811,11 @@ fn bindings(
             TypedStmtKind::Let { name, .. } | TypedStmtKind::Const { name, .. }
                 if name.name.starts_with('#') => {}
             TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. } => {
-                out.push((name.span, ty.clone(), retained));
+                out.push((
+                    name.span,
+                    typed.written_binding_type(name.span, ty),
+                    retained,
+                ));
             }
             TypedStmtKind::ForOf {
                 name, element_ty, ..
@@ -819,7 +825,11 @@ fn bindings(
             }
             | TypedStmtKind::AssignGlobal {
                 ident, target_ty, ..
-            } => out.push((ident.span, target_ty.clone(), retained)),
+            } => out.push((
+                ident.span,
+                typed.written_binding_type(ident.span, target_ty),
+                retained,
+            )),
             _ => {}
         }
     }
@@ -871,7 +881,7 @@ fn assignment_statements(typed: &TypedAst) -> Vec<(Span, Type)> {
         if let TypedStmtKind::AssignLocal { value, .. }
         | TypedStmtKind::AssignGlobal { value, .. } = &statement.kind
         {
-            out.push((statement.span, typed.try_expr(*value).unwrap().ty.clone()));
+            out.push((statement.span, typed.written_type(*value).unwrap().clone()));
         }
     }
     out

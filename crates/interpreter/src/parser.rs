@@ -2709,7 +2709,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    // Disambiguates C-style for and for-of via non-consuming lookahead for `of`.
+    // Disambiguates C-style for, for-in and for-of via non-consuming lookahead.
     fn parse_for(&mut self) -> Option<StmtId> {
         let kw = self.advance();
         // `for await (…)`: there are no promises to wait for, so name the
@@ -2734,37 +2734,264 @@ impl<'a> Parser<'a> {
         }
         self.advance();
 
-        if matches!(self.peek().kind, TokenKind::Let | TokenKind::Const)
-            && matches!(self.peek_at(1).kind, TokenKind::Identifier)
-            && matches!(self.peek_at(2).kind, TokenKind::In)
-        {
-            self.error_at_with_help(
-                self.peek_at(2).span,
-                "`for…in` is not supported",
-                vec![
-                    "use `for (const k of Object.keys(obj))` to iterate the object's own keys"
-                        .to_string(),
-                ],
-            );
-            // Consume the rejected header and body so recovery does not treat
-            // its `const` as a separate declaration with a missing initializer.
-            for _ in 0..3 {
-                self.advance();
-            }
-            self.parse_expression()?;
-            if !matches!(self.peek().kind, TokenKind::RightParen) {
-                self.error_at_peek("expected `)` after `for…in` object");
-                return None;
-            }
-            self.advance();
-            self.parse_loop_body()?;
-            return None;
+        if let Some(in_at) = self.scan_for_in_head() {
+            return self.parse_for_in_tail(kw, in_at);
         }
         if self.scan_for_of_shape() {
             self.parse_for_of_tail(kw)
         } else {
             self.parse_c_for_tail(kw)
         }
+    }
+
+    /// The `in` token after a name or pattern, optionally preceded by `let` or
+    /// `const`. Recognize patterns too so their rejection names the loop syntax.
+    fn scan_for_in_head(&self) -> Option<usize> {
+        let binding_at = self.pos
+            + usize::from(matches!(
+                self.peek().kind,
+                TokenKind::Let | TokenKind::Const
+            ));
+        let in_at = match self.tokens.get(binding_at)?.kind {
+            TokenKind::Identifier => binding_at + 1,
+            TokenKind::LeftBracket => self.scan_past_balanced(
+                binding_at,
+                |k| matches!(k, TokenKind::LeftBracket),
+                |k| matches!(k, TokenKind::RightBracket),
+            )?,
+            TokenKind::LeftBrace => self.scan_past_balanced(
+                binding_at,
+                |k| matches!(k, TokenKind::LeftBrace),
+                |k| matches!(k, TokenKind::RightBrace),
+            )?,
+            _ => return None,
+        };
+        matches!(self.tokens.get(in_at)?.kind, TokenKind::In).then_some(in_at)
+    }
+
+    /// `for (k in obj)` iterates the keys of `obj` that `Object.keys` lists, and
+    /// none when `obj` is nullish. It becomes a `for-of` over those keys, with
+    /// `obj` held first so it runs once. A loop variable declared outside the
+    /// loop receives each key from a fresh binding the loop declares.
+    fn parse_for_in_tail(&mut self, kw: Token, in_at: usize) -> Option<StmtId> {
+        let binding_kind = match self.peek().kind {
+            TokenKind::Let => Some(crate::BindingKind::Let),
+            TokenKind::Const => Some(crate::BindingKind::Const),
+            _ => None,
+        };
+        if binding_kind.is_some() {
+            self.advance();
+        }
+        let name = if matches!(
+            self.peek().kind,
+            TokenKind::LeftBracket | TokenKind::LeftBrace
+        ) {
+            self.error_at_peek_with_help(
+                "the left-hand side of `for…in` cannot be a destructuring pattern",
+                vec![
+                    "use `for (const k in obj)` and read each value with `obj[k]`".to_string(),
+                    "or use `for (const [k, v] of Object.entries(obj))` for key-value pairs"
+                        .to_string(),
+                ],
+            );
+            self.pos = in_at;
+            None
+        } else {
+            let name_tok = self.advance();
+            Some(self.ident_from_token(&name_tok))
+        };
+        self.advance();
+
+        let object = self.parse_expression()?;
+        if !matches!(self.peek().kind, TokenKind::RightParen) {
+            self.error_at_peek("expected `)` after `for…in` object");
+            return None;
+        }
+        self.advance();
+        let body = self.parse_loop_body()?;
+        let body_span = parse_arena_result(self.ast.try_stmt(body), &mut self.fatal)?.span;
+        let loop_span = self.span(kw.span.start, body_span.end);
+
+        let Some(name) = name else {
+            // The diagnostic prevents compilation. Consume the whole invalid loop
+            // so recovery preserves sibling heads and enclosing braces, but do not
+            // infer its body without the rejected bindings. Keep the original body
+            // block in the arena so its destructuring declarations are lowered.
+            return parse_arena_result(
+                self.ast.try_push_stmt(Stmt {
+                    kind: StmtKind::Block(Vec::new()),
+                    span: loop_span,
+                }),
+                &mut self.fatal,
+            );
+        };
+
+        let held = self.hold_for_in_object(object)?;
+        let keys = self.for_in_keys(&held)?;
+        let (binding_kind, binding, body) = if let Some(kind) = binding_kind {
+            (kind, name, body)
+        } else {
+            let (key, body) = self.copy_key_to_outer(name, body, body_span)?;
+            (crate::BindingKind::Const, key, body)
+        };
+        let for_of = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::ForOf {
+                    binding_kind,
+                    name: binding,
+                    ty: None,
+                    iter: keys,
+                    body,
+                },
+                span: loop_span,
+            }),
+            &mut self.fatal,
+        )?;
+        parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(vec![held.statement, for_of]),
+                span: loop_span,
+            }),
+            &mut self.fatal,
+        )
+    }
+
+    /// For `for (k in obj)` with `k` declared outside the loop: the loop binds a
+    /// fresh key, and its body starts by copying that key into `k`. Nested
+    /// loops share the key's name: each copies before its body runs.
+    fn copy_key_to_outer(
+        &mut self,
+        outer: Ident,
+        body: StmtId,
+        body_span: Span,
+    ) -> Option<(Ident, StmtId)> {
+        let span = outer.span;
+        let key = Ident {
+            name: FOR_IN_KEY.to_string(),
+            span,
+        };
+        let key_expr = self.synthetic_expr(span, ExprKind::Identifier(key.clone()))?;
+        let copy = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Assign {
+                    target: outer,
+                    value: key_expr,
+                },
+                span,
+            }),
+            &mut self.fatal,
+        )?;
+        let body = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Block(vec![copy, body]),
+                span: body_span,
+            }),
+            &mut self.fatal,
+        )?;
+        Some((key, body))
+    }
+
+    /// `let #for_in_object = object;`, so the guard and `Object.keys` read one
+    /// evaluation. It is a `let`, never reassigned: a `const` alias of a
+    /// type-parameter value breaks the guard's narrowing (SUB-2171). `#` cannot
+    /// start a source identifier.
+    fn hold_for_in_object(&mut self, object: ExprId) -> Option<HeldForInObject> {
+        let span = parse_arena_result(self.ast.try_expr(object), &mut self.fatal)?.span;
+        let name = Ident {
+            name: FOR_IN_OBJECT.to_string(),
+            span,
+        };
+        let statement = parse_arena_result(
+            self.ast.try_push_stmt(Stmt {
+                kind: StmtKind::Let {
+                    name: name.clone(),
+                    ty: None,
+                    value: object,
+                    doc: None,
+                },
+                span,
+            }),
+            &mut self.fatal,
+        )?;
+        Some(HeldForInObject { name, statement })
+    }
+
+    /// `held === undefined || held === null ? [] : Object.keys(held)`, which
+    /// puts `held`'s span on every synthesized node so a diagnostic about it
+    /// points at the `for…in` object.
+    fn for_in_keys(&mut self, held: &HeldForInObject) -> Option<ExprId> {
+        let span = held.name.span;
+        let undefined = self.synthetic_expr(
+            span,
+            ExprKind::Identifier(Ident {
+                name: "undefined".to_string(),
+                span,
+            }),
+        )?;
+        self.ast.synthetic_undefined.insert(undefined);
+        let null = self.synthetic_expr(span, ExprKind::Null)?;
+        let is_undefined = self.held_equals(held, undefined)?;
+        let is_null = self.held_equals(held, null)?;
+        let cond = self.synthetic_expr(
+            span,
+            ExprKind::Binary {
+                op: BinOp::Or,
+                lhs: is_undefined,
+                rhs: is_null,
+            },
+        )?;
+        let none = self.synthetic_expr(span, ExprKind::ArrayLiteral { elements: vec![] })?;
+        let namespace = self.synthetic_expr(
+            span,
+            ExprKind::Identifier(Ident {
+                name: "Object".to_string(),
+                span,
+            }),
+        )?;
+        let callee = self.synthetic_expr(
+            span,
+            ExprKind::FieldAccess {
+                receiver: namespace,
+                name: Ident {
+                    name: "keys".to_string(),
+                    span,
+                },
+            },
+        )?;
+        let argument = self.synthetic_expr(span, ExprKind::Identifier(held.name.clone()))?;
+        let keys = self.synthetic_expr(
+            span,
+            ExprKind::Call {
+                callee,
+                type_args: None,
+                args: vec![argument],
+            },
+        )?;
+        self.synthetic_expr(
+            span,
+            ExprKind::Ternary {
+                cond,
+                then_: none,
+                else_: keys,
+            },
+        )
+    }
+
+    fn held_equals(&mut self, held: &HeldForInObject, other: ExprId) -> Option<ExprId> {
+        let object =
+            self.synthetic_expr(held.name.span, ExprKind::Identifier(held.name.clone()))?;
+        self.synthetic_expr(
+            held.name.span,
+            ExprKind::Binary {
+                op: BinOp::Eq,
+                lhs: object,
+                rhs: other,
+            },
+        )
+    }
+
+    fn synthetic_expr(&mut self, span: Span, kind: ExprKind) -> Option<ExprId> {
+        parse_arena_result(self.ast.try_push_expr(Expr { kind, span }), &mut self.fatal)
     }
 
     // Counts bracket/angle depth to skip past optional type annotations.
@@ -2776,10 +3003,10 @@ impl<'a> Parser<'a> {
         let (start, mut depth) = match self.peek_at(1).kind {
             TokenKind::Identifier => match self.peek_at(2).kind {
                 TokenKind::Identifier if self.peek_at_is_word(2, "of") => return true,
-                TokenKind::Colon => (3, 0i32),
+                TokenKind::Colon => (3, 0usize),
                 _ => return false,
             },
-            TokenKind::LeftBracket | TokenKind::LeftBrace => (2, 1i32),
+            TokenKind::LeftBracket | TokenKind::LeftBrace => (2, 1usize),
             _ => return false,
         };
         let mut i = start;
@@ -3735,8 +3962,23 @@ impl<'a> Parser<'a> {
             }
             let open = self.advance();
             if !matches!(self.peek().kind, TokenKind::RightBracket) {
-                self.error_at(open.span, "expected `]` to close array type");
-                return None;
+                // `T[K]`, an indexed access type. The index is a whole type,
+                // unions included.
+                let index = self.parse_type_annotation()?;
+                if !matches!(self.peek().kind, TokenKind::RightBracket) {
+                    self.error_at(open.span, "expected `]` to close indexed access type");
+                    return None;
+                }
+                let close = self.advance();
+                let span = self.span(ty.span.start, close.span.end);
+                ty = TypeAnnotation {
+                    kind: TypeAnnotationKind::IndexedAccess {
+                        object: Box::new(ty),
+                        index: Box::new(index),
+                    },
+                    span,
+                };
+                continue;
             }
             let close = self.advance();
             let span = self.span(ty.span.start, close.span.end);
@@ -4935,7 +5177,15 @@ impl<'a> Parser<'a> {
             self.tokens.get(i).map(|t| &t.kind),
             Some(TokenKind::LeftBracket)
         ) {
-            i += 1;
+            if matches!(
+                self.tokens.get(i + 1).map(|t| &t.kind),
+                Some(TokenKind::RightBracket)
+            ) {
+                i += 2;
+                continue;
+            }
+            // `T[K]`: an indexed access type, whose index is a whole type.
+            i = self.scan_past_type_annotation_at_depth(i + 1, TypePos::Anywhere, depth + 1)?;
             if !matches!(
                 self.tokens.get(i).map(|t| &t.kind),
                 Some(TokenKind::RightBracket)
@@ -4955,7 +5205,9 @@ impl<'a> Parser<'a> {
         is_open: fn(&TokenKind) -> bool,
         is_close: fn(&TokenKind) -> bool,
     ) -> Option<usize> {
-        let mut depth: i32 = 1;
+        // At most one unmatched opening per token: depth is bounded by the
+        // token vector's length, so use its index type rather than a signed count.
+        let mut depth: usize = 1;
         let mut i = start + 1;
         while i < self.tokens.len() && depth > 0 {
             let token = self.tokens.get(i)?;
@@ -6941,6 +7193,17 @@ fn mixed_logical_help(prev: BinOp, next: BinOp) -> String {
 
 const LOGICAL_AND_PREC: u8 = 2;
 
+/// The bindings a lowered `for…in` declares. `#` cannot start a source
+/// identifier, so neither can clash with a user's name.
+const FOR_IN_OBJECT: &str = "#for_in_object";
+const FOR_IN_KEY: &str = "#for_in_key";
+
+/// The `for…in` object, held in a variable so it is evaluated once.
+struct HeldForInObject {
+    name: Ident,
+    statement: StmtId,
+}
+
 /// One side of a loose comparison that is always nullish.
 #[derive(Clone, Copy)]
 struct NullishOperand {
@@ -7194,6 +7457,106 @@ mod tests {
     use crate::{Asi, Ast, ExprKind, FileId, ImportKind, StmtKind, Token, TokenKind, diagnostics};
 
     const F: FileId = FileId(0);
+
+    #[test]
+    fn for_in_destructuring_reports_the_invalid_head() {
+        for declaration in ["let ", "const ", ""] {
+            for pattern in [
+                "[a, b]",
+                "{a, b}",
+                "[a, ...rest]",
+                "{a: [b]}",
+                "[a = 'x' in {}]",
+                "{a = (1 < 2)}",
+                "{['a']: a}",
+            ] {
+                let source = format!("for ({declaration}{pattern} in []) {{}}");
+                let (_, diagnostics) = parse_str(&source);
+                assert_eq!(diagnostics.len(), 1, "{source}: {diagnostics:?}");
+                let diagnostic = diagnostics.first().expect("a pattern is invalid in for…in");
+                assert_eq!(
+                    diagnostic.message,
+                    "the left-hand side of `for…in` cannot be a destructuring pattern",
+                    "{source}: {diagnostics:?}"
+                );
+                assert_eq!(
+                    diagnostic.span.start as usize,
+                    source.find(pattern).unwrap()
+                );
+                assert!(diagnostic.help.iter().any(|h| h.contains("obj[k]")));
+                assert!(
+                    diagnostic
+                        .help
+                        .iter()
+                        .any(|h| h.contains("Object.entries(obj)"))
+                );
+                assert!(
+                    !diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("initializer"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unfinished_for_in_patterns_report_syntax_errors() {
+        for source in ["for (let [a in []", "for (const {a in []", "for ([a"] {
+            let (_, diagnostics) = parse_str(source);
+            assert!(!diagnostics.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn for_in_destructuring_recovery_preserves_loop_boundaries() {
+        for body in ["{}", "{ const [local] = [1]; break; }", ";"] {
+            let source = format!(
+                "function main(): void {{
+                    for (let [a] in []) {{ for (const [b] in {{}}) {body} }}
+                    for (const {{a}} in {{}}) {body}
+                    for (let [a] in []) for (const [b] in {{}}) {body}
+                    const after = 1;
+                }}"
+            );
+            let (ast, diagnostics) = parse_str(&source);
+            assert_eq!(diagnostics.len(), 5, "{source}: {diagnostics:?}");
+            assert!(
+                diagnostics.iter().all(|d| d.message
+                    == "the left-hand side of `for…in` cannot be a destructuring pattern")
+            );
+            let main = ast.try_stmt(ast.top_level[0]).unwrap();
+            let StmtKind::Function { body, .. } = main.kind else {
+                panic!("expected main function");
+            };
+            let StmtKind::Block(ref statements) = ast.try_stmt(body).unwrap().kind else {
+                panic!("expected function body");
+            };
+            assert_eq!(statements.len(), 4, "all sibling statements are preserved");
+            assert!(matches!(
+                ast.try_stmt(statements[3]).unwrap().kind,
+                StmtKind::Const { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn for_in_head_scanning_handles_deep_and_unfinished_patterns_iteratively() {
+        for opening in ['[', '{'] {
+            let closing = if opening == '[' { ']' } else { '}' };
+            let pattern = opening.to_string().repeat(4096) + &closing.to_string().repeat(4096);
+            let source = format!("{pattern} in obj");
+            let parser = parser_from_source(&source);
+            let in_at = parser.scan_for_in_head().expect("balanced pattern head");
+            assert!(matches!(parser.tokens[in_at].kind, TokenKind::In));
+            let source = format!("let {pattern} of obj");
+            assert!(parser_from_source(&source).scan_for_of_shape());
+
+            let source = opening.to_string().repeat(4096);
+            assert!(parser_from_source(&source).scan_for_in_head().is_none());
+            let source = format!("let {source}");
+            assert!(!parser_from_source(&source).scan_for_of_shape());
+        }
+    }
 
     #[test]
     fn index_key_type_does_not_disrupt_initializer_parsing() {

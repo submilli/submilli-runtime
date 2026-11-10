@@ -487,7 +487,9 @@ impl DependencyUsage {
             | Type::NonPrimitive
             | Type::Error
             | Type::TypeVar(_)
-            | Type::GenericParam { .. } => {}
+            | Type::GenericParam { .. }
+            | Type::KeyOf(_)
+            | Type::IndexedAccess { .. } => {}
         }
     }
 
@@ -573,6 +575,7 @@ impl DependencyUsage {
         // call the reconstructed class constructors, so these classes must
         // reconstruct in every module.
         self.note_type(crate::mangle::prelude("Error"));
+        self.note_type(crate::mangle::prelude("MissingValueError"));
         self.note_type(crate::mangle::prelude("RangeError"));
         self.note_type(crate::mangle::prelude("ReferenceError"));
         self.note_type(crate::mangle::prelude("TypeError"));

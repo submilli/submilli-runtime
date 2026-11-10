@@ -1,0 +1,30 @@
+types: 66 of 169 tsc entries compared, 5 differ
+
+line 109: tk
+  tsc:  T[K]
+  ours: U[K]
+
+line 112: tj
+  tsc:  T[J]
+  ours: U[J]
+
+line 114: tj
+  tsc:  T[J]
+  ours: U[J]
+
+line 115: tk
+  tsc:  T[K]
+  ours: U[J]
+
+line 118: tk
+  tsc:  T[K]
+  ours: U[J]
+
+errors:
+line 109: tsc TS2322: Type 'T[K]' is not assignable to type 'U[K]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'. (we accept)
+line 112: tsc TS2322: Type 'T[J]' is not assignable to type 'U[J]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'. (we accept)
+line 115: tsc TS2322: Type 'T[K]' is not assignable to type 'T[J]'.   Type 'K' is not assignable to type 'J'.     'K' is assignable to the constraint of type 'J', but 'J' could be instantiated with a different subtype of constraint 'string'. (we accept)
+line 118: tsc TS2322: Type 'T[K]' is not assignable to type 'U[J]'.   Type 'T' is not assignable to type 'U'.     'U' could be instantiated with an arbitrary type which could be unrelated to 'T'. (we accept)
+line 49: ours: Property `toString` does not exist on type `{}` (tsc accepts)
+line 149: ours: unsupported Record key type `keyof T` (tsc accepts)
+line 153: ours: unsupported Record key type `keyof T` (tsc accepts)

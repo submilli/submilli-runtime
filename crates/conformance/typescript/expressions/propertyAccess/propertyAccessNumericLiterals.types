@@ -29,7 +29,16 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;
+1234..toString();
+>1234..toString() : string
+>                 : ^^^^^^
+>1234..toString : (radix?: number) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1234. : 1234
+>      : ^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 1e0.toString();
 >1e0.toString() : string
 >               : ^^^^^^
@@ -60,7 +69,16 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;
+0_8.8e5.toString();
+>0_8.8e5.toString() : string
+>                   : ^^^^^^
+>0_8.8e5.toString : (radix?: number) => string
+>                 : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>0_8.8e5 : 880000
+>        : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 8.8e5.toString();
 >8.8e5.toString() : string
 >                 : ^^^^^^
@@ -81,7 +99,16 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;
+88_e4.toString();
+>88_e4.toString() : string
+>                 : ^^^^^^
+>88_e4.toString : (radix?: number) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>88_e4 : 880000
+>      : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 88e4.toString();
 >88e4.toString() : string
 >                : ^^^^^^
@@ -92,7 +119,16 @@
 >toString : (radix?: number) => string
 >         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*pruned*/;
+8_8e4.toString();
+>8_8e4.toString() : string
+>                 : ^^^^^^
+>8_8e4.toString : (radix?: number) => string
+>               : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+>8_8e4 : 880000
+>      : ^^^^^^
+>toString : (radix?: number) => string
+>         : ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 
 function main(): void {}
 >main : () => void

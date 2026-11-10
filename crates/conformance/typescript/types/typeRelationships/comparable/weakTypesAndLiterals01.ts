@@ -15,14 +15,14 @@ type LiteralsOrWeakTypes =
 
 let aOrB: "A" | "B" = null as unknown as ("A" | "B");
 
-/*pruned*/;                              
-                      
-                   
-     
-          
-                   
-     
- 
+const f = (arg: LiteralsOrWeakTypes) => {
+    if (arg === "A") {
+        return arg;
+    }
+    else {
+        return arg;
+    }
+}
 
 const g = (arg: WeakTypes) => {
     if (arg === "A") {

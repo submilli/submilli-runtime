@@ -8,8 +8,8 @@ x1 += '';
 let x2: number = null as unknown as (number);
 x2 += '';
 
-/*pruned*/;                        
-/**/;    
+let x3: E = null as unknown as (E);
+x3 += '';
 
 let x4: {a: string} = null as unknown as ({a: string});
 x4 += '';

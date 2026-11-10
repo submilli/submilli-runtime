@@ -406,7 +406,7 @@ async fn package_top_level_throw_is_a_runtime_error_at_its_statement() {
     let message = body["error"]["message"].as_str().unwrap_or_default();
     assert!(
         message.starts_with(
-            "error: package `@pied-piper/util` failed to initialize: RangeError: index 7 is out of range for `table` (length 1); use `table.at(7)` to get `undefined` instead\n  at <top level> (@pied-piper/util/lib:2:"
+            "error: package `@pied-piper/util` failed to initialize: MissingValueError: index 7 is out of range for `table` (length 1); use `table[7] ?? …` or `table.at(7)`\n  at <top level> (@pied-piper/util/lib:2:"
         ),
         "got: {body:#}"
     );

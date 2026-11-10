@@ -1,0 +1,1 @@
+line 11, 12, 13, 14, 18, 19, 25, 31, 40, 50, 51, 52, 53, 57, 58, 64, 70, 79 type: artifact one side prints a type alias (or `keyof`) by name and the other expands it

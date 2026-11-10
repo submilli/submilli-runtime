@@ -182,14 +182,45 @@ fn emit_expr_value(
             // field, then recover the declared type from the cell's
             // erased payload. Non-boxed reads are a plain `local.get`.
             let slot = emitter.require_local_slot(&ident.name)?;
+            // A local holding a read that may have found no value is stored,
+            // and boxed, as `T | undefined`.
+            let maybe_missing = emitter.maybe_missing_slots.get(&slot).cloned();
+            let stored_ty = maybe_missing
+                .as_ref()
+                .map_or(&expr.ty, |local| &local.storage);
             if *boxed {
-                let box_idx = ctx.symbols.box_type_idx(&expr.ty)?.ok_or_else(|| {
+                let box_idx = ctx.symbols.box_type_idx(stored_ty)?.ok_or_else(|| {
                     crate::codegen::internal_failure("box type registered for every boxed LocalRef")
                 })?;
                 super::binding_cells::read(emitter, ctx, slot, box_idx)?;
-                cast::emit_unerase(emitter, ctx, &expr.ty)?;
+                cast::emit_unerase(emitter, ctx, stored_ty)?;
             } else {
                 emitter.instruction(Instruction::LocalGet(slot));
+            }
+            if let Some(local) = maybe_missing.as_ref() {
+                // A use the typechecker left at `T` tests the value: a missing
+                // one throws here. A check takes it as it is, at
+                // `T | undefined`, which the typechecker records. A use typed
+                // with room for `undefined` also takes it as it is when the
+                // local has no present flag: a local declared `T | undefined`
+                // may hold a real `undefined` (never assigned, `v = undefined`),
+                // which only a flag could tell from a missing read. A local
+                // with a flag decides by the record alone: its narrowed type
+                // `T & ({} | undefined)` holds `undefined` too.
+                let checked = ctx.ta.widened_missing_reads.contains_key(&id)
+                    || (local.present_flag.is_none()
+                        && ctx
+                            .ta
+                            .source_type(id)
+                            .map_err(crate::codegen::arena_failure)?
+                            .holds_undefined());
+                if checked {
+                    cast::emit_coerce_to_slot(emitter, ctx, &local.storage, &expr.ty)?;
+                } else {
+                    let stack = ctx.symbols.value_type(stored_ty)?;
+                    emit_missing_local_check(emitter, ctx, slot, stack)?;
+                    cast::emit_cast_to(emitter, ctx, &expr.ty)?;
+                }
             }
         }
         // A guard that rules out every value leaves no shadow to read, and
@@ -293,7 +324,11 @@ fn emit_expr_value(
             )?;
         }
         TypedExprKind::IntrinsicCall { kind, args } => {
-            emit_intrinsic_call(emitter, ctx, *kind, args, &expr.ty)?;
+            let source_ty = ctx
+                .ta
+                .source_type(id)
+                .map_err(crate::codegen::arena_failure)?;
+            emit_intrinsic_call(emitter, ctx, *kind, args, &expr.ty, source_ty)?;
         }
         TypedExprKind::MethodCall {
             receiver,
@@ -474,7 +509,9 @@ fn emit_expr_value(
             // bindings snapshot once, while field/index paths register their
             // source for checked live reads. This scope lasts only for `inner`.
             emitter.push_scope();
-            if path.chain.is_empty() {
+            if !path.chain.is_empty() {
+                emitter.register_narrow_source(&binding.name, *source)?;
+            } else if !reads_maybe_missing_local(emitter, ctx, *source)? {
                 let shadow_val = ctx.symbols.value_type(&cast_info.to_ty)?;
                 let shadow = emitter.define_local(binding, shadow_val)?;
                 emit_expr(emitter, ctx, *source)?;
@@ -482,8 +519,6 @@ fn emit_expr_value(
                     emitter, ctx, cast_info,
                 )?;
                 emitter.instruction(Instruction::LocalSet(shadow));
-            } else {
-                emitter.register_narrow_source(&binding.name, *source)?;
             }
             emit_expr(emitter, ctx, *inner)?;
             emitter.pop_scope()?;
@@ -538,6 +573,10 @@ fn emit_expr_value(
         // InterfaceProperty land alongside their non-chain siblings'
         // refactor).
         TypedExprKind::OptionalChain { base, parts } => {
+            let present_flag = take_present_flag(emitter, id);
+            if let Some(flag) = present_flag {
+                set_present_flag(emitter, flag, true);
+            }
             let result_ty = expr.ty.clone();
             let base_ty = ctx
                 .ta
@@ -561,6 +600,7 @@ fn emit_expr_value(
                 &base_ty,
                 &result_ty,
                 ctx.ta.runtime_chain_types.get(&id).map(Vec::as_slice),
+                present_flag,
             )?;
         }
         TypedExprKind::PostfixUnary { op, target } => {
@@ -571,7 +611,7 @@ fn emit_expr_value(
                     .ta
                     .source_type(*receiver)
                     .map_err(crate::codegen::arena_failure)?
-                    .is_structural_object()
+                    .indexes_by_name()
             {
                 emit_object_index_postfix(
                     emitter,
@@ -932,12 +972,39 @@ fn emit_index_access(
     // Array (packed i8 vs boxed anyref slots), so the index
     // recipe forks on the static receiver type. Tuples lower
     // to `$Array` and fall through to the default arm.
+    //
+    // Only an array or record read sets a present flag (see
+    // `emit_value_with_present_flag`); a string or `Uint8Array` element is
+    // never `undefined`, so its value tells. Taken before anything nested is
+    // emitted, so no nested read can take it.
+    let mut present_flag = take_present_flag(emitter, id);
+    let missing_reads_undefined = ctx.ta.missing_reads_undefined.contains(&id);
+    // Such a read always finds a value (see `checked_ty` below): a local
+    // holding it is present.
+    if missing_reads_undefined && let Some(flag) = present_flag.take() {
+        set_present_flag(emitter, flag, true);
+    }
     let recv_ty = ctx
         .ta
         .source_type(*receiver)
         .map_err(crate::codegen::arena_failure)?
         .clone();
-    if recv_ty.is_structural_object() {
+    // The typechecker's type for the read, which a wide slot may have
+    // erased from `result_ty`: a read typed with room for `undefined` gives
+    // it for a missing element, and any other throws. A generic read whose
+    // missing key reads `undefined` is checked as one typed `T[K] |
+    // undefined`.
+    let source_ty = ctx
+        .ta
+        .source_type(id)
+        .map_err(crate::codegen::arena_failure)?;
+    let checked_ty = if missing_reads_undefined {
+        Type::union(vec![source_ty.clone(), Type::Undefined])
+    } else {
+        source_ty.clone()
+    };
+    let missing_gives_undefined = checked_ty.holds_undefined();
+    if recv_ty.indexes_by_name() {
         emit_expr(emitter, ctx, *receiver)?;
         cast::emit_box(
             emitter,
@@ -947,6 +1014,7 @@ fn emit_index_access(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?;
+        let probe = stash_probed_record(emitter, ctx, &checked_ty, present_flag)?;
         emit_expr(emitter, ctx, *index)?;
         crate::codegen::cast_check::emit_operation_cast_on_stack(
             emitter,
@@ -957,6 +1025,8 @@ fn emit_index_access(
                 .ty,
             &Type::String,
         )?;
+        let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
+        emitter.instruction(Instruction::LocalTee(key));
         let Some(symbol) = ctx.require(
             ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
             "dynamic read imported",
@@ -964,33 +1034,39 @@ fn emit_index_access(
             return Ok(());
         };
         emitter.instruction(Instruction::Call(symbol));
-        let checked_ty = ctx
-            .ta
-            .source_type(id)
-            .map_err(crate::codegen::arena_failure)?;
-        crate::codegen::cast_check::emit_checked_cast_on_stack(
+        emit_checked_record_read(
             emitter,
             ctx,
-            &Type::Unknown,
-            checked_ty,
+            &checked_ty,
+            KeyOperand::Local(key),
+            probe,
+            &receiver_name(ctx.ta, *receiver)?,
         )?;
-        cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
+        cast::emit_coerce_to_slot(emitter, ctx, &checked_ty, result_ty)?;
     } else if recv_ty.lowered() == &Type::Uint8Array {
         emit_expr(emitter, ctx, *receiver)?;
         emit_uint8_index_with_receiver_on_stack(
             emitter,
             ctx,
             *index,
+            missing_gives_undefined.then_some(result_ty),
             &receiver_name(ctx.ta, *receiver)?,
         )?;
+        if let Some(flag) = present_flag {
+            set_present_flag_from_value(emitter, ctx, flag, result_ty)?;
+        }
     } else if recv_ty.is_string_shaped() {
         emit_expr(emitter, ctx, *receiver)?;
         emit_string_index_with_receiver_on_stack(
             emitter,
             ctx,
             *index,
+            missing_gives_undefined.then_some(result_ty),
             &receiver_name(ctx.ta, *receiver)?,
         )?;
+        if let Some(flag) = present_flag {
+            set_present_flag_from_value(emitter, ctx, flag, result_ty)?;
+        }
     } else {
         emit_expr(emitter, ctx, *receiver)?;
         emit_bounds_checked_index_with_receiver_on_stack(
@@ -998,8 +1074,13 @@ fn emit_index_access(
             ctx,
             *index,
             result_ty,
-            ctx.ta.call_spread_index_reads.contains(&id)
-                || is_optional_tuple_position(ctx, &recv_ty, *index)?,
+            MissingElement {
+                gives_undefined: ctx.ta.call_spread_index_reads.contains(&id)
+                    || missing_gives_undefined
+                    || is_optional_tuple_position(ctx, &recv_ty, *index)?,
+                throws_on_absent_group: recv_ty.is_regexp_match_array() && !missing_gives_undefined,
+                present_flag,
+            },
             &receiver_name(ctx.ta, *receiver)?,
         )?;
     }
@@ -1008,13 +1089,19 @@ fn emit_index_access(
 }
 
 /// `s[index]`, with `s` on the stack: the host helper reads the code unit,
-/// throwing `RangeError` out of range as an array read does.
+/// throwing `MissingValueError` out of range as an array read does. With
+/// `undefined_into`, the read was typed with room for `undefined`, and an
+/// index out of range gives it in that slot instead.
 fn emit_string_index_with_receiver_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     index: ExprId,
+    undefined_into: Option<&Type>,
     receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if let Some(result_ty) = undefined_into {
+        return emit_string_index_or_undefined(emitter, ctx, index, result_ty, receiver_name);
+    }
     let Some(helper) = ctx.require(
         ctx.symbols.prelude_func_idx("string_index"),
         "string index helper imported",
@@ -1051,6 +1138,233 @@ fn emit_string_index_with_receiver_on_stack(
     )?;
     emitter.instruction(Instruction::Call(helper));
     Ok(())
+}
+
+/// [`emit_string_index_with_receiver_on_stack`] for a read whose index may be
+/// out of range, which gives `undefined`.
+fn emit_string_index_or_undefined(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    index: ExprId,
+    result_ty: &Type,
+    receiver_name: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(helper) = ctx.require(
+        ctx.symbols.prelude_func_idx("string_index"),
+        "string index helper imported",
+    ) else {
+        return Ok(());
+    };
+    let string_idx = ctx.symbols.string_type_idx().ok_or_else(|| {
+        crate::codegen::internal_failure("the $string intrinsic is not registered")
+    })?;
+    let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(receiver));
+    emit_expr(emitter, ctx, index)?;
+    emit_index_number(
+        emitter,
+        ctx,
+        &ctx.ta
+            .try_expr(index)
+            .map_err(crate::codegen::arena_failure)?
+            .ty,
+    )?;
+    let idx_f64_local = stash_index_operand(emitter)?;
+    emitter.instruction(Instruction::LocalGet(receiver));
+    crate::codegen::cast_check::emit_operation_cast_on_stack(
+        emitter,
+        ctx,
+        &Type::Unknown,
+        &Type::String,
+    )?;
+    let string = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
+    emitter.instruction(Instruction::LocalTee(string));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(string_idx)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: string_idx,
+        field_index: 1,
+    });
+    emitter.instruction(Instruction::ArrayLen);
+    let length = emitter.add_anonymous_local(ValType::I32)?;
+    emitter.instruction(Instruction::LocalSet(length));
+    crate::codegen::bounds::emit_index_in_range(emitter, length, idx_f64_local);
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(result_ty)?));
+    let label = ctx
+        .symbols
+        .field_name_string_global_idx(receiver_name)
+        .ok_or_else(|| crate::codegen::internal_failure("string index label global collected"))?;
+    emitter.instruction(Instruction::GlobalGet(label));
+    emitter.instruction(Instruction::LocalGet(idx_f64_local));
+    emitter.instruction(Instruction::LocalGet(string));
+    emitter.instruction(Instruction::Call(helper));
+    cast::emit_coerce_to_slot(emitter, ctx, &Type::String, result_ty)?;
+    emitter.emit_else();
+    emit_undefined(emitter, ctx)?;
+    cast::emit_coerce_to_slot(emitter, ctx, &Type::Undefined, result_ty)?;
+    emitter.emit_end();
+    Ok(())
+}
+
+/// Where a record read pushes its key again for a missing-key message.
+#[derive(Clone, Copy)]
+enum KeyOperand {
+    Local(u32),
+    Global(u32),
+}
+
+/// With a record read's `getField` result (`unknown`) on the stack, leaves it
+/// checked against `read_ty`, the type the read was given.
+///
+/// `getField` answers `undefined` for a key the record does not have. Where
+/// `read_ty` has no room for `undefined`, that throws `MissingValueError`
+/// naming the key. Where the typechecker gave the read room for it (a check,
+/// or a place that holds `undefined`), `undefined` passes, and only a
+/// present value is checked, against `read_ty` without `undefined`: a
+/// representation test alone would let any object through a
+/// `number | undefined` slot. With `record`, the record kept by
+/// `stash_probed_record`, an `undefined` answer is a missing key only if
+/// `hasField` says the record has no such key.
+fn emit_checked_record_read(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    read_ty: &Type,
+    key: KeyOperand,
+    probe: RecordProbe,
+    receiver_label: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let present_ty = crate::typechecker::infer::narrowing::strip_undefined(read_ty);
+    let value = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalTee(value));
+    emit_is_undefined(emitter, ctx)?;
+    if read_ty.holds_undefined() && !present_ty.holds_undefined() {
+        emitter.emit_if(BlockType::Result(ctx.symbols.value_type(read_ty)?));
+        // A present flag says whether the key exists, which `undefined`
+        // alone doesn't for a type parameter's value.
+        if let Some(flag) = probe.present_flag {
+            match probe.record {
+                Some(record) => {
+                    let Some(has_field) = ctx.require(
+                        ctx.symbols.prelude_func_idx("ObjectConstructor##hasField"),
+                        "record key probe imported",
+                    ) else {
+                        return Ok(());
+                    };
+                    emitter.instruction(Instruction::LocalGet(record));
+                    push_record_key(emitter, key);
+                    emitter.instruction(Instruction::Call(has_field));
+                    emitter.instruction(Instruction::LocalSet(flag));
+                }
+                None => set_present_flag(emitter, flag, false),
+            }
+        }
+        emit_undefined(emitter, ctx)?;
+        cast::emit_coerce_to_slot(emitter, ctx, &Type::Undefined, read_ty)?;
+        emitter.emit_else();
+        if let Some(flag) = probe.present_flag {
+            set_present_flag(emitter, flag, true);
+        }
+        emitter.instruction(Instruction::LocalGet(value));
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            &present_ty,
+        )?;
+        cast::emit_coerce_to_slot(emitter, ctx, &present_ty, read_ty)?;
+        emitter.emit_end();
+        return Ok(());
+    }
+    // Only a read typed with room for `undefined` is absorbed, so here the
+    // value, when there is one, is present.
+    if let Some(flag) = probe.present_flag {
+        set_present_flag(emitter, flag, true);
+    }
+    emitter.emit_if(BlockType::Empty);
+    if !read_ty.holds_undefined() && !matches!(read_ty.peel(), Type::Error | Type::Never) {
+        let Some(helper) = ctx.require(
+            ctx.symbols.prelude_func_idx("missing_key_error"),
+            "missing key helper imported",
+        ) else {
+            return Ok(());
+        };
+        // A type parameter's instantiation may hold `undefined`: only a key
+        // the record doesn't have is missing there.
+        if let Some(record) = probe.record {
+            let Some(has_field) = ctx.require(
+                ctx.symbols.prelude_func_idx("ObjectConstructor##hasField"),
+                "record key probe imported",
+            ) else {
+                return Ok(());
+            };
+            emitter.instruction(Instruction::LocalGet(record));
+            push_record_key(emitter, key);
+            emitter.instruction(Instruction::Call(has_field));
+            emitter.instruction(Instruction::I32Eqz);
+            emitter.emit_if(BlockType::Empty);
+        }
+        push_record_key(emitter, key);
+        // A label the analysis didn't pool falls back to the unnamed message.
+        let label = if ctx.strings.lookup_text(receiver_label).is_some() {
+            receiver_label
+        } else {
+            ""
+        };
+        crate::codegen::function_emitter::emit_const_string_by_text(emitter, ctx, label)?;
+        emitter.instruction(Instruction::Call(helper));
+        emitter.instruction(Instruction::Unreachable);
+        if probe.record.is_some() {
+            emitter.emit_end();
+        }
+    }
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(value));
+    crate::codegen::cast_check::emit_checked_cast_on_stack(emitter, ctx, &Type::Unknown, read_ty)?;
+    Ok(())
+}
+
+/// Pushes a record read's key again.
+fn push_record_key(emitter: &mut FunctionEmitter, key: KeyOperand) {
+    match key {
+        KeyOperand::Local(local) => emitter.instruction(Instruction::LocalGet(local)),
+        KeyOperand::Global(global) => emitter.instruction(Instruction::GlobalGet(global)),
+    }
+}
+
+/// How a record read at a type parameter tells a missing key from a present
+/// `undefined` value (see `emit_checked_record_read`).
+#[derive(Clone, Copy)]
+struct RecordProbe {
+    /// The record, kept so a `getField` answer of `undefined` can be probed
+    /// with `hasField`.
+    record: Option<u32>,
+    /// The present flag the read sets, for a local holding it.
+    present_flag: Option<u32>,
+}
+
+/// With a record on the stack about to be read at `read_ty`: keeps the
+/// record in a local when that type is a type parameter with no room for
+/// `undefined` of its own, or when the read sets `present_flag`.
+fn stash_probed_record(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    read_ty: &Type,
+    present_flag: Option<u32>,
+) -> Result<RecordProbe, crate::compiler_error::CompilerFailure> {
+    // A read that sets a present flag probes its key even where its type has
+    // room for `undefined`.
+    if !read_ty.has_type_parameter_member() || (read_ty.holds_undefined() && present_flag.is_none())
+    {
+        return Ok(RecordProbe {
+            record: None,
+            present_flag,
+        });
+    }
+    let record = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalTee(record));
+    Ok(RecordProbe {
+        record: Some(record),
+        present_flag,
+    })
 }
 
 fn emit_nullish_coalesce(
@@ -1337,6 +1651,8 @@ fn emit_field_access(
         .map_err(crate::codegen::arena_failure)?
         .clone();
     if ctx.ta.has_string_index(&receiver_ty) {
+        // See `emit_index_access`.
+        let present_flag = take_present_flag(emitter, id);
         emit_expr(emitter, ctx, *receiver)?;
         cast::emit_box(
             emitter,
@@ -1346,6 +1662,11 @@ fn emit_field_access(
                 .map_err(crate::codegen::arena_failure)?
                 .ty,
         )?;
+        let checked_ty = ctx
+            .ta
+            .source_type(id)
+            .map_err(crate::codegen::arena_failure)?;
+        let probe = stash_probed_record(emitter, ctx, checked_ty, present_flag)?;
         let Some(symbol) = ctx.require(
             ctx.symbols.field_name_string_global_idx(&name.name),
             "property name collected",
@@ -1353,6 +1674,7 @@ fn emit_field_access(
             return Ok(());
         };
         emitter.instruction(Instruction::GlobalGet(symbol));
+        let key = KeyOperand::Global(symbol);
         let Some(symbol) = ctx.require(
             ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
             "record read imported",
@@ -1360,15 +1682,13 @@ fn emit_field_access(
             return Ok(());
         };
         emitter.instruction(Instruction::Call(symbol));
-        let checked_ty = ctx
-            .ta
-            .source_type(id)
-            .map_err(crate::codegen::arena_failure)?;
-        crate::codegen::cast_check::emit_checked_cast_on_stack(
+        emit_checked_record_read(
             emitter,
             ctx,
-            &Type::Unknown,
             checked_ty,
+            key,
+            probe,
+            &receiver_name(ctx.ta, *receiver)?,
         )?;
         cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
         return Ok(());
@@ -1611,6 +1931,165 @@ fn inferred_never(
     Ok(matches!(ty, Type::Never))
 }
 
+/// Emits `value`, stored next in a local holding a maybe-missing read, and
+/// with `present_flag`, that local's present flag, sets the flag. A value the
+/// typechecker let hold a missing read (`widened_missing_reads`) sets it as
+/// that read finds: an array or record read reports it, another local's flag
+/// is copied, and anything else is present unless it is `undefined`. Any
+/// other value is present, even an `undefined` one.
+pub(super) fn emit_value_with_present_flag(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    value: ExprId,
+    present_flag: Option<u32>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(flag) = present_flag else {
+        return emit_expr(emitter, ctx, value);
+    };
+    let expr = ctx
+        .ta
+        .try_expr(value)
+        .map_err(crate::codegen::arena_failure)?;
+    if !ctx.ta.widened_missing_reads.contains_key(&value) {
+        emit_expr(emitter, ctx, value)?;
+        set_present_flag(emitter, flag, true);
+        return Ok(());
+    }
+    match &expr.kind {
+        TypedExprKind::LocalRef { ident, .. } => {
+            let source = emitter
+                .local_slot(&ident.name)
+                .and_then(|slot| emitter.present_flag(slot));
+            emit_expr(emitter, ctx, value)?;
+            match source {
+                Some(source) => {
+                    emitter.instruction(Instruction::LocalGet(source));
+                    emitter.instruction(Instruction::LocalSet(flag));
+                }
+                // A local without a flag has a type with no room for a
+                // present `undefined`.
+                None => set_present_flag_from_value(emitter, ctx, flag, &expr.ty)?,
+            }
+        }
+        TypedExprKind::IndexAccess { .. }
+        | TypedExprKind::FieldAccess { .. }
+        | TypedExprKind::OptionalChain { .. } => {
+            emitter.present_flag_request = Some((value, flag));
+            emit_expr(emitter, ctx, value)?;
+            // No read known to reach here leaves the request (string and
+            // `Uint8Array` reads take it); if one did, its value would tell,
+            // as for a local without a flag.
+            if emitter.present_flag_request.take().is_some() {
+                set_present_flag_from_value(emitter, ctx, flag, &expr.ty)?;
+            }
+        }
+        _ => {
+            emit_expr(emitter, ctx, value)?;
+            set_present_flag_from_value(emitter, ctx, flag, &expr.ty)?;
+        }
+    }
+    Ok(())
+}
+
+/// The present flag `emit_value_with_present_flag` asked the read `id` to
+/// set, taken so no read nested inside it sets it.
+fn take_present_flag(emitter: &mut FunctionEmitter, id: ExprId) -> Option<u32> {
+    match emitter.present_flag_request {
+        Some((owner, flag)) if owner == id => {
+            emitter.present_flag_request = None;
+            Some(flag)
+        }
+        _ => None,
+    }
+}
+
+fn set_present_flag(emitter: &mut FunctionEmitter, flag: u32, found: bool) {
+    emitter.instruction(Instruction::I32Const(i32::from(found)));
+    emitter.instruction(Instruction::LocalSet(flag));
+}
+
+/// With a value of type `ty` on the stack, whose type has no room for a
+/// present `undefined`: sets `flag` to whether the value isn't `undefined`.
+fn set_present_flag_from_value(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    flag: u32,
+    ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let value_ty = ctx.symbols.value_type(ty)?;
+    if !matches!(value_ty, ValType::Ref(_)) {
+        set_present_flag(emitter, flag, true);
+        return Ok(());
+    }
+    let value = emitter.add_anonymous_local(value_ty)?;
+    emitter.instruction(Instruction::LocalTee(value));
+    emit_is_undefined(emitter, ctx)?;
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.instruction(Instruction::LocalSet(flag));
+    emitter.instruction(Instruction::LocalGet(value));
+    Ok(())
+}
+
+/// Whether a narrowing's `source` reads a local that may hold a missing read.
+/// Such a narrowing takes no shadow: a narrowing never proves the value
+/// present, so the typechecker reads the local itself at the narrowed type,
+/// checking it, and a narrowed read with no shadow falls back to the local
+/// (`emit_local_narrow_ref`).
+pub(super) fn reads_maybe_missing_local(
+    emitter: &FunctionEmitter,
+    ctx: &CodegenCtx,
+    source: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let expr = ctx
+        .ta
+        .try_expr(source)
+        .map_err(crate::codegen::arena_failure)?;
+    let TypedExprKind::LocalRef { ident, .. } = &expr.kind else {
+        return Ok(false);
+    };
+    Ok(emitter
+        .local_slot(&ident.name)
+        .is_some_and(|slot| emitter.maybe_missing_slots.contains_key(&slot)))
+}
+
+/// With the value of the local in `slot` on the stack as a `stack`: when the
+/// local holds a read that may have found no value, throws
+/// `MissingValueError` with its message if it found none, by the local's
+/// present flag when it has one, else by the value being `undefined`. Leaves
+/// the value on the stack, and emits nothing for any other local.
+fn emit_missing_local_check(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    slot: u32,
+    stack: ValType,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some((message, present_flag)) = emitter
+        .maybe_missing_slots
+        .get(&slot)
+        .map(|local| (local.message.clone(), local.present_flag))
+    else {
+        return Ok(());
+    };
+    // A local typed with a type parameter keeps a present flag: its value
+    // may be a present `undefined`.
+    if let Some(flag) = present_flag {
+        emitter.instruction(Instruction::LocalGet(flag));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.emit_if(BlockType::Empty);
+        crate::codegen::throw::emit_missing_value_error_throw(emitter, ctx, &message);
+        emitter.emit_end();
+        return Ok(());
+    }
+    let value = emitter.add_anonymous_local(stack)?;
+    emitter.instruction(Instruction::LocalTee(value));
+    emit_is_undefined(emitter, ctx)?;
+    emitter.emit_if(BlockType::Empty);
+    crate::codegen::throw::emit_missing_value_error_throw(emitter, ctx, &message);
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(value));
+    Ok(())
+}
+
 fn emit_local_narrow_ref(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
@@ -1645,6 +2124,9 @@ fn emit_local_narrow_ref(
         {
             emitter.instruction(Instruction::LocalGet(slot));
             let stack_ty = unbox_if_boxed(emitter, ctx, slot_ty)?;
+            // The binding may hold a read that found no value; a narrowing
+            // never proves one present (see `missing_reads`).
+            emit_missing_local_check(emitter, ctx, slot, stack_ty)?;
             if stack_ty != ctx.symbols.value_type(narrowed_ty)? {
                 cast::emit_cast_to(emitter, ctx, narrowed_ty)?;
             }
@@ -1983,6 +2465,9 @@ fn emit_postfix_unary(
             } else {
                 emitter.instruction(Instruction::LocalGet(slot));
             }
+            // `v++` reads `v`: a missing value throws.
+            let stack = ctx.symbols.value_type(target_ty)?;
+            emit_missing_local_check(emitter, ctx, slot, stack)?;
             let cast_info = cast_info_for(target_ty.clone(), result_ty.clone());
             cast::emit_narrowing_cast(emitter, ctx, &cast_info)?;
             emit_postfix_numeric(emitter, ctx, result_ty);
@@ -2059,6 +2544,17 @@ fn emit_postfix_unary(
                     op,
                     target_ty,
                 )?;
+                return Ok(());
+            }
+            if ctx.ta.has_string_index(&receiver_ty) {
+                emit_expr(emitter, ctx, *receiver)?;
+                cast::emit_box(emitter, ctx, &receiver_ty)?;
+                let object =
+                    emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
+                emitter.instruction(Instruction::LocalSet(object));
+                super::emit_const_string_by_text(emitter, ctx, &name.name)?;
+                emit_record_postfix_on_stack(emitter, ctx, *receiver, object, op, target_ty)?;
+                cast::emit_cast_to(emitter, ctx, result_ty)?;
                 return Ok(());
             }
             // Mirror AssignField + FieldAccess's vtable-dispatched calls.
@@ -2477,6 +2973,7 @@ fn emit_chain_parts(
     receiver_ty: &Type,
     result_ty: &Type,
     source_types: Option<&[Type]>,
+    present_flag: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if source_types.is_some_and(|types| parts.len().checked_add(1) != Some(types.len())) {
         return Err(crate::codegen::internal_failure(
@@ -2529,8 +3026,22 @@ fn emit_chain_parts(
     let part_result_ty = part.result_ty().clone();
     // Only an optional step needs the receiver's slot, so don't ask for a
     // lowering a straight-line step never uses.
-    let recv_val = part
-        .is_optional()
+    //
+    // A `?.` that checks a base which may be missing (SUB-2148) and that no
+    // check around the chain reached has a receiver that can't be nullish:
+    // the base throws when missing, so this step is straight-line too.
+    // A method's `?.()` keeps its test: the typechecker keeps it only where
+    // the method may be absent although its type isn't nullish.
+    let receiver_may_be_nullish = {
+        let ty = source_ty.unwrap_or(receiver_ty);
+        crate::codegen::symbol_table::may_hold_null(ty)
+            || ty.holds_undefined()
+            || matches!(
+                part,
+                crate::TypedChainPart::Call { .. } | crate::TypedChainPart::MethodCall { .. }
+            )
+    };
+    let recv_val = (part.is_optional() && receiver_may_be_nullish)
         .then(|| ctx.symbols.value_type(receiver_ty))
         .transpose()?;
     // A receiver in a primitive slot cannot hold null, and `ref.is_null` does
@@ -2544,6 +3055,9 @@ fn emit_chain_parts(
         emitter.instruction(Instruction::LocalTee(tmp));
         emit_is_nullish(emitter, ctx)?;
         emitter.emit_if(block_ty);
+        if let Some(flag) = present_flag {
+            set_present_flag(emitter, flag, false);
+        }
         emit_undefined_for_chain_result(emitter, ctx, result_ty)?;
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(tmp));
@@ -2556,6 +3070,7 @@ fn emit_chain_parts(
             source_ty,
             check_ty,
             &receiver_name,
+            present_flag.filter(|_| next == parts.len()),
         )?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
@@ -2567,6 +3082,7 @@ fn emit_chain_parts(
             &part_result_ty,
             result_ty,
             source_types,
+            present_flag,
         )?;
         emitter.emit_end();
     } else {
@@ -2578,6 +3094,7 @@ fn emit_chain_parts(
             source_ty,
             check_ty,
             &receiver_name,
+            present_flag.filter(|_| next == parts.len()),
         )?;
         emitter.call_receiver = saved_receiver;
         emit_chain_parts(
@@ -2589,11 +3106,13 @@ fn emit_chain_parts(
             &part_result_ty,
             result_ty,
             source_types,
+            present_flag,
         )?;
     };
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_chain_operation(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -2602,6 +3121,7 @@ fn emit_chain_operation(
     source_ty: Option<&Type>,
     check_ty: Option<&Type>,
     receiver_name: &str,
+    present_flag: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     if let crate::TypedChainPart::Constraint { result_ty, .. } = part {
         return cast::emit_coerce_to_slot(emitter, ctx, receiver_ty, result_ty);
@@ -2673,6 +3193,7 @@ fn emit_chain_operation(
         &operation_ty,
         check_ty.unwrap_or(part.result_ty()),
         receiver_name,
+        present_flag,
     )?;
     Ok(())
 }
@@ -3157,6 +3678,7 @@ fn emit_chain_access(
     receiver_ty: &Type,
     check_ty: &Type,
     receiver_name: &str,
+    present_flag: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match part {
         crate::TypedChainPart::Constraint { result_ty, .. } => {
@@ -3166,6 +3688,7 @@ fn emit_chain_access(
             name, result_ty, ..
         } => {
             if ctx.ta.has_string_index(receiver_ty) {
+                let probe = stash_probed_record(emitter, ctx, check_ty, present_flag)?;
                 let Some(symbol) = ctx.require(
                     ctx.symbols.field_name_string_global_idx(&name.name),
                     "property name collected",
@@ -3173,6 +3696,7 @@ fn emit_chain_access(
                     return Ok(());
                 };
                 emitter.instruction(Instruction::GlobalGet(symbol));
+                let key = KeyOperand::Global(symbol);
                 let Some(symbol) = ctx.require(
                     ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
                     "record read imported",
@@ -3180,12 +3704,7 @@ fn emit_chain_access(
                     return Ok(());
                 };
                 emitter.instruction(Instruction::Call(symbol));
-                crate::codegen::cast_check::emit_checked_cast_on_stack(
-                    emitter,
-                    ctx,
-                    &Type::Unknown,
-                    check_ty,
-                )?;
+                emit_checked_record_read(emitter, ctx, check_ty, key, probe, receiver_name)?;
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
                 return Ok(());
             }
@@ -3243,7 +3762,8 @@ fn emit_chain_access(
             emit_object_property_read_as(emitter, ctx, rcv_local, &name.name, result_ty, check_ty)?;
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
-            if receiver_ty.is_structural_object() {
+            if receiver_ty.indexes_by_name() {
+                let probe = stash_probed_record(emitter, ctx, check_ty, present_flag)?;
                 emit_expr(emitter, ctx, *idx)?;
                 crate::codegen::cast_check::emit_operation_cast_on_stack(
                     emitter,
@@ -3254,6 +3774,8 @@ fn emit_chain_access(
                         .ty,
                     &Type::String,
                 )?;
+                let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
+                emitter.instruction(Instruction::LocalTee(key));
                 let Some(symbol) = ctx.require(
                     ctx.symbols.prelude_func_idx("ObjectConstructor##getField"),
                     "record read imported",
@@ -3261,17 +3783,37 @@ fn emit_chain_access(
                     return Ok(());
                 };
                 emitter.instruction(Instruction::Call(symbol));
-                crate::codegen::cast_check::emit_checked_cast_on_stack(
+                emit_checked_record_read(
                     emitter,
                     ctx,
-                    &Type::Unknown,
                     check_ty,
+                    KeyOperand::Local(key),
+                    probe,
+                    receiver_name,
                 )?;
                 cast::emit_coerce_to_slot(emitter, ctx, check_ty, result_ty)?;
             } else if receiver_ty.lowered() == &Type::Uint8Array {
-                emit_uint8_index_with_receiver_on_stack(emitter, ctx, *idx, receiver_name)?;
+                emit_uint8_index_with_receiver_on_stack(
+                    emitter,
+                    ctx,
+                    *idx,
+                    check_ty.holds_undefined().then_some(result_ty),
+                    receiver_name,
+                )?;
+                if let Some(flag) = present_flag {
+                    set_present_flag_from_value(emitter, ctx, flag, result_ty)?;
+                }
             } else if receiver_ty.is_string_shaped() {
-                emit_string_index_with_receiver_on_stack(emitter, ctx, *idx, receiver_name)?;
+                emit_string_index_with_receiver_on_stack(
+                    emitter,
+                    ctx,
+                    *idx,
+                    check_ty.holds_undefined().then_some(result_ty),
+                    receiver_name,
+                )?;
+                if let Some(flag) = present_flag {
+                    set_present_flag_from_value(emitter, ctx, flag, result_ty)?;
+                }
             } else {
                 let source_ty = match receiver_ty.lowered() {
                     Type::Array(element) => element.as_ref(),
@@ -3284,16 +3826,37 @@ fn emit_chain_access(
                         TypedExprKind::Number(index) => {
                             elements.get(*index as usize).unwrap_or(result_ty)
                         }
-                        _ => result_ty,
+                        _ => check_ty,
                     },
-                    _ => result_ty,
+                    _ => check_ty,
+                };
+                // A step the typechecker gave room for `undefined` reads a
+                // missing element as `undefined`; `check_ty` is its type
+                // before any wide slot erased it.
+                let missing_gives_undefined =
+                    check_ty.holds_undefined() && !source_ty.holds_undefined();
+                let source_ty = if missing_gives_undefined {
+                    result_ty
+                } else {
+                    source_ty
                 };
                 emit_bounds_checked_index_with_receiver_on_stack(
                     emitter,
                     ctx,
                     *idx,
                     source_ty,
-                    is_optional_tuple_position(ctx, receiver_ty, *idx)?,
+                    MissingElement {
+                        gives_undefined: missing_gives_undefined
+                            || source_ty.holds_undefined()
+                            || is_optional_tuple_position(ctx, receiver_ty, *idx)?,
+                        // The receiver of a `?.` step may still be typed nullable.
+                        throws_on_absent_group: crate::typechecker::infer::narrowing::strip_nullish(
+                            receiver_ty,
+                        )
+                        .is_regexp_match_array()
+                            && !check_ty.holds_undefined(),
+                        present_flag,
+                    },
                     receiver_name,
                 )?;
                 if source_ty != result_ty {
@@ -4575,12 +5138,24 @@ fn emit_object_property_write_value(
     Ok(())
 }
 
+/// What an array read does when the element is missing.
+#[derive(Clone, Copy)]
+struct MissingElement {
+    /// It gives `undefined`, where the read was typed with room for it.
+    gives_undefined: bool,
+    /// The receiver is a regex match read at a type with no room for
+    /// `undefined`, so a group that did not take part throws too.
+    throws_on_absent_group: bool,
+    /// A present flag to set: 1 when the element is found.
+    present_flag: Option<u32>,
+}
+
 /// `<receiver>[idx]` with the `(ref $Array)` receiver already on the stack:
 ///
 /// ```text
 ///   struct.get $Array 1; local.set $raw
 ///   <idx>; i32.trunc_sat_f64_u; local.set $i
-///   bounds-check $i against len($raw)   ;; throws RangeError on a miss
+///   bounds-check $i against len($raw)   ;; throws MissingValueError on a miss
 ///   local.get $raw; local.get $i; array.get $rawArray
 ///   emit_cast_to(result_ty)             ;; unboxes if primitive
 /// ```
@@ -4593,9 +5168,14 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
     ctx: &CodegenCtx,
     idx: ExprId,
     result_ty: &Type,
-    allow_missing: bool,
+    missing: MissingElement,
     receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let MissingElement {
+        gives_undefined: allow_missing,
+        throws_on_absent_group: match_groups,
+        present_flag,
+    } = missing;
     let array_idx = ctx.symbols.array_type_idx().ok_or_else(|| {
         crate::codegen::internal_failure("Type::Array requires intrinsic types declared")
     })?;
@@ -4641,15 +5221,22 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
+    // A read whose type has room for `undefined` gives it for an index that
+    // finds no element: negative, fractional and `NaN` indices included, as
+    // in JavaScript.
     if allow_missing {
-        emitter.instruction(Instruction::LocalGet(idx_f64_local));
-        emitter.instruction(Instruction::LocalGet(length));
-        emitter.instruction(Instruction::F64ConvertI32U);
-        emitter.instruction(Instruction::F64Ge);
+        crate::codegen::bounds::emit_index_in_range(emitter, length, idx_f64_local);
+        emitter.instruction(Instruction::I32Eqz);
         emitter.emit_if(BlockType::Result(ctx.symbols.value_type(result_ty)?));
+        if let Some(flag) = present_flag {
+            set_present_flag(emitter, flag, false);
+        }
         emit_undefined(emitter, ctx)?;
         cast::emit_coerce_to_slot(emitter, ctx, &Type::Undefined, result_ty)?;
         emitter.emit_else();
+    }
+    if let Some(flag) = present_flag {
+        set_present_flag(emitter, flag, true);
     }
     let idx_local = emit_checked_index_with_length(
         emitter,
@@ -4662,6 +5249,17 @@ fn emit_bounds_checked_index_with_receiver_on_stack(
     emitter.instruction(Instruction::LocalGet(raw_arr_local));
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGet(raw_array_idx));
+    // A regex group that did not take part holds `undefined`; a read typed
+    // without room for it finds no value there.
+    if match_groups {
+        crate::codegen::bounds::emit_group_participation_check(
+            emitter,
+            ctx,
+            length,
+            idx_f64_local,
+            receiver_name,
+        )?;
+    }
     cast::emit_cast_to(emitter, ctx, result_ty)?;
     if allow_missing {
         emitter.emit_end();
@@ -4701,6 +5299,7 @@ fn emit_uint8_index_with_receiver_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     index: ExprId,
+    undefined_into: Option<&Type>,
     receiver_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let uint8_idx = ctx.symbols.uint8_array_type_idx().ok_or_else(|| {
@@ -4747,6 +5346,19 @@ fn emit_uint8_index_with_receiver_on_stack(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_local));
+    // A read typed with room for `undefined` gives it out of range.
+    if let Some(result_ty) = undefined_into {
+        let length = emitter.add_anonymous_local(ValType::I32)?;
+        emitter.instruction(Instruction::LocalGet(raw_local));
+        emitter.instruction(Instruction::ArrayLen);
+        emitter.instruction(Instruction::LocalSet(length));
+        crate::codegen::bounds::emit_index_in_range(emitter, length, idx_f64_local);
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.emit_if(BlockType::Result(ctx.symbols.value_type(result_ty)?));
+        emit_undefined(emitter, ctx)?;
+        cast::emit_coerce_to_slot(emitter, ctx, &Type::Undefined, result_ty)?;
+        emitter.emit_else();
+    }
     let idx_local = emit_checked_index(
         emitter,
         ctx,
@@ -4759,6 +5371,10 @@ fn emit_uint8_index_with_receiver_on_stack(
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::ArrayGetU(raw_uint8_idx));
     emitter.instruction(Instruction::F64ConvertI32U);
+    if let Some(result_ty) = undefined_into {
+        cast::emit_coerce_to_slot(emitter, ctx, &Type::Number, result_ty)?;
+        emitter.emit_end();
+    }
     Ok(())
 }
 
@@ -6342,6 +6958,7 @@ fn emit_intrinsic_call(
     kind: Intrinsic,
     args: &[ExprId],
     result_ty: &Type,
+    source_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let _: () = match kind {
         Intrinsic::Assert => {
@@ -6387,7 +7004,7 @@ fn emit_intrinsic_call(
             emit_undefined(emitter, ctx)?;
         }
         Intrinsic::JsonStringify => {
-            super::json::emit_stringify(emitter, ctx, args, result_ty)?;
+            super::json::emit_stringify(emitter, ctx, args, result_ty, source_ty)?;
         }
         Intrinsic::JsonParse => {
             super::json::emit_parse(emitter, ctx, args)?;
@@ -7229,6 +7846,18 @@ fn emit_object_index_postfix(
             .ty,
         &Type::String,
     )?;
+    emit_record_postfix_on_stack(emitter, ctx, receiver, object, op, read_ty)
+}
+
+/// The receiver and key have already been evaluated exactly once.
+fn emit_record_postfix_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    object: u32,
+    op: crate::PostfixOp,
+    read_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let key = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::String)?)?;
     emitter.instruction(Instruction::LocalSet(key));
     emitter.instruction(Instruction::LocalGet(object));
@@ -7240,11 +7869,17 @@ fn emit_object_index_postfix(
         return Ok(());
     };
     emitter.instruction(Instruction::Call(symbol));
-    crate::codegen::cast_check::emit_operation_cast_on_stack(
+    let label = crate::codegen::bounds::receiver_name(ctx.ta, receiver)?;
+    emit_checked_record_read(
         emitter,
         ctx,
-        &Type::Unknown,
         read_ty,
+        KeyOperand::Local(key),
+        RecordProbe {
+            record: Some(object),
+            present_flag: None,
+        },
+        &label,
     )?;
     cast::emit_box(emitter, ctx, read_ty)?;
     emit_postfix_numeric(emitter, ctx, &Type::Unknown);
@@ -7307,8 +7942,15 @@ mod tests {
             |ctx| {
                 let mut emitter = FunctionEmitter::new(ctx, &[]).unwrap();
                 assert_internal(
-                    emit_intrinsic_call(&mut emitter, ctx, Intrinsic::Assert, &[], &Type::Void)
-                        .unwrap_err(),
+                    emit_intrinsic_call(
+                        &mut emitter,
+                        ctx,
+                        Intrinsic::Assert,
+                        &[],
+                        &Type::Void,
+                        &Type::Void,
+                    )
+                    .unwrap_err(),
                 );
                 assert_internal(
                     emit_intrinsic_call(
@@ -7316,6 +7958,7 @@ mod tests {
                         ctx,
                         Intrinsic::BigIntFromString,
                         &[],
+                        &Type::BigInt,
                         &Type::BigInt,
                     )
                     .unwrap_err(),
@@ -7346,6 +7989,7 @@ mod tests {
                         &Type::Number,
                         &Type::Number,
                         None,
+                        None,
                     )
                     .unwrap_err(),
                 );
@@ -7359,6 +8003,7 @@ mod tests {
                         &Type::Number,
                         &Type::Number,
                         Some(&[]),
+                        None,
                     )
                     .unwrap_err(),
                 );

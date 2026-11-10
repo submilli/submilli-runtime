@@ -1,0 +1,97 @@
+=== numericStringLiteralTypes.ts ===
+
+/*pruned*/;                      // string
+/*pruned*/;                      // `${number}
+/*pruned*/;                      // `${bigint}
+/*pruned*/;                                   // `${T}
+/*pruned*/;                                                    // `${Capitalize<T>}`
+
+function f1(a: boolean[], x: `${number}`): void {
+>f1 : (a: boolean[], x: `${number}`) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean[]
+>  : ^^^^^^^^^
+>x : `${number}`
+>  : ^^^^^^^^^^^
+
+    let s = a[x];  // boolean
+>s : boolean
+>  : ^^^^^^^
+>a[x] : boolean
+>     : ^^^^^^^
+>a : boolean[]
+>  : ^^^^^^^^^
+>x : `${number}`
+>  : ^^^^^^^^^^^
+
+}
+
+function f2(a: boolean[], x: number | `${number}`): void {
+>f2 : (a: boolean[], x: number | `${number}`) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : boolean[]
+>  : ^^^^^^^^^
+>x : number | `${number}`
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+    let s = a[x];  // boolean
+>s : boolean
+>  : ^^^^^^^
+>a[x] : boolean
+>     : ^^^^^^^
+>a : boolean[]
+>  : ^^^^^^^^^
+>x : number | `${number}`
+>  : ^^^^^^^^^^^^^^^^^^^^
+
+}
+
+type T10 = boolean[][`${number}`];  // boolean
+>T10 : boolean
+>    : ^^^^^^^
+
+type T11 = boolean[][number | `${number}`];  // boolean
+>T11 : T11
+>    : ^^^
+
+
+type T20<T extends number | `${number}`> = T;
+>T20 : T
+>    : ^
+>T : T
+>  : ^
+
+/*pruned*/;
+
+type Container<T> = {
+>Container : Container<T>
+>          : ^^^^^^^^^^^^
+>T : T
+>  : ^
+
+    value: T
+>value : T
+>      : ^
+
+}
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+
+/*pruned*/;
+/*pruned*/;
+
+
+
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

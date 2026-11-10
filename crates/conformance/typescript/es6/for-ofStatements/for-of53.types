@@ -1,0 +1,18 @@
+=== for-of53.ts ===
+for (let v of []) {
+>v : never
+>  : ^^^^^
+>[] : never[]
+>   : ^^^^^^^
+
+    let v;
+>v : any
+>  : ^^^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

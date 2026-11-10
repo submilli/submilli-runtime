@@ -1,0 +1,243 @@
+=== typeParameterAssignability2.ts ===
+// type parameters are not assignable to one another unless directly or indirectly constrained to one another
+
+function foo<T, U extends T>(t: T, u: U): void {
+>foo : <T, U extends T>(t: T, u: U) => void
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    t = u; // error
+>t = u : U
+>      : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    u = t; // ok
+>u = t : T
+>      : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+}
+
+function foo2<T extends U, U>(t: T, u: U): void {
+>foo2 : <T extends U, U>(t: T, u: U) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    t = u; // error
+>t = u : U
+>      : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    u = t; // ok
+>u = t : T
+>      : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+}
+
+function foo3<T extends U, U extends V, V>(t: T, u: U, v: V): void {
+>foo3 : <T extends U, U extends V, V>(t: T, u: U, v: V) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    t = u; // error
+>t = u : U
+>      : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    u = t;
+>u = t : T
+>      : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+
+    t = v; // error
+>t = v : V
+>      : ^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+    v = t; // ok
+>v = t : T
+>      : ^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+
+    u = v; // error
+>u = v : V
+>      : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    v = u; // ok
+>v = u : U
+>      : ^
+>v : V
+>  : ^
+>u : U
+>  : ^
+
+}
+
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// same as foo4 with different type parameter ordering
+/*pruned*/;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function foo6<T extends U, U, V>(t: T, u: U, v: V): void {
+>foo6 : <T extends U, U, V>(t: T, u: U, v: V) => void
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+    t = u; // error
+>t = u : U
+>      : ^
+>t : T
+>  : ^
+>u : U
+>  : ^
+
+    t = v; // error
+>t = v : V
+>      : ^
+>t : T
+>  : ^
+>v : V
+>  : ^
+
+
+    u = t; // ok
+>u = t : T
+>      : ^
+>u : U
+>  : ^
+>t : T
+>  : ^
+
+    u = v; // error
+>u = v : V
+>      : ^
+>u : U
+>  : ^
+>v : V
+>  : ^
+
+
+    v = t; // error
+>v = t : T
+>      : ^
+>v : V
+>  : ^
+>t : T
+>  : ^
+
+    v = u; // error
+>v = u : U
+>      : ^
+>v : V
+>  : ^
+>u : U
+>  : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

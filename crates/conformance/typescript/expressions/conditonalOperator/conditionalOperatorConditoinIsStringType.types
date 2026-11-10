@@ -377,7 +377,20 @@ let resultIsString3 = foo() ? exprString1 : exprString2;
 >            : ^^^^^^
 
 /*pruned*/;
-/*pruned*/;                                                                    // union
+let resultIsStringOrBoolean3 = typeof condString ? exprString1 : exprBoolean1; // union
+>resultIsStringOrBoolean3 : string | boolean
+>                         : ^^^^^^^^^^^^^^^^
+>typeof condString ? exprString1 : exprBoolean1 : string | boolean
+>                                               : ^^^^^^^^^^^^^^^^
+>typeof condString : "string" | "number" | "bigint" | "boolean" | "symbol" | "undefined" | "object" | "function"
+>                  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>condString : string
+>           : ^^^^^^
+>exprString1 : string
+>            : ^^^^^^
+>exprBoolean1 : boolean
+>             : ^^^^^^^
+
 let resultIsStringOrBoolean4 = condString.toUpperCase ? exprString1 : exprBoolean1; // union
 >resultIsStringOrBoolean4 : string | boolean
 >                         : ^^^^^^^^^^^^^^^^

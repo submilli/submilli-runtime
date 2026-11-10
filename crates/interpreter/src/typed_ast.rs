@@ -888,6 +888,20 @@ pub struct TypedParam {
     pub default: Option<crate::DefaultValue>,
 }
 
+/// A function-local binding that holds a read which may have found no value;
+/// see [`TypedAst::maybe_missing_locals`].
+#[derive(Clone, Debug)]
+pub struct MaybeMissingLocal {
+    /// What a use at `T` throws when the value is missing; it names the read.
+    pub message: String,
+    /// Whether codegen keeps a present flag beside the binding: one typed
+    /// with a type parameter, whose instantiation may hold `undefined`, can't
+    /// tell a missing read from a present `undefined` by its value. Recorded
+    /// here because wide-slot erasure may type the binding `unknown` before
+    /// codegen sees it.
+    pub has_present_flag: bool,
+}
+
 /// Compiler intermediate representation, produced by type inference and consumed
 /// by checking, capture analysis, desugaring, and code generation.
 ///
@@ -917,6 +931,35 @@ pub struct TypedParam {
 pub struct TypedAst {
     /// Positional reads from a collected call-argument array return undefined for missing slots.
     pub call_spread_index_reads: std::collections::BTreeSet<ExprId>,
+    /// Function-local `let`/`const` declarations, by name span, that hold a
+    /// read which may have found no value, from their initializer or a later
+    /// assignment, and the temporaries of assignment expressions that pass
+    /// such a read on. The binding is stored as `T | undefined`, and a read
+    /// of it that the typechecker left at `T` throws `MissingValueError` when
+    /// the value is missing.
+    pub maybe_missing_locals: std::collections::BTreeMap<Span, MaybeMissingLocal>,
+    /// Every read that may find no value and reaches a check or a place
+    /// that holds `undefined`, with its written type: the type tsc reports,
+    /// before the typechecker widened it with `undefined` (unchanged where it
+    /// already held `undefined`). Tools show the written type (see
+    /// [`TypedAst::written_type`]); codegen takes a read listed here as a
+    /// check of a maybe-missing local, and as a value that may clear a
+    /// present flag. A use not listed tests the value, except a use of a
+    /// local without a present flag typed with room for `undefined`, which
+    /// takes the value as it is.
+    pub widened_missing_reads: std::collections::BTreeMap<ExprId, Type>,
+    /// Generic reads (`o[k]` typed `T[K]`) whose missing key reads
+    /// `undefined`: every instantiation's property holds it (an optional
+    /// field among `K`'s, or an unbounded `T`). Their type stays tsc's;
+    /// codegen reads `undefined` for a missing key, as for a read typed with
+    /// room for it.
+    pub missing_reads_undefined: std::collections::BTreeSet<ExprId>,
+    /// Declarations and assignment targets, by span, whose recorded type is
+    /// the `T | undefined` storage of an unannotated local holding a
+    /// maybe-missing read, though the local has the type `T`. Only tools that
+    /// show types read it, the conformance harness among them; see
+    /// [`TypedAst::written_binding_type`].
+    pub widened_bindings: std::collections::BTreeSet<Span>,
     /// Typed operands written as spread arguments to a rest parameter.
     pub call_spread_values: std::collections::BTreeSet<ExprId>,
     /// Tuple sources expanded into positional call arguments; codegen evaluates each once.
@@ -997,6 +1040,9 @@ pub struct TypedAst {
     /// truth for visibility — `TypedFunction`/`TypedGlobal` carry no `is_exported`
     /// flag. Built but not yet consumed for surface projection in single-file mode.
     pub exports: Vec<ExportEntry>,
+    /// Root module path. Package rule checking requires it to report module
+    /// diagnostics in path order; a script has `None`.
+    pub package_root_module: Option<crate::ModulePath>,
     /// External package names that were resolved from explicit imports in this
     /// module. This is deliberately package-level, not symbol-level: embedders
     /// use it to install only the package modules the typed program imports.
@@ -1585,6 +1631,33 @@ impl TypedAst {
         inits
     }
 
+    /// The type `id` has as written, before the typechecker widened a read
+    /// that may find no value with `undefined` (see
+    /// [`TypedAst::widened_missing_reads`]).
+    pub fn written_type(&self, id: ExprId) -> Result<&Type, ArenaError> {
+        let expr = self.try_expr(id)?;
+        Ok(self.widened_missing_reads.get(&id).unwrap_or(&expr.ty))
+    }
+
+    /// The type a binding declared or assigned at `span` has as written, given
+    /// the type its statement records: an unannotated local holding a
+    /// maybe-missing read is stored as `T | undefined` but has the type `T`.
+    pub fn written_binding_type(&self, span: Span, ty: &Type) -> Type {
+        if !self.widened_bindings.contains(&span) {
+            return ty.clone();
+        }
+        match ty.peel() {
+            Type::Union(members) => Type::union(
+                members
+                    .iter()
+                    .filter(|member| !matches!(member.peel(), Type::Undefined))
+                    .cloned()
+                    .collect(),
+            ),
+            _ => ty.clone(),
+        }
+    }
+
     pub fn source_type(&self, id: ExprId) -> Result<&Type, ArenaError> {
         let expr = self.try_expr(id)?;
         Ok(self.runtime_source_types.get(&id).unwrap_or(&expr.ty))
@@ -1629,6 +1702,59 @@ impl TypedAst {
 mod tests {
     use super::{TypedAst, TypedExpr, TypedExprKind, TypedParam, TypedStmt, TypedStmtKind};
     use crate::{BinOp, Ident, Span, Type, UnOp};
+
+    #[test]
+    fn missing_read_side_tables_are_ordered() {
+        let spans = [
+            Span::new(crate::FileId(0), 1, 2).unwrap(),
+            Span::new(crate::FileId(0), 1, 3).unwrap(),
+            Span::new(crate::FileId(0), 4, 4).unwrap(),
+            Span::at(crate::FileId(1)),
+        ];
+        let ids = [
+            crate::ExprId(0),
+            crate::ExprId(1),
+            crate::ExprId(2),
+            crate::ExprId(3),
+        ];
+        let mut forward = TypedAst::new();
+        let mut reverse = TypedAst::with_package("main");
+        for (ast, order) in [(&mut forward, [0, 1, 2, 3]), (&mut reverse, [3, 2, 1, 0])] {
+            for index in order {
+                let span = spans[index];
+                ast.maybe_missing_locals.insert(
+                    span,
+                    super::MaybeMissingLocal {
+                        message: format!("missing read {index}"),
+                        has_present_flag: index == 0,
+                    },
+                );
+                ast.widened_bindings.insert(span);
+                ast.widened_missing_reads.insert(ids[index], Type::Number);
+            }
+        }
+        assert_eq!(
+            forward
+                .maybe_missing_locals
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            spans
+        );
+        assert_eq!(
+            forward
+                .widened_missing_reads
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            ids
+        );
+        assert_eq!(
+            forward.widened_bindings.iter().copied().collect::<Vec<_>>(),
+            spans
+        );
+        assert_eq!(format!("{forward:?}"), format!("{reverse:?}"));
+    }
 
     #[test]
     fn arena_round_trip_for_typed_exprs() {

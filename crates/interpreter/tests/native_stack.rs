@@ -54,9 +54,21 @@ fn callback_recursion_traps_on_documented_stacks() {
 }
 
 fn exercise_runners() {
-    let compiled = std::thread::Builder::new()
+    let (recursive, structural) = std::thread::Builder::new()
         .stack_size(COMPILER_STACK_BYTES)
-        .spawn(|| compile_script(SOURCE, "reentry.ts", FileId(0), &[], &[]).expect("compile"))
+        .spawn(|| {
+            let recursive = compile_script(SOURCE, "reentry.ts", FileId(0), &[], &[])
+                .expect("compile recursive callbacks");
+            let structural = compile_script(
+                include_str!("fixtures/cyclic_graph_host_walk.ts"),
+                "structural.ts",
+                FileId(0),
+                &[],
+                &[],
+            )
+            .expect("compile bounded structural walks");
+            (recursive, structural)
+        })
         .expect("compiler thread")
         .join()
         .expect("compiler did not panic");
@@ -77,9 +89,9 @@ fn exercise_runners() {
                     for compiled_runner in [false, true] {
                         let result = runtime.block_on(async {
                             if compiled_runner {
-                                cfg.run_compiled(&compiled).await
+                                cfg.run_compiled(&recursive).await
                             } else {
-                                cfg.run(&compiled.wasm).await
+                                cfg.run(&recursive.wasm).await
                             }
                         });
                         let error = result.expect_err("recursion must terminate the run");
@@ -88,6 +100,13 @@ fn exercise_runners() {
                             Some(&Trap::StackOverflow),
                             "budget={budget}, run_compiled={compiled_runner}: {error:#}"
                         );
+                    }
+                    // The fixture promises deep walks under the default budget;
+                    // they need not fit a deliberately smaller execution budget.
+                    if budget >= RuntimeConfig::default().max_wasm_stack {
+                        runtime
+                            .block_on(cfg.run_compiled(&structural))
+                            .expect("bounded host walks fit the documented native stack");
                     }
                 })
                 .expect("execution thread")

@@ -1,1 +1,13 @@
-types: 23 of 35 tsc entries compared, 0 differ
+types: 29 of 43 tsc entries compared, 3 differ
+
+line 18: f
+  tsc:  (arg: LiteralsOrWeakTypes) => WeakTypes | "A" | "B"
+  ours: (arg0: LiteralsOrWeakTypes) => "A" | "B" | { optional?: true } | { otherOptionalProp?: number; toUpperCase?: () => string } | { toLowerCase?: () => string }
+
+line 18: (arg: LiteralsOrWeakTypes) => { if (arg === "A") { return arg; } else { return arg; } }
+  tsc:  (arg: LiteralsOrWeakTypes) => WeakTypes | "A" | "B"
+  ours: (arg0: LiteralsOrWeakTypes) => "A" | "B" | { optional?: true } | { otherOptionalProp?: number; toUpperCase?: () => string } | { toLowerCase?: () => string }
+
+line 23: arg
+  tsc:  WeakTypes | "B"
+  ours: "B" | { optional?: true } | { otherOptionalProp?: number; toUpperCase?: () => string } | { toLowerCase?: () => string }

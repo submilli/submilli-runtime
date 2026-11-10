@@ -6,6 +6,7 @@ invalidVoidAssignments.ts(9,11): error TS2564: Property 'foo' has no initializer
 invalidVoidAssignments.ts(10,5): error TS2322: Type 'void' is not assignable to type 'C'.
 invalidVoidAssignments.ts(13,5): error TS2322: Type 'void' is not assignable to type 'I'.
 invalidVoidAssignments.ts(15,5): error TS2322: Type 'number' is not assignable to type '{ baz: string; }'.
+invalidVoidAssignments.ts(16,5): error TS2322: Type 'number' is not assignable to type '{ 0: number; }'.
 invalidVoidAssignments.ts(22,5): error TS2322: Type 'void' is not assignable to type 'T'.   'T' could be instantiated with an arbitrary type which could be unrelated to 'void'.
 invalidVoidAssignments.ts(24,1): error TS2630: Cannot assign to 'i' because it is a function.
 invalidVoidAssignments.ts(27,1): error TS2322: Type 'typeof E' is not assignable to type 'void'.

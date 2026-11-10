@@ -1,0 +1,33 @@
+=== asiPreventsParsingAsTypeAlias01.ts ===
+
+let type;
+>type : any
+>     : ^^^
+
+let string;
+>string : any
+>       : ^^^
+
+let Foo;
+>Foo : any
+>    : ^^^
+
+
+type
+>type : undefined
+>     : ^^^^^^^^^
+
+Foo = string;
+>Foo = string : undefined
+>             : ^^^^^^^^^
+>Foo : any
+>    : ^^^
+>string : undefined
+>       : ^^^^^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

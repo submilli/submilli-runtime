@@ -1,16 +1,16 @@
-// A `Uint8Array` index out of range raises the same catchable `RangeError` an
-// array index does, on both the read and the write path.
+// A `Uint8Array` index out of range raises the same catchable error an array
+// index does: `MissingValueError` for a read, `RangeError` for a write.
 function main(): void {
   const u = Uint8Array.alloc(2);
 
   let readMessage = "";
   try {
-    const x = u[5];
+    const x: number = u[5];
     assert(false, "an out-of-range read should not return");
   } catch (e) {
     readMessage = e.message;
   }
-  assert(readMessage === "index 5 is out of range for `u` (length 2); use `u.at(5)` to get `undefined` instead", "the read throws RangeError");
+  assert(readMessage === "index 5 is out of range for `u` (length 2); use `u[5] ?? …` or `u.at(5)`", "the read throws MissingValueError");
 
   let writeMessage = "";
   try {
@@ -22,21 +22,21 @@ function main(): void {
   assert(writeMessage === "index 9 is out of range for `u` (length 2); indexed writes require an existing element", "the write throws RangeError");
 
   try {
-    const y = u[5];
+    const y: number = u[5];
     assert(false, "unreachable");
-  } catch (e: RangeError) {
-    assert(e.name === "RangeError", "catchable by the RangeError class");
+  } catch (e: MissingValueError) {
+    assert(e.name === "MissingValueError", "catchable by the MissingValueError class");
   }
 
   const arr: number[] = [1, 2];
   let arrayMessage = "";
   try {
-    const z = arr[5];
+    const z: number = arr[5];
     assert(false, "unreachable");
   } catch (e) {
     arrayMessage = e.message;
   }
-  assert(arrayMessage === "index 5 is out of range for `arr` (length 2); use `arr.at(5)` to get `undefined` instead", "same details as the Uint8Array path, with its own receiver name");
+  assert(arrayMessage === "index 5 is out of range for `arr` (length 2); use `arr[5] ?? …` or `arr.at(5)`", "same details as the Uint8Array path, with its own receiver name");
 
   u[0] = 7;
   u[1] = 255;
@@ -48,12 +48,12 @@ function main(): void {
   const empty = Uint8Array.alloc(0);
   let emptyRead = "";
   try {
-    const z = empty[0];
+    const z: number = empty[0];
     assert(false, "unreachable");
   } catch (e) {
     emptyRead = e.message;
   }
-  assert(emptyRead === "index 0 is out of range for `empty` (length 0); use `empty.at(0)` to get `undefined` instead", "slot 0 of an empty array is out of range");
+  assert(emptyRead === "index 0 is out of range for `empty` (length 0); use `empty[0] ?? …` or `empty.at(0)`", "slot 0 of an empty array is out of range");
 
   // Left-to-right evaluation survives the check: the index expression and the
   // RHS both run, in that order, before the bounds check throws.

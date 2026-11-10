@@ -1,4 +1,4 @@
-types: 198 of 284 tsc entries compared, 11 differ
+types: 201 of 284 tsc entries compared, 11 differ
 
 line 87: x
   tsc:  {}
@@ -45,7 +45,6 @@ line 375: x
   ours: number
 
 errors:
-line 294: tsc TS2345: Argument of type '"foo"' is not assignable to parameter of type 'never'. (we accept)
 line 29: ours: cannot use `unknown` as a condition (tsc accepts)
 line 35: ours: cannot use `unknown` in a boolean context (tsc accepts)
 line 86: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
@@ -54,5 +53,3 @@ line 119: ours: `x != undefined` does not also match `null`: `==` compares like 
 line 125: ours: `x != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
 line 173: ours: `x != undefined` does not also match `null`: `==` compares like `===` (tsc accepts)
 line 176: ours: `x != null` does not also match `undefined`: `==` compares like `===` (tsc accepts)
-line 278: ours: `keyof` needs an object type or interface, got `T` (tsc accepts)
-line 279: ours: cannot index into non-array type `T` (tsc accepts)

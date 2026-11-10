@@ -1,0 +1,43 @@
+types: 27 of 50 tsc entries compared, 9 differ
+
+line 10: [1, 2, "string"]
+  tsc:  [number, number, string]
+  ours: [number, boolean, string]
+
+line 16: [1, 2, 3]
+  tsc:  [number, number, number]
+  ours: number[]
+
+line 18: b3
+  tsc:  string | Number
+  ours: undefined
+
+line 23: [...temp]
+  tsc:  number[]
+  ours: []
+
+line 24: [...temp]
+  tsc:  number[]
+  ours: []
+
+line 31: { 2: true }
+  tsc:  { 2: true; }
+  ours: { "2": boolean }
+
+line 35: c4
+  tsc:  any
+  ours: boolean
+
+line 35: c5
+  tsc:  any
+  ours: boolean
+
+line 35: c6
+  tsc:  any
+  ours: boolean
+
+errors:
+line 35: tsc TS2488: Type 'F' must have a '[Symbol.iterator]()' method that returns an iterator. (we accept)
+line 11: ours: interface base must be an interface or structural object type (tsc accepts)
+line 16: ours: expected `J`, got `[number, number, number]` (tsc accepts)
+line 18: ours: field `length` does not exist on `J` (tsc accepts)

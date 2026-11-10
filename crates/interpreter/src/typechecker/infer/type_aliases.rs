@@ -53,7 +53,11 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
                 walk_alias_refs(m, visit);
             }
         }
-        Type::Array(e) | Type::Readonly(e) => walk_alias_refs(e, visit),
+        Type::Array(e) | Type::Readonly(e) | Type::KeyOf(e) => walk_alias_refs(e, visit),
+        Type::IndexedAccess { object, index } => {
+            walk_alias_refs(object, visit);
+            walk_alias_refs(index, visit);
+        }
         Type::Object { fields, index } => {
             if let Some(i) = index {
                 walk_alias_refs(&i.value, visit);
@@ -85,6 +89,14 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
         }
         _ => {}
     }
+}
+
+/// See [`Inferer::pending_declaration`].
+pub(super) enum PendingDeclaration {
+    /// The operand names the declaration being resolved or bound: the name.
+    Cycle(String),
+    /// The operand names a declaration bound later in the signature pass.
+    Forward,
 }
 
 impl<'a> Inferer<'a> {
@@ -141,6 +153,10 @@ impl<'a> Inferer<'a> {
             .map(|a| self.resolve_type(a))
             .collect::<Result<_, _>>()?;
 
+        if let Some(utility) = super::utility_types::utility(&mangled) {
+            return self.resolve_utility_application(utility, resolved_args, span);
+        }
+
         // Recursion back-edge: emit the lazy by-name reference.
         if self.alias_resolution_stack.iter().any(|n| n == name) {
             return Ok(Type::alias_ref(
@@ -164,12 +180,16 @@ impl<'a> Inferer<'a> {
             body
         } else {
             let sub =
-                crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
+                crate::typechecker::type_param_substitution::TypeParamSubstitution::instantiation(
                     &generics,
                     &resolved_args,
                 );
-            sub.apply(&body, &self.type_limits)
-                .map_err(super::type_limit_at(span))?
+            let body = sub
+                .apply(&body, &self.type_limits)
+                .map_err(super::type_limit_at(span))?;
+            // `type V<T, K extends keyof T> = T[K]` evaluates once its
+            // arguments are known.
+            self.normalize_at(&body, span)?
         };
         let alias = Type::alias_ty(
             alias_package,
@@ -182,6 +202,214 @@ impl<'a> Inferer<'a> {
         // identity alias doubles the type it wraps.
         crate::type_size::check(&alias).map_err(super::type_limit_at(span))?;
         Ok(alias)
+    }
+
+    /// A written utility application, `Partial<User>`: its constraints are
+    /// checked here, at the application's own span, and it evaluates to the
+    /// type it stands for.
+    fn resolve_utility_application(
+        &mut self,
+        utility: super::utility_types::Utility,
+        args: Vec<Type>,
+        span: crate::Span,
+    ) -> Result<Type, CompilerFailure> {
+        use super::utility_types::{Evaluated, Utility, deferred, evaluate, label};
+        // `typeof identity` names a generic function, whose own type
+        // parameters are no parameter in scope here. tsc instantiates them
+        // with their constraints for `ReturnType` and `Parameters`; the
+        // function type no longer records those, so they become `unknown`.
+        let args = if matches!(utility, Utility::Parameters | Utility::ReturnType) {
+            args.iter()
+                .map(|arg| self.instantiate_foreign_type_vars(arg))
+                .collect()
+        } else {
+            args
+        };
+        let deferred = deferred(utility, args.clone());
+        self.check_application_constraints(&deferred, span)?;
+        if let Some(ty) = self.defer_if_pending(utility.name(), &args, span, || deferred.clone()) {
+            return Ok(ty);
+        }
+        let ty = match evaluate(utility, &args, self.resolver()) {
+            Evaluated::Resolved(ty) => label(utility, args, ty),
+            // It evaluates once instantiation substitutes its type parameters.
+            Evaluated::Deferred => deferred,
+            Evaluated::Invalid(Some(reason)) => {
+                self.error(span, reason);
+                Type::Error
+            }
+            Evaluated::Invalid(None) => Type::Error,
+        };
+        crate::type_size::check(&ty).map_err(super::type_limit_at(span))?;
+        Ok(ty)
+    }
+
+    /// `ty` with each type variable that names no type parameter in scope
+    /// replaced by `unknown`.
+    fn instantiate_foreign_type_vars(&self, ty: &Type) -> Type {
+        match ty {
+            Type::TypeVar(name) if !self.is_generic_in_scope(name) => Type::Unknown,
+            _ => crate::type_size::map_children_infallible(ty, |child| {
+                self.instantiate_foreign_type_vars(child)
+            }),
+        }
+    }
+
+    /// Run `bind` for the interface or class `name`: a form over it there is
+    /// a cycle, and afterwards it is bound.
+    pub(super) fn with_binding<T>(
+        &mut self,
+        name: String,
+        bind: impl FnOnce(&mut Self) -> Result<T, CompilerFailure>,
+    ) -> Result<T, CompilerFailure> {
+        self.binding_types.push(name.clone());
+        let result = bind(self);
+        self.binding_types.pop();
+        self.unbound_types.remove(&name);
+        result
+    }
+
+    /// The form a written operator stands for while `operands` name a
+    /// declaration not bound yet: `Error` after reporting a cycle, or `form`,
+    /// evaluated where it is used once every declaration is bound. `None`
+    /// when every declaration they name is bound.
+    pub(super) fn defer_if_pending(
+        &mut self,
+        operator: &str,
+        operands: &[Type],
+        span: crate::Span,
+        form: impl FnOnce() -> Type,
+    ) -> Option<Type> {
+        match self.pending_declaration(operands)? {
+            PendingDeclaration::Cycle(declared) => {
+                self.report_cycle(operator, &declared, span);
+                Some(Type::Error)
+            }
+            PendingDeclaration::Forward => {
+                let form = form();
+                self.forward_forms.push((form.clone(), span));
+                Some(form)
+            }
+        }
+    }
+
+    /// Whether `operands` name a declaration the signature pass has not
+    /// finished: one it is resolving or binding now (a cycle, as in `type
+    /// Tree = { kids: Partial<Tree>[] }` or `interface Node { next:
+    /// Readonly<Node> }`), or a later one whose members are not bound yet.
+    pub(super) fn pending_declaration(&self, operands: &[Type]) -> Option<PendingDeclaration> {
+        let mut referenced = BTreeSet::new();
+        let mut pending: Vec<&Type> = operands.iter().collect();
+        while let Some(ty) = pending.pop() {
+            if let Type::InterfaceRef { mangled, .. }
+            | Type::ClassRef { mangled, .. }
+            | Type::AliasRef { mangled, .. } = ty
+            {
+                referenced.insert(mangled.clone());
+            }
+            crate::type_size::for_each_child(ty, |child| pending.push(child));
+        }
+        let is_referenced = |name: &&String| {
+            self.type_mangled_name(name)
+                .is_some_and(|mangled| referenced.contains(&mangled))
+        };
+        if let Some(declared) = self.alias_resolution_stack.iter().find(is_referenced) {
+            return Some(PendingDeclaration::Cycle(declared.clone()));
+        }
+        if let Some(declared) = self.binding_types.iter().find(is_referenced) {
+            return Some(if self.resolving_method_signature {
+                PendingDeclaration::Forward
+            } else {
+                PendingDeclaration::Cycle(declared.clone())
+            });
+        }
+        self.unbound_types
+            .iter()
+            .find(is_referenced)
+            .map(|_| PendingDeclaration::Forward)
+    }
+
+    /// A utility, `keyof` or `T[K]` (`operator`) over the type `declared`
+    /// inside its own definition, which has no evaluation yet (SUB-2154).
+    pub(super) fn report_cycle(&mut self, operator: &str, declared: &str, span: crate::Span) {
+        self.error_with_help(
+            span,
+            format!(
+                "`{operator}` cannot be applied to `{}` inside its own definition",
+                display_type_name(declared),
+            ),
+            vec![format!(
+                "spell out the type `{operator}` would give in a separate declaration; \
+                 self-referencing applications are not supported yet"
+            )],
+        );
+    }
+
+    /// Check each form kept lazy over a later declaration now that every
+    /// declaration is bound, reporting where it was written why it has no
+    /// evaluation: a missing member (`B["zz"]`), or a cycle of forms that only
+    /// name each other (`A["b"]` and `B["c"]`).
+    pub(super) fn check_forward_forms(&mut self) -> Result<(), CompilerFailure> {
+        let forms = std::mem::take(&mut self.forward_forms);
+        if forms.is_empty() {
+            return Ok(());
+        }
+        let _settled = super::utility_types::SettledForms::enter();
+        for (form, span) in forms {
+            let mut failures = Vec::new();
+            super::utility_types::normalize_reporting(&form, self.resolver(), &mut failures)
+                .map_err(super::type_limit_at(span))?;
+            if let Some(failure) = failures.into_iter().next() {
+                self.error(span, failure);
+            }
+        }
+        Ok(())
+    }
+
+    /// Replace the forms kept lazy in interface and class members with what
+    /// they evaluate to, now that every declaration is bound. A method's
+    /// parameters and result then have one representation for its callers
+    /// and its body: `static key(k: keyof Box): string { return k; }` passes
+    /// a `string`, not an erased `keyof Box`.
+    pub(super) fn settle_member_types(&mut self) -> Result<(), CompilerFailure> {
+        let names: Vec<String> = self.types.iter_names().map(str::to_owned).collect();
+        for name in names {
+            let Some(symbol) = self.types.lookup(&name) else {
+                continue;
+            };
+            if !matches!(
+                symbol.kind,
+                TypeKind::Interface { .. } | TypeKind::Class { .. }
+            ) {
+                continue;
+            }
+            let mut kind = symbol.kind.clone();
+            let mut changed = false;
+            let mut exceeded = None;
+            for_each_member_type_mut(&mut kind, &mut |ty| {
+                if !super::utility_types::has_evaluable_application(ty) {
+                    return;
+                }
+                match super::utility_types::normalize(ty, self.resolver()) {
+                    Ok(settled) => {
+                        *ty = settled;
+                        changed = true;
+                    }
+                    Err(limit) => exceeded = Some(limit),
+                }
+            });
+            if let Some(limit) = exceeded {
+                return Err(super::type_limit_unlocated(limit));
+            }
+            if changed && let Some(symbol) = self.types.lookup_mut(&name) {
+                symbol.kind = kind;
+            }
+        }
+        Ok(())
+    }
+
+    fn type_mangled_name(&self, name: &str) -> Option<crate::MangledName> {
+        self.types.lookup(name).map(|sym| sym.mangled_name.clone())
     }
 
     /// Resolve alias `name`'s body, fill in its placeholder symbol, and
@@ -225,9 +453,13 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    /// [`rehydrate_alias_refs`] against this inferer's type registry.
-    pub(super) fn rehydrate_alias_refs(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
-        rehydrate_alias_refs(ty, self.resolver())
+    /// [`rehydrate_alias_refs`] against this inferer's type registry, with
+    /// every concrete utility application, `keyof` and `T[K]` evaluated: a
+    /// generic interface's `keyof T` member read at `J<{ a: number }>` is
+    /// `"a"`.
+    pub(super) fn rehydrate_and_evaluate(&self, ty: &Type) -> Result<Type, TypeTooLarge> {
+        let rehydrated = rehydrate_alias_refs(ty, self.resolver())?;
+        super::utility_types::normalize(&rehydrated, self.resolver())
     }
 }
 
@@ -289,6 +521,9 @@ pub(crate) fn alias_ref_body(
     args: &[Type],
     types: TypeResolver<'_>,
 ) -> Type {
+    if let Some(utility) = super::utility_types::utility(mangled) {
+        return utility_body(utility, args, types);
+    }
     let Some(sym) = types.lookup(mangled, name) else {
         return Type::Error;
     };
@@ -301,12 +536,30 @@ pub(crate) fn alias_ref_body(
     if generics.is_empty() {
         return body.clone();
     }
-    types.limits.type_or_error(
-        crate::typechecker::type_param_substitution::TypeParamSubstitution::from_pairs(
+    let substituted = types.limits.type_or_error(
+        crate::typechecker::type_param_substitution::TypeParamSubstitution::instantiation(
             generics, args,
         )
         .apply(body, types.limits),
-    )
+    );
+    types
+        .limits
+        .type_or_error(super::utility_types::normalize(&substituted, types))
+}
+
+/// The type a lazy utility application stands for. A deferred application is
+/// its own body, so the walk stops there.
+fn utility_body(
+    utility: super::utility_types::Utility,
+    args: &[Type],
+    types: TypeResolver<'_>,
+) -> Type {
+    use super::utility_types::{Evaluated, deferred, evaluate};
+    match evaluate(utility, args, types) {
+        Evaluated::Resolved(ty) => ty,
+        Evaluated::Deferred => deferred(utility, args.to_vec()),
+        Evaluated::Invalid(_) => Type::Error,
+    }
 }
 
 /// Builds under a budget from `types`: expanding a back-edge copies a stored
@@ -337,6 +590,14 @@ fn rehydrate_reachable(
                 .collect::<Result<_, _>>()?;
             let body = alias_ref_body(mangled, name, &rehydrated_args, types);
             budget.charge_copy(&body, child)?;
+            if let Some(utility) = super::utility_types::utility(mangled) {
+                // A deferred application stays a name; a concrete one is the
+                // type it stands for, labeled as a written one is.
+                return Ok(match body {
+                    Type::AliasRef { .. } => body,
+                    body => super::utility_types::label(utility, rehydrated_args, body),
+                });
+            }
             Ok(Type::alias_ty(
                 package.clone(),
                 name.clone(),
@@ -374,5 +635,62 @@ fn rehydrate_reachable(
                 rehydrate_reachable(inner, types, skip, child, budget)
             })
         }
+    }
+}
+
+/// Every member type of an interface or class: fields, properties, an index
+/// signature's value, method, static and accessor signatures, and the
+/// constructor's parameters.
+fn for_each_member_type_mut(kind: &mut TypeKind, settle: &mut dyn FnMut(&mut Type)) {
+    let method = |method: &mut crate::MethodSig, settle: &mut dyn FnMut(&mut Type)| {
+        method
+            .params
+            .iter_mut()
+            .for_each(|param| settle(&mut param.ty));
+        settle(&mut method.ret);
+    };
+    match kind {
+        TypeKind::Interface {
+            methods,
+            properties,
+            index,
+            ..
+        } => {
+            methods.values_mut().for_each(|sig| method(sig, settle));
+            properties
+                .values_mut()
+                .for_each(|property| settle(&mut property.ty));
+            if let Some(index) = index {
+                settle(&mut index.value);
+            }
+        }
+        TypeKind::Class {
+            fields,
+            methods,
+            accessors,
+            constructor,
+            statics,
+            static_fields,
+            ..
+        } => {
+            fields
+                .values_mut()
+                .chain(static_fields.values_mut())
+                .for_each(|field| settle(&mut field.ty));
+            methods
+                .values_mut()
+                .chain(statics.values_mut())
+                .for_each(|sig| method(sig, settle));
+            for accessor in accessors {
+                match accessor {
+                    crate::AccessorSig::Getter { ret_ty, .. } => settle(ret_ty),
+                    crate::AccessorSig::Setter { param, .. } => settle(&mut param.ty),
+                }
+            }
+            constructor
+                .iter_mut()
+                .for_each(|param| settle(&mut param.ty));
+        }
+        _ => {}
     }
 }

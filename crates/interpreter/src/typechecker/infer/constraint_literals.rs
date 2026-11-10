@@ -36,14 +36,22 @@ impl LiteralKinds {
     pub(super) fn is_empty(self) -> bool {
         !(self.string || self.number || self.boolean || self.bigint)
     }
+    /// The kinds of literal a value keeps where `ty` is its context (a
+    /// parameter's bound when `parameter`). A bound naming `keyof T` keeps
+    /// string and number literals, as in tsc: `pick(o, ["a", "b"])` with `K
+    /// extends keyof T`, or `K extends Extract<keyof T, string>`, binds
+    /// `"a" | "b"`.
     fn from_context(ty: &Type, parameter: bool) -> Self {
         Self {
             string: ty.any_member(&|ty| {
                 matches!(ty, Type::StringLiteral(_) | Type::TemplateLiteral { .. })
+                    || literal_bound(ty)
                     || parameter && ty == &Type::String
             }),
             number: ty.any_member(&|ty| {
-                matches!(ty, Type::NumberLiteral(_)) || parameter && ty == &Type::Number
+                matches!(ty, Type::NumberLiteral(_))
+                    || literal_bound(ty)
+                    || parameter && ty == &Type::Number
             }),
             boolean: ty.any_member(&|ty| matches!(ty, Type::Boolean | Type::BooleanLiteral(_))),
             bigint: ty.any_member(&|ty| {
@@ -159,6 +167,15 @@ impl Inferer<'_> {
                     let bound = sub
                         .apply(bound, &self.type_limits)
                         .map_err(type_limit_at(span))?;
+                    // A key bound over a parameter inferred already
+                    // evaluates: `Exclude<keyof U, "id">` is `"b"`. Any other
+                    // bound keeps its form (`T[keyof T]` widens, as in tsc).
+                    let bound = if literal_bound(&bound) {
+                        super::utility_types::normalize(&bound, self.resolver())
+                            .map_err(type_limit_at(span))?
+                    } else {
+                        bound
+                    };
                     enqueue(&mut pending, &mut budget, argument, &bound, true)
                         .map_err(type_limit_at(span))?;
                 }
@@ -401,6 +418,35 @@ fn enqueue(
     budget.charge_copy(ty, 0)?;
     pending.push((expression, ty.clone(), parameter));
     Ok(())
+}
+
+/// Whether a bound keeps the literal a value is inferred from, as tsc keeps
+/// one for a primitive constraint: `keyof T`, a string mapping
+/// (`Capitalize<S>`), and `Extract`, `Exclude`, `NonNullable` or `NoInfer`
+/// of either or of a type parameter (`Extract<keyof T, string>`, `Extract<U,
+/// string>`). A bound in an index position (`T[keyof T]`) names values, so
+/// tsc widens there. Read from the application as written, so a concrete one
+/// (`Exclude<keyof U, "id">` once `U` is inferred) counts too.
+pub(super) fn literal_bound(ty: &Type) -> bool {
+    use super::utility_types::{Utility, utility};
+    match ty.without_aliases() {
+        Type::KeyOf(_) => true,
+        Type::Union(members) => members.iter().any(literal_bound),
+        Type::AliasRef { mangled, args, .. } => match utility(mangled) {
+            Some(mapping) if mapping.is_string_mapping() => true,
+            Some(Utility::Extract | Utility::Exclude | Utility::NonNullable | Utility::NoInfer) => {
+                args.first().is_some_and(|operand| {
+                    literal_bound(operand)
+                        || matches!(
+                            operand.without_aliases(),
+                            Type::TypeVar(_) | Type::GenericParam { .. }
+                        )
+                })
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 #[cfg(test)]

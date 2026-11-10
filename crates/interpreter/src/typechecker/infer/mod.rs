@@ -31,6 +31,8 @@ mod likely_mistakes;
 mod literal_freshness;
 mod literal_prebinding;
 mod lookup;
+mod mismatch;
+mod missing_reads;
 pub(in crate::typechecker) mod module_symbols;
 mod namespace_symbol;
 mod narrow_scopes;
@@ -50,10 +52,11 @@ pub mod stmt;
 mod switch_stmt;
 pub(crate) mod type_aliases;
 mod type_diff;
-mod type_namespace;
+pub(in crate::typechecker) mod type_namespace;
 mod type_predicate;
-mod type_registry;
+pub(in crate::typechecker) mod type_registry;
 mod union_call;
+pub(crate) mod utility_types;
 mod value_operand;
 pub(crate) mod variance;
 
@@ -158,6 +161,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
     let bindings = binding_analysis::analyze(ast)?;
     let mut tc = Inferer {
         source,
+        diagnostic_sources: None,
         package_name,
         ast,
         typed_ast: TypedAst::with_package(package_name),
@@ -184,7 +188,6 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
-        const_record_reads: Default::default(),
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
@@ -198,6 +201,11 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         invoked_body_exit: None,
         prebinding_parameter_types: false,
         captured_mutators: bindings.mutators,
+        captured_locals: bindings.captured_locals,
+        pending_read: None,
+        missable_reads: Default::default(),
+        maybe_missing_uses: Default::default(),
+        missable_chains: Default::default(),
         function_written_globals: bindings.function_written_globals,
         arithmetic_targets: bindings.arithmetic_targets,
         arithmetic_written_globals: bindings.arithmetic_written_globals,
@@ -280,6 +288,10 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: BTreeSet::new(),
+        binding_types: Vec::new(),
+        resolving_method_signature: false,
+        forward_forms: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
@@ -436,7 +448,6 @@ pub fn infer_package_checked<'a>(
     };
 
     let mut inferred_modules: BTreeMap<ModulePath, ModuleSymbols> = BTreeMap::new();
-    let mut module_exports: BTreeMap<ModulePath, Vec<crate::ExportEntry>> = BTreeMap::new();
     let mut root_public_exports = Vec::new();
     let mut package_declaration = PackageDeclaration::with_package(package_name);
     let first_module = order.first().ok_or_else(|| {
@@ -468,6 +479,7 @@ pub fn infer_package_checked<'a>(
         .collect();
     let mut tc = Inferer {
         source: first_source,
+        diagnostic_sources: Some(sources),
         package_name,
         ast: first_ast,
         typed_ast: TypedAst::with_package(package_name),
@@ -492,7 +504,6 @@ pub fn infer_package_checked<'a>(
         prebinding: false,
         returns_into_void_context: false,
         fields_keeping_returned_literals: None,
-        const_record_reads: Default::default(),
         aliased_conditions: Default::default(),
         immediately_invoked: None,
         spread_context_for_next_literal: None,
@@ -506,6 +517,11 @@ pub fn infer_package_checked<'a>(
         invoked_body_exit: None,
         prebinding_parameter_types: false,
         captured_mutators: Default::default(),
+        captured_locals: Default::default(),
+        pending_read: None,
+        missable_reads: Default::default(),
+        maybe_missing_uses: Default::default(),
+        missable_chains: Default::default(),
         function_written_globals: Default::default(),
         arithmetic_targets: Default::default(),
         arithmetic_written_globals: Default::default(),
@@ -580,11 +596,16 @@ pub fn infer_package_checked<'a>(
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
+        unbound_types: BTreeSet::new(),
+        binding_types: Vec::new(),
+        resolving_method_signature: false,
+        forward_forms: Vec::new(),
         type_resolution_depth: 0,
         type_limits: Default::default(),
         diagnostic_failure: Default::default(),
     };
 
+    tc.typed_ast.package_root_module = Some(root_module.clone());
     for module in order {
         let (file, ast) = module_map.get(&module).copied().ok_or_else(|| {
             CompileError::from(inference_failure("module absent from inference map"))
@@ -716,7 +737,6 @@ pub fn infer_package_checked<'a>(
                 .internal_modules
                 .insert(module.clone(), module_symbols.internal_exports());
         }
-        module_exports.insert(module.clone(), exports);
         inferred_modules.insert(module, module_symbols);
     }
 
@@ -755,11 +775,6 @@ pub fn infer_package_checked<'a>(
     }
     tc.typed_ast.exports = root_public_exports;
     package_declaration.refresh_shapes();
-    let module_surfaces = module_exports.iter().filter_map(|(module, exports)| {
-        inferred_modules
-            .get(module)
-            .map(|symbols| crate::typechecker::rules::PackageModuleSurface { symbols, exports })
-    });
     let dependencies: Vec<&PackageDeclaration> = tc
         .packages_by_name
         .values()
@@ -767,11 +782,8 @@ pub fn infer_package_checked<'a>(
         .copied()
         .collect();
     let rule_diagnostics = crate::typechecker::rules::check_package(
-        package_name,
         &tc.typed_ast,
         &package_declaration,
-        tc.resolver(),
-        module_surfaces,
         &dependencies,
     )
     .map_err(|error| {
@@ -888,8 +900,6 @@ pub(super) struct Inferer<'a> {
     /// in that field keeps its returned literals (see
     /// [`Inferer::field_keeps_returned_literals`]).
     fields_keeping_returned_literals: Option<(crate::ExprId, Vec<String>)>,
-    /// Record-index initializers, keyed by binding identity so shadowing cannot misattribute help.
-    const_record_reads: BTreeMap<narrowing::BindingId, crate::ExprId>,
     aliased_conditions: aliased_conditions::AliasedConditions,
     /// The span of the arrow an immediately-invoked call is about to infer;
     /// see [`iife::immediately_invoked_arrow`].
@@ -932,6 +942,7 @@ pub(super) struct Inferer<'a> {
     /// A preliminary initializer pass does not recursively start more trials.
     prebinding_parameter_types: bool,
     pub(super) source: &'a str,
+    diagnostic_sources: Option<&'a crate::Sources>,
     pub(super) package_name: &'a str,
     pub(super) ast: &'a Ast,
     pub(super) typed_ast: TypedAst,
@@ -948,6 +959,21 @@ pub(super) struct Inferer<'a> {
     pub(super) narrow_scopes: Vec<narrowing::NarrowEnv>,
     /// Bindings reassigned inside closures; narrowings on these paths are dropped (a closure could invalidate the narrowing between check and use).
     pub(super) captured_mutators: std::collections::HashSet<(String, Span)>,
+    /// Declarations, by name span, of the locals a nested function reads or
+    /// writes; see [`binding_analysis::Analysis::captured_locals`].
+    pub(super) captured_locals: std::collections::HashSet<Span>,
+    /// What the expression being inferred reads, for `infer_expr` to record
+    /// against the node it pushes; see [`missing_reads`].
+    pub(super) pending_read: Option<missing_reads::PendingRead>,
+    /// Index reads, and reads through an index signature, that may find no
+    /// value; see [`missing_reads`].
+    pub(super) missable_reads: std::collections::BTreeSet<crate::ExprId>,
+    /// Reads of a local that may hold a missing read; see [`missing_reads`].
+    pub(super) maybe_missing_uses: std::collections::BTreeSet<crate::ExprId>,
+    /// Optional chains among `missable_reads`, and where each may find no
+    /// value; see [`missing_reads::MissableChain`].
+    pub(super) missable_chains:
+        std::collections::BTreeMap<crate::ExprId, missing_reads::MissableChain>,
     /// Module-level names some function body writes; top-level code may call
     /// that function between a guard on the name and its use.
     pub(super) function_written_globals: std::collections::HashSet<String>,
@@ -1167,6 +1193,21 @@ pub(super) struct Inferer<'a> {
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
     /// finished, and for a true cycle infinite) body.
     pub(super) alias_resolution_stack: Vec<String>,
+    /// Interfaces and classes of this module whose members the signature
+    /// pass has not bound yet. A utility, `keyof` or `T[K]` over one stays
+    /// lazy until it is used.
+    pub(super) unbound_types: BTreeSet<String>,
+    /// The interfaces and classes the signature pass is binding now. A
+    /// utility, `keyof` or `T[K]` over one is a cycle (SUB-2154).
+    pub(super) binding_types: Vec<String>,
+    /// Set while a method's or constructor's signature resolves. A reference
+    /// to the type being bound there (`patch(changes: Partial<User>)`) is no
+    /// cycle: run-time checks never expand method types, so it stays lazy.
+    pub(super) resolving_method_signature: bool,
+    /// Forms kept lazy over a declaration bound later, with where each was
+    /// written: checked once every declaration is bound, so a missing member
+    /// or a cycle through them is reported there.
+    pub(super) forward_forms: Vec<(Type, Span)>,
     /// Nested annotation and alias-body resolutions in progress. Alias chains
     /// resolve recursively, so their length is bounded before the stack is.
     pub(super) type_resolution_depth: u32,
@@ -1256,7 +1297,6 @@ impl<'a> Inferer<'a> {
         self.clause_write_scopes.clear();
         self.tombstone_scopes.clear();
         self.last_write_spans.clear();
-        self.const_record_reads.clear();
         self.aliased_conditions = Default::default();
         self.suspended_narrow_scopes.clear();
         self.pending_post_if_materializations.clear();
@@ -1265,6 +1305,7 @@ impl<'a> Inferer<'a> {
         }
         let bindings = binding_analysis::analyze(ast)?;
         self.captured_mutators = bindings.mutators;
+        self.captured_locals = bindings.captured_locals;
         self.function_written_globals = bindings.function_written_globals;
         self.arithmetic_targets = bindings.arithmetic_targets;
         self.arithmetic_written_globals = bindings.arithmetic_written_globals;
@@ -1625,23 +1666,13 @@ mod tests {
                 .any(|diagnostic| diagnostic.severity == crate::Severity::Error),
             "{diagnostics:?}"
         );
-        let types = TypeNamespace::new();
-        let registry = TypeRegistry::new();
         let limits = crate::type_size::TypeLimits::with_work_allowance(0);
-        let resolver = assignable::TypeResolver {
-            types: &types,
-            registry: &registry,
-            limits: &limits,
-            strict_subtype: false,
-            generic_constraints: &Default::default(),
-        };
-        let error = crate::typechecker::rules::check_package(
-            "@test/resource",
+        let error = crate::typechecker::rules::check_package_rules(
             &typed_ast,
             &package,
-            resolver,
-            std::iter::empty(),
             &[],
+            true,
+            &limits,
         )
         .unwrap_err();
         assert!(

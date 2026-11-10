@@ -58,8 +58,8 @@ function f5(): void {
 }
 
 /*pruned*/;          
-                                                              
-                                                              
+                                                                        
+                                                                        
                                
                                 
                     
@@ -88,13 +88,13 @@ function f8<T>(x: T): void {
     }
 }
 
-/*pruned*/;                                
-            
-                
-     
-          
-                   
-     
- 
+function f9<T extends object>(x: T): void {
+    if (x) {
+        x; // {}
+    }
+    else {
+        x; // never
+    }
+}
 
 function main(): void {}

@@ -1,0 +1,1 @@
+line 41, 43 type: artifact the argument is checked against `NoInfer<T>` once `T` is fixed, so its literals widen first, where tsc keeps them from that context

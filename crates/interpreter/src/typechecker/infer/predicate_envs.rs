@@ -775,7 +775,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
-        let path_ty = self.narrowing_source_ty(path_expr)?;
+        let path_ty = self.narrowing_source_ty_at(chain_id, path_expr)?;
         // Never introduce a null alternative that the operand cannot hold.
         // Keep the non-null fact even when already proven: loop rechecking
         // needs it after invalidating the enclosing guard at a back edge.
@@ -1073,7 +1073,8 @@ impl<'a> Inferer<'a> {
         let mut env = narrowing::NarrowEnv::new();
         let null = self.null_literal_at(chain_id)?;
         let mut receiver = base;
-        for part in parts {
+        let mut parts = parts.into_iter().peekable();
+        while let Some(part) = parts.next() {
             if part.is_optional() {
                 env.extend(self.receiver_present_env(receiver, null)?);
             }
@@ -1081,7 +1082,16 @@ impl<'a> Inferer<'a> {
                 .typed_ast
                 .try_expr(receiver)
                 .map_err(crate::typechecker::arena_failure)?;
-            let (span, ty) = (part.span(), part.result_ty().clone());
+            let (span, mut ty) = (part.span(), part.result_ty().clone());
+            // A constraint view of a receiver that may be missing keeps room
+            // for `undefined` (see `infer_chain_steps`). The `?.` after it
+            // proves the receiver present, so the view it narrows is the
+            // bound's alone.
+            if matches!(part, TypedChainPart::Constraint { .. })
+                && parts.peek().is_some_and(TypedChainPart::is_optional)
+            {
+                ty = narrowing::strip_undefined(&ty);
+            }
             let is_index = matches!(part, TypedChainPart::Index { .. });
             let kind = match part {
                 TypedChainPart::Field { name, .. } => {
@@ -1215,8 +1225,8 @@ impl<'a> Inferer<'a> {
             .typed_ast
             .try_expr(lhs_id)
             .map_err(crate::typechecker::arena_failure)?;
-        let field_name = match &lhs.kind {
-            TypedExprKind::String(s) => s.clone(),
+        let field_name = match (&lhs.kind, lhs.ty.peel()) {
+            (TypedExprKind::String(s), _) | (_, Type::StringLiteral(s)) => s.clone(),
             _ => return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new())),
         };
         let rhs = self
@@ -1229,13 +1239,13 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
-        let path_ty = self.narrowing_source_ty(rhs)?;
+        let path_ty = self.narrowing_source_ty_at(rhs_id, rhs)?;
         let path_span = rhs.span;
         let fallback_kind = rhs.kind.clone();
 
         let (true_ty, false_ty) =
             narrowing::narrow_field_presence(&path_ty, &field_name, &|member, field| {
-                self.member_shape(member)?.get(field).cloned()
+                self.presence_member_field(member, field)
             });
 
         let source_kind = self
@@ -1283,6 +1293,17 @@ impl<'a> Inferer<'a> {
             },
         );
         Ok((true_env, false_env))
+    }
+
+    fn presence_member_field(&self, member: &Type, field: &str) -> Option<crate::ObjectField> {
+        if !matches!(member.peel(), Type::Array(_) | Type::Tuple(_)) {
+            return self.member_shape(member)?.get(field).cloned();
+        }
+        if crate::property_keys::canonical_number(field) {
+            return Some(crate::ObjectField::optional(Type::Unknown));
+        }
+        (self.find_property(member, field).is_some() || self.find_method(member, field).is_some())
+            .then(|| crate::ObjectField::required(Type::Unknown))
     }
 
     fn narrow_present_field(
@@ -1573,7 +1594,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return Ok(None);
         }
-        let path_ty = self.narrowing_source_ty(path_expr)?;
+        let path_ty = self.narrowing_source_ty_at(path_id, path_expr)?;
         let path_span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
         let equal_ty = if matches!(path_ty.peel(), Type::Unknown) {
@@ -1709,7 +1730,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return Ok(None);
         }
-        let path_ty = self.narrowing_source_ty(path_expr)?;
+        let path_ty = self.narrowing_source_ty_at(path_id, path_expr)?;
         let path_span = path_expr.span;
         let path_kind = path_expr.kind.clone();
 
@@ -2555,7 +2576,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
-        let from_ty = self.narrowing_source_ty(value_expr)?;
+        let from_ty = self.narrowing_source_ty_at(value_id, value_expr)?;
         let value_span = value_expr.span;
         let fallback_kind = value_expr.kind.clone();
 
@@ -2729,7 +2750,7 @@ impl<'a> Inferer<'a> {
         if self.path_root_is_captured_mutator(&path) {
             return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
         }
-        let from_ty = self.narrowing_source_ty(path_expr)?;
+        let from_ty = self.narrowing_source_ty_at(path_expr_id, path_expr)?;
         let span = path_expr.span;
         let fallback_kind = path_expr.kind.clone();
 

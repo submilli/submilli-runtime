@@ -33,7 +33,14 @@ enum E { A }
 >A : E.A
 >  : ^^^
 
-/*pruned*/;
+let ae: E = null as unknown as (E);
+>ae : E
+>   : ^
+>null as unknown as (E) : E
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
 
 let b: number = undefined;
 >b : number
@@ -97,7 +104,14 @@ ai = undefined;
 >undefined : undefined
 >          : ^^^^^^^^^
 
-/*pruned*/;
+ae = undefined;
+>ae = undefined : undefined
+>               : ^^^^^^^^^
+>ae : E
+>   : ^
+>undefined : undefined
+>          : ^^^^^^^^^
+
 let m: number[] = undefined;
 >m : number[]
 >  : ^^^^^^^^

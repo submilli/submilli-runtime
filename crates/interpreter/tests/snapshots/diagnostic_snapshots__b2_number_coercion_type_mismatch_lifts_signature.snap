@@ -1,12 +1,12 @@
 ---
 source: crates/interpreter/tests/diagnostic_snapshots.rs
-expression: "render_inside_main(\"  let x = Number(true);\")"
+expression: "render_inside_main(\"  let x = Number(null);\")"
 ---
-error: expected `number | bigint | string | undefined`, got `boolean`
+error: expected `number | bigint | string | boolean | undefined`, got `null`
  --> test.subm:2:18
   |
 1 | function main(): void {
-2 |   let x = Number(true);
+2 |   let x = Number(null);
   |                  ^^^^
 3 | }
 ---

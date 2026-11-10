@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "e28d91c562bca75076f6ffad2a0f62f665bf951cacd557b45c53a5eaeed31761"
+  contentHash: "a52a50226266e726b043140b19fa2a5980ceafa4a0885c552e618e569bfa9932"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -23,7 +23,7 @@ modules are on [Standard library](/docs/reference/standard-library).
 `submilli builtins` prints the catalog:
 
 ```text
-Types: Array, BigInt, Boolean, Error, Map, Number, Object, PermissionDeniedError, QuotaExceededError, RangeError, Record, ReferenceError, RegExp, Set, String, SyntaxError, TextDecoder, TextEncoder, TypeError, URIError, Uint8Array
+Types: Array, BigInt, Boolean, Capitalize, Error, ErrorOptions, Exclude, Extract, Lowercase, Map, MissingValueError, NoInfer, NonNullable, Number, Object, Omit, Parameters, Partial, PermissionDeniedError, Pick, QuotaExceededError, RangeError, Readonly, ReadonlyMap, ReadonlySet, Record, ReferenceError, RegExp, Required, ReturnType, Set, String, SyntaxError, TextDecoder, TextEncoder, TimeoutError, TypeError, URIError, Uint8Array, Uncapitalize, Uppercase
 Namespaces: JSON, Math, Temporal
 ```
 
@@ -38,12 +38,15 @@ Namespaces: JSON, Math, Temporal
 | `Boolean` | Type | `true` and `false` |
 | `Object` | Type | The base of every object type, with `Object.keys`, `values`, `entries`, `hasOwn`, `is` |
 | `Record<K, V>` | Type | String-keyed objects ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)) |
+| `Partial`, `Required`, `Readonly`, `Pick`, `Omit`, `Exclude`, `Extract`, `NonNullable`, `Parameters`, `ReturnType`, `NoInfer` | Type | TypeScript's utility types, over concrete types and type parameters |
+| `Uppercase`, `Lowercase`, `Capitalize`, `Uncapitalize` | Type | String literal case mappings |
 | `RegExp` | Type | Regular expressions, without lookaround or backreferences |
 | `Uint8Array` | Type | Byte arrays, with hex and base64 conversion |
 | `TextEncoder`, `TextDecoder` | Type | UTF-8 encoding and decoding |
 | `Error` | Error class | The base error class. `throw` takes `Error` and its subclasses |
 | `TypeError` | Error class | Failed runtime type checks: a failed `as` cast, `x!` on `null` or `undefined`, invalid UTF-8, an invalid URL |
-| `RangeError` | Error class | Out-of-range values: an array index, bigint division by zero, invalid Temporal values, and argument-size caps |
+| `RangeError` | Error class | Out-of-range values: an array index written past the end, bigint division by zero, invalid Temporal values, and argument-size caps |
+| `MissingValueError` | Error class | A read that finds no value and no check: an array or string index out of range, a key a record doesn't have, or a regex group that didn't take part ([Language](/docs/reference/language#recordstring-v-for-runtime-keys)). `JSON.stringify` of a value with no JSON text throws it too ([Language](/docs/reference/language#json-and-stored-values)) |
 | `SyntaxError` | Error class | Text that fails to parse: `JSON.parse`, `BigInt()`, `Uint8Array.fromHex`, `new RegExp()` |
 | `URIError` | Error class | A malformed `%` escape in `decodeURI`, or a lone surrogate in `encodeURI` |
 | `ReferenceError` | Error class | Reading or writing a module variable, static field, or parameter before its declaration or initialization has run |
@@ -341,6 +344,14 @@ Constructor object for `Map`.
 | --- | --- |
 | `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): Map<K, T[]>` | Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. |
 | `new <K, V>(entries?: readonly (readonly [K, V])[] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
+
+## `MissingValueError`
+
+A read found no value (`extends Error`): an array or string index out of range, a key a record does not have, or a regex group that did not take part in the match. Check the read where it happens: `r[k] ?? fallback`, `k in r`, or `a.at(i)`.
+
+| Member | Description |
+| --- | --- |
+| `constructor(message?: string, options?: ErrorOptions)` |  |
 
 ## `Number`
 
@@ -742,7 +753,7 @@ Constructor object for `Uint8Array`.
 | Function | Capability | Description |
 | --- | --- | --- |
 | `parse(text: string): unknown` |  | Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. |
-| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string \| undefined` |  | Serialize a value to a JSON string, or return undefined when it has no JSON representation. |
+| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string` |  | Serialize a value to a JSON string. An `undefined` or function value has no JSON text: the call throws `MissingValueError` where the result is read as `string`, and is `undefined` at a check or where the type names `undefined` (not `unknown`). |
 
 ## `Math`
 

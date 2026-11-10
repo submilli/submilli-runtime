@@ -38,7 +38,7 @@ let r6 = (new C2()).f<string>(1);
 /*pruned*/;                          
 /*pruned*/;              
 
-/**/; 
+let a;
 /*pruned*/;          
 
 /*pruned*/;                            

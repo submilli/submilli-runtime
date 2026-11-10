@@ -1,0 +1,1 @@
+parserGenericConstraint2.ts(2,19): error TS2304: Cannot find name 'List'.

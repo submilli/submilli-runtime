@@ -1,0 +1,6 @@
+functionNameConflicts.ts(14,10): error TS2300: Duplicate identifier 'fn3'.
+functionNameConflicts.ts(15,5): error TS2300: Duplicate identifier 'fn3'.
+functionNameConflicts.ts(18,9): error TS2300: Duplicate identifier 'fn4'.
+functionNameConflicts.ts(19,14): error TS2300: Duplicate identifier 'fn4'.
+functionNameConflicts.ts(21,14): error TS2300: Duplicate identifier 'fn5'.
+functionNameConflicts.ts(22,9): error TS2300: Duplicate identifier 'fn5'.

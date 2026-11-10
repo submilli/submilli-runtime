@@ -69,7 +69,14 @@ let g: { baz: string } = 1;
 >1 : 1
 >  : ^
 
-/*pruned*/;
+let g2: { 0: number } = 1;
+>g2 : { 0: number; }
+>   : ^^^^^^^^^^^^^^
+>0 : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
 
 /*pruned*/;
 /**/;

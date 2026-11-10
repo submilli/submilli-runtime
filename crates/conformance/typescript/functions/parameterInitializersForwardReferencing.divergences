@@ -1,1 +1,21 @@
-types: 15 of 36 tsc entries compared, 0 differ
+types: 21 of 43 tsc entries compared, 4 differ
+
+line 20: b
+  tsc:  any
+  ours: unknown
+
+line 24: b
+  tsc:  any
+  ours: unknown
+
+line 25: b
+  tsc:  undefined
+  ours: unknown
+
+line 26: b
+  tsc:  any
+  ours: unknown
+
+errors:
+line 24: ours: cannot infer the type of `b` at this read (tsc accepts)
+line 25: ours: cannot infer the type of `b` at this read (tsc accepts)

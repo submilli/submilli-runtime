@@ -63,6 +63,13 @@ pub(super) async fn get(
     name: &Val,
 ) -> wasmtime::Result<Val> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
+    // A generic `o[k]` whose `T` is a string, array or other built-in value.
+    if shape_arrays(caller, object)?.is_none() {
+        let name = String::from_utf16_lossy(&key);
+        return super::super::member::builtin_property(caller, object, &name)
+            .await
+            .map_err(|error| crate::runtime::host::throw_host_error(caller, error));
+    }
     if let Some(property) = find(caller, object, &key, false)? {
         if !field_is_present(caller, &property.name, &property.value)? {
             return super::super::undefined::value(caller);
@@ -125,6 +132,16 @@ pub(super) async fn set(
         return set_builtin_property(caller, object, &key, value);
     }
     if let Some(property) = find(caller, object, &key, false)? {
+        // Methods are fixed at their declaration, as a static write enforces.
+        if super::is_method_slot(caller, &property.name)? {
+            return Err(crate::runtime::host::throw_host_error(
+                caller,
+                crate::runtime::host::type_error(format!(
+                    "Cannot assign to method '{}'",
+                    String::from_utf16_lossy(&key)
+                )),
+            ));
+        }
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
@@ -157,7 +174,11 @@ fn set_builtin_property(
 ) -> wasmtime::Result<()> {
     let name = String::from_utf16_lossy(key);
     let intr = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?;
-    let (array, regex) = (intr.array.clone(), intr.regex.clone());
+    let (array, uint8_array, regex) = (
+        intr.array.clone(),
+        intr.uint8_array.clone(),
+        intr.regex.clone(),
+    );
     let is_a = |caller: &mut Caller<'_, StoreData>, ty: &wasmtime::StructType| match object {
         Val::AnyRef(Some(any)) => match any.as_struct(&mut *caller)? {
             Some(st) => st.matches_ty(&*caller, ty),
@@ -165,7 +186,21 @@ fn set_builtin_property(
         },
         _ => Ok(false),
     };
-    let result = if name == "length" && is_a(caller, &array)? {
+    // `xs[i] = v` through a generic `o[k]`: in range only, as a static write.
+    // A number that is no index (`-1`, `1.5`, `NaN`) is out of range there too.
+    let number = name
+        .parse::<f64>()
+        .ok()
+        .filter(|number| crate::runtime::number::format_number_js(*number) == name);
+    let result = if let Some(index) = number
+        && is_a(caller, &array)?
+    {
+        set_array_element(caller, object, index, value)
+    } else if let Some(index) = number
+        && is_a(caller, &uint8_array)?
+    {
+        set_uint8_element(caller, object, index, value)
+    } else if name == "length" && is_a(caller, &array)? {
         let length = crate::runtime::host::read_boxed_number(caller, value, "Array#length")?;
         super::super::array::set_length(caller, object, length)
     } else if name == "lastIndex" && is_a(caller, &regex)? {
@@ -179,12 +214,98 @@ fn set_builtin_property(
     result.map_err(|error| crate::runtime::host::throw_host_error(caller, error))
 }
 
+fn set_array_element(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    index: f64,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let storage = crate::runtime::array_storage::ArrayStorage::read(caller, object)?;
+    let index = existing_element(index, storage.len, super::super::index::IndexAccess::Write)?;
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+    storage
+        .backing
+        .set(&mut *caller, index, *value)
+        .map_err(crate::runtime::host::fatal_host_error)
+}
+
+/// A byte written through a generic `o[k]` wraps as a static write does.
+fn set_uint8_element(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    index: f64,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let object = super::super::iterator::as_struct(caller, object, "Uint8Array")?;
+    let Val::AnyRef(Some(backing)) = object.field(&mut *caller, 1)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "invalid Uint8Array backing",
+        ));
+    };
+    let backing = backing.unwrap_array(&mut *caller)?;
+    let len = backing.len(&mut *caller)?;
+    let index = existing_element(index, len, super::super::index::IndexAccess::FixedWrite)?;
+    let number = crate::runtime::host::read_boxed_number(caller, value, "Uint8Array element")?;
+    fuel::charge(&mut *caller, fuel::ELEM, 1)?;
+    backing
+        .set(
+            &mut *caller,
+            index,
+            Val::I32(i32::from(crate::runtime::number::to_uint8(number))),
+        )
+        .map_err(crate::runtime::host::fatal_host_error)
+}
+
+/// `index` as the position of an element below `len`, or the `RangeError` a
+/// static write past it throws.
+fn existing_element(
+    index: f64,
+    len: u32,
+    access: super::super::index::IndexAccess,
+) -> wasmtime::Result<u32> {
+    if index.fract() != 0.0 || index < 0.0 || index >= f64::from(len) {
+        return Err(crate::runtime::host::range_error(access.message(
+            index,
+            len as usize,
+            "",
+        )));
+    }
+    Ok(index as u32)
+}
+
 pub(super) fn has(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
+    let array = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+        .array
+        .clone();
+    if super::super::collection::is_a(caller, object, &array)? {
+        let len = crate::runtime::array_storage::ArrayStorage::read(caller, object)?.len;
+        fuel::charge(&mut *caller, fuel::SCAN, key.len() as u64)?;
+        if super::integer_key(&key).is_some_and(|index| index < len)
+            || "length".encode_utf16().eq(key.iter().copied())
+        {
+            return Ok(true);
+        }
+        let regex_match = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+            .regex_match_box
+            .clone();
+        if super::super::collection::is_a(caller, object, &regex_match)?
+            && ["index", "input", "groups"]
+                .iter()
+                .any(|name| name.encode_utf16().eq(key.iter().copied()))
+        {
+            return Ok(true);
+        }
+        return super::super::member::has_builtin_member(
+            caller,
+            crate::mangle::prelude("Array").as_str(),
+            &key,
+        );
+    }
     if let Some(property) = find(caller, object, &key, false)? {
         return field_is_present(caller, &property.name, &property.value);
     }

@@ -1,1 +1,9 @@
-types: 60 of 72 tsc entries compared, 0 differ
+types: 64 of 78 tsc entries compared, 2 differ
+
+line 93: x
+  tsc:  T
+  ours: T & {}
+
+line 96: x
+  tsc:  never
+  ours: T

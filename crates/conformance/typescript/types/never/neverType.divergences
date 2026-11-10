@@ -1,1 +1,4 @@
-types: 47 of 80 tsc entries compared, 0 differ
+types: 65 of 119 tsc entries compared, 0 differ
+
+errors:
+line 42: ours: unreachable code (tsc accepts)

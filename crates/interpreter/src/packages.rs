@@ -1161,6 +1161,56 @@ pub fn render_declarations_for(defs: &PackageDeclaration, audience: DocAudience)
     out.trim_end().to_string()
 }
 
+/// Render a selected package surface, including qualified namespace members.
+pub fn render_selected_declarations(defs: &PackageDeclaration) -> String {
+    enum Part<'a> {
+        Namespace(&'a str, &'a NamespaceSymbol, usize),
+        Close(usize),
+    }
+    let defs = with_public_type_names(defs);
+    let mut top = defs.as_ref().clone();
+    // Namespace types are mirrored in the top-level map for type lookup.
+    top.types.retain(|name, _| !name.contains('.'));
+    let mut out = render_declarations_for(&top, DocAudience::Agent);
+    let mut pending: Vec<_> = defs
+        .namespaces
+        .iter()
+        .rev()
+        .map(|(name, ns)| Part::Namespace(name, ns, 0))
+        .collect();
+    while let Some(part) = pending.pop() {
+        match part {
+            Part::Close(depth) => {
+                let _ = writeln!(out, "{}}}", "  ".repeat(depth));
+            }
+            Part::Namespace(name, ns, depth) => {
+                if ns.values.is_empty() && ns.types.is_empty() && ns.namespaces.is_empty() {
+                    continue;
+                }
+                let indent = "  ".repeat(depth);
+                let _ = writeln!(out, "\n{indent}namespace {name} {{");
+                let inner = format!("{indent}  ");
+                for (name, value) in &ns.values {
+                    push_doc_for(&mut out, value_doc(&value.kind), &inner, DocAudience::Agent);
+                    render_value(&mut out, name, &value.kind, &inner);
+                }
+                for (name, symbol) in &ns.types {
+                    push_doc_for(&mut out, type_doc(&symbol.kind), &inner, DocAudience::Agent);
+                    render_type_for(&mut out, name, symbol, &inner, DocAudience::Agent);
+                }
+                pending.push(Part::Close(depth));
+                pending.extend(
+                    ns.namespaces
+                        .iter()
+                        .rev()
+                        .map(|(name, ns)| Part::Namespace(name, ns, depth + 1)),
+                );
+            }
+        }
+    }
+    out.trim().to_owned()
+}
+
 /// `defs` with each reference to a type it exports under another name, as in
 /// `export { Res as Result } from "./model"`, renamed to that public name. A
 /// reference records the name its declaring module gave the type, which the
@@ -1796,6 +1846,19 @@ fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
     .then_some("Array<string | undefined>")
 }
 
+/// The `lib.es5.d.ts` text of a built-in utility type, whose alias body is an
+/// application of itself.
+fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
+    match body {
+        Type::AliasRef {
+            mangled,
+            name: applied,
+            ..
+        } if applied == name => crate::runtime::prelude::utility_types::declaration_text(mangled),
+        _ => None,
+    }
+}
+
 /// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
@@ -1865,6 +1928,9 @@ fn render_ts_type(
                 let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
+        }
+        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
+            let _ = writeln!(out, "{indent}{export_prefix}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
             let _ = writeln!(
@@ -2185,6 +2251,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Error => "never".to_string(),
         Type::Never => "never".to_string(),
         Type::TypeVar(name) | Type::GenericParam { name, .. } => name.clone(),
+        Type::KeyOf(_) | Type::IndexedAccess { .. } => ty.to_string(),
         Type::InterfaceRef { name, args, .. }
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
@@ -2209,7 +2276,9 @@ fn ts_named_type(name: &str, args: &[Type]) -> String {
 fn ts_type_array_element(ty: &Type) -> String {
     match ty {
         Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => ts_type(ty),
-        Type::Function { .. } | Type::Union(_) | Type::Readonly(_) => format!("({})", ts_type(ty)),
+        Type::Function { .. } | Type::Union(_) | Type::Readonly(_) | Type::KeyOf(_) => {
+            format!("({})", ts_type(ty))
+        }
         _ => ts_type(ty),
     }
 }
@@ -2311,9 +2380,9 @@ fn json_package_declaration() -> PackageDeclaration {
                         rest: false,
                     },
                 ],
-                ret: Type::union(vec![Type::String, Type::Undefined]),
+                ret: Type::String,
                 type_predicate: None,
-                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string, or return undefined when it has no JSON representation. */"),
+                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string. An `undefined` or function value has no JSON text: the call throws `MissingValueError` where the result is read as `string`, and is `undefined` at a check or where the type includes `undefined`. */"),
             },
         },
     );
@@ -2424,6 +2493,9 @@ fn render_type_for(
                 let _ = writeln!(out, "{inner}{v} = \"{}\",", escape_string_literal(value));
             }
             let _ = writeln!(out, "{indent}}}\n");
+        }
+        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
+            let _ = writeln!(out, "{indent}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
             let _ = writeln!(
@@ -3452,7 +3524,7 @@ mod tests {
     fn builtin_docs_handles_json_intrinsic() {
         let docs = builtin_docs("JSON").expect("JSON built-in");
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
         ));
         assert!(docs.contains("function parse(text: string): unknown;"));
     }
@@ -3958,6 +4030,8 @@ mod tests {
             "URIError",
             "ReferenceError",
             "PermissionDeniedError",
+            "TimeoutError",
+            "MissingValueError",
         ] {
             assert!(
                 lib.contains(&format!("declare class {class} extends Error {{")),
@@ -4054,7 +4128,7 @@ mod tests {
         assert!(docs.contains("declare namespace Temporal {"));
         assert!(docs.contains("declare namespace JSON {"));
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string | undefined;"
+            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
         ));
         assert!(docs.contains("interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}"));
         assert!(docs.contains("interface IArguments {}"));
@@ -4068,7 +4142,7 @@ mod tests {
     #[test]
     fn d_ts_renderer_uses_typescript_call_and_predicate_signatures() {
         let docs = render_lib_submilli_d_ts();
-        assert!(docs.contains("(value?: number | bigint | string): number;"));
+        assert!(docs.contains("(value?: number | bigint | string | boolean): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
         assert!(!docs.contains("@call"));
     }

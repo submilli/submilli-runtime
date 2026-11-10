@@ -1,0 +1,8 @@
+noInfer.ts(39,13): error TS2345: Argument of type '"bar"' is not assignable to parameter of type '"foo"'.
+noInfer.ts(40,14): error TS2322: Type '"bar"' is not assignable to type '"foo"'.
+noInfer.ts(41,14): error TS2322: Type '"bar"' is not assignable to type '"foo"'.
+noInfer.ts(42,15): error TS2322: Type '"bar"' is not assignable to type '"foo"'.
+noInfer.ts(43,15): error TS2322: Type '"bar"' is not assignable to type '"foo"'.
+noInfer.ts(57,16): error TS2345: Argument of type '{ x: number; }' is not assignable to parameter of type '{ x: number; y: number; }'.   Property 'y' is missing in type '{ x: number; }' but required in type '{ x: number; y: number; }'.
+noInfer.ts(63,14): error TS2353: Object literal may only specify known properties, and 'y' does not exist in type '{ x: number; }'.
+noInfer.ts(70,14): error TS2345: Argument of type '{}' is not assignable to parameter of type '{ foo: number; }'.   Property 'foo' is missing in type '{}' but required in type '{ foo: number; }'.

@@ -32,11 +32,11 @@ enum TypeRegistryEntry<'a> {
 }
 
 impl<'a> TypeRegistry<'a> {
-    pub(super) fn new() -> Self {
+    pub(in crate::typechecker) fn new() -> Self {
         Self::default()
     }
 
-    pub(super) fn insert_borrowed(&mut self, sym: &'a TypeSymbol) {
+    pub(in crate::typechecker) fn insert_borrowed(&mut self, sym: &'a TypeSymbol) {
         self.variances.get_mut().clear();
         self.entries
             .insert(sym.mangled_name.clone(), TypeRegistryEntry::Borrowed(sym));

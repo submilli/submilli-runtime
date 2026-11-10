@@ -1,0 +1,135 @@
+=== constraintSatisfactionWithAny.ts ===
+// any is not a valid type argument unless there is no constraint, or the constraint is any
+
+function foo<T extends String>(x: T): T { return null; }
+>foo : <T extends String>(x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : T
+>  : ^
+
+function foo2<T extends { x: number }>(x: T): T { return null; }
+>foo2 : <T extends { x: number; }>(x: T) => T
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>x : number
+>  : ^^^^^^
+>x : T
+>  : ^
+
+//function foo3<T extends T[]>(x: T): T { return null; }
+/*pruned*/;
+let a;
+>a : any
+>  : ^^^
+
+foo(a);
+>foo(a) : String
+>       : ^^^^^^
+>foo : <T extends String>(x: T) => T
+>    : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+
+foo2(a);
+>foo2(a) : { x: number; }
+>        : ^^^^^^^^^^^^^^
+>foo2 : <T extends { x: number; }>(x: T) => T
+>     : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+
+//foo3(a);
+/**/;
+
+let b: number = null as unknown as (number);
+>b : number
+>  : ^^^^^^
+>null as unknown as (number) : number
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+/*pruned*/;
+/*pruned*/;
+//foo3<any>(b);
+/*pruned*/;
+
+//function foo5<T extends String, U extends T>(x: T, y: U): T { return null; }
+//foo5(a, a);
+//foo5<any, any>(b, b);
+
+class C<T extends String> {
+>C : C<T>
+>  : ^^^^
+>T : T
+>  : ^
+
+    constructor(public x: T) { }
+>x : T
+>  : ^
+
+}
+
+let c1 = new C(a);
+>c1 : C<String>
+>   : ^^^^^^^^^
+>new C(a) : C<String>
+>         : ^^^^^^^^^
+>C : typeof C
+>  : ^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+
+class C2<T extends { x: number }> {
+>C2 : C2<T>
+>   : ^^^^^
+>T : T
+>  : ^
+>x : number
+>  : ^^^^^^
+
+    constructor(public x: T) { }
+>x : T
+>  : ^
+
+}
+
+let c3 = new C2(a);
+>c3 : C2<{ x: number; }>
+>   : ^^^^^^^^^^^^^^^^^^
+>new C2(a) : C2<{ x: number; }>
+>          : ^^^^^^^^^^^^^^^^^^
+>C2 : typeof C2
+>   : ^^^^^^^^^
+>a : undefined
+>  : ^^^^^^^^^
+
+/*pruned*/;
+
+//class C3<T extends T[]> {
+//    constructor(public x: T) { }
+//}
+
+//var c5 = new C3(a);
+//var c6 = new C3<any>(b);
+
+/*pruned*/;
+
+
+
+/*pruned*/;
+/*pruned*/;
+
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

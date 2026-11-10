@@ -3,7 +3,9 @@
 //! `arr[i]` lowers to a raw `array.get`/`array.set`, which traps uncatchably on
 //! an out-of-range index. A trap halts the program and can't be intercepted by
 //! user `try/catch`, turning a user-controlled index into a DoS vector. Instead
-//! we range-check the index and `throw` a catchable `RangeError` on a miss,
+//! we range-check the index. A read that finds no element throws a catchable
+//! `MissingValueError` (or gives `undefined` where the typechecker typed it
+//! `T | undefined`), and a write outside the array throws `RangeError`,
 //! matching how every other runtime fault surfaces (cast mismatch, etc.).
 
 use wasm_encoder::{BlockType, Instruction, ValType};
@@ -185,6 +187,24 @@ pub(crate) fn emit_checked_index_with_length(
     receiver: &str,
     access: IndexAccess,
 ) -> Result<u32, crate::compiler_error::CompilerFailure> {
+    emit_index_in_range(emitter, len, idx_f64_local);
+    // throw unless all three hold
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.emit_if(BlockType::Empty);
+    emit_index_oob_throw(emitter, ctx, len, idx_f64_local, receiver, access)?;
+    emitter.emit_end();
+
+    let idx_local = emitter.add_anonymous_local(ValType::I32)?;
+    emitter.instruction(Instruction::LocalGet(idx_f64_local));
+    emitter.instruction(Instruction::I32TruncSatF64U);
+    emitter.instruction(Instruction::LocalSet(idx_local));
+    Ok(idx_local)
+}
+
+/// Pushes whether `idx >= 0 && idx < len && idx === Math.floor(idx)`, as an
+/// `i32`: whether a read at the `f64` index finds an element. See
+/// [`emit_checked_index`] for why the `f64` is tested.
+pub(crate) fn emit_index_in_range(emitter: &mut FunctionEmitter, len: u32, idx_f64_local: u32) {
     // idx >= 0
     emitter.instruction(Instruction::LocalGet(idx_f64_local));
     emitter.instruction(Instruction::F64Const(0.0.into()));
@@ -201,17 +221,40 @@ pub(crate) fn emit_checked_index_with_length(
     emitter.instruction(Instruction::F64Floor);
     emitter.instruction(Instruction::F64Eq);
     emitter.instruction(Instruction::I32And);
-    // throw unless all three hold
-    emitter.instruction(Instruction::I32Eqz);
-    emitter.emit_if(BlockType::Empty);
-    emit_index_oob_throw(emitter, ctx, len, idx_f64_local, receiver, access)?;
-    emitter.emit_end();
+}
 
-    let idx_local = emitter.add_anonymous_local(ValType::I32)?;
-    emitter.instruction(Instruction::LocalGet(idx_f64_local));
-    emitter.instruction(Instruction::I32TruncSatF64U);
-    emitter.instruction(Instruction::LocalSet(idx_local));
-    Ok(idx_local)
+/// With the element just read from a regex match array on the stack, throws
+/// `MissingValueError` when it is `undefined`: a group that did not take part
+/// in the match. Leaves the element on the stack otherwise.
+pub(crate) fn emit_group_participation_check(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    len: u32,
+    idx_f64_local: u32,
+    receiver: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let undefined_idx = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .map(|indices| indices.undefined)
+        .ok_or_else(|| crate::codegen::internal_failure("undefined intrinsic registered"))?;
+    let element = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalTee(element));
+    emitter.instruction(Instruction::RefTestNonNull(
+        wasm_encoder::HeapType::Concrete(undefined_idx),
+    ));
+    emitter.emit_if(BlockType::Empty);
+    emit_index_oob_throw(
+        emitter,
+        ctx,
+        len,
+        idx_f64_local,
+        receiver,
+        IndexAccess::Group,
+    )?;
+    emitter.emit_end();
+    emitter.instruction(Instruction::LocalGet(element));
+    Ok(())
 }
 
 fn emit_index_oob_throw(
@@ -232,7 +275,7 @@ fn emit_index_oob_throw(
     emit_const_string_by_text(emitter, ctx, receiver)?;
     emitter.instruction(Instruction::F64Const((access as u32 as f64).into()));
     emitter.instruction(Instruction::Call(helper));
-    // The host helper always returns Err(RangeError), never a value.
+    // The host helper always returns an error, never a value.
     emitter.instruction(Instruction::Unreachable);
     Ok(())
 }

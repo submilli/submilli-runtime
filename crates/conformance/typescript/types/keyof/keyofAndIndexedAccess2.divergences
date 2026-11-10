@@ -1,0 +1,106 @@
+types: 130 of 292 tsc entries compared, 23 differ
+
+line 22: b
+  tsc:  { [key: string]: number; }
+  ours: T
+
+line 24: b
+  tsc:  { [key: string]: number; }
+  ours: T
+
+line 28: b
+  tsc:  { [key: string]: number; }
+  ours: T & { [key: string]: number }
+
+line 29: c
+  tsc:  T
+  ours: T & { [key: string]: number }
+
+line 45: a
+  tsc:  number
+  ours: { [key: string]: number }[K]
+
+line 46: a
+  tsc:  number
+  ours: { [key: string]: number }[K]
+
+line 47: a
+  tsc:  number
+  ours: { [key: string]: number }[K]
+
+line 52: k2
+  tsc:  keyof Item
+  ours: "a" | "b"
+
+line 54: k2
+  tsc:  keyof Item
+  ours: "a" | "b"
+
+line 68: obj
+  tsc:  T
+  ours: T & Readonly<Dict>
+
+line 89: entities
+  tsc:  { [key: string]: E; [key: number]: E; }
+  ours: { [key: number]: E }
+
+line 90: ids.map(id => entities[id])
+  tsc:  { [key: string]: E; [key: number]: E; }[IdOf<E>][]
+  ours: E[]
+
+line 90: entities
+  tsc:  { [key: string]: E; [key: number]: E; }
+  ours: { [key: number]: E }
+
+line 94: entities
+  tsc:  { [key: string]: E; [key: number]: E; }
+  ours: { [key: number]: E }
+
+line 100: entities
+  tsc:  { [key: string]: E; [key: number]: E; }
+  ours: { [key: number]: E }
+
+line 123: cb
+  tsc:  (element: T["elements"][number]) => void
+  ours: (arg0: T["elements"][number]) => void
+
+line 124: cb
+  tsc:  (element: T["elements"][number]) => void
+  ours: (arg0: T["elements"][number]) => void
+
+line 124: param
+  tsc:  { elements: Array<string>; } | { elements: Array<number>; }
+  ours: T
+
+line 127: cb
+  tsc:  (element: T[number]) => void
+  ours: (arg0: T[number]) => void
+
+line 128: cb
+  tsc:  (element: T[number]) => void
+  ours: (arg0: T[number]) => void
+
+line 133: cb
+  tsc:  (element: T[number]) => void
+  ours: (arg0: T[number]) => void
+
+line 134: cb
+  tsc:  (element: T[number]) => void
+  ours: (arg0: T[number]) => void
+
+line 139: y
+  tsc:  (readonly string[])[K]
+  ours: readonly string[][K]
+
+errors:
+line 22: tsc TS2322: Type '{ [key: string]: number; }' is not assignable to type 'T'.   '{ [key: string]: number; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '{ [key: string]: number; }'. (we accept)
+line 29: tsc TS2339: Property 'x' does not exist on type 'T'. (we accept)
+line 46: ours: expected `{ [key: string]: number }[K]`, got `number` (tsc accepts)
+line 84: ours: duplicate string index signature (tsc accepts)
+line 90: ours: index key `IdOf<E>` does not satisfy `number` (tsc accepts)
+line 100: ours: index key `IdOf<E>` does not satisfy `number` (tsc accepts)
+line 124: ours: expected `T["elements"][number]`, got `number | string` (tsc accepts)
+line 128: ours: expected `T[number]`, got `string` (tsc accepts)
+line 134: ours: expected `T[number]`, got `string` (tsc accepts)
+line 138: ours: expected `string[][K]`, got `string` (tsc accepts)
+line 139: ours: expected `readonly string[][K]`, got `string` (tsc accepts)

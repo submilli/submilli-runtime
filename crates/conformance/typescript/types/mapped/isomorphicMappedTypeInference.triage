@@ -1,0 +1,2 @@
+line 102 type: bug SUB-2153 inferring `T` from an object literal against `{ [x: string]: T }` keeps only the first property's type
+line 102 extra: bug SUB-2153 inferring `T` from an object literal against `{ [x: string]: T }` keeps only the first property's type

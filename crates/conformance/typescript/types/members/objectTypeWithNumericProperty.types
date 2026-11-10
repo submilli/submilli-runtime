@@ -1,0 +1,221 @@
+=== objectTypeWithNumericProperty.ts ===
+// no errors here
+
+class C {
+>C : C
+>  : ^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    1.1: string;
+>1.1 : string
+>    : ^^^^^^
+
+}
+
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+/*pruned*/;
+
+interface I {
+>I : I
+>  : ^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    1.1: string;
+>1.1 : string
+>    : ^^^^^^
+
+}
+
+let i: I = null as unknown as (I);
+>i : I
+>  : ^
+>null as unknown as (I) : I
+>                       : ^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let r1_2 = i[1];
+>r1_2 : number
+>     : ^^^^^^
+>i[1] : number
+>     : ^^^^^^
+>i : I
+>  : ^
+>1 : 1
+>  : ^
+
+let r2_2 = i[1.1];
+>r2_2 : string
+>     : ^^^^^^
+>i[1.1] : string
+>       : ^^^^^^
+>i : I
+>  : ^
+>1.1 : 1.1
+>    : ^^^
+
+let r3_2 = i['1'];
+>r3_2 : number
+>     : ^^^^^^
+>i['1'] : number
+>       : ^^^^^^
+>i : I
+>  : ^
+>'1' : "1"
+>    : ^^^
+
+let r4_2 = i['1.1'];
+>r4_2 : string
+>     : ^^^^^^
+>i['1.1'] : string
+>         : ^^^^^^
+>i : I
+>  : ^
+>'1.1' : "1.1"
+>      : ^^^^^
+
+
+let a: {
+>a : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    1.1: string;
+>1.1 : string
+>    : ^^^^^^
+
+} = null as unknown as ({
+>null as unknown as ({     1: number;     1.1: string; }) : { 1: number; 1.1: string; }
+>                                                         : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    1.1: string;
+>1.1 : string
+>    : ^^^^^^
+
+});
+
+let r1_3 = a[1];
+>r1_3 : number
+>     : ^^^^^^
+>a[1] : number
+>     : ^^^^^^
+>a : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let r2_3 = a[1.1];
+>r2_3 : string
+>     : ^^^^^^
+>a[1.1] : string
+>       : ^^^^^^
+>a : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1.1 : 1.1
+>    : ^^^
+
+let r3_3 = a['1'];
+>r3_3 : number
+>     : ^^^^^^
+>a['1'] : number
+>       : ^^^^^^
+>a : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'1' : "1"
+>    : ^^^
+
+let r4_3 = a['1.1'];
+>r4_3 : string
+>     : ^^^^^^
+>a['1.1'] : string
+>         : ^^^^^^
+>a : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'1.1' : "1.1"
+>      : ^^^^^
+
+
+let b = {
+>b : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>{     1: 1,     1.1: "" } : { 1: number; 1.1: string; }
+>                          : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    1: 1,
+>1 : number
+>  : ^^^^^^
+>1 : 1
+>  : ^
+
+    1.1: ""
+>1.1 : string
+>    : ^^^^^^
+>"" : ""
+>   : ^^
+
+}
+
+let r1_4 = b[1];
+>r1_4 : number
+>     : ^^^^^^
+>b[1] : number
+>     : ^^^^^^
+>b : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1 : 1
+>  : ^
+
+let r2_4 = b[1.1];
+>r2_4 : string
+>     : ^^^^^^
+>b[1.1] : string
+>       : ^^^^^^
+>b : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>1.1 : 1.1
+>    : ^^^
+
+let r3_4 = b['1'];
+>r3_4 : number
+>     : ^^^^^^
+>b['1'] : number
+>       : ^^^^^^
+>b : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'1' : "1"
+>    : ^^^
+
+let r4_4 = b['1.1'];
+>r4_4 : string
+>     : ^^^^^^
+>b['1.1'] : string
+>         : ^^^^^^
+>b : { 1: number; 1.1: string; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>'1.1' : "1.1"
+>      : ^^^^^
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

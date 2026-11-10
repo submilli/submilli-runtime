@@ -1,0 +1,91 @@
+=== typeParameterIndirectlyConstrainedToItself.ts ===
+class C<U extends T, T extends U> { }
+>C : C<U, T>
+>  : ^^^^^^^
+>U : U
+>  : ^
+>T : T
+>  : ^
+
+class C2<T extends U, U extends V, V extends T> { }
+>C2 : C2<T, U, V>
+>   : ^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+
+
+interface I<U extends T, T extends U> { }
+>I : I<U, T>
+>  : ^^^^^^^
+>U : U
+>  : ^
+>T : T
+>  : ^
+
+interface I2<T extends U, U extends V, V extends T> { }
+>I2 : I2<T, U, V>
+>   : ^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+
+
+function f<U extends T, T extends U>(): void { }
+>f : <U, T>() => void
+>  : ^^^^^^^^^^^^^^^^
+>U : U
+>  : ^
+>T : T
+>  : ^
+
+function f2<T extends U, U extends V, V extends T>(): void { }
+>f2 : <T, U, V>() => void
+>   : ^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>U : U
+>  : ^
+>V : V
+>  : ^
+
+
+/**/;
+
+
+
+
+
+
+
+/*pruned*/;
+/*pruned*/;
+
+class D<U extends T, T extends V, V extends T> { }
+>D : D<U, T, V>
+>  : ^^^^^^^^^^
+>U : U
+>  : ^
+>T : T
+>  : ^
+>V : V
+>  : ^
+
+
+// Repro from #25740
+
+/*pruned*/;
+/*pruned*/;
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

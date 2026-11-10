@@ -148,6 +148,9 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
             ty: Box::new(erase_generic_params(ty)),
         },
         Type::GenericParam { name, .. } => Type::TypeVar(name.clone()),
+        Type::KeyOf(_) | Type::IndexedAccess { .. } => {
+            crate::type_size::map_children_infallible(ty, erase_generic_params)
+        }
         Type::Object { fields, index } => Type::Object {
             index: index.as_ref().map(|i| i.map_types(erase_generic_params)),
             fields: fields
@@ -353,10 +356,7 @@ pub(super) fn erase_generic_params_in_stmt(stmt: &mut TypedStmt) {
 /// erased union (`T | null` and friends), and `unknown` — mirrors the
 /// `needs_box` shape used for the non-generic-method return path.
 fn return_erases_to_object_slot(ret: &Type) -> bool {
-    matches!(
-        ret.peel(),
-        Type::TypeVar(_) | Type::Unknown | Type::Union(_)
-    )
+    ret.lowers_to_erased_slot() || matches!(ret.peel(), Type::Unknown | Type::Union(_))
 }
 
 impl Inferer<'_> {
@@ -966,7 +966,7 @@ impl Inferer<'_> {
         self.record_generic_call_arguments(&typed_args, &sig.params, &sig.ret, type_args.is_some());
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
-        let any_generic_arg = sig.params.iter().any(|p| matches!(p.ty, Type::TypeVar(_)));
+        let any_generic_arg = sig.params.iter().any(|p| p.ty.lowers_to_erased_slot());
         // The wrapper erases any TypeVar-mentioning return to `$Object`, so the
         // substituted result needs a cast back to its static shape — not only a
         // bare `V`, but also `V | null` and other erased unions (their object
@@ -978,7 +978,7 @@ impl Inferer<'_> {
                 .zip(sig.params.iter())
                 .map(|(expr, p)| crate::GenericArgument {
                     expr,
-                    is_generic: matches!(p.ty, Type::TypeVar(_)),
+                    is_generic: p.ty.lowers_to_erased_slot(),
                 })
                 .collect();
             let return_cast = if object_assign && result_ty.is_structural_object() {
@@ -1364,9 +1364,10 @@ impl Inferer<'_> {
             }
             let error_span = close_match.argument_span.unwrap_or(span);
             let (expected, got) = self.close_match_mismatch(sub, close_match);
-            self.error_with_help(
+            self.error_type_mismatch(
                 error_span,
-                format!("expected `{expected}`, got `{got}`"),
+                &expected,
+                &got,
                 self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
             );
             reported.push(error_span);
@@ -1399,13 +1400,29 @@ impl Inferer<'_> {
 
     /// `ty` with `sub` applied, at a call site at `span`.
     fn instantiate(
-        &self,
+        &mut self,
         sub: &TypeParamSubstitution,
         ty: &Type,
         span: Span,
     ) -> Result<Type, CompilerFailure> {
-        sub.apply(ty, &self.type_limits)
-            .map_err(type_limit_at(span))
+        let applied = sub
+            .apply(ty, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        self.normalize_at(&applied, span)
+    }
+
+    /// [`utility_types::normalize`](super::utility_types::normalize), reporting
+    /// at `span` each form the instantiation leaves with no evaluation, such
+    /// as `Partial<Uint8Array>`.
+    pub(super) fn normalize_at(&mut self, ty: &Type, span: Span) -> Result<Type, CompilerFailure> {
+        let mut failures = Vec::new();
+        let normalized =
+            super::utility_types::normalize_reporting(ty, self.resolver(), &mut failures)
+                .map_err(type_limit_at(span))?;
+        for failure in failures {
+            self.error(span, failure);
+        }
+        Ok(normalized)
     }
 
     /// Bind type parameters from the annotated parameters of a function
@@ -2387,6 +2404,12 @@ impl Inferer<'_> {
     ) -> Result<(), CompilerFailure> {
         for check in checks {
             let param = sub.apply_or_record(&check.param_ty, &self.type_limits);
+            let param = super::utility_types::normalize(&param, self.resolver()).unwrap_or_else(
+                |exceeded| {
+                    self.type_limits.record(exceeded);
+                    Type::Error
+                },
+            );
             if super::expr::type_contains_type_var(&param) {
                 continue;
             }
@@ -2417,11 +2440,7 @@ impl Inferer<'_> {
             }
             let help =
                 self.render_help_list(super::type_diff::type_mismatch_help(&param, &check.arg_ty));
-            self.error_with_help(
-                span,
-                format!("expected `{param}`, got `{}`", check.arg_ty),
-                help,
-            );
+            self.error_type_mismatch(span, &param, &check.arg_ty, help);
         }
         Ok(())
     }
@@ -2449,6 +2468,13 @@ impl Inferer<'_> {
             Some(loose) => loose.apply_or_record(param_ty, &self.type_limits),
             None => sub.apply_or_record(param_ty, &self.type_limits),
         };
+        // A hint `T[K]` with `T` and `K` bound is the property's type, so a
+        // callback argument takes its parameters from it.
+        let hint =
+            super::utility_types::normalize(&hint, self.resolver()).unwrap_or_else(|exceeded| {
+                self.type_limits.record(exceeded);
+                Type::Error
+            });
         let diagnostics_before = self.diagnostics.len();
         let errors_before = self.error_count();
         let first = self.infer_generic_argument_with(arg_id, param_ty, hint, arguments, sub)?;
@@ -2540,6 +2566,9 @@ impl Inferer<'_> {
         self.fields_keeping_returned_literals = enclosing_fields;
         self.arguments_with_replaceable_hints.remove(&arg_id);
         let (typed_id, arg_ty) = inferred?;
+        // A parameter whose type, as instantiated so far, names `undefined`
+        // takes a missing value: `x?: T`, or `T` bound to `V | undefined`.
+        self.absorb_missing_into(typed_id, &hint)?;
         if keeps_literal {
             self.record_kept_literal_argument(typed_id);
         }
@@ -2897,11 +2926,7 @@ impl Inferer<'_> {
                 help.extend(
                     self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
                 );
-                self.error_with_help(
-                    arg_span,
-                    super::diagnostics::mismatch_message(&expected, &got),
-                    help,
-                );
+                self.error_type_mismatch(arg_span, &expected, &got, help);
             }
         };
         Ok(())
@@ -3223,7 +3248,7 @@ impl Inferer<'_> {
             .zip(params.iter())
             .map(|(expr, p)| crate::GenericArgument {
                 expr,
-                is_generic: matches!(p.ty, Type::TypeVar(_)),
+                is_generic: p.ty.lowers_to_erased_slot(),
             })
             .collect();
         let return_cast = if return_erases_to_object_slot(&ret) {
@@ -3318,7 +3343,10 @@ impl LiteralTypeArguments {
         let mut sole = Vec::new();
         let mut widened = Vec::new();
         for name in inferred_generics {
-            if constraints.get(name).is_some_and(literal_constraint) {
+            if constraints
+                .get(name)
+                .is_some_and(|bound| literal_constraint(bound, constraints))
+            {
                 kept.push(name.clone());
                 continue;
             }
@@ -3376,7 +3404,7 @@ impl LiteralTypeArguments {
     }
 }
 
-fn literal_constraint(ty: &Type) -> bool {
+fn literal_constraint(ty: &Type, constraints: &BTreeMap<String, Type>) -> bool {
     match ty.peel() {
         Type::String
         | Type::Number
@@ -3387,9 +3415,37 @@ fn literal_constraint(ty: &Type) -> bool {
         | Type::BooleanLiteral(_)
         | Type::BigIntLiteral(_)
         | Type::TemplateLiteral { .. } => true,
-        Type::Union(members) => members.iter().any(literal_constraint),
-        _ => false,
+        Type::Union(members) => members
+            .iter()
+            .any(|member| literal_constraint(member, constraints)),
+        // `V extends T["kind"]` with `T extends { kind: "a" | "b" }` keeps
+        // `"a"`, as the property's constraint is primitive.
+        Type::IndexedAccess { object, index } => constraint_property(object, index, constraints)
+            .is_some_and(|property| literal_constraint(&property, constraints)),
+        // `K extends keyof T` (or `Extract<keyof T, string>`) keeps `"a"` a
+        // literal, as in tsc.
+        bound => super::constraint_literals::literal_bound(bound),
     }
+}
+
+/// The property `object[index]` names in `object`'s declared bound, when
+/// `object` is a type parameter of the call bounded by an object type and
+/// `index` a literal key.
+fn constraint_property(
+    object: &Type,
+    index: &Type,
+    constraints: &BTreeMap<String, Type>,
+) -> Option<Type> {
+    let Type::TypeVar(name) = object.peel() else {
+        return None;
+    };
+    let Type::Object { fields, .. } = constraints.get(name)?.peel() else {
+        return None;
+    };
+    let Type::StringLiteral(key) = index.peel() else {
+        return None;
+    };
+    fields.get(key).map(|field| field.ty.clone())
 }
 
 /// A concrete union arm offers only a fallback candidate. Constrained

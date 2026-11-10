@@ -1,1 +1,33 @@
-types: 46 of 140 tsc entries compared, 0 differ
+types: 69 of 187 tsc entries compared, 8 differ
+
+line 69: carrier
+  tsc:  WithoutError<Data>
+  ours: DataCarrier<Data> & WithoutError<Data>
+
+line 70: carrier
+  tsc:  WithoutError<Data>
+  ours: DataCarrier<Data> & WithoutError<Data>
+
+line 72: carrier
+  tsc:  WithError
+  ours: DataCarrier<Data> & WithError
+
+line 73: carrier
+  tsc:  WithError
+  ours: DataCarrier<Data> & WithError
+
+line 83: foo
+  tsc:  { tag: true; x: number; } | { [x: string]: string; }
+  ours: Foo
+
+line 86: foo
+  tsc:  { tag: false; y: number; } | { [x: string]: string; }
+  ours: Foo
+
+line 92: foo
+  tsc:  { tag: true; x: number; }
+  ours: Foo
+
+line 95: foo
+  tsc:  { tag: false; y: number; } | { [x: string]: string; }
+  ours: Foo

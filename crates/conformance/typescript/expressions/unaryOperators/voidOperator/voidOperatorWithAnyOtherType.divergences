@@ -1,0 +1,13 @@
+types: 39 of 52 tsc entries compared, 3 differ
+
+line 6: ANY1
+  tsc:  any
+  ours: unknown
+
+line 28: ANY1
+  tsc:  any
+  ours: undefined
+
+line 58: ANY1
+  tsc:  any
+  ours: undefined

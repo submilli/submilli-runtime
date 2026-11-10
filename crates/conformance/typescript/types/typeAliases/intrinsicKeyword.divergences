@@ -1,0 +1,8 @@
+types: 6 of 31 tsc entries compared, 1 differ
+
+line 22: s1
+  tsc:  string
+  ours: intrinsic
+
+errors:
+line 7: tsc TS2795: The 'intrinsic' keyword can only be used to declare compiler provided intrinsic types. (we accept)

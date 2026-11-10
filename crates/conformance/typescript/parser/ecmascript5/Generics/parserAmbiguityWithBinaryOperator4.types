@@ -1,0 +1,32 @@
+=== parserAmbiguityWithBinaryOperator4.ts ===
+function g(): void {
+>g : () => void
+>  : ^^^^^^^^^^
+
+    let a, b, c;
+>a : any
+>  : ^^^
+>b : any
+>  : ^^^
+>c : any
+>  : ^^^
+
+    if (a<b, b>(c + 1)) { }
+>a<b, b>(c + 1) : any
+>               : ^^^
+>a : undefined
+>  : ^^^^^^^^^
+>c + 1 : any
+>      : ^^^
+>c : undefined
+>  : ^^^^^^^^^
+>1 : 1
+>  : ^
+
+}
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

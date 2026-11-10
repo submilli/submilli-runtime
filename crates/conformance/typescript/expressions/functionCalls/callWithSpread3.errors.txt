@@ -1,0 +1,9 @@
+callWithSpread3.ts(15,10): error TS2554: Expected 2 arguments, but got 3.
+callWithSpread3.ts(16,15): error TS2554: Expected 2 arguments, but got 5.
+callWithSpread3.ts(17,15): error TS2554: Expected 2 arguments, but got 5.
+callWithSpread3.ts(18,15): error TS2554: Expected 2 arguments, but got 6.
+callWithSpread3.ts(19,12): error TS2554: Expected 2 arguments, but got 3.
+callWithSpread3.ts(20,5): error TS2554: Expected 2 arguments, but got 3.
+callWithSpread3.ts(21,6): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+callWithSpread3.ts(23,6): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.
+callWithSpread3.ts(24,6): error TS2556: A spread argument must either have a tuple type or be passed to a rest parameter.

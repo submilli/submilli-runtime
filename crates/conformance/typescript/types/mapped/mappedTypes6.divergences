@@ -1,0 +1,29 @@
+types: 69 of 161 tsc entries compared, 7 differ
+
+line 30: y
+  tsc:  T
+  ours: Required<T>
+
+line 34: z
+  tsc:  Partial<T>
+  ours: T
+
+line 96: { a: 1 }
+  tsc:  { a: number; }
+  ours: { a: number; c?: number; d?: number | undefined }
+
+line 103: x1
+  tsc:  Foo
+  ours: { a: number; b: number | undefined; c?: number; d?: number | undefined }
+
+line 104: x1
+  tsc:  Foo
+  ours: { a: number; b: number | undefined; c?: number; d?: number | undefined }
+
+line 105: x1
+  tsc:  Foo
+  ours: { a: number; b: number | undefined; c?: number; d?: number | undefined }
+
+line 106: x1
+  tsc:  Foo
+  ours: { a: number; b: number | undefined; c?: number; d?: number | undefined }

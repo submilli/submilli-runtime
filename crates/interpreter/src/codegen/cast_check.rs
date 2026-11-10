@@ -580,6 +580,17 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
         }
+        // `keyof T`, `T[K]` and a utility over `T` are erased like `T`, with no
+        // descriptor of their own to test against (casts to them are rejected
+        // at typecheck, SUB-2152), so a read guard over one admits the value.
+        // So does one codegen instantiated (`Partial<{ a: number }>` for a
+        // generic class's field): it has no type table to evaluate it with.
+        operator
+            if operator.is_utility_application()
+                || matches!(operator, Type::KeyOf(_) | Type::IndexedAccess { .. }) =>
+        {
+            emitter.instruction(Instruction::I32Const(1));
+        }
         // Recursion back-edge: delegate to the alias's generated validator, which
         // re-enters this test on the alias body. Terminates on the finite value.
         Type::AliasRef { .. } => {

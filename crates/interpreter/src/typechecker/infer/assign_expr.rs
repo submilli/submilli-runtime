@@ -58,6 +58,21 @@ impl Inferer<'_> {
         Ok((TypedExprKind::Sequence { stmts, result }, ty))
     }
 
+    /// [`Self::narrowing_source_ty`] of the expression `id`, `expr`. A read
+    /// widened with `undefined` where it may find no value narrows from its
+    /// written type, as in tsc: the check that widened it already handles a
+    /// missing value, so `undefined` doesn't reach the narrowed branches.
+    pub(super) fn narrowing_source_ty_at(
+        &self,
+        id: crate::ExprId,
+        expr: &TypedExpr,
+    ) -> Result<Type, crate::compiler_error::CompilerFailure> {
+        match self.typed_ast.widened_missing_reads.get(&id) {
+            Some(written) => Ok(written.clone()),
+            None => self.narrowing_source_ty(expr),
+        }
+    }
+
     /// The type a condition narrows from when it tests `expr`. An assignment
     /// used as a value has the value's type, as TypeScript gives it, but the
     /// narrowing lands on the binding, which a `readonly` declaration keeps
@@ -274,6 +289,20 @@ impl Inferer<'_> {
             span,
         };
         self.record_held_value(name.name.clone(), expr);
+        // A missing read the assignment took passes through as it is: the
+        // temporary's reads are checks, and one typed with a type parameter
+        // keeps a present flag for the target to copy.
+        let widened = self.typed_ast.widened_missing_reads.get(&expr).cloned();
+        if widened.is_some() && ty.has_type_parameter_member() {
+            // No read of the temporary throws, so it needs no message.
+            self.typed_ast
+                .maybe_missing_locals
+                .entry(name.span)
+                .or_insert(crate::MaybeMissingLocal {
+                    message: String::new(),
+                    has_present_flag: true,
+                });
+        }
         stmts.push(self.push_typed_stmt(
             TypedStmtKind::Const {
                 name: name.clone(),
@@ -283,7 +312,8 @@ impl Inferer<'_> {
             },
             span,
         )?);
-        self.typed_ast
+        let read = self
+            .typed_ast
             .try_push_expr(TypedExpr {
                 kind: TypedExprKind::LocalRef {
                     ident: name,
@@ -292,7 +322,11 @@ impl Inferer<'_> {
                 span,
                 ty,
             })
-            .map_err(crate::typechecker::arena_failure)
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(written) = widened {
+            self.typed_ast.widened_missing_reads.insert(read, written);
+        }
+        Ok(read)
     }
 
     pub(super) fn reread_temp(
@@ -304,9 +338,14 @@ impl Inferer<'_> {
             .try_expr(held)
             .map_err(crate::typechecker::arena_failure)?
             .clone();
-        self.typed_ast
+        let reread = self
+            .typed_ast
             .try_push_expr(read)
-            .map_err(crate::typechecker::arena_failure)
+            .map_err(crate::typechecker::arena_failure)?;
+        if let Some(written) = self.typed_ast.widened_missing_reads.get(&held).cloned() {
+            self.typed_ast.widened_missing_reads.insert(reread, written);
+        }
+        Ok(reread)
     }
 
     /// A compound assignment's value reads the target through the same

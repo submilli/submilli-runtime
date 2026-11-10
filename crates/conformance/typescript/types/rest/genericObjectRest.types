@@ -1,0 +1,130 @@
+=== genericObjectRest.ts ===
+
+const a = 'a';
+>a : "a"
+>  : ^^^
+>'a' : "a"
+>    : ^^^
+
+
+function f1<T extends { a: string, b: number }>(obj: T): void {
+>f1 : <T extends { a: string; b: number; }>(obj: T) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>a : string
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>obj : T
+>    : ^
+
+    let { ...r0 } = obj;
+>r0 : T
+>   : ^
+>obj : T
+>    : ^
+
+    let { a: a1, ...r1 } = obj;
+>a : any
+>  : ^^^
+>a1 : string
+>   : ^^^^^^
+>r1 : Omit<T, "a">
+>   : ^^^^^^^^^^^^
+>obj : T
+>    : ^
+
+    let { a: a2, b: b2, ...r2 } = obj;
+>a : any
+>  : ^^^
+>a2 : string
+>   : ^^^^^^
+>b : any
+>  : ^^^
+>b2 : number
+>   : ^^^^^^
+>r2 : Omit<T, "a" | "b">
+>   : ^^^^^^^^^^^^^^^^^^
+>obj : T
+>    : ^
+
+    /*pruned*/;
+    /*pruned*/;
+    /*pruned*/;
+}
+
+const sa = Symbol();
+>sa : unique symbol
+>   : ^^^^^^^^^^^^^
+>Symbol() : unique symbol
+>         : ^^^^^^^^^^^^^
+>Symbol : SymbolConstructor
+>       : ^^^^^^^^^^^^^^^^^
+
+const sb = Symbol();
+>sb : unique symbol
+>   : ^^^^^^^^^^^^^
+>Symbol() : unique symbol
+>         : ^^^^^^^^^^^^^
+>Symbol : SymbolConstructor
+>       : ^^^^^^^^^^^^^^^^^
+
+
+/*pruned*/;
+
+
+
+function f3<T, K1 extends keyof T, K2 extends keyof T>(obj: T, k1: K1, k2: K2): void {
+>f3 : <T, K1 extends keyof T, K2 extends keyof T>(obj: T, k1: K1, k2: K2) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>T : T
+>  : ^
+>K1 : K1
+>   : ^^
+>K2 : K2
+>   : ^^
+>obj : T
+>    : ^
+>k1 : K1
+>   : ^^
+>k2 : K2
+>   : ^^
+
+    /*pruned*/;
+}
+
+type Item = { a: string, b: number, c: boolean };
+>Item : Item
+>     : ^^^^
+>a : string
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : boolean
+>  : ^^^^^^^
+
+
+function f4<K1 extends keyof Item, K2 extends keyof Item>(obj: Item, k1: K1, k2: K2): void {
+>f4 : <K1 extends keyof Item, K2 extends keyof Item>(obj: Item, k1: K1, k2: K2) => void
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>K1 : K1
+>   : ^^
+>K2 : K2
+>   : ^^
+>obj : Item
+>    : ^^^^
+>k1 : K1
+>   : ^^
+>k2 : K2
+>   : ^^
+
+    /*pruned*/;
+}
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

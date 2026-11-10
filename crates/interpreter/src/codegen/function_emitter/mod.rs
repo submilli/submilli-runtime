@@ -97,6 +97,26 @@ pub struct FunctionEmitter<'a> {
     /// parameter or pattern cell a default can observe, or a capture that may
     /// be one. Every other cell is initialized when it is created.
     pub(super) uninitialized_cells: HashSet<u32>,
+    /// Slots of the locals that hold a read which may have found no value.
+    /// See `typechecker::infer::missing_reads`.
+    pub(super) maybe_missing_slots: HashMap<u32, MaybeMissingSlot>,
+    /// While the value of a local with a present flag is emitted: that value's
+    /// node and the flag, which that read is asked to set (see
+    /// `emit_value_with_present_flag`).
+    pub(super) present_flag_request: Option<(ExprId, u32)>,
+}
+
+/// A local holding a read that may have found no value.
+#[derive(Clone)]
+pub(super) struct MaybeMissingSlot {
+    /// The message a read of it at `T` throws when the value is missing.
+    pub(super) message: String,
+    /// Its storage, `T | undefined`, which also keys its box when boxed.
+    pub(super) storage: Type,
+    /// For a local typed with a type parameter, whose instantiation may hold
+    /// `undefined`, an i32 local that is 1 when the value was found: the
+    /// value alone can't tell a missing read from a present `undefined`.
+    pub(super) present_flag: Option<u32>,
 }
 
 /// A name's two slots. `declared` is the binding's storage — the slot every
@@ -204,6 +224,8 @@ impl<'a> FunctionEmitter<'a> {
             parameter_input_slots: BTreeMap::new(),
             uninitialized_parameters: HashSet::new(),
             parameter_binding_cells: HashMap::new(),
+            maybe_missing_slots: HashMap::new(),
+            present_flag_request: None,
             uninitialized_cells: HashSet::new(),
             cast_diagnostic: None,
         };
@@ -359,6 +381,14 @@ impl<'a> FunctionEmitter<'a> {
             .expect("emitter retains its root scope");
         scope.define(name.to_string(), index, ty);
         Ok(())
+    }
+
+    /// The present flag of the local in `slot`, when it holds a maybe-missing
+    /// read typed with a type parameter.
+    pub(super) fn present_flag(&self, slot: u32) -> Option<u32> {
+        self.maybe_missing_slots
+            .get(&slot)
+            .and_then(|local| local.present_flag)
     }
 
     /// Record the shadow an assignment's narrowing just took. Narrowed reads

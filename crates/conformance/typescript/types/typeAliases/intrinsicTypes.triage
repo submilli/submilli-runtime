@@ -1,0 +1,3 @@
+line 44, 46, 47 type: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`s = y` on line 43, `x = y` on line 45)
+line 44, 46, 47 missed: by-design spec §1.6 after an assignment the variable has the assigned value's type, where tsc keeps the declared one (`s = y` on line 43, `x = y` on line 45)
+line 51 type: artifact tsc reads `x` at its bound under a literal-union annotation; we keep `Uppercase<T>`

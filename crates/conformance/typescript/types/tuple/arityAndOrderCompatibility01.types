@@ -1,0 +1,216 @@
+=== arityAndOrderCompatibility01.ts ===
+interface StrNum extends Array<string|number> {
+>StrNum : StrNum
+>       : ^^^^^^
+
+    0: string;
+>0 : string
+>  : ^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    length: 2;
+>length : 2
+>       : ^
+
+}
+
+let x: [string, number] = null as unknown as ([string, number]);
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+>null as unknown as ([string, number]) : [string, number]
+>                                      : ^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let y: StrNum = null as unknown as (StrNum);
+>y : StrNum
+>  : ^^^^^^
+>null as unknown as (StrNum) : StrNum
+>                            : ^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+let z: {
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    0: string;
+>0 : string
+>  : ^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    length: 2;
+>length : 2
+>       : ^
+
+} = null as unknown as ({
+>null as unknown as ({     0: string;     1: number;     length: 2; }) : { 0: string; 1: number; length: 2; }
+>                                                                      : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>null as unknown : unknown
+>                : ^^^^^^^
+
+    0: string;
+>0 : string
+>  : ^^^^^^
+
+    1: number;
+>1 : number
+>  : ^^^^^^
+
+    length: 2;
+>length : 2
+>       : ^
+
+});
+
+let [a, b, c] = x;
+>a : string
+>  : ^^^^^^
+>b : number
+>  : ^^^^^^
+>c : undefined
+>  : ^^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let [d, e, f] = y;
+>d : string
+>  : ^^^^^^
+>e : number
+>  : ^^^^^^
+>f : string | number
+>  : ^^^^^^^^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let [g, h, i] = z;
+>g : any
+>  : ^^^
+>h : any
+>  : ^^^
+>i : any
+>  : ^^^
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let j1: [number, number, number] = x;
+>j1 : [number, number, number]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let j2: [number, number, number] = y;
+>j2 : [number, number, number]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let j3: [number, number, number] = z;
+>j3 : [number, number, number]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let k1: [string, number, number] = x;
+>k1 : [string, number, number]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let k2: [string, number, number] = y;
+>k2 : [string, number, number]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let k3: [string, number, number] = z;
+>k3 : [string, number, number]
+>   : ^^^^^^^^^^^^^^^^^^^^^^^^
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let l1: [number] = x;
+>l1 : [number]
+>   : ^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let l2: [number] = y;
+>l2 : [number]
+>   : ^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let l3: [number] = z;
+>l3 : [number]
+>   : ^^^^^^^^
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let m1: [string] = x;
+>m1 : [string]
+>   : ^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let m2: [string] = y;
+>m2 : [string]
+>   : ^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let m3: [string] = z;
+>m3 : [string]
+>   : ^^^^^^^^
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let n1: [number, string] = x;
+>n1 : [number, string]
+>   : ^^^^^^^^^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let n2: [number, string] = y;
+>n2 : [number, string]
+>   : ^^^^^^^^^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let n3: [number, string] = z;
+>n3 : [number, string]
+>   : ^^^^^^^^^^^^^^^^
+>z : { 0: string; 1: number; length: 2; }
+>  : ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+let o1: [string, number] = x;
+>o1 : [string, number]
+>   : ^^^^^^^^^^^^^^^^
+>x : [string, number]
+>  : ^^^^^^^^^^^^^^^^
+
+let o2: [string, number] = y;
+>o2 : [string, number]
+>   : ^^^^^^^^^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+let o3: [string, number] = y;
+>o3 : [string, number]
+>   : ^^^^^^^^^^^^^^^^
+>y : StrNum
+>  : ^^^^^^
+
+
+
+function main(): void {}
+>main : () => void
+>     : ^^^^^^^^^^
+
+

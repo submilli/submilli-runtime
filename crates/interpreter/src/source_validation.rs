@@ -567,6 +567,10 @@ impl<'a> Validator<'a> {
                 | TypeAnnotationKind::Optional(inner)
                 | TypeAnnotationKind::Readonly(inner)
                 | TypeAnnotationKind::KeyOf(inner) => self.annotation(inner)?,
+                TypeAnnotationKind::IndexedAccess { object, index } => {
+                    self.annotation(object)?;
+                    self.annotation(index)?;
+                }
                 TypeAnnotationKind::TemplateLiteral {
                     parts,
                     substitutions,

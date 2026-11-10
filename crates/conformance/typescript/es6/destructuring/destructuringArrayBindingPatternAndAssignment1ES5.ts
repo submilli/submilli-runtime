@@ -22,8 +22,8 @@
 // V is an array assignment pattern, S is the type Any or an array-like type (section 3.3.2), and, for each assignment element E in V,
 //      S is the type Any, or
 
-/*pruned*/;              
-/*pruned*/;                          
+/*pruned*/;                   
+/*pruned*/;                               
 
 // V is an array assignment pattern, S is the type Any or an array-like type (section 3.3.2), and, for each assignment element E in V,
 //      S is a tuple- like type (section 3.3.3) with a property named N of a type that is assignable to the target given in E,

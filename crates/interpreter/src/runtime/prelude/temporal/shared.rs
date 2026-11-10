@@ -1005,6 +1005,65 @@ pub(super) fn reg_plain_month_code_getter(
     )
 }
 
+/// The prelude interface of a Temporal value (`Temporal#PlainDate`), told
+/// apart by its vtable, as classes of one layout share a struct type.
+pub(crate) fn temporal_interface(
+    caller: &mut Caller<'_, StoreData>,
+    object: &wasmtime::Rooted<StructRef>,
+) -> wasmtime::Result<Option<MangledName>> {
+    let Some(abi) = caller
+        .data()
+        .host_abi
+        .as_ref()
+        .map(|abi| abi.temporal.clone())
+    else {
+        return Ok(None);
+    };
+    let classes = [
+        (&abi.instant, &abi.instant_vtable, "Instant"),
+        (&abi.duration, &abi.duration_vtable, "Duration"),
+        (
+            &abi.zoned_date_time,
+            &abi.zoned_date_time_vtable,
+            "ZonedDateTime",
+        ),
+        (&abi.plain_date, &abi.plain_date_vtable, "PlainDate"),
+        (&abi.plain_time, &abi.plain_time_vtable, "PlainTime"),
+        (
+            &abi.plain_date_time,
+            &abi.plain_date_time_vtable,
+            "PlainDateTime",
+        ),
+        (
+            &abi.plain_year_month,
+            &abi.plain_year_month_vtable,
+            "PlainYearMonth",
+        ),
+        (
+            &abi.plain_month_day,
+            &abi.plain_month_day_vtable,
+            "PlainMonthDay",
+        ),
+    ];
+    for (ty, vtable, name) in classes {
+        if !object.matches_ty(&*caller, ty)? {
+            continue;
+        }
+        let (Val::AnyRef(Some(actual)), Val::AnyRef(Some(expected))) =
+            (object.field(&mut *caller, 0)?, vtable.get(&mut *caller))
+        else {
+            continue;
+        };
+        if wasmtime::Rooted::ref_eq(&*caller, &actual, &expected)? {
+            return Ok(Some(crate::mangle::extend(
+                &crate::mangle::prelude("Temporal"),
+                name,
+            )));
+        }
+    }
+    Ok(None)
+}
+
 pub(super) fn temporal_abi<'a>(
     caller: &'a Caller<'_, StoreData>,
 ) -> wasmtime::Result<&'a TemporalAbi> {

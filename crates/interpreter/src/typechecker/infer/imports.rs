@@ -425,7 +425,7 @@ impl<'a> Inferer<'a> {
 
         if let Some(type_sym) = imported_module.exported_type(imported) {
             found = true;
-            if self.types.contains(&local.name) {
+            if self.types.blocking_type(&local.name).is_some() {
                 self.error(
                     local.span,
                     format!(
@@ -722,7 +722,7 @@ impl<'a> Inferer<'a> {
 
         if let Some(type_sym) = pkg.types.get(imported) {
             found = true;
-            if self.types.contains(&local.name) {
+            if self.types.blocking_type(&local.name).is_some() {
                 self.error(
                     local.span,
                     format!(

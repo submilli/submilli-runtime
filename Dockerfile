@@ -47,7 +47,8 @@ LABEL org.opencontainers.image.title="submilli-server" \
       org.opencontainers.image.source="https://github.com/submilli/submilli-runtime" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${REVISION}"
+      org.opencontainers.image.revision="${REVISION}" \
+      io.modelcontextprotocol.server.name="io.github.submilli/submilli-runtime"
 
 # Both binaries ship. In a shell-less image the CLI is the only diagnostic an
 # operator has over `docker exec` (`submilli server secret put`, `submilli

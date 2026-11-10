@@ -1,0 +1,40 @@
+types: 13 of 42 tsc entries compared, 9 differ
+
+line 5: obj.b
+  tsc:  T["b"]
+  ours: string
+
+line 9: obj.b
+  tsc:  T["b"]
+  ours: string
+
+line 12: obj
+  tsc:  Pick<T | U, keyof T & keyof U>
+  ours: Pick<T | U, keyof (T | U)>
+
+line 13: obj.b
+  tsc:  (T | U)["b"]
+  ours: string
+
+line 13: obj
+  tsc:  Pick<T | U, keyof T & keyof U>
+  ours: Pick<T | U, keyof (T | U)>
+
+line 23: obj.a
+  tsc:  string
+  ours: <error>
+
+line 23: obj
+  tsc:  Record<"c" | Exclude<keyof T, "b">, string>
+  ours: <error>
+
+line 24: obj.c
+  tsc:  string
+  ours: <error>
+
+line 24: obj
+  tsc:  Record<"c" | Exclude<keyof T, "b">, string>
+  ours: <error>
+
+errors:
+line 22: ours: unsupported Record key type `"c" | Exclude<keyof T, "b">` (tsc accepts)
