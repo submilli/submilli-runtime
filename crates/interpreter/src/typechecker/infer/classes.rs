@@ -360,8 +360,7 @@ impl<'a> Inferer<'a> {
                     }
                     seen_constructor = true;
                     constructor_visibility = *visibility;
-                    constructor =
-                        self.with_method_signature(|this| this.resolve_parameter_types(params))?;
+                    constructor = self.with_method_signature(|this| this.resolve_params(params))?;
                     // Parameter properties declare a field with the param's type.
                     for (decl, resolved) in params.iter().zip(constructor.iter()) {
                         let Some(modifiers) = &decl.modifiers else {
@@ -3681,6 +3680,7 @@ impl<'a> Inferer<'a> {
 
             let decl = TypedClassDecl {
                 name: name.clone(),
+                generics: class_generics.clone(),
                 fields: typed_fields,
                 static_methods: static_sigs
                     .keys()
@@ -3716,8 +3716,7 @@ impl<'a> Inferer<'a> {
                 constructor: typed_ctor,
                 methods: typed_methods,
                 accessors,
-                // Codegen is generics-erased: the typed AST carries only the
-                // parent's name, never the extends args.
+                extends_args: parent.as_ref().map(|e| e.args.clone()).unwrap_or_default(),
                 extends: parent.map(|e| e.parent),
                 implements,
                 mangled_name: mangled,

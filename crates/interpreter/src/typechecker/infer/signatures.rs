@@ -400,8 +400,14 @@ impl<'a> Inferer<'a> {
         let mut property_sigs: BTreeMap<String, PropertySig> = BTreeMap::new();
         let mut typed_members: Vec<crate::TypedInterfaceMember> = Vec::new();
         let mut index = None;
+        let mut bases = Vec::new();
         for base in extends {
-            self.inherit_interface(&base, &mut method_sigs, &mut property_sigs, &mut index)?;
+            bases.extend(self.inherit_interface(
+                &base,
+                &mut method_sigs,
+                &mut property_sigs,
+                &mut index,
+            )?);
         }
         let mut own_names = BTreeSet::new();
         let mut own_index = false;
@@ -562,6 +568,7 @@ impl<'a> Inferer<'a> {
             property_names: property_sigs.keys().cloned().collect(),
             name: name.clone(),
             generics: generic_names.clone(),
+            extends: bases,
             members: typed_members,
             index: index.clone(),
             doc: doc.clone(),
@@ -643,16 +650,6 @@ impl<'a> Inferer<'a> {
     /// evaluated in the function's own scope, so an identifier naming a
     /// parameter refers to that parameter, never to a global of the same name.
     pub(super) fn resolve_params(
-        &mut self,
-        params: &[crate::ParamDecl],
-    ) -> Result<Vec<Param>, CompilerFailure> {
-        self.check_parameter_arity(params)?;
-        self.resolve_parameter_types(params)
-    }
-
-    /// Resolve slot types/defaults without imposing a callable ABI. Constructors
-    /// use this directly because they have no closure slot of their own.
-    pub(super) fn resolve_parameter_types(
         &mut self,
         params: &[crate::ParamDecl],
     ) -> Result<Vec<Param>, CompilerFailure> {

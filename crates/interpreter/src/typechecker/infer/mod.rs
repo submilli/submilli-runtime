@@ -6,7 +6,6 @@ pub(crate) mod assignable;
 mod best_common_type;
 mod binding_analysis;
 mod classes;
-mod closure_arity;
 mod comparable;
 mod comparison_operand;
 mod constraint_literals;

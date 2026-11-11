@@ -3,6 +3,7 @@
 //! Read-only: produces additional diagnostics, never modifies the tree.
 
 pub(crate) mod body_walk;
+mod callable_arity;
 mod capability_consistency;
 mod check_calls;
 mod check_discipline;
@@ -218,6 +219,7 @@ fn run_rules(
         definite_assignment::run(ta, diags)?;
     }
     super_call::run(ta, diags)?;
+    callable_arity::run(ta, diags)?;
     if source == Source::Script {
         // Inference reports a package that declares `main`.
         main_required::run(ta, diags);

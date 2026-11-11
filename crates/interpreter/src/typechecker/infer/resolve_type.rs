@@ -292,7 +292,6 @@ impl<'a> Inferer<'a> {
 
     fn resolve_and_check_type(&mut self, annot: &TypeAnnotation) -> Result<Type, CompilerFailure> {
         let resolved = self.resolve_type_inner(annot)?;
-        self.check_callable_type(&resolved, annot.span);
         self.check_named_type_constraints(&resolved, annot.span)?;
         Ok(resolved)
     }

@@ -72,22 +72,21 @@ fn check_enforces_boundary_for_all_source_signature_forms() {
     }
 }
 
+fn limit_diagnostics(diagnostics: &[Diagnostic]) -> Vec<&Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|d| d.message.contains("parameter slots"))
+        .collect()
+}
+
 #[test]
-fn repeated_annotation_resolution_reports_one_limit() {
+fn an_alias_is_reported_once() {
     let source = format!(
-        "type F = ({}) => number; function main(): number {{ return 42; }}",
+        "type F = ({}) => number; function main(): number {{ const f: F | null = null; return 42; }}",
         parameters(256)
     );
     let error = typecheck_checked(&source, FileId(0)).unwrap_err();
-    assert_eq!(
-        error
-            .diagnostics
-            .iter()
-            .filter(|d| d.message.contains("parameter slots"))
-            .count(),
-        1,
-        "{error:?}"
-    );
+    assert_eq!(limit_diagnostics(&error.diagnostics).len(), 1, "{error:?}");
 }
 
 #[test]
@@ -98,176 +97,6 @@ fn constructors_keep_their_own_abi() {
     );
     typecheck_checked(&source, FileId(0)).unwrap();
     compile_script_checked(&source, "constructor.ts", FileId(0), &[], &[]).unwrap();
-}
-
-fn imported_declaration() -> submilli_engine::PackageDeclaration {
-    compile_package_checked("aritydep", ModulePath::from("lib"), &[PackageSourceModule {
-        path: ModulePath::from("lib"),
-        source: "export function bad(a: number): number { return a; } export function healthy(): number { return 42; }",
-    }], &[]).unwrap().declaration
-}
-
-#[test]
-fn imported_signatures_are_checked_on_use_and_unused_surface_is_allowed() {
-    let mut declaration = imported_declaration();
-    let ValueKind::Function { params, .. } = &mut declaration.values.get_mut("bad").unwrap().kind
-    else {
-        panic!("function")
-    };
-    *params = (0..256)
-        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
-        .collect();
-    // Keep the physical ABI consistent so this tests payload arity, not corrupt metadata.
-    let runtime_name = declaration.values.get("bad").unwrap().mangled_name.clone();
-    declaration
-        .runtime_functions
-        .get_mut(&runtime_name)
-        .unwrap()
-        .params = vec![Type::Number; 256];
-    let args = (0..256)
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    for body in [
-        format!("return bad({args});"),
-        "const f = bad; return 0;".into(),
-    ] {
-        let source =
-            format!("import {{ bad }} from \"aritydep\"; function main(): number {{ {body} }}");
-        let error =
-            compile_script_checked(&source, "use.ts", FileId(7), &[&declaration], &[]).unwrap_err();
-        assert!(error.fatal.is_none(), "{error:?}");
-        assert_limit(&error.diagnostics, &source, FileId(7));
-    }
-    for source in [
-        "function main(): number { return 42; }",
-        "import { healthy } from \"aritydep\"; function main(): number { return healthy(); }",
-        "import { bad } from \"aritydep\"; function main(): number { return 42; }",
-    ] {
-        compile_script_checked(source, "healthy.ts", FileId(7), &[&declaration], &[]).unwrap();
-    }
-}
-
-fn oversized_type() -> Type {
-    Type::Function {
-        optional: 0,
-        params: vec![Type::Number; 256],
-        ret: Box::new(Type::Number),
-        has_rest: false,
-        predicate: None,
-    }
-}
-
-#[test]
-fn nested_imported_returns_and_generic_instantiations_are_checked() {
-    let mut declaration = imported_declaration();
-    let ValueKind::Function { params, ret, .. } =
-        &mut declaration.values.get_mut("bad").unwrap().kind
-    else {
-        panic!("function")
-    };
-    params.clear();
-    *ret = Type::Array(Box::new(oversized_type()));
-    let source = "import { bad } from \"aritydep\"; function main(): number { const callbacks = bad(); return 42; }";
-    let error =
-        compile_script_checked(source, "nested.ts", FileId(7), &[&declaration], &[]).unwrap_err();
-    assert!(error.fatal.is_none(), "{error:?}");
-    assert_limit(&error.diagnostics, source, FileId(7));
-
-    let ValueKind::Function { generics, ret, .. } =
-        &mut declaration.values.get_mut("bad").unwrap().kind
-    else {
-        panic!("function")
-    };
-    generics.names.push("T".into());
-    *ret = Type::TypeVar("T".into());
-    let source = format!(
-        "import {{ bad }} from \"aritydep\"; function main(): number {{ const callback = bad<({}) => number>(); return 42; }}",
-        parameters(256)
-    );
-    let error =
-        compile_script_checked(&source, "generic.ts", FileId(7), &[&declaration], &[]).unwrap_err();
-    assert!(error.fatal.is_none(), "{error:?}");
-    assert_limit(&error.diagnostics, &source, FileId(7));
-}
-
-#[test]
-fn inherited_dependency_methods_require_supported_payload_signatures() {
-    let mut declaration = compile_package_checked(
-        "aritydep",
-        ModulePath::from("lib"),
-        &[PackageSourceModule {
-            path: ModulePath::from("lib"),
-            source: "export class Base { f(): number { return 42; } }",
-        }],
-        &[],
-    )
-    .unwrap()
-    .declaration;
-    set_oversized_method(&mut declaration, "Base", "f");
-    for source in [
-        "import { Base } from \"aritydep\"; class Child extends Base {} function main(): number { return 42; }",
-        "import { Base } from \"aritydep\"; function main(): number { const b = new Base(); return 42; }",
-    ] {
-        let error = compile_script_checked(source, "class.ts", FileId(7), &[&declaration], &[])
-            .unwrap_err();
-        assert!(error.fatal.is_none(), "{error:?}");
-        assert_limit(&error.diagnostics, source, FileId(7));
-        assert!(error.diagnostics.iter().any(|d| {
-            d.help
-                .iter()
-                .any(|h| h.contains("aritydep") && h.contains("f"))
-        }));
-    }
-    compile_script_checked(
-        "function main(): number { return 42; }",
-        "healthy.ts",
-        FileId(7),
-        &[&declaration],
-        &[],
-    )
-    .unwrap();
-}
-
-#[test]
-fn imported_interface_methods_are_validated_when_dispatched() {
-    let mut declaration = compile_package_checked("aritydep", ModulePath::from("lib"), &[PackageSourceModule {
-        path: ModulePath::from("lib"),
-        source: "export interface I { f(): number; } export function get(): I { return { f: (): number => 42 }; }",
-    }], &[]).unwrap().declaration;
-    let submilli_engine::TypeKind::Interface { methods, .. } =
-        &mut declaration.types.get_mut("I").unwrap().kind
-    else {
-        panic!("interface")
-    };
-    methods.get_mut("f").unwrap().params = (0..256)
-        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
-        .collect();
-    let args = (0..256)
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let source = format!(
-        "import {{ get }} from \"aritydep\"; function main(): number {{ return get().f({args}); }}"
-    );
-    let error =
-        compile_script_checked(&source, "method.ts", FileId(7), &[&declaration], &[]).unwrap_err();
-    assert!(error.fatal.is_none(), "{error:?}");
-    assert_limit(&error.diagnostics, &source, FileId(7));
-    let source =
-        "import { get } from \"aritydep\"; function main(): number { const i = get(); return 42; }";
-    let error = compile_script_checked(source, "reachable.ts", FileId(7), &[&declaration], &[])
-        .unwrap_err();
-    assert!(error.fatal.is_none(), "{error:?}");
-    assert_limit(&error.diagnostics, source, FileId(7));
-    compile_script_checked(
-        "import { get } from \"aritydep\"; function main(): number { return 42; }",
-        "unused.ts",
-        FileId(7),
-        &[&declaration],
-        &[],
-    )
-    .unwrap();
 }
 
 #[test]
@@ -310,58 +139,212 @@ fn imported_constructors_keep_their_own_abi() {
     }
 }
 
+fn compile_package(source: &str) -> Result<(), submilli_engine::compiler_error::CompileError> {
+    compile_package_checked(
+        "aritydep",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source,
+        }],
+        &[],
+    )
+    .map(|_| ())
+}
+
+/// A package with a callable of too many slots fails its own compile, once,
+/// at the declaration, whatever a script would use of it.
 #[test]
-fn static_only_class_usage_checks_required_callable_payloads() {
-    let mut declaration = compile_package_checked("aritydep", ModulePath::from("lib"), &[PackageSourceModule {
-        path: ModulePath::from("lib"),
-        source: "export class C { static f: (a: number) => number = (a: number): number => a; static healthy(): number { return 42; } }",
-    }], &[]).unwrap().declaration;
-    let submilli_engine::TypeKind::Class { static_fields, .. } =
-        &mut declaration.types.get_mut("C").unwrap().kind
-    else {
-        panic!("class")
-    };
-    static_fields.get_mut("f").unwrap().ty = oversized_type();
-    let args = (0..256)
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    for call in [format!("C.f({args})"), "C.healthy()".into()] {
-        let source = format!(
-            "import {{ C }} from \"aritydep\"; function main(): number {{ return {call}; }}"
-        );
-        let error = compile_script_checked(&source, "static.ts", FileId(7), &[&declaration], &[])
-            .unwrap_err();
-        assert!(error.fatal.is_none(), "{error:?}");
-        assert_limit(&error.diagnostics, &source, FileId(7));
+fn packages_report_the_limit_where_declared() {
+    for arity in [255, 256] {
+        let p = parameters(arity);
+        // A closure is reported over its parameter list.
+        let closure = p.strip_suffix(": number").unwrap();
+        let cases = [
+            (
+                "an interface's method",
+                format!("export interface I {{ f({p}): number; }}"),
+                "f",
+            ),
+            (
+                "a member's function type",
+                format!("export interface I {{ f: ({p}) => number; }}"),
+                "f",
+            ),
+            (
+                "a rest parameter's element",
+                format!("export function g(...fs: Array<({p}) => void>): void {{}}"),
+                "fs",
+            ),
+            (
+                "a function type inside a parameter's type",
+                format!("export function g(o?: {{ callback: ({p}) => void }}): void {{}}"),
+                "o",
+            ),
+            (
+                "a function",
+                format!("export function g({p}): number {{ return 42; }}"),
+                "g",
+            ),
+            (
+                "a function and a value that holds it",
+                format!("export function f({p}): void {{}} export const g = f;"),
+                "f",
+            ),
+            (
+                "a type predicate",
+                format!("export function isF(x: unknown): x is ({p}) => void {{ return false; }}"),
+                "isF",
+            ),
+            (
+                "a function's bound",
+                format!("export function f<T extends ({p}) => void>(x: T | null): void {{}}"),
+                "f",
+            ),
+            (
+                "a method's bound",
+                format!("export interface I {{ m<T extends ({p}) => void>(x: T): void; }}"),
+                "m",
+            ),
+            (
+                "a class field",
+                format!("export class C {{ f: (({p}) => void) | null = null; }}"),
+                "f",
+            ),
+            (
+                "a static field",
+                format!("export class C {{ static f: (({p}) => void) | null = null; }}"),
+                "C",
+            ),
+            (
+                "a class's extends clause",
+                format!(
+                    "export class Base<T> {{ f: T | null = null; }} export class C extends Base<({p}) => void> {{}}"
+                ),
+                "C",
+            ),
+            (
+                "an interface's extends clause",
+                format!(
+                    "export interface B<T> {{ f: T; }} export interface I extends B<({p}) => void> {{}}"
+                ),
+                "I",
+            ),
+            (
+                "a class's bound",
+                format!("export class C<T extends ({p}) => void> {{ v: T | null = null; }}"),
+                "C",
+            ),
+            (
+                "a getter",
+                format!("export class C {{ get g(): (({p}) => void) | null {{ return null; }} }}"),
+                "g",
+            ),
+            (
+                "a closure's type predicate",
+                format!("export const isF = (x: unknown): x is ({p}) => void => false;"),
+                "isF",
+            ),
+            (
+                "an inherited extends clause",
+                format!(
+                    "export class A<T> {{ f: T | null = null; }} export class B<U> extends A<U> {{}} export class C extends B<({p}) => void> {{}}"
+                ),
+                "C",
+            ),
+            (
+                "a global's closure",
+                format!("export const g = ({p}): void => {{}};"),
+                closure,
+            ),
+            (
+                "an object literal's method",
+                format!("export const o = {{ m({p}): number {{ return 1; }} }};"),
+                closure,
+            ),
+        ];
+        for (name, source, declared) in cases {
+            let result = compile_package(&source);
+            if arity == 255 {
+                result.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+                continue;
+            }
+            let error = result.unwrap_err();
+            assert!(error.fatal.is_none(), "{name}: {error:?}");
+            assert_limit(&error.diagnostics, &source, FileId(0));
+            let limits = limit_diagnostics(&error.diagnostics);
+            assert_eq!(limits.len(), 1, "{name}: {limits:?}");
+            assert_eq!(
+                limits[0].span.text(&source, FileId(0)).unwrap(),
+                declared,
+                "{name}"
+            );
+        }
     }
 }
 
+/// Inference copies a declared function type to the values that hold it; the
+/// rule reports it once, where it is written.
 #[test]
-fn static_calls_validate_unmentioned_instance_method_payloads() {
-    let mut declaration = compile_package_checked("aritydep", ModulePath::from("lib"), &[PackageSourceModule {
-        path: ModulePath::from("lib"),
-        source: "export class C { f(): number { return 42; } static healthy(): number { return 42; } }",
-    }], &[]).unwrap().declaration;
-    let submilli_engine::TypeKind::Class { methods, .. } =
-        &mut declaration.types.get_mut("C").unwrap().kind
-    else {
-        panic!("class")
-    };
-    methods.get_mut("f").unwrap().params = (0..256)
-        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
-        .collect();
-    let source = "import { C } from \"aritydep\"; function main(): number { return C.healthy(); }";
-    let error =
-        compile_script_checked(source, "static.ts", FileId(7), &[&declaration], &[]).unwrap_err();
-    assert!(error.fatal.is_none(), "{error:?}");
-    assert_limit(&error.diagnostics, source, FileId(7));
+fn bodies_report_each_declared_type_once() {
+    let p = parameters(256);
+    let closure = p.strip_suffix(": number").unwrap();
+    let cases = [
+        (
+            "a local's type",
+            format!("const fs: Array<({p}) => void> = [];"),
+            "fs",
+        ),
+        (
+            "a closure held by a local",
+            format!("const g = ({p}): void => {{}};"),
+            closure,
+        ),
+        (
+            "a function held by a local",
+            "const g = f; const h = [f];".into(),
+            "f",
+        ),
+        (
+            "a cast",
+            format!("const u: unknown = 1; u as ({p}) => void;"),
+            "u as",
+        ),
+        (
+            "a type argument",
+            format!("id<({p}) => void>(null!);"),
+            "id<",
+        ),
+    ];
+    for (name, body, declared) in cases {
+        let source = format!(
+            "function id<T>(value: T): T {{ return value; }} function f({p}): number {{ return 1; }} function main(): number {{ {body} return 42; }}"
+        );
+        let error = typecheck_checked(&source, FileId(0)).unwrap_err();
+        assert!(error.fatal.is_none(), "{name}: {error:?}");
+        // `f` is reported in every case; the case adds at most one more.
+        let limits: Vec<_> = limit_diagnostics(&error.diagnostics)
+            .into_iter()
+            .map(|d| d.span.text(&source, FileId(0)).unwrap())
+            .filter(|text| *text != "f")
+            .collect();
+        if declared == "f" {
+            assert!(limits.is_empty(), "{name}: {limits:?}");
+        } else {
+            assert_eq!(limits.len(), 1, "{name}: {limits:?}");
+            assert!(limits[0].starts_with(declared), "{name}: {limits:?}");
+        }
+    }
 }
 
+/// A dependency is checked when it is compiled. One built by hand reaches
+/// codegen, whose own check still rejects the signatures it lowers.
 #[test]
-fn raw_host_functions_only_need_the_limit_when_adapted_to_closures() {
-    let mut declaration = imported_declaration();
-    declaration.runtime_functions.clear();
+fn codegen_rejects_a_hand_built_dependency() {
+    let mut declaration = compile_package_checked("aritydep", ModulePath::from("lib"), &[PackageSourceModule {
+        path: ModulePath::from("lib"),
+        source: "export function bad(a: number): number { return a; } export function healthy(): number { return 42; }",
+    }], &[]).unwrap().declaration;
     let ValueKind::Function { params, .. } = &mut declaration.values.get_mut("bad").unwrap().kind
     else {
         panic!("function")
@@ -369,97 +352,31 @@ fn raw_host_functions_only_need_the_limit_when_adapted_to_closures() {
     *params = (0..256)
         .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
         .collect();
-    let args = (0..256)
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let source = format!(
-        "import * as api from \"aritydep\"; function main(): number {{ return api.bad({args}); }}"
-    );
-    compile_script_checked(&source, "host.ts", FileId(7), &[&declaration], &[]).unwrap();
-    let source =
-        "import { bad } from \"aritydep\"; function main(): number { const f = bad; return 42; }";
-    let error =
-        compile_script_checked(source, "adapter.ts", FileId(7), &[&declaration], &[]).unwrap_err();
-    assert!(error.fatal.is_none(), "{error:?}");
-    assert_limit(&error.diagnostics, source, FileId(7));
-}
-
-#[test]
-fn inherited_statics_validate_the_declaring_class_only() {
-    let declaration = compile_package_checked(
-        "aritydep",
-        ModulePath::from("lib"),
-        &[PackageSourceModule {
-            path: ModulePath::from("lib"),
-            source: "export class Base { baseMethod(): number { return 42; } static healthy(): number { return 42; } static identity<T>(value: T): T { return value; } static callback: () => number = (): number => 42; } export class Derived extends Base { derivedMethod(): number { return 42; } }",
-        }],
-        &[],
-    ).unwrap().declaration;
-    for (class, method) in [("Derived", "derivedMethod"), ("Base", "baseMethod")] {
-        let mut declaration = declaration.clone();
-        set_oversized_method(&mut declaration, class, method);
-        for body in [
-            "return Derived.healthy();",
-            "const f = Derived.healthy; return f();",
-            "return Derived.identity<number>(42);",
-            "return Derived.callback();",
-            "const f = Derived.callback; return f();",
-        ] {
-            let source = format!(
-                "import {{ Derived }} from \"aritydep\"; function main(): number {{ {body} }}"
-            );
-            let result = compile_script_checked(
-                &source,
-                "inherited-static.ts",
-                FileId(7),
-                &[&declaration],
-                &[],
-            );
-            if class == "Derived" {
-                result.unwrap_or_else(|error| {
-                    panic!("unused derived payload rejected for {body}: {error:?}")
-                });
-            } else {
-                let error = result.unwrap_err();
-                assert!(error.fatal.is_none(), "{body}: {error:?}");
-                assert_limit(&error.diagnostics, &source, FileId(7));
-                assert!(
-                    error
-                        .diagnostics
-                        .iter()
-                        .any(|d| d.help.iter().any(|h| h.contains("Base.baseMethod"))),
-                    "{body}: {error:?}"
-                );
-            }
-        }
-    }
-}
-
-// Public exports and hidden runtime class surfaces share the physical signature.
-fn set_oversized_method(
-    declaration: &mut submilli_engine::PackageDeclaration,
-    class: &str,
-    method: &str,
-) {
-    let class_name = declaration.types.get(class).unwrap().mangled_name.clone();
-    for symbol in declaration
-        .types
-        .values_mut()
-        .chain(declaration.runtime_types.values_mut())
-        .filter(|symbol| symbol.mangled_name == class_name)
-    {
-        let submilli_engine::TypeKind::Class { methods, .. } = &mut symbol.kind else {
-            panic!("class")
-        };
-        methods.get_mut(method).unwrap().params = (0..256)
-            .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
-            .collect();
-    }
-    let runtime_name = submilli_engine::mangle::extend(&class_name, method);
+    let runtime_name = declaration.values.get("bad").unwrap().mangled_name.clone();
     declaration
         .runtime_functions
         .get_mut(&runtime_name)
         .unwrap()
         .params = vec![Type::Number; 256];
+    let args = (0..256)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "import {{ bad }} from \"aritydep\"; function main(): number {{ return bad({args}); }}"
+    );
+    let error =
+        compile_script_checked(&source, "use.ts", FileId(7), &[&declaration], &[]).unwrap_err();
+    assert!(
+        matches!(&error.fatal, Some(submilli_engine::compiler_error::CompilerFailure::Limit { message, .. }) if message.contains("256 parameter slots")),
+        "{error:?}"
+    );
+    compile_script_checked(
+        "import { healthy } from \"aritydep\"; function main(): number { return healthy(); }",
+        "healthy.ts",
+        FileId(7),
+        &[&declaration],
+        &[],
+    )
+    .unwrap();
 }

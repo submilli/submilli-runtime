@@ -1160,6 +1160,7 @@ pub enum TypedTypeDecl {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedClassDecl {
     pub name: Ident,
+    pub generics: crate::GenericParameters,
     pub fields: Vec<TypedClassField>,
     /// Static member visibility retained for analyses that run after package
     /// declarations have been reduced to their runtime surface.
@@ -1184,6 +1185,9 @@ pub struct TypedClassDecl {
     /// per entry (see `codegen::classes`).
     pub accessors: Vec<TypedClassAccessor>,
     pub extends: Option<crate::MangledName>,
+    /// The type arguments the `extends` clause gives the parent. Codegen
+    /// erases generics and reads only `extends`; rules check what is written.
+    pub extends_args: Vec<Type>,
     pub implements: Vec<crate::MangledName>,
     pub mangled_name: crate::MangledName,
     pub doc: Option<crate::DocComment>,
@@ -1469,6 +1473,8 @@ pub struct TypedInterfaceDecl {
     pub index: Option<crate::IndexSignature>,
     pub name: Ident,
     pub generics: crate::GenericParameters,
+    /// The bases the `extends` clause names, with their type arguments.
+    pub extends: Vec<Type>,
     pub members: Vec<TypedInterfaceMember>,
     pub doc: Option<crate::DocComment>,
 }

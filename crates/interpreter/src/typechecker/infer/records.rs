@@ -920,9 +920,9 @@ impl Inferer<'_> {
         methods: &mut BTreeMap<String, crate::MethodSig>,
         properties: &mut BTreeMap<String, crate::PropertySig>,
         index: &mut Option<IndexSignature>,
-    ) -> Result<(), CompilerFailure> {
+    ) -> Result<Option<Type>, CompilerFailure> {
         let Some(base) = self.interface_base_contract(base)? else {
-            return Ok(());
+            return Ok(None);
         };
         for name in base.methods.keys() {
             properties.remove(name);
@@ -935,7 +935,7 @@ impl Inferer<'_> {
         let _: () = if index.is_none() {
             *index = base.index;
         };
-        Ok(())
+        Ok(Some(base.ty))
     }
 
     fn validate_bound_interface(
@@ -1224,6 +1224,7 @@ impl Inferer<'_> {
             }
         };
         Ok(Some(InterfaceContract {
+            ty,
             methods,
             properties,
             index,
@@ -1311,6 +1312,8 @@ fn interface_member_contracts(
 }
 
 struct InterfaceContract {
+    /// The base as written, with its type arguments.
+    ty: Type,
     methods: BTreeMap<String, crate::MethodSig>,
     properties: BTreeMap<String, crate::PropertySig>,
     index: Option<IndexSignature>,
