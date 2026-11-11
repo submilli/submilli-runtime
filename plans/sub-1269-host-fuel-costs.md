@@ -2167,3 +2167,10 @@ whose value is `undefined` still occupy a field. These costs are incurred during
 output construction; directory iterator output and committed download results use
 `settle_result` so exhaustion cannot discard an advanced entry or committed file.
 `Skill`, `Embeddings`, `Response`, `FileWriter`, and `URL` retain their backing.
+
+### Functions (`submilli:functions`, SUB-2208)
+
+| Function | What the host does | Formula | Charge point | Notes |
+| --- | --- | --- | --- | --- |
+| `submilli:functions#escalate` | Reads `reason` via `read_string_arg` and returns an uncatchable `Escalated` host error (`stdlib/functions.rs`) | `CALL + COPY(len(reason)) + SCAN(len(reason))` | before | `CALL` is charged by `register_host_fn`; `COPY` and `SCAN` are charged inside `read_string_arg` before building `Escalated`. |
+| `invoke_function_async` JSON arguments | Reserves `HostBytes`, transcodes UTF-8 -> UTF-16 into a fallibly reserved buffer, and parses each host-supplied JSON argument via `json_text::parse` (`functions.rs`) | `SCAN(len_utf8(arg)) + PARSE(len_utf16(arg))` per supplied argument | before transcoding / parsing | `HostBytes` and `SCAN` charge from O(1) `arg.len()` before iterating UTF-8; `PARSE` charges before `json_text::parse` builds the host `JsonValue`; `JsonUnknownAllocator` charges `ELEM`/`COPY` when materializing guest values; `<pkg>#function:argument:<i>` and `<pkg>#function:invoke` burn Wasm fuel directly. |

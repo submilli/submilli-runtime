@@ -1059,6 +1059,9 @@ pub struct TypedAst {
     /// `finalizer`, in the hidden export embedders call to restore it; `None`
     /// without one.
     pub finalizer_argument: Option<FinalizerArgumentCheck>,
+    /// Host-invocation argument checks and return-encoding metadata for a
+    /// `@functions/<name>` module's exported `run` function; `None` elsewhere.
+    pub function_invoke: Option<FunctionInvokePlan>,
     /// Concrete runtime validators resolved while inference still has access to
     /// interface declarations and generic substitutions. Codegen consults this
     /// for narrowed reads instead of re-deriving type structure.
@@ -1076,6 +1079,27 @@ pub struct TypedAst {
 pub struct FinalizerArgumentCheck {
     pub target: Type,
     pub check: Type,
+}
+
+/// Non-generic host-invocation metadata recorded for a `@functions/<name>`
+/// module's exported `run` function. Generic `run` exports leave
+/// `TypedAst::function_invoke` as `None`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionInvokePlan {
+    pub arguments: Vec<FunctionArgumentCheck>,
+    pub return_type: Type,
+}
+
+/// How one parameter of a function's `run` export is checked when invoked from
+/// the host with JSON arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FunctionArgumentCheck {
+    /// Castable from `unknown` (`JSON.parse` output) via `value as T`.
+    Checked(Box<FinalizerArgumentCheck>),
+    /// Not runtime-castable from JSON (e.g. a closure or nominal class).
+    /// Compilation still succeeds for guest `@functions` callers; direct host
+    /// invocation rejects supplying this parameter with `InvalidArguments`.
+    Uncastable { reason: String },
 }
 
 #[derive(Clone, Debug)]

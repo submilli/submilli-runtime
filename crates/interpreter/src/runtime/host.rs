@@ -1712,6 +1712,7 @@ pub(crate) fn read_string_value(
 /// deadline or stack limit.
 pub(crate) fn ends_the_run(err: &wasmtime::Error) -> bool {
     err.is::<FatalHostError>()
+        || err.is::<crate::stdlib::functions::Escalated>()
         || err.is::<wasmtime::Trap>()
         || super::limits::is_memory_exhausted(err)
 }

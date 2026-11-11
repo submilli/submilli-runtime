@@ -346,6 +346,13 @@ impl<'a> Discovery<'a> {
         if let Some(argument) = &ta.finalizer_argument {
             self.walk(&argument.check)?;
         }
+        if let Some(plan) = &ta.function_invoke {
+            for argument in &plan.arguments {
+                if let crate::FunctionArgumentCheck::Checked(check) = argument {
+                    self.walk(&check.check)?;
+                }
+            }
+        }
         Ok(())
     }
 

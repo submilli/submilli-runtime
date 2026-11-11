@@ -4593,6 +4593,61 @@ impl Inferer<'_> {
         Ok(())
     }
 
+    /// Records how a `@functions/<name>` module's exported `run` function
+    /// validates incoming JSON arguments and encodes its return value for host
+    /// `invoke`. Non-castable parameter types are recorded rather than rejected
+    /// so guest `@functions` callers can still pass non-JSON values directly.
+    pub(super) fn record_function_invoke(
+        &mut self,
+        declaration: &crate::PackageDeclaration,
+    ) -> Result<(), CompilerFailure> {
+        if !declaration
+            .package_name
+            .starts_with(crate::functions::FUNCTIONS_MODULE_PREFIX)
+        {
+            return Ok(());
+        }
+        let Some(symbol) = declaration.values.get("run") else {
+            return Ok(());
+        };
+        let ValueKind::Function {
+            generics,
+            params,
+            ret,
+            ..
+        } = &symbol.kind
+        else {
+            return Ok(());
+        };
+        if !generics.is_empty() {
+            return Ok(());
+        }
+        let mut arguments = Vec::with_capacity(params.len());
+        for param in params {
+            match self.as_check_shape(&param.ty) {
+                Ok(check) => {
+                    self.record_runtime_type_test(&param.ty)?;
+                    arguments.push(crate::FunctionArgumentCheck::Checked(Box::new(
+                        crate::FinalizerArgumentCheck {
+                            target: param.ty.clone(),
+                            check,
+                        },
+                    )));
+                }
+                Err(reason) => {
+                    arguments.push(crate::FunctionArgumentCheck::Uncastable {
+                        reason: reason.to_string(),
+                    });
+                }
+            }
+        }
+        self.typed_ast.function_invoke = Some(crate::FunctionInvokePlan {
+            arguments,
+            return_type: ret.clone(),
+        });
+        Ok(())
+    }
+
     /// dispatch a `<ns>.<member>(args)` call where `<ns>` is
     /// a namespace-imported package. Lifts the member's
     /// package-export mangled name into a static call (or `VirtualCall` for

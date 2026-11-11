@@ -504,6 +504,7 @@ TypedAst {
     internal_modules: {},
     test_exports: [],
     finalizer_argument: None,
+    function_invoke: None,
     runtime_type_tests: {
         Number: Shape(
             Number,

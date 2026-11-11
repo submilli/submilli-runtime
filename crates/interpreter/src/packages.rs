@@ -1219,7 +1219,7 @@ pub fn render_selected_declarations(defs: &PackageDeclaration) -> String {
 /// Like [`rendered_type_references`], this walks the serialized form, where
 /// every by-name `Type` carries its declaring symbol's `mangled` name. A
 /// declaration that won't round-trip renders under its source names.
-fn with_public_type_names(defs: &PackageDeclaration) -> Cow<'_, PackageDeclaration> {
+pub(crate) fn with_public_type_names(defs: &PackageDeclaration) -> Cow<'_, PackageDeclaration> {
     // A type declared in the entry module has its public name in its own
     // mangled name, so only a re-export can be referenced by another name.
     let mut public: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -1256,7 +1256,11 @@ fn with_public_type_names(defs: &PackageDeclaration) -> Cow<'_, PackageDeclarati
                     *name = first.to_string();
                     renamed = true;
                 }
-                pending.extend(fields.get_mut("args"));
+                for (key, child) in fields {
+                    if key != "mangled" && key != "name" {
+                        pending.push(child);
+                    }
+                }
             }
             serde_json::Value::Array(items) => pending.extend(items),
             _ => {}

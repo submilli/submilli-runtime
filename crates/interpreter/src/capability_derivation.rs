@@ -459,6 +459,20 @@ pub fn filter_string_literal(value: &str) -> Option<String> {
     (!value.contains(VAR_PLACEHOLDER)).then(|| format!("\"{}\"", escape(value)))
 }
 
+/// Decode a filter-expression operand produced by capability derivation back
+/// into a [`DocCapabilityLiteral`](crate::DocCapabilityLiteral).
+pub(crate) fn parse_filter_literal(operand: &str) -> crate::DocCapabilityLiteral {
+    match operand {
+        "null" => crate::DocCapabilityLiteral::Null,
+        "true" => crate::DocCapabilityLiteral::Boolean(true),
+        "false" => crate::DocCapabilityLiteral::Boolean(false),
+        _ if operand.starts_with('"') && operand.ends_with('"') && operand.len() >= 2 => {
+            crate::DocCapabilityLiteral::String(unescape(&operand[1..operand.len() - 1]))
+        }
+        _ => crate::DocCapabilityLiteral::Number(operand.to_string()),
+    }
+}
+
 /// The escapes the filter tokenizer reads inside a quoted string.
 fn escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -470,6 +484,30 @@ fn escape(value: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\r' => out.push_str("\\r"),
             c => out.push(c),
+        }
+    }
+    out
+}
+
+fn unescape(quoted_inner: &str) -> String {
+    let mut out = String::with_capacity(quoted_inner.len());
+    let mut chars = quoted_inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(ch);
         }
     }
     out

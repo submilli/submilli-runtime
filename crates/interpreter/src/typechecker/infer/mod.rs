@@ -732,6 +732,14 @@ pub fn infer_package_checked<'a>(
                     }
                     .with_prior_diagnostics(&diagnostics)
                 })?;
+            tc.record_function_invoke(&package_declaration)
+                .map_err(|fatal| {
+                    CompileError {
+                        diagnostics: tc.diagnostics.clone(),
+                        fatal: Some(fatal),
+                    }
+                    .with_prior_diagnostics(&diagnostics)
+                })?;
         } else {
             tc.typed_ast
                 .internal_modules

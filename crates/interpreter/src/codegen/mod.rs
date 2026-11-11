@@ -27,6 +27,7 @@ pub mod field_names;
 mod finalizer_argument;
 pub mod function_adapters;
 pub mod function_emitter;
+mod function_invoke;
 pub mod imported_classes;
 pub mod init_guard;
 pub mod intrinsics;
@@ -1591,6 +1592,21 @@ fn codegen_inner(
         })
         .transpose()?;
 
+    let function_invoke = ta
+        .function_invoke
+        .as_ref()
+        .map(|plan| {
+            function_invoke::allocate(
+                ta,
+                plan,
+                &mut types,
+                &symbols,
+                &mut next_type_idx,
+                &mut next_func_idx,
+            )
+        })
+        .transpose()?;
+
     // `main`'s result is encoded to its output `$string` entirely in wasm by the
     // `__main_output` shim (`() -> (ref null $string)`): scalars render via `toString`
     // (a `string` passes through verbatim — no JSON quoting), and structured
@@ -1687,6 +1703,12 @@ fn codegen_inner(
     }
     if let Some(argument) = &finalizer_argument {
         functions.function(argument.type_idx);
+    }
+    if let Some(invoke) = &function_invoke {
+        for argument in &invoke.arguments {
+            functions.function(argument.type_idx);
+        }
+        functions.function(invoke.invoke_type_idx);
     }
     if let Some((sig_idx, _)) = main_output_shim {
         functions.function(sig_idx);
@@ -1874,6 +1896,20 @@ fn codegen_inner(
             crate::mangle::finalizer_argument(&ta.package_name).as_str(),
             WasmExportKind::Func,
             argument.func_idx,
+        );
+    }
+    if let Some(invoke) = &function_invoke {
+        for argument in &invoke.arguments {
+            exports.export(
+                crate::mangle::function_argument(&ta.package_name, argument.index).as_str(),
+                WasmExportKind::Func,
+                argument.func_idx,
+            );
+        }
+        exports.export(
+            crate::mangle::function_invoke(&ta.package_name).as_str(),
+            WasmExportKind::Func,
+            invoke.invoke_func_idx,
         );
     }
     // A test build also exports what its non-entry modules export, each once.
@@ -2103,6 +2139,12 @@ fn codegen_inner(
     }
     if let Some(argument) = &finalizer_argument {
         code.function(&finalizer_argument::body(&ctx, argument)?);
+    }
+    if let Some(invoke) = &function_invoke {
+        for argument in &invoke.arguments {
+            code.function(&function_invoke::argument_body(&ctx, argument)?);
+        }
+        code.function(&function_invoke::invoke_body(&ctx, invoke)?);
     }
 
     if let (Some(_), Some(main_func_idx), Some(main_return_ty)) =

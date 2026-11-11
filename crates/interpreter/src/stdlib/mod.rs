@@ -17,6 +17,10 @@ pub mod crypto;
 pub(crate) mod dot_segments;
 pub mod embedding;
 pub mod fs;
+/// Function-authoring package (`submilli:functions`). Deliberately absent from
+/// [`stdlib_package_declarations`] and [`install_host_functions`]: only
+/// functions compiled into `@functions` may import it.
+pub mod functions;
 pub mod git;
 pub mod http;
 pub(crate) mod json_schema;
@@ -175,6 +179,24 @@ pub(crate) fn unavailable_import(module: &str) -> Option<(String, Vec<String>)> 
             format!("package `{module}` not found"),
             vec![
                 "`submilli:test` is only available to test files run via `submilli build test`; it is not importable from a program run with `submilli run`"
+                    .to_string(),
+            ],
+        ));
+    }
+    if module == functions::MODULE_NAME {
+        return Some((
+            format!("package `{module}` not found"),
+            vec![
+                "`submilli:functions` is only available to functions compiled into `@functions`; it is not importable from a program or package"
+                    .to_string(),
+            ],
+        ));
+    }
+    if crate::functions::is_functions_module_name(module) {
+        return Some((
+            format!("package `{module}` is not available"),
+            vec![
+                "`@functions` is only available to a program when the harness provides functions, and functions cannot import `@functions`"
                     .to_string(),
             ],
         ));

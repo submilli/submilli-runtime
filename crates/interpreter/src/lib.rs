@@ -18,6 +18,7 @@ pub mod did_you_mean;
 pub mod doc_comment;
 pub mod doc_directives;
 pub mod docs_view;
+pub mod functions;
 pub mod import_suggestions;
 pub mod lexer;
 pub(crate) mod literal_units;
@@ -77,6 +78,13 @@ pub use doc_comment::{
     DocCapabilityLiteral, DocComment, DocParam, DocReturns, DocText, DocUnknownTag, RawDoc, doc,
     parse_doc_comment,
 };
+pub use functions::{
+    CompiledFunction, CompiledFunctionSet, FUNCTIONS_MODULE_PREFIX, FUNCTIONS_PACKAGE,
+    FUNCTIONS_STDLIB_MODULE, FunctionCache, FunctionCompileFailure, FunctionDefinition,
+    FunctionError, FunctionNameError, FunctionSet, FunctionSummary, FunctionsView,
+    MAX_FUNCTION_NAME_LEN, compile_function_set, compile_function_set_for, install_functions_async,
+    invoke_function_async, validate_function_name,
+};
 pub use lexer::Lexer;
 pub use lower_patterns::lower as lower_patterns;
 pub use mangle::MangledName;
@@ -90,20 +98,22 @@ pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async, instantiate_pro
 pub use shape::Shape;
 pub use source::{ModulePath, SourceFile, Sources};
 pub use span::{FileId, LineIndex, Span};
+pub use stdlib::functions::Escalated;
 pub use stdlib::{OptionalPackage, Stdlib};
 pub use token::{Token, TokenKind};
 pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};
 pub use typechecker::{capability_binding_type, capture, check, desugar, infer, infer_package};
 pub use typed_ast::{
     CapturedVar, ClosureBody, EnumVariantPayload, ExportEntry, ExportKind, FieldNarrowingCheck,
-    FieldNarrowingTest, FinalizerArgumentCheck, ForOfKind, GenericArgument, GlobalKind,
-    InterfaceCarrier, InterfaceNarrowingTest, InternalModuleExports, Intrinsic, MaybeMissingLocal,
-    PostfixTarget, TypedArrayElement, TypedAst, TypedCatchClause, TypedChainPart,
-    TypedClassAccessor, TypedClassConstructor, TypedClassDecl, TypedClassField, TypedClassMethod,
-    TypedExpr, TypedExprKind, TypedFunction, TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember,
-    TypedNumberEnumDecl, TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource,
-    TypedObjectLiteralField, TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind,
-    TypedStringEnumDecl, TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue,
-    TypedTypeAliasDecl, TypedTypeDecl, TypeofTagKind,
+    FieldNarrowingTest, FinalizerArgumentCheck, ForOfKind, FunctionArgumentCheck,
+    FunctionInvokePlan, GenericArgument, GlobalKind, InterfaceCarrier, InterfaceNarrowingTest,
+    InternalModuleExports, Intrinsic, MaybeMissingLocal, PostfixTarget, TypedArrayElement,
+    TypedAst, TypedCatchClause, TypedChainPart, TypedClassAccessor, TypedClassConstructor,
+    TypedClassDecl, TypedClassField, TypedClassMethod, TypedExpr, TypedExprKind, TypedFunction,
+    TypedGlobal, TypedInterfaceDecl, TypedInterfaceMember, TypedNumberEnumDecl,
+    TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField,
+    TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl,
+    TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl,
+    TypeofTagKind,
 };
 pub use types::{IndexSignature, ObjectField, Package, TupleType, Type, TypePredicate};

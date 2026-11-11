@@ -49,7 +49,7 @@ pub async fn dispatch_main_async(
         if matches!(super::host::abi_arg(&out, 0)?, Val::AnyRef(None)) {
             return Ok(None);
         }
-        Ok(Some(read_main_string(&mut *store, &out)?))
+        Ok(Some(read_output_string(&mut *store, &out, "main")?))
     } else {
         let r = main.call_async(&mut *store, &[], &mut []).await;
         r.map_err(|err| uncaught_error(store, err))?;
@@ -66,9 +66,12 @@ pub(crate) fn uncaught_error(
     store: &mut Store<StoreData>,
     err: wasmtime::Error,
 ) -> wasmtime::Error {
-    if err.is::<super::host::FatalHostError>() || super::limits::is_memory_exhausted(&err) {
+    if err.is::<super::host::FatalHostError>()
+        || err.is::<crate::stdlib::functions::Escalated>()
+        || super::limits::is_memory_exhausted(&err)
+    {
         // A pending guest exception must not replace the actual fatal cause.
-        // Memory exhaustion is named; a fatal host error passes unchanged.
+        // Memory exhaustion is named; fatal and escalated host errors pass unchanged.
         store.take_pending_exception();
         return super::limits::name_memory_exhaustion(err);
     }
@@ -245,18 +248,19 @@ fn quoted_truncated(text: &str) -> String {
     format!("{:?}", format!("{cut}…"))
 }
 
-/// Reads the `$string` produced by the `__main_output` shim (in `out[0]`) into a
-/// Rust `String`, returned verbatim. Errors with a `main`-specific message if the
-/// ref slot isn't the expected non-null `$string`.
-fn read_main_string(store: &mut Store<StoreData>, out: &[Val]) -> wasmtime::Result<String> {
+/// Reads a `$string` produced by an output shim (`__main_output` or
+/// `#function:invoke`, in `out[0]`) into a Rust `String`, returned verbatim.
+pub(crate) fn read_output_string(
+    store: &mut Store<StoreData>,
+    out: &[Val],
+    source_label: &str,
+) -> wasmtime::Result<String> {
     let s_struct = match super::host::abi_arg(out, 0)? {
         Val::AnyRef(Some(any)) => any.unwrap_struct(&mut *store)?,
         Val::AnyRef(None) => {
-            return Err(wasmtime::Error::msg(
-                "main returned null where the wasm signature is non-nullable",
-            ));
+            wasmtime::bail!("{source_label} returned null where the wasm signature is non-nullable")
         }
-        other => wasmtime::bail!("unexpected ref-slot value: {other:?}"),
+        other => wasmtime::bail!("unexpected {source_label} ref-slot value: {other:?}"),
     };
     // Field 1 of `$string` is `(ref $rawString)` — the raw
     // packed-UTF-16 array. Field 0 is the vtable (skipped).
@@ -264,11 +268,9 @@ fn read_main_string(store: &mut Store<StoreData>, out: &[Val]) -> wasmtime::Resu
     let arr = match raw_field {
         Val::AnyRef(Some(any)) => any.unwrap_array(&mut *store)?,
         Val::AnyRef(None) => {
-            return Err(wasmtime::Error::msg(
-                "main's $string had null raw-array field",
-            ));
+            wasmtime::bail!("{source_label}'s $string had null raw-array field")
         }
-        other => wasmtime::bail!("$string field 1 not an arrayref: {other:?}"),
+        other => wasmtime::bail!("{source_label} $string field 1 not an arrayref: {other:?}"),
     };
     read_submilli_string(&mut *store, arr)
 }
