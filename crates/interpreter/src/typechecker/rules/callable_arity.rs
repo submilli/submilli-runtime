@@ -152,7 +152,7 @@ impl Rule<'_> {
     fn check_class_types(&mut self, class: &TypedClassDecl) {
         let span = class.name.span;
         self.check_generics(&class.generics, span);
-        for arg in &class.extends_args {
+        for arg in class.extends.iter().flat_map(|parent| &parent.args) {
             self.check_type(arg, span);
         }
         if let Some(constructor) = &class.constructor {

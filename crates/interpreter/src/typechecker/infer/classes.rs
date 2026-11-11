@@ -3596,9 +3596,6 @@ impl<'a> Inferer<'a> {
                 );
             };
             let mangled = sym.mangled_name.clone();
-            self.typed_ast
-                .runtime_class_parameters
-                .insert(mangled.clone(), class_generics.to_vec());
 
             // Static bodies run without an instance: checked before `current_class`
             // is set so `this`/`super` get the static-specific rejections — and
@@ -3716,8 +3713,7 @@ impl<'a> Inferer<'a> {
                 constructor: typed_ctor,
                 methods: typed_methods,
                 accessors,
-                extends_args: parent.as_ref().map(|e| e.args.clone()).unwrap_or_default(),
-                extends: parent.map(|e| e.parent),
+                extends: parent,
                 implements,
                 mangled_name: mangled,
                 doc,

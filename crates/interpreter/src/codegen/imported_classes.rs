@@ -351,7 +351,7 @@ fn needed_in_topo_order(
     // Imported parents of local classes (the parent itself may not be "used").
     for decl in &ta.types {
         if let TypedTypeDecl::Class(c) = decl
-            && let Some(parent) = &c.extends
+            && let Some(parent) = c.parent()
             && info.contains_key(parent)
         {
             roots.insert(parent.clone());
@@ -924,7 +924,7 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         for decl in &mut ta.types {
             if let TypedTypeDecl::Class(class) = decl {
-                class.extends = Some(parent.clone());
+                class.extends = Some(crate::ClassExtends::plain(parent.clone()));
             }
         }
         ta
