@@ -4113,24 +4113,12 @@ fn emit_binary(
                 emit_bigint_binop_inline(emitter, ctx, lhs, rhs, "mod")?;
                 return Ok(());
             }
-            // Wasm has no `f64.rem`; lower to JS-truncation modulo using
-            // `a - trunc(a / b) * b`. Two scratch f64 locals so each operand
-            // is evaluated exactly once (preserves side-effect order).
-            let a = emitter.add_anonymous_local(ValType::F64)?;
-            let b = emitter.add_anonymous_local(ValType::F64)?;
             emit_primitive_operand(emitter, ctx, lhs)?;
-            emitter.instruction(Instruction::LocalSet(a));
             emit_primitive_operand(emitter, ctx, rhs)?;
-            emitter.instruction(Instruction::LocalSet(b));
-            // Build `a - trunc(a/b)*b` on the stack.
-            emitter.instruction(Instruction::LocalGet(a));
-            emitter.instruction(Instruction::LocalGet(a));
-            emitter.instruction(Instruction::LocalGet(b));
-            emitter.instruction(Instruction::F64Div);
-            emitter.instruction(Instruction::F64Trunc);
-            emitter.instruction(Instruction::LocalGet(b));
-            emitter.instruction(Instruction::F64Mul);
-            emitter.instruction(Instruction::F64Sub);
+            let remainder = ctx.symbols.number_remainder_function.ok_or_else(|| {
+                crate::codegen::internal_failure("numeric remainder helper registered")
+            })?;
+            emitter.instruction(Instruction::Call(remainder));
         }
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
             // bigint → inline `bigint.cmp` host call; number → f64 ops;
