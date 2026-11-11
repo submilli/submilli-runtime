@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "88f06cb3f981a4252ed51e67454aefa857de9cb6c881596b643dfb9750907d3d"
+  contentHash: "5c400466667717c911030517bd04dc671f0e6213e55cdf351f0001581b015a00"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -418,7 +418,7 @@ submilli blueprint prompt
 
 ```text
 …
-Programs are synchronous: never `async`, `await` or `Promise`. Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module (`submilli:url`, `submilli:crypto`, `submilli:uuid`). Built-ins need no import: …
+Programs are synchronous: never `async`, `await` or `Promise`. Programs are typed: never `any`, in an annotation or a cast (`as any`). Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module (`submilli:url`, `submilli:crypto`, `submilli:uuid`). Built-ins need no import: …
 …
 ```
 

@@ -51,7 +51,7 @@ Run a Submilli program: a strict TypeScript subset, compiled to WebAssembly.
 
 Before your first program, call `{t_docs}` with every package and module you will import, and use those declarations rather than guessing APIs. `{t_search}` finds packages, and `{t_builtins_docs}` declares the built-ins.{function_docs}
 
-Programs are synchronous: never `async`, `await` or `Promise`. Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module ({stdlib_modules}). Built-ins need no import: `console`, {builtins} (there is no `Date`).
+Programs are synchronous: never `async`, `await` or `Promise`. Programs are typed: never `any`, in an annotation or a cast (`as any`). Every call, a package's included, returns its value directly. Import every function and type you use from its package (`@scope/name`) or standard-library module ({stdlib_modules}). Built-ins need no import: `console`, {builtins} (there is no `Date`).
 
 ```ts
 import { list_orders, type Order } from "@shop/orders";
@@ -69,7 +69,7 @@ function main(): string[] {
 }
 ```
 
-There is no `any`: use the package's types, or `unknown` narrowed with `typeof`, `Array.isArray` or `===`. Every function declaration needs a return type, `main` included: `function main(): string[]`, never `function main()`. `x == null` is a compile error: write `x === null` or `x === undefined`.
+Instead of `any`, use the package's types: `const large: Order[] = []` for an array you fill, and no annotation on a callback parameter (`orders.filter((order) => …)`). For a value of unknown shape, use `unknown` narrowed with `typeof`, `Array.isArray` or `===`. Every function declaration needs a return type, `main` included: `function main(): string[]`, never `function main()`. `x == null` is a compile error: write `x === null` or `x === undefined`.
 
 Postfix `x!` is a runtime-checked non-null assertion: it
 removes `null` and `undefined` from the type and throws `TypeError` for either.
@@ -186,8 +186,8 @@ keeps appearing despite the existing prose. Record:
   862-word prompt had 80 compile-failed programs per round across Claude
   Haiku 5.5, GPT-6 Luna and DeepSeek V4.1 Flash. Haiku's 47 alone
   included 29 with `async` and 21 with a missing return type.
-- **Fix:** the current layout, at about 560 words: the synchronous and
-  import rules, one example, the three rules most broken, then the
+- **Fix:** the current layout, at about 560 words: the synchronous, `any`
+  and import rules, one example, the three rules most broken, then the
   paragraph of language differences (the one starting "Postfix `x!`").
   Two runs gave 19 and 19 compile-failed programs, with no `async` and no
   missing return types. Findings along the way:
@@ -200,6 +200,13 @@ keeps appearing despite the existing prose. Record:
     Haiku's `const all: any[] = []`. "`function main(): string[]`, never
     `function main()`" primed nothing and took missing return types to 0;
     GPT-6.1 Terra had written `function main() {` in 48 programs.
+  - The `any` rule next to the synchronous one. Haiku still wrote
+    `const all: any[] = []`, `(x: any) =>` and `as any`. "Programs are
+    typed: never `any`, in an annotation or a cast (`as any`)" after the
+    synchronous rule, with the later rule rewritten as fixes (a typed
+    empty array, an unannotated callback parameter), took Haiku's `any`
+    compile errors from 12 to 0 on AppWorld dev and train (147 tasks,
+    2026-11-11), with nothing else changed. Naming `as any` primed nothing.
   - Removed with no measured cost: the strategy paragraphs (one sentence
     is left), the Node/NPM sentence, the built-ins docs tool walkthrough,
     and the separate output paragraph.
