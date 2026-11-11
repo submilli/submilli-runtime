@@ -29,22 +29,31 @@ use crate::{
 pub(super) fn run(ta: &TypedAst, diagnostics: &mut Vec<Diagnostic>) -> Result<(), CompilerFailure> {
     let mut rule = Rule {
         ta,
-        signatures: BTreeSet::new(),
+        seen: BTreeSet::new(),
+        reported: BTreeSet::new(),
         diagnostics,
     };
-    // Callables first: each reports and records its signature, so a written
-    // function type that repeats one is not reported again.
+    // The places a type is written first, then the values that may hold a
+    // copy of one: a local or global takes its initializer's type, a cast or
+    // type argument may come from inference.
     rule.check_named_callables();
     body_walk::walk_program(ta, &mut Closures(&mut rule))?;
     rule.check_declaration_types();
+    for global in &ta.globals {
+        rule.check_held_type(&global.ty, global.name.span);
+    }
     body_walk::walk_program(ta, &mut BodyTypes(&mut rule))
 }
 
+/// A function type's parameter types and return type.
+type Signature = (Vec<Type>, Type);
+
 struct Rule<'a> {
     ta: &'a TypedAst,
-    /// The signatures of the callables and function types reported so far.
-    /// Each is a function type's parameter types and return type.
-    signatures: BTreeSet<(Vec<Type>, Type)>,
+    /// Every signature of too many slots found so far.
+    seen: BTreeSet<Signature>,
+    /// Each place reported, with the signature reported there.
+    reported: BTreeSet<(Span, Signature)>,
     diagnostics: &'a mut Vec<Diagnostic>,
 }
 
@@ -85,9 +94,11 @@ impl Rule<'_> {
     /// Every callable is reported, even one whose signature another shares.
     fn check_callable(&mut self, params: &[TypedParam], ret: &Type, span: Span) {
         if let Err(error) = checked_closure_arity(params.len()) {
-            self.report(error, span);
-            let params = params.iter().map(|p| p.ty.clone()).collect();
-            self.signatures.insert((params, ret.clone()));
+            let signature: Signature = (params.iter().map(|p| p.ty.clone()).collect(), ret.clone());
+            self.seen.insert(signature.clone());
+            if self.reported.insert((span, signature)) {
+                self.report(error, span);
+            }
         }
     }
 
@@ -114,9 +125,6 @@ impl Rule<'_> {
             if let Some(predicate) = &function.type_predicate {
                 self.check_type(&predicate.asserted_type, span);
             }
-        }
-        for global in &ta.globals {
-            self.check_type(&global.ty, global.name.span);
         }
     }
 
@@ -194,26 +202,24 @@ impl Rule<'_> {
         }
     }
 
-    /// Reports each function type in `root` of too many slots whose signature
-    /// is not reported yet. A named type is not followed: its declaration is
-    /// checked where it is declared.
+    /// Reports each function type of too many slots that `root`, written at
+    /// `span`, holds, once per place.
     fn check_type(&mut self, root: &Type, span: Span) {
-        let mut pending = vec![root];
-        while let Some(ty) = pending.pop() {
-            match ty {
-                Type::Alias { args, .. }
-                | Type::InterfaceRef { args, .. }
-                | Type::ClassRef { args, .. }
-                | Type::AliasRef { args, .. } => pending.extend(args),
-                Type::Function { params, ret, .. } => {
-                    if let Err(error) = checked_closure_arity(params.len())
-                        && self.signatures.insert((params.clone(), (**ret).clone()))
-                    {
-                        self.report(error, span);
-                    }
-                    crate::type_size::for_each_child(ty, |child| pending.push(child));
-                }
-                _ => crate::type_size::for_each_child(ty, |child| pending.push(child)),
+        for (error, signature) in oversized_functions(root) {
+            self.seen.insert(signature.clone());
+            if self.reported.insert((span, signature)) {
+                self.report(error, span);
+            }
+        }
+    }
+
+    /// Reports each function type of too many slots that `root` holds and
+    /// no place has reported: the type of a value may repeat one written
+    /// elsewhere.
+    fn check_held_type(&mut self, root: &Type, span: Span) {
+        for (error, signature) in oversized_functions(root) {
+            if self.seen.insert(signature) {
+                self.report(error, span);
             }
         }
     }
@@ -229,7 +235,7 @@ impl Rule<'_> {
     }
 }
 
-/// Reports each closure's parameter list.
+/// Checks each closure: its parameter list and the types it writes.
 struct Closures<'r, 'a>(&'r mut Rule<'a>);
 
 impl Visitor for Closures<'_, '_> {
@@ -242,20 +248,27 @@ impl Visitor for Closures<'_, '_> {
         else {
             return Ok(());
         };
-        let span = closure_span(self.0.ta, id, params)?;
+        let ta = self.0.ta;
+        let span = closure_span(ta, id, params)?;
         self.0.check_callable(params, return_type, span);
+        // Its own type, with its parameters, return and predicate.
+        let ty = &ta
+            .try_expr(id)
+            .map_err(crate::typechecker::arena_failure)?
+            .ty;
+        self.0.check_type(ty, span);
         Ok(())
     }
 }
 
-/// Checks the types written in bodies: of closures, locals, casts and type
+/// Checks the types of the values in bodies: of locals, casts and type
 /// arguments.
 struct BodyTypes<'r, 'a>(&'r mut Rule<'a>);
 
 impl Visitor for BodyTypes<'_, '_> {
     fn visit_stmt(&mut self, kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
         if let TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. } = kind {
-            self.0.check_type(ty, name.span);
+            self.0.check_held_type(ty, name.span);
         }
         Ok(())
     }
@@ -264,30 +277,44 @@ impl Visitor for BodyTypes<'_, '_> {
         let rule = &mut *self.0;
         let ta = rule.ta;
         match kind {
-            // Its own type, with its parameters, return and predicate.
-            TypedExprKind::Closure { params, .. } => {
-                let span = closure_span(ta, id, params)?;
-                let ty = &ta
-                    .try_expr(id)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .ty;
-                rule.check_type(ty, span);
-            }
             TypedExprKind::Cast { target_ty, .. } => {
                 let span = expr_span(ta, id)?;
-                rule.check_type(target_ty, span);
+                rule.check_held_type(target_ty, span);
             }
             TypedExprKind::GenericCall { type_args, .. }
             | TypedExprKind::GenericMethodCall { type_args, .. } => {
                 let span = expr_span(ta, id)?;
                 for ty in type_args {
-                    rule.check_type(ty, span);
+                    rule.check_held_type(ty, span);
                 }
             }
             _ => {}
         }
         Ok(())
     }
+}
+
+/// The function types of too many slots in `root`. A named type is not
+/// followed: its declaration is checked where it is declared.
+fn oversized_functions(root: &Type) -> Vec<(UnsupportedClosureArity, Signature)> {
+    let mut found = Vec::new();
+    let mut pending = vec![root];
+    while let Some(ty) = pending.pop() {
+        match ty {
+            Type::Alias { args, .. }
+            | Type::InterfaceRef { args, .. }
+            | Type::ClassRef { args, .. }
+            | Type::AliasRef { args, .. } => pending.extend(args),
+            Type::Function { params, ret, .. } => {
+                if let Err(error) = checked_closure_arity(params.len()) {
+                    found.push((error, (params.clone(), (**ret).clone())));
+                }
+                crate::type_size::for_each_child(ty, |child| pending.push(child));
+            }
+            _ => crate::type_size::for_each_child(ty, |child| pending.push(child)),
+        }
+    }
+    found
 }
 
 /// A closure is reported over its parameter list.

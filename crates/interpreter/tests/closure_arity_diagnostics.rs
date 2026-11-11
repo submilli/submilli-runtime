@@ -89,6 +89,22 @@ fn an_alias_is_reported_once() {
     assert_eq!(limit_diagnostics(&error.diagnostics).len(), 1, "{error:?}");
 }
 
+/// Each place that writes a function type of too many slots is reported, even
+/// when another writes the same one.
+#[test]
+fn each_written_place_is_reported() {
+    let p = parameters(256);
+    let source = format!(
+        "type F = ({p}) => void; type G = ({p}) => void; function main(): number {{ return 42; }}"
+    );
+    let error = typecheck_checked(&source, FileId(0)).unwrap_err();
+    let spans: Vec<_> = limit_diagnostics(&error.diagnostics)
+        .into_iter()
+        .map(|d| d.span.text(&source, FileId(0)).unwrap())
+        .collect();
+    assert_eq!(spans, ["F", "G"], "{error:?}");
+}
+
 #[test]
 fn constructors_keep_their_own_abi() {
     let source = format!(
@@ -231,6 +247,11 @@ fn packages_report_the_limit_where_declared() {
                 "I",
             ),
             (
+                "a static method",
+                format!("export class C {{ static f({p}): number {{ return 1; }} }}"),
+                "f",
+            ),
+            (
                 "a class's bound",
                 format!("export class C<T extends ({p}) => void> {{ v: T | null = null; }}"),
                 "C",
@@ -243,7 +264,7 @@ fn packages_report_the_limit_where_declared() {
             (
                 "a closure's type predicate",
                 format!("export const isF = (x: unknown): x is ({p}) => void => false;"),
-                "isF",
+                "x",
             ),
             (
                 "an inherited extends clause",
@@ -379,4 +400,54 @@ fn codegen_rejects_a_hand_built_dependency() {
         &[],
     )
     .unwrap();
+}
+
+/// A hand-built dependency's interface may hold a method of too many slots.
+/// Using the interface lowers every member's signature, so codegen rejects a
+/// script that reads only another member. The compiler never builds such a
+/// declaration: host packages, the only ones built by hand, dispatch their
+/// interfaces statically or directly.
+#[test]
+fn codegen_rejects_a_hand_built_interface() {
+    let wide = parameters(255);
+    let source = format!(
+        "export interface I {{ m(a: number): number; n({wide}): number; p: number; }}
+         export function get(): I {{ return {{ m: (a: number): number => a, n: ({wide}): number => a254, p: 7 }}; }}"
+    );
+    let mut declaration = compile_package_checked(
+        "aritydep",
+        ModulePath::from("lib"),
+        &[PackageSourceModule {
+            path: ModulePath::from("lib"),
+            source: &source,
+        }],
+        &[],
+    )
+    .unwrap()
+    .declaration;
+    let submilli_engine::TypeKind::Interface { methods, .. } =
+        &mut declaration.types.get_mut("I").unwrap().kind
+    else {
+        panic!("interface")
+    };
+    methods.get_mut("m").unwrap().params = (0..256)
+        .map(|i| submilli_engine::Param::new(format!("a{i}"), Type::Number))
+        .collect();
+    let args = (1..=255)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    for body in [
+        "return get().p;".to_string(),
+        format!("return get().n({args});"),
+    ] {
+        let source =
+            format!("import {{ get }} from \"aritydep\"; function main(): number {{ {body} }}");
+        let error =
+            compile_script_checked(&source, "use.ts", FileId(7), &[&declaration], &[]).unwrap_err();
+        assert!(
+            matches!(&error.fatal, Some(submilli_engine::compiler_error::CompilerFailure::Limit { message, .. }) if message.contains("256 parameter slots")),
+            "{body}: {error:?}"
+        );
+    }
 }
