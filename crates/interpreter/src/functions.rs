@@ -7,6 +7,76 @@
 //! (`lead-scan` -> `leadScan`). At runtime, frames inside `@functions/<name>`
 //! resolve to the `"main"` principal so functions never amplify caller
 //! permissions and never receive package-scoped secrets.
+//!
+//! # Embedder workflow
+//!
+//! ```no_run
+//! use submilli_engine::docs_view::Unscoped;
+//! use submilli_engine::packages::DocAudience;
+//! use submilli_engine::runtime::{
+//!     StoreData, Vfs, install_package_modules_async, install_runtime_async_for,
+//! };
+//! use submilli_engine::{
+//!     FileId, FunctionCache, FunctionDefinition, FunctionError, FunctionSet, OptionalPackage,
+//!     RuntimeConfig, Stdlib, compile_function_set_for, compile_parsed_script_timed,
+//!     dispatch_main_async, install_functions_async, instantiate_program_async, invoke_function_async,
+//!     parse_script,
+//! };
+//! use wasmtime::{Linker, Module};
+//!
+//! # async fn example() -> wasmtime::Result<()> {
+//! let cfg = RuntimeConfig::default();
+//! let engine = cfg.engine()?;
+//! let cache = FunctionCache::new();
+//! let stdlib = Stdlib::core().with(OptionalPackage::Agents);
+//!
+//! // 1 & 2. Validate a single function at apply time or assemble a session FunctionSet.
+//! let set = FunctionSet::new(vec![FunctionDefinition {
+//!     name: "lead-scan".into(),
+//!     description: "Scan daily leads.".into(),
+//!     source: "export function run(limit: number): number { return limit + 1; }".into(),
+//! }]);
+//! let compiled_set = compile_function_set_for(stdlib, &engine, &set, &[], &[], Some(&cache))?;
+//! let _requires = compiled_set.get("lead-scan").unwrap().requires();
+//!
+//! // 3. Directly invoke a function from the host with JSON-encoded arguments.
+//! let mut store = cfg.store(&engine, StoreData::with_vfs("run-1".into(), Vfs::tempdir()?))?;
+//! match invoke_function_async(&mut store, &compiled_set, &[], "lead-scan", &["10"]).await {
+//!     Ok(Some(json)) => assert_eq!(json, "11"),
+//!     Ok(None) => {}
+//!     Err(FunctionError::Escalated { reason: _ }) => {}
+//!     Err(other) => return Err(other.into()),
+//! }
+//!
+//! // 4 & 5. Project `@functions` docs/search and link `@functions` into LLM `main.ts` code.
+//! let view = compiled_set.view(&Unscoped);
+//! let _docs = view.docs_for("@functions", DocAudience::Agent);
+//! let _hits = view.search_functions("lead");
+//!
+//! let main_src =
+//!     r#"import { leadScan } from "@functions"; function main(): number { return leadScan(4); }"#;
+//! let parsed = parse_script(main_src, FileId(0));
+//! let main = compile_parsed_script_timed(
+//!     main_src,
+//!     "main.ts",
+//!     &parsed,
+//!     &compiled_set.stdlib().package_declarations(),
+//!     &[compiled_set.package_declaration()],
+//!     &[],
+//! )
+//! .expect("compile main");
+//! let main_module = Module::new(&engine, &main.wasm)?;
+//! let mut store = cfg.store(&engine, StoreData::with_vfs("run-2".into(), Vfs::tempdir()?))?;
+//! let mut linker = Linker::new(&engine);
+//! install_runtime_async_for(&mut linker, &mut store, compiled_set.stdlib()).await?;
+//! install_package_modules_async(&mut linker, &mut store, &[]).await?;
+//! install_functions_async(&mut linker, &mut store, &compiled_set).await?;
+//! store.data_mut().install_type_info(main.type_info);
+//! let instance = instantiate_program_async(&linker, &mut store, &main_module).await?;
+//! let _out = dispatch_main_async(&mut store, &instance).await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
