@@ -1065,7 +1065,6 @@ pub struct TypedAst {
     pub runtime_type_tests: std::collections::BTreeMap<Type, FieldNarrowingTest>,
     /// Substituted data fields for generic-class runtime validation.
     pub runtime_class_fields: std::collections::BTreeMap<Type, Type>,
-    pub runtime_class_parameters: std::collections::BTreeMap<MangledName, Vec<String>>,
     pub runtime_class_contexts: std::collections::BTreeMap<Type, Vec<InstanceTypeContext>>,
     pub runtime_field_guards: std::collections::BTreeMap<Type, Vec<InstantiatedFieldGuard>>,
 }
@@ -1160,6 +1159,7 @@ pub enum TypedTypeDecl {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedClassDecl {
     pub name: Ident,
+    pub generics: crate::GenericParameters,
     pub fields: Vec<TypedClassField>,
     /// Static member visibility retained for analyses that run after package
     /// declarations have been reduced to their runtime surface.
@@ -1183,7 +1183,7 @@ pub struct TypedClassDecl {
     /// both). They are *not* in `methods`; codegen synthesizes the vtable method
     /// per entry (see `codegen::classes`).
     pub accessors: Vec<TypedClassAccessor>,
-    pub extends: Option<crate::MangledName>,
+    pub extends: Option<crate::ClassExtends>,
     pub implements: Vec<crate::MangledName>,
     pub mangled_name: crate::MangledName,
     pub doc: Option<crate::DocComment>,
@@ -1431,6 +1431,11 @@ fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool 
 }
 
 impl TypedClassDecl {
+    /// The class `extends` names, without the type arguments it passes.
+    pub fn parent(&self) -> Option<&crate::MangledName> {
+        self.extends.as_ref().map(|extends| &extends.parent)
+    }
+
     /// The constructor signature this class exposes: its own if it declares
     /// one, otherwise the inherited signature. Callers should prefer this over
     /// reading either field directly — `inherited_ctor_params` is meaningful
@@ -1469,6 +1474,8 @@ pub struct TypedInterfaceDecl {
     pub index: Option<crate::IndexSignature>,
     pub name: Ident,
     pub generics: crate::GenericParameters,
+    /// The bases the `extends` clause names, with their type arguments.
+    pub extends: Vec<Type>,
     pub members: Vec<TypedInterfaceMember>,
     pub doc: Option<crate::DocComment>,
 }

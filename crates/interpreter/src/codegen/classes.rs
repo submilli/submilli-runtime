@@ -230,7 +230,7 @@ impl ClassPlan {
 
         for mangled in &order {
             let decl = class_decl(&by_mangled, mangled)?;
-            let mut private = match &decl.extends {
+            let mut private = match decl.parent() {
                 Some(parent) => private_members
                     .get(parent)
                     .cloned()
@@ -251,7 +251,7 @@ impl ClassPlan {
             private_members.insert(mangled.clone(), private);
             // Parent prefix: a local parent (resolved earlier this pass) or an
             // imported parent (its full layout reconstructed in `imported_classes`).
-            let (parent_fields, parent_methods) = match &decl.extends {
+            let (parent_fields, parent_methods) = match decl.parent() {
                 Some(parent) => parent_prefix(parent, &layouts, imported)?,
                 None => (Vec::new(), Vec::new()),
             };
@@ -378,15 +378,11 @@ impl ClassPlan {
                 .ok_or_else(|| internal_failure("a class's private members were not recorded"))?;
             classes.push(ClassLayout {
                 private_members,
-                generics: ta
-                    .runtime_class_parameters
-                    .get(&mangled)
-                    .cloned()
-                    .unwrap_or_default(),
+                generics: decl.generics.names.clone(),
                 mangled: mangled.clone(),
                 name: decl.name.name.clone(),
                 name_span: decl.name.span,
-                parent: decl.extends.clone(),
+                parent: decl.parent().cloned(),
                 fields,
                 field_setup,
                 accessor_names,
@@ -2000,7 +1996,7 @@ fn topo_order(
                 return Err(internal_failure("class inheritance is cyclic"));
             }
             chain.push(mangled);
-            next = decl.extends.as_ref();
+            next = decl.parent();
         }
         for mangled in chain.into_iter().rev() {
             visited.insert(mangled);
@@ -2804,7 +2800,7 @@ mod layout_invariant_tests {
 
         let mut cyclic = intact;
         let b_name = class_mut(&mut cyclic, "B").mangled_name.clone();
-        class_mut(&mut cyclic, "A").extends = Some(b_name);
+        class_mut(&mut cyclic, "A").extends = Some(crate::ClassExtends::plain(b_name));
         assert_internal(ClassPlan::collect(&cyclic, &BTreeMap::new()));
     }
 

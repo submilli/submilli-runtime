@@ -243,8 +243,7 @@ fn public_classes(ta: &TypedAst) -> BTreeSet<&MangledName> {
                 break;
             }
             current = class
-                .extends
-                .as_ref()
+                .parent()
                 .and_then(|parent| classes(ta).find(|class| class.mangled_name == *parent));
         }
     }

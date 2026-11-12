@@ -324,9 +324,9 @@ impl<'a> Builder<'a> {
                 continue;
             };
             self.classes
-                .insert(class.mangled_name.clone(), class.extends.clone());
+                .insert(class.mangled_name.clone(), class.parent().cloned());
             self.class_hierarchy
-                .insert(class.mangled_name.clone(), class.extends.clone());
+                .insert(class.mangled_name.clone(), class.parent().cloned());
             let class_public = exported_classes.contains(&class.mangled_name);
             let ctor_public = class_public && self.constructor_is_public(&class.mangled_name);
             let ctor_mangled = crate::mangle::extend(&class.mangled_name, "constructor");
@@ -612,7 +612,7 @@ impl<'a> Builder<'a> {
                     .map(|field| field.name.name.clone())
                     .collect(),
             };
-            let mut parent = class.extends.clone();
+            let mut parent = class.parent().cloned();
             for _ in 0..=self.class_hierarchy.len() {
                 let Some(parent_name) = parent else {
                     break;
@@ -657,7 +657,7 @@ impl<'a> Builder<'a> {
                         class.name.span,
                         &mut seen.statics,
                     )?;
-                    parent = parent_class.extends.clone();
+                    parent = parent_class.parent().cloned();
                     continue;
                 }
                 let Some(surface) = self.external_surfaces.get(&parent_name).cloned() else {
@@ -1073,7 +1073,7 @@ impl<'a> Builder<'a> {
             let TypedTypeDecl::Class(class) = declaration else {
                 continue;
             };
-            let (None, Some(parent)) = (&class.constructor, &class.extends) else {
+            let (None, Some(parent)) = (&class.constructor, class.parent()) else {
                 continue;
             };
             let child = crate::mangle::extend(&class.mangled_name, "constructor");

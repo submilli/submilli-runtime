@@ -234,7 +234,7 @@ pub fn class_member_sigs(
             }
         }
         class_accessor_sigs(&class.accessors, &mut out)?;
-        inherited_dependency_sigs(class.extends.clone(), dependencies, &mut out)?;
+        inherited_dependency_sigs(class.parent().cloned(), dependencies, &mut out)?;
     }
     Ok(out)
 }

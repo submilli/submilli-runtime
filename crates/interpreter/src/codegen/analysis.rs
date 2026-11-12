@@ -159,10 +159,9 @@ impl CodegenAnalysis {
             analysis.walk_expr(ta, expr_id)?;
         }
         if !ta.runtime_class_fields.is_empty()
-            || ta
-                .runtime_class_parameters
-                .values()
-                .any(|params| !params.is_empty())
+            || ta.types.iter().any(|declaration| {
+                matches!(declaration, crate::TypedTypeDecl::Class(class) if !class.generics.is_empty())
+            })
             || ta
                 .functions
                 .iter()
@@ -243,7 +242,7 @@ impl CodegenAnalysis {
             .types
             .iter()
             .filter_map(|decl| match decl {
-                crate::TypedTypeDecl::Class(class) => class.extends.as_ref(),
+                crate::TypedTypeDecl::Class(class) => class.parent(),
                 _ => None,
             })
             .collect();

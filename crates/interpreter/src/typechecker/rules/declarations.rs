@@ -150,7 +150,7 @@ impl<'a> TypeDeclarations<'a> {
                     return None;
                 }
                 (
-                    class.extends.as_ref(),
+                    class.parent(),
                     class
                         .fields
                         .iter()
