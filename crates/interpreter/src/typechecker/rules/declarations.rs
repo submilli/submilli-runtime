@@ -204,10 +204,15 @@ impl<'a> TypeDeclarations<'a> {
         Some(names.into_iter().collect())
     }
 
+    /// A branded primitive (`string & { brand: true }`) peels to its
+    /// primitive, so its phantom members are not found here.
     fn member_within(&self, ty: &Type, member: &str, expansions_left: u32) -> Member {
         match ty.peel() {
             Type::Object { fields, index } => object_member(fields, index.as_ref(), member),
             Type::Union(alternatives) => self.union_member(alternatives, member, expansions_left),
+            Type::Intersection(members) => {
+                self.intersection_member(members, member, expansions_left)
+            }
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -244,6 +249,8 @@ impl<'a> TypeDeclarations<'a> {
             | Type::GenericParam { .. }
             | Type::KeyOf(_)
             | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
             | Type::NumberEnum { .. }
             | Type::StringEnum { .. }
             // `peel` has removed these.
@@ -273,6 +280,27 @@ impl<'a> TypeDeclarations<'a> {
             return Member::Missing;
         }
         Member::Found(Type::union(found))
+    }
+
+    /// A member of `A & B` is the intersection of the members' types that
+    /// have it.
+    fn intersection_member(&self, members: &[Type], member: &str, expansions_left: u32) -> Member {
+        let mut found = Vec::new();
+        let mut unresolved = false;
+        for each in members {
+            match self.member_within(each, member, expansions_left) {
+                Member::Found(ty) => found.push(ty),
+                Member::Missing => {}
+                Member::Unresolved => unresolved = true,
+            }
+        }
+        if unresolved {
+            return Member::Unresolved;
+        }
+        if found.is_empty() {
+            return Member::Missing;
+        }
+        Member::Found(Type::intersection(found))
     }
 
     fn interface_member(

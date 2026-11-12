@@ -261,7 +261,10 @@ fn walk(
         Type::TypeVar(_)
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
-        | Type::IndexedAccess { .. } => Err(reject(
+        | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_) => Err(reject(
             path,
             "generic type parameters are erased — the schema is emitted at compile time",
         )),

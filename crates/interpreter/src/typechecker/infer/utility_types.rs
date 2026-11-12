@@ -304,7 +304,10 @@ impl Evaluator<'_> {
             Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::KeyOf(_)
-            | Type::IndexedAccess { .. } => Err(None),
+            | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
+            | Type::Intersection(_) => Err(None),
         }
     }
 

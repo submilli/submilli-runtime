@@ -49,7 +49,10 @@ impl fmt::Display for Shape {
             // Mirrors `Type`'s array arm — `canonical_display` is a dedup key
             // compared against it.
             Shape::Array(elem) => match &**elem {
-                Type::Union(_) | Type::Function { .. } => write!(f, "({elem})[]"),
+                Type::Union(_)
+                | Type::Function { .. }
+                | Type::Conditional { .. }
+                | Type::Intersection(_) => write!(f, "({elem})[]"),
                 _ => write!(f, "{elem}[]"),
             },
             Shape::Tuple(elements) => Type::Tuple(elements.clone()).fmt(f),

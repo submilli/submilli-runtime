@@ -137,11 +137,15 @@ impl<'a> ShapeCollector<'a> {
                     self.collect(a);
                 }
             }
-            // A symbolic `keyof T` or `T[K]` lowers like a type parameter.
+            // A symbolic `keyof T` or `T[K]` lowers like a type parameter,
+            // as do mapped, conditional and intersection types.
             Type::KeyOf(inner) => self.collect(inner),
             Type::IndexedAccess { object, index } => {
                 self.collect(object);
                 self.collect(index);
+            }
+            Type::Mapped { .. } | Type::Conditional { .. } | Type::Intersection(_) => {
+                crate::type_size::for_each_child(ty, |child| self.collect(child));
             }
             // aliases have no shape of their own — recurse into the body
             Type::Alias { ty: inner, .. }

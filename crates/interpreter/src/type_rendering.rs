@@ -1,6 +1,7 @@
 //! Iterative type spelling; frames borrow the input and never clone recursive types.
 use crate::lower_local_types::{display_type_name, written_type_args};
 use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
+use crate::types::MappedModifier;
 use crate::{IndexSignature, ObjectField, Type};
 
 /// What a [`Frame::List`] writes, which decides how each item is spelled.
@@ -8,8 +9,12 @@ use crate::{IndexSignature, ObjectField, Type};
 enum ListKind {
     /// Type arguments.
     Plain,
-    /// Union members: a function member is parenthesized.
+    /// Union members: a function, refinement or conditional member is
+    /// parenthesized.
     Union,
+    /// Intersection members: parenthesized as a union's, and a union member
+    /// too.
+    Intersection,
     /// A function's parameters, named `argN`; items from `optional_from` on
     /// are optional, and the last is the rest parameter when `rest`.
     Params { rest: bool, optional_from: usize },
@@ -40,6 +45,10 @@ enum Frame<'a> {
         first: bool,
         depth: usize,
     },
+    /// Starts a conditional type's `extends` clause, where its `infer`
+    /// names are spelled `infer N`.
+    EnterInfers(&'a [String]),
+    LeaveInfers,
 }
 
 pub(crate) fn render(ty: &Type, limits: RenderLimits) -> Result<RenderedText, RenderError> {
@@ -48,6 +57,7 @@ pub(crate) fn render(ty: &Type, limits: RenderLimits) -> Result<RenderedText, Re
 
 pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError> {
     let mut frames = Vec::new();
+    let mut infers: Vec<&[String]> = Vec::new();
     push(&mut frames, Frame::Type(ty, 1))?;
     while let Some(frame) = frames.pop() {
         out.step()?;
@@ -60,7 +70,14 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
             )?,
             Frame::Type(ty, depth) => {
                 out.depth(depth)?;
-                write_node(out, &mut frames, ty, depth)?;
+                write_node(out, &mut frames, ty, depth, &infers)?;
+            }
+            Frame::EnterInfers(names) => {
+                infers.try_reserve(1).map_err(|_| RenderError::Allocation)?;
+                infers.push(names);
+            }
+            Frame::LeaveInfers => {
+                infers.pop();
             }
             Frame::List {
                 mut remaining,
@@ -89,8 +106,12 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                 )?;
                 match kind {
                     ListKind::Plain => push(&mut frames, Frame::Type(ty, depth))?,
-                    ListKind::Union => {
-                        let parens = matches!(ty, Type::Function { .. } | Type::Refined { .. });
+                    ListKind::Union | ListKind::Intersection => {
+                        let parens = matches!(
+                            ty,
+                            Type::Function { .. } | Type::Refined { .. } | Type::Conditional { .. }
+                        ) || (matches!(kind, ListKind::Intersection)
+                            && matches!(ty, Type::Union(_)));
                         if parens {
                             out.push("(")?;
                             push(&mut frames, Frame::Text(")"))?;
@@ -137,7 +158,7 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                             _ => push(&mut frames, union_list(present, depth))?,
                         }
                     }
-                    _ => write_node(out, &mut frames, ty, depth)?,
+                    _ => write_node(out, &mut frames, ty, depth, &infers)?,
                 }
             }
             Frame::Fields {
@@ -188,6 +209,7 @@ fn write_node<'a>(
     frames: &mut Vec<Frame<'a>>,
     ty: &'a Type,
     depth: usize,
+    infers: &[&[String]],
 ) -> Result<(), RenderError> {
     let child = depth.checked_add(1).ok_or(RenderError::Truncated)?;
     match ty {
@@ -228,12 +250,22 @@ fn write_node<'a>(
         Type::NonPrimitive => out.push("object"),
         Type::Error => out.push("<error>"),
         Type::Never => out.push("never"),
-        Type::TypeVar(name) | Type::GenericParam { name, .. } => out.push(display_type_name(name)),
+        Type::TypeVar(name) => {
+            if is_infer(ty, infers) {
+                out.push("infer ")?;
+            }
+            out.push(display_type_name(name))
+        }
+        Type::GenericParam { name, .. } => out.push(display_type_name(name)),
         Type::KeyOf(inner) => {
             let parens = matches!(
                 inner.as_ref(),
-                Type::Union(_) | Type::Function { .. } | Type::Refined { .. }
-            );
+                Type::Union(_)
+                    | Type::Function { .. }
+                    | Type::Refined { .. }
+                    | Type::Conditional { .. }
+                    | Type::Intersection(_)
+            ) || is_infer(inner, infers);
             out.push(if parens { "keyof (" } else { "keyof " })?;
             if parens {
                 push(frames, Frame::Text(")"))?;
@@ -243,8 +275,13 @@ fn write_node<'a>(
         Type::IndexedAccess { object, index } => {
             let parens = matches!(
                 object.as_ref(),
-                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } | Type::KeyOf(_)
-            );
+                Type::Union(_)
+                    | Type::Function { .. }
+                    | Type::Refined { .. }
+                    | Type::KeyOf(_)
+                    | Type::Conditional { .. }
+                    | Type::Intersection(_)
+            ) || is_infer(object, infers);
             if parens {
                 out.push("(")?;
             }
@@ -253,6 +290,83 @@ fn write_node<'a>(
             push(frames, Frame::Text(if parens { ")[" } else { "[" }))?;
             push(frames, Frame::Type(object, child))
         }
+        // `{ readonly [K in keyof T as N]?: T[K] }`, as tsc prints it.
+        Type::Mapped {
+            key,
+            constraint,
+            name,
+            template,
+            optional,
+            readonly,
+        } => {
+            out.push(match readonly {
+                MappedModifier::Keep => "{ [",
+                MappedModifier::Add => "{ readonly [",
+                MappedModifier::Remove => "{ -readonly [",
+            })?;
+            out.push(display_type_name(key))?;
+            out.push(" in ")?;
+            push(frames, Frame::Text(" }"))?;
+            push(frames, Frame::Type(template, child))?;
+            push(
+                frames,
+                Frame::Text(match optional {
+                    MappedModifier::Keep => "]: ",
+                    MappedModifier::Add => "]?: ",
+                    MappedModifier::Remove => "]-?: ",
+                }),
+            )?;
+            if let Some(name) = name {
+                push(frames, Frame::Type(name, child))?;
+                push(frames, Frame::Text(" as "))?;
+            }
+            push(frames, Frame::Type(constraint, child))
+        }
+        // The check and `extends` types bind tighter than the conditional,
+        // so a function or conditional there is parenthesized.
+        Type::Conditional {
+            check,
+            extends,
+            infers: names,
+            true_ty,
+            false_ty,
+        } => {
+            let operand =
+                |ty: &Type| matches!(ty, Type::Function { .. } | Type::Conditional { .. });
+            let (check_parens, extends_parens) = (operand(check), operand(extends));
+            push(frames, Frame::Type(false_ty, child))?;
+            push(frames, Frame::Text(" : "))?;
+            push(frames, Frame::Type(true_ty, child))?;
+            push(frames, Frame::Text(" ? "))?;
+            if extends_parens {
+                push(frames, Frame::Text(")"))?;
+            }
+            push(frames, Frame::LeaveInfers)?;
+            push(frames, Frame::Type(extends, child))?;
+            push(frames, Frame::EnterInfers(names))?;
+            if extends_parens {
+                push(frames, Frame::Text("("))?;
+            }
+            push(frames, Frame::Text(" extends "))?;
+            if check_parens {
+                push(frames, Frame::Text(")"))?;
+            }
+            push(frames, Frame::Type(check, child))?;
+            if check_parens {
+                out.push("(")?;
+            }
+            Ok(())
+        }
+        Type::Intersection(members) => push(
+            frames,
+            Frame::List {
+                remaining: members.iter().rev().collect(),
+                index: 0,
+                separator: " & ",
+                kind: ListKind::Intersection,
+                depth: child,
+            },
+        ),
         Type::NumberEnum { name, .. } | Type::StringEnum { name, .. } => {
             out.push(display_type_name(name))?;
             match ty.enum_member_name() {
@@ -313,10 +427,13 @@ fn write_node<'a>(
             let parens = match inner.as_ref() {
                 // `ReadonlyMap<K, V>[]` needs no parentheses.
                 Type::Readonly(element) => !matches!(element.as_ref(), Type::InterfaceRef { .. }),
-                Type::Union(_) | Type::Function { .. } | Type::Refined { .. } | Type::KeyOf(_) => {
-                    true
-                }
-                _ => false,
+                Type::Union(_)
+                | Type::Function { .. }
+                | Type::Refined { .. }
+                | Type::KeyOf(_)
+                | Type::Conditional { .. }
+                | Type::Intersection(_) => true,
+                inner => is_infer(inner, infers),
             };
             if parens {
                 out.push("(")?;
@@ -387,6 +504,12 @@ fn write_node<'a>(
             union_list(crate::types::union_display_order(members), child),
         ),
     }
+}
+
+/// Whether `ty` is a name an enclosing conditional's `extends` clause
+/// declares with `infer`.
+fn is_infer(ty: &Type, infers: &[&[String]]) -> bool {
+    matches!(ty, Type::TypeVar(name) if infers.iter().any(|names| names.contains(name)))
 }
 
 fn union_list(members: Vec<&Type>, depth: usize) -> Frame<'_> {
@@ -654,6 +777,12 @@ fn copied_text_bytes(ty: &Type) -> Result<usize, RenderError> {
             add(package.as_str())?;
             add(name)?;
         }
+        Type::Mapped { key, .. } => add(key)?,
+        Type::Conditional { infers, .. } => {
+            for name in infers {
+                add(name)?;
+            }
+        }
         _ => {}
     }
     Ok(bytes)
@@ -687,6 +816,158 @@ mod tests {
                 .check_substitution(&Type::TypeVar("T".into()), &cycle)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn type_operators_render_as_tsc_spells_them() {
+        use crate::types::MappedModifier;
+        let var = |name: &str| Type::TypeVar(name.into());
+        let keys = Type::KeyOf(Box::new(var("T")));
+        let mapped = |name: Option<Type>, optional, readonly| Type::Mapped {
+            key: "K".into(),
+            constraint: Box::new(keys.clone()),
+            name: name.map(Box::new),
+            template: Box::new(Type::indexed_access(var("T"), var("K"))),
+            optional,
+            readonly,
+        };
+        let brand = Type::Object {
+            fields: [(
+                "brand".to_string(),
+                ObjectField::required(Type::BooleanLiteral(true)),
+            )]
+            .into(),
+            index: None,
+        };
+        let conditional =
+            |check: Type, extends: Type, infers: &[&str], true_ty: Type| Type::Conditional {
+                check: Box::new(check),
+                extends: Box::new(extends),
+                infers: infers.iter().map(ToString::to_string).collect(),
+                true_ty: Box::new(true_ty),
+                false_ty: Box::new(Type::Boolean),
+            };
+        let string_test = conditional(var("T"), Type::String, &[], Type::Number);
+        let function = Type::Function {
+            params: Vec::new(),
+            optional: 0,
+            ret: Box::new(Type::Void),
+            predicate: None,
+            has_rest: false,
+        };
+        let cases = [
+            (
+                mapped(None, MappedModifier::Add, MappedModifier::Keep),
+                "{ [K in keyof T]?: T[K] }",
+            ),
+            (
+                mapped(Some(var("K")), MappedModifier::Remove, MappedModifier::Add),
+                "{ readonly [K in keyof T as K]-?: T[K] }",
+            ),
+            (
+                mapped(None, MappedModifier::Keep, MappedModifier::Remove),
+                "{ -readonly [K in keyof T]: T[K] }",
+            ),
+            (string_test.clone(), "T extends string ? number : boolean"),
+            (
+                conditional(var("T"), Type::Array(Box::new(var("U"))), &["U"], var("U")),
+                "T extends (infer U)[] ? U : boolean",
+            ),
+            (
+                conditional(function.clone(), function, &[], Type::Number),
+                "(() => void) extends (() => void) ? number : boolean",
+            ),
+            (Type::intersection(vec![var("U"), var("T")]), "T & U"),
+            (
+                Type::intersection(vec![brand.clone(), Type::String]),
+                "string & { brand: true }",
+            ),
+            (
+                Type::intersection(vec![
+                    var("T"),
+                    Type::union(vec![Type::Number, Type::String]),
+                ]),
+                "T & (number | string)",
+            ),
+            (
+                Type::Array(Box::new(Type::intersection(vec![var("T"), var("U")]))),
+                "(T & U)[]",
+            ),
+            (
+                Type::union(vec![string_test.clone(), Type::Null]),
+                "(T extends string ? number : boolean) | null",
+            ),
+            (
+                Type::KeyOf(Box::new(string_test)),
+                "keyof (T extends string ? number : boolean)",
+            ),
+        ];
+        for (ty, spelled) in cases {
+            assert_eq!(ty.to_string(), spelled);
+        }
+    }
+
+    #[test]
+    fn intersection_is_canonical() {
+        let var = |name: &str| Type::TypeVar(name.into());
+        let nested = Type::intersection(vec![var("U"), var("T")]);
+        assert_eq!(
+            Type::intersection(vec![var("V"), nested.clone(), Type::Unknown, var("T")]),
+            Type::Intersection(vec![var("T"), var("U"), var("V")])
+        );
+        assert_eq!(Type::intersection(vec![var("T"), Type::Unknown]), var("T"));
+        assert_eq!(Type::intersection(vec![var("T"), Type::Never]), Type::Never);
+        assert_eq!(Type::intersection(Vec::new()), Type::Unknown);
+        let a = || Type::StringLiteral("a".into());
+        for uninhabited in [
+            vec![Type::Number, a()],
+            vec![Type::String, Type::Null],
+            vec![Type::Undefined, Type::Null],
+            vec![a(), Type::StringLiteral("b".into())],
+        ] {
+            assert_eq!(Type::intersection(uninhabited), Type::Never);
+        }
+        assert_eq!(Type::intersection(vec![Type::String, a()]), a());
+        let void_undefined = Type::intersection(vec![Type::Void, Type::Undefined]);
+        assert!(matches!(void_undefined, Type::Intersection(_)));
+        assert_eq!(
+            Type::intersection(vec![Type::Void, Type::Null]),
+            Type::Never
+        );
+        let brand = Type::Object {
+            fields: [("b".to_string(), ObjectField::required(Type::Boolean))].into(),
+            index: None,
+        };
+        // Dropping the base keeps the brand, and a refinement that peels to
+        // the base is more than the base.
+        assert_eq!(
+            Type::intersection(vec![Type::String, a(), brand.clone()]),
+            Type::Intersection(vec![a(), brand.clone()])
+        );
+        let refined = Type::Refined {
+            original: Box::new(var("T")),
+            ty: Box::new(Type::String),
+        };
+        assert_eq!(
+            Type::intersection(vec![refined.clone(), a()]),
+            Type::Intersection(vec![a(), refined])
+        );
+        // Built by hand, unreduced: the literal is the narrower primitive.
+        let unreduced = Type::Intersection(vec![Type::String, a(), brand.clone()]);
+        assert_eq!(unreduced.peel(), &a());
+        // Each level is peeled once: a non-flat chain doesn't take
+        // exponential time.
+        let mut chain = Type::String;
+        for _ in 0..200 {
+            chain = Type::Intersection(vec![brand.clone(), chain]);
+        }
+        assert_eq!(chain.peel(), &Type::String);
+        let branded = Type::intersection(vec![var("T"), Type::String]);
+        assert_eq!(branded.peel(), &Type::String);
+        assert_eq!(branded.lowered(), &Type::String);
+        assert!(!branded.lowers_to_erased_slot());
+        assert!(nested.lowers_to_erased_slot());
+        assert!(nested.is_type_operator() && branded.is_type_operator());
     }
 
     #[test]

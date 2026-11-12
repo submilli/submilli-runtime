@@ -2251,7 +2251,11 @@ fn ts_type(ty: &Type) -> String {
         Type::Error => "never".to_string(),
         Type::Never => "never".to_string(),
         Type::TypeVar(name) | Type::GenericParam { name, .. } => name.clone(),
-        Type::KeyOf(_) | Type::IndexedAccess { .. } => ty.to_string(),
+        Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_) => ty.to_string(),
         Type::InterfaceRef { name, args, .. }
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
@@ -2276,7 +2280,12 @@ fn ts_named_type(name: &str, args: &[Type]) -> String {
 fn ts_type_array_element(ty: &Type) -> String {
     match ty {
         Type::Readonly(inner) if matches!(inner.as_ref(), Type::InterfaceRef { .. }) => ts_type(ty),
-        Type::Function { .. } | Type::Union(_) | Type::Readonly(_) | Type::KeyOf(_) => {
+        Type::Function { .. }
+        | Type::Union(_)
+        | Type::Readonly(_)
+        | Type::KeyOf(_)
+        | Type::Conditional { .. }
+        | Type::Intersection(_) => {
             format!("({})", ts_type(ty))
         }
         _ => ts_type(ty),
@@ -2285,7 +2294,7 @@ fn ts_type_array_element(ty: &Type) -> String {
 
 fn ts_type_union_member(ty: &Type) -> String {
     match ty {
-        Type::Function { .. } => format!("({})", ts_type(ty)),
+        Type::Function { .. } | Type::Conditional { .. } => format!("({})", ts_type(ty)),
         _ => ts_type(ty),
     }
 }

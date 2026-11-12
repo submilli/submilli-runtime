@@ -2069,7 +2069,8 @@ fn own_static_names(ta: &TypedAst, class: &MangledName) -> BTreeSet<String> {
 fn may_be_callable(ty: &Type) -> bool {
     match ty.peel() {
         Type::Function { .. } => true,
-        Type::Union(members) => members.iter().any(may_be_callable),
+        // `(() => void) & { tag: string }` is callable.
+        Type::Union(members) | Type::Intersection(members) => members.iter().any(may_be_callable),
         _ => false,
     }
 }

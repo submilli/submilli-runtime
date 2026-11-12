@@ -580,15 +580,15 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
         }
-        // `keyof T`, `T[K]` and a utility over `T` are erased like `T`, with no
-        // descriptor of their own to test against (casts to them are rejected
-        // at typecheck, SUB-2152), so a read guard over one admits the value.
-        // So does one codegen instantiated (`Partial<{ a: number }>` for a
-        // generic class's field): it has no type table to evaluate it with.
-        operator
-            if operator.is_utility_application()
-                || matches!(operator, Type::KeyOf(_) | Type::IndexedAccess { .. }) =>
-        {
+        // Type operators (`keyof T`, `T[K]`, mapped, conditional and
+        // intersection types) and a utility over `T` are erased like `T`, with
+        // no descriptor of their own to test against (casts to them are
+        // rejected at typecheck, SUB-2152), so a read guard over one admits the
+        // value. So does one codegen instantiated (`Partial<{ a: number }>` for
+        // a generic class's field): it has no type table to evaluate it with.
+        // An intersection with a primitive member never gets here: `lowered()`,
+        // which this match is on, reads it as that primitive.
+        operator if operator.is_utility_application() || operator.is_type_operator() => {
             emitter.instruction(Instruction::I32Const(1));
         }
         // Recursion back-edge: delegate to the alias's generated validator, which

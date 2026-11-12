@@ -1317,6 +1317,9 @@ fn is_typeof_object(ty: &Type) -> bool {
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
         | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_)
         | Type::AliasRef { .. } => false,
 
         // Peeled by the caller.

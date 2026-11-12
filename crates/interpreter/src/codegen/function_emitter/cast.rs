@@ -138,6 +138,9 @@ pub fn emit_box(
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
         | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_)
         | Type::Unknown
         | Type::NonPrimitive
         | Type::Never => {
@@ -680,6 +683,9 @@ pub fn emit_cast_to(
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
         | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_)
         | Type::Unknown
         | Type::NonPrimitive
         | Type::Never => {
@@ -808,6 +814,9 @@ pub fn target_allows_null(
             | Type::GenericParam { .. }
             | Type::KeyOf(_)
             | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
+            | Type::Intersection(_)
             | Type::AliasRef { .. }
     ) || (matches!(ty, Type::Union(_)) && is_nullable_ref(ctx.symbols.value_type(ty)?)))
 }

@@ -353,6 +353,11 @@ fn collect_signature_named_types(
             collect_signature_named_types(package_name, object, out);
             collect_signature_named_types(package_name, index, out);
         }
+        Type::Mapped { .. } | Type::Conditional { .. } | Type::Intersection(_) => {
+            crate::type_size::for_each_child(ty, |child| {
+                collect_signature_named_types(package_name, child, out);
+            });
+        }
         Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
             for element in elements {
                 collect_signature_named_types(package_name, element, out);

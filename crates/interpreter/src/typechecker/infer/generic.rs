@@ -148,7 +148,11 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
             ty: Box::new(erase_generic_params(ty)),
         },
         Type::GenericParam { name, .. } => Type::TypeVar(name.clone()),
-        Type::KeyOf(_) | Type::IndexedAccess { .. } => {
+        Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_) => {
             crate::type_size::map_children_infallible(ty, erase_generic_params)
         }
         Type::Object { fields, index } => Type::Object {
