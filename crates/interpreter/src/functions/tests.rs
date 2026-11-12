@@ -625,6 +625,23 @@ fn naming_contract_and_compile_errors_report_function_name_and_line() {
         .expect_err("ordinary packages must not import submilli:functions");
         let pkg_rendered = format!("{pkg_escalate:?}");
         assert!(pkg_rendered.contains("@functions"));
+
+        // `Stdlib` discovery omits `submilli:functions`, while `stdlib::functions::docs()`
+        // renders its authoring reference (including the pre-side-effect guidance).
+        assert!(Stdlib::core().docs("submilli:functions").is_none());
+        let authoring_doc = crate::stdlib::functions::docs();
+        assert_eq!(authoring_doc.name, "submilli:functions");
+        assert!(
+            authoring_doc
+                .declarations
+                .contains("function escalate(reason: string): never;")
+        );
+        assert!(
+            authoring_doc.declarations.contains("side effects")
+                && authoring_doc.declarations.contains("not be resumed"),
+            "expected pre-side-effect / non-resumable guidance in docs, got:\n{}",
+            authoring_doc.declarations
+        );
     });
 }
 
