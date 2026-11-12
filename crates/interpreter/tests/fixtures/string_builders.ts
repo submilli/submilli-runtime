@@ -5,7 +5,6 @@ function main(): void {
     assert(lone.repeat(2.9).length === 2);
     assert(lone.repeat(-0.5) === "");
     assert(lone.repeat(NaN) === "");
-    assert("".repeat(Infinity) === "");
     assert(lone.concat(pad).charCodeAt(0) === 0xD800);
     assert((lone + pad).charCodeAt(1) === 0xDC00);
     assert(lone.padStart(4, pad) === pad + String.fromCharCode(0xDC00) + lone);
@@ -22,6 +21,10 @@ function main(): void {
         assert(e instanceof RangeError);
         caught++;
     }
+    try { const bad = "".repeat(Infinity); } catch (e: Error) {
+        assert(e instanceof RangeError);
+        caught++;
+    }
     try { const bad = lone.padStart(33554433, pad); } catch (e: Error) {
         assert(e instanceof RangeError);
         caught++;
@@ -30,7 +33,7 @@ function main(): void {
         assert(e instanceof RangeError);
         caught++;
     }
-    assert(caught === 4);
+    assert(caught === 5);
 
     // Sources longer than the host's 2048-unit copy buffer are streamed and
     // restart at their first unit; short ones repeat across buffer blocks.
