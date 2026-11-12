@@ -41,6 +41,8 @@ pub struct ScriptImports {
     pub mcp_servers: BTreeSet<String>,
     /// The script imports `@tools`, the session's application tools.
     pub tools: bool,
+    /// The script imports `@functions`, the harness-supplied function set.
+    pub functions: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -90,7 +92,10 @@ impl ParsedScript {
                 imports.mcp_servers.insert(server.to_string());
             } else if module == runtime::TOOLS_PACKAGE {
                 imports.tools = true;
+            } else if module == crate::functions::FUNCTIONS_PACKAGE {
+                imports.functions = true;
             } else if stdlib_names.contains(module.as_str())
+                || module == crate::stdlib::functions::MODULE_NAME
                 || crate::stdlib::OptionalPackage::from_module_name(module).is_some()
             {
                 // An optional package counts as stdlib whether or not the embedder
@@ -877,8 +882,44 @@ pub fn compile_package_configured(
         modules,
         dependencies,
         transitive,
-        config,
+        Some(config),
         surface,
+    )
+    .map(|(compiled, _)| compiled)
+    .map_err(|error| {
+        error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
+    })
+}
+
+/// Compile a single-module `@functions/<name>` source with `submilli:functions`
+/// available and return both its compiled package artifact and its host-invoke
+/// plan.
+pub(crate) fn compile_function_module(
+    stdlib: Stdlib,
+    package_name: &str,
+    root_module: ModulePath,
+    source: &str,
+    dependencies: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<(CompiledPackage, Option<crate::FunctionInvokePlan>), CompileError> {
+    let mut sources = Sources::new();
+    let mut stdlib_defs = stdlib.package_declarations();
+    stdlib_defs.push(crate::stdlib::functions::package_declaration());
+    stdlib_defs.sort_by(|a, b| a.package_name.cmp(&b.package_name));
+    let modules = [PackageSourceModule {
+        path: root_module.clone(),
+        source,
+    }];
+    compile_package_sources(
+        &mut sources,
+        &stdlib_defs,
+        package_name,
+        root_module,
+        &modules,
+        dependencies,
+        transitive,
+        None,
+        PackageSurface::Public,
     )
     .map_err(|error| {
         error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
@@ -894,9 +935,9 @@ fn compile_package_sources(
     modules: &[PackageSourceModule<'_>],
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
-    config: &BTreeMap<String, String>,
+    config: Option<&BTreeMap<String, String>>,
     surface: PackageSurface,
-) -> Result<CompiledPackage, CompileError> {
+) -> Result<(CompiledPackage, Option<crate::FunctionInvokePlan>), CompileError> {
     // Public declarations may be constructed directly. Validate recursive
     // metadata before cloning them into the inference registries.
     crate::typechecker::infer::check_declaration_types(
@@ -911,7 +952,9 @@ fn compile_package_sources(
                 CompileError::from(error.into_compiler_failure(CompilerStage::Parse))
                     .with_prior_diagnostics(&diagnostics)
             })?;
-        let (ast, mut module_diags) = if module.path.as_str() == "config" {
+        let (ast, mut module_diags) = if let Some(config) = config
+            && module.path.as_str() == "config"
+        {
             parse_config_module(module.source, file, config)
         } else {
             parse_package_module(module.source, file)
@@ -1024,15 +1067,18 @@ fn compile_package_sources(
     declaration.runtime_functions = generated.runtime_functions;
     declaration.runtime_globals = generated.runtime_globals;
     declaration.closure_caches = generated.closure_caches;
-    Ok(CompiledPackage {
-        wasm: generated.wasm,
-        type_info: generated.type_info,
-        declaration,
-        required_capabilities,
-        authority_map,
-        warnings: warnings_only(diagnostics),
-        test_surface,
-    })
+    Ok((
+        CompiledPackage {
+            wasm: generated.wasm,
+            type_info: generated.type_info,
+            declaration,
+            required_capabilities,
+            authority_map,
+            warnings: warnings_only(diagnostics),
+            test_surface,
+        },
+        ta.function_invoke,
+    ))
 }
 
 /// The modules' exports minus values and classes another package declares,

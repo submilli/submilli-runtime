@@ -229,6 +229,7 @@ fn consumer_of_running_package(
             ));
             return std::ops::ControlFlow::Break(());
         };
+        let owner = crate::functions::principal_for_module_name(owner);
         if let Some(running) = &running {
             if owner != running {
                 match crate::stdlib::shared::owned_principal(owner) {

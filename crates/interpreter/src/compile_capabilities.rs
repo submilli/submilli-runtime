@@ -100,10 +100,43 @@ pub fn derive_package_requirements(
                     }
                 }
             }
+            TypedExprKind::VirtualCall { target, tool, .. } => {
+                required.push(derive_virtual_call_capability(target, tool));
+            }
             _ => {}
         }
     }
     Ok((required, warnings))
+}
+
+fn derive_virtual_call_capability(
+    target: &crate::VirtualDispatch,
+    tool: &str,
+) -> DerivedCapability {
+    let mut known_bindings = BTreeMap::new();
+    if let Some(tool_operand) = crate::capability_derivation::filter_string_literal(tool) {
+        known_bindings.insert("tool".to_string(), tool_operand);
+    }
+    let capability = match target {
+        crate::VirtualDispatch::Mcp { server } => {
+            known_bindings.insert("transport".to_string(), "\"streamable_http\"".to_string());
+            format!("mcp.{server}")
+        }
+        crate::VirtualDispatch::Tools => crate::runtime::TOOLS_CAPABILITY.to_string(),
+    };
+    let filter = (!known_bindings.is_empty()).then(|| {
+        known_bindings
+            .iter()
+            .map(|(field, operand)| format!("{field} == {operand}"))
+            .collect::<Vec<_>>()
+            .join(" and ")
+    });
+    DerivedCapability {
+        capability,
+        filter,
+        known_bindings,
+        warnings: Vec::new(),
+    }
 }
 
 impl<'a> CapabilityLookup<'a> {

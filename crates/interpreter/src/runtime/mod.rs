@@ -426,6 +426,11 @@ pub async fn install_package_modules_async(
 ) -> wasmtime::Result<()> {
     for package in packages {
         let name = package.declaration.package_name.as_str();
+        if name == crate::mangle::USER_PACKAGE || crate::functions::is_functions_module_name(name) {
+            wasmtime::bail!(
+                "package `{name}` uses a reserved runtime principal name and cannot be linked as a package"
+            );
+        }
         if store.data().git.is_none()
             && package
                 .module
@@ -461,7 +466,7 @@ pub async fn install_package_modules_async(
         // off the running frame names them without any bracketing here.
         let instance = {
             let outcome = linker.instantiate_async(&mut *store, package.module).await;
-            name_the_failing_initializer(&mut *store, name, outcome)?
+            name_failing_initializer(&mut *store, "package", name, outcome)?
         };
         linker.instance(&mut *store, name, instance)?;
     }
@@ -472,13 +477,14 @@ pub async fn install_package_modules_async(
 /// a denial most of all — escapes instantiation as the engine's opaque
 /// `ThrownException`, whose Display is "wasm exception thrown". The thrown
 /// value is still on the store, so recover its text the way an uncaught throw
-/// from `main` is recovered and say which package it came from. Without this an
-/// operator who granted a capability under `main:` rather than the package's own
-/// block — the mistake this attribution makes easy — gets no package, no
-/// capability, and no reason.
-fn name_the_failing_initializer(
+/// from `main` is recovered and say which package or function it came from.
+/// Without this an operator who granted a capability under `main:` rather than
+/// the package's own block — the mistake this attribution makes easy — gets no
+/// package, no capability, and no reason.
+pub(crate) fn name_failing_initializer(
     store: &mut Store<StoreData>,
-    package: &str,
+    kind: &str,
+    name: &str,
     outcome: wasmtime::Result<Instance>,
 ) -> wasmtime::Result<Instance> {
     let err = match outcome {
@@ -490,10 +496,7 @@ fn name_the_failing_initializer(
         return Err(recovered);
     };
     Err(wasmtime::Error::new(crate::backtrace::ThrownError {
-        message: format!(
-            "package `{package}` failed to initialize: {}",
-            thrown.message
-        ),
+        message: format!("{kind} `{name}` failed to initialize: {}", thrown.message),
         backtrace: thrown.backtrace.clone(),
         denial: thrown.denial.clone(),
     }))

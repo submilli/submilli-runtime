@@ -178,6 +178,17 @@ impl CodegenAnalysis {
         if let Some(argument) = &ta.finalizer_argument {
             analysis.note_cast(&argument.target, Some(&argument.check))?;
         }
+        if let Some(plan) = &ta.function_invoke {
+            analysis.dependency_usage.collect_json_host_values();
+            analysis
+                .string_pool
+                .intern_text(super::function_emitter::json::FUNCTION_RETURN_NOT_JSON_MESSAGE);
+            for argument in &plan.arguments {
+                if let crate::FunctionArgumentCheck::Checked(check) = argument {
+                    analysis.note_cast(&check.target, Some(&check.check))?;
+                }
+            }
+        }
         analysis.note_narrowing_checks(ta)?;
         analysis.note_inherited_conversions(ta, dependencies)?;
         for test in ta.runtime_type_tests.values() {

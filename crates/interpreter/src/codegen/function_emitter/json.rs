@@ -20,6 +20,11 @@ pub(crate) const FUNCTION_HAS_NO_JSON_TEXT: &str = "JSON.stringify: a function h
 pub(crate) const NO_JSON_TEXT_MESSAGES: [&str; 2] =
     [UNDEFINED_HAS_NO_JSON_TEXT, FUNCTION_HAS_NO_JSON_TEXT];
 
+/// Thrown when a host-invoked function returns a closure or constructor value,
+/// which has no JSON representation (unlike `undefined`, which encodes to `None`).
+pub(crate) const FUNCTION_RETURN_NOT_JSON_MESSAGE: &str =
+    "function return value cannot be serialized to JSON (got a function)";
+
 pub(super) fn emit_stringify(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -156,6 +161,20 @@ fn may_stringify_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
     ty.any_member(&|member| {
         Type::stringifies_to_undefined(member) || is_constructor_value(ctx, member)
     })
+}
+
+/// Functions are assignable to `object` (`Type::NonPrimitive`), `{}`
+/// (`Type::Object`), and callable or empty `interface`s (`Type::InterfaceRef`),
+/// so `emit_function_json_return` must runtime-test `$Closure` on those slots
+/// rather than falling through to `$Closure`'s array-element `"null"` vtable.
+fn may_return_closure_or_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
+    may_stringify_undefined(ctx, ty)
+        || ty.any_member(&|member| {
+            matches!(
+                member.lowered(),
+                Type::NonPrimitive | Type::InterfaceRef { .. } | Type::Object { .. }
+            )
+        })
 }
 
 /// A constructor binding used as a value (`Number`) is a function, which JSON
@@ -581,6 +600,64 @@ pub(crate) fn emit_main_output_shim(
         emitter.emit_end();
     }
     emitter.build()
+}
+
+/// Encodes the on-stack return value of a `@functions/<name>` `run` export into
+/// the nullable JSON `$string` consumed by host `invoke`.
+///
+/// `undefined` (including `void`) returns a null `$string` reference (`Ok(None)`
+/// on the host). Any concrete JSON-serializable value (`null`, primitives,
+/// arrays, objects, classes) encodes via the `JSON.stringify` machinery (so a
+/// bare `string` is JSON-quoted, unlike `__main_output`). Returning a function
+/// throws a `TypeError` rather than silently collapsing to `None`.
+pub(crate) fn emit_function_json_return(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    return_ty: &Type,
+    source_return_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if matches!(source_return_ty.peel(), Type::Never | Type::Error)
+        || matches!(return_ty.peel(), Type::Never | Type::Error)
+    {
+        emitter.instruction(Instruction::Unreachable);
+        return Ok(());
+    }
+    if !may_return_closure_or_undefined(ctx, return_ty) {
+        emit_defined_stringify_value(emitter, ctx, return_ty);
+        return Ok(());
+    }
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics registered"))?;
+    let nullable_string = ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intr.string),
+    });
+    let value = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: true,
+        heap_type: HeapType::Concrete(intr.object),
+    }))?;
+    emitter.instruction(Instruction::LocalSet(value));
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intr.undefined,
+    )));
+    emitter.emit_if(BlockType::Result(nullable_string));
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.string)));
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intr.closure,
+    )));
+    emitter.emit_if(BlockType::Result(nullable_string));
+    crate::codegen::throw::emit_type_error_throw(emitter, ctx, FUNCTION_RETURN_NOT_JSON_MESSAGE);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(value));
+    emit_stringify_nullable(emitter, ctx);
+    emitter.emit_end();
+    emitter.emit_end();
+    Ok(())
 }
 
 /// Encodes `main`'s on-stack return value (`arg_ty`, already peeled) into the output

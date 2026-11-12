@@ -45,6 +45,18 @@ pub fn finalizer_argument(package: &str) -> MangledName {
     MangledName(format!("{package}{SEP}finalizer:argument"))
 }
 
+/// Hidden export on a `@functions/<name>` module that checks argument `index`
+/// against `run`'s parameter type before `run` is entered.
+pub fn function_argument(package: &str, index: usize) -> MangledName {
+    MangledName(format!("{package}{SEP}function:argument:{index}"))
+}
+
+/// Hidden export on a `@functions/<name>` module that invokes `run` with
+/// already-checked boxed arguments and encodes its return value as JSON text.
+pub fn function_invoke(package: &str) -> MangledName {
+    MangledName(format!("{package}{SEP}function:invoke"))
+}
+
 /// Internal module symbol for a declaration in a multi-file package. `module` is
 /// the canonicalized package-relative path (`util`, `internal/math`) — no
 /// leading `./`, no `.subm` suffix. Root-exported (public) symbols use

@@ -38,7 +38,10 @@ pub(crate) fn running_package(
     let mut principal = None;
     wasmtime::WasmBacktrace::visit_modules(store, |module| {
         principal = Some(match module.name() {
-            Some(name) => owned_principal(name).map_err(PrincipalError::Internal),
+            Some(name) => {
+                owned_principal(crate::functions::principal_for_module_name(name))
+                    .map_err(PrincipalError::Internal)
+            }
             None => Err(PrincipalError::Unknown(UnknownPrincipal {
                 label: "<unnamed module>",
                 reason: "the running module declares no package name, so its caller cannot be identified",
@@ -250,7 +253,15 @@ pub(crate) fn call_origin(store: &impl wasmtime::AsContext<Data = StoreData>) ->
     let frames = backtrace.frames();
     let program = frames
         .iter()
-        .position(|frame| frame.module().name() == Some(crate::mangle::USER_PACKAGE));
+        .position(|frame| frame.module().name() == Some(crate::mangle::USER_PACKAGE))
+        .or_else(|| {
+            frames.iter().position(|frame| {
+                frame
+                    .module()
+                    .name()
+                    .is_some_and(crate::functions::is_functions_module_name)
+            })
+        });
     let line = program.and_then(|at| {
         let symbol = frames[at].symbols().first()?;
         Some(SourceLine {
@@ -268,6 +279,9 @@ pub(crate) fn call_origin(store: &impl wasmtime::AsContext<Data = StoreData>) ->
 /// The package line a frame is at, when it is package code with a known line.
 fn package_line(frame: &wasmtime::FrameInfo) -> Option<PackageLine> {
     let package = frame.module().name()?;
+    if crate::functions::is_functions_module_name(package) {
+        return None;
+    }
     let symbol = frame.symbols().first()?;
     let module = symbol.file()?.strip_prefix(package)?.strip_prefix('/')?;
     Some(PackageLine {
