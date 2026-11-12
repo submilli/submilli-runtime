@@ -1060,8 +1060,9 @@ impl CodegenAnalysis {
                 }
                 Intrinsic::JsonStringify => {
                     self.dependency_usage.collect_json_host_values();
-                    self.string_pool
-                        .intern_text(super::function_emitter::json::NO_JSON_TEXT_MESSAGE);
+                    for message in super::function_emitter::json::NO_JSON_TEXT_MESSAGES {
+                        self.string_pool.intern_text(message);
+                    }
                 }
                 Intrinsic::BigIntFromString => {
                     self.dependency_usage
