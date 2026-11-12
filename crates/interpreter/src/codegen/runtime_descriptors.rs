@@ -99,7 +99,7 @@ pub fn allocate(
 ) -> Result<Vec<(Type, u32)>, crate::compiler_error::CompilerFailure> {
     let mut targets = BTreeSet::from([Type::Unknown]);
     targets.extend(extra.iter().cloned());
-    let mut has_generic_calls = false;
+    let mut passes_type_arguments = false;
     for index in ta.expr_ids().map_err(crate::codegen::arena_failure)? {
         match &ta
             .try_expr(index)
@@ -107,13 +107,13 @@ pub fn allocate(
             .kind
         {
             TypedExprKind::GenericCall { type_args, .. } => {
-                has_generic_calls = true;
+                passes_type_arguments = true;
                 targets.extend(type_args.iter().cloned());
             }
             // A runtime-generic host method (`Response#json<T>`); every
             // other generic method call carries no type arguments.
             TypedExprKind::GenericMethodCall { type_args, .. } if !type_args.is_empty() => {
-                has_generic_calls = true;
+                passes_type_arguments = true;
                 targets.extend(type_args.iter().cloned());
             }
             _ => {}
@@ -124,7 +124,12 @@ pub fn allocate(
             targets.extend(context.args.iter().cloned());
         }
     }
-    if !has_generic_calls
+    let main_type_args = main_type_arguments(ta);
+    if !main_type_args.is_empty() {
+        passes_type_arguments = true;
+        targets.extend(main_type_args);
+    }
+    if !passes_type_arguments
         && targets.len() == 1
         && ta.runtime_class_contexts.values().all(Vec::is_empty)
         && !ta
@@ -145,6 +150,30 @@ pub fn allocate(
         crate::codegen::next_index(next)?;
     }
     Ok(descriptors)
+}
+
+/// [`entry_type_arguments`] of `ta`'s `main`, if it has one.
+pub fn main_type_arguments(ta: &TypedAst) -> Vec<Type> {
+    ta.functions
+        .iter()
+        .find(|f| f.name.name == "main")
+        .map(entry_type_arguments)
+        .unwrap_or_default()
+}
+
+/// The type arguments the entry shim passes to `main`, in declaration
+/// order: each type parameter's bound, or `unknown` when it has none.
+/// Nothing in a program can name another type argument for the entry call.
+/// A bound that names a type parameter has no closed descriptor for the
+/// shim to build, so that parameter takes `unknown` as well.
+pub fn entry_type_arguments(main: &crate::TypedFunction) -> Vec<Type> {
+    main.generics
+        .iter()
+        .map(|name| match main.generics.constraints.get(name) {
+            Some(bound) if parameters(bound).is_empty() => bound.clone(),
+            _ => Type::Unknown,
+        })
+        .collect()
 }
 
 /// Closed types' descriptors are singletons so recursive calls retain effective type identity.

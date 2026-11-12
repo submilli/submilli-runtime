@@ -247,6 +247,15 @@ fn import_statics(
             symbols.runtime_generic_functions.insert(key.clone());
             param_types.push(super::runtime_descriptors::environment_type(symbols)?);
         }
+        super::check_function_parameters(
+            || {
+                format!(
+                    "the static method `{}.{name}` of package `{}`",
+                    class.name, class.package
+                )
+            },
+            &param_types,
+        )?;
         let results = symbols.wasm_result(&sig.ret)?;
         let sig_idx = next_index(next_type_idx)?;
         types.ty().function(param_types, results);
@@ -549,6 +558,15 @@ fn reconstruct_one(
             params: params.iter().skip(1).copied().collect(),
             ret: results.first().copied(),
         };
+        super::check_function_parameters(
+            || {
+                format!(
+                    "the method `{}#{name}` of package `{}`",
+                    class.name, class.package
+                )
+            },
+            &params,
+        )?;
         let sig_idx = next_index(next_type_idx)?;
         types.ty().function(params, results);
         symbols.record_class_method_sig(mangled.clone(), name.clone(), sig_idx);
@@ -756,9 +774,21 @@ fn reconstruct_one(
         symbols.record_host_parameter_defaults(ctor_idx, defaults.clone());
     }
 
-    // Self-first ctor-init: `((ref $Object), params...) -> ()`.
+    // Self-first ctor-init: `((ref $Object), params...) -> ()`. It takes the
+    // receiver beside the declared parameters, and the entry function at
+    // most one guard argument, so checking it covers both.
+    let declared = ctor_params.len();
     let mut init_params = vec![ref_to(intrinsics.object)];
     init_params.extend(ctor_params);
+    super::check_function_parameters(
+        || {
+            format!(
+                "the constructor of `{}` of package `{}` ({declared} declared parameters and its receiver)",
+                class.name, class.package
+            )
+        },
+        &init_params,
+    )?;
     let init_sig = next_index(next_type_idx)?;
     types.ty().function(init_params, Vec::<ValType>::new());
     let init_mangled = crate::mangle::extend(mangled, "constructor_init");

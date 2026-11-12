@@ -547,15 +547,25 @@ fn emit_to_json_direct(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, iface: &
 /// Body of the exported `__main_output` shim: call `main`, then encode its result
 /// to the nullable string the runtime consumes as program output. Undefined
 /// uses the private ABI's null reference; language null produces the text
-/// `"null"`. The host reads concrete strings verbatim.
+/// `"null"`. The host reads concrete strings verbatim. A generic `main`
+/// takes the descriptors of `type_args`; one that never returns has a shim
+/// only so that the runtime never calls it without them.
 pub(crate) fn emit_main_output_shim(
     ctx: &CodegenCtx,
     main_func_idx: u32,
+    type_args: &[Type],
     return_ty: &Type,
     source_return_ty: &Type,
 ) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut emitter = FunctionEmitter::new(ctx, &[])?;
+    if !type_args.is_empty() {
+        crate::codegen::runtime_descriptors::environment(&mut emitter, ctx, type_args)?;
+    }
     emitter.instruction(Instruction::Call(main_func_idx));
+    if matches!(return_ty.peel(), Type::Never | Type::Error) {
+        emitter.instruction(Instruction::Unreachable);
+        return emitter.build();
+    }
     let optional_output = may_stringify_undefined(ctx, return_ty);
     if optional_output {
         let intr = ctx

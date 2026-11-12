@@ -512,6 +512,10 @@ impl ClassPlan {
                     params: params.iter().skip(1).copied().collect(),
                     ret: results.first().copied(),
                 };
+                super::check_function_parameters(
+                    || format!("the method `{}#{}`", class.name, slot.name),
+                    &params,
+                )?;
                 let sig_idx = next_index(next_type_idx)?;
                 types.ty().function(params, results);
                 sig_by_name.insert((class.mangled.clone(), slot.name.clone()), (sig_idx, abi));
@@ -645,8 +649,24 @@ impl ClassPlan {
             class.ctor_sig_idx = next_index(next_type_idx)?;
             types.ty().function(entry_params, vec![ret]);
 
+            let declared = params.len();
             let mut init_params = vec![ref_to(object_idx)];
             init_params.extend(params);
+            // The closure arity rule doesn't cover constructors, which keep
+            // their own ABI; the engine's parameter limit still does. The
+            // init function takes the receiver beside the declared
+            // parameters, and the entry function at most one guard argument,
+            // so checking the init function covers both.
+            super::check_function_parameters(
+                || {
+                    format!(
+                        "the constructor of `{}` ({declared} declared parameters and its receiver)",
+                        class.name
+                    )
+                },
+                &init_params,
+            )
+            .map_err(|failure| failure.with_span(class.name_span))?;
             class.ctor_init_sig_idx = next_index(next_type_idx)?;
             types.ty().function(init_params, Vec::new());
         }
@@ -1063,6 +1083,7 @@ impl ClassPlan {
                 ctx.symbols,
             )?);
             let field_count = wasm_u32(class.fields.len())?;
+            let describe_class = || format!("the class `{}`", class.name);
             if extends_error {
                 let mut equals = Function::new([]);
                 equals.instruction(&Instruction::LocalGet(0));
@@ -1071,7 +1092,9 @@ impl ClassPlan {
                 equals.instruction(&Instruction::End);
                 code.function(&equals);
             } else {
-                code.function(&emit_class_equals_body(field_count, intrinsics));
+                let equals = emit_class_equals_body(field_count, intrinsics);
+                super::check_generated_body(&equals, "equals", describe_class)?;
+                code.function(&equals);
             }
             let to_json = match user_method_thunk("toJson")? {
                 Some(thunk) => thunk,
@@ -1086,7 +1109,9 @@ impl ClassPlan {
                     intrinsics.hash_fn,
                 )?);
             } else {
-                code.function(&emit_class_hash_body(field_count, intrinsics));
+                let hash = emit_class_hash_body(field_count, intrinsics);
+                super::check_generated_body(&hash, "hash", describe_class)?;
+                code.function(&hash);
             }
         }
         Ok(())
