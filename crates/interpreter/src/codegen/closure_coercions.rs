@@ -334,7 +334,7 @@ pub fn emit_coercion(
         emitter.instruction(Instruction::LocalSet(original));
         emit_wrap(emitter, ctx, target, original)?;
     } else {
-        emit_erased_cast(emitter, ctx, target)?;
+        emit_erased_cast(emitter, ctx, target, false)?;
     }
     Ok(true)
 }
@@ -394,6 +394,7 @@ pub fn emit_erased_cast(
     emitter: &mut FunctionEmitter<'_>,
     ctx: &CodegenCtx<'_>,
     target: ClosureSig,
+    unwrap_adapters: bool,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let target_struct = ctx
         .symbols
@@ -409,7 +410,13 @@ pub fn emit_erased_cast(
         .closure_struct_type_idx(source)
         .ok_or_else(|| crate::codegen::internal_failure("source closure"))?;
     let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
-    emitter.instruction(Instruction::LocalTee(original));
+    if unwrap_adapters {
+        emitter.instruction(Instruction::LocalSet(original));
+        emit_unwrap_adapters(emitter, ctx, original)?;
+        emitter.instruction(Instruction::LocalGet(original));
+    } else {
+        emitter.instruction(Instruction::LocalTee(original));
+    }
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         target_struct,
     )));
@@ -679,6 +686,47 @@ pub fn emit_equals(
     body.instruction(&Instruction::RefEq);
     body.instruction(&Instruction::End);
     Ok(body)
+}
+
+fn emit_unwrap_adapters(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    local: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let object = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics"))?
+        .object;
+    let wrapper = ctx.symbols.closure_coercion_vtable_type()?;
+    emitter.emit_block(wasm_encoder::BlockType::Empty);
+    emitter.emit_loop(wasm_encoder::BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.instruction(Instruction::BrIf(1));
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: object,
+        field_index: 0,
+    });
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(wrapper)));
+    emitter.instruction(Instruction::I32Eqz);
+    emitter.instruction(Instruction::BrIf(1));
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: object,
+        field_index: 0,
+    });
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: wrapper,
+        field_index: ADAPTER_ORIGINAL_FIELD,
+    });
+    emitter.instruction(Instruction::LocalSet(local));
+    emitter.instruction(Instruction::Br(0));
+    emitter.emit_end();
+    emitter.emit_end();
+    Ok(())
 }
 
 fn emit_original_identity(

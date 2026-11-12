@@ -27,6 +27,7 @@ pub(super) fn connect(
 
 fn seed_dependencies(dependencies: &[&crate::PackageDeclaration], flow: &mut Flow) {
     for dependency in dependencies {
+        dependency.collect_static_value_bindings(&mut flow.static_value_bindings);
         for (name, ty) in &dependency.runtime_globals {
             if ty == &Type::Unknown {
                 flow.widened.insert(Place::Global(name.clone()));
@@ -636,6 +637,10 @@ fn connect_expression(
                 .kind
             {
                 flow.value(*receiver, target.clone());
+                if name.name == "@call" && !flow.is_static_value_binding(ast, *receiver)? {
+                    flow.widened.insert(target.clone());
+                    flow.edge(Place::CallbackReturn, target.clone());
+                }
             }
             flow.edge(Place::Method(name.name.clone()), target);
             for declaration in &ast.types {
@@ -662,6 +667,10 @@ fn connect_expression(
             flow.value(*receiver, target.clone());
             flow.value(*receiver, Place::Element);
             flow.edge(Place::Method(name.name.clone()), target.clone());
+            if name.name == "@call" && !flow.is_static_value_binding(ast, *receiver)? {
+                flow.widened.insert(target.clone());
+                flow.edge(Place::CallbackReturn, target.clone());
+            }
             if return_cast.is_some() {
                 flow.widened.insert(target.clone());
                 flow.edge(Place::Element, target);
@@ -822,6 +831,10 @@ fn connect_optional_chain(
             crate::TypedChainPart::MethodCall { name, .. } => {
                 flow.edge(receiver.clone(), step.clone());
                 flow.edge(Place::Method(name.name.clone()), step.clone());
+                if name.name == "@call" {
+                    flow.widened.insert(step.clone());
+                    flow.edge(Place::CallbackReturn, step.clone());
+                }
             }
             crate::TypedChainPart::Call { .. } => {
                 flow.widened.insert(step.clone());

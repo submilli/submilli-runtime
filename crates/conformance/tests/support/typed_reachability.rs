@@ -1,6 +1,6 @@
 //! Retained typed-AST nodes, excluding abandoned speculative inference passes.
 use interpreter::{
-    ClosureBody, ExprId, PostfixTarget, StmtId, TypedAst, TypedChainPart, TypedExprKind,
+    ClosureBody, ExprId, PostfixTarget, Span, StmtId, TypedAst, TypedChainPart, TypedExprKind,
     TypedStmtKind,
 };
 use std::collections::BTreeSet;
@@ -146,7 +146,9 @@ impl Reachable {
         if !self.expressions.insert(id) {
             return;
         }
-        match &ta.try_expr(id).unwrap().kind {
+        let expr = ta.try_expr(id).unwrap();
+        let span = expr.span;
+        match &expr.kind {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
@@ -155,17 +157,20 @@ impl Reachable {
                 for &arg in args {
                     self.walk_expr(ta, arg);
                 }
+                self.walk_authored_call_arguments(ta, span);
             }
             TypedExprKind::CallClosure { callee, args } => {
                 self.walk_expr(ta, *callee);
                 for &arg in args {
                     self.walk_expr(ta, arg);
                 }
+                self.walk_authored_call_arguments(ta, span);
             }
             TypedExprKind::GenericCall { args, .. } => {
                 for arg in args {
                     self.walk_expr(ta, arg.expr);
                 }
+                self.walk_authored_call_arguments(ta, span);
             }
             TypedExprKind::Closure { body, .. } => match *body {
                 ClosureBody::Expr(expr) => self.walk_expr(ta, expr),
@@ -194,12 +199,14 @@ impl Reachable {
                 for &arg in args {
                     self.walk_expr(ta, arg);
                 }
+                self.walk_authored_call_arguments(ta, span);
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.walk_expr(ta, *receiver);
                 for arg in args {
                     self.walk_expr(ta, arg.expr);
                 }
+                self.walk_authored_call_arguments(ta, span);
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
@@ -242,11 +249,12 @@ impl Reachable {
                 for part in parts {
                     match part {
                         TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx),
-                        TypedChainPart::Call { args, .. }
-                        | TypedChainPart::MethodCall { args, .. } => {
+                        TypedChainPart::Call { args, span, .. }
+                        | TypedChainPart::MethodCall { args, span, .. } => {
                             for &arg in args {
                                 self.walk_expr(ta, arg);
                             }
+                            self.walk_authored_call_arguments(ta, *span);
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
@@ -280,6 +288,15 @@ impl Reachable {
             | TypedExprKind::FunctionRef { .. }
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
+        }
+    }
+
+    fn walk_authored_call_arguments(&mut self, ta: &TypedAst, span: Span) {
+        let Some(authored) = ta.authored_call_arguments(span) else {
+            return;
+        };
+        for elem in authored {
+            self.walk_expr(ta, elem.expr_id());
         }
     }
 }

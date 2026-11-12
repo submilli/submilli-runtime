@@ -26,10 +26,20 @@ impl<'a> PackageFacts<'a> {
 
     /// The arguments as written: a call site also holds the defaults of the
     /// ones it omits, and packs the ones a rest parameter takes.
-    pub(super) fn authored<'s>(&'s self, span: Span, args: &'s [ExprId]) -> &'s [ExprId] {
-        self.ta
-            .authored_call_arguments(span)
-            .map_or(args, Vec::as_slice)
+    pub(super) fn authored<'s>(
+        &'s self,
+        span: Span,
+        args: &'s [ExprId],
+    ) -> std::borrow::Cow<'s, [ExprId]> {
+        match self.ta.authored_call_arguments(span) {
+            Some(authored) => std::borrow::Cow::Owned(
+                authored
+                    .iter()
+                    .map(crate::TypedArrayElement::expr_id)
+                    .collect(),
+            ),
+            None => std::borrow::Cow::Borrowed(args),
+        }
     }
 
     /// Where a global the caller can reach is declared, when this package

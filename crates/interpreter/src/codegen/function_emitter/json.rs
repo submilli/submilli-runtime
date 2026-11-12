@@ -159,7 +159,9 @@ fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty:
 
 fn may_stringify_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
     ty.any_member(&|member| {
-        Type::stringifies_to_undefined(member) || is_constructor_value(ctx, member)
+        Type::stringifies_to_undefined(member)
+            || is_constructor_value(ctx, member)
+            || is_vtable_interface(ctx, member)
     })
 }
 
@@ -175,6 +177,16 @@ fn may_return_closure_or_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
                 Type::NonPrimitive | Type::InterfaceRef { .. } | Type::Object { .. }
             )
         })
+}
+
+fn is_vtable_interface(ctx: &CodegenCtx, ty: &Type) -> bool {
+    let Type::InterfaceRef { mangled, .. } = ty else {
+        return false;
+    };
+    matches!(
+        ctx.symbols.iface_dispatch(mangled),
+        None | Some(crate::Dispatch::VTable)
+    )
 }
 
 /// A constructor binding used as a value (`Number`) is a function, which JSON

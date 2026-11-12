@@ -22,6 +22,7 @@ pub(super) struct ShapeCollector<'a> {
     /// (`type G<T> = { v: T; next: G<G<T>> }`), where every expansion is a
     /// strictly larger type and so always looks new.
     open_aliases: BTreeSet<MangledName>,
+    walked_exprs: BTreeSet<crate::ExprId>,
     types: TypeResolver<'a>,
 }
 
@@ -32,6 +33,7 @@ impl<'a> ShapeCollector<'a> {
             emitted_shapes: BTreeSet::new(),
             walked_types: BTreeSet::new(),
             open_aliases: BTreeSet::new(),
+            walked_exprs: BTreeSet::new(),
             types,
         }
     }
@@ -357,6 +359,9 @@ pub(super) fn collect_from_expr(
     expr_id: crate::ExprId,
     c: &mut ShapeCollector<'_>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if !c.walked_exprs.insert(expr_id) {
+        return Ok(());
+    }
     let expr = ast
         .try_expr(expr_id)
         .map_err(crate::typechecker::arena_failure)?;
@@ -397,38 +402,39 @@ pub(super) fn collect_from_expr(
         TypedExprKind::Call { args, .. }
         | TypedExprKind::VirtualCall { args, .. }
         | TypedExprKind::SuperCtorCall { args, .. }
-        | TypedExprKind::SuperMethodCall { args, .. } => {
+        | TypedExprKind::SuperMethodCall { args, .. }
+        | TypedExprKind::IntrinsicCall { args, .. } => {
             for a in args {
                 collect_from_expr(ast, *a, c)?;
             }
+            collect_from_authored_arguments(ast, expr.span, c)?;
         }
         TypedExprKind::CallClosure { callee, args } => {
             collect_from_expr(ast, *callee, c)?;
             for a in args {
                 collect_from_expr(ast, *a, c)?;
             }
+            collect_from_authored_arguments(ast, expr.span, c)?;
         }
         TypedExprKind::GenericCall { args, .. } => {
             for a in args {
                 collect_from_expr(ast, a.expr, c)?;
             }
+            collect_from_authored_arguments(ast, expr.span, c)?;
         }
         TypedExprKind::MethodCall { receiver, args, .. } => {
             collect_from_expr(ast, *receiver, c)?;
             for a in args {
                 collect_from_expr(ast, *a, c)?;
             }
+            collect_from_authored_arguments(ast, expr.span, c)?;
         }
         TypedExprKind::GenericMethodCall { receiver, args, .. } => {
             collect_from_expr(ast, *receiver, c)?;
             for a in args {
                 collect_from_expr(ast, a.expr, c)?;
             }
-        }
-        TypedExprKind::IntrinsicCall { args, .. } => {
-            for a in args {
-                collect_from_expr(ast, *a, c)?;
-            }
+            collect_from_authored_arguments(ast, expr.span, c)?;
         }
         TypedExprKind::ObjectLiteral { members, fields } => {
             // The literal is built with its layout, which its type (an interface,
@@ -527,6 +533,7 @@ pub(super) fn collect_from_expr(
                         args,
                         result_ty,
                         union_signature,
+                        span,
                         ..
                     } => {
                         c.collect(result_ty);
@@ -536,14 +543,19 @@ pub(super) fn collect_from_expr(
                         for a in args {
                             collect_from_expr(ast, *a, c)?;
                         }
+                        collect_from_authored_arguments(ast, *span, c)?;
                     }
                     crate::TypedChainPart::MethodCall {
-                        args, result_ty, ..
+                        args,
+                        result_ty,
+                        span,
+                        ..
                     } => {
                         c.collect(result_ty);
                         for a in args {
                             collect_from_expr(ast, *a, c)?;
                         }
+                        collect_from_authored_arguments(ast, *span, c)?;
                     }
                 }
             }
@@ -589,6 +601,20 @@ pub(super) fn collect_from_expr(
             collect_from_expr(ast, *value, c)?;
         }
     };
+    Ok(())
+}
+
+fn collect_from_authored_arguments(
+    ast: &TypedAst,
+    span: crate::Span,
+    c: &mut ShapeCollector<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(elements) = ast.authored_call_arguments(span) else {
+        return Ok(());
+    };
+    for element in elements {
+        collect_from_expr(ast, element.expr_id(), c)?;
+    }
     Ok(())
 }
 

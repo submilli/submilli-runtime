@@ -692,11 +692,12 @@ pub fn emit_cast_to(
             // Never: the call always throws before producing a value; reuses
             // Unknown's (ref null $Object) lowering — see value_type.
         }
-        Type::Function { .. } => {
+        Type::Function { has_rest, .. } => {
             crate::codegen::closure_coercions::emit_erased_cast(
                 emitter,
                 ctx,
                 crate::codegen::closures::classify(ty)?,
+                *has_rest,
             )?;
         }
         Type::Null => {

@@ -87,6 +87,7 @@ struct InferredCallArguments {
     typed: Vec<ExprId>,
     checks: Vec<ArgumentCheck>,
     spread_sources: Option<CallSpreadSources>,
+    authored: Option<CallSpreadSources>,
     /// Contextual callback defaults are not inference candidates. Keep the
     /// chosen types so a subsequent replacement is validated normally.
     constraint_defaults: BTreeMap<String, Type>,
@@ -758,6 +759,7 @@ impl Inferer<'_> {
             typed: mut typed_args,
             checks: argument_checks,
             spread_sources,
+            authored,
             constraint_defaults,
         } = self.infer_generic_arguments(
             &args,
@@ -794,10 +796,7 @@ impl Inferer<'_> {
             None
         };
 
-        if has_rest || typed_args.len() < sig.params.len() {
-            self.typed_ast
-                .record_authored_arguments(span, typed_args.clone());
-        }
+        self.record_generic_authored_arguments(span, authored, &typed_args, sig.params.len())?;
         if expanded_arity_ok && spread_sources.is_none() {
             self.fill_omitted_defaults(&receiver_params, typed_args.len(), span, &mut typed_args)?;
         }
@@ -1156,7 +1155,13 @@ impl Inferer<'_> {
         let ret_kind = ShapeKind::of(ret);
         let mut agreed: Option<TypeParamSubstitution> = None;
         for member in members {
-            if !ret_kind.could_be(ShapeKind::of(member)) {
+            let callable_pair = (matches!(ret.peel(), Type::Function { .. })
+                && super::assignable::expand_interface_call_signature(member, self.resolver())
+                    .is_some())
+                || (matches!(member.peel(), Type::Function { .. })
+                    && super::assignable::expand_interface_call_signature(ret, self.resolver())
+                        .is_some());
+            if !ret_kind.could_be(ShapeKind::of(member)) && !callable_pair {
                 continue;
             }
             let mut trial = sub.clone();
@@ -2065,7 +2070,9 @@ impl Inferer<'_> {
             if self.ast.call_spread_args.contains(&arg) {
                 let source = self.infer_expr(arg, None)?;
                 let width = match source.1.peel() {
-                    Type::Tuple(tuple) if next_position < fixed_count => tuple.elements.len(),
+                    Type::Tuple(tuple) if next_position < fixed_count || !has_rest => {
+                        tuple.elements.len()
+                    }
                     _ => 1,
                 };
                 next_position = next_position.saturating_add(width);
@@ -2153,7 +2160,7 @@ impl Inferer<'_> {
                     continue;
                 }
                 let position = positions[i];
-                if position < fixed_count
+                if (position < fixed_count || !has_rest)
                     && let Some((source, source_ty)) = &spread_sources[i]
                     && let Type::Tuple(tuple) = source_ty.peel()
                 {
@@ -2326,12 +2333,12 @@ impl Inferer<'_> {
         }
         let dynamic_tuple = args.iter().enumerate().any(|(i, arg)| {
             self.ast.call_spread_args.contains(arg)
-                && positions[i] < fixed_count
+                && (positions[i] < fixed_count || !has_rest)
                 && spread_sources[i]
                     .as_ref()
                     .is_some_and(|(_, ty)| matches!(ty.peel(), Type::Tuple(_)))
         });
-        let sources = if dynamic_tuple {
+        let raw_elements = if dynamic_tuple || has_rest || has_call_spread {
             Some(
                 args.iter()
                     .enumerate()
@@ -2356,10 +2363,12 @@ impl Inferer<'_> {
         } else {
             None
         };
+        let sources = dynamic_tuple.then(|| raw_elements.clone()).flatten();
         Ok(InferredCallArguments {
             typed: typed_slots.into_iter().flatten().flatten().collect(),
             checks,
             spread_sources: sources,
+            authored: raw_elements,
             constraint_defaults,
         })
     }
@@ -3121,6 +3130,7 @@ impl Inferer<'_> {
             typed: mut typed_args,
             checks: argument_checks,
             spread_sources,
+            authored,
             constraint_defaults,
         } = self.infer_generic_arguments(
             &args,
@@ -3149,10 +3159,7 @@ impl Inferer<'_> {
         }
         self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
 
-        if has_rest || typed_args.len() < params.len() {
-            self.typed_ast
-                .record_authored_arguments(span, typed_args.clone());
-        }
+        self.record_generic_authored_arguments(span, authored, &typed_args, params.len())?;
         if expanded_arity_ok && spread_sources.is_none() {
             self.fill_omitted_defaults(&params, typed_args.len(), span, &mut typed_args)?;
         }
@@ -3282,6 +3289,27 @@ impl Inferer<'_> {
             type_predicate,
         };
         Ok((call, result_ty))
+    }
+
+    fn record_generic_authored_arguments(
+        &mut self,
+        span: Span,
+        authored: Option<Vec<crate::TypedArrayElement>>,
+        typed_args: &[ExprId],
+        sig_param_count: usize,
+    ) -> Result<(), CompilerFailure> {
+        if let Some(authored) = authored {
+            let elements = self.materialize_call_elements(&authored)?;
+            self.typed_ast.record_authored_arguments(span, elements);
+        } else if typed_args.len() < sig_param_count {
+            let elements = typed_args
+                .iter()
+                .copied()
+                .map(crate::TypedArrayElement::Value)
+                .collect();
+            self.typed_ast.record_authored_arguments(span, elements);
+        }
+        Ok(())
     }
 }
 

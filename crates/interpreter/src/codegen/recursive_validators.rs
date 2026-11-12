@@ -391,7 +391,9 @@ impl<'a> Discovery<'a> {
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for carrier in &interface.non_shape_carriers {
             match carrier {
-                crate::InterfaceCarrier::Array(ty) | crate::InterfaceCarrier::Set(ty) => {
+                crate::InterfaceCarrier::Array(ty)
+                | crate::InterfaceCarrier::Function(ty)
+                | crate::InterfaceCarrier::Set(ty) => {
                     self.walk(ty)?;
                 }
                 crate::InterfaceCarrier::Map(key, value) => {

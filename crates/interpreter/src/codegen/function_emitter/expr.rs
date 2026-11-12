@@ -240,6 +240,9 @@ fn emit_expr_value(
         }
         TypedExprKind::Call { mangled, args, .. } => {
             crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
+            if args.is_empty() {
+                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            }
             emit_symbol_call(emitter, ctx, mangled, args, &expr.ty)?;
         }
         TypedExprKind::SuperCtorCall { parent, args } => {
@@ -257,6 +260,9 @@ fn emit_expr_value(
                 .ok_or_else(|| crate::codegen::internal_failure("parent ctor init fn allocated"))?;
             // A host parent's declared defaults replace an `undefined` argument.
             let defaults = ctx.symbols.host_call_defaults(init, args.len()).to_vec();
+            if args.is_empty() {
+                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            }
             emit_args_into_slots_with_defaults(emitter, ctx, args, ctor_abi.as_deref(), &defaults)?;
             emitter.instruction(Instruction::Call(init));
             // Own field initializers / parameter-property copies run right after
@@ -276,6 +282,9 @@ fn emit_expr_value(
             })?;
             emitter.instruction(Instruction::LocalGet(this));
             let abi = ctx.symbols.class_method_abi(owner, &name.name).cloned();
+            if args.is_empty() {
+                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            }
             emit_args_into_slots(
                 emitter,
                 ctx,
@@ -295,6 +304,9 @@ fn emit_expr_value(
             // No per-tool import: serialize the args to JSON, dispatch the package's
             // single host fn, which returns guest objects as `unknown`. Known-return
             // tools are wrapped in a normal `Cast` by typecheck.
+            if args.is_empty() {
+                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            }
             super::virtual_call::emit_virtual_call(emitter, ctx, target, tool, args)?;
         }
         TypedExprKind::CallClosure { callee, args } => {
@@ -303,7 +315,7 @@ fn emit_expr_value(
             // inline `Closure` expression, a function-typed field,
             // etc. The typechecker decided this isn't a static
             // top-level call.
-            emit_indirect_closure_call(emitter, ctx, *callee, args, &expr.ty)?;
+            emit_indirect_closure_call(emitter, ctx, *callee, args, &expr.ty, Some(expr.span))?;
         }
         TypedExprKind::GenericCall {
             mangled,
@@ -313,6 +325,9 @@ fn emit_expr_value(
             type_predicate: _,
         } => {
             crate::codegen::init_guard::emit_check(emitter, ctx, mangled);
+            if args.is_empty() {
+                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            }
             emit_generic_call(
                 emitter,
                 ctx,
@@ -328,6 +343,9 @@ fn emit_expr_value(
                 .ta
                 .source_type(id)
                 .map_err(crate::codegen::arena_failure)?;
+            if args.is_empty() {
+                emit_discarded_call_arguments(emitter, ctx, expr.span)?;
+            }
             emit_intrinsic_call(emitter, ctx, *kind, args, &expr.ty, source_ty)?;
         }
         TypedExprKind::MethodCall {
@@ -337,7 +355,7 @@ fn emit_expr_value(
             args,
             type_predicate: _,
         } => {
-            emit_method_call(
+            emit_method_call_at(
                 emitter,
                 ctx,
                 *receiver,
@@ -348,6 +366,7 @@ fn emit_expr_value(
                 &[],
                 None,
                 &expr.ty,
+                Some(expr.span),
             )?;
         }
         TypedExprKind::GenericMethodCall {
@@ -360,7 +379,7 @@ fn emit_expr_value(
             type_predicate: _,
         } => {
             let plain_args: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-            emit_method_call(
+            emit_method_call_at(
                 emitter,
                 ctx,
                 *receiver,
@@ -371,6 +390,7 @@ fn emit_expr_value(
                 type_args,
                 return_cast.as_ref(),
                 &expr.ty,
+                Some(expr.span),
             )?;
         }
         TypedExprKind::ObjectLiteral { members, fields } => {
@@ -584,11 +604,17 @@ fn emit_expr_value(
                 .map_err(crate::codegen::arena_failure)?
                 .ty
                 .clone();
-            let receiver = if matches!(parts.first(), Some(crate::TypedChainPart::Call { .. })) {
-                emit_callee(emitter, ctx, *base)?
-            } else {
-                emit_expr(emitter, ctx, *base)?;
-                None
+            let receiver = match parts.first() {
+                Some(crate::TypedChainPart::Call { .. }) => emit_callee(emitter, ctx, *base)?,
+                Some(crate::TypedChainPart::MethodCall { name, .. })
+                    if is_call_signature_call(&name.name) =>
+                {
+                    emit_callee(emitter, ctx, *base)?
+                }
+                _ => {
+                    emit_expr(emitter, ctx, *base)?;
+                    None
+                }
             };
             emitter.call_receiver = receiver;
             emit_chain_parts(
@@ -730,10 +756,11 @@ fn emit_global_ref(
     // function-as-value path separately.
     //
     // Static-interface bindings (`console`, `Map`, `Temporal.Instant`) have
-    // no global behind them (see `static_interface_of` in codegen::mod). As
-    // a value, one reads as the host object that prints like the binding.
-    if let Some(iface) = static_interface(ctx, result_ty) {
-        emit_static_value(emitter, ctx, iface)?;
+    // no global behind them (see `PackageDeclaration::static_interface_of`). As
+    // a value, one reads as the host object that prints like the binding;
+    // a user global typed at a static-dispatch interface reads its own global.
+    if let Some(tag) = ctx.symbols.static_binding_tag(mangled) {
+        emit_static_value(emitter, ctx, tag)?;
         if let ValType::Ref(RefType {
             nullable: false, ..
         }) = ctx.symbols.value_type(result_ty)?
@@ -757,26 +784,11 @@ fn emit_global_ref(
     Ok(())
 }
 
-/// The static-dispatch interface `ty` names, if any.
-fn static_interface<'a>(ctx: &CodegenCtx, ty: &'a Type) -> Option<&'a crate::MangledName> {
-    match ty.lowered() {
-        Type::InterfaceRef { mangled, .. }
-            if ctx.symbols.iface_dispatch(mangled) == Some(crate::Dispatch::Static) =>
-        {
-            Some(mangled)
-        }
-        _ => None,
-    }
-}
-
 fn emit_static_value(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
-    iface: &crate::MangledName,
+    tag: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let tag = ctx.symbols.static_value_tag(iface).ok_or_else(|| {
-        crate::codegen::internal_failure("a static binding read as a value has a recorded tag")
-    })?;
     super::emit_inline_string_literal(emitter, ctx, tag)?;
     let helper = ctx
         .symbols
@@ -896,6 +908,23 @@ fn emit_symbol_call(
         cast::emit_box(emitter, ctx, &target.ret)?;
     }
 
+    Ok(())
+}
+
+/// Evaluates and drops authored arguments of a zero-parameter call, such as an
+/// empty-tuple spread `zero(...mkEmpty())` whose expanded ABI slot list is empty.
+fn emit_discarded_call_arguments(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    span: crate::Span,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let Some(elements) = ctx.ta.authored_call_arguments(span) else {
+        return Ok(());
+    };
+    for element in elements {
+        emit_expr(emitter, ctx, element.expr_id())?;
+        emitter.instruction(Instruction::Drop);
+    }
     Ok(())
 }
 
@@ -3134,11 +3163,18 @@ fn emit_chain_operation(
         ..
     } = part
         && !crate::codegen::is_host_package(iface.as_str())
+        && !is_call_signature_call(&name.name)
         && let Some(args) = ctx.ta.authored_call_arguments(*span)
     {
         cast::emit_box(emitter, ctx, receiver_ty)?;
-        emit_live_member_on_stack(emitter, ctx, iface, &name.name, Some(args))?;
-        cast::emit_cast_to(emitter, ctx, result_ty)?;
+        emit_live_member_on_stack(
+            emitter,
+            ctx,
+            iface,
+            &name.name,
+            Some((CallArguments::Authored(args), None)),
+        )?;
+        emit_live_member_return_cast(emitter, ctx, result_ty)?;
         return Ok(());
     }
     if receiver_ty == &Type::Unknown {
@@ -3150,9 +3186,15 @@ fn emit_chain_operation(
                 result_ty,
                 span,
                 ..
-            } if crate::codegen::runtime_values::dynamic_member_interface(iface) => {
-                let args = ctx.ta.authored_call_arguments(*span).unwrap_or(args);
-                emit_live_member_on_stack(emitter, ctx, iface, &name.name, Some(args))?;
+            } if crate::codegen::runtime_values::dynamic_member_interface(iface)
+                && !is_call_signature_call(&name.name) =>
+            {
+                let args = ctx
+                    .ta
+                    .authored_call_arguments(*span)
+                    .map_or(CallArguments::Typed(args), CallArguments::Authored);
+                emit_live_member_on_stack(emitter, ctx, iface, &name.name, Some((args, None)))?;
+                emit_live_member_return_cast(emitter, ctx, result_ty)?;
                 return Ok(());
             }
             crate::TypedChainPart::InterfaceProperty { iface, name, .. }
@@ -3173,7 +3215,10 @@ fn emit_chain_operation(
             | crate::TypedChainPart::NonNull { .. }
     ) {
         let receiver_slot = ctx.symbols.value_type(receiver_ty)?;
-        if receiver_slot == ctx.symbols.value_type(&operation_ty)? {
+        let stripped_receiver = crate::typechecker::infer::narrowing::strip_nullish(receiver_ty);
+        if stripped_receiver == operation_ty
+            && receiver_slot == ctx.symbols.value_type(&operation_ty)?
+        {
             if matches!(receiver_slot, ValType::Ref(_)) {
                 cast::emit_cast_to(emitter, ctx, &operation_ty)?;
             }
@@ -3198,16 +3243,85 @@ fn emit_chain_operation(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum CallArguments<'a> {
+    Authored(&'a [crate::TypedArrayElement]),
+    Typed(&'a [ExprId]),
+}
+
+impl<'a> CallArguments<'a> {
+    fn len(self) -> usize {
+        match self {
+            Self::Authored(elements) => elements.len(),
+            Self::Typed(exprs) => exprs.len(),
+        }
+    }
+
+    fn try_for_each_expr(
+        self,
+        mut f: impl FnMut(ExprId) -> Result<(), crate::compiler_error::CompilerFailure>,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        match self {
+            Self::Authored(elements) => elements.iter().try_for_each(|e| f(e.expr_id())),
+            Self::Typed(exprs) => exprs.iter().copied().try_for_each(f),
+        }
+    }
+}
+
+fn emit_call_signature_on_stack(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver_ty: &Type,
+    iface: &crate::MangledName,
+    args: CallArguments<'_>,
+    call_receiver: Option<u32>,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    cast::emit_box(emitter, ctx, receiver_ty)?;
+    emit_live_member_on_stack(emitter, ctx, iface, "@call", Some((args, call_receiver)))?;
+    emit_live_member_return_cast(emitter, ctx, result_ty)
+}
+
+fn emit_live_member_return_cast(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if result_ty.is_void() || matches!(result_ty.lowered(), Type::Unknown) {
+        return Ok(());
+    }
+    crate::codegen::cast_check::emit_checked_cast_on_stack(emitter, ctx, &Type::Unknown, result_ty)
+}
+
 fn emit_live_member_on_stack(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     iface: &crate::MangledName,
     name: &str,
-    args: Option<&[ExprId]>,
+    call: Option<(CallArguments<'_>, Option<u32>)>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     super::emit_const_string_by_text(emitter, ctx, name)?;
     super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
-    let helper = if args.is_some() {
+    let helper = if let Some((_, call_receiver)) = call {
+        if let Some(slot) = call_receiver {
+            emitter.instruction(Instruction::LocalGet(slot));
+            match emitter.local_type(slot)? {
+                ValType::F64 => cast::emit_box(emitter, ctx, &Type::Number)?,
+                ValType::I32 => cast::emit_box(emitter, ctx, &Type::Boolean)?,
+                ValType::Ref(_) => {}
+                other => {
+                    return Err(crate::codegen::internal_failure(format!(
+                        "unexpected call receiver local type {other:?}"
+                    )));
+                }
+            }
+        } else {
+            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));
+        }
         "__value_member"
     } else {
         "__value_property"
@@ -3217,37 +3331,42 @@ fn emit_live_member_on_stack(
             .prelude_func_idx(helper)
             .ok_or_else(|| crate::codegen::internal_failure("live member helper collected"))?,
     ));
-    let Some(args) = args else {
+    let Some((args, _)) = call else {
         return Ok(());
     };
-    let intr = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
-    emitter.instruction(Instruction::GlobalGet(
-        ctx.symbols
-            .prelude_global_idx("array_vtable")
-            .ok_or_else(|| crate::codegen::internal_failure("array vtable"))?,
-    ));
-    for &arg in args {
-        emit_expr(emitter, ctx, arg)?;
-        cast::emit_box(
-            emitter,
-            ctx,
-            &ctx.ta
-                .try_expr(arg)
-                .map_err(crate::codegen::arena_failure)?
-                .ty,
-        )?;
+    if let CallArguments::Authored(elements) = args
+        && elements
+            .iter()
+            .any(|element| matches!(element, crate::TypedArrayElement::Spread(_)))
+    {
+        emit_spread_array_literal(emitter, ctx, elements)?;
+    } else {
+        emitter.instruction(Instruction::GlobalGet(
+            ctx.symbols
+                .prelude_global_idx("array_vtable")
+                .ok_or_else(|| crate::codegen::internal_failure("array vtable"))?,
+        ));
+        let len = args.len();
+        args.try_for_each_expr(|arg| {
+            emit_expr(emitter, ctx, arg)?;
+            cast::emit_box(
+                emitter,
+                ctx,
+                &ctx.ta
+                    .try_expr(arg)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty,
+            )
+        })?;
+        emitter.instruction(Instruction::ArrayNewFixed {
+            array_type_index: intr.raw_array,
+            array_size: crate::codegen::wasm_u32(len)?,
+        });
+        emitter.instruction(Instruction::I32Const(i32::try_from(len).map_err(|_| {
+            crate::codegen::internal_failure("argument array too large")
+        })?));
+        emitter.instruction(Instruction::StructNew(intr.array));
     }
-    emitter.instruction(Instruction::ArrayNewFixed {
-        array_type_index: intr.raw_array,
-        array_size: crate::codegen::wasm_u32(args.len())?,
-    });
-    emitter.instruction(Instruction::I32Const(i32::try_from(args.len()).map_err(
-        |_| crate::codegen::internal_failure("argument array too large"),
-    )?));
-    emitter.instruction(Instruction::StructNew(intr.array));
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .prelude_func_idx("__value_invoke")
@@ -3895,6 +4014,7 @@ fn emit_chain_access(
         crate::TypedChainPart::Call {
             args,
             union_signature,
+            span,
             ..
         } => {
             // receiver on stack is the closure value
@@ -3914,6 +4034,7 @@ fn emit_chain_access(
                 union_signature.as_ref().unwrap_or(receiver_ty),
                 args,
                 part.result_ty(),
+                Some(*span),
             )?;
         }
         crate::TypedChainPart::MethodCall {
@@ -3921,8 +4042,25 @@ fn emit_chain_access(
             name,
             args,
             result_ty,
+            span,
             ..
         } => {
+            if is_call_signature_call(&name.name) {
+                let call_receiver = emitter.call_receiver.take();
+                let args = ctx
+                    .ta
+                    .authored_call_arguments(*span)
+                    .map_or(CallArguments::Typed(args), CallArguments::Authored);
+                return emit_call_signature_on_stack(
+                    emitter,
+                    ctx,
+                    receiver_ty,
+                    iface,
+                    args,
+                    call_receiver,
+                    result_ty,
+                );
+            }
             // dispatch through the same three paths the
             // non-chain `emit_method_call` uses (Direct/Static wrapper,
             // built-in vtable slot, shape-based fallback) — the helper
@@ -3943,6 +4081,7 @@ fn emit_chain_access(
                 &[],
                 None,
                 result_ty,
+                Some(*span),
             )?;
         }
         crate::TypedChainPart::NonNull { result_ty, .. } => {
@@ -5547,6 +5686,7 @@ fn emit_indirect_closure_call(
     callee: ExprId,
     args: &[ExprId],
     result_ty: &Type,
+    call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let callee_ty = ctx
         .ta
@@ -5555,7 +5695,9 @@ fn emit_indirect_closure_call(
         .clone();
     let receiver = emit_callee(emitter, ctx, callee)?;
     emitter.call_receiver = receiver;
-    emit_indirect_closure_call_with_receiver_on_stack(emitter, ctx, &callee_ty, args, result_ty)?;
+    emit_indirect_closure_call_with_receiver_on_stack(
+        emitter, ctx, &callee_ty, args, result_ty, call_span,
+    )?;
     Ok(())
 }
 
@@ -5640,10 +5782,16 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     callee_ty: &Type,
     args: &[ExprId],
     result_ty: &Type,
+    call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let receiver = emitter.call_receiver.take();
     let callee = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
     emitter.instruction(Instruction::LocalSet(callee));
+    if args.is_empty()
+        && let Some(span) = call_span
+    {
+        emit_discarded_call_arguments(emitter, ctx, span)?;
+    }
     let mut arguments = Vec::with_capacity(args.len());
     for &arg in args {
         emit_expr(emitter, ctx, arg)?;
@@ -6180,12 +6328,71 @@ pub(crate) fn emit_method_call(
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_method_call_at(
+        emitter,
+        ctx,
+        receiver,
+        iface,
+        method,
+        args,
+        generic_args,
+        type_args,
+        return_cast,
+        call_ret_ty,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_method_call_at(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+    iface: &crate::MangledName,
+    method: &str,
+    args: &[ExprId],
+    generic_args: Option<&[crate::GenericArgument]>,
+    type_args: &[Type],
+    return_cast: Option<&Type>,
+    call_ret_ty: &Type,
+    call_span: Option<crate::Span>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let recv_ty = ctx
         .ta
         .source_type(receiver)
         .map_err(crate::codegen::arena_failure)?
         .clone();
-    if !emit_dropped_static_receiver(emitter, ctx, receiver, iface)? {
+    let static_receiver = ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static)
+        && emit_dropped_static_receiver(emitter, ctx, receiver)?;
+    if !static_receiver {
+        if is_call_signature_call(method) {
+            let call_receiver = emit_callee(emitter, ctx, receiver)?;
+            let actual_recv_ty = &ctx
+                .ta
+                .try_expr(receiver)
+                .map_err(crate::codegen::arena_failure)?
+                .ty;
+            if actual_recv_ty != &recv_ty {
+                crate::codegen::cast_check::emit_operation_cast_on_stack(
+                    emitter,
+                    ctx,
+                    actual_recv_ty,
+                    &recv_ty,
+                )?;
+            }
+            let args = call_span
+                .and_then(|span| ctx.ta.authored_call_arguments(span))
+                .map_or(CallArguments::Typed(args), CallArguments::Authored);
+            return emit_call_signature_on_stack(
+                emitter,
+                ctx,
+                &recv_ty,
+                iface,
+                args,
+                call_receiver,
+                call_ret_ty,
+            );
+        }
         emit_receiver(emitter, ctx, receiver)?;
     }
     emit_method_call_with_receiver_on_stack(
@@ -6199,6 +6406,7 @@ pub(crate) fn emit_method_call(
         type_args,
         return_cast,
         call_ret_ty,
+        call_span,
     )?;
     Ok(())
 }
@@ -6210,15 +6418,15 @@ fn emit_dropped_static_receiver(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     receiver: ExprId,
-    iface: &crate::MangledName,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
     let expr = ctx
         .ta
         .try_expr(receiver)
         .map_err(crate::codegen::arena_failure)?;
-    if !matches!(expr.kind, TypedExprKind::GlobalRef { .. })
-        || static_interface(ctx, &expr.ty) != Some(iface)
-    {
+    let TypedExprKind::GlobalRef { mangled, .. } = &expr.kind else {
+        return Ok(false);
+    };
+    if ctx.symbols.static_binding_tag(mangled).is_none() {
         return Ok(false);
     }
     match ctx.symbols.value_type(&expr.ty)? {
@@ -6252,11 +6460,23 @@ fn emit_method_call_with_receiver_on_stack(
     type_args: &[Type],
     return_cast: Option<&Type>,
     call_ret_ty: &Type,
+    call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if args.is_empty()
+        && let Some(span) = call_span
+    {
+        emit_discarded_call_arguments(emitter, ctx, span)?;
+    }
     let concrete_receiver = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
     if concrete_receiver.primitive_union_members().is_some() {
         cast::emit_box(emitter, ctx, recv_ty)?;
-        emit_live_member_on_stack(emitter, ctx, iface, method, Some(args))?;
+        emit_live_member_on_stack(
+            emitter,
+            ctx,
+            iface,
+            method,
+            Some((CallArguments::Typed(args), None)),
+        )?;
         return cast::emit_cast_to(emitter, ctx, call_ret_ty);
     }
     crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver)?;
@@ -6367,14 +6587,6 @@ fn emit_method_call_with_receiver_on_stack(
     // function-typed field. Reuses the `$ObjectShape` field-name scan
     // machinery and the closure ABI.
     if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
-        if is_call_signature_call(iface, method) {
-            // A call signature names no member: the value is the function (a
-            // constructor such as `Number` is one), or an object with a quoted
-            // `"@call"` method answers. The runtime member call resolves both.
-            cast::emit_box(emitter, ctx, recv_ty)?;
-            emit_live_member_on_stack(emitter, ctx, iface, method, Some(args))?;
-            return cast::emit_cast_to(emitter, ctx, call_ret_ty);
-        }
         emit_interface_method_via_shape_with_receiver_on_stack(
             emitter,
             ctx,
@@ -6390,11 +6602,12 @@ fn emit_method_call_with_receiver_on_stack(
     )))
 }
 
-/// Whether a call on a user interface goes through its call signature
-/// (`interface F { (v: number): number }`). Codegen analysis notes the runtime
-/// member helpers such a call needs by the same test.
-pub(in crate::codegen) fn is_call_signature_call(iface: &crate::MangledName, method: &str) -> bool {
-    method == "@call" && !crate::codegen::is_host_package(iface.as_str())
+/// Whether a call on an interface goes through its call signature
+/// (`interface F { (v: number): number }`, `BooleanConstructor`, etc.).
+/// Codegen analysis notes the runtime member helpers such a call needs by the
+/// same test.
+pub(in crate::codegen) fn is_call_signature_call(method: &str) -> bool {
+    method == "@call"
 }
 
 fn emit_class_method_value(
@@ -6588,6 +6801,7 @@ fn emit_shape_method_with_arguments(
         emitter,
         ctx,
         crate::codegen::closures::ClosureSig::of(args.len(), call_ret_ty)?,
+        false,
     )?;
     emitter.instruction(Instruction::LocalTee(closure_local));
 
@@ -7914,6 +8128,7 @@ mod tests {
                     &[],
                     None,
                     &Type::Number,
+                    None,
                 )
                 .unwrap_err();
                 assert!(error.to_string().contains("MissingInterface.missingMethod"));

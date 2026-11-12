@@ -1,0 +1,6 @@
+# Cross-package call-signature interfaces (`BooleanConstructor`, exported generic
+# `Formatter<T>`, and exported `Empty` carrying `InterfaceCarrier::FunctionAny`
+# and `InterfaceCarrier::Function(Type)` across `PackageDeclaration`).
+# name            dir      deps            root
+@test/callables   provider -
+main              app      @test/callables root

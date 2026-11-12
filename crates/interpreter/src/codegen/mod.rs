@@ -151,7 +151,7 @@ fn record_function_value_tags(defs: &PackageDeclaration, symbols: &mut SymbolTab
                 ValueKind::Function { .. } => continue,
             };
             if value.name.starts_with(|c: char| c.is_ascii_uppercase())
-                && let Some(symbol) = static_interface_of(defs, ty)
+                && let Some(symbol) = defs.static_interface_of(ty)
             {
                 symbols.record_static_value_tag(
                     symbol.mangled_name.clone(),
@@ -164,42 +164,6 @@ fn record_function_value_tags(defs: &PackageDeclaration, symbols: &mut SymbolTab
         }
     }
     walk(&defs.values, &defs.namespaces, defs, symbols);
-}
-
-/// The `Dispatch::Static` interface `ty` names in `defs`, if any. Constructor
-/// and namespace receiver bindings (`console`, `Map`, `Temporal.Instant`) are
-/// typed by these; every call site drops the receiver, so the bindings are
-/// inert — they lower to a typed null and import no global.
-fn static_interface_of<'a>(
-    defs: &'a PackageDeclaration,
-    ty: &Type,
-) -> Option<&'a crate::TypeSymbol> {
-    fn find<'a>(
-        types: &'a std::collections::BTreeMap<String, crate::TypeSymbol>,
-        namespaces: &'a std::collections::BTreeMap<String, crate::NamespaceSymbol>,
-        mangled: &crate::MangledName,
-    ) -> Option<&'a crate::TypeSymbol> {
-        types
-            .values()
-            .find(|t| t.mangled_name == *mangled)
-            .or_else(|| {
-                namespaces
-                    .values()
-                    .find_map(|ns| find(&ns.types, &ns.namespaces, mangled))
-            })
-    }
-    let Type::InterfaceRef { mangled, .. } = ty.peel() else {
-        return None;
-    };
-    find(&defs.types, &defs.namespaces, mangled).filter(|ts| {
-        matches!(
-            &ts.kind,
-            TypeKind::Interface {
-                dispatch: crate::Dispatch::Static,
-                ..
-            }
-        )
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -285,14 +249,13 @@ fn import_value_symbol(
         }
         ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => {
             // Static-interface receiver bindings are inert (see
-            // `static_interface_of`): record the dispatch so the emitter lowers
-            // references to a typed null, and import nothing.
-            if let Some(ts) = static_interface_of(defs, ty) {
+            // `PackageDeclaration::static_interface_of`): record the dispatch so
+            // the emitter lowers references to a typed null, and import nothing.
+            if let Some(ts) = defs.static_interface_of(ty) {
+                let tag = static_value_tag(&value.name);
                 symbols.record_iface_dispatch(ts.mangled_name.clone(), crate::Dispatch::Static);
-                symbols.record_static_value_tag(
-                    ts.mangled_name.clone(),
-                    static_value_tag(&value.name),
-                );
+                symbols.record_static_value_tag(ts.mangled_name.clone(), tag.clone());
+                symbols.record_static_binding_tag(value.mangled_name.clone(), tag);
                 return Ok(());
             }
             // Every exported value-global is Wasm-mutable across the board — a

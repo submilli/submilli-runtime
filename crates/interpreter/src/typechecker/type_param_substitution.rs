@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 
 use crate::type_size::{TypeBudget, TypeLimits, TypeTooLarge, map_children};
 use crate::typechecker::infer::assignable::{
-    TypeResolver, assignable, drops_readonly, expand_alias_ref, expand_interface_data_shape,
-    rest_function_accepts,
+    TypeResolver, assignable, drops_readonly, expand_alias_ref, expand_interface_call_signature,
+    expand_interface_data_shape, rest_function_accepts,
 };
 use crate::typechecker::infer::type_aliases::rehydrate_alias_refs;
 use crate::typechecker::infer::variance::Variance;
@@ -1129,6 +1129,30 @@ impl<'a> Unifier<'a> {
                         expected: param_ty.clone(),
                         got: arg_ty.clone(),
                     }),
+                }
+            }
+            (Type::InterfaceRef { .. }, Type::Function { .. })
+            | (Type::Function { .. }, Type::InterfaceRef { .. }) => {
+                let expanded = self.types.and_then(|types| {
+                    let param = expand_interface_call_signature(param_ty, types);
+                    let arg = expand_interface_call_signature(arg_ty, types);
+                    Some((
+                        param.unwrap_or_else(|| param_ty.clone()),
+                        arg.unwrap_or_else(|| arg_ty.clone()),
+                    ))
+                    .filter(|(param, arg)| param != param_ty || arg != arg_ty)
+                });
+                if let Some((param, arg)) = expanded {
+                    self.unify(&param, &arg)
+                } else if self.accepts_as_subtype(arg_ty, param_ty)
+                    || self.accepts_as_supertype(arg_ty, param_ty)
+                {
+                    Ok(())
+                } else {
+                    Err(UnifyError::Mismatch {
+                        expected: param_ty.clone(),
+                        got: arg_ty.clone(),
+                    })
                 }
             }
             // Union-vs-union: a lone unbound type parameter takes what its

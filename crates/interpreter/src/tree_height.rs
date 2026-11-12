@@ -948,7 +948,7 @@ impl Tree for TypedTree<'_> {
         let span = match node {
             Node::Expr(id) => {
                 let expr = self.0.try_expr(id).map_err(typed_arena_error)?;
-                children.expr_kind(&expr.kind);
+                children.expr_kind(self.0, expr.span, &expr.kind);
                 expr.span
             }
             Node::Stmt(id) => {
@@ -987,13 +987,20 @@ impl TypedChildren {
         self.nodes.extend(ids.iter().copied().map(Node::Expr));
     }
 
+    fn authored_call_arguments(&mut self, ta: &TypedAst, span: Span) {
+        if let Some(elements) = ta.authored_call_arguments(span) {
+            self.nodes
+                .extend(elements.iter().map(|element| Node::Expr(element.expr_id())));
+        }
+    }
+
     fn stmt(&mut self, id: StmtId) {
         self.nodes.push(Node::Stmt(id));
     }
 
     /// Code generation nests each chain link inside the previous one, so the
     /// link at depth `n` and the operands it owns sit `n` levels down.
-    fn chain_parts(&mut self, parts: &[TypedChainPart]) {
+    fn chain_parts(&mut self, ta: &TypedAst, parts: &[TypedChainPart]) {
         let mut depth = 0u32;
         for part in parts {
             depth = depth.saturating_add(1);
@@ -1004,9 +1011,15 @@ impl TypedChildren {
                 | TypedChainPart::NonNull { .. }
                 | TypedChainPart::Constraint { .. } => {}
                 TypedChainPart::Index { idx, .. } => self.expr_at(*idx, depth),
-                TypedChainPart::Call { args, .. } | TypedChainPart::MethodCall { args, .. } => {
+                TypedChainPart::Call { args, span, .. }
+                | TypedChainPart::MethodCall { args, span, .. } => {
                     for arg in args {
                         self.expr_at(*arg, depth);
+                    }
+                    if let Some(elements) = ta.authored_call_arguments(*span) {
+                        for element in elements {
+                            self.expr_at(element.expr_id(), depth);
+                        }
                     }
                 }
             }
@@ -1038,7 +1051,7 @@ impl TypedChildren {
         self.owned_height = self.owned_height.max(chain_height);
     }
 
-    fn expr_kind(&mut self, kind: &TypedExprKind) {
+    fn expr_kind(&mut self, ta: &TypedAst, span: Span, kind: &TypedExprKind) {
         match kind {
             TypedExprKind::Number(_)
             | TypedExprKind::BigInt(_)
@@ -1066,23 +1079,30 @@ impl TypedChildren {
             | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
-            | TypedExprKind::SuperMethodCall { args, .. } => self.exprs(args),
+            | TypedExprKind::SuperMethodCall { args, .. } => {
+                self.exprs(args);
+                self.authored_call_arguments(ta, span);
+            }
             TypedExprKind::CallClosure { callee, args } => {
                 self.expr(*callee);
                 self.exprs(args);
+                self.authored_call_arguments(ta, span);
             }
             TypedExprKind::GenericCall { args, .. } => {
                 self.nodes
                     .extend(args.iter().map(|argument| Node::Expr(argument.expr)));
+                self.authored_call_arguments(ta, span);
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.expr(*receiver);
                 self.exprs(args);
+                self.authored_call_arguments(ta, span);
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.expr(*receiver);
                 self.nodes
                     .extend(args.iter().map(|argument| Node::Expr(argument.expr)));
+                self.authored_call_arguments(ta, span);
             }
             TypedExprKind::ObjectLiteral { members, fields } => {
                 for member in members {
@@ -1112,7 +1132,7 @@ impl TypedChildren {
             TypedExprKind::Ternary { cond, then_, else_ } => self.exprs(&[*cond, *then_, *else_]),
             TypedExprKind::OptionalChain { base, parts } => {
                 self.expr(*base);
-                self.chain_parts(parts);
+                self.chain_parts(ta, parts);
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
                 PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => {}
@@ -1788,5 +1808,130 @@ mod tests {
             ),
             Err(CompilerFailure::Limit { .. })
         ));
+    }
+
+    #[test]
+    fn zero_parameter_spread_calls_count_authored_argument_height() {
+        let call_with_authored_spread = |arg_levels: u32| {
+            let mut ta = TypedAst::new();
+            let inner = negations(&mut ta, arg_levels);
+            let call_span = Span {
+                file: FileId(0),
+                start: 10,
+                end: 20,
+            };
+            ta.record_authored_arguments(call_span, vec![crate::TypedArrayElement::Spread(inner)]);
+            ta.try_push_expr(TypedExpr {
+                kind: TypedExprKind::Call {
+                    mangled: crate::mangle::prelude("zero"),
+                    args: Vec::new(),
+                    type_predicate: None,
+                },
+                span: call_span,
+                ty: Type::Number,
+            })
+            .unwrap();
+            ta
+        };
+        check_typed(
+            &call_with_authored_spread(MAX_TYPED_HEIGHT - 1),
+            CompilerStage::Codegen,
+        )
+        .unwrap();
+        assert!(matches!(
+            check_typed(
+                &call_with_authored_spread(MAX_TYPED_HEIGHT),
+                CompilerStage::Codegen
+            ),
+            Err(CompilerFailure::Limit { .. })
+        ));
+
+        let chain_call_with_authored_spread = |links: usize, arg_levels: u32| {
+            let mut ta = TypedAst::new();
+            let base = ta
+                .try_push_expr(TypedExpr {
+                    kind: TypedExprKind::Undefined,
+                    span: Span::at(FileId(0)),
+                    ty: Type::Unknown,
+                })
+                .unwrap();
+            let inner = negations(&mut ta, arg_levels);
+            let mut parts: Vec<TypedChainPart> = (0..links - 1)
+                .map(|_| TypedChainPart::NonNull {
+                    result_ty: Type::Unknown,
+                    span: Span::at(FileId(0)),
+                })
+                .collect();
+            let call_span = Span {
+                file: FileId(0),
+                start: 30,
+                end: 40,
+            };
+            ta.record_authored_arguments(call_span, vec![crate::TypedArrayElement::Spread(inner)]);
+            parts.push(TypedChainPart::Call {
+                args: Vec::new(),
+                optional: true,
+                result_ty: Type::Unknown,
+                union_signature: None,
+                span: call_span,
+            });
+            ta.try_push_expr(TypedExpr {
+                kind: TypedExprKind::OptionalChain { base, parts },
+                span: Span::at(FileId(0)),
+                ty: Type::Unknown,
+            })
+            .unwrap();
+            ta
+        };
+        let within_chain = MAX_TYPED_HEIGHT - 1 - 400;
+        check_typed(
+            &chain_call_with_authored_spread(400, within_chain),
+            CompilerStage::Codegen,
+        )
+        .unwrap();
+        assert!(matches!(
+            check_typed(
+                &chain_call_with_authored_spread(400, within_chain + 1),
+                CompilerStage::Codegen,
+            ),
+            Err(CompilerFailure::Limit { .. })
+        ));
+
+        // End-to-end check on a compiler-stack thread: syntax nesting stays
+        // well below `MAX_SYNTAX_HEIGHT`, while template lowering inside
+        // `zero(...mkEmpty(...))` exceeds `MAX_TYPED_HEIGHT`.
+        std::thread::Builder::new()
+            .stack_size(crate::compiler_limits::COMPILER_STACK_BYTES)
+            .spawn(|| {
+                let build_source = |levels: usize| {
+                    let mut expr = String::from("s");
+                    let suffix = "-${s}".repeat(120);
+                    for _ in 0..levels {
+                        expr = format!("zero(...mkEmpty(`${{{expr}}}{suffix}`))");
+                    }
+                    format!(
+                        "type EmptyTuple = Parameters<() => void>;\n\
+                         function zero(): string {{ return \"\"; }}\n\
+                         function mkEmpty(_s: string): EmptyTuple {{ return ([] as unknown) as EmptyTuple; }}\n\
+                         function main(): string {{ const s = \"\"; return {expr}; }}"
+                    )
+                };
+                let shallow = build_source(3);
+                assert!(crate::compile_script(&shallow, "test.ts", FileId(0), &[], &[]).is_ok());
+
+                let deep = build_source(6);
+                assert!(syntax_limit(&deep).is_none());
+                let diagnostics = crate::compile_script(&deep, "test.ts", FileId(0), &[], &[])
+                    .expect_err("lowered spread call nesting exceeds limit");
+                assert!(
+                    diagnostics.iter().any(|d| d
+                        .message
+                        .contains("lowered expression nesting exceeds the compiler limit")),
+                    "expected lowered expression height diagnostic, got: {diagnostics:?}",
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

@@ -1782,6 +1782,15 @@ impl<'a> Inferer<'a> {
         let mut carriers = self.primitive_interface_carriers(target);
         carriers.extend(self.collection_interface_carriers(target, name, members));
         carriers.extend(self.direct_interface_carriers(package, name, dispatch));
+        if let Some(call) = members.get("@call").filter(|call| !call.optional) {
+            if matches!(call.ty.peel(), Type::Function { .. })
+                && super::assignable(&call.ty, target, self.resolver())
+            {
+                carriers.insert(crate::InterfaceCarrier::Function(call.ty.clone()));
+            }
+        } else if super::assignable::interface_may_hold_function(target, self.resolver()) {
+            carriers.insert(crate::InterfaceCarrier::FunctionAny);
+        }
         carriers
     }
 
@@ -2375,6 +2384,16 @@ impl<'a> Inferer<'a> {
                     record(param)?;
                 }
                 record(ret)?;
+            }
+            Type::AliasRef { .. } => {
+                let expanded = super::assignable::expand_alias_ref(ty.peel(), self.resolver());
+                if &expanded != ty.peel() {
+                    self.record_runtime_type_test_inner(
+                        &expanded,
+                        RuntimeTestMode::AllowAliasRefs,
+                        active_interfaces,
+                    )?;
+                }
             }
             _ => {}
         }

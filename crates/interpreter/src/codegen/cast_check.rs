@@ -477,7 +477,15 @@ fn emit_structural_test_inner(
                 emitter.instruction(Instruction::I32And);
             }
             emitter.emit_else();
-            emitter.instruction(Instruction::I32Const(0));
+            if reduced_interface_admits_closure(ctx.ta, ty) {
+                let intr = ctx
+                    .symbols
+                    .intrinsic_type_indices()
+                    .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+                emit_ref_test(emitter, value_local, intr.closure);
+            } else {
+                emitter.instruction(Instruction::I32Const(0));
+            }
             emitter.emit_end();
         }
         Type::Array(elem) => {
@@ -654,6 +662,53 @@ fn emit_structural_test_inner(
     Ok(())
 }
 
+/// Whether `ty` is the `named(...)` object reduction of a weak `InterfaceRef`
+/// whose runtime descriptor admits `$Closure` carriers (`FunctionAny`).
+/// Plain object types and `type` aliases (`(ref $ObjectShape)` slots) are not
+/// interfaces in `runtime_type_tests` and return `false`.
+fn reduced_interface_admits_closure(ta: &crate::TypedAst, mut ty: &Type) -> bool {
+    let mut innermost = None;
+    while let Type::Alias { ty: body, .. } | Type::Refined { ty: body, .. } = ty {
+        if let Type::Alias {
+            mangled,
+            package,
+            name,
+            args,
+            ..
+        } = ty
+        {
+            innermost = Some((mangled, package, name, args));
+        }
+        ty = body;
+    }
+    let Some((mangled, package, name, args)) = innermost else {
+        return false;
+    };
+    let key = Type::InterfaceRef {
+        mangled: mangled.clone(),
+        package: package.clone(),
+        name: name.clone(),
+        args: args.clone(),
+    };
+    if let Some(crate::FieldNarrowingTest::Interface(test)) = ta.runtime_type_tests.get(&key) {
+        return test
+            .non_shape_carriers
+            .contains(&crate::InterfaceCarrier::FunctionAny);
+    }
+    ta.runtime_type_tests.iter().any(|(k, v)| {
+        matches!(
+            (k, v),
+            (
+                Type::InterfaceRef { mangled: m, .. },
+                crate::FieldNarrowingTest::Interface(test),
+            ) if m == mangled
+                && test
+                    .non_shape_carriers
+                    .contains(&crate::InterfaceCarrier::FunctionAny)
+        )
+    })
+}
+
 /// Pushes whether the value in `value_local` is a closure that can stand for
 /// the function type `ty`. A rest closure shares the struct of its Wasm arity
 /// but takes its arguments packed, and only a closure whose environment carries
@@ -700,11 +755,7 @@ fn emit_function_structural_test(
     emitter.instruction(Instruction::I32Const(i32::from(!has_rest)));
     emitter.emit_end();
     emitter.emit_else();
-    if has_rest {
-        emitter.instruction(Instruction::I32Const(0));
-    } else {
-        fit(emitter)?;
-    }
+    fit(emitter)?;
     emitter.emit_end();
     Ok(())
 }
@@ -1356,7 +1407,7 @@ fn emit_non_shape_interface_test(
                 &mut std::collections::BTreeSet::new(),
                 validator_state,
             )?,
-            InterfaceCarrier::Array(ty) => {
+            InterfaceCarrier::Array(ty) | InterfaceCarrier::Function(ty) => {
                 emit_structural_test_inner(
                     emitter,
                     ctx,
@@ -1365,6 +1416,9 @@ fn emit_non_shape_interface_test(
                     &mut std::collections::BTreeSet::new(),
                     validator_state,
                 )?;
+            }
+            InterfaceCarrier::FunctionAny => {
+                emit_ref_test(emitter, value_local, intr.closure);
             }
             InterfaceCarrier::Number => emit_ref_test(emitter, value_local, boxed_number_idx(ctx)?),
             InterfaceCarrier::Boolean => {
@@ -1909,10 +1963,10 @@ pub(crate) fn emit_runtime_validator_body(
     emitter.instruction(Instruction::I32Const(validator_id));
     emitter.instruction(Instruction::ArraySet(intr.raw_index_array));
     let mut interface_stack = std::collections::BTreeSet::new();
-    if key.lowered() == body.lowered()
-        && let Some(crate::FieldNarrowingTest::Interface(test)) =
-            ctx.ta.runtime_type_tests.get(key.lowered())
+    if let Some(crate::FieldNarrowingTest::Interface(test)) =
+        ctx.ta.runtime_type_tests.get(key.lowered())
     {
+        interface_stack.insert(key.lowered().clone());
         emit_interface_test_inner(
             &mut emitter,
             ctx,
@@ -1927,10 +1981,17 @@ pub(crate) fn emit_runtime_validator_body(
             }),
         )?;
     } else {
-        // A recursive alias's body is checked under the alias's name, so a
-        // failure at its value names `Tree`, not the expanded shape.
+        // A recursive alias or interface body is checked under its declared
+        // name, so failure diagnostics and weak-interface carrier checks keep
+        // that identity rather than seeing only the anonymous expanded shape.
         let named_body = match key {
             Type::AliasRef {
+                mangled,
+                package,
+                name,
+                args,
+            }
+            | Type::InterfaceRef {
                 mangled,
                 package,
                 name,

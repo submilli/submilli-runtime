@@ -135,6 +135,10 @@ pub struct SymbolTable {
     /// The JavaScript string form of each static-dispatch interface's binding,
     /// which names the object the binding reads as when used as a value.
     static_value_tags: BTreeMap<MangledName, String>,
+    /// Static-dispatch bindings keyed by the binding's own mangled name, so a
+    /// user global whose type is a static-dispatch interface still reads its
+    /// own Wasm global rather than the host binding's value.
+    static_binding_tags: BTreeMap<MangledName, String>,
     /// Physical signature of each Direct/Static-dispatch interface wrapper,
     /// keyed by its `iface#method` dispatch key.
     iface_method_abi: BTreeMap<MangledName, MethodSlotAbi>,
@@ -975,6 +979,14 @@ impl SymbolTable {
 
     pub fn static_value_tag(&self, iface: &MangledName) -> Option<&str> {
         self.static_value_tags.get(iface).map(String::as_str)
+    }
+
+    pub fn record_static_binding_tag(&mut self, binding: MangledName, tag: String) {
+        self.static_binding_tags.insert(binding, tag);
+    }
+
+    pub fn static_binding_tag(&self, binding: &MangledName) -> Option<&str> {
+        self.static_binding_tags.get(binding).map(String::as_str)
     }
 
     pub fn iface_dispatch(&self, iface: &MangledName) -> Option<Dispatch> {

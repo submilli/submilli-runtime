@@ -354,7 +354,7 @@ impl<'a> Inferer<'a> {
         let mut invalid_spread = false;
         for arg in &args {
             let i = typed_args.len();
-            if i < fixed_count && self.ast.call_spread_args.contains(arg) {
+            if (i < fixed_count || !has_rest) && self.ast.call_spread_args.contains(arg) {
                 let (source, source_ty) = self.infer_expr(*arg, None)?;
                 if let Type::Tuple(tuple) = source_ty.peel() {
                     spread_sources.push(crate::TypedArrayElement::Spread(source));
@@ -415,7 +415,14 @@ impl<'a> Inferer<'a> {
         }
         if expanded_arity_ok && dynamic_tuple {
             let rest = params.get(fixed_count).and_then(|p| p.ty.rest_element());
-            typed_args = self.collect_call_arguments(&spread_sources, &fixed_types, rest, span)?;
+            if fixed_types.is_empty() && rest.is_none() {
+                let elements = self.materialize_call_elements(&spread_sources)?;
+                self.typed_ast.record_authored_arguments(span, elements);
+                typed_args.clear();
+            } else {
+                typed_args =
+                    self.collect_call_arguments(&spread_sources, &fixed_types, rest, span)?;
+            }
         }
         let type_predicate = match &value.kind {
             ValueKind::Function { type_predicate, .. } => type_predicate.clone().map(Box::new),

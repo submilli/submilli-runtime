@@ -3040,3 +3040,80 @@ fn a_value_made_only_from_primitives_is_the_bodys_own() {
         )
     );
 }
+
+#[test]
+fn callable_interface_calls_are_treated_as_function_values_without_leaking_at_call() {
+    let called = findings(&[(
+        "lib",
+        &format!(
+            "{IMPORT}export function send(to: string, gate: BooleanConstructor): void {{\n\
+               const ok = gate(to);\n\
+               check(\"x/send\", {{ to, ok }});\n\
+               post(to, String(ok));\n\
+             }}\n"
+        ),
+    )]);
+    assert_eq!(called.len(), 1, "{called:#?}");
+    assert_eq!(
+        called[0].message,
+        "caller-supplied `gate` is called in `send`, which calls `check()`"
+    );
+    assert!(
+        !called[0].message.contains("@call")
+            && called[0]
+                .notes
+                .iter()
+                .all(|(_, note)| !note.contains("@call")),
+        "{called:#?}"
+    );
+
+    let passed = messages(
+        "interface Sink { (input: Input): void }\n\
+         function pickSink(): Sink { return deliver; }\n\
+         export function send(input: Input): void {\n\
+           check(\"x/send\", { channelId: input.channelId });\n\
+           pickSink()(input);\n\
+         }\n",
+    );
+    assert_eq!(
+        passed,
+        ["caller-supplied `input` is passed to a function value in `send`, which calls `check()`"]
+    );
+
+    // A `check()` nested inside an empty-tuple spread into a 0-parameter
+    // `@call` interface is still discovered by `check_calls` and enforces
+    // check discipline on earlier caller-supplied function calls.
+    let nested_in_empty_spread = findings(&[(
+        "lib",
+        &format!(
+            "{IMPORT}export interface Thunk {{ (): void }}\n\
+             type EmptyTuple = Parameters<() => void>;\n\
+             function emptyAfter(_done: void): EmptyTuple {{ return []; }}\n\
+             export function send(to: string, gate: BooleanConstructor, t: Thunk): void {{\n\
+               const ok = gate(to);\n\
+               t(...emptyAfter(check(\"x/send\", {{ to, ok }})));\n\
+               post(to, String(ok));\n\
+             }}\n"
+        ),
+    )]);
+    assert!(
+        nested_in_empty_spread.iter().any(|f| f
+            .message
+            .contains("caller-supplied `gate` is called in `send`")),
+        "{nested_in_empty_spread:#?}"
+    );
+
+    // Direct call to the runtime `Boolean(...)` conversion stays pure, and
+    // spreading a `Set` produced by an inner spread call does not alias spans.
+    assert_clean(
+        "function makeTags(...xs: string[]): Set<string> { return new Set(xs); }\n\
+         function count(...xs: string[]): number { return xs.length; }\n\
+         export function send(input: Input): void {\n\
+           const nonEmpty = Boolean(input.channelId);\n\
+           const fixed = [\"a\", \"b\"];\n\
+           const total = count(...makeTags(...fixed));\n\
+           check(\"x/send\", { nonEmpty, total });\n\
+           post(\"fixed\", String(nonEmpty));\n\
+         }\n",
+    );
+}

@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compiler_error::{CompilerFailure, CompilerStage};
 use crate::{
-    CapturedVar, ClosureBody, ExprId, Ident, StmtId, Type, TypedAst, TypedChainPart, TypedExprKind,
-    TypedStmtKind, tree_height,
+    CapturedVar, ClosureBody, ExprId, Ident, Span, StmtId, Type, TypedArrayElement, TypedAst,
+    TypedChainPart, TypedExprKind, TypedStmtKind, tree_height,
 };
 
 /// Capture-pass name for `this`. `this` is a keyword, so it can never collide
@@ -39,6 +39,7 @@ pub(crate) fn resolve_locals(
         frames: Vec::new(),
         pending: Vec::new(),
         resolved: ResolvedLocals::default(),
+        walked_exprs: BTreeSet::new(),
     };
     let function_bodies: Vec<(usize, Vec<crate::TypedParam>, StmtId)> = state
         .ta
@@ -153,6 +154,7 @@ struct State<'a> {
     frames: Vec<Frame>,
     pending: Vec<Pending>,
     resolved: ResolvedLocals,
+    walked_exprs: BTreeSet<ExprId>,
 }
 
 enum Pending {
@@ -588,6 +590,9 @@ impl State<'_> {
     }
 
     fn walk_expr(&mut self, id: ExprId) -> Result<(), crate::compiler_error::CompilerFailure> {
+        if !self.walked_exprs.insert(id) {
+            return Ok(());
+        }
         let expr = self
             .ta
             .try_expr(id)
@@ -712,6 +717,7 @@ impl State<'_> {
                 for a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             // `super.m()` dispatches on the receiver without naming `this`, so
             // it captures it just like an explicit `this` would.
@@ -720,6 +726,7 @@ impl State<'_> {
                 for a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
                 {
                     let b = self.require_source(THIS_BINDING)?;
                     self.mark_cross_frame_capture(THIS_BINDING, &b)?;
@@ -730,28 +737,33 @@ impl State<'_> {
                 for a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::GenericCall { args, .. } => {
                 for a in args {
                     self.walk_expr(a.expr)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.walk_expr(receiver)?;
                 for a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.walk_expr(receiver)?;
                 for a in args {
                     self.walk_expr(a.expr)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::IntrinsicCall { args, .. } => {
                 for a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
@@ -796,11 +808,12 @@ impl State<'_> {
                 for part in parts {
                     match part {
                         TypedChainPart::Index { idx, .. } => self.walk_expr(idx)?,
-                        TypedChainPart::Call { args, .. }
-                        | TypedChainPart::MethodCall { args, .. } => {
+                        TypedChainPart::Call { args, span, .. }
+                        | TypedChainPart::MethodCall { args, span, .. } => {
                             for a in args {
                                 self.walk_expr(a)?;
                             }
+                            self.walk_authored_call_arguments(span)?;
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
@@ -840,6 +853,24 @@ impl State<'_> {
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };
+        Ok(())
+    }
+
+    fn walk_authored_call_arguments(
+        &mut self,
+        span: Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let Some(authored) = self.ta.authored_call_arguments(span).map(|elements| {
+            elements
+                .iter()
+                .map(TypedArrayElement::expr_id)
+                .collect::<Vec<_>>()
+        }) else {
+            return Ok(());
+        };
+        for expr in authored {
+            self.walk_expr(expr)?;
+        }
         Ok(())
     }
 
@@ -1205,6 +1236,7 @@ mod tests {
             frames: Vec::new(),
             pending: Vec::new(),
             resolved: super::ResolvedLocals::default(),
+            walked_exprs: std::collections::BTreeSet::new(),
         };
         let source = super::BindingSource::Param {
             owner: super::ParamOwner::Function(0),

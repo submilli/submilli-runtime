@@ -189,6 +189,53 @@ impl PackageDeclaration {
             })
     }
 
+    /// The `Dispatch::Static` interface `ty` names in this package, if any.
+    /// Direct calls on host constructor and namespace bindings (`Boolean`,
+    /// `console`, `Temporal.Instant`) drop the binding receiver, whereas
+    /// non-binding places of a satisfiable static interface (`const B:
+    /// BooleanConstructor = fn`) hold live runtime values.
+    pub fn static_interface_of(&self, ty: &Type) -> Option<&TypeSymbol> {
+        let Type::InterfaceRef { mangled, .. } = ty.peel() else {
+            return None;
+        };
+        self.type_symbol(mangled).filter(|symbol| {
+            matches!(
+                &symbol.kind,
+                TypeKind::Interface {
+                    dispatch: crate::Dispatch::Static,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Appends every value binding in this package whose declared type resolves
+    /// to a `Dispatch::Static` interface in this package.
+    pub fn collect_static_value_bindings(
+        &self,
+        out: &mut std::collections::BTreeSet<crate::MangledName>,
+    ) {
+        fn walk_values(
+            values: &BTreeMap<String, ValueSymbol>,
+            namespaces: &BTreeMap<String, NamespaceSymbol>,
+            declaration: &PackageDeclaration,
+            out: &mut std::collections::BTreeSet<crate::MangledName>,
+        ) {
+            for symbol in values.values() {
+                let (ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. }) = &symbol.kind else {
+                    continue;
+                };
+                if declaration.static_interface_of(ty).is_some() {
+                    out.insert(symbol.mangled_name.clone());
+                }
+            }
+            for namespace in namespaces.values() {
+                walk_values(&namespace.values, &namespace.namespaces, declaration, out);
+            }
+        }
+        walk_values(&self.values, &self.namespaces, self, out);
+    }
+
     pub fn refresh_shapes(&mut self) {
         self.shapes = self.collect_shapes();
     }
@@ -465,6 +512,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
             for carrier in non_shape_carriers {
                 match carrier {
                     crate::InterfaceCarrier::Array(element)
+                    | crate::InterfaceCarrier::Function(element)
                     | crate::InterfaceCarrier::Set(element) => visit(element),
                     crate::InterfaceCarrier::Map(key, value) => {
                         visit(key);
@@ -477,6 +525,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                     | crate::InterfaceCarrier::BigInt
                     | crate::InterfaceCarrier::Uint8Array
                     | crate::InterfaceCarrier::ArrayAny
+                    | crate::InterfaceCarrier::FunctionAny
                     | crate::InterfaceCarrier::MapAny
                     | crate::InterfaceCarrier::SetAny
                     | crate::InterfaceCarrier::RegExp

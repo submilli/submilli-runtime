@@ -34,7 +34,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let intr = build_intrinsic_types(&engine)?;
     let object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
     for (name, arity) in [
-        ("member", 3),
+        ("member", 4),
         ("invoke", 2),
         ("property", 3),
         ("invoke_defaults", 3),
@@ -66,7 +66,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
 pub(super) fn declare(defs: &mut PackageDeclaration) {
     for (name, arity) in [
-        ("member", 3),
+        ("member", 4),
         ("invoke", 2),
         ("property", 3),
         ("invoke_defaults", 3),
@@ -85,12 +85,21 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
 }
 
 async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    lookup_with_receiver(caller, params, *abi_arg(params, 3)?).await
+}
+
+async fn lookup_with_receiver(
+    caller: &mut Caller<'_, StoreData>,
+    params: &[Val],
+    call_receiver: Val,
+) -> wasmtime::Result<Val> {
     require_receiver(caller, abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "member")?;
     // A call signature (`@call`) names no member: the value itself is the
     // function. An optional conversion field left out has no method; the call
     // then takes the inherited conversion, as `String(value)` does.
-    let method = if name == "@call" && value::is_callable(caller, abi_arg(params, 0)?)? {
+    let direct_call = name == "@call" && value::is_callable(caller, abi_arg(params, 0)?)?;
+    let method = if direct_call {
         Some(*abi_arg(params, 0)?)
     } else {
         value::conversion_method(caller, abi_arg(params, 0)?, &name).await?
@@ -111,7 +120,11 @@ async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime:
         host::write_submilli_array_struct(
             caller,
             &[
-                *abi_arg(params, 0)?,
+                if direct_call {
+                    call_receiver
+                } else {
+                    *abi_arg(params, 0)?
+                },
                 key,
                 method.unwrap_or(Val::null_any_ref()),
             ],
@@ -135,9 +148,11 @@ async fn invoke(
         if !value::is_callable(caller, method)? {
             return Err(host::type_error("Member is not callable"));
         }
-        return super::closure::read(caller, method, "method")?
-            .call_with_receiver(caller, *receiver, &args)
-            .await;
+        let closure = super::closure::read_callback(caller, method, "method")?;
+        if matches!(receiver, Val::AnyRef(None)) {
+            return closure.call_dynamic(caller, &args).await;
+        }
+        return closure.call_with_receiver(caller, *receiver, &args).await;
     }
     let function = caller
         .data()
@@ -345,7 +360,7 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
         };
         return box_result(caller, Val::F64((len as f64).to_bits()));
     }
-    let token = lookup(caller, params).await?;
+    let token = lookup_with_receiver(caller, params, Val::null_any_ref()).await?;
     let args = Val::AnyRef(Some(
         host::write_submilli_array_struct(caller, &[])?.to_anyref(),
     ));
@@ -400,7 +415,7 @@ async fn read_builtin_element(
     index: u32,
 ) -> wasmtime::Result<Val> {
     let params = member_params(caller, object, interface, "at")?;
-    let token = lookup(caller, &params).await?;
+    let token = lookup_with_receiver(caller, &params, Val::null_any_ref()).await?;
     let argument = box_result(caller, Val::F64(f64::from(index).to_bits()))?;
     let args = Val::AnyRef(Some(
         host::write_submilli_array_struct(caller, &[argument])?.to_anyref(),
