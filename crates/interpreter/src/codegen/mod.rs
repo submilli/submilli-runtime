@@ -37,6 +37,7 @@ mod nullish;
 mod number_remainder;
 pub mod recursive_validators;
 mod runtime_descriptors;
+pub(crate) use runtime_descriptors::entry_type_arguments;
 mod runtime_values;
 pub mod string_pool;
 pub mod symbol_table;
@@ -252,6 +253,15 @@ fn import_value_symbol(
                     params.iter().map(|param| param.default.clone()).collect(),
                 );
             }
+            check_function_parameters(
+                || {
+                    format!(
+                        "the host function `{}` of package `{}`",
+                        value.name, defs.package_name
+                    )
+                },
+                &param_types,
+            )?;
             if result_types.is_empty() {
                 symbols.resultless_functions.insert(*next_func_idx);
             }
@@ -717,9 +727,63 @@ struct FinishedFunction {
     locals_limit_span: Option<crate::Span>,
 }
 
+/// Fails when `function`, the `member` function codegen generates for the
+/// type or class `describe_owner` names, is larger than the
+/// Wasm engine accepts. These bodies grow with the owner's fields and are
+/// built without a [`FunctionEmitter`], which measures every function it
+/// builds.
+pub(crate) fn check_generated_body(
+    function: &wasm_encoder::Function,
+    member: &str,
+    describe_owner: impl FnOnce() -> String,
+) -> Result<(), CompilerFailure> {
+    if FunctionLimit::body_fits(function.byte_len()) {
+        return Ok(());
+    }
+    Err(CompilerFailure::Limit {
+        stage: crate::compiler_error::CompilerStage::Codegen,
+        span: None,
+        message: format!(
+            "the `{member}` function generated for {} {}",
+            describe_owner(),
+            FunctionLimit::BodyBytes.function_exceeds(),
+        ),
+        help: vec![
+            "the functions generated for an object type or a class grow with its fields; group the fields into nested objects".into(),
+        ],
+    })
+}
+
+/// Fails when a function type of `params`, for the function
+/// `describe_function` names, would take more Wasm parameters than the
+/// engine accepts. A source function or method stops at the closure arity
+/// rule first; this covers constructors, which keep their own ABI, and
+/// declarations from elsewhere: host packages, other front ends.
+pub(crate) fn check_function_parameters(
+    describe_function: impl FnOnce() -> String,
+    params: &[wasm_encoder::ValType],
+) -> Result<(), CompilerFailure> {
+    use crate::compiler_limits::MAX_FUNCTION_PARAMS;
+    if params.len() <= MAX_FUNCTION_PARAMS {
+        return Ok(());
+    }
+    Err(CompilerFailure::Limit {
+        stage: crate::compiler_error::CompilerStage::Codegen,
+        span: None,
+        message: format!(
+            "{} takes {} WebAssembly parameters, more than the {MAX_FUNCTION_PARAMS} a function may have",
+            describe_function(),
+            params.len()
+        ),
+        help: vec![
+            "declare the function with fewer parameters; one object parameter can carry many values".into(),
+        ],
+    })
+}
+
 /// `ty` as a diagnostic names it, cut short: a type near the size limit
 /// renders as hundreds of kilobytes.
-fn abbreviated(ty: &Type) -> String {
+pub(crate) fn abbreviated(ty: &Type) -> String {
     const MAX_CHARS: usize = 120;
     let text = ty.to_string();
     if text.chars().count() <= MAX_CHARS {
@@ -1340,6 +1404,15 @@ fn codegen_inner(
             if let Some(defaults) = host_defaults {
                 symbols.record_host_parameter_defaults(next_func_idx, defaults);
             }
+            check_function_parameters(
+                || {
+                    format!(
+                        "the host method `{}#{method_name}` of package `{}`",
+                        ty_sym.name, defs.package_name
+                    )
+                },
+                &params,
+            )?;
             let results: Vec<ValType> = abi.ret.into_iter().collect();
             let sig_idx = next_type_idx;
             crate::codegen::next_index(&mut next_type_idx)?;
@@ -1613,11 +1686,17 @@ fn codegen_inner(
     // returns route through the same `toJson` machinery as `JSON.stringify`. Codegen
     // — which has the typed return type — is the single source of truth for the
     // encoding; the host reads the shim's `$string` verbatim. Undefined produces
-    // no output; `never`/`error` never produce a value to encode.
+    // no output; `never`/`error` never produce a value to encode, so they have no
+    // shim, except in a generic `main`: the runtime calls a `main` without a shim
+    // with no arguments, so its shim passes the type descriptors and then traps.
     let main_func = ta.functions.iter().find(|f| f.name.name == "main");
     let main_return_ty = main_func.map(|f| f.return_type.clone());
+    let main_type_args = main_func
+        .map(runtime_descriptors::entry_type_arguments)
+        .unwrap_or_default();
     let main_output_shim = match main_return_ty.as_ref().map(Type::peel) {
-        None | Some(Type::Never | Type::Error) => None,
+        None => None,
+        Some(Type::Never | Type::Error) if main_type_args.is_empty() => None,
         Some(_) => {
             let sig_idx = next_type_idx;
             types.ty().function(
@@ -2153,6 +2232,7 @@ fn codegen_inner(
         code.function(&function_emitter::json::emit_main_output_shim(
             &ctx,
             main_func_idx,
+            &main_type_args,
             main_return_ty,
             source_main_return_ty.as_ref().unwrap_or(main_return_ty),
         )?);
@@ -4300,6 +4380,116 @@ function main(): string {
                 .expect("recording security mutex")
                 .as_slice(),
             &[("test:lib".to_string(), "fs.stat".to_string())],
+        );
+    }
+
+    /// A host import of more Wasm parameters than the engine accepts is a
+    /// compile-time limit, not a module the engine refuses to load. A tree
+    /// from this front end stops earlier, at the closure signature of the
+    /// callee; the import check covers a tree that reaches codegen without it.
+    #[test]
+    fn host_function_parameters_stop_at_the_engine_limit() {
+        let at_limit = vec![wasm_encoder::ValType::F64; 1_000];
+        let wide = || "the host function `wide` of package `test:wide`".to_string();
+        super::check_function_parameters(wide, &at_limit).expect("an import at the limit fits");
+        let past_limit = vec![wasm_encoder::ValType::F64; 1_001];
+        let Err(super::CompilerFailure::Limit { message, .. }) =
+            super::check_function_parameters(wide, &past_limit)
+        else {
+            panic!("an import past the limit is a limit");
+        };
+        assert!(
+            message.contains("`wide` of package `test:wide` takes 1001 WebAssembly parameters"),
+            "{message}"
+        );
+    }
+
+    /// The closure arity rule doesn't cover constructors, so a constructor
+    /// past the engine's parameter limit is a limit at its class. Its
+    /// functions take one argument more than it declares: the receiver, and
+    /// the field-guard argument of a class with guarded fields.
+    #[test]
+    fn constructor_parameters_stop_at_the_engine_limit() {
+        for (open, type_args) in [
+            ("class C {", ""),
+            ("class C<T> { items: T[] = [];", "<number>"),
+        ] {
+            for declared in [999, 1_000] {
+                let params = (0..declared)
+                    .map(|i| format!("a{i}: number"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let args = vec!["0"; declared].join(", ");
+                let source = format!(
+                    "{open} constructor({params}) {{}} }}\nfunction main(): number {{ const c = new C{type_args}({args}); return 1; }}"
+                );
+                let result =
+                    crate::compile::compile_script(&source, "ctor.ts", crate::FileId(0), &[], &[]);
+                if declared == 999 {
+                    result.unwrap_or_else(|d| panic!("{open} at 999 compiles: {d:?}"));
+                    continue;
+                }
+                let Err(diagnostics) = result else {
+                    panic!("{open} at 1000 is a limit");
+                };
+                let expected = "the constructor of `C` (1000 declared parameters and its receiver) takes 1001 WebAssembly parameters";
+                let limit = diagnostics
+                    .iter()
+                    .find(|d| d.message.contains(expected))
+                    .unwrap_or_else(|| panic!("{expected}: {diagnostics:?}"));
+                assert_eq!(limit.span.text(&source, crate::FileId(0)).ok(), Some("C"));
+            }
+        }
+    }
+
+    /// A generic `main` that never returns still has an entry shim, so the
+    /// runtime never calls `main` without its type descriptors.
+    #[test]
+    fn generic_never_main_has_an_entry_shim() {
+        let source = "function main<T>(): never { throw new Error(\"stop\"); }";
+        let compiled =
+            crate::compile::compile_script(source, "main.ts", crate::FileId(0), &[], &[])
+                .expect("a generic never main compiles");
+        let engine = crate::runtime::RuntimeConfig::default()
+            .engine()
+            .expect("engine");
+        let module =
+            wasmtime::Module::new(&engine, &compiled.wasm).expect("a generic never main loads");
+        assert!(
+            module
+                .exports()
+                .any(|export| export.name() == "__main_output"),
+            "a generic never main exports its entry shim"
+        );
+    }
+
+    /// A generated body over the engine's size limit names its type.
+    #[test]
+    fn generated_bodies_stop_at_the_engine_size_limit() {
+        let ty = Type::Object {
+            index: None,
+            fields: std::collections::BTreeMap::from([(
+                "wide".to_string(),
+                ObjectField::required(Type::Number),
+            )]),
+        };
+        let mut fits = wasm_encoder::Function::new([]);
+        fits.instruction(&wasm_encoder::Instruction::End);
+        let owner = || format!("the type `{}`", super::abbreviated(&ty));
+        super::check_generated_body(&fits, "equals", owner).expect("a small body fits");
+        let mut over = wasm_encoder::Function::new([]);
+        for _ in 0..=crate::compiler_limits::MAX_FUNCTION_BODY_BYTES {
+            over.instruction(&wasm_encoder::Instruction::Nop);
+        }
+        over.instruction(&wasm_encoder::Instruction::End);
+        let Err(super::CompilerFailure::Limit { message, .. }) =
+            super::check_generated_body(&over, "equals", owner)
+        else {
+            panic!("a body over the limit is a limit");
+        };
+        assert!(
+            message.contains("the `equals` function generated for the type `{ wide: number }`"),
+            "{message}"
         );
     }
 

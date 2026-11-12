@@ -1441,6 +1441,14 @@ impl<'a> Inferer<'a> {
                 .or_insert((false, symbol));
             self.mark_direct_package_export(&function.name.name, exports::ExportNamespace::Value)?;
         }
+        // The entry call passes a generic `main` these type arguments, as a
+        // generic call passes its own: their runtime tests are recorded alike.
+        // A package's `main` is no entry point (and is an error of its own).
+        if function.name.name == "main" && !self.package_inference {
+            for ty in crate::codegen::entry_type_arguments(&function) {
+                self.record_runtime_type_test(&ty)?;
+            }
+        }
         self.typed_ast.functions.push(function);
 
         Ok(())

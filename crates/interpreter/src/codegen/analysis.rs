@@ -112,6 +112,15 @@ impl CodegenAnalysis {
         for g in &ta.globals {
             analysis.visit_type_at(&g.ty, g.span)?;
         }
+        // The entry shim builds the descriptors of a generic `main`'s type
+        // arguments. No expression builds or tests a value of a bound's type,
+        // so nothing else notes its dependencies or interns its member names
+        // for the descriptor's test. The closure signature the descriptors
+        // need is noted with every generic function below.
+        for ty in &super::runtime_descriptors::main_type_arguments(ta) {
+            analysis.visit_type(ty)?;
+            analysis.note_shape_member_names(ty);
+        }
         let guarded_bindings = super::init_guard::guarded_globals(ta)?
             .into_iter()
             .map(|guard| guard.binding)

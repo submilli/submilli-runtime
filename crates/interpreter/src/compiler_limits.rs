@@ -72,6 +72,12 @@ pub const MAX_INLINE_VALIDATOR_STEPS: u64 = 1 << 15;
 /// reject.
 pub const MAX_FUNCTION_LOCALS: u32 = 50_000;
 
+/// Parameters the Wasm engine accepts in one function type (wasmparser's
+/// `MAX_WASM_FUNCTION_PARAMS`). Codegen checks the function types it declares
+/// for declarations not bound by [`MAX_CLOSURE_ARITY`] against this (see
+/// `codegen::check_function_parameters`).
+pub const MAX_FUNCTION_PARAMS: usize = 1_000;
+
 /// Bytes the Wasm engine accepts in one function body (wasmparser's
 /// `MAX_WASM_FUNCTION_SIZE`). Runtime checks stop emitting before a function
 /// reaches it, which also keeps a body far below the 4 GiB the Wasm encoder can

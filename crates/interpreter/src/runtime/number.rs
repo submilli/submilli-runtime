@@ -282,19 +282,15 @@ pub fn parse_int_js(input: &str, radix: u32) -> f64 {
         return f64::NAN;
     };
 
-    let mut consumed = 0usize;
-    let mut value: f64 = 0.0;
-    for ch in digits.chars() {
-        let Some(digit) = ch.to_digit(effective_radix) else {
-            break;
-        };
-        value = value * (effective_radix as f64) + (digit as f64);
-        consumed += ch.len_utf8();
-    }
+    // Radix digits are ASCII, so the count of digit bytes is the prefix length.
+    let consumed = digits
+        .bytes()
+        .take_while(|&b| char::from(b).is_digit(effective_radix))
+        .count();
     if consumed == 0 {
         return f64::NAN;
     }
-    sign * value
+    sign * digits_to_f64(&digits[..consumed], effective_radix)
 }
 
 pub fn parse_float_js(input: &str) -> f64 {
@@ -348,6 +344,11 @@ pub fn string_to_number_js(input: &str) -> f64 {
     }
 
     let (sign, rest) = strip_sign(s);
+    // Rust's float parser takes a sign of its own, so a second sign would
+    // be read where JavaScript allows only one.
+    if rest.starts_with(['+', '-']) {
+        return f64::NAN;
+    }
     if rest == "Infinity" {
         return sign * f64::INFINITY;
     }
@@ -372,17 +373,31 @@ fn strip_radix_prefix(s: &str, marker: u8) -> Option<&str> {
 }
 
 fn parse_radix_strict(digits: &str, radix: u32) -> f64 {
-    if digits.is_empty() {
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
         return f64::NAN;
     }
-    let mut value = 0.0_f64;
-    for ch in digits.chars() {
-        let Some(d) = ch.to_digit(radix) else {
-            return f64::NAN;
-        };
-        value = value * f64::from(radix) + f64::from(d);
+    digits_to_f64(digits, radix)
+}
+
+/// The double nearest to `digits`, a non-empty string of ASCII digits of
+/// `radix`. Accumulating digit by digit in a double rounds at every step
+/// once the value passes 2^53, so a long string drifts from the nearest
+/// double. ECMAScript requires the nearest double for radix 10 and the
+/// powers of two; for any other radix it allows an approximation, and the
+/// accumulation stays, since an exact conversion there is quadratic.
+fn digits_to_f64(digits: &str, radix: u32) -> f64 {
+    match radix {
+        // Rust's float parser rounds correctly, and a string too long for
+        // a finite double parses as infinity.
+        10 => digits.parse::<f64>().unwrap_or(f64::NAN),
+        2 | 4 | 8 | 16 | 32 => num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
+            .and_then(|value| num_traits::ToPrimitive::to_f64(&value))
+            .unwrap_or(f64::NAN),
+        _ => digits.chars().fold(0.0, |value, ch| {
+            let digit = ch.to_digit(radix).unwrap_or(0);
+            value * f64::from(radix) + f64::from(digit)
+        }),
     }
-    value
 }
 
 fn is_decimal_literal_byte(b: u8) -> bool {
@@ -576,6 +591,62 @@ mod tests {
         assert!(parse_int_js("", 10).is_nan());
         assert!(parse_int_js("   ", 10).is_nan());
         assert!(parse_int_js("0xZZ", 16).is_nan());
+    }
+
+    #[test]
+    fn number_of_two_signs_is_nan() {
+        for text in ["++1", "--1", "+-1", "-+1", "+-Infinity", "--0"] {
+            assert!(string_to_number_js(text).is_nan(), "{text}");
+        }
+        assert_eq!(string_to_number_js("+1"), 1.0);
+        assert_eq!(string_to_number_js("-1"), -1.0);
+        assert_eq!(string_to_number_js("-1e-2"), -0.01);
+    }
+
+    #[test]
+    fn parse_int_of_many_digits_is_the_nearest_double() {
+        assert_eq!(
+            parse_int_js("123456789012345678901234567890", 10),
+            1.2345678901234568e29
+        );
+        assert_eq!(
+            parse_int_js("12345678901234567890", 10),
+            12345678901234567000.0
+        );
+        assert_eq!(
+            parse_int_js("1234567890123456789012345678901234567890", 10),
+            1.2345678901234568e39
+        );
+        assert_eq!(parse_int_js(&"9".repeat(400), 10), f64::INFINITY);
+        // 2^53 + 1 is halfway between two doubles; the tie goes to even.
+        assert_eq!(parse_int_js("20000000000001", 16), 9007199254740992.0);
+        assert_eq!(parse_int_js("20000000000003", 16), 9007199254740996.0);
+        assert_eq!(parse_int_js("200000000000011", 16), 144115188075855904.0);
+        assert_eq!(
+            string_to_number_js("0x200000000000011"),
+            144115188075855904.0
+        );
+        assert_eq!(
+            string_to_number_js(&format!("0b{}", "1".repeat(60))),
+            1152921504606846976.0
+        );
+        assert_eq!(
+            string_to_number_js(&format!("0o{}", "7".repeat(30))),
+            1.2379400392853803e27
+        );
+        assert_eq!(
+            string_to_number_js(&format!("0x{}", "f".repeat(256))),
+            f64::INFINITY
+        );
+        // 2^1024 - 2^970 is halfway between the largest double and 2^1024,
+        // so it rounds to infinity, and one less rounds to the largest double.
+        let one = num_bigint::BigUint::from(1u8);
+        let halfway: num_bigint::BigUint = (&one << 1024u32) - (&one << 970u32);
+        let below = &halfway - 1u8;
+        assert_eq!(parse_int_js(&halfway.to_str_radix(10), 10), f64::INFINITY);
+        assert_eq!(parse_int_js(&below.to_str_radix(10), 10), f64::MAX);
+        assert_eq!(parse_int_js(&halfway.to_str_radix(16), 16), f64::INFINITY);
+        assert_eq!(parse_int_js(&below.to_str_radix(16), 16), f64::MAX);
     }
 
     #[test]

@@ -216,13 +216,16 @@ pub fn emit_method_bodies(
         .prelude_global_idx("object_vtable")
         .ok_or_else(|| internal_failure("object_vtable is not imported from the prelude"))?;
     for subtype in subtypes {
-        code.function(&emit_subtype_to_string_body(
+        let describe_type = || format!("the type `{}`", super::abbreviated(&subtype.ty));
+        let body = emit_subtype_to_string_body(
             subtype,
             intrinsics,
             symbols,
             string_vtable_global_idx,
             object_vtable_global,
-        )?);
+        )?;
+        super::check_generated_body(&body, "toString", describe_type)?;
+        code.function(&body);
 
         let bodies = subtype.guarded_bodies;
         for (body, params, result) in [
@@ -239,7 +242,7 @@ pub fn emit_method_bodies(
         let host_json_type = type_info_index
             .object_type_id(type_info, &subtype.ty)
             .filter(|_| type_info.supports_host_json_object(&subtype.ty));
-        code.function(&emit_subtype_to_json_body(
+        let body = emit_subtype_to_json_body(
             subtype,
             intrinsics,
             symbols,
@@ -247,22 +250,23 @@ pub fn emit_method_bodies(
             pkg_string_global_idx,
             string_concat_func_idx,
             string_vtable_global_idx,
-        )?);
+        )?;
+        super::check_generated_body(&body, "toJson", describe_type)?;
+        code.function(&body);
 
-        code.function(&emit_subtype_equals_body(
+        let body = emit_subtype_equals_body(
             subtype,
             intrinsics,
             symbols,
             string_eq_func_idx,
             object_vtable_global,
-        )?);
+        )?;
+        super::check_generated_body(&body, "equals", describe_type)?;
+        code.function(&body);
 
-        code.function(&emit_subtype_hash_body(
-            subtype,
-            intrinsics,
-            symbols,
-            object_vtable_global,
-        )?);
+        let body = emit_subtype_hash_body(subtype, intrinsics, symbols, object_vtable_global)?;
+        super::check_generated_body(&body, "hash", describe_type)?;
+        code.function(&body);
     }
     Ok(())
 }
