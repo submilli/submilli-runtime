@@ -8,8 +8,17 @@ use crate::codegen::symbol_table::may_hold_null;
 use crate::{ExprId, Type};
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
 
-/// Thrown when `JSON.stringify` has no JSON text and the call is typed `string`.
-pub(crate) const NO_JSON_TEXT_MESSAGE: &str = "`JSON.stringify` has no JSON text for this value (it is `undefined` or a function); use `JSON.stringify(value) ?? …` or check the value first";
+/// Thrown when `JSON.stringify` of `undefined` has no JSON text and the call
+/// is typed `string`.
+pub(crate) const UNDEFINED_HAS_NO_JSON_TEXT: &str = "JSON.stringify: `undefined` has no JSON text; check the value first, or use `JSON.stringify(value) ?? …`";
+
+/// Thrown when `JSON.stringify` of a function has no JSON text and the call
+/// is typed `string`.
+pub(crate) const FUNCTION_HAS_NO_JSON_TEXT: &str = "JSON.stringify: a function has no JSON text; pass the data instead of the function, or use `JSON.stringify(value) ?? …`";
+
+/// Every message a rejected call may throw, interned before codegen.
+pub(crate) const NO_JSON_TEXT_MESSAGES: [&str; 2] =
+    [UNDEFINED_HAS_NO_JSON_TEXT, FUNCTION_HAS_NO_JSON_TEXT];
 
 pub(super) fn emit_stringify(
     emitter: &mut FunctionEmitter,
@@ -35,12 +44,14 @@ pub(super) fn emit_stringify(
         .map_err(crate::codegen::arena_failure)?
         .ty
         .clone();
+    // The argument is kept in a local: the optional arguments and the
+    // rejection message both read it again.
+    emit_expr(emitter, ctx, arg)?;
+    let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?)?;
     if args.len() == 1 {
-        emit_expr(emitter, ctx, arg)?;
+        emitter.instruction(Instruction::LocalTee(arg_local));
         emit_stringify_value(emitter, ctx, &arg_ty);
     } else {
-        emit_expr(emitter, ctx, arg)?;
-        let arg_local = emitter.add_anonymous_local(ctx.symbols.value_type(&arg_ty)?)?;
         emitter.instruction(Instruction::LocalSet(arg_local));
         emit_stringify_optional_args(emitter, ctx, args, arg_local, &arg_ty)?;
     }
@@ -50,7 +61,7 @@ pub(super) fn emit_stringify(
     // while the call still promises a string.
     let may_be_undefined = may_stringify_undefined(ctx, &arg_ty);
     if may_be_undefined && !source_ty.holds_undefined() {
-        emit_reject_missing_json_text(emitter, ctx)?;
+        emit_reject_missing_json_text(emitter, ctx, arg_local)?;
         return super::cast::emit_coerce_to_slot(emitter, ctx, &Type::String, slot_ty);
     }
     let emitted_ty = if may_be_undefined {
@@ -62,10 +73,14 @@ pub(super) fn emit_stringify(
 }
 
 /// With a `string | undefined` JSON text on the stack, throws when it is
-/// `undefined` and leaves the string.
+/// `undefined` and leaves the string. The message names the kind of the
+/// argument in `arg_local`: `emit_stringify_value` gives `undefined` only for
+/// the undefined singleton or a closure, so a value that is not `undefined`
+/// is a function.
 fn emit_reject_missing_json_text(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
+    arg_local: u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
@@ -81,7 +96,14 @@ fn emit_reject_missing_json_text(
         intrinsics.undefined,
     )));
     emitter.emit_if(BlockType::Empty);
-    crate::codegen::throw::emit_missing_value_error_throw(emitter, ctx, NO_JSON_TEXT_MESSAGE);
+    emitter.instruction(Instruction::LocalGet(arg_local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.undefined,
+    )));
+    emitter.emit_if(BlockType::Empty);
+    crate::codegen::throw::emit_missing_value_error_throw(emitter, ctx, UNDEFINED_HAS_NO_JSON_TEXT);
+    emitter.emit_end();
+    crate::codegen::throw::emit_missing_value_error_throw(emitter, ctx, FUNCTION_HAS_NO_JSON_TEXT);
     emitter.emit_end();
     emitter.instruction(Instruction::LocalGet(value));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(

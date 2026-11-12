@@ -42,16 +42,18 @@ function invoke(read: () => string): string {
   return read();
 }
 
-const NO_TEXT =
-  "MissingValueError: `JSON.stringify` has no JSON text for this value (it is `undefined` or a function); use `JSON.stringify(value) ?? …` or check the value first";
+const NO_UNDEFINED_TEXT =
+  "MissingValueError: JSON.stringify: `undefined` has no JSON text; check the value first, or use `JSON.stringify(value) ?? …`";
+const NO_FUNCTION_TEXT =
+  "MissingValueError: JSON.stringify: a function has no JSON text; pass the data instead of the function, or use `JSON.stringify(value) ?? …`";
 
 function main(): void {
   assert(asString(f()) === "1", "unknown holding a number is a string");
   assert(JSON.stringify(f()) === "1", "the call's own type is string");
 
-  assert(thrown(() => JSON.stringify(undefined)) === NO_TEXT, "undefined in a string place throws");
-  assert(thrown(() => JSON.stringify(() => 1)) === NO_TEXT, "a function in a string place throws");
-  assert(thrown(() => asString(undefined)) === NO_TEXT, "a string return throws");
+  assert(thrown(() => JSON.stringify(undefined)) === NO_UNDEFINED_TEXT, "undefined in a string place throws");
+  assert(thrown(() => JSON.stringify(() => 1)) === NO_FUNCTION_TEXT, "a function in a string place throws");
+  assert(thrown(() => asString(undefined)) === NO_UNDEFINED_TEXT, "a string return throws");
   assert(asOptional(undefined) === undefined, "a string | undefined place returns undefined");
   assert(asOptional(() => 1) === undefined, "a function in an optional place returns undefined");
   assert(JSON.stringify(undefined) === undefined, "a check sees no JSON text as undefined");
@@ -76,8 +78,8 @@ function main(): void {
   // Number assigned to it is still a closure, and a closure's toJson is "null".
   const asCall: FromNumConstructor = Number;
   assert(JSON.stringify(asCall) === "null", "a call-signature interface is not omitted");
-  assert(thrown(() => unionText(asCall)) === NO_TEXT, "a function in an undefined union has no JSON text");
-  assert(thrown(() => unionText(undefined)) === NO_TEXT, "undefined in that union throws in a string place");
+  assert(thrown(() => unionText(asCall)) === NO_FUNCTION_TEXT, "a function in an undefined union has no JSON text");
+  assert(thrown(() => unionText(undefined)) === NO_UNDEFINED_TEXT, "undefined in that union throws in a string place");
   assert(unionCheck(asCall), "a check sees a function in that union as undefined");
   assert(unionCheck(undefined), "a check sees undefined in that union");
 }
