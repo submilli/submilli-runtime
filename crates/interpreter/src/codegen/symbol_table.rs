@@ -1343,15 +1343,16 @@ impl SymbolTable {
     }
 }
 
-/// Names of a validator key's type arguments when every one is a generic
-/// parameter, so one validator serves each instantiation.
+/// Names of a validator key's type arguments when every one is a distinct
+/// generic parameter, so one validator serves each instantiation.
 fn generic_parameter_names(args: &[Type]) -> Option<Vec<String>> {
     if args.is_empty() {
         return None;
     }
+    let mut seen = BTreeSet::new();
     args.iter()
         .map(|arg| match arg {
-            Type::TypeVar(name) => Some(name.clone()),
+            Type::TypeVar(name) if seen.insert(name.as_str()) => Some(name.clone()),
             _ => None,
         })
         .collect()

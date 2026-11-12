@@ -235,6 +235,119 @@ class CounterHolder {
   }
 }
 
+type GrowingWeakChain<T> = {
+  box: WeakBox<T>;
+  next: GrowingWeakChain<T[]> | null;
+};
+
+class GrowingWeakParent {
+  chain: unknown = null;
+  reset(v: unknown): void {
+    this.chain = v;
+  }
+}
+
+class GrowingWeakChild extends GrowingWeakParent {
+  chain: GrowingWeakChain<number> = { box: {}, next: null };
+}
+
+type GrowingCallChain<UniqueCallElem> = {
+  box: Callable<UniqueCallElem>;
+  next: GrowingCallChain<UniqueCallElem[]> | null;
+};
+
+class GrowingCallParent {
+  chain: unknown = null;
+  reset(v: unknown): void {
+    this.chain = v;
+  }
+}
+
+class GrowingCallChild0 extends GrowingCallParent {
+  chain: GrowingCallChain<number> = { box: () => 1, next: null };
+}
+
+class GrowingCallChild1 extends GrowingCallParent {
+  chain: GrowingCallChain<number[]> = { box: () => [1], next: null };
+}
+
+interface PairTaggedCallable<A, B> {
+  (a: A, b: B): A;
+  first: A;
+  second: B;
+}
+
+type GrowingPairCallChain<UniquePairElem> = {
+  pair: PairTaggedCallable<UniquePairElem, UniquePairElem>;
+  next: GrowingPairCallChain<UniquePairElem[]> | null;
+};
+
+class GrowingPairParent {
+  chain: unknown = null;
+  reset(v: unknown): void {
+    this.chain = v;
+  }
+}
+
+class GrowingPairChild extends GrowingPairParent {
+  chain: GrowingPairCallChain<number> | null = null;
+}
+
+class HeteroPairChild extends GrowingPairParent {
+  chain: PairTaggedCallable<string, number> | null = null;
+}
+
+interface MutualCallA<UniqueMutA> {
+  fn: Callable<UniqueMutA>;
+  b: MutualCallB<UniqueMutA[]> | null;
+}
+
+interface MutualCallB<UniqueMutB> {
+  fn: Callable<UniqueMutB>;
+  a: MutualCallA<UniqueMutB[]> | null;
+}
+
+class MutualCallParent {
+  node: unknown = null;
+  reset(v: unknown): void {
+    this.node = v;
+  }
+}
+
+class MutualCallChild extends MutualCallParent {
+  node: MutualCallA<number> = { fn: () => 1, b: null };
+}
+
+class SeedBox<UniqueSeedBox> {
+  value: UniqueSeedBox;
+  fn: Callable<UniqueSeedBox>;
+  chain: SeedBoxChain<UniqueSeedBox> | null = null;
+  constructor(value: UniqueSeedBox, fn: Callable<UniqueSeedBox>) {
+    this.value = value;
+    this.fn = fn;
+  }
+}
+
+type SeedBoxChain<UniqueSeedElem> = {
+  selfNext: SeedBoxChain<UniqueSeedElem[]> | null;
+  box: SeedBox<UniqueSeedElem> | null;
+};
+
+class SeedBoxParent {
+  item: unknown = null;
+  reset(v: unknown): void {
+    this.item = v;
+  }
+}
+
+class SeedBoxChild0 extends SeedBoxParent {
+  item: SeedBox<string> | null = null;
+}
+
+class SeedBoxChainChild extends SeedBoxParent {
+  item: SeedBoxChain<string> | null = null;
+}
+
 function main(): void {
   // Direct binding fast path vs interface-typed places.
   assert(Boolean(1) === true && Boolean(0) === false && Boolean() === false);
@@ -741,4 +854,169 @@ function main(): void {
   assert(checkWith(Boolean, 5) && !checkWith(Boolean, 0));
   const pred: Predicate<number> = (n) => n > 0;
   assert(pred(3) && !pred(-1) && JSON.stringify(pred) === undefined);
+
+  // Polymorphic recursive alias containing a weak interface with callable sub-interface values.
+  const callableBox0: CallableWeakBox<number> = (v: number) => v + 1;
+  const callableBox1: CallableWeakBox<number[]> = (vs: number[]) => vs;
+  const callableBox2: CallableWeakBox<number[][]> = (vss: number[][]) => vss;
+  const growingWeak = new GrowingWeakChild();
+  growingWeak.reset({
+    box: callableBox0,
+    next: { box: callableBox1, next: { box: callableBox2, next: null } },
+  });
+  assert(
+    typeof growingWeak.chain.box === "function" &&
+      growingWeak.chain.next !== null &&
+      typeof growingWeak.chain.next.box === "function" &&
+      growingWeak.chain.next.next !== null &&
+      typeof growingWeak.chain.next.next.box === "function",
+  );
+
+  // Multiple roots into a polymorphic recursive alias with a call-signature interface
+  // preserve full runtime descriptor discovery at each root's depth.
+  const callChain0 = new GrowingCallChild0();
+  assert(callChain0.chain.box() === 1);
+  const callChain1 = new GrowingCallChild1();
+  callChain1.reset({
+    box: (): number[] => [1],
+    next: { box: (): number[][] => [[2]], next: null },
+  });
+  assert(callChain1.chain.next !== null && callChain1.chain.next.box()[0]![0] === 2);
+  callChain1.reset({ box: (): number[] => [1], next: { box: 12345, next: null } });
+  let growingCallCaught = false;
+  try {
+    const invalid = callChain1.chain;
+    assert(invalid.box().length >= 0);
+  } catch (e) {
+    growingCallCaught = e instanceof TypeError;
+  }
+  assert(growingCallCaught);
+
+  // Repeated type-parameter instantiation inside a polymorphic recursive alias coexists
+  // with distinct concrete instantiations of the same multi-parameter callable interface.
+  const pairObj0: PairTaggedCallable<number, number> = {
+    "@call"(a: number, _b: number): number {
+      return a;
+    },
+    first: 10,
+    second: 20,
+  };
+  const pairObj1: PairTaggedCallable<number[], number[]> = {
+    "@call"(a: number[], _b: number[]): number[] {
+      return a;
+    },
+    first: [1],
+    second: [2],
+  };
+  const pairObj2: PairTaggedCallable<number[][], number[][]> = {
+    "@call"(a: number[][], _b: number[][]): number[][] {
+      return a;
+    },
+    first: [[3]],
+    second: [[4]],
+  };
+  const pairChild = new GrowingPairChild();
+  pairChild.reset({
+    pair: pairObj0,
+    next: { pair: pairObj1, next: { pair: pairObj2, next: null } },
+  });
+  assert(
+    pairChild.chain !== null &&
+      pairChild.chain.next !== null &&
+      pairChild.chain.next.next !== null &&
+      pairChild.chain.next.next.pair([[9]], [[8]])[0]![0] === 9,
+  );
+  const heteroChild = new HeteroPairChild();
+  heteroChild.reset({
+    "@call"(a: string, _b: number): string {
+      return a;
+    },
+    first: "ok",
+    second: 42,
+  });
+  assert(heteroChild.chain !== null && heteroChild.chain("hi", 1) === "hi");
+  heteroChild.reset({
+    "@call"(a: string, _b: number): string {
+      return a;
+    },
+    first: "ok",
+    second: "wrong-not-number",
+  });
+  let heteroPairCaught = false;
+  try {
+    const invalidPair = heteroChild.chain;
+    assert(invalidPair === null || invalidPair("x", 1).length >= 0);
+  } catch (e) {
+    heteroPairCaught = e instanceof TypeError;
+  }
+  assert(heteroPairCaught);
+
+  // Mutually recursive generic interfaces preserve callable descriptors on both sides.
+  const mutualChild = new MutualCallChild();
+  mutualChild.reset({
+    fn: (): number => 7,
+    b: {
+      fn: (): number[] => [8],
+      a: { fn: (): number[][] => [[9]], b: null },
+    },
+  });
+  assert(
+    mutualChild.node.b !== null &&
+      mutualChild.node.b.a !== null &&
+      mutualChild.node.b.a.fn()[0]![0] === 9,
+  );
+  mutualChild.reset({
+    fn: (): number => 7,
+    b: { fn: "not-a-function", a: null },
+  });
+  let mutualCaught = false;
+  try {
+    const invalidMutual = mutualChild.node;
+    assert(invalidMutual.fn() === 7);
+  } catch (e) {
+    mutualCaught = e instanceof TypeError;
+  }
+  assert(mutualCaught);
+
+  // Walking `SeedBox<string>` first (`SeedBox` active while discovering `SeedBoxChain`)
+  // must not poison `SeedBox<TypeVar>` when `SeedBoxChain<string>` is checked directly.
+  const seedBoxChild = new SeedBoxChild0();
+  seedBoxChild.reset(new SeedBox("seed", () => "seed"));
+  assert(seedBoxChild.item !== null && seedBoxChild.item.fn() === "seed");
+  const seedChainChild = new SeedBoxChainChild();
+  seedChainChild.reset({
+    selfNext: {
+      selfNext: {
+        selfNext: null,
+        box: new SeedBox([["deep"]], () => [["deep"]]),
+      },
+      box: new SeedBox(["mid"], () => ["mid"]),
+    },
+    box: new SeedBox("top", () => "top"),
+  });
+  assert(
+    seedChainChild.item !== null &&
+      seedChainChild.item.selfNext !== null &&
+      seedChainChild.item.selfNext.selfNext !== null &&
+      seedChainChild.item.selfNext.selfNext.box !== null &&
+      seedChainChild.item.selfNext.selfNext.box.fn()[0]![0] === "deep",
+  );
+  seedChainChild.reset({
+    selfNext: {
+      selfNext: {
+        selfNext: null,
+        box: { value: [["wrong"]], fn: () => [["wrong"]], chain: null },
+      },
+      box: new SeedBox(["mid"], () => ["mid"]),
+    },
+    box: new SeedBox("top", () => "top"),
+  });
+  let invalidSeedBoxCaught = false;
+  try {
+    const invalidChain = seedChainChild.item;
+    assert(invalidChain === null || invalidChain.box === null || invalidChain.box.fn() === "top");
+  } catch (e) {
+    invalidSeedBoxCaught = e instanceof TypeError;
+  }
+  assert(invalidSeedBoxCaught);
 }

@@ -286,6 +286,8 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         pending_aliases: BTreeMap::new(),
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
+        complete_runtime_type_tests: BTreeSet::new(),
+        partial_runtime_type_tests: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
         unbound_types: BTreeSet::new(),
         binding_types: Vec::new(),
@@ -594,6 +596,8 @@ pub fn infer_package_checked<'a>(
         pending_aliases: BTreeMap::new(),
         pending_index_checks: None,
         field_narrowing_checks: BTreeMap::new(),
+        complete_runtime_type_tests: BTreeSet::new(),
+        partial_runtime_type_tests: BTreeMap::new(),
         alias_resolution_stack: Vec::new(),
         unbound_types: BTreeSet::new(),
         binding_types: Vec::new(),
@@ -1195,6 +1199,12 @@ pub(super) struct Inferer<'a> {
     /// [`crate::FieldNarrowingCheck`].
     pub(super) field_narrowing_checks:
         BTreeMap<(crate::MangledName, String), crate::FieldNarrowingCheck>,
+    /// Keys in `typed_ast.runtime_type_tests` whose transitive dependency walk
+    /// finished without hitting an enclosing declaration in `active`.
+    pub(super) complete_runtime_type_tests: BTreeSet<Type>,
+    /// Bounded per-type subsumption cache for runtime-test walks whose subtrees
+    /// stopped at one or more enclosing declarations in `active`.
+    pub(super) partial_runtime_type_tests: BTreeMap<Type, Vec<classes::PartialRuntimeTestOutcome>>,
     /// Names of aliases currently mid-resolution. A reference to a name
     /// already on this stack is a recursion **back-edge** — it resolves
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
