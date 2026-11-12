@@ -246,6 +246,7 @@ pub(super) fn with_source_inferer(source: &str, test: impl FnOnce(&mut super::In
         field_narrowing_checks: BTreeMap::new(),
         complete_runtime_type_tests: std::collections::BTreeSet::new(),
         partial_runtime_type_tests: BTreeMap::new(),
+        recorded_generic_validator_keys: std::collections::BTreeSet::new(),
         alias_resolution_stack: Vec::new(),
         unbound_types: std::collections::BTreeSet::new(),
         binding_types: Vec::new(),

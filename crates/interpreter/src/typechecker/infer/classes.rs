@@ -2249,7 +2249,14 @@ impl<'a> Inferer<'a> {
         };
         let test = if let Some(members) = self.enum_runtime_members(&key) {
             crate::FieldNarrowingTest::Shape(members)
-        } else if let Some(interface) = self.interface_narrowing_test(&key) {
+        } else if let Some(interface) = match self.typed_ast.runtime_type_tests.get(&key) {
+            Some(crate::FieldNarrowingTest::Interface(existing)) => Some(existing.clone()),
+            _ => self.interface_narrowing_test(&key),
+        } {
+            self.typed_ast.runtime_type_tests.insert(
+                key.clone(),
+                crate::FieldNarrowingTest::Interface(interface.clone()),
+            );
             let interface_ref = match key.peel() {
                 ty @ Type::InterfaceRef { .. } => Some(ty.clone()),
                 Type::Union(members) => members.iter().find_map(|member| match member.peel() {
@@ -2267,7 +2274,7 @@ impl<'a> Inferer<'a> {
             {
                 subtree.blocked.insert(identity.clone());
                 if let Some(blocked_ref) = interface_ref.as_ref() {
-                    self.record_generic_validator_key(blocked_ref, walk, &mut subtree)?;
+                    self.record_generic_validator_key(blocked_ref)?;
                 }
                 crate::FieldNarrowingTest::Interface(interface)
             } else {
@@ -2317,7 +2324,7 @@ impl<'a> Inferer<'a> {
             if subtree.blocked.is_empty() {
                 self.partial_runtime_type_tests.remove(&key);
                 self.complete_runtime_type_tests.insert(key);
-            } else {
+            } else if !self.complete_runtime_type_tests.contains(&key) {
                 let outcomes = self.partial_runtime_type_tests.entry(key).or_default();
                 if outcomes.len() >= MAX_PARTIAL_RUNTIME_TEST_OUTCOMES {
                     outcomes.remove(0);
@@ -2578,7 +2585,7 @@ impl<'a> Inferer<'a> {
                     subtree.merge(alias_subtree);
                 } else {
                     arg_subtree.blocked.insert(mangled.clone());
-                    self.record_generic_validator_key(ty.peel(), walk, &mut arg_subtree)?;
+                    self.record_generic_validator_key(ty.peel())?;
                     subtree.merge(arg_subtree);
                 }
             }
@@ -2587,13 +2594,8 @@ impl<'a> Inferer<'a> {
         Ok(())
     }
 
-    fn record_generic_validator_key(
-        &mut self,
-        blocked_ty: &Type,
-        walk: &mut RuntimeTestWalk,
-        subtree: &mut RuntimeTestSubtree,
-    ) -> Result<(), CompilerFailure> {
-        let (identity, generic_key) = match blocked_ty.peel() {
+    fn record_generic_validator_key(&mut self, blocked_ty: &Type) -> Result<(), CompilerFailure> {
+        let generic_key = match blocked_ty.peel() {
             Type::AliasRef {
                 package,
                 mangled,
@@ -2609,15 +2611,12 @@ impl<'a> Inferer<'a> {
                 if generics.is_empty() {
                     return Ok(());
                 }
-                (
-                    mangled.clone(),
-                    Type::AliasRef {
-                        package: package.clone(),
-                        mangled: mangled.clone(),
-                        name: name.clone(),
-                        args: generics.iter().cloned().map(Type::TypeVar).collect(),
-                    },
-                )
+                Type::AliasRef {
+                    package: package.clone(),
+                    mangled: mangled.clone(),
+                    name: name.clone(),
+                    args: generics.iter().cloned().map(Type::TypeVar).collect(),
+                }
             }
             Type::InterfaceRef {
                 package,
@@ -2634,27 +2633,27 @@ impl<'a> Inferer<'a> {
                 if generics.is_empty() {
                     return Ok(());
                 }
-                (
-                    mangled.clone(),
-                    Type::InterfaceRef {
-                        package: package.clone(),
-                        mangled: mangled.clone(),
-                        name: name.clone(),
-                        args: generics.iter().cloned().map(Type::TypeVar).collect(),
-                    },
-                )
+                Type::InterfaceRef {
+                    package: package.clone(),
+                    mangled: mangled.clone(),
+                    name: name.clone(),
+                    args: generics.iter().cloned().map(Type::TypeVar).collect(),
+                }
             }
             _ => return Ok(()),
         };
-        walk.active.remove(&identity);
-        let mut generic_subtree = self.record_runtime_type_test_inner(
+        if !self
+            .recorded_generic_validator_keys
+            .insert(generic_key.clone())
+        {
+            return Ok(());
+        }
+        let mut generic_walk = RuntimeTestWalk::default();
+        self.record_runtime_type_test_inner(
             &generic_key,
             RuntimeTestMode::AllowAliasRefs,
-            walk,
+            &mut generic_walk,
         )?;
-        walk.active.insert(identity.clone());
-        generic_subtree.expanded.remove(&identity);
-        subtree.merge(generic_subtree);
         Ok(())
     }
 
@@ -5943,6 +5942,31 @@ mod review_regressions {
                 tc.record_runtime_type_test(&nested),
                 Err(CompilerFailure::Limit { .. })
             ));
+        });
+    }
+
+    #[test]
+    fn generic_interface_diamond_chain_back_to_root_stays_linear() {
+        let mut source = String::new();
+        for k in 0..23 {
+            let next = k + 1;
+            source.push_str(&format!(
+                "interface L{k}<T> {{ a: L{next}<T>; b: L{next}<T>; c: L0<T>; }}\n"
+            ));
+        }
+        source.push_str("interface L23<T> { a: (x: T) => void; b: (x: T) => void; c: L0<T>; }\n");
+        with_source_inferer(&source, |tc| {
+            assert!(tc.signatures().unwrap());
+            assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+            let l5_mangled = tc.types.lookup("L5").unwrap().mangled_name.clone();
+            let l5_number = Type::InterfaceRef {
+                package: crate::Package(tc.package_name.into()),
+                mangled: l5_mangled,
+                name: "L5".into(),
+                args: vec![Type::Number],
+            };
+            tc.type_limits = TypeLimits::with_work_allowance(50_000);
+            tc.record_runtime_type_test(&l5_number).unwrap();
         });
     }
 }

@@ -288,6 +288,7 @@ pub(crate) fn infer_with_transitive_for_owner_checked<'a>(
         field_narrowing_checks: BTreeMap::new(),
         complete_runtime_type_tests: BTreeSet::new(),
         partial_runtime_type_tests: BTreeMap::new(),
+        recorded_generic_validator_keys: BTreeSet::new(),
         alias_resolution_stack: Vec::new(),
         unbound_types: BTreeSet::new(),
         binding_types: Vec::new(),
@@ -598,6 +599,7 @@ pub fn infer_package_checked<'a>(
         field_narrowing_checks: BTreeMap::new(),
         complete_runtime_type_tests: BTreeSet::new(),
         partial_runtime_type_tests: BTreeMap::new(),
+        recorded_generic_validator_keys: BTreeSet::new(),
         alias_resolution_stack: Vec::new(),
         unbound_types: BTreeSet::new(),
         binding_types: Vec::new(),
@@ -1205,6 +1207,9 @@ pub(super) struct Inferer<'a> {
     /// Bounded per-type subsumption cache for runtime-test walks whose subtrees
     /// stopped at one or more enclosing declarations in `active`.
     pub(super) partial_runtime_type_tests: BTreeMap<Type, Vec<classes::PartialRuntimeTestOutcome>>,
+    /// Canonical `TypeVar`-parameterized validator keys whose standalone root
+    /// runtime-test walk has already started or completed.
+    pub(super) recorded_generic_validator_keys: BTreeSet<Type>,
     /// Names of aliases currently mid-resolution. A reference to a name
     /// already on this stack is a recursion **back-edge** — it resolves
     /// to a lazy [`Type::AliasRef`] instead of inlining the (not-yet-
