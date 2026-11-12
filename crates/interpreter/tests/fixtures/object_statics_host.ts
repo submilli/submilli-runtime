@@ -1,22 +1,28 @@
 // Pins the edges of the Object statics the broader fixtures skip: null-receiver
-// throws for values/entries/hasOwn, non-object receivers, optional fields
+// throws for keys/values/entries/hasOwn, non-object receivers, optional fields
 // holding null, result-array independence, and Object.is across mixed types.
+// A null or undefined receiver throws a `TypeError`, as ToObject does.
 
-function expectNullThrow(f: () => void, label: string): void {
+function expectTypeError(f: () => void, label: string): void {
   let threw: boolean = false;
   try {
     f();
   } catch (e: Error) {
-    threw = true;
+    threw = e instanceof TypeError;
   }
   assert(threw, label);
 }
 
 function main(): void {
   const n: unknown = null;
-  expectNullThrow(() => { Object.values(n); }, "Object.values(null) throws a catchable Error");
-  expectNullThrow(() => { Object.entries(n); }, "Object.entries(null) throws a catchable Error");
-  expectNullThrow(() => { Object.hasOwn(n, "x"); }, "Object.hasOwn(null) throws a catchable Error");
+  const u: unknown = undefined;
+  expectTypeError(() => { Object.keys(n); }, "Object.keys(null) throws a TypeError");
+  expectTypeError(() => { Object.values(n); }, "Object.values(null) throws a TypeError");
+  expectTypeError(() => { Object.entries(n); }, "Object.entries(null) throws a TypeError");
+  expectTypeError(() => { Object.hasOwn(n, "x"); }, "Object.hasOwn(null) throws a TypeError");
+  expectTypeError(() => { Object.hasOwn(u, "x"); }, "Object.hasOwn(undefined) throws a TypeError");
+  expectTypeError(() => { Object.hasOwn(JSON.parse("null"), "a"); }, "Object.hasOwn of parsed null throws a TypeError");
+  assert(Object.hasOwn(JSON.parse("{\"a\":1}"), "a"), "Object.hasOwn of a parsed object stays true");
 
   const boxed: unknown = 5;
   assert(!Object.hasOwn(boxed, "x"), "non-object values own no fields");

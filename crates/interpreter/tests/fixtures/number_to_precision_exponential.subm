@@ -10,11 +10,23 @@ function main(): void {
   assert((0.0042).toExponential(1) === "4.2e-3", "negative exponent keeps its sign");
   assert((1).toExponential(0) === "1e+0", "zero fraction digits");
 
+  assert((-0).toExponential() === "0e+0", "negative zero has no sign in exponential form");
+  assert((-0).toExponential(2) === "0.00e+0", "negative zero with digits has no sign");
+  assert((-0).toFixed(2) === "0.00", "toFixed of negative zero");
+  assert((-0).toPrecision(2) === "0.0", "toPrecision of negative zero");
+
+  // A value that is not finite spells its name before the precision's range
+  // is checked. Computed values keep them out of constant folding.
+  let zero: number = 0;
+  assert((1 / zero).toPrecision(200) === "Infinity", "Infinity ignores an out-of-range precision");
+  assert((-1 / zero).toPrecision(0) === "-Infinity", "-Infinity ignores an out-of-range precision");
+  assert((zero / zero).toPrecision(101) === "NaN", "NaN ignores an out-of-range precision");
+
   let threw: boolean = false;
   try {
     (1).toPrecision(0);
   } catch (e: Error) {
-    threw = true;
+    threw = e instanceof RangeError;
   }
-  assert(threw, "precision below 1 throws");
+  assert(threw, "precision below 1 throws a RangeError");
 }

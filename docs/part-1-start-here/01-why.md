@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "human-written"
   confirmed: true
-  contentHash: "2b4105131be1fd4901e978ebeb33ca2b853a8d32e2844d1711a64efd5725f55e"
+  contentHash: "52623be12c29bf6d1ae4316e41d53b36c04e71e07a57909544990213693a6093"
   confirmedAt: "2026-10-05T20:18:00.685778+00:00"
 ---
 
@@ -31,7 +31,7 @@ Programmatic tool calling is an emerging pattern across the industry, and its im
 * Cloudflare's [Code Mode](https://blog.cloudflare.com/code-mode-mcp/)
 serves their 2,500-endpoint API to the model in about 1,000 tokens. As tool
 schemas, the same API takes 1.17 million tokens.
-* [OpenAI](https://developers.openai.com/api/docs/guides/latest-model#programmatic-tool-calling)
+* [OpenAI](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling)
 and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling-ptc) are aligned.
 
 It has become clear that agents should write code. The question that stems from it, is where should this code run, and what should it be allowed to do?

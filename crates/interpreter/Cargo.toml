@@ -24,6 +24,7 @@ gimli = { workspace = true }
 unicode-ident = { workspace = true }
 unicode-width = "0.2.2"
 unicode-normalization = { workspace = true }
+icu_collator = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
 reqwest = { workspace = true }

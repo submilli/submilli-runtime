@@ -38,6 +38,7 @@ clap = { version = "4", features = ["derive", "env"] }
 insta = "1"
 unicode-ident = "1"
 unicode-normalization = "0.1"
+icu_collator = "2"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 

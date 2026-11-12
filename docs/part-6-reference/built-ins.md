@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "43b03f068457dd5aaf7e15b9974c6ed3c108908345e2b9debe73782aeff62005"
+  contentHash: "943de3f4ba6b091ecb80ecbee6a7239014cdce721ea4081176c5fa4c55f52037"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -124,7 +124,7 @@ These globals are in scope and are not in the `submilli builtins` catalog.
 | `WeakMap`, `WeakSet` | `Map`, `Set` |
 | `Promise`, `queueMicrotask`, `setTimeout`, `setInterval` | None. Calls are synchronous |
 | Typed arrays other than `Uint8Array`, `ArrayBuffer`, `DataView` | `Uint8Array` |
-| `Intl` | None. `localeCompare` compares UTF-16 code units |
+| `Intl` | None. `localeCompare` uses the Unicode root collation on every machine |
 | `globalThis`, `window` | None |
 | `fetch` | `submilli:http` |
 | `URL`, `URLSearchParams` | `submilli:url` |
@@ -702,7 +702,7 @@ The UTF-16 string type.
 | `isWellFormed(): boolean` | Returns `true` when the string contains no lone surrogates (it round-trips losslessly through UTF-8). |
 | `iterator(): Iterator<string>` | Returns an `Iterator<string>` of CODE POINTS — surrogate pairs arrive as one two-unit string. |
 | `lastIndexOf(search: string, fromIndex?: number): number` | Returns the index of the last occurrence of `search` at or before `fromIndex`, or `-1` if none. |
-| `localeCompare(other: string): number` | Compares this string with `other` in UTF-16 code-unit order. |
+| `localeCompare(other: string): number` | Compares this string with `other` by the Unicode root collation, the order `Intl.Collator` gives for the root or an English locale: lower case before upper case, accented letters beside their base letter. |
 | `match(re: string \| RegExp): RegExpMatchArray \| null` | Find the next match of `re` in this string. |
 | `matchAll(re: string \| RegExp): Iterator<RegExpExecArray>` | Find every non-overlapping match of `re` in this string. |
 | `normalize(form?: string): string` | Returns a new string in the specified Unicode normalization form. |

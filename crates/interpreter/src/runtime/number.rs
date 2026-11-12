@@ -1,7 +1,5 @@
 //! JavaScript-compatible number parsers and formatters.
 
-use num_traits::FromPrimitive;
-
 /// ECMAScript ToUint32: truncate then wrap, including non-finite inputs.
 pub(crate) fn to_uint32(value: f64) -> u32 {
     if value == 0.0 || !value.is_finite() {
@@ -128,6 +126,8 @@ pub fn to_exponential_js(x: f64, fraction_digits: f64) -> Result<String, String>
     if !x.is_finite() {
         return Ok(format_number_js(x));
     }
+    // JavaScript writes `-0` without its sign; `{:e}` would keep it.
+    let x = if x == 0.0 { 0.0 } else { x };
     let mantissa_exp = if fraction_digits.is_nan() {
         format!("{x:e}")
     } else {
@@ -143,7 +143,9 @@ pub fn to_exponential_js(x: f64, fraction_digits: f64) -> Result<String, String>
 /// JS-spec `Number#toPrecision(precision)`. A NaN `precision` is the
 /// omitted-argument sentinel: behave like plain `toString`.
 pub fn to_precision_js(x: f64, precision: f64) -> Result<String, String> {
-    if precision.is_nan() {
+    // A value that is not finite spells its name before the precision's
+    // range is checked (ECMA-262 `Number.prototype.toPrecision`, step 4).
+    if precision.is_nan() || !x.is_finite() {
         return Ok(format_number_js(x));
     }
     let p = precision.trunc();
@@ -151,9 +153,6 @@ pub fn to_precision_js(x: f64, precision: f64) -> Result<String, String> {
         return Err("toPrecision precision must be between 1 and 100".to_string());
     }
     let p = p as usize;
-    if !x.is_finite() {
-        return Ok(format_number_js(x));
-    }
     if x == 0.0 {
         return Ok(if p == 1 {
             "0".to_string()
@@ -188,9 +187,11 @@ fn jsify_exponent(s: &str) -> String {
 
 /// JS-spec `Number#toString(radix)` for radix 2–36.
 ///
-/// The integer part is exact at any magnitude; the fraction part emits up
-/// to 32 digits and stops (JS prints the shortest uniquely-identifying
-/// fraction, which can be longer or shorter).
+/// ECMA-262 leaves the digits for a radix other than 10 to the
+/// implementation. This follows V8's `DoubleToRadixCString`, so the text is
+/// what Node prints: the fraction stops once its digits tell the value from
+/// its neighbors (within half the gap to the next double), and an integer
+/// part at or above 2^53 writes zeros where the double has no digits.
 pub fn to_string_radix_js(x: f64, radix: f64) -> Result<String, String> {
     let r = radix.trunc();
     if !(2.0..=36.0).contains(&r) || radix.is_nan() {
@@ -203,43 +204,91 @@ pub fn to_string_radix_js(x: f64, radix: f64) -> Result<String, String> {
     if x == 0.0 {
         return Ok("0".to_string());
     }
+    let digit_char =
+        |digit: u32| char::from_digit(digit, r).expect("digit is below the validated radix");
 
-    let negative = x < 0.0;
-    let magnitude = x.abs();
-    let integer = magnitude.trunc();
-    let mut fraction = magnitude - integer;
+    let value = x.abs();
+    let (fraction_digits, carry) = radix_fraction_digits(value, r);
+    let integer_digits = radix_integer_digits(value.floor() + if carry { 1.0 } else { 0.0 }, r);
 
-    // f64 → BigInt is exact for any finite value, so arbitrarily large
-    // integer parts convert without drift.
-    let int_digits = num_bigint::BigInt::from_f64(integer)
-        .expect("finite integer magnitude converts to BigInt")
-        .to_str_radix(r);
-    let mut out = String::new();
-    if negative {
+    let mut out = String::with_capacity(integer_digits.len() + fraction_digits.len() + 2);
+    if x < 0.0 {
         out.push('-');
     }
-    out.push_str(&int_digits);
-
-    if fraction > 0.0 {
+    out.extend(integer_digits.into_iter().map(digit_char));
+    if !fraction_digits.is_empty() {
         out.push('.');
-        for _ in 0..32 {
-            // fraction is in [0, 1). Even its largest f64 value times the
-            // exact integer radix is below the midpoint between r and its previous
-            // representable value, so rounding
-            // cannot produce r. Subtracting trunc below preserves [0, 1).
-            fraction *= f64::from(r);
-            let digit = fraction.trunc() as u32;
-            out.push(
-                char::from_digit(digit, r).expect("fraction digit is below the validated radix"),
-            );
-            fraction -= fraction.trunc();
-            if fraction == 0.0 {
-                break;
-            }
-        }
+        out.extend(fraction_digits.into_iter().map(digit_char));
     }
     Ok(out)
 }
+
+/// The radix-`r` digits after the point of `value`, most significant first,
+/// and whether rounding the last digit carried into the integer part.
+///
+/// The digits stop once the remainder is within `delta`, half the gap to the
+/// next double: past that, they no longer separate the value from its
+/// neighbor. The smallest subnormal bounds `delta` below.
+fn radix_fraction_digits(value: f64, r: u32) -> (Vec<u32>, bool) {
+    let base = f64::from(r);
+    let mut fraction = value - value.floor();
+    let mut delta = (0.5 * (value.next_up() - value)).max(f64::from_bits(1));
+    let mut digits = Vec::new();
+    while fraction >= delta {
+        // `fraction` is in [0, 1). Even its largest f64 value times the exact
+        // integer radix is below the midpoint between r and its previous
+        // representable value, so the digit stays below r.
+        fraction *= base;
+        delta *= base;
+        let digit = fraction.trunc() as u32;
+        digits.push(digit);
+        fraction -= f64::from(digit);
+        // Round half to even on the last digit.
+        if (fraction > 0.5 || (fraction == 0.5 && digit & 1 == 1)) && fraction + delta > 1.0 {
+            let carry = round_up(&mut digits, r);
+            return (digits, carry);
+        }
+    }
+    (digits, false)
+}
+
+/// Adds one to the last of `digits`, dropping each trailing digit that
+/// becomes `r`. Returns whether the carry ran past the first digit.
+fn round_up(digits: &mut Vec<u32>, r: u32) -> bool {
+    while let Some(last) = digits.pop() {
+        if last + 1 < r {
+            digits.push(last + 1);
+            return false;
+        }
+    }
+    true
+}
+
+/// The radix-`r` digits of the non-negative `integer`, most significant
+/// first (collected least significant first, then reversed). While the
+/// quotient is at or above 2^53 the double has no digit for the place, so it
+/// reads as zero. Each remainder is in [0, r), and the
+/// truncating cast takes its digit as V8 does.
+fn radix_integer_digits(mut integer: f64, r: u32) -> Vec<u32> {
+    let base = f64::from(r);
+    let mut digits = Vec::new();
+    while integer / base >= TWO_POW_53 {
+        integer /= base;
+        digits.push(0);
+    }
+    loop {
+        let remainder = integer % base;
+        digits.push(remainder as u32);
+        integer = (integer - remainder) / base;
+        if integer <= 0.0 {
+            digits.reverse();
+            return digits;
+        }
+    }
+}
+
+/// 2^53, where a double's integers stop being consecutive.
+const TWO_POW_53: f64 = 9_007_199_254_740_992.0;
 
 /// `parseInt(s, radix)` with the radix argument as JavaScript reads it:
 /// `ToInt32`, where 0 (including `NaN` and an omitted radix) means "detect a
@@ -556,6 +605,207 @@ mod tests {
         );
         assert_eq!(super::to_precision_js(f64::MAX, 1.0).unwrap(), "2e+308");
         assert_eq!(super::to_precision_js(-0.0, 3.0).unwrap(), "0.00");
+    }
+
+    #[test]
+    fn radix_digits_match_node() {
+        // Expected values from Node 24 (V8's `DoubleToRadixCString`).
+        for (value, radix, expected) in [
+            (
+                0.1,
+                2,
+                "0.0001100110011001100110011001100110011001100110011001101",
+            ),
+            (0.1, 36, "0.3lllllllllm"),
+            (1e21, 36, "5v1j4f4ds7c000"),
+            (0.1, 3, "0.0022002200220022002200220022002201"),
+            (-0.1, 8, "-0.0631463146314631464"),
+            (255.0, 16, "ff"),
+            (0.5, 2, "0.1"),
+            (-0.0, 2, "0"),
+            (
+                f64::MAX,
+                36,
+                "1a1e4vngaiqo0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+        ] {
+            assert_eq!(
+                super::to_string_radix_js(value, radix as f64).unwrap(),
+                expected
+            );
+        }
+        let smallest = super::to_string_radix_js(f64::from_bits(1), 2.0).unwrap();
+        assert_eq!(smallest.len(), 1076);
+        assert!(smallest.ends_with('1'));
+    }
+
+    #[test]
+    fn radix_digits_match_node_across_radixes() {
+        // Node 24: values just below an integer or a carry, the subnormal
+        // boundary, past 2^53, and repeating fractions.
+        for (value, radix, expected) in [
+            (
+                0.9999999999999999,
+                2,
+                "0.11111111111111111111111111111111111111111111111111111",
+            ),
+            (0.9999999999999999, 3, "0.222222222222222222222222222222222"),
+            (0.9999999999999999, 7, "0.6666666666666666666"),
+            (0.9999999999999999, 16, "0.fffffffffffff8"),
+            (0.9999999999999999, 36, "0.zzzzzzzzzza"),
+            (
+                4503599627370495.5,
+                2,
+                "1111111111111111111111111111111111111111111111111111.1",
+            ),
+            (4503599627370495.5, 3, "210212120220220211102011121012020.2"),
+            (4503599627370495.5, 7, "2523420223060136361.4"),
+            (4503599627370495.5, 16, "fffffffffffff.8"),
+            (4503599627370495.5, 36, "18ce53un18f.i"),
+            (
+                35.99999999999999,
+                2,
+                "100011.11111111111111111111111111111111111111111111111",
+            ),
+            (35.99999999999999, 3, "1022.222222222222222222222222222222"),
+            (35.99999999999999, 7, "50.66666666666666665"),
+            (35.99999999999999, 16, "23.fffffffffffe"),
+            (35.99999999999999, 36, "z.zzzzzzzzz"),
+            (
+                2.2250738585072014e-308,
+                2,
+                "0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+            ),
+            (
+                2.2250738585072014e-308,
+                3,
+                "0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000102002100002110201011001212212212",
+            ),
+            (
+                2.2250738585072014e-308,
+                7,
+                "0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006300034234640101632",
+            ),
+            (
+                2.2250738585072014e-308,
+                16,
+                "0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004",
+            ),
+            (
+                2.2250738585072014e-308,
+                36,
+                "0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000034lmua2oev",
+            ),
+            (
+                1e300,
+                2,
+                "1011111100100001111001000100000000000011101011001110000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                1e300,
+                3,
+                "20222221112102120111122202200001200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                1e300,
+                7,
+                "6562255533065302131000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                1e300,
+                16,
+                "17e43c8800759c00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                1e300,
+                36,
+                "fhgyjdfcg7s00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            ),
+            (
+                -1e-300,
+                2,
+                "-0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010101011011100001111111000010111110001111001101011001",
+            ),
+            (
+                -1e-300,
+                3,
+                "-0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001021201112222120202101222201001001",
+            ),
+            (
+                -1e-300,
+                7,
+                "-0.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010105550636136256015",
+            ),
+            (
+                -1e-300,
+                16,
+                "-0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ab70fe17c79ac8",
+            ),
+            (
+                -1e-300,
+                36,
+                "-0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002box4rhe6qp",
+            ),
+            (
+                9007199254740994.0,
+                2,
+                "100000000000000000000000000000000000000000000000000010",
+            ),
+            (9007199254740994.0, 3, "1121202011211211122211100012101111"),
+            (9007199254740994.0, 7, "5350140446150306056"),
+            (9007199254740994.0, 16, "20000000000002"),
+            (9007199254740994.0, 36, "2gosa7pa2gy"),
+            (
+                123.456,
+                2,
+                "1111011.0111010010111100011010100111111011111001110111",
+            ),
+            (123.456, 3, "11120.11002210211000212022212010001"),
+            (123.456, 7, "234.312256641535441"),
+            (123.456, 16, "7b.74bc6a7ef9dc"),
+            (123.456, 36, "3f.gez4w97ry"),
+            (
+                1.0 / 3.0,
+                2,
+                "0.010101010101010101010101010101010101010101010101010101",
+            ),
+            (1.0 / 3.0, 3, "0.1"),
+            (1.0 / 3.0, 7, "0.2222222222222222222"),
+            (1.0 / 3.0, 16, "0.55555555555554"),
+            (1.0 / 3.0, 36, "0.c"),
+            (
+                std::f64::consts::PI,
+                2,
+                "11.001001000011111101101010100010001000010110100011",
+            ),
+            (std::f64::consts::PI, 3, "10.010211012222010211002111110222"),
+            (std::f64::consts::PI, 7, "3.066365143203613411"),
+            (std::f64::consts::PI, 16, "3.243f6a8885a3"),
+            (std::f64::consts::PI, 36, "3.53i5ab8p5f"),
+        ] {
+            assert_eq!(
+                super::to_string_radix_js(value, f64::from(radix)).unwrap(),
+                expected,
+                "{value} in radix {radix}"
+            );
+        }
+    }
+
+    #[test]
+    fn exponential_and_precision_edges_match_node() {
+        assert_eq!(super::to_exponential_js(-0.0, f64::NAN).unwrap(), "0e+0");
+        assert_eq!(super::to_exponential_js(-0.0, 2.0).unwrap(), "0.00e+0");
+        assert_eq!(
+            super::to_precision_js(f64::INFINITY, 200.0).unwrap(),
+            "Infinity"
+        );
+        assert_eq!(
+            super::to_precision_js(f64::NEG_INFINITY, 0.0).unwrap(),
+            "-Infinity"
+        );
+        assert_eq!(super::to_precision_js(f64::NAN, 101.0).unwrap(), "NaN");
+        assert!(super::to_precision_js(1.0, 0.0).is_err());
+        assert!(super::to_precision_js(1.0, 101.0).is_err());
     }
 
     #[test]
