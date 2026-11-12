@@ -489,7 +489,10 @@ impl DependencyUsage {
             | Type::TypeVar(_)
             | Type::GenericParam { .. }
             | Type::KeyOf(_)
-            | Type::IndexedAccess { .. } => {}
+            | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
+            | Type::Intersection(_) => {}
         }
     }
 

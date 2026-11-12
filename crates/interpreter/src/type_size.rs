@@ -23,6 +23,9 @@ use crate::span::Span;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeTooLarge {
     InvalidTemplate,
+    /// An intersection with fewer than two members, which
+    /// [`Type::intersection`] never builds.
+    InvalidIntersection,
     /// Temporary traversal storage could not be allocated.
     Allocation,
     Nodes,
@@ -35,7 +38,10 @@ pub enum TypeTooLarge {
 
 impl TypeTooLarge {
     pub fn into_failure(self, stage: CompilerStage, span: Option<Span>) -> CompilerFailure {
-        if matches!(self, Self::Allocation | Self::InvalidTemplate) {
+        if matches!(
+            self,
+            Self::Allocation | Self::InvalidTemplate | Self::InvalidIntersection
+        ) {
             return CompilerFailure::Internal {
                 stage,
                 span,
@@ -43,7 +49,7 @@ impl TypeTooLarge {
             };
         }
         let help = match self {
-            Self::Allocation | Self::InvalidTemplate => Vec::new(),
+            Self::Allocation | Self::InvalidTemplate | Self::InvalidIntersection => Vec::new(),
             Self::NamespaceMetadata => vec![
                 "reduce namespace nesting, exported namespace count, or qualified name lengths".into(),
             ],
@@ -74,6 +80,9 @@ impl std::fmt::Display for TypeTooLarge {
         match self {
             Self::InvalidTemplate => {
                 f.write_str("template type has inconsistent parts and substitutions")
+            }
+            Self::InvalidIntersection => {
+                f.write_str("intersection type has fewer than two members")
             }
             Self::Allocation => f.write_str("could not allocate type traversal frames"),
             Self::NamespaceMetadata => write!(
@@ -114,21 +123,25 @@ pub struct TypeExtent {
 /// bound; a stopped measurement reports the count that crossed it. Temporary
 /// ancestor-frame allocation failures are returned without a partial extent.
 pub fn measure(ty: &Type, max_nodes: u64, max_depth: u32) -> Result<TypeExtent, TypeTooLarge> {
-    let invalid = Cell::new(false);
+    let invalid = Cell::new(None);
     let extent = crate::type_walk::measure(ty, max_nodes, max_depth, |ty| {
-        if let Type::TemplateLiteral {
-            parts,
-            substitutions,
-        } = ty
-            && parts.len() != substitutions.len().saturating_add(1)
-        {
-            invalid.set(true);
+        match ty {
+            Type::TemplateLiteral {
+                parts,
+                substitutions,
+            } if parts.len() != substitutions.len().saturating_add(1) => {
+                invalid.set(Some(TypeTooLarge::InvalidTemplate));
+            }
+            Type::Intersection(members) if members.len() < 2 => {
+                invalid.set(Some(TypeTooLarge::InvalidIntersection));
+            }
+            _ => {}
         }
         TypeChildren::new(ty)
     })
     .map_err(|_| TypeTooLarge::Allocation)?;
-    if invalid.get() {
-        return Err(TypeTooLarge::InvalidTemplate);
+    if let Some(invalid) = invalid.get() {
+        return Err(invalid);
     }
     Ok(extent)
 }
@@ -305,6 +318,9 @@ pub(crate) fn child_count(ty: &Type) -> usize {
         | Type::Union(members) => members.len(),
         Type::Refined { .. } | Type::IndexedAccess { .. } => 2,
         Type::KeyOf(_) => 1,
+        Type::Mapped { name, .. } => 2 + usize::from(name.is_some()),
+        Type::Conditional { .. } => 4,
+        Type::Intersection(members) => members.len(),
         Type::InterfaceRef { args, .. }
         | Type::ClassRef { args, .. }
         | Type::AliasRef { args, .. } => args.len(),
@@ -359,12 +375,37 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
             visit(object);
             visit(index);
         }
+        Type::Mapped {
+            constraint,
+            name,
+            template,
+            ..
+        } => {
+            visit(constraint);
+            if let Some(name) = name {
+                visit(name);
+            }
+            visit(template);
+        }
+        Type::Conditional {
+            check,
+            extends,
+            true_ty,
+            false_ty,
+            ..
+        } => {
+            visit(check);
+            visit(extends);
+            visit(true_ty);
+            visit(false_ty);
+        }
         Type::Tuple(members) => members.iter().for_each(visit),
         Type::TemplateLiteral {
             substitutions: members,
             ..
         }
-        | Type::Union(members) => members.iter().for_each(visit),
+        | Type::Union(members)
+        | Type::Intersection(members) => members.iter().for_each(visit),
         Type::Refined { original, ty } => {
             visit(original);
             visit(ty);
@@ -467,6 +508,38 @@ pub fn map_children<E>(
             object: Box::new(map(object)?),
             index: Box::new(map(index)?),
         },
+        Type::Mapped {
+            key,
+            constraint,
+            name,
+            template,
+            optional,
+            readonly,
+        } => Type::Mapped {
+            key: key.clone(),
+            constraint: Box::new(map(constraint)?),
+            name: match name {
+                Some(name) => Some(Box::new(map(name)?)),
+                None => None,
+            },
+            template: Box::new(map(template)?),
+            optional: *optional,
+            readonly: *readonly,
+        },
+        Type::Conditional {
+            check,
+            extends,
+            infers,
+            true_ty,
+            false_ty,
+        } => Type::Conditional {
+            check: Box::new(map(check)?),
+            extends: Box::new(map(extends)?),
+            infers: infers.clone(),
+            true_ty: Box::new(map(true_ty)?),
+            false_ty: Box::new(map(false_ty)?),
+        },
+        Type::Intersection(members) => Type::intersection(map_all(members)?),
         Type::Tuple(members) => Type::Tuple(crate::types::TupleType {
             elements: map_all(members)?,
             optional: members.optional,
@@ -560,7 +633,7 @@ pub fn map_children<E>(
 struct TypeChildren<'a> {
     members: std::slice::Iter<'a, Type>,
     fields: Option<std::collections::btree_map::Values<'a, String, crate::ObjectField>>,
-    trailing: [Option<&'a Type>; 2],
+    trailing: [Option<&'a Type>; 4],
 }
 
 impl<'a> TypeChildren<'a> {
@@ -568,7 +641,7 @@ impl<'a> TypeChildren<'a> {
         let mut children = Self {
             members: [].iter(),
             fields: None,
-            trailing: [None, None],
+            trailing: [None; 4],
         };
         match ty {
             Type::Function {
@@ -578,7 +651,8 @@ impl<'a> TypeChildren<'a> {
                 ..
             } => {
                 children.members = params.iter();
-                children.trailing = [Some(ret), predicate.as_ref().map(|p| &p.asserted_type)];
+                children.trailing[0] = Some(ret);
+                children.trailing[1] = predicate.as_ref().map(|p| &p.asserted_type);
             }
             Type::Object { fields, index } => {
                 children.fields = Some(fields.values());
@@ -589,7 +663,25 @@ impl<'a> TypeChildren<'a> {
                 children.trailing[0] = Some(inner);
             }
             Type::IndexedAccess { object, index } => {
-                children.trailing = [Some(object), Some(index)];
+                children.trailing[0] = Some(object);
+                children.trailing[1] = Some(index);
+            }
+            Type::Mapped {
+                constraint,
+                name,
+                template,
+                ..
+            } => {
+                children.trailing = [Some(constraint), name.as_deref(), Some(template), None];
+            }
+            Type::Conditional {
+                check,
+                extends,
+                true_ty,
+                false_ty,
+                ..
+            } => {
+                children.trailing = [Some(check), Some(extends), Some(true_ty), Some(false_ty)];
             }
             Type::Tuple(tuple) => children.members = tuple.elements.iter(),
             Type::TemplateLiteral {
@@ -597,10 +689,14 @@ impl<'a> TypeChildren<'a> {
                 ..
             }
             | Type::Union(members)
+            | Type::Intersection(members)
             | Type::InterfaceRef { args: members, .. }
             | Type::ClassRef { args: members, .. }
             | Type::AliasRef { args: members, .. } => children.members = members.iter(),
-            Type::Refined { original, ty } => children.trailing = [Some(original), Some(ty)],
+            Type::Refined { original, ty } => {
+                children.trailing[0] = Some(original);
+                children.trailing[1] = Some(ty);
+            }
             Type::Alias { args, ty, .. } => {
                 children.members = args.iter();
                 children.trailing[0] = Some(ty);
@@ -858,6 +954,16 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn check_rejects_an_intersection_of_fewer_than_two_members() {
+        for members in [Vec::new(), vec![Type::String]] {
+            let ty = Type::Array(Box::new(Type::Intersection(members)));
+            assert_eq!(check(&ty), Err(TypeTooLarge::InvalidIntersection));
+        }
+        let pair = Type::intersection(vec![Type::TypeVar("T".into()), Type::TypeVar("U".into())]);
+        assert!(check(&pair).is_ok());
+    }
+
+    #[test]
     fn map_children_rebuilds_every_variant_unchanged() {
         let object = Type::Object {
             fields: BTreeMap::from([("f".into(), ObjectField::required(Type::String))]),
@@ -897,12 +1003,31 @@ pub(crate) mod tests {
                 Type::class_ref(package.clone(), "C", mangled.clone(), vec![Type::String]),
                 Type::alias_ref(package.clone(), "R", mangled.clone(), vec![Type::Null]),
                 Type::alias_ty(package, "A", mangled, vec![Type::Number], Box::new(object)),
+                Type::Mapped {
+                    key: "K".into(),
+                    constraint: Box::new(Type::KeyOf(Box::new(Type::TypeVar("T".into())))),
+                    name: Some(Box::new(Type::TypeVar("K".into()))),
+                    template: Box::new(Type::indexed_access(
+                        Type::TypeVar("T".into()),
+                        Type::TypeVar("K".into()),
+                    )),
+                    optional: crate::types::MappedModifier::Add,
+                    readonly: crate::types::MappedModifier::Remove,
+                },
+                Type::Conditional {
+                    check: Box::new(Type::TypeVar("T".into())),
+                    extends: Box::new(Type::Array(Box::new(Type::TypeVar("U".into())))),
+                    infers: vec!["U".into()],
+                    true_ty: Box::new(Type::TypeVar("U".into())),
+                    false_ty: Box::new(Type::Never),
+                },
+                Type::intersection(vec![Type::TypeVar("U".into()), Type::TypeVar("T".into())]),
             ]
             .into(),
         );
         let mut visited = 0;
         for_each_child(&ty, |_| visited += 1);
-        assert_eq!(visited, 9);
+        assert_eq!(visited, 12);
         check_type_child_order(&ty);
         let rebuilt = map_children(&ty, |child| {
             map_children(child, |grandchild| Ok::<_, ()>(grandchild.clone()))

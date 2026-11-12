@@ -58,6 +58,9 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
             walk_alias_refs(object, visit);
             walk_alias_refs(index, visit);
         }
+        Type::Mapped { .. } | Type::Conditional { .. } | Type::Intersection(_) => {
+            crate::type_size::for_each_child(ty, |child| walk_alias_refs(child, visit));
+        }
         Type::Object { fields, index } => {
             if let Some(i) = index {
                 walk_alias_refs(&i.value, visit);

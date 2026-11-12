@@ -212,6 +212,9 @@ pub(crate) fn may_hold_null(ty: &Type) -> bool {
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
         | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_)
         | Type::AliasRef { .. } => true,
         Type::Union(members) => members.iter().any(may_hold_null),
         _ => false,
@@ -1056,6 +1059,9 @@ impl SymbolTable {
             | Type::GenericParam { .. }
             | Type::KeyOf(_)
             | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
+            | Type::Intersection(_)
             | Type::Unknown
             | Type::NonPrimitive
             | Type::Void => {

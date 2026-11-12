@@ -2523,7 +2523,10 @@ fn may_hold_function(ty: &crate::Type) -> bool {
         | crate::Type::TypeVar(_)
         | crate::Type::GenericParam { .. }
         | crate::Type::Error => true,
-        _ => false,
+        // `T[K]`, `T & U` and the other erased forms hold what `T` may;
+        // `keyof T` holds only keys.
+        crate::Type::KeyOf(_) => false,
+        other => other.lowers_to_erased_slot(),
     }
 }
 

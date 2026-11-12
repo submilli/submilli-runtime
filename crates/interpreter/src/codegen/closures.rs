@@ -417,6 +417,9 @@ pub(crate) fn walk_type(
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
         | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_)
         | Type::Unknown
         | Type::NonPrimitive
         | Type::NumberEnum { .. }

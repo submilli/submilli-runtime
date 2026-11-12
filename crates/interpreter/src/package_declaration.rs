@@ -674,6 +674,9 @@ impl PackageShapeCollector {
                 self.collect_type(object);
                 self.collect_type(index);
             }
+            Type::Mapped { .. } | Type::Conditional { .. } | Type::Intersection(_) => {
+                crate::type_size::for_each_child(ty, |child| self.collect_type(child));
+            }
             Type::Number
             | Type::BigInt
             | Type::BigIntLiteral(_)

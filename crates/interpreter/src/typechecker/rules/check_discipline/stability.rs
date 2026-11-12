@@ -32,6 +32,10 @@ pub(super) fn is_primitive(ty: &Type) -> bool {
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
         | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        // One with a primitive member peels to that primitive.
+        | Type::Intersection(_)
         | Type::InterfaceRef { .. }
         | Type::ClassRef { .. }
         | Type::AliasRef { .. }

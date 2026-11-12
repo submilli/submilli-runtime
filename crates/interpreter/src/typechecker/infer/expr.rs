@@ -637,6 +637,11 @@ pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bo
             args, ty: inner, ..
         } => args.iter().any(recurse) || recurse(inner),
         Type::Union(members) => members.iter().any(recurse),
+        Type::Mapped { .. } | Type::Conditional { .. } | Type::Intersection(_) => {
+            let mut found = false;
+            crate::type_size::for_each_child(ty, |child| found = found || recurse(child));
+            found
+        }
         _ => false,
     }
 }
@@ -15067,7 +15072,10 @@ fn unsupported_cast_target_reason(
         Type::TypeVar(_)
         | Type::GenericParam { .. }
         | Type::KeyOf(_)
-        | Type::IndexedAccess { .. } => Some("generic type parameters are erased at runtime"),
+        | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. } => Some("generic type parameters are erased at runtime"),
+        Type::Intersection(_) => Some("intersection types have no run-time check"),
         Type::Never => Some("`never` has no runtime values"),
         Type::Error => None,
         Type::Alias { ty: underlying, .. }

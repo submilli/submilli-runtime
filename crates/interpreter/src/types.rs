@@ -459,6 +459,56 @@ pub enum Type {
         object: Box<Type>,
         index: Box<Type>,
     },
+    /// `{ [K in C as N]: X }` while its constraint `C` mentions a type
+    /// parameter (tsc's MappedType). A concrete constraint resolves to an
+    /// object type, so this only appears in generic signatures and bodies,
+    /// and lowers like a type parameter. `name` and `template` refer to the
+    /// key as `Type::TypeVar(key)`. The key's name differs from every type
+    /// parameter in scope (a front end renames it if needed), so substituting
+    /// those passes through it.
+    Mapped {
+        key: String,
+        constraint: Box<Type>,
+        /// The `as` clause.
+        name: Option<Box<Type>>,
+        template: Box<Type>,
+        optional: MappedModifier,
+        readonly: MappedModifier,
+    },
+    /// `C extends E ? X : Y` while `C` mentions a type parameter (tsc's
+    /// ConditionalType). A concrete check type resolves to one branch, so
+    /// this only appears in generic signatures and bodies, and lowers like a
+    /// type parameter. Each name in `infers` is declared by `infer N` in
+    /// `extends`, and is a `Type::TypeVar` there and in `true_ty`. Like a
+    /// mapped type's key, these names differ from every type parameter in
+    /// scope.
+    Conditional {
+        check: Box<Type>,
+        extends: Box<Type>,
+        infers: Vec<String>,
+        true_ty: Box<Type>,
+        false_ty: Box<Type>,
+    },
+    /// `A & B` that normalizes to neither an object type nor a refinement:
+    /// `T & U`, `string & { brand: true }`. At least two members, flat,
+    /// sorted and deduplicated, as a union's are; build it with
+    /// [`Type::intersection`]. One with a primitive member is used as that
+    /// primitive: [`Type::peel`] reads it as the primitive, so a cast to
+    /// `string & { brand: true }` checks for a string. Any other lowers like
+    /// a type parameter.
+    Intersection(Vec<Type>),
+}
+
+/// How a [`Type::Mapped`] changes each property's `?` or `readonly`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum MappedModifier {
+    /// Keeps the modifier of the property it maps (none, over a non-`keyof`
+    /// constraint).
+    Keep,
+    /// `?` or `readonly`, also spelled `+?` or `+readonly`.
+    Add,
+    /// `-?` or `-readonly`.
+    Remove,
 }
 
 impl Type {
@@ -814,8 +864,9 @@ impl Type {
     }
 
     /// Whether a value of this type sits in the erased generic slot, as a
-    /// type parameter's does: a type parameter itself, `keyof T`, `T[K]`, or
-    /// a utility application over a type parameter (`Partial<T>`).
+    /// type parameter's does: a type parameter itself, `keyof T`, `T[K]`, a
+    /// mapped, conditional or intersection type over one, or a utility
+    /// application over a type parameter (`Partial<T>`).
     pub fn lowers_to_erased_slot(&self) -> bool {
         let ty = self.peel();
         matches!(ty, Type::TypeVar(_) | Type::GenericParam { .. }) || ty.is_type_operator()
@@ -829,12 +880,21 @@ impl Type {
             if crate::typechecker::infer::utility_types::utility(mangled).is_some())
     }
 
-    /// Whether this is `keyof T`, `T[K]` or a utility application over a
-    /// type parameter: a type computed from type parameters, known only once
-    /// a call instantiates them.
+    /// Whether this is `keyof T`, `T[K]`, a mapped, conditional or
+    /// intersection type, or a utility application over a type parameter: a
+    /// type computed from type parameters, known only once a call
+    /// instantiates them. Every intersection counts, including one with a
+    /// primitive member, which [`Type::peel`] reads as that primitive, so a
+    /// caller asking of a peeled type never sees it.
     pub fn is_type_operator(&self) -> bool {
-        matches!(self, Type::KeyOf(_) | Type::IndexedAccess { .. })
-            || crate::typechecker::infer::utility_types::deferred_application(self).is_some()
+        matches!(
+            self,
+            Type::KeyOf(_)
+                | Type::IndexedAccess { .. }
+                | Type::Mapped { .. }
+                | Type::Conditional { .. }
+                | Type::Intersection(_)
+        ) || crate::typechecker::infer::utility_types::deferred_application(self).is_some()
     }
 
     /// Remove display aliases while retaining generic guard identity.
@@ -894,12 +954,20 @@ impl Type {
             if matches!(original.peel(), Type::GenericParam { .. }))
     }
 
+    /// The type a value is used at: through aliases, refinements, `readonly`,
+    /// and an intersection with a primitive member, which is that primitive
+    /// (`string & { brand: true }` is a `string`).
     pub fn peel(&self) -> &Type {
         let mut t = self;
-        while let Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) = t {
-            t = ty;
+        loop {
+            t = match t {
+                Type::Alias { ty, .. } | Type::Refined { ty, .. } | Type::Readonly(ty) => ty,
+                Type::Intersection(members) if let Some(primitive) = primitive_member(members) => {
+                    primitive
+                }
+                _ => return t,
+            };
         }
-        t
     }
 
     /// `{ [key: string]: unknown }`: any object, interface or class instance,
@@ -1253,6 +1321,8 @@ impl Type {
                 | Type::GenericParam { .. }
                 | Type::TypeVar(_)
                 | Type::IndexedAccess { .. }
+                | Type::Conditional { .. }
+                | Type::Intersection(_)
                 | Type::Function { .. }
         )
     }
@@ -1293,16 +1363,7 @@ impl Type {
                 _ => flat.push(m),
             }
         }
-        // Sorting by the peeled key groups alias-labelled duplicates next to
-        // their body; aliases rank 0 so they sort first within the group, and
-        // `dedup_by` keeps the earlier element — the name the user wrote.
-        let alias_rank = |t: &Type| u8::from(!matches!(t, Type::Alias { .. }));
-        flat.sort_by(|a, b| {
-            a.without_aliases()
-                .cmp(b.without_aliases())
-                .then_with(|| alias_rank(a).cmp(&alias_rank(b)))
-        });
-        flat.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
+        sort_and_dedup_members(&mut flat);
         fold_boolean_literals(&mut flat);
         fold_enum_members(&mut flat);
         // `T | (T & {})` holds `T`'s values: the refinement adds nothing.
@@ -1327,6 +1388,51 @@ impl Type {
             Some(member) => member,
             None => Type::Never,
         }
+    }
+
+    /// The canonical [`Type::Intersection`] of `members`: nested
+    /// intersections flattened, members sorted and deduplicated through
+    /// aliases as [`Type::union`]'s are. `unknown` members add nothing, nor
+    /// does a primitive another member narrows (`"a" & string` is `"a"`). A
+    /// `never` member makes it `never`, as do two different primitives
+    /// (`number & string`, `string & null`) or literals (`"a" & "b"`). One
+    /// member left is that member.
+    ///
+    /// It doesn't otherwise evaluate: object members aren't merged, an
+    /// intersection with a union isn't distributed, and other empty
+    /// intersections (`null & { a: 1 }`, `E.A & E.B`) are kept. A front end
+    /// builds one only where the intersection stays generic or keeps a
+    /// primitive.
+    pub fn intersection(members: Vec<Type>) -> Type {
+        if members.iter().any(|m| matches!(m.peel(), Type::Error)) {
+            return Type::Error;
+        }
+        if members.iter().any(|m| matches!(m.peel(), Type::Never)) {
+            return Type::Never;
+        }
+        let mut flat: Vec<Type> = Vec::new();
+        for member in members {
+            match member.without_aliases() {
+                Type::Intersection(inner) => flat.extend(inner.iter().cloned()),
+                Type::Unknown => {}
+                _ => flat.push(member),
+            }
+        }
+        if has_no_common_value(&flat) {
+            return Type::Never;
+        }
+        // `"a" & string` is `"a"`. Only a bare base goes: a refinement or a
+        // branded primitive that peels to it carries more than the base.
+        let narrowed: BTreeSet<Type> = flat
+            .iter()
+            .filter_map(|member| narrowed_base(member.peel()))
+            .collect();
+        flat.retain(|member| !narrowed.contains(member.without_aliases()));
+        sort_and_dedup_members(&mut flat);
+        if flat.len() > 1 {
+            return Type::Intersection(flat);
+        }
+        flat.into_iter().next().unwrap_or(Type::Unknown)
     }
 
     /// The distinct primitive receiver types of a union, if every member is
@@ -1671,6 +1777,93 @@ pub fn union_display_order(members: &[Type]) -> Vec<&Type> {
         _ => 0,
     });
     ordered
+}
+
+/// Sorts union or intersection members by their peeled key, which groups
+/// alias-labelled duplicates next to their body, and drops the duplicates.
+/// Aliases rank first within a group, so `dedup_by` keeps the earlier
+/// element: the name the user wrote.
+fn sort_and_dedup_members(members: &mut Vec<Type>) {
+    let alias_rank = |t: &Type| u8::from(!matches!(t, Type::Alias { .. }));
+    members.sort_by(|a, b| {
+        a.without_aliases()
+            .cmp(b.without_aliases())
+            .then_with(|| alias_rank(a).cmp(&alias_rank(b)))
+    });
+    members.dedup_by(|a, b| a.without_aliases() == b.without_aliases());
+}
+
+/// The primitive an intersection's `members` are used as, peeled: `string`
+/// in `string & { brand: true }`. A literal, template or enum member is
+/// preferred to its base, since it is the narrower of the two. Each member
+/// is peeled once, so nested intersections cost linear time.
+fn primitive_member(members: &[Type]) -> Option<&Type> {
+    let mut base_member = None;
+    for member in members {
+        let peeled = member.peel();
+        if narrowed_base(peeled).is_some() {
+            return Some(peeled);
+        }
+        if primitive_base(peeled).is_some() {
+            base_member = base_member.or(Some(peeled));
+        }
+    }
+    base_member
+}
+
+/// The base primitive a peeled literal, template or enum type narrows:
+/// `string` for `"a"`. `None` for a base primitive itself and for any other
+/// type.
+fn narrowed_base(ty: &Type) -> Option<Type> {
+    primitive_base(ty).filter(|base| base != ty)
+}
+
+/// Whether no value is in every one of `members`: two of them hold
+/// different primitives (`null` and `undefined` included), or different
+/// literals.
+fn has_no_common_value(members: &[Type]) -> bool {
+    let peeled: Vec<&Type> = members.iter().map(Type::peel).collect();
+    let kind = |ty: &Type| match ty {
+        Type::Null => Some(Type::Null),
+        Type::Undefined | Type::Void => Some(Type::Undefined),
+        ty => primitive_base(ty),
+    };
+    let mut kinds = peeled.iter().filter_map(|ty| kind(ty));
+    if let Some(first) = kinds.next()
+        && kinds.any(|other| other != first)
+    {
+        return true;
+    }
+    let literals: BTreeSet<&Type> = peeled
+        .into_iter()
+        .filter(|ty| {
+            matches!(
+                ty,
+                Type::NumberLiteral(_)
+                    | Type::StringLiteral(_)
+                    | Type::BooleanLiteral(_)
+                    | Type::BigIntLiteral(_)
+            )
+        })
+        .collect();
+    literals.len() > 1
+}
+
+/// The primitive whose values a peeled type holds: its base type for a
+/// literal, template or enum. Unlike [`Type::primitive_behavior`], a union of
+/// literals has none: an intersection's member gives the intersection a
+/// primitive representation only when it is one primitive type.
+fn primitive_base(ty: &Type) -> Option<Type> {
+    Some(match ty {
+        Type::Number | Type::NumberLiteral(_) | Type::NumberEnum { .. } => Type::Number,
+        Type::BigInt | Type::BigIntLiteral(_) => Type::BigInt,
+        Type::String
+        | Type::StringLiteral(_)
+        | Type::TemplateLiteral { .. }
+        | Type::StringEnum { .. } => Type::String,
+        Type::Boolean | Type::BooleanLiteral(_) => Type::Boolean,
+        _ => return None,
+    })
 }
 
 impl fmt::Display for Type {
