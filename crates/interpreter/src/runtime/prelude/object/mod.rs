@@ -25,7 +25,7 @@ use crate::runtime::StoreData;
 use crate::runtime::array_storage::ArrayStorage;
 use crate::runtime::host::{
     host_object_vtable, intrinsic_array_type, intrinsic_string_type, register_host_fn,
-    register_host_fn_async, write_submilli_array_struct, write_submilli_string_struct,
+    register_host_fn_async, type_error, write_submilli_array_struct, write_submilli_string_struct,
     write_submilli_string_struct_units,
 };
 use crate::runtime::intrinsic_types::{build_intrinsic_types, intrinsic_types};
@@ -171,7 +171,8 @@ fn enumerate(
     kind: Enumerate,
 ) -> wasmtime::Result<Val> {
     if super::undefined::is_nullish(caller, obj)? {
-        return Err(wasmtime::Error::msg(format!(
+        // ToObject throws a `TypeError` for `null` and `undefined`.
+        return Err(type_error(format!(
             "Object.{} called on null or undefined",
             kind.method()
         )));
@@ -764,9 +765,8 @@ fn spread_omitted_fields(
 
 fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime::Result<bool> {
     if super::undefined::is_nullish(caller, obj)? {
-        return Err(wasmtime::Error::msg(
-            "Object.hasOwn called on null or undefined",
-        ));
+        // ToObject throws a `TypeError` for `null` and `undefined`.
+        return Err(type_error("Object.hasOwn called on null or undefined"));
     }
     let target = read_string_units(caller, key, FIELD_NAME)?;
     let regex_match = intrinsic_types(&mut *caller)?.regex_match_box.clone();
@@ -1313,7 +1313,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::String)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the object's field names in canonical sorted order (the same order JSON output uses).\n * An omitted optional field is not listed; one set to `undefined` or `null` is. Non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns the object's field names in canonical sorted order (the same order JSON output uses).\n * An omitted optional field is not listed; one set to `undefined` or `null` is. Non-object values yield `[]`; `null` or `undefined` throws a catchable `TypeError`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
@@ -1326,7 +1326,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Array(Box::new(Type::Unknown)),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns the object's field values, aligned with `Object.keys` order. They keep the value type of a record or index signature, the field types of an object type (an optional field adds `undefined`), or the element type of an array or string. They are `unknown` for an interface without an index signature, a class-instance argument, a union of unrelated value types, or values a run-time check can't verify (class instances, interfaces with methods, type parameters) — narrow with `typeof` / `as`.\n * A string or array lists its elements; other non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`. A field holding a value outside its declared type throws a `TypeError`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns the object's field values, aligned with `Object.keys` order. They keep the value type of a record or index signature, the field types of an object type (an optional field adds `undefined`), or the element type of an array or string. They are `unknown` for an interface without an index signature, a class-instance argument, a union of unrelated value types, or values a run-time check can't verify (class instances, interfaces with methods, type parameters) — narrow with `typeof` / `as`.\n * A string or array lists its elements; other non-object values yield `[]`; `null` or `undefined` throws a catchable `TypeError`. A field holding a value outside its declared type throws a `TypeError`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
@@ -1342,7 +1342,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ].into()))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `[name, value]` pairs in canonical sorted key order. The values are typed as `Object.values` types them.\n * A string or array lists its indices and elements; other non-object values yield `[]`; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to enumerate.\n */",
+                                "/**\n * Returns `[name, value]` pairs in canonical sorted key order. The values are typed as `Object.values` types them.\n * A string or array lists its indices and elements; other non-object values yield `[]`; `null` or `undefined` throws a catchable `TypeError`.\n * @param obj The object to enumerate.\n */",
                             ),
                         },
                     ),
@@ -1381,7 +1381,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. Non-object values have no fields; `null` or `undefined` throws a catchable `Error`.\n * @param obj The object to test.\n * @param key The field name.\n */",
+                                "/**\n * Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. Non-object values have no fields; `null` or `undefined` throws a catchable `TypeError`.\n * @param obj The object to test.\n * @param key The field name.\n */",
                             ),
                         },
                     ),

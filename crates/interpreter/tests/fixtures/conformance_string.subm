@@ -39,6 +39,6 @@ function main(): void {
 
   // Unicode-correct casing beyond ASCII.
   assert("straße".toUpperCase() === "STRASSE", "sharp s uppercases to SS");
-  // localeCompare is plain code-unit order — no locale tables.
-  assert("App".localeCompare("app") < 0, "uppercase sorts before lowercase");
+  // localeCompare uses the root collation: lower case sorts before upper case.
+  assert("App".localeCompare("app") === 1, "lowercase sorts before uppercase");
 }

@@ -15,4 +15,18 @@ function main(): void {
   }
   assert(threw, "negative repeat throws");
   assert("".repeat(100) === "", "empty repeat is empty");
+  assert("".repeat(0) === "", "empty repeat(0) is empty");
+  assert("".repeat(5) === "", "empty repeat(5) is empty");
+
+  // The count is checked before the receiver: an infinite count throws a
+  // RangeError even for the empty string.
+  let infinite: number = Infinity;
+  let rangeError: boolean = false;
+  try {
+    const s: string = "".repeat(infinite);
+    assert(false, "infinite repeat should throw");
+  } catch (e: Error) {
+    rangeError = e instanceof RangeError;
+  }
+  assert(rangeError, "empty repeat(Infinity) throws a RangeError");
 }

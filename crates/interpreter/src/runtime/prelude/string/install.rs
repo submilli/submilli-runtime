@@ -12,10 +12,10 @@ use wasmtime::{
 use super::gc_text::{GcText, GcUnits, Run, allocate, fill_run};
 use super::transforms::{TrimEnds, to_lower_case, to_upper_case, trim_range};
 use super::{
-    RangeError, Str, at_index, cmp, code_point, concat_length, ends_with_window, from_char_code,
-    from_code_point, includes, index_of, is_well_formed, last_index_of, normalize, pad_length,
-    repeat_length, slice_range, starts_with_window, string_index_unit, substr_range,
-    substring_range, to_well_formed, unit_index,
+    CollationBudget, RangeError, Str, at_index, cmp, code_point, concat_length, ends_with_window,
+    from_char_code, from_code_point, includes, index_of, is_well_formed, last_index_of,
+    locale_compare, normalize, pad_length, repeat_length, slice_range, starts_with_window,
+    string_index_unit, substr_range, substring_range, to_well_formed, unit_index,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -180,7 +180,14 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         move |caller, params, results| {
             let a = lc_abi.read(caller, abi_arg(params, 0)?, "String#localeCompare")?;
             let b = lc_abi.read(caller, abi_arg(params, 1)?, "String#localeCompare")?;
-            *abi_result(results, 0)? = Val::F64(f64::from(cmp(&a.value, &b.value)).to_bits());
+            *abi_result(results, 0)? = Val::F64(
+                f64::from(locale_compare(
+                    &a.value,
+                    &b.value,
+                    &mut CallerBudget(caller),
+                )?)
+                .to_bits(),
+            );
             Ok(())
         },
     )?;
@@ -1543,7 +1550,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Number,
                             predicate: None,
                             doc: doc(
-                                "/**\n * Compares this string with `other` in UTF-16 code-unit order.\n * @param other The string to compare against.\n * @returns A negative number if this sorts before `other`, `0` if equal, a positive number if after. No locale awareness — pure code-unit order.\n */",
+                                "/**\n * Compares this string with `other` by the Unicode root collation, the order `Intl.Collator` gives for the root or an English locale: lower case before upper case, accented letters beside their base letter.\n * @param other The string to compare against.\n * @returns `-1` if this sorts before `other`, `0` if they are equal (including canonically equivalent spellings), `1` if after. The order is the same on every machine; the relational operators (`<`, `>`) compare UTF-16 code units instead.\n */",
                             ),
                         },
                     ),
@@ -2195,4 +2202,20 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             },
         },
     );
+}
+
+/// Charges `localeCompare`'s collation to the calling store.
+struct CallerBudget<'c, 'd>(&'c mut Caller<'d, StoreData>);
+
+impl CollationBudget for CallerBudget<'_, '_> {
+    fn charge(&mut self, rate: fuel::Rate, units: u64) -> wasmtime::Result<()> {
+        fuel::charge(&mut *self.0, rate, units)
+    }
+
+    fn admit(&mut self, bytes: u64) -> wasmtime::Result<crate::runtime::limits::HostBytes> {
+        Ok(crate::runtime::limits::HostBytes::new(
+            &self.0.data().tenant_limits,
+            bytes,
+        )?)
+    }
 }

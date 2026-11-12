@@ -6,6 +6,14 @@ function main(): void {
   assert((35).toString(36) === "z", "base 36 digit");
   assert((0.5).toString(2) === "0.1", "binary fraction");
   assert((9007199254740993e3).toString(16).length > 10, "large integers stay exact");
+  // The fraction stops at the shortest digits that identify the double, and
+  // an integer part past 2^53 writes zeros where the double has no digits,
+  // as V8 does.
+  assert((0.1).toString(2) === "0.0001100110011001100110011001100110011001100110011001101", "binary fraction to the double's precision");
+  assert((0.1).toString(36) === "0.3lllllllllm", "base 36 fraction stops when it identifies the double");
+  assert((1e21).toString(36) === "5v1j4f4ds7c000", "large integers pad past their digits");
+  assert((5e-324).toString(2).length === 1076, "the smallest subnormal writes every binary digit");
+  assert((-0.1).toString(3) === "-0.0022002200220022002200220022002201", "negative fractions carry the sign");
 
   let threw: boolean = false;
   try {
