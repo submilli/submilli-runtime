@@ -1,3 +1,2 @@
-line 7 extra: by-design spec §Excluded-Features assigning properties onto a function is rejected, where tsc makes the function an expando object
 line 7 type: by-design spec §Excluded-Features assigning properties onto a function is rejected, where tsc makes the function an expando object
 line 9 type: artifact the runner pairs tsc's entry with a node we synthesize (for the narrowed receiver)

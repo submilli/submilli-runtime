@@ -221,11 +221,12 @@ impl<V: Visitor> Walk<'_, V> {
         if !self.seen.insert(expr_id) {
             return Ok(());
         }
-        let kind = &self
+        let expr = self
             .ta
             .try_expr(expr_id)
-            .map_err(crate::typechecker::arena_failure)?
-            .kind;
+            .map_err(crate::typechecker::arena_failure)?;
+        let span = expr.span;
+        let kind = &expr.kind;
         self.visitor.visit_expr(expr_id, kind)?;
         let _: () = match kind {
             TypedExprKind::Closure {
@@ -266,29 +267,34 @@ impl<V: Visitor> Walk<'_, V> {
                 for &a in args {
                     self.expr(a)?;
                 }
+                self.authored_call_arguments(span)?;
             }
             TypedExprKind::CallClosure { callee, args } => {
                 self.expr(*callee)?;
                 for &a in args {
                     self.expr(a)?;
                 }
+                self.authored_call_arguments(span)?;
             }
             TypedExprKind::GenericCall { args, .. } => {
                 for a in args {
                     self.expr(a.expr)?;
                 }
+                self.authored_call_arguments(span)?;
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.expr(*receiver)?;
                 for &a in args {
                     self.expr(a)?;
                 }
+                self.authored_call_arguments(span)?;
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.expr(*receiver)?;
                 for a in args {
                     self.expr(a.expr)?;
                 }
+                self.authored_call_arguments(span)?;
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
@@ -333,11 +339,12 @@ impl<V: Visitor> Walk<'_, V> {
                 for part in parts {
                     match part {
                         TypedChainPart::Index { idx, .. } => self.expr(*idx)?,
-                        TypedChainPart::Call { args, .. }
-                        | TypedChainPart::MethodCall { args, .. } => {
+                        TypedChainPart::Call { args, span, .. }
+                        | TypedChainPart::MethodCall { args, span, .. } => {
                             for a in args {
                                 self.expr(*a)?;
                             }
+                            self.authored_call_arguments(*span)?;
                         }
                         TypedChainPart::Field { .. }
                         | TypedChainPart::InterfaceProperty { .. }
@@ -374,6 +381,16 @@ impl<V: Visitor> Walk<'_, V> {
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };
+        Ok(())
+    }
+
+    fn authored_call_arguments(&mut self, span: crate::Span) -> Result<(), CompilerFailure> {
+        let Some(elements) = self.ta.authored_call_arguments(span) else {
+            return Ok(());
+        };
+        for element in elements {
+            self.expr(element.expr_id())?;
+        }
         Ok(())
     }
 }

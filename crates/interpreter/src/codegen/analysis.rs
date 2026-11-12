@@ -23,6 +23,7 @@ pub struct CodegenAnalysis {
     pub mentioned_closure_sigs: Vec<ClosureSig>,
     pub extra_field_names: Vec<String>,
     adapter_seen: BTreeSet<crate::MangledName>,
+    static_value_bindings: BTreeSet<crate::MangledName>,
 }
 
 impl CodegenAnalysis {
@@ -39,6 +40,7 @@ impl CodegenAnalysis {
             mentioned_closure_sigs: Vec::new(),
             extra_field_names: Vec::new(),
             adapter_seen: BTreeSet::new(),
+            static_value_bindings: collect_static_value_bindings(dependencies),
         };
 
         // Generated serializers also cover dependency shapes discovered later,
@@ -63,11 +65,12 @@ impl CodegenAnalysis {
             analysis
                 .visit_type(ty)
                 .map_err(|error| error.with_span(span))?;
+            analysis.note_shape_member_names(ty);
             analysis
                 .string_pool
                 .intern_text(&cast_check::error_prefix(ty));
         }
-        if !ta.runtime_source_types.is_empty() {
+        if !ta.runtime_source_types.is_empty() || !ta.runtime_chain_types.is_empty() {
             for text in cast_check::TYPE_TAG_STRINGS {
                 analysis.string_pool.intern_text(text);
             }
@@ -95,6 +98,7 @@ impl CodegenAnalysis {
             for ty in types {
                 let ty = crate::typechecker::infer::narrowing::strip_nullish(ty);
                 analysis.visit_type_at(&ty, span)?;
+                analysis.note_shape_member_names(&ty);
                 analysis
                     .string_pool
                     .intern_text(&cast_check::error_prefix(&ty));
@@ -346,6 +350,11 @@ impl CodegenAnalysis {
                 };
                 self.visit_type(&shape)?;
                 self.note_shape_member_names(&shape);
+                for carrier in &test.non_shape_carriers {
+                    if let crate::InterfaceCarrier::Function(ty) = carrier {
+                        self.visit_type(ty)?;
+                    }
+                }
             }
             crate::FieldNarrowingTest::NonNull
             | crate::FieldNarrowingTest::Substituted
@@ -619,14 +628,22 @@ impl CodegenAnalysis {
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {
-                for &arg in args {
-                    self.walk_expr(ta, arg)?;
+                if args.is_empty() {
+                    self.walk_authored_call_arguments(ta, expr.span)?;
+                } else {
+                    for &arg in args {
+                        self.walk_expr(ta, arg)?;
+                    }
                 }
             }
             TypedExprKind::CallClosure { callee, args } => {
                 self.walk_expr(ta, *callee)?;
-                for &arg in args {
-                    self.walk_expr(ta, arg)?;
+                if args.is_empty() {
+                    self.walk_authored_call_arguments(ta, expr.span)?;
+                } else {
+                    for &arg in args {
+                        self.walk_expr(ta, arg)?;
+                    }
                 }
             }
             TypedExprKind::GenericCall {
@@ -637,8 +654,12 @@ impl CodegenAnalysis {
                 for ty in type_args {
                     self.visit_type(ty)?;
                 }
-                for arg in args {
-                    self.walk_expr(ta, arg.expr)?;
+                if args.is_empty() {
+                    self.walk_authored_call_arguments(ta, expr.span)?;
+                } else {
+                    for arg in args {
+                        self.walk_expr(ta, arg.expr)?;
+                    }
                 }
             }
             TypedExprKind::Closure { body, .. } => match *body {
@@ -665,16 +686,46 @@ impl CodegenAnalysis {
             | TypedExprKind::NonNullAssert { value: operand } => {
                 self.walk_expr(ta, *operand)?;
             }
-            TypedExprKind::MethodCall { receiver, args, .. } => {
+            TypedExprKind::MethodCall {
+                receiver,
+                name,
+                args,
+                ..
+            } => {
                 self.walk_expr(ta, *receiver)?;
-                for &arg in args {
-                    self.walk_expr(ta, arg)?;
+                if (args.is_empty()
+                    || (crate::codegen::function_emitter::expr::is_call_signature_call(&name.name)
+                        && !self.is_static_value_binding(ta, *receiver)?))
+                    && let Some(authored) = ta.authored_call_arguments(expr.span)
+                {
+                    for element in authored {
+                        self.walk_expr(ta, element.expr_id())?;
+                    }
+                } else {
+                    for &arg in args {
+                        self.walk_expr(ta, arg)?;
+                    }
                 }
             }
-            TypedExprKind::GenericMethodCall { receiver, args, .. } => {
+            TypedExprKind::GenericMethodCall {
+                receiver,
+                name,
+                args,
+                ..
+            } => {
                 self.walk_expr(ta, *receiver)?;
-                for arg in args {
-                    self.walk_expr(ta, arg.expr)?;
+                if (args.is_empty()
+                    || (crate::codegen::function_emitter::expr::is_call_signature_call(&name.name)
+                        && !self.is_static_value_binding(ta, *receiver)?))
+                    && let Some(authored) = ta.authored_call_arguments(expr.span)
+                {
+                    for element in authored {
+                        self.walk_expr(ta, element.expr_id())?;
+                    }
+                } else {
+                    for arg in args {
+                        self.walk_expr(ta, arg.expr)?;
+                    }
                 }
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
@@ -717,13 +768,48 @@ impl CodegenAnalysis {
             }
             TypedExprKind::OptionalChain { base, parts } => {
                 self.walk_expr(ta, *base)?;
+                let mut actual_receiver_ty = &ta
+                    .try_expr(*base)
+                    .map_err(crate::codegen::arena_failure)?
+                    .ty;
                 for part in parts {
                     match part {
                         TypedChainPart::Index { idx, .. } => self.walk_expr(ta, *idx)?,
-                        TypedChainPart::Call { args, .. }
-                        | TypedChainPart::MethodCall { args, .. } => {
-                            for &arg in args {
-                                self.walk_expr(ta, arg)?;
+                        TypedChainPart::Call { args, span, .. } => {
+                            if args.is_empty() {
+                                self.walk_authored_call_arguments(ta, *span)?;
+                            } else {
+                                for &arg in args {
+                                    self.walk_expr(ta, arg)?;
+                                }
+                            }
+                        }
+                        TypedChainPart::MethodCall {
+                            iface,
+                            name,
+                            args,
+                            span,
+                            ..
+                        } => {
+                            let walk_authored = args.is_empty()
+                                || !crate::codegen::is_host_package(iface.as_str())
+                                || (actual_receiver_ty == &Type::Unknown
+                                    && crate::codegen::runtime_values::dynamic_member_interface(
+                                        iface,
+                                    ))
+                                || crate::codegen::function_emitter::expr::is_call_signature_call(
+                                    &name.name,
+                                );
+                            if walk_authored
+                                && let Some(authored) = ta.authored_call_arguments(*span)
+                            {
+                                for element in authored {
+                                    self.walk_expr(ta, element.expr_id())?;
+                                }
+                            } else {
+                                for &arg in args {
+                                    self.walk_expr(ta, arg)?;
+                                }
                             }
                         }
                         TypedChainPart::Field { .. }
@@ -731,6 +817,7 @@ impl CodegenAnalysis {
                         | TypedChainPart::NonNull { .. }
                         | TypedChainPart::Constraint { .. } => {}
                     }
+                    actual_receiver_ty = part.result_ty();
                 }
             }
             TypedExprKind::PostfixUnary { target, .. } => match target {
@@ -1098,14 +1185,7 @@ impl CodegenAnalysis {
                 args,
                 ..
             } => {
-                self.note_method_call(
-                    ta.source_type(*receiver)
-                        .map_err(crate::codegen::arena_failure)?,
-                    iface,
-                    name,
-                    args.len(),
-                    &expr.ty,
-                )?;
+                self.note_method_call(ta, *receiver, iface, name, args.len(), &expr.ty)?;
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
@@ -1114,14 +1194,7 @@ impl CodegenAnalysis {
                 args,
                 ..
             } => {
-                self.note_method_call(
-                    ta.source_type(*receiver)
-                        .map_err(crate::codegen::arena_failure)?,
-                    iface,
-                    name,
-                    args.len(),
-                    &expr.ty,
-                )?;
+                self.note_method_call(ta, *receiver, iface, name, args.len(), &expr.ty)?;
             }
             TypedExprKind::InterfacePropertyAccess { iface, name, .. } => {
                 self.dependency_usage
@@ -1311,12 +1384,16 @@ impl CodegenAnalysis {
     /// through an object shape, the sig that dispatch builds.
     fn note_method_call(
         &mut self,
-        receiver_ty: &Type,
+        ta: &TypedAst,
+        receiver: ExprId,
         iface: &crate::MangledName,
         name: &crate::Ident,
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let receiver_ty = ta
+            .source_type(receiver)
+            .map_err(crate::codegen::arena_failure)?;
         self.string_pool.intern_text(iface.as_str());
         self.string_pool.intern_text(&name.name);
         self.dependency_usage
@@ -1325,8 +1402,14 @@ impl CodegenAnalysis {
         self.string_pool
             .intern_text("Unbound function has no this receiver");
         self.extra_field_names.push(name.name.clone());
-        if crate::codegen::function_emitter::expr::is_call_signature_call(iface, &name.name) {
+        if crate::codegen::function_emitter::expr::is_call_signature_call(&name.name)
+            && !self.is_static_value_binding(ta, receiver)?
+        {
             self.note_live_member_call();
+            self.note_cast(receiver_ty, Some(receiver_ty))?;
+            if !ret.is_void() && !matches!(ret.lowered(), Type::Unknown) {
+                self.note_cast(ret, Some(ret))?;
+            }
         }
         self.note_shape_dispatch(receiver_ty, arity, ret)?;
 
@@ -1399,6 +1482,7 @@ impl CodegenAnalysis {
         let mut receiver_ty = ta
             .source_type(base)
             .map_err(crate::codegen::arena_failure)?;
+        let mut actual_receiver_ty = &ta.try_expr(base).map_err(crate::codegen::arena_failure)?.ty;
         for (index, part) in parts.iter().enumerate() {
             if let TypedChainPart::MethodCall { iface, name, .. }
             | TypedChainPart::InterfaceProperty { iface, name, .. } = part
@@ -1425,13 +1509,13 @@ impl CodegenAnalysis {
                     iface,
                     name,
                     result_ty,
-                    span,
                     ..
                 } => {
-                    if ta.authored_call_arguments(*span).is_some()
-                        && !crate::codegen::is_host_package(iface.as_str())
+                    if actual_receiver_ty == &Type::Unknown
+                        && crate::codegen::runtime_values::dynamic_member_interface(iface)
                     {
-                        self.note_live_member_call();
+                        self.dependency_usage
+                            .note_value(crate::mangle::prelude("__value_property"));
                     }
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
@@ -1476,11 +1560,16 @@ impl CodegenAnalysis {
                 } => {
                     if (ta.authored_call_arguments(*span).is_some()
                         && !crate::codegen::is_host_package(iface.as_str()))
+                        || (actual_receiver_ty == &Type::Unknown
+                            && crate::codegen::runtime_values::dynamic_member_interface(iface))
                         || crate::codegen::function_emitter::expr::is_call_signature_call(
-                            iface, &name.name,
+                            &name.name,
                         )
                     {
                         self.note_live_member_call();
+                        if !result_ty.is_void() && !matches!(result_ty.lowered(), Type::Unknown) {
+                            self.note_cast(result_ty, Some(result_ty))?;
+                        }
                     }
                     self.extra_field_names.push(name.name.clone());
                     self.dependency_usage
@@ -1490,6 +1579,7 @@ impl CodegenAnalysis {
                 }
             }
             receiver_ty = source_types.map_or_else(|| part.result_ty(), |types| &types[index + 1]);
+            actual_receiver_ty = part.result_ty();
         }
         Ok(())
     }
@@ -1577,6 +1667,19 @@ impl CodegenAnalysis {
         Ok(())
     }
 
+    fn is_static_value_binding(
+        &self,
+        ta: &TypedAst,
+        id: ExprId,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        let expr = ta.try_expr(id).map_err(crate::codegen::arena_failure)?;
+        Ok(matches!(
+            &expr.kind,
+            TypedExprKind::GlobalRef { mangled, .. }
+                if self.static_value_bindings.contains(mangled)
+        ))
+    }
+
     fn note_postfix_target(
         &mut self,
         ty: &Type,
@@ -1586,6 +1689,30 @@ impl CodegenAnalysis {
 
         Ok(())
     }
+
+    fn walk_authored_call_arguments(
+        &mut self,
+        ta: &TypedAst,
+        span: crate::Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let Some(authored) = ta.authored_call_arguments(span) else {
+            return Ok(());
+        };
+        for element in authored {
+            self.walk_expr(ta, element.expr_id())?;
+        }
+        Ok(())
+    }
+}
+
+fn collect_static_value_bindings(
+    dependencies: &[&crate::PackageDeclaration],
+) -> BTreeSet<crate::MangledName> {
+    let mut bindings = BTreeSet::new();
+    for defs in dependencies {
+        defs.collect_static_value_bindings(&mut bindings);
+    }
+    bindings
 }
 
 /// Whether a property access on this receiver lowers to the `$ObjectShape`

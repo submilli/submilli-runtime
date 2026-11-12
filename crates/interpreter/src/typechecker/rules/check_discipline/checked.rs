@@ -1331,31 +1331,33 @@ impl Walker<'_, '_> {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::IntrinsicCall { args, .. } => {
-                for arg in self.package.authored(expr.span, args) {
+                for arg in self.package.authored(expr.span, args).iter() {
                     self.parts_of(*arg, &mut parts)?;
                 }
             }
             TypedExprKind::GenericCall { args, .. } => {
-                for arg in args {
-                    self.parts_of(arg.expr, &mut parts)?;
+                let plain: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
+                for arg in self.package.authored(expr.span, &plain).iter() {
+                    self.parts_of(*arg, &mut parts)?;
                 }
             }
             TypedExprKind::CallClosure { callee, args } => {
                 self.parts_of(*callee, &mut parts)?;
-                for arg in self.package.authored(expr.span, args) {
+                for arg in self.package.authored(expr.span, args).iter() {
                     self.parts_of(*arg, &mut parts)?;
                 }
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.parts_of(*receiver, &mut parts)?;
-                for arg in self.package.authored(expr.span, args) {
+                for arg in self.package.authored(expr.span, args).iter() {
                     self.parts_of(*arg, &mut parts)?;
                 }
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.parts_of(*receiver, &mut parts)?;
-                for arg in args {
-                    self.parts_of(arg.expr, &mut parts)?;
+                let plain: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
+                for arg in self.package.authored(expr.span, &plain).iter() {
+                    self.parts_of(*arg, &mut parts)?;
                 }
             }
             _ => self.parts_of(value, &mut parts)?,
@@ -1429,23 +1431,26 @@ impl<'a> Walker<'a, '_> {
                 self.call(mangled, span, &args)?
             }
             TypedExprKind::VirtualCall { tool, args, .. } => {
-                self.call_with(None, self.package.authored(span, args), tool, span)?
+                let args = self.package.authored(span, args);
+                self.call_with(None, &args, tool, span)?
             }
             TypedExprKind::SuperCtorCall { args, .. } => {
-                self.call_with(None, self.package.authored(span, args), "super", span)?
+                let args = self.package.authored(span, args);
+                self.call_with(None, &args, "super", span)?
             }
             TypedExprKind::IntrinsicCall { kind, args } => {
-                self.call_with(None, self.package.authored(span, args), kind.name(), span)?
+                let args = self.package.authored(span, args);
+                self.call_with(None, &args, kind.name(), span)?
             }
             TypedExprKind::SuperMethodCall { name, args, .. } => {
                 let args = self.package.authored(span, args);
-                self.method_call(self.this(), None, false, args, &name.name, span)?
+                self.method_call(self.this(), None, false, &args, &name.name, span)?
             }
             TypedExprKind::CallClosure { callee, args } => {
                 let (name, calls_itself) = self.function_value_name(*callee)?;
                 let callee = self.eval(*callee)?;
                 let args = self.package.authored(span, args);
-                self.call_function_value(callee, name, calls_itself, args, span)?
+                self.call_function_value(callee, name, calls_itself, &args, span)?
             }
             TypedExprKind::MethodCall {
                 receiver,
@@ -1454,7 +1459,7 @@ impl<'a> Walker<'a, '_> {
                 ..
             } => {
                 let args = self.package.authored(span, args);
-                self.method_call_on(*receiver, args, &name.name, span)?
+                self.method_call_on(*receiver, &args, &name.name, span)?
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
@@ -1464,7 +1469,7 @@ impl<'a> Walker<'a, '_> {
             } => {
                 let args: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
                 let args = self.package.authored(span, &args);
-                self.method_call_on(*receiver, args, &name.name, span)?
+                self.method_call_on(*receiver, &args, &name.name, span)?
             }
             TypedExprKind::Binary { op, lhs, rhs } => self.binary(*op, *lhs, *rhs, span)?,
             TypedExprKind::NullishCoalesce { lhs, rhs } => self.either(*lhs, *rhs, span)?,
@@ -1701,14 +1706,31 @@ impl<'a> Walker<'a, '_> {
                         _ => ("a function value".to_string(), false),
                     };
                     let args = self.package.authored(*span, args);
-                    self.call_function_value(flow, name, calls_itself, args, *span)?
+                    self.call_function_value(flow, name, calls_itself, &args, *span)?
                 }
                 TypedChainPart::MethodCall {
                     name, args, span, ..
                 } => {
                     let args = self.package.authored(*span, args);
-                    let changeable = (!is_primitive(receiver_ty)).then_some(receiver_ty);
-                    self.method_call(flow, changeable, receiver_fresh, args, &name.name, *span)?
+                    if name.name == "@call"
+                        && !(position == 0 && is_runtime_global(self.package.expr_at(base)?))
+                    {
+                        let (callee_name, calls_itself) = match position {
+                            0 => self.function_value_name(base)?,
+                            _ => ("a function value".to_string(), false),
+                        };
+                        self.call_function_value(flow, callee_name, calls_itself, &args, *span)?
+                    } else {
+                        let changeable = (!is_primitive(receiver_ty)).then_some(receiver_ty);
+                        self.method_call(
+                            flow,
+                            changeable,
+                            receiver_fresh,
+                            &args,
+                            &name.name,
+                            *span,
+                        )?
+                    }
                 }
                 TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => flow,
             };
@@ -1801,10 +1823,10 @@ impl Walker<'_, '_> {
             if self.body.mangled.as_ref() == Some(mangled) {
                 self.events.push(Event::Recursion { span });
             }
-            return self.call_with(None, args, source_name(mangled), span);
+            return self.call_with(None, &args, source_name(mangled), span);
         }
         self.checks_met = self.checks_met.saturating_add(1);
-        for arg in args {
+        for arg in args.iter() {
             let flow = self.eval(*arg)?;
             let span = self.package.expr_at(*arg)?.span;
             self.sinks.push(Sink {
@@ -1825,6 +1847,10 @@ impl Walker<'_, '_> {
     ) -> Result<Flow, CompilerFailure> {
         let receiver_expr = self.package.expr_at(receiver)?;
         let flow = self.eval(receiver)?;
+        if method == "@call" && !is_runtime_global(receiver_expr) {
+            let (callee_name, calls_itself) = self.function_value_name(receiver)?;
+            return self.call_function_value(flow, callee_name, calls_itself, args, span);
+        }
         let on_this = matches!(receiver_expr.kind, TypedExprKind::This);
         if on_this && self.member_name.as_deref() == Some(method) {
             self.events.push(Event::Recursion { span });

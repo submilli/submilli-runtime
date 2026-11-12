@@ -1203,6 +1203,14 @@ pub fn falsy_values_are_only_null(ty: &Type) -> bool {
 }
 
 pub fn type_matches_facts(ty: &Type, facts: TypeFacts) -> bool {
+    type_matches_facts_with_types(ty, facts, None)
+}
+
+pub(super) fn type_matches_facts_with_types(
+    ty: &Type,
+    facts: TypeFacts,
+    types: Option<super::assignable::TypeResolver<'_>>,
+) -> bool {
     // Aliases are transparent for type identity — peel before matching so an
     // aliased primitive/union (e.g. `type NS = number | string`) classifies the
     // same as its inline spelling.
@@ -1257,14 +1265,33 @@ pub fn type_matches_facts(ty: &Type, facts: TypeFacts) -> bool {
         return matches!(ty, Type::Array(_));
     }
     if facts.contains(TypeFacts::IS_FUNCTION) {
-        // `object` holds functions too; Submilli has no `Function` type to
-        // narrow it to, so it stays `object`.
-        return matches!(ty, Type::Function { .. } | Type::NonPrimitive);
+        // `object` and function-capable interfaces hold functions too; Submilli
+        // has no `Function` type to narrow them to, so they keep their type.
+        return is_typeof_function(ty, types);
     }
     if facts.contains(TypeFacts::IS_OBJECT) {
         return is_typeof_object(ty);
     }
     false
+}
+
+fn is_typeof_function(ty: &Type, types: Option<super::assignable::TypeResolver<'_>>) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members.iter().all(|m| is_typeof_function(m, types)),
+        Type::Function { .. } | Type::NonPrimitive => true,
+        Type::InterfaceRef { .. } => interface_may_be_typeof_function(ty.peel(), types),
+        _ => false,
+    }
+}
+
+fn interface_may_be_typeof_function(
+    ty: &Type,
+    types: Option<super::assignable::TypeResolver<'_>>,
+) -> bool {
+    types.is_some_and(|types| {
+        super::expr::is_constructor_binding(ty, types)
+            || super::assignable::interface_may_hold_function(ty, types)
+    })
 }
 
 /// Does `typeof` answer `"object"` for a value of `ty`?
@@ -1332,12 +1359,20 @@ fn is_typeof_object(ty: &Type) -> bool {
 /// `typeof "object"` test is the exception: it turns `unknown`, `{}` and a
 /// type parameter into the object types they hold ([`typeof_object_narrowing`]).
 pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
+    intersect_with_types(ty, facts, None)
+}
+
+pub(super) fn intersect_with_types(
+    ty: &Type,
+    facts: TypeFacts,
+    types: Option<super::assignable::TypeResolver<'_>>,
+) -> Type {
     if let Type::Refined {
         original,
         ty: shape,
     } = ty.without_aliases()
     {
-        return preserve_refinement(original, intersect_with(shape, facts));
+        return preserve_refinement(original, intersect_with_types(shape, facts, types));
     }
     let peeled = ty.peel();
     if facts == TypeFacts::IS_OBJECT
@@ -1368,16 +1403,16 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
         }
     }
     if matches!(peeled, Type::Unknown) && tests_only_presence(facts) {
-        return recombine_unknown(intersect_with(&unknown_as_union(), facts));
+        return recombine_unknown(intersect_with_types(&unknown_as_union(), facts, types));
     }
     if holds_any_value_of_a_parameter(peeled) && tests_only_presence(facts) {
-        return preserve_refinement(ty, intersect_with(&Type::Unknown, facts));
+        return preserve_refinement(ty, intersect_with_types(&Type::Unknown, facts, types));
     }
     match peeled {
         Type::Union(members) => without_nullish_refinements(Type::union(
             members
                 .iter()
-                .map(|m| intersect_with(m, facts))
+                .map(|m| intersect_with_types(m, facts, types))
                 .filter(|ty| !matches!(ty, Type::Error))
                 .collect(),
         )),
@@ -1387,7 +1422,7 @@ pub fn intersect_with(ty: &Type, facts: TypeFacts) -> Type {
         // `boolean` is `true | false`, and truthiness splits it.
         Type::Boolean if facts == TypeFacts::TRUTHY => Type::BooleanLiteral(true),
         Type::Boolean if facts == TypeFacts::FALSY => Type::BooleanLiteral(false),
-        _ if type_matches_facts(peeled, facts) => ty.clone(),
+        _ if type_matches_facts_with_types(peeled, facts, types) => ty.clone(),
         _ if matches!(peeled, Type::Unknown) => Type::Unknown,
         _ => Type::Error,
     }
@@ -1422,32 +1457,40 @@ fn holds_any_value_of_a_parameter(peeled: &Type) -> bool {
 }
 
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
+    subtract_types(ty, facts, None)
+}
+
+pub(super) fn subtract_types(
+    ty: &Type,
+    facts: TypeFacts,
+    types: Option<super::assignable::TypeResolver<'_>>,
+) -> Type {
     if let Type::Refined {
         original,
         ty: shape,
     } = ty.without_aliases()
     {
-        return preserve_refinement(original, subtract(shape, facts));
+        return preserve_refinement(original, subtract_types(shape, facts, types));
     }
     let peeled = ty.peel();
     // `unknown` minus `null` or `undefined` is the rest of `{} | null |
     // undefined`, as in TypeScript; minus any other type it stays `unknown`.
     if matches!(peeled, Type::Unknown) {
         if tests_only_nullishness(facts) {
-            return recombine_unknown(subtract(&unknown_as_union(), facts));
+            return recombine_unknown(subtract_types(&unknown_as_union(), facts, types));
         }
         return Type::Unknown;
     }
     if holds_any_value_of_a_parameter(peeled) {
-        return preserve_refinement(ty, subtract(&Type::Unknown, facts));
+        return preserve_refinement(ty, subtract_types(&Type::Unknown, facts, types));
     }
     // A `void` result may hold any value, so no test rules it out: `typeof
     // v !== "undefined"` keeps it, though `typeof v === "undefined"` may
     // narrow it to `undefined`.
     let ruled_out = |member: &Type| {
         !matches!(member.peel(), Type::Void)
-            && !typeof_tag_keeps(member, facts)
-            && type_matches_facts(member, facts)
+            && !typeof_tag_keeps(member, facts, types)
+            && type_matches_facts_with_types(member, facts, types)
     };
     match peeled {
         Type::Union(members) => {
@@ -1460,13 +1503,18 @@ pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
 }
 
 /// Whether a `typeof` tag in `facts` leaves `member` in place: `{}` holds a
-/// value of every tag, and `object` holds functions too. As in TypeScript,
-/// `typeof x !== "object"` does rule out `object`.
-fn typeof_tag_keeps(member: &Type, facts: TypeFacts) -> bool {
+/// value of every tag, `object` holds functions too, and an interface that can
+/// hold both functions and objects (`BooleanConstructor`, call-signature
+/// interfaces) is ruled out by neither `"object"` nor `"function"`.
+fn typeof_tag_keeps(
+    member: &Type,
+    facts: TypeFacts,
+    types: Option<super::assignable::TypeResolver<'_>>,
+) -> bool {
     let peeled = member.peel();
     let tags_object = facts.contains(TypeFacts::IS_OBJECT);
     let tags_function = facts.contains(TypeFacts::IS_FUNCTION);
-    if peeled.is_empty_object() {
+    if peeled.is_empty_object() || interface_may_be_typeof_function(peeled, types) {
         return tags_object || tags_function;
     }
     tags_function && matches!(peeled, Type::NonPrimitive)
@@ -2341,5 +2389,151 @@ mod tests {
             intersect_with(&string_or_null, TypeFacts::NE_NULL),
             Type::String
         );
+    }
+
+    #[test]
+    fn typeof_narrowing_accounts_for_callable_and_empty_interfaces() {
+        use super::super::assignable::TypeResolver;
+        use super::super::type_namespace::TypeNamespace;
+        use super::super::type_registry::TypeRegistry;
+
+        let mut ns = TypeNamespace::new();
+        let insert_iface =
+            |ns: &mut TypeNamespace,
+             name: &str,
+             methods: BTreeMap<String, crate::MethodSig>,
+             properties: BTreeMap<String, crate::PropertySig>| {
+                ns.insert(
+                    name.to_string(),
+                    crate::mangle::USER_PACKAGE.to_string(),
+                    crate::TypeSymbol {
+                        name: name.to_string(),
+                        mangled_name: crate::mangle::package_symbol(
+                            crate::mangle::USER_PACKAGE,
+                            name,
+                        ),
+                        declaration_span: crate::Span::at(crate::FileId(0)),
+                        kind: crate::TypeKind::Interface {
+                            index: None,
+                            generics: Default::default(),
+                            methods,
+                            properties,
+                            dispatch: crate::Dispatch::VTable,
+                            doc: None,
+                        },
+                    },
+                );
+            };
+        insert_iface(
+            &mut ns,
+            "Pred",
+            BTreeMap::from([(
+                "@call".to_string(),
+                crate::MethodSig {
+                    optional: false,
+                    generics: Default::default(),
+                    params: Vec::new(),
+                    ret: Type::Boolean,
+                    predicate: None,
+                    doc: None,
+                },
+            )]),
+            BTreeMap::new(),
+        );
+        insert_iface(&mut ns, "EmptyIface", BTreeMap::new(), BTreeMap::new());
+        insert_iface(
+            &mut ns,
+            "PlainIface",
+            BTreeMap::new(),
+            BTreeMap::from([(
+                "id".to_string(),
+                crate::PropertySig {
+                    ty: Type::String,
+                    readonly: false,
+                    intrinsic: false,
+                    optional: false,
+                    doc: None,
+                },
+            )]),
+        );
+        let iref = |name: &str| {
+            Type::interface_ref(
+                crate::types::Package::user(),
+                name,
+                crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, name),
+                Vec::new(),
+            )
+        };
+        let registry = TypeRegistry::new();
+        let limits = crate::type_size::TypeLimits::default();
+        let resolver = Some(TypeResolver {
+            types: &ns,
+            registry: &registry,
+            limits: &limits,
+            strict_subtype: false,
+            generic_constraints: &BTreeMap::new(),
+        });
+
+        let pred_or_str = Type::union(vec![iref("Pred"), Type::String]);
+        // `typeof x === "function"` keeps `Pred` and drops `string`.
+        assert_eq!(
+            intersect_with_types(&pred_or_str, TypeFacts::IS_FUNCTION, resolver),
+            iref("Pred")
+        );
+        // `typeof x === "object"` keeps `Pred` (it can hold `{"@call": ...}`),
+        // AND subtracting `IS_OBJECT` also keeps `Pred` (it can hold `$Closure`).
+        assert_eq!(
+            intersect_with_types(&pred_or_str, TypeFacts::IS_OBJECT, resolver),
+            iref("Pred")
+        );
+        assert_eq!(
+            subtract_types(&pred_or_str, TypeFacts::IS_OBJECT, resolver),
+            pred_or_str
+        );
+        assert_eq!(
+            subtract_types(&pred_or_str, TypeFacts::IS_FUNCTION, resolver),
+            pred_or_str
+        );
+
+        // `EmptyIface` can hold functions too; `PlainIface` has a required property and cannot.
+        assert_eq!(
+            intersect_with_types(&iref("EmptyIface"), TypeFacts::IS_FUNCTION, resolver),
+            iref("EmptyIface")
+        );
+        assert_eq!(
+            intersect_with_types(&iref("PlainIface"), TypeFacts::IS_FUNCTION, resolver),
+            Type::Error
+        );
+        assert_eq!(
+            subtract_types(
+                &Type::union(vec![iref("PlainIface"), Type::String]),
+                TypeFacts::IS_OBJECT,
+                resolver,
+            ),
+            Type::String
+        );
+
+        let aliased_fn = Type::Alias {
+            package: crate::types::Package::user(),
+            name: "FnAlias".to_string(),
+            mangled: crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, "FnAlias"),
+            args: Vec::new(),
+            ty: Box::new(Type::Function {
+                params: vec![Type::Number],
+                ret: Box::new(Type::Boolean),
+                optional: 0,
+                has_rest: false,
+                predicate: None,
+            }),
+        };
+        assert!(is_typeof_function(&aliased_fn, resolver));
+        assert!(is_typeof_function(
+            &Type::union(vec![aliased_fn.clone(), iref("Pred")]),
+            resolver,
+        ));
+        assert!(!is_typeof_function(
+            &Type::union(vec![aliased_fn, Type::String]),
+            resolver,
+        ));
     }
 }

@@ -21,6 +21,7 @@ pub fn collect(
         symbols,
         seen: HashSet::new(),
         order: Vec::new(),
+        walked_exprs: std::collections::BTreeSet::new(),
     };
     let function_bodies: Vec<(Vec<TypedParam>, StmtId)> = ta
         .functions
@@ -84,6 +85,7 @@ struct Collector<'a> {
     symbols: &'a SymbolTable,
     seen: HashSet<ValType>,
     order: Vec<ValType>,
+    walked_exprs: std::collections::BTreeSet<ExprId>,
 }
 
 impl Collector<'_> {
@@ -228,12 +230,15 @@ impl Collector<'_> {
     }
 
     fn walk_expr(&mut self, id: ExprId) -> Result<(), crate::compiler_error::CompilerFailure> {
-        let _: () = match &self
+        if !self.walked_exprs.insert(id) {
+            return Ok(());
+        }
+        let expr = self
             .ta
             .try_expr(id)
-            .map_err(crate::codegen::arena_failure)?
-            .kind
-        {
+            .map_err(crate::codegen::arena_failure)?;
+        let span = expr.span;
+        let _: () = match &expr.kind {
             TypedExprKind::Closure {
                 params,
                 captured,
@@ -276,38 +281,39 @@ impl Collector<'_> {
             TypedExprKind::Call { args, .. }
             | TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
-            | TypedExprKind::SuperMethodCall { args, .. } => {
+            | TypedExprKind::SuperMethodCall { args, .. }
+            | TypedExprKind::IntrinsicCall { args, .. } => {
                 for &a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::CallClosure { callee, args } => {
                 self.walk_expr(*callee)?;
                 for &a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::GenericCall { args, .. } => {
                 for a in args {
                     self.walk_expr(a.expr)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.walk_expr(*receiver)?;
                 for &a in args {
                     self.walk_expr(a)?;
                 }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.walk_expr(*receiver)?;
                 for a in args {
                     self.walk_expr(a.expr)?;
                 }
-            }
-            TypedExprKind::IntrinsicCall { args, .. } => {
-                for &a in args {
-                    self.walk_expr(a)?;
-                }
+                self.walk_authored_call_arguments(span)?;
             }
             TypedExprKind::ObjectLiteral { members, .. } => {
                 for member in members {
@@ -352,11 +358,12 @@ impl Collector<'_> {
                 for part in parts {
                     match part {
                         crate::TypedChainPart::Index { idx, .. } => self.walk_expr(*idx)?,
-                        crate::TypedChainPart::Call { args, .. }
-                        | crate::TypedChainPart::MethodCall { args, .. } => {
+                        crate::TypedChainPart::Call { args, span, .. }
+                        | crate::TypedChainPart::MethodCall { args, span, .. } => {
                             for a in args {
                                 self.walk_expr(*a)?;
                             }
+                            self.walk_authored_call_arguments(*span)?;
                         }
                         crate::TypedChainPart::Field { .. }
                         | crate::TypedChainPart::InterfaceProperty { .. }
@@ -400,6 +407,19 @@ impl Collector<'_> {
             | TypedExprKind::NumberEnumMember { .. }
             | TypedExprKind::StringEnumMember { .. } => {}
         };
+        Ok(())
+    }
+
+    fn walk_authored_call_arguments(
+        &mut self,
+        span: crate::Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let Some(authored) = self.ta.authored_call_arguments(span) else {
+            return Ok(());
+        };
+        for element in authored {
+            self.walk_expr(element.expr_id())?;
+        }
         Ok(())
     }
 }

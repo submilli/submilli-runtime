@@ -243,7 +243,7 @@ impl<'a> TypeResolver<'a> {
 
     /// A method's signature as a function type, with the class's arguments
     /// substituted.
-    fn method_type(&self, sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> Type {
+    pub(super) fn method_type(&self, sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> Type {
         Type::Function {
             params: sig
                 .params
@@ -1647,14 +1647,30 @@ fn satisfies_structurally(
     let Some((me, _pe, ne, ae)) = expected.interface_routing() else {
         return false;
     };
-    let Some((ma, _pa, na, aa)) = actual.interface_routing() else {
-        return false;
-    };
     let Some(expected_form) = types.interface_full_form(&me, ne, &ae) else {
         return false;
     };
-    let Some(actual_form) = types.interface_full_form(&ma, na, &aa) else {
-        return false;
+    let actual_form = if matches!(actual, Type::Function { .. }) {
+        if has_required_generic_method(&me, ne, types) {
+            return false;
+        }
+        BTreeMap::from([(
+            "@call".to_string(),
+            ObjectField {
+                ty: actual.clone(),
+                optional: false,
+                readonly: true,
+                method: true,
+            },
+        )])
+    } else {
+        let Some((ma, _pa, na, aa)) = actual.interface_routing() else {
+            return false;
+        };
+        let Some(actual_form) = types.interface_full_form(&ma, na, &aa) else {
+            return false;
+        };
+        actual_form
     };
     if weak_type_rejects(&actual_form, &expected_form) {
         return false;
@@ -1794,6 +1810,66 @@ pub(super) fn weak_type_rejects(
         && expected_form.values().all(|f| f.optional)
         && !actual_form.is_empty()
         && !expected_form.keys().any(|k| actual_form.contains_key(k))
+}
+
+pub(super) fn has_required_generic_method(
+    mangled: &MangledName,
+    name: &str,
+    types: TypeResolver,
+) -> bool {
+    let Some(TypeKind::Interface { methods, .. }) = types.lookup(mangled, name).map(|s| &s.kind)
+    else {
+        return false;
+    };
+    methods
+        .values()
+        .any(|sig| !sig.generics.is_empty() && !sig.optional)
+}
+
+/// The full member form of `ty` when it is a non-host-backed `InterfaceRef`
+/// with no index signature, no required generic methods, and only optional
+/// non-`@call` members — i.e., an interface whose shape a function or a
+/// callable sub-interface can inhabit.
+pub(super) fn function_satisfiable_interface_form(
+    ty: &Type,
+    types: TypeResolver,
+) -> Option<BTreeMap<String, ObjectField>> {
+    let ty = ty.peel();
+    if is_host_backed_interface(ty) || types.index_signature(ty).is_some() {
+        return None;
+    }
+    let Type::InterfaceRef {
+        mangled,
+        name,
+        args,
+        ..
+    } = ty
+    else {
+        return None;
+    };
+    if has_required_generic_method(mangled, name, types) {
+        return None;
+    }
+    let form = types.interface_full_form(mangled, name, args)?;
+    form.iter()
+        .all(|(member, field)| member == "@call" || field.optional)
+        .then_some(form)
+}
+
+/// Expand a call-signature `InterfaceRef` to its `@call` `Type::Function` when
+/// functions structurally satisfy the interface (no host backing, index
+/// signature, or required non-call members).
+pub(crate) fn expand_interface_call_signature(ty: &Type, types: TypeResolver) -> Option<Type> {
+    let form = function_satisfiable_interface_form(ty, types)?;
+    let call = form.get("@call")?;
+    (!call.optional).then(|| call.ty.clone())
+}
+
+/// Whether a value typed as `ty` may hold a function at run time through
+/// structural interface assignability (including via a callable sub-interface),
+/// so `JSON.stringify` may omit it and `typeof` may observe `"function"`.
+pub(super) fn interface_may_hold_function(ty: &Type, types: TypeResolver) -> bool {
+    function_satisfiable_interface_form(ty, types).is_some()
 }
 
 /// Expand a **data-only** (method-free) `InterfaceRef` to the structural

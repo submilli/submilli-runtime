@@ -159,22 +159,20 @@ fn emit_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty:
 
 fn may_stringify_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
     ty.any_member(&|member| {
-        Type::stringifies_to_undefined(member) || is_constructor_value(ctx, member)
+        Type::stringifies_to_undefined(member)
+            || is_constructor_value(ctx, member)
+            || is_vtable_interface(ctx, member)
     })
 }
 
-/// Functions are assignable to `object` (`Type::NonPrimitive`), `{}`
-/// (`Type::Object`), and callable or empty `interface`s (`Type::InterfaceRef`),
-/// so `emit_function_json_return` must runtime-test `$Closure` on those slots
-/// rather than falling through to `$Closure`'s array-element `"null"` vtable.
-fn may_return_closure_or_undefined(ctx: &CodegenCtx, ty: &Type) -> bool {
-    may_stringify_undefined(ctx, ty)
-        || ty.any_member(&|member| {
-            matches!(
-                member.lowered(),
-                Type::NonPrimitive | Type::InterfaceRef { .. } | Type::Object { .. }
-            )
-        })
+fn is_vtable_interface(ctx: &CodegenCtx, ty: &Type) -> bool {
+    let Type::InterfaceRef { mangled, .. } = ty else {
+        return false;
+    };
+    matches!(
+        ctx.symbols.iface_dispatch(mangled),
+        None | Some(crate::Dispatch::VTable)
+    )
 }
 
 /// A constructor binding used as a value (`Number`) is a function, which JSON
@@ -622,7 +620,7 @@ pub(crate) fn emit_function_json_return(
         emitter.instruction(Instruction::Unreachable);
         return Ok(());
     }
-    if !may_return_closure_or_undefined(ctx, return_ty) {
+    if !may_stringify_undefined(ctx, return_ty) {
         emit_defined_stringify_value(emitter, ctx, return_ty);
         return Ok(());
     }

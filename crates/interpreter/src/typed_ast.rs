@@ -978,7 +978,7 @@ pub struct TypedAst {
     /// then, so they are never called: a non-void one traps if it is.
     pub placeholder_closures: std::collections::BTreeSet<ExprId>,
     /// Arguments before omitted defaults and rest packing, keyed by call span.
-    pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<ExprId>>,
+    pub authored_arguments: std::collections::BTreeMap<(u32, u32, u32), Vec<TypedArrayElement>>,
     /// Parameter declaration types before optional/default ABI input widening.
     pub authored_parameter_types: std::collections::BTreeMap<(u32, u32, u32), Type>,
     /// The type a binding's postfix `++`/`--` reads it at, keyed by the name's
@@ -1372,6 +1372,8 @@ pub enum InterfaceCarrier {
     Uint8Array,
     ArrayAny,
     Array(Type),
+    FunctionAny,
+    Function(Type),
     MapAny,
     Map(Type, Type),
     SetAny,
@@ -1587,14 +1589,15 @@ impl TypedAst {
         }
     }
 
-    pub fn record_authored_arguments(&mut self, span: Span, args: Vec<ExprId>) {
+    pub fn record_authored_arguments(&mut self, span: Span, args: Vec<TypedArrayElement>) {
         self.authored_arguments
             .insert((span.file.0, span.start, span.end), args);
     }
 
-    pub fn authored_call_arguments(&self, span: Span) -> Option<&Vec<ExprId>> {
+    pub fn authored_call_arguments(&self, span: Span) -> Option<&[TypedArrayElement]> {
         self.authored_arguments
             .get(&(span.file.0, span.start, span.end))
+            .map(Vec::as_slice)
     }
 
     /// Checked allocation; failure leaves the arena unchanged.

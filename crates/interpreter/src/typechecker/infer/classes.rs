@@ -25,10 +25,50 @@ use super::generic::{
     substitute_typevars,
 };
 
+const MAX_PARTIAL_RUNTIME_TEST_OUTCOMES: usize = 16;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RuntimeTestMode {
     General,
     AllowAliasRefs,
+}
+
+/// Cached dependency summary for a [`Type`] whose runtime-test walk stopped at
+/// one or more enclosing declarations in `active`.
+pub(in crate::typechecker) struct PartialRuntimeTestOutcome {
+    blocked: BTreeSet<MangledName>,
+    expanded: BTreeSet<MangledName>,
+}
+
+#[derive(Default)]
+struct RuntimeTestSubtree {
+    blocked: BTreeSet<MangledName>,
+    expanded: BTreeSet<MangledName>,
+    open_cycle_depth: Option<usize>,
+}
+
+impl RuntimeTestSubtree {
+    fn merge(&mut self, child: Self) {
+        self.blocked.extend(child.blocked);
+        self.expanded.extend(child.expanded);
+        self.open_cycle_depth = match (self.open_cycle_depth, child.open_cycle_depth) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+    }
+
+    fn close_declaration(&mut self, id: MangledName) {
+        self.blocked.remove(&id);
+        self.expanded.insert(id);
+    }
+}
+
+#[derive(Default)]
+struct RuntimeTestWalk {
+    active: BTreeSet<MangledName>,
+    in_progress: BTreeMap<(Type, BTreeSet<MangledName>), usize>,
 }
 
 /// A static member found by [`Inferer::class_static_in_chain`].
@@ -1782,6 +1822,15 @@ impl<'a> Inferer<'a> {
         let mut carriers = self.primitive_interface_carriers(target);
         carriers.extend(self.collection_interface_carriers(target, name, members));
         carriers.extend(self.direct_interface_carriers(package, name, dispatch));
+        if let Some(call) = members.get("@call").filter(|call| !call.optional) {
+            if matches!(call.ty.peel(), Type::Function { .. })
+                && super::assignable(&call.ty, target, self.resolver())
+            {
+                carriers.insert(crate::InterfaceCarrier::Function(call.ty.clone()));
+            }
+        } else if super::assignable::interface_may_hold_function(target, self.resolver()) {
+            carriers.insert(crate::InterfaceCarrier::FunctionAny);
+        }
         carriers
     }
 
@@ -2115,39 +2164,84 @@ impl<'a> Inferer<'a> {
         // A type holding an error type belongs to an expression whose error
         // stops compilation, or to one inferred only to bind type
         // parameters early (see `literal_prebinding`), which codegen never
-        // reaches; neither needs a runtime test.
-        if super::literal_prebinding::holds_error_type(ty) {
+        // reaches; neither needs a runtime test. Once a type limit is already
+        // pending, compilation will fail at its owning checkpoint.
+        if super::literal_prebinding::holds_error_type(ty) || self.type_limits.limit_reached() {
             return Ok(());
         }
-        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut BTreeSet::new())?;
+        let mut walk = RuntimeTestWalk::default();
+        self.record_runtime_type_test_inner(ty, RuntimeTestMode::General, &mut walk)?;
         Ok(())
+    }
+
+    fn upgrade_runtime_type_test_for_alias_refs(&mut self, key: &Type, mode: RuntimeTestMode) {
+        if mode == RuntimeTestMode::AllowAliasRefs
+            && matches!(
+                self.typed_ast.runtime_type_tests.get(key),
+                Some(crate::FieldNarrowingTest::Representation)
+            )
+            && crate::typed_ast::field_runtime_type_is_testable(key)
+        {
+            self.typed_ast
+                .runtime_type_tests
+                .insert(key.clone(), crate::FieldNarrowingTest::Shape(key.clone()));
+        }
     }
 
     fn record_runtime_type_test_inner(
         &mut self,
         ty: &Type,
         mode: RuntimeTestMode,
-        active_interfaces: &mut BTreeSet<MangledName>,
-    ) -> Result<(), CompilerFailure> {
+        walk: &mut RuntimeTestWalk,
+    ) -> Result<RuntimeTestSubtree, CompilerFailure> {
         let key = super::generic::erase_generic_params(ty.peel());
-        if let Some(existing) = self.typed_ast.runtime_type_tests.get(&key) {
-            if mode == RuntimeTestMode::AllowAliasRefs
-                && matches!(existing, crate::FieldNarrowingTest::Representation)
-                && crate::typed_ast::field_runtime_type_is_testable(&key)
-            {
-                self.typed_ast
-                    .runtime_type_tests
-                    .insert(key.clone(), crate::FieldNarrowingTest::Shape(key));
-            }
-            return Ok(());
+        if self.complete_runtime_type_tests.contains(&key) {
+            self.upgrade_runtime_type_test_for_alias_refs(&key, mode);
+            return Ok(RuntimeTestSubtree::default());
         }
-        // Break recursive interface discovery conservatively. A later outer
+        let in_progress_key = (key.clone(), walk.active.clone());
+        if let Some(&target_depth) = walk.in_progress.get(&in_progress_key) {
+            self.upgrade_runtime_type_test_for_alias_refs(&key, mode);
+            return Ok(RuntimeTestSubtree {
+                blocked: BTreeSet::new(),
+                expanded: BTreeSet::new(),
+                open_cycle_depth: Some(target_depth),
+            });
+        }
+        if let Some((blocked, expanded)) =
+            self.partial_runtime_type_tests
+                .get(&key)
+                .and_then(|outcomes| {
+                    outcomes
+                        .iter()
+                        .find(|outcome| {
+                            outcome.blocked.is_subset(&walk.active)
+                                && walk.active.is_disjoint(&outcome.expanded)
+                        })
+                        .map(|outcome| (outcome.blocked.clone(), outcome.expanded.clone()))
+                })
+        {
+            self.upgrade_runtime_type_test_for_alias_refs(&key, mode);
+            return Ok(RuntimeTestSubtree {
+                blocked,
+                expanded,
+                open_cycle_depth: None,
+            });
+        }
+        if !self.type_limits.spend_work(1) {
+            return Err(self.pending_limit_or(type_limit_unlocated(TypeTooLarge::Work)));
+        }
+        // Break exact `(Type, active)` cycles conservatively. A later outer
         // call replaces this placeholder with the resolved descriptor.
+        let my_depth = walk.in_progress.len();
+        walk.in_progress.insert(in_progress_key.clone(), my_depth);
         self.typed_ast
             .runtime_type_tests
-            .insert(key.clone(), crate::FieldNarrowingTest::Representation);
-        self.record_runtime_test_dependencies(&key, active_interfaces)?;
-        self.record_runtime_class_fields(&key, active_interfaces)?;
+            .entry(key.clone())
+            .or_insert(crate::FieldNarrowingTest::Representation);
+        let mut subtree = RuntimeTestSubtree::default();
+        self.record_runtime_test_dependencies(&key, walk, &mut subtree)?;
+        self.record_runtime_class_fields(&key, walk, &mut subtree)?;
         let testable = if mode == RuntimeTestMode::AllowAliasRefs {
             crate::typed_ast::field_runtime_type_is_testable(&key)
         } else {
@@ -2155,38 +2249,55 @@ impl<'a> Inferer<'a> {
         };
         let test = if let Some(members) = self.enum_runtime_members(&key) {
             crate::FieldNarrowingTest::Shape(members)
-        } else if let Some(interface) = self.interface_narrowing_test(&key) {
-            let interface_identity = match key.peel() {
-                Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+        } else if let Some(interface) = match self.typed_ast.runtime_type_tests.get(&key) {
+            Some(crate::FieldNarrowingTest::Interface(existing)) => Some(existing.clone()),
+            _ => self.interface_narrowing_test(&key),
+        } {
+            self.typed_ast.runtime_type_tests.insert(
+                key.clone(),
+                crate::FieldNarrowingTest::Interface(interface.clone()),
+            );
+            let interface_ref = match key.peel() {
+                ty @ Type::InterfaceRef { .. } => Some(ty.clone()),
                 Type::Union(members) => members.iter().find_map(|member| match member.peel() {
-                    Type::InterfaceRef { mangled, .. } => Some(mangled.clone()),
+                    ty @ Type::InterfaceRef { .. } => Some(ty.clone()),
                     _ => None,
                 }),
                 _ => None,
             };
+            let interface_identity = match &interface_ref {
+                Some(Type::InterfaceRef { mangled, .. }) => Some(mangled.clone()),
+                _ => None,
+            };
             if let Some(identity) = interface_identity.as_ref()
-                && !active_interfaces.insert(identity.clone())
+                && !walk.active.insert(identity.clone())
             {
-                self.record_generic_interface_validators(&interface, identity)?;
+                subtree.blocked.insert(identity.clone());
+                if let Some(blocked_ref) = interface_ref.as_ref() {
+                    self.record_generic_validator_key(blocked_ref)?;
+                }
                 crate::FieldNarrowingTest::Interface(interface)
             } else {
+                let mut inner_subtree = RuntimeTestSubtree::default();
                 if let Some(index) = &interface.index {
-                    self.record_runtime_type_test_inner(
+                    inner_subtree.merge(self.record_runtime_type_test_inner(
                         &index.value,
                         RuntimeTestMode::AllowAliasRefs,
-                        active_interfaces,
-                    )?;
+                        walk,
+                    )?);
                 }
                 for member in interface.members.values() {
-                    self.record_runtime_type_test_inner(
+                    inner_subtree.merge(self.record_runtime_type_test_inner(
                         &member.ty,
                         RuntimeTestMode::AllowAliasRefs,
-                        active_interfaces,
-                    )?;
+                        walk,
+                    )?);
                 }
                 if let Some(identity) = interface_identity {
-                    active_interfaces.remove(&identity);
+                    walk.active.remove(&identity);
+                    inner_subtree.close_declaration(identity);
                 }
+                subtree.merge(inner_subtree);
                 crate::FieldNarrowingTest::Interface(interface)
             }
         } else if testable {
@@ -2194,8 +2305,37 @@ impl<'a> Inferer<'a> {
         } else {
             crate::FieldNarrowingTest::Representation
         };
-        self.typed_ast.runtime_type_tests.insert(key, test);
-        Ok(())
+        walk.in_progress.remove(&in_progress_key);
+        let keep_existing_shape = matches!(test, crate::FieldNarrowingTest::Representation)
+            && matches!(
+                self.typed_ast.runtime_type_tests.get(&key),
+                Some(crate::FieldNarrowingTest::Shape(_))
+            );
+        if !keep_existing_shape {
+            self.typed_ast.runtime_type_tests.insert(key.clone(), test);
+        }
+        if subtree
+            .open_cycle_depth
+            .is_some_and(|depth| depth >= my_depth)
+        {
+            subtree.open_cycle_depth = None;
+        }
+        if subtree.open_cycle_depth.is_none() {
+            if subtree.blocked.is_empty() {
+                self.partial_runtime_type_tests.remove(&key);
+                self.complete_runtime_type_tests.insert(key);
+            } else if !self.complete_runtime_type_tests.contains(&key) {
+                let outcomes = self.partial_runtime_type_tests.entry(key).or_default();
+                if outcomes.len() >= MAX_PARTIAL_RUNTIME_TEST_OUTCOMES {
+                    outcomes.remove(0);
+                }
+                outcomes.push(PartialRuntimeTestOutcome {
+                    blocked: subtree.blocked.clone(),
+                    expanded: subtree.expanded.clone(),
+                });
+            }
+        }
+        Ok(subtree)
     }
 
     pub(super) fn enum_runtime_members(&self, ty: &Type) -> Option<Type> {
@@ -2227,7 +2367,8 @@ impl<'a> Inferer<'a> {
     fn record_runtime_class_fields(
         &mut self,
         ty: &Type,
-        active: &mut BTreeSet<MangledName>,
+        walk: &mut RuntimeTestWalk,
+        subtree: &mut RuntimeTestSubtree,
     ) -> Result<(), CompilerFailure> {
         let Type::ClassRef { mangled, args, .. } = ty else {
             return Ok(());
@@ -2237,10 +2378,12 @@ impl<'a> Inferer<'a> {
         if self.invalid_class_hierarchies.contains(mangled) {
             return Ok(());
         }
-        if !active.insert(mangled.clone()) {
+        if !walk.active.insert(mangled.clone()) {
+            subtree.blocked.insert(mangled.clone());
             self.typed_ast
                 .runtime_class_fields
-                .insert(ty.clone(), Type::Never);
+                .entry(ty.clone())
+                .or_insert(Type::Never);
             return Ok(());
         }
         let mut fields = BTreeMap::new();
@@ -2319,12 +2462,13 @@ impl<'a> Inferer<'a> {
         self.typed_ast
             .runtime_field_guards
             .insert(ty.clone(), guards.clone());
+        let mut class_subtree = RuntimeTestSubtree::default();
         for guard in guards {
-            self.record_runtime_type_test_inner(
+            class_subtree.merge(self.record_runtime_type_test_inner(
                 &guard.target,
                 RuntimeTestMode::AllowAliasRefs,
-                active,
-            )?;
+                walk,
+            )?);
         }
         let shape = Type::Object {
             index: None,
@@ -2333,92 +2477,183 @@ impl<'a> Inferer<'a> {
         self.typed_ast
             .runtime_class_fields
             .insert(ty.clone(), shape.clone());
-        self.record_runtime_type_test_inner(&shape, RuntimeTestMode::AllowAliasRefs, active)?;
-        active.remove(mangled);
+        class_subtree.merge(self.record_runtime_type_test_inner(
+            &shape,
+            RuntimeTestMode::AllowAliasRefs,
+            walk,
+        )?);
+        walk.active.remove(mangled);
+        class_subtree.close_declaration(mangled.clone());
+        subtree.merge(class_subtree);
         Ok(())
     }
 
     fn record_runtime_test_dependencies(
         &mut self,
         ty: &Type,
-        active_interfaces: &mut BTreeSet<MangledName>,
+        walk: &mut RuntimeTestWalk,
+        subtree: &mut RuntimeTestSubtree,
     ) -> Result<(), CompilerFailure> {
-        let mut record = |dependency: &Type| {
-            self.record_runtime_type_test_inner(
+        let mut record = |dependency: &Type, subtree: &mut RuntimeTestSubtree| {
+            let child = self.record_runtime_type_test_inner(
                 dependency,
                 RuntimeTestMode::AllowAliasRefs,
-                active_interfaces,
-            )
+                walk,
+            )?;
+            subtree.merge(child);
+            Ok::<(), CompilerFailure>(())
         };
         match ty.peel() {
-            Type::Array(element) => record(element)?,
+            Type::Array(element) => record(element, subtree)?,
             Type::Tuple(elements) => {
                 for element in elements {
-                    record(element)?;
+                    record(element, subtree)?;
                 }
             }
             Type::Union(elements) | Type::ClassRef { args: elements, .. } => {
                 for element in elements {
-                    record(element)?;
+                    record(element, subtree)?;
                 }
             }
             Type::Object { fields, index } => {
                 if let Some(i) = index {
-                    record(&i.value)?;
+                    record(&i.value, subtree)?;
                 }
                 for field in fields.values() {
-                    record(&field.ty)?;
+                    record(&field.ty, subtree)?;
                 }
             }
             Type::Function { params, ret, .. } => {
                 for param in params {
-                    record(param)?;
+                    record(param, subtree)?;
                 }
-                record(ret)?;
+                record(ret, subtree)?;
+            }
+            Type::AliasRef { mangled, args, .. } => {
+                let mut arg_subtree = RuntimeTestSubtree::default();
+                for arg in args {
+                    arg_subtree.merge(self.record_runtime_type_test_inner(
+                        arg,
+                        RuntimeTestMode::AllowAliasRefs,
+                        walk,
+                    )?);
+                }
+                if super::utility_types::utility(mangled).is_some() {
+                    let mut operand_decls = BTreeSet::new();
+                    for arg in args {
+                        collect_type_declarations(arg, &mut operand_decls);
+                    }
+                    if walk.active.is_disjoint(&operand_decls) {
+                        walk.active.extend(operand_decls.iter().cloned());
+                        let expanded =
+                            super::assignable::expand_alias_ref(ty.peel(), self.resolver());
+                        let mut utility_subtree = if &expanded == ty.peel() {
+                            RuntimeTestSubtree::default()
+                        } else {
+                            self.record_runtime_type_test_inner(
+                                &expanded,
+                                RuntimeTestMode::AllowAliasRefs,
+                                walk,
+                            )?
+                        };
+                        for decl in operand_decls {
+                            walk.active.remove(&decl);
+                            utility_subtree.close_declaration(decl);
+                        }
+                        subtree.merge(arg_subtree);
+                        subtree.merge(utility_subtree);
+                    } else {
+                        arg_subtree
+                            .blocked
+                            .extend(operand_decls.intersection(&walk.active).cloned());
+                        subtree.merge(arg_subtree);
+                    }
+                } else if walk.active.insert(mangled.clone()) {
+                    let expanded = super::assignable::expand_alias_ref(ty.peel(), self.resolver());
+                    let mut alias_subtree = if &expanded == ty.peel() {
+                        RuntimeTestSubtree::default()
+                    } else {
+                        self.record_runtime_type_test_inner(
+                            &expanded,
+                            RuntimeTestMode::AllowAliasRefs,
+                            walk,
+                        )?
+                    };
+                    walk.active.remove(mangled);
+                    alias_subtree.close_declaration(mangled.clone());
+                    subtree.merge(arg_subtree);
+                    subtree.merge(alias_subtree);
+                } else {
+                    arg_subtree.blocked.insert(mangled.clone());
+                    self.record_generic_validator_key(ty.peel())?;
+                    subtree.merge(arg_subtree);
+                }
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn record_generic_interface_validators(
-        &mut self,
-        interface: &crate::InterfaceNarrowingTest,
-        identity: &MangledName,
-    ) -> Result<(), CompilerFailure> {
-        let mut references = BTreeSet::new();
-        for member in interface.members.values() {
-            collect_interface_instantiations(&member.ty, identity, &mut references);
-        }
-        for reference in references {
-            let Type::InterfaceRef {
+    fn record_generic_validator_key(&mut self, blocked_ty: &Type) -> Result<(), CompilerFailure> {
+        let generic_key = match blocked_ty.peel() {
+            Type::AliasRef {
+                package,
                 mangled,
                 name,
-                args,
                 ..
-            } = &reference
-            else {
-                continue;
-            };
-            let Some(symbol) = self.resolver().lookup(mangled, name) else {
-                continue;
-            };
-            let TypeKind::Interface { generics, .. } = &symbol.kind else {
-                continue;
-            };
-            if args.is_empty() {
-                continue;
+            } if super::utility_types::utility(mangled).is_none() => {
+                let Some(symbol) = self.resolver().lookup(mangled, name) else {
+                    return Ok(());
+                };
+                let TypeKind::Alias { generics, .. } = &symbol.kind else {
+                    return Ok(());
+                };
+                if generics.is_empty() {
+                    return Ok(());
+                }
+                Type::AliasRef {
+                    package: package.clone(),
+                    mangled: mangled.clone(),
+                    name: name.clone(),
+                    args: generics.iter().cloned().map(Type::TypeVar).collect(),
+                }
             }
-            let mut key = reference.clone();
-            if let Type::InterfaceRef { args, .. } = &mut key {
-                *args = generics.iter().cloned().map(Type::TypeVar).collect();
+            Type::InterfaceRef {
+                package,
+                mangled,
+                name,
+                ..
+            } => {
+                let Some(symbol) = self.resolver().lookup(mangled, name) else {
+                    return Ok(());
+                };
+                let TypeKind::Interface { generics, .. } = &symbol.kind else {
+                    return Ok(());
+                };
+                if generics.is_empty() {
+                    return Ok(());
+                }
+                Type::InterfaceRef {
+                    package: package.clone(),
+                    mangled: mangled.clone(),
+                    name: name.clone(),
+                    args: generics.iter().cloned().map(Type::TypeVar).collect(),
+                }
             }
-            self.record_runtime_type_test_inner(
-                &key,
-                RuntimeTestMode::AllowAliasRefs,
-                &mut BTreeSet::new(),
-            )?;
+            _ => return Ok(()),
+        };
+        if !self
+            .recorded_generic_validator_keys
+            .insert(generic_key.clone())
+        {
+            return Ok(());
         }
+        let mut generic_walk = RuntimeTestWalk::default();
+        self.record_runtime_type_test_inner(
+            &generic_key,
+            RuntimeTestMode::AllowAliasRefs,
+            &mut generic_walk,
+        )?;
         Ok(())
     }
 
@@ -4405,44 +4640,22 @@ fn collect_runtime_carrier_candidates(ty: &Type, out: &mut Vec<Type>) {
     }
 }
 
-fn collect_interface_instantiations(ty: &Type, identity: &MangledName, out: &mut BTreeSet<Type>) {
-    match ty.peel() {
-        Type::InterfaceRef { mangled, .. } if mangled == identity => {
-            out.insert(ty.peel().clone());
-        }
-        Type::Array(element) => collect_interface_instantiations(element, identity, out),
-        Type::Tuple(elements) => {
-            for element in elements {
-                collect_interface_instantiations(element, identity, out);
+fn collect_type_declarations(ty: &Type, out: &mut BTreeSet<MangledName>) {
+    let mut stack = vec![ty];
+    while let Some(current) = stack.pop() {
+        match current.peel() {
+            Type::ClassRef { mangled, args, .. } | Type::InterfaceRef { mangled, args, .. } => {
+                out.insert(mangled.clone());
+                stack.extend(args.iter());
             }
-        }
-        Type::Union(elements) => {
-            for element in elements {
-                collect_interface_instantiations(element, identity, out);
+            Type::AliasRef { mangled, args, .. } => {
+                if super::utility_types::utility(mangled).is_none() {
+                    out.insert(mangled.clone());
+                }
+                stack.extend(args.iter());
             }
+            other => crate::type_size::for_each_child(other, |child| stack.push(child)),
         }
-        Type::Object { fields, index } => {
-            if let Some(index) = index {
-                collect_interface_instantiations(&index.value, identity, out);
-            }
-            for field in fields.values() {
-                collect_interface_instantiations(&field.ty, identity, out);
-            }
-        }
-        Type::Function { params, ret, .. } => {
-            for param in params {
-                collect_interface_instantiations(param, identity, out);
-            }
-            collect_interface_instantiations(ret, identity, out);
-        }
-        Type::InterfaceRef { args, .. }
-        | Type::ClassRef { args, .. }
-        | Type::AliasRef { args, .. } => {
-            for arg in args {
-                collect_interface_instantiations(arg, identity, out);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -5690,5 +5903,70 @@ mod review_regressions {
                 );
             });
         }
+    }
+
+    #[test]
+    fn diamond_under_active_cycle_memoizes_and_charges_work_budget() {
+        let mut source = String::from(
+            "interface S0 { leaf: Grow<number> | null }\n\
+             type Grow<U> = { d: S30; next: Grow<U[]> | null };\n\
+             class Parent { x: unknown = null; }\n\
+             class Child extends Parent { x: Grow<number> | null = null; }\n",
+        );
+        for k in 1..=30 {
+            let prev = k - 1;
+            source.push_str(&format!(
+                "interface T{k} {{ sub: S{prev} }}\ninterface S{k} {{ a: S{prev}; b: T{k} }}\n"
+            ));
+        }
+        with_source_inferer(&source, |tc| {
+            assert!(tc.signatures().unwrap());
+            assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+            let child_mangled = tc.types.lookup("Child").unwrap().mangled_name.clone();
+            let child_ty = Type::class_ref(
+                crate::Package(tc.package_name.into()),
+                "Child",
+                child_mangled,
+                Vec::new(),
+            );
+            tc.type_limits = TypeLimits::with_work_allowance(50_000);
+            tc.record_runtime_type_test(&child_ty).unwrap();
+        });
+        with_source_inferer("", |tc| {
+            let mut nested = Type::Number;
+            for _ in 0..8 {
+                nested = Type::Array(Box::new(nested));
+            }
+            tc.type_limits = TypeLimits::with_work_allowance(4);
+            assert!(matches!(
+                tc.record_runtime_type_test(&nested),
+                Err(CompilerFailure::Limit { .. })
+            ));
+        });
+    }
+
+    #[test]
+    fn generic_interface_diamond_chain_back_to_root_stays_linear() {
+        let mut source = String::new();
+        for k in 0..23 {
+            let next = k + 1;
+            source.push_str(&format!(
+                "interface L{k}<T> {{ a: L{next}<T>; b: L{next}<T>; c: L0<T>; }}\n"
+            ));
+        }
+        source.push_str("interface L23<T> { a: (x: T) => void; b: (x: T) => void; c: L0<T>; }\n");
+        with_source_inferer(&source, |tc| {
+            assert!(tc.signatures().unwrap());
+            assert!(tc.diagnostics.is_empty(), "{:?}", tc.diagnostics);
+            let l5_mangled = tc.types.lookup("L5").unwrap().mangled_name.clone();
+            let l5_number = Type::InterfaceRef {
+                package: crate::Package(tc.package_name.into()),
+                mangled: l5_mangled,
+                name: "L5".into(),
+                args: vec![Type::Number],
+            };
+            tc.type_limits = TypeLimits::with_work_allowance(50_000);
+            tc.record_runtime_type_test(&l5_number).unwrap();
+        });
     }
 }

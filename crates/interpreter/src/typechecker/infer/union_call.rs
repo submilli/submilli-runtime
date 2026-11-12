@@ -23,13 +23,18 @@ const MERGE_FIELDS: usize = 256;
 impl Inferer<'_> {
     /// The callee `typed_callee`, of type `callee_ty`, cast up to the signature
     /// a call passing `arg_count` arguments reaches it through, when it is a
-    /// union of function types that combine; otherwise as it is.
+    /// union of pure function types that combine; otherwise as it is. Unions
+    /// containing call-signature interfaces are dispatched dynamically by the
+    /// caller instead of casting to a closure struct.
     pub(super) fn cast_up_to_union_signature(
         &mut self,
         typed_callee: ExprId,
         callee_ty: Type,
         arg_count: usize,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        if union_has_interface_member(&callee_ty) {
+            return Ok((typed_callee, callee_ty));
+        }
         let Some(signature) = self.union_signature_of(&callee_ty, Some(arg_count)) else {
             return Ok((typed_callee, callee_ty));
         };
@@ -55,7 +60,7 @@ impl Inferer<'_> {
 
     /// The signature a call passing `arg_count` arguments (any number, when
     /// `None`) reaches a callee of type `ty` through, when `ty` is a union of
-    /// function types that combine.
+    /// callable types that combine.
     pub(super) fn union_signature_of(&self, ty: &Type, arg_count: Option<usize>) -> Option<Type> {
         match ty.peel() {
             Type::Union(members) => self.union_call_signature(members, arg_count),
@@ -63,9 +68,9 @@ impl Inferer<'_> {
         }
     }
 
-    /// The function type a union of function types `members` is called
+    /// The function type a union of callable types `members` is called
     /// through by a call passing `arg_count` arguments, or `None` when they
-    /// don't combine: a member that is not a function or has a rest parameter
+    /// don't combine: a member that is not callable or has a rest parameter
     /// that isn't an array, members that differ in whether they return a
     /// value, or a position whose parameter types have no common subtype
     /// Submilli can name.
@@ -84,7 +89,7 @@ impl Inferer<'_> {
     ) -> Option<Type> {
         let (signatures, returns): (Vec<Signature>, Vec<Type>) = members
             .iter()
-            .map(Signature::of)
+            .map(|member| self.member_call_signature(member))
             .collect::<Option<Vec<_>>>()?
             .into_iter()
             .unzip();
@@ -112,6 +117,21 @@ impl Inferer<'_> {
             _ => chosen,
         };
         Some(chosen.into_function(ret))
+    }
+
+    fn member_call_signature(&self, ty: &Type) -> Option<(Signature, Type)> {
+        if let Some(signature) = Signature::of(ty) {
+            return Some(signature);
+        }
+        let peeled = ty.peel();
+        if !matches!(peeled, Type::InterfaceRef { .. }) {
+            return None;
+        }
+        let (sig, bindings, _, _) = self.find_method(peeled, "@call")?;
+        if sig.optional || !sig.generics.is_empty() {
+            return None;
+        }
+        Signature::of(&self.resolver().method_type(&sig, &bindings))
     }
 
     /// The signature a union of `signatures` is called through: the first
@@ -433,5 +453,14 @@ impl Signature {
             predicate: None,
             has_rest: self.rest,
         }
+    }
+}
+
+pub(super) fn union_has_interface_member(ty: &Type) -> bool {
+    match ty.peel() {
+        Type::Union(members) => members
+            .iter()
+            .any(|member| matches!(member.peel(), Type::InterfaceRef { .. })),
+        _ => false,
     }
 }

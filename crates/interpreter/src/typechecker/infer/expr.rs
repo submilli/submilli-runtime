@@ -377,7 +377,9 @@ fn admits_undefined_leaf(member: &Type) -> bool {
 /// typed `string`; that missing text is a missing read.
 fn stringify_arg_may_omit_json_text(ty: &Type, types: TypeResolver<'_>) -> bool {
     any_resolved_member(ty, types, &|member| {
-        Type::stringifies_to_undefined(member) || is_constructor_binding(member, types)
+        Type::stringifies_to_undefined(member)
+            || is_constructor_binding(member, types)
+            || super::assignable::interface_may_hold_function(member, types)
     })
 }
 
@@ -387,8 +389,8 @@ fn stringify_arg_may_omit_json_text(ty: &Type, types: TypeResolver<'_>) -> bool 
 /// `Console` is the one that types a plain object. Codegen tells the two
 /// apart by binding name instead (`static_value_tag` in codegen/mod.rs), and
 /// every prelude constructor interface is bound to a capitalized name.
-fn is_constructor_binding(ty: &Type, types: TypeResolver<'_>) -> bool {
-    let Type::InterfaceRef { mangled, name, .. } = ty else {
+pub(super) fn is_constructor_binding(ty: &Type, types: TypeResolver<'_>) -> bool {
+    let Type::InterfaceRef { mangled, name, .. } = ty.peel() else {
         return false;
     };
     types.lookup(mangled, name).is_some_and(|symbol| {
@@ -3172,6 +3174,38 @@ impl Inferer<'_> {
 
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
         let (typed_callee, callee_ty) = self.constraint_receiver(typed_callee, callee_ty, span)?;
+        if super::union_call::union_has_interface_member(&callee_ty)
+            && let Some(signature) = self.union_signature_of(&callee_ty, Some(args.len()))
+            && let Type::Function {
+                params,
+                ret,
+                has_rest,
+                ..
+            } = signature.peel()
+        {
+            let (param_tys, ret_ty, has_rest) = (params.clone(), (**ret).clone(), *has_rest);
+            let typed_args = self.bind_fn_type_call_args(
+                &param_tys,
+                &ret_ty,
+                has_rest,
+                CallLift::Anon { ty: &signature },
+                &args,
+                span,
+            )?;
+            return Ok((
+                TypedExprKind::MethodCall {
+                    receiver: typed_callee,
+                    iface: crate::mangle::prelude("Object"),
+                    name: Ident {
+                        name: "@call".to_string(),
+                        span,
+                    },
+                    args: typed_args,
+                    type_predicate: None,
+                },
+                ret_ty,
+            ));
+        }
         let (typed_callee, callee_ty) =
             self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
         // call-signature dispatch — when the callee types
@@ -3249,6 +3283,7 @@ impl Inferer<'_> {
             _ => {
                 let culprit = self.nullish_culprit(&[(typed_callee, &callee_ty)], |t| {
                     matches!(t.peel(), Type::Function { .. })
+                        || self.find_method(t, "@call").is_some()
                 });
                 let help = if culprit.is_some() {
                     let callee_span = self
@@ -3410,7 +3445,7 @@ impl Inferer<'_> {
         let mut invalid_spread = false;
         for &arg_id in &args {
             let i = typed_args.len();
-            if i < fixed_count && self.ast.call_spread_args.contains(&arg_id) {
+            if (i < fixed_count || !has_rest) && self.ast.call_spread_args.contains(&arg_id) {
                 let (source, source_ty) = self.infer_expr(arg_id, None)?;
                 if let Type::Tuple(tuple) = source_ty.peel() {
                     spread_sources.push(crate::TypedArrayElement::Spread(source));
@@ -3501,12 +3536,19 @@ impl Inferer<'_> {
         }
         if expanded_arity_ok && dynamic_tuple {
             let fixed = param_types.as_deref().unwrap_or(&[]);
-            typed_args = self.collect_call_arguments(
-                &spread_sources,
-                &fixed[..fixed_count],
-                fixed.get(fixed_count).and_then(Type::rest_element),
-                span,
-            )?;
+            let rest = fixed.get(fixed_count).and_then(Type::rest_element);
+            if fixed_count == 0 && rest.is_none() {
+                let elements = self.materialize_call_elements(&spread_sources)?;
+                self.typed_ast.record_authored_arguments(span, elements);
+                typed_args.clear();
+            } else {
+                typed_args = self.collect_call_arguments(
+                    &spread_sources,
+                    &fixed[..fixed_count],
+                    rest,
+                    span,
+                )?;
+            }
         }
 
         // Static dispatch when the callee is a bare top-level
@@ -5169,7 +5211,7 @@ impl Inferer<'_> {
         let mut invalid_spread = false;
         for &arg_id in args {
             let i = typed_args.len();
-            if i < fixed_count && self.ast.call_spread_args.contains(&arg_id) {
+            if (i < fixed_count || !has_rest) && self.ast.call_spread_args.contains(&arg_id) {
                 let (source, source_ty) = self.infer_expr(arg_id, None)?;
                 if let Type::Tuple(tuple) = source_ty.peel() {
                     spread_sources.push(crate::TypedArrayElement::Spread(source));
@@ -5226,9 +5268,12 @@ impl Inferer<'_> {
             );
         }
 
-        if has_rest || typed_args.len() < params.len() {
-            self.typed_ast
-                .record_authored_arguments(span, typed_args.clone());
+        let has_spread = spread_sources
+            .iter()
+            .any(|element| matches!(element, crate::TypedArrayElement::Spread(_)));
+        if has_rest || dynamic_tuple || has_spread || typed_args.len() < params.len() {
+            let elements = self.materialize_call_elements(&spread_sources)?;
+            self.typed_ast.record_authored_arguments(span, elements);
         }
         if expanded_arity_ok && !dynamic_tuple {
             self.fill_omitted_defaults(params, typed_args.len(), span, &mut typed_args)?;
@@ -5343,6 +5388,36 @@ impl Inferer<'_> {
         Ok(projected)
     }
 
+    pub(super) fn materialize_call_elements(
+        &mut self,
+        sources: &[crate::TypedArrayElement],
+    ) -> Result<Vec<crate::TypedArrayElement>, CompilerFailure> {
+        let mut elements = Vec::with_capacity(sources.len());
+        for source in sources {
+            if let crate::TypedArrayElement::Spread(source) = source {
+                let source = *source;
+                let source_expr = self
+                    .typed_ast
+                    .try_expr(source)
+                    .map_err(super::arena_failure)?;
+                let ty = source_expr.ty.clone();
+                // Zero-width point span at the spread operand's start so a
+                // synthesized `Array.from` call never shares the `Span` key of
+                // the enclosing or inner authored call in `authored_arguments`.
+                let synthetic_span = Span {
+                    file: source_expr.span.file,
+                    start: source_expr.span.start,
+                    end: source_expr.span.start,
+                };
+                let source = self.materialize_spread_source(source, &ty, synthetic_span)?;
+                elements.push(crate::TypedArrayElement::Spread(source));
+            } else {
+                elements.push(source.clone());
+            }
+        }
+        Ok(elements)
+    }
+
     pub(super) fn collect_call_arguments(
         &mut self,
         sources: &[crate::TypedArrayElement],
@@ -5350,22 +5425,7 @@ impl Inferer<'_> {
         rest: Option<&Type>,
         span: Span,
     ) -> Result<Vec<ExprId>, CompilerFailure> {
-        let mut elements = Vec::with_capacity(sources.len());
-        for source in sources {
-            if let crate::TypedArrayElement::Spread(source) = source {
-                let source = *source;
-                let ty = self
-                    .typed_ast
-                    .try_expr(source)
-                    .map_err(super::arena_failure)?
-                    .ty
-                    .clone();
-                let source = self.materialize_spread_source(source, &ty, span)?;
-                elements.push(crate::TypedArrayElement::Spread(source));
-            } else {
-                elements.push(source.clone());
-            }
-        }
+        let elements = self.materialize_call_elements(sources)?;
         let collected = self.push_synthetic_expr(
             TypedExprKind::ArrayLiteral {
                 elements,
@@ -5532,9 +5592,8 @@ impl Inferer<'_> {
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         Ok(match name.name.as_str() {
             "fromString" => {
-                let typed_args = self
-                    .infer_fixed_spread_args(&args, &[Type::String], span)?
-                    .0;
+                let (mut typed_args, spread_sources) =
+                    self.infer_fixed_spread_args(&args, &[Type::String], span)?;
                 if typed_args.len() != 1 {
                     self.error(
                         span,
@@ -5565,6 +5624,16 @@ impl Inferer<'_> {
                         span,
                         format!("`BigInt.fromString(s)`: expected `string`, got `{arg_ty}`",),
                     );
+                }
+                if typed_args.len() == 1
+                    && let Some(sources) = &spread_sources
+                {
+                    typed_args = self.collect_call_arguments(
+                        sources,
+                        std::slice::from_ref(&arg_ty),
+                        None,
+                        span,
+                    )?;
                 }
                 (
                     TypedExprKind::IntrinsicCall {
@@ -5833,7 +5902,7 @@ impl Inferer<'_> {
         // verify the resolved type is assignable to `string`, as a call's
         // argument is: `string | (T & string)` narrowed from `string | T`
         // passes. Codegen coerces it to the string slot.
-        let (typed_arg, arg_ty) = if let Some((typed, _)) = spread_args {
+        let (mut typed_arg, arg_ty) = if let Some((typed, _)) = &spread_args {
             let id = typed[0];
             let ty = self
                 .typed_ast
@@ -5845,6 +5914,13 @@ impl Inferer<'_> {
         } else {
             self.infer_expr(args[0], Some(&Type::String))?
         };
+        if let Some((_, Some(sources))) = &spread_args {
+            let collected =
+                self.collect_call_arguments(sources, std::slice::from_ref(&arg_ty), None, span)?;
+            if let Some(&first) = collected.first() {
+                typed_arg = first;
+            }
+        }
         if !matches!(arg_ty.peel(), Type::Error)
             && !super::assignable::assignable(&arg_ty, &Type::String, self.resolver())
         {
@@ -5897,15 +5973,15 @@ impl Inferer<'_> {
         let spread = args
             .iter()
             .any(|arg| self.ast.call_spread_args.contains(arg));
-        let mut typed_args = if spread {
-            let hints = params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>();
-            self.infer_fixed_spread_args(&args, &hints, span)?.0
+        let hints = params.iter().map(|p| p.ty.clone()).collect::<Vec<_>>();
+        let (mut typed_args, spread_sources) = if spread {
+            self.infer_fixed_spread_args(&args, &hints, span)?
         } else {
             let mut typed = Vec::with_capacity(params.len());
             for (i, &arg_id) in args.iter().enumerate() {
                 typed.push(self.infer_expr(arg_id, params.get(i).map(|p| &p.ty))?.0);
             }
-            typed
+            (typed, None)
         };
         let count = typed_args.len();
         let omitted_have_defaults =
@@ -5917,6 +5993,47 @@ impl Inferer<'_> {
                 format!("expected {} argument(s), got {}", params.len(), count),
                 vec![help],
             );
+        } else if let Some(sources) = &spread_sources {
+            if count > 0 {
+                typed_args = self.collect_call_arguments(sources, &hints[..count], None, span)?;
+            } else {
+                let elements = self.materialize_call_elements(sources)?;
+                if omitted_have_defaults {
+                    self.fill_omitted_defaults(&params, count, span, &mut typed_args)?;
+                    if let Some(first) = typed_args.first_mut() {
+                        let effect = self.push_synthetic_expr(
+                            TypedExprKind::ArrayLiteral {
+                                elements,
+                                element_ty: Type::Unknown,
+                            },
+                            Type::Array(Box::new(Type::Unknown)),
+                            span,
+                        )?;
+                        let first_ty = self
+                            .typed_ast
+                            .try_expr(*first)
+                            .map_err(super::arena_failure)?
+                            .ty
+                            .clone();
+                        *first = self.push_synthetic_expr(
+                            TypedExprKind::EffectThen {
+                                effect,
+                                result: *first,
+                            },
+                            first_ty,
+                            span,
+                        )?;
+                    }
+                    return Ok((
+                        TypedExprKind::IntrinsicCall {
+                            kind: intrinsic,
+                            args: typed_args,
+                        },
+                        intrinsic.ret(),
+                    ));
+                }
+                self.typed_ast.record_authored_arguments(span, elements);
+            }
         }
         if omitted_have_defaults {
             self.fill_omitted_defaults(&params, count, span, &mut typed_args)?;
@@ -7668,10 +7785,11 @@ impl Inferer<'_> {
                     ref args,
                     ..
                 } => {
-                    let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
+                    let Some(mut fields) = self.resolver().interface_full_form(mangled, name, args)
                     else {
                         return Ok(None);
                     };
+                    fields.remove("@call");
                     fields
                 }
                 // Inner inference already reported it.
@@ -10935,10 +11053,8 @@ impl Inferer<'_> {
         type_predicate: Option<&crate::TypePredicateAnnotation>,
         expected: Option<&Type>,
     ) -> Result<Type, CompilerFailure> {
-        let hint = expected.and_then(|ty| match ty.peel() {
-            Type::Function { params, ret, .. } => Some((params, ret)),
-            _ => None,
-        });
+        let has_rest = params.last().is_some_and(|param| param.rest);
+        let hint = self.contextual_function_hint(expected, params.len(), has_rest);
         let param_types: Vec<Type> = params
             .iter()
             .enumerate()
@@ -10948,7 +11064,10 @@ impl Inferer<'_> {
                     .as_ref()
                     .map(|ty| self.resolve_type(ty))
                     .transpose()?
-                    .or_else(|| hint.and_then(|(params, _)| params.get(index).cloned()))
+                    .or_else(|| {
+                        hint.as_ref()
+                            .and_then(|(params, _)| params.get(index).cloned())
+                    })
                     .unwrap_or(Type::Error);
                 Ok::<_, CompilerFailure>(crate::ObjectField::widen_optional(
                     param.is_omittable(),
@@ -10971,7 +11090,7 @@ impl Inferer<'_> {
         let ret = return_type
             .map(|ty| self.resolve_type(ty))
             .transpose()?
-            .or_else(|| hint.map(|(_, ret)| (**ret).clone()))
+            .or_else(|| hint.map(|(_, ret)| ret))
             .unwrap_or(Type::Unknown);
         Ok(Type::Function {
             params: param_types,
@@ -10981,7 +11100,7 @@ impl Inferer<'_> {
                 ret
             }),
             predicate: predicate.map(Box::new),
-            has_rest: params.last().is_some_and(|param| param.rest),
+            has_rest,
             optional: params
                 .iter()
                 .rev()
@@ -10989,6 +11108,67 @@ impl Inferer<'_> {
                 .take_while(|p| p.is_omittable())
                 .count(),
         })
+    }
+
+    /// Contextual parameter and return types from `expected`, looking through
+    /// call-signature interfaces and unions whose callable members agree on the
+    /// leading parameter types. A rest parameter lines up only with a rest hint
+    /// of the same arity.
+    fn contextual_function_hint(
+        &self,
+        expected: Option<&Type>,
+        param_count: usize,
+        has_rest: bool,
+    ) -> Option<(Vec<Type>, Type)> {
+        let lines_up = |hint_params: &[Type], hint_rest: bool| {
+            (hint_params.len() == param_count && has_rest == hint_rest) || !(has_rest || hint_rest)
+        };
+        let leading =
+            |hint_params: &[Type]| hint_params[..param_count.min(hint_params.len())].to_vec();
+        match expected.map(crate::types::Type::peel) {
+            Some(Type::Union(members)) => {
+                let functions: Vec<_> = members
+                    .iter()
+                    .filter_map(|member| match self.contextual_call_signature(member) {
+                        Some(Type::Function {
+                            params: hp,
+                            ret,
+                            has_rest: hint_rest,
+                            ..
+                        }) if lines_up(&hp, hint_rest) => Some((leading(&hp), (*ret).clone())),
+                        _ => None,
+                    })
+                    .collect();
+                functions.first().and_then(|(params, _)| {
+                    functions.iter().all(|(other, _)| other == params).then(|| {
+                        (
+                            params.clone(),
+                            Type::union(functions.iter().map(|(_, ret)| ret.clone()).collect()),
+                        )
+                    })
+                })
+            }
+            Some(ty) => match self.contextual_call_signature(ty) {
+                Some(Type::Function {
+                    params: hp,
+                    ret: hr,
+                    has_rest: hint_rest,
+                    ..
+                }) if lines_up(&hp, hint_rest) => Some((leading(&hp), (*hr).clone())),
+                _ => None,
+            },
+            None => None,
+        }
+    }
+
+    fn contextual_call_signature(&self, ty: &Type) -> Option<Type> {
+        match ty.peel() {
+            function @ Type::Function { .. } => Some(function.clone()),
+            interface @ Type::InterfaceRef { .. } => {
+                super::assignable::expand_interface_call_signature(interface, self.resolver())
+            }
+            _ => None,
+        }
     }
 
     /// arrow function inference. Two-mode:
@@ -11046,48 +11226,7 @@ impl Inferer<'_> {
         // nullable `sort` comparator) still gives the arrow its contextual
         // parameter types.
         let arrow_rest = params.last().is_some_and(|p| p.rest);
-        // A rest arrow standing for a fixed-arity function takes no hint: its
-        // rest parameter would be compared with a single argument's type. It
-        // is checked as a whole function instead.
-        let lines_up = |hint_params: &[Type], hint_rest: bool| {
-            (hint_params.len() == params.len() && arrow_rest == hint_rest)
-                || !(arrow_rest || hint_rest)
-        };
-        let leading =
-            |hint_params: &[Type]| hint_params[..params.len().min(hint_params.len())].to_vec();
-        let hint_owned: Option<(Vec<Type>, Type)> = match expected.map(crate::types::Type::peel) {
-            Some(Type::Function {
-                params: hp,
-                ret: hr,
-                has_rest,
-                ..
-            }) if lines_up(hp, *has_rest) => Some((leading(hp), (**hr).clone())),
-            Some(Type::Union(members)) => {
-                let functions: Vec<_> = members
-                    .iter()
-                    .filter_map(|member| match member.peel() {
-                        Type::Function {
-                            params: hp,
-                            ret,
-                            has_rest,
-                            ..
-                        } if lines_up(hp, *has_rest) => Some((leading(hp), ret)),
-                        _ => None,
-                    })
-                    .collect();
-                functions.first().and_then(|(params, _)| {
-                    functions.iter().all(|(other, _)| other == params).then(|| {
-                        (
-                            params.clone(),
-                            Type::union(
-                                functions.iter().map(|(_, ret)| (***ret).clone()).collect(),
-                            ),
-                        )
-                    })
-                })
-            }
-            _ => None,
-        };
+        let hint_owned = self.contextual_function_hint(expected, params.len(), arrow_rest);
 
         let invoked_types = self.take_invoked_parameter_types(span);
         self.scopes.push();
@@ -12953,6 +13092,12 @@ impl Inferer<'_> {
                 steps: missing_steps,
             }));
         }
+        for part in &typed_parts {
+            if matches!(part, TypedChainPart::MethodCall { .. }) {
+                self.record_runtime_type_test(part.result_ty())
+                    .map_err(|failure| failure.with_span(part.span()))?;
+            }
+        }
         Ok((
             TypedExprKind::OptionalChain {
                 base: typed_base,
@@ -13307,6 +13452,12 @@ impl Inferer<'_> {
                     ));
                 }
 
+                if let Some(call_part) =
+                    self.infer_chain_call_signature(receiver_ty, &args, optional, span)?
+                {
+                    return Ok(call_part);
+                }
+
                 // Closure-typed receiver: ordinary `Call` part.
                 let union_signature = self.union_signature_of(receiver_ty, Some(args.len()));
                 let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
@@ -13348,6 +13499,24 @@ impl Inferer<'_> {
                         (ret_ty, typed_args)
                     }
                 };
+                if super::union_call::union_has_interface_member(receiver_ty)
+                    && union_signature.is_some()
+                {
+                    return Ok((
+                        TypedChainPart::MethodCall {
+                            iface: crate::mangle::prelude("Object"),
+                            name: Ident {
+                                name: "@call".to_string(),
+                                span,
+                            },
+                            args: typed_args,
+                            optional,
+                            result_ty: ret_ty.clone(),
+                            span,
+                        },
+                        ret_ty,
+                    ));
+                }
                 (
                     TypedChainPart::Call {
                         args: typed_args,
@@ -13360,6 +13529,85 @@ impl Inferer<'_> {
                 )
             }
         })
+    }
+
+    fn infer_chain_call_signature(
+        &mut self,
+        receiver_ty: &Type,
+        args: &[ExprId],
+        optional: bool,
+        span: Span,
+    ) -> Result<Option<(TypedChainPart, Type)>, CompilerFailure> {
+        if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
+            return Ok(None);
+        }
+        let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
+            self.find_method(receiver_ty, "@call")
+        else {
+            return Ok(None);
+        };
+        if !sig.generics.is_empty() {
+            self.error(
+                span,
+                "optional call signature with method-level generics is not yet \
+                 supported in chain position"
+                    .to_string(),
+            );
+            let typed_args = args
+                .iter()
+                .map(|&a| Ok::<_, CompilerFailure>(self.infer_expr(a, None)?.0))
+                .collect::<Result<_, _>>()?;
+            return Ok(Some((
+                TypedChainPart::Call {
+                    args: typed_args,
+                    optional,
+                    result_ty: Type::Error,
+                    union_signature: None,
+                    span,
+                },
+                Type::Error,
+            )));
+        }
+        let params: Vec<crate::Param> = sig
+            .params
+            .iter()
+            .map(|p| crate::Param {
+                ty: super::generic::substitute_or_record(
+                    &p.ty,
+                    &interface_bindings,
+                    &self.type_limits,
+                ),
+                ..p.clone()
+            })
+            .collect();
+        let ret_ty =
+            super::generic::substitute_or_record(&sig.ret, &interface_bindings, &self.type_limits);
+        let call_name = Ident {
+            name: "@call".to_string(),
+            span,
+        };
+        let typed_args = self.bind_param_call_args(
+            &params,
+            &ret_ty,
+            CallLift::Method {
+                receiver_ty,
+                name: &call_name.name,
+                sig: &sig,
+            },
+            args,
+            span,
+        )?;
+        Ok(Some((
+            TypedChainPart::MethodCall {
+                iface: iface_mangled,
+                name: call_name,
+                args: typed_args,
+                optional,
+                result_ty: ret_ty.clone(),
+                span,
+            },
+            ret_ty,
+        )))
     }
 
     /// A static-dispatch interface is a namespace, not a value: its binding
@@ -14032,7 +14280,9 @@ impl Inferer<'_> {
     /// and put to the same predicate `infer_as` uses.
     pub(super) fn is_legal_cast_target(&self, source: &Type, target: &Type) -> bool {
         let shape = self.reduce_cast_target(target);
-        if super::assignable::assignable(source, &shape, self.resolver()) {
+        if super::assignable::assignable(source, target, self.resolver())
+            || super::assignable::assignable(source, &shape, self.resolver())
+        {
             return true;
         }
         unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_none()
@@ -14091,16 +14341,21 @@ impl Inferer<'_> {
                 target_ty,
             ));
         }
-        // `assignable` is nominal for `InterfaceRef`; relate (and later check) against the
-        // interface's structural data shape so `unknown`/structurally-compatible sources pass.
+        // Relate against both `target_ty` (so callable sub-interfaces and functions
+        // satisfy weak/callable interface targets) and its reduced structural data shape
+        // (so `unknown` and plain-object sources relate to data-only interfaces).
         let shape = self.reduce_cast_target(&target_ty);
-        let inner_to_target = assignable(&inner_ty, &shape, self.resolver());
-        let target_to_inner = assignable(&shape, &inner_ty, self.resolver());
-        let target_to_widened =
-            assignable(&shape, &widen_assertion_source(&inner_ty), self.resolver());
+        let widened_inner = widen_assertion_source(&inner_ty);
+        let inner_to_target = assignable(&inner_ty, &target_ty, self.resolver())
+            || assignable(&inner_ty, &shape, self.resolver());
+        let target_to_inner = assignable(&target_ty, &inner_ty, self.resolver())
+            || assignable(&shape, &inner_ty, self.resolver());
+        let target_to_widened = assignable(&target_ty, &widened_inner, self.resolver())
+            || assignable(&shape, &widened_inner, self.resolver());
         if !inner_to_target
             && !target_to_inner
             && !target_to_widened
+            && !self.union_members_overlap(&inner_ty, &target_ty)
             && !self.union_members_overlap(&inner_ty, &shape)
         {
             let blockers = optional_vs_required_blockers(&inner_ty, &shape, self.resolver());

@@ -212,6 +212,8 @@ struct Builder<'a> {
     class_hierarchy: BTreeMap<MangledName, Option<MangledName>>,
     external_classes: BTreeMap<MangledName, &'a crate::TypeSymbol>,
     external_surfaces: BTreeMap<MangledName, Rc<ExternalClassSurface>>,
+    callable_interfaces: BTreeSet<MangledName>,
+    static_value_bindings: BTreeSet<MangledName>,
     edges: Vec<RawEdge>,
     exposure_edges: Vec<(usize, usize)>,
     direct_effect_count: usize,
@@ -235,6 +237,7 @@ impl<'a> Builder<'a> {
                 _ => None,
             })
             .collect();
+        let dependencies: Vec<_> = dependencies.collect();
         let mut builder = Self {
             declaration,
             ta,
@@ -255,12 +258,19 @@ impl<'a> Builder<'a> {
             class_hierarchy: BTreeMap::new(),
             external_classes: BTreeMap::new(),
             external_surfaces: BTreeMap::new(),
+            callable_interfaces: BTreeSet::new(),
+            static_value_bindings: BTreeSet::new(),
             edges: Vec::new(),
             exposure_edges: Vec::new(),
             direct_effect_count: 0,
             check_count: 0,
             limits,
         };
+        builder.index_callable_interfaces(declaration);
+        for dependency in &dependencies {
+            builder.index_callable_interfaces(dependency);
+            builder.index_static_value_bindings(dependency);
+        }
         builder.index_local()?;
         for dependency in dependencies {
             builder.index_dependency_declaration(dependency);
@@ -528,7 +538,7 @@ impl<'a> Builder<'a> {
         exported: bool,
     ) -> Result<(), CompilerFailure> {
         let held = self.held_callable(value)?;
-        if held.is_none() && !may_be_callable(target_ty) {
+        if held.is_none() && !may_be_callable(target_ty, &self.callable_interfaces) {
             return Ok(());
         }
         let exposure = if exported {
@@ -698,7 +708,7 @@ impl<'a> Builder<'a> {
                     .is_none_or(|seen| seen.insert(field.name.name.clone()));
                 (newly_visible
                     && field.visibility == Visibility::Public
-                    && may_be_callable(&field.ty))
+                    && may_be_callable(&field.ty, &self.callable_interfaces))
                 .then_some((
                     field.name.name.clone(),
                     field.name.span,
@@ -793,7 +803,7 @@ impl<'a> Builder<'a> {
             .filter(|(name, field)| {
                 !seen.contains(*name)
                     && field.visibility == Visibility::Public
-                    && may_be_callable(&field.ty)
+                    && may_be_callable(&field.ty, &self.callable_interfaces)
             })
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
@@ -833,7 +843,8 @@ impl<'a> Builder<'a> {
             .static_fields
             .iter()
             .filter(|(_, field)| {
-                field.visibility == Visibility::Public && may_be_callable(&field.ty)
+                field.visibility == Visibility::Public
+                    && may_be_callable(&field.ty, &self.callable_interfaces)
             })
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
@@ -1437,7 +1448,7 @@ impl<'a> Builder<'a> {
             if matches!(symbol.kind, TypeKind::Class { .. }) {
                 self.external_classes
                     .insert(symbol.mangled_name.clone(), symbol);
-                if let Some(surface) = external_class_surface(symbol) {
+                if let Some(surface) = external_class_surface(symbol, &self.callable_interfaces) {
                     self.external_surfaces
                         .insert(symbol.mangled_name.clone(), Rc::new(surface));
                 }
@@ -1517,6 +1528,53 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+    }
+
+    fn index_callable_interfaces(&mut self, declaration: &PackageDeclaration) {
+        fn walk_types(
+            types: &BTreeMap<String, crate::TypeSymbol>,
+            namespaces: &BTreeMap<String, crate::NamespaceSymbol>,
+            out: &mut BTreeSet<MangledName>,
+        ) {
+            for symbol in types.values() {
+                if let TypeKind::Interface { methods, .. } = &symbol.kind
+                    && methods.contains_key("@call")
+                {
+                    out.insert(symbol.mangled_name.clone());
+                }
+            }
+            for namespace in namespaces.values() {
+                walk_types(&namespace.types, &namespace.namespaces, out);
+            }
+        }
+        walk_types(
+            &declaration.types,
+            &declaration.namespaces,
+            &mut self.callable_interfaces,
+        );
+        for symbol in declaration.runtime_types.values() {
+            if let TypeKind::Interface { methods, .. } = &symbol.kind
+                && methods.contains_key("@call")
+            {
+                self.callable_interfaces.insert(symbol.mangled_name.clone());
+            }
+        }
+    }
+
+    fn index_static_value_bindings(&mut self, declaration: &PackageDeclaration) {
+        declaration.collect_static_value_bindings(&mut self.static_value_bindings);
+    }
+
+    fn is_static_value_binding(&self, id: ExprId) -> Result<bool, CompilerFailure> {
+        let expr = self
+            .ta
+            .try_expr(id)
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok(matches!(
+            &expr.kind,
+            TypedExprKind::GlobalRef { mangled, .. }
+                if self.static_value_bindings.contains(mangled)
+        ))
     }
 
     fn local_method(&self, class: &MangledName, name: &str) -> Option<usize> {
@@ -1689,18 +1747,34 @@ impl Visitor for CallVisitor<'_, '_> {
                 self.direct_call(mangled, &args, span)?;
             }
             TypedExprKind::MethodCall {
-                iface, name, args, ..
+                receiver,
+                iface,
+                name,
+                args,
+                ..
             } => {
-                self.method_call(iface, &name.name, args, span)?;
+                if name.name == "@call" && !self.builder.is_static_value_binding(*receiver)? {
+                    self.call_signature_call(*receiver, span)?;
+                } else {
+                    self.method_call(iface, &name.name, args, span)?;
+                }
             }
             TypedExprKind::SuperMethodCall { owner, name, args } => {
                 self.super_method_call(owner, &name.name, args, span)?;
             }
             TypedExprKind::GenericMethodCall {
-                iface, name, args, ..
+                receiver,
+                iface,
+                name,
+                args,
+                ..
             } => {
-                let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-                self.method_call(iface, &name.name, &args, span)?;
+                if name.name == "@call" && !self.builder.is_static_value_binding(*receiver)? {
+                    self.call_signature_call(*receiver, span)?;
+                } else {
+                    let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
+                    self.method_call(iface, &name.name, &args, span)?;
+                }
             }
             TypedExprKind::SuperCtorCall { parent, .. } => {
                 let target = crate::mangle::extend(parent, "constructor");
@@ -1792,7 +1866,15 @@ impl CallVisitor<'_, '_> {
                     span,
                     ..
                 } => {
-                    self.method_call(iface, &name.name, args, *span)?;
+                    if name.name == "@call" {
+                        self.builder.add_unresolved(
+                            self.caller,
+                            *span,
+                            "dynamic optional-call target",
+                        )?;
+                    } else {
+                        self.method_call(iface, &name.name, args, *span)?;
+                    }
                     receiver_type = result_ty.clone();
                 }
                 TypedChainPart::Call {
@@ -1947,6 +2029,15 @@ impl CallVisitor<'_, '_> {
         self.builder.held_callable(id)
     }
 
+    fn call_signature_call(&mut self, callee: ExprId, span: Span) -> Result<(), CompilerFailure> {
+        if let Some(target) = self.closure_target(callee)? {
+            self.builder.add_edge(self.caller, target, span)
+        } else {
+            self.builder
+                .add_unresolved(self.caller, span, "dynamic closure target")
+        }
+    }
+
     fn accessor(
         &mut self,
         receiver: ExprId,
@@ -2066,11 +2157,14 @@ fn own_static_names(ta: &TypedAst, class: &MangledName) -> BTreeSet<String> {
         .collect()
 }
 
-fn may_be_callable(ty: &Type) -> bool {
+fn may_be_callable(ty: &Type, callable_interfaces: &BTreeSet<MangledName>) -> bool {
     match ty.peel() {
         Type::Function { .. } => true,
+        Type::InterfaceRef { mangled, .. } => callable_interfaces.contains(mangled),
         // `(() => void) & { tag: string }` is callable.
-        Type::Union(members) | Type::Intersection(members) => members.iter().any(may_be_callable),
+        Type::Union(members) | Type::Intersection(members) => members
+            .iter()
+            .any(|member| may_be_callable(member, callable_interfaces)),
         _ => false,
     }
 }
@@ -2120,7 +2214,10 @@ struct InheritedNames {
     fields: BTreeSet<String>,
 }
 
-fn external_class_surface(symbol: &crate::TypeSymbol) -> Option<ExternalClassSurface> {
+fn external_class_surface(
+    symbol: &crate::TypeSymbol,
+    callable_interfaces: &BTreeSet<MangledName>,
+) -> Option<ExternalClassSurface> {
     let TypeKind::Class {
         fields,
         methods,
@@ -2160,7 +2257,8 @@ fn external_class_surface(symbol: &crate::TypeSymbol) -> Option<ExternalClassSur
         function_fields: fields
             .iter()
             .filter(|(_, field)| {
-                field.visibility == Visibility::Public && may_be_callable(&field.ty)
+                field.visibility == Visibility::Public
+                    && may_be_callable(&field.ty, callable_interfaces)
             })
             .map(|(name, _)| name.clone())
             .collect(),
@@ -2172,7 +2270,8 @@ fn external_class_surface(symbol: &crate::TypeSymbol) -> Option<ExternalClassSur
         static_function_fields: static_fields
             .iter()
             .filter(|(_, field)| {
-                field.visibility == Visibility::Public && may_be_callable(&field.ty)
+                field.visibility == Visibility::Public
+                    && may_be_callable(&field.ty, callable_interfaces)
             })
             .map(|(name, _)| name.clone())
             .collect(),
@@ -3096,5 +3195,89 @@ export function unchecked(): void { get("https://example.com"); }
                 ..
             }) if actual == span
         ));
+    }
+
+    #[test]
+    fn callable_interface_binding_propagates_effects_while_builtin_boolean_stays_pure() {
+        let map = compile(&[(
+            "lib",
+            r#"
+                import { get } from "submilli:secrets";
+                const stealth: BooleanConstructor = (_x?: unknown): boolean => {
+                    get("STEALTH_BOOL");
+                    return false;
+                };
+                export function pure(x: unknown): boolean {
+                    return Boolean(x);
+                }
+                export function sneaky(x: unknown): boolean {
+                    return stealth(x);
+                }
+                export function sneakyOptional(f: BooleanConstructor | null): boolean {
+                    return f?.(1) ?? false;
+                }
+                type EmptyTuple = Parameters<() => void>;
+                function zero(): number {
+                    return 0;
+                }
+                function emptyWithSecret(): EmptyTuple {
+                    get("EMPTY_SPREAD_SECRET");
+                    return [];
+                }
+                export function sneakyEmptySpread(): number {
+                    return zero(...emptyWithSecret());
+                }
+                export class CallableHolder {
+                    b: BooleanConstructor = (_x?: unknown): boolean => {
+                        get("FIELD_BOOL");
+                        return true;
+                    };
+                }
+                export interface WeakOpts {
+                    retries?: number;
+                }
+                export class PlainClient {
+                    opts: WeakOpts = {};
+                    run(): number {
+                        return this.opts.retries ?? 0;
+                    }
+                }
+            "#,
+        )]);
+        assert!(route(&map, "#pure").effects.is_empty(), "{map:#?}");
+        assert!(route(&map, "#sneaky").effects.iter().any(|effect| {
+            effect.effect.known_bindings.get("name") == Some(&"\"STEALTH_BOOL\"".to_string())
+        }));
+        assert!(route(&map, "#sneakyOptional").effects.iter().any(|effect| {
+            effect.effect.reason.as_deref() == Some("dynamic optional-call target")
+        }));
+        assert!(
+            route(&map, "#sneakyEmptySpread")
+                .effects
+                .iter()
+                .any(|effect| {
+                    effect.effect.known_bindings.get("name")
+                        == Some(&"\"EMPTY_SPREAD_SECRET\"".to_string())
+                })
+        );
+        assert!(map.routes.iter().any(|route| {
+            route.effects.iter().any(|effect| {
+                effect.effect.known_bindings.get("name") == Some(&"\"FIELD_BOOL\"".to_string())
+            })
+        }));
+        assert!(map.routes.iter().any(|route| {
+            route.callable.contains("CallableHolder")
+                && route.effects.iter().any(|effect| {
+                    effect.effect.reason.as_deref()
+                        == Some("public function field may be reassigned")
+                })
+        }));
+        assert!(!map.routes.iter().any(|route| {
+            route.callable.contains("PlainClient")
+                && route.effects.iter().any(|effect| {
+                    effect.effect.reason.as_deref()
+                        == Some("public function field may be reassigned")
+                })
+        }));
     }
 }

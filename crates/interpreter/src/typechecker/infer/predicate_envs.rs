@@ -972,12 +972,15 @@ impl<'a> Inferer<'a> {
             .as_ref()
             .and_then(|path| result_env.get_mut(path))
         {
-            let source_ty = &self
+            let source_ty = self
                 .typed_ast
                 .try_expr(view.source)
                 .map_err(crate::typechecker::arena_failure)?
-                .ty;
-            view.narrowed_ty = narrowing::intersect_with(source_ty, result_facts);
+                .ty
+                .clone();
+            let resolver = self.resolver();
+            view.narrowed_ty =
+                narrowing::intersect_with_types(&source_ty, result_facts, Some(resolver));
             view.facts = result_facts;
         }
         env.extend(result_env);
@@ -2485,6 +2488,7 @@ impl<'a> Inferer<'a> {
         if !members.iter().all(|m| matches!(m.peel(), Type::Tuple(_))) {
             return Ok(());
         }
+        let resolver = self.resolver();
         let mut matching: Vec<Type> = Vec::new();
         let mut non_matching: Vec<Type> = Vec::new();
         for m in members {
@@ -2497,13 +2501,13 @@ impl<'a> Inferer<'a> {
             let read_ty =
                 crate::ObjectField::widen_optional(position >= elems.required_len(), elem.clone());
             if !matches!(
-                narrowing::intersect_with(&read_ty, facts),
+                narrowing::intersect_with_types(&read_ty, facts, Some(resolver)),
                 Type::Error | Type::Never
             ) {
                 matching.push(m.clone());
             }
             if !matches!(
-                narrowing::subtract(&read_ty, facts),
+                narrowing::subtract_types(&read_ty, facts, Some(resolver)),
                 Type::Error | Type::Never
             ) {
                 non_matching.push(m.clone());
@@ -2580,8 +2584,9 @@ impl<'a> Inferer<'a> {
         let value_span = value_expr.span;
         let fallback_kind = value_expr.kind.clone();
 
-        let true_ty = narrowing::intersect_with(&from_ty, facts);
-        let false_ty = narrowing::subtract(&from_ty, facts);
+        let resolver = self.resolver();
+        let true_ty = narrowing::intersect_with_types(&from_ty, facts, Some(resolver));
+        let false_ty = narrowing::subtract_types(&from_ty, facts, Some(resolver));
 
         let true_facts = facts;
         // False-branch facts left EMPTY — `narrowed_ty` is load-bearing; `facts` only
@@ -2773,8 +2778,11 @@ impl<'a> Inferer<'a> {
 
         let root_envs = self.truthiness_discriminant_envs(&path, &fallback_kind, span)?;
 
-        let true_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::TRUTHY);
-        let false_ty = narrowing::intersect_with(&from_ty, narrowing::TypeFacts::FALSY);
+        let resolver = self.resolver();
+        let true_ty =
+            narrowing::intersect_with_types(&from_ty, narrowing::TypeFacts::TRUTHY, Some(resolver));
+        let false_ty =
+            narrowing::intersect_with_types(&from_ty, narrowing::TypeFacts::FALSY, Some(resolver));
         // An outcome a local's type can't take makes it `never` there (a
         // ruled-out view), when every member of the type is always truthy or
         // always falsy: an object is never falsy, as `null` is never truthy.
@@ -2869,9 +2877,10 @@ impl<'a> Inferer<'a> {
                 return Ok(None);
             };
             is_discriminant |= narrowing::has_unit_member(&field_ty);
+            let resolver = self.resolver();
             let can_be = |facts| {
                 !matches!(
-                    narrowing::intersect_with(&field_ty, facts).peel(),
+                    narrowing::intersect_with_types(&field_ty, facts, Some(resolver)).peel(),
                     Type::Error | Type::Never
                 )
             };

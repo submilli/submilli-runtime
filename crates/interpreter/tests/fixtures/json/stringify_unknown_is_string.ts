@@ -8,6 +8,10 @@ interface FromNumConstructor {
   (v: number): number;
 }
 
+interface ValueConstructor {
+  value: number;
+}
+
 function f(): unknown {
   return 1;
 }
@@ -74,14 +78,23 @@ function main(): void {
   assert(text === undefined, "a constructor binding in an optional place");
   assert(invoke(() => "ok") === "ok", "an unused outer missing value does not break a closure");
 
-  // A user interface whose name ends in Constructor is not a static binding.
-  // Number assigned to it is still a closure, and a closure's toJson is "null".
+  // A user interface whose name ends in Constructor is not a static binding:
+  // a plain data interface serializes as an object, while a call-signature
+  // interface admits functions and omits their top-level JSON text like Node.
+  const asObject: ValueConstructor = { value: 1 };
+  assert(JSON.stringify(asObject) === "{\"value\":1}", "a data interface named *Constructor is an object");
   const asCall: FromNumConstructor = Number;
-  assert(JSON.stringify(asCall) === "null", "a call-signature interface is not omitted");
+  assert(JSON.stringify(asCall) === undefined, "a function at a call-signature interface has no JSON text");
+  assert(thrown(() => callText(asCall)) === NO_FUNCTION_TEXT, "a function at a call-signature interface throws in a string place");
+  assert(JSON.stringify([asCall]) === "[null]", "an array element at a call-signature interface is null");
   assert(thrown(() => unionText(asCall)) === NO_FUNCTION_TEXT, "a function in an undefined union has no JSON text");
   assert(thrown(() => unionText(undefined)) === NO_UNDEFINED_TEXT, "undefined in that union throws in a string place");
   assert(unionCheck(asCall), "a check sees a function in that union as undefined");
   assert(unionCheck(undefined), "a check sees undefined in that union");
+}
+
+function callText(value: FromNumConstructor): string {
+  return JSON.stringify(value);
 }
 
 function unionCheck(value: FromNumConstructor | undefined): boolean {

@@ -391,7 +391,9 @@ impl<'a> Discovery<'a> {
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
         for carrier in &interface.non_shape_carriers {
             match carrier {
-                crate::InterfaceCarrier::Array(ty) | crate::InterfaceCarrier::Set(ty) => {
+                crate::InterfaceCarrier::Array(ty)
+                | crate::InterfaceCarrier::Function(ty)
+                | crate::InterfaceCarrier::Set(ty) => {
                     self.walk(ty)?;
                 }
                 crate::InterfaceCarrier::Map(key, value) => {
@@ -751,5 +753,13 @@ fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
 }
 
 fn is_generic_interface_key(ty: &Type) -> bool {
-    matches!(ty, Type::InterfaceRef { args, .. } if !args.is_empty() && args.iter().all(|arg| matches!(arg, Type::TypeVar(_))))
+    let Type::InterfaceRef { args, .. } = ty else {
+        return false;
+    };
+    if args.is_empty() {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    args.iter()
+        .all(|arg| matches!(arg, Type::TypeVar(name) if seen.insert(name.as_str())))
 }

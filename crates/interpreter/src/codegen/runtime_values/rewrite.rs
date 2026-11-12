@@ -271,7 +271,8 @@ fn rewrite_operation(
             name,
             args,
             ..
-        } if super::dynamic_member_interface(&iface)
+        } if name.name != "@call"
+            && super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
                 || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
@@ -290,7 +291,8 @@ fn rewrite_operation(
             name,
             args,
             ..
-        } if super::dynamic_member_interface(&iface)
+        } if name.name != "@call"
+            && super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
                 || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
@@ -476,8 +478,23 @@ fn rewrite_member_call(
         .try_expr(id)
         .map_err(crate::codegen::arena_failure)?
         .span;
-    let args = ast.authored_call_arguments(span).cloned().unwrap_or(args);
-    let lookup_args = member_arguments(ast, id, receiver, iface, name)?;
+    let elements = ast.authored_call_arguments(span).map_or_else(
+        || {
+            args.into_iter()
+                .map(crate::TypedArrayElement::Value)
+                .collect()
+        },
+        <[crate::TypedArrayElement]>::to_vec,
+    );
+    let mut lookup_args = member_arguments(ast, id, receiver, iface, name)?;
+    let null_receiver = ast
+        .try_push_expr(crate::TypedExpr {
+            kind: TypedExprKind::Null,
+            ty: Type::Unknown,
+            span,
+        })
+        .map_err(crate::codegen::arena_failure)?;
+    lookup_args.push(null_receiver);
     let member = ast
         .try_push_expr(crate::TypedExpr {
             kind: member_helper("member", lookup_args),
@@ -488,10 +505,7 @@ fn rewrite_member_call(
     let args = ast
         .try_push_expr(crate::TypedExpr {
             kind: TypedExprKind::ArrayLiteral {
-                elements: args
-                    .into_iter()
-                    .map(crate::TypedArrayElement::Value)
-                    .collect(),
+                elements,
                 element_ty: Type::Unknown,
             },
             ty: Type::Array(Box::new(Type::Unknown)),

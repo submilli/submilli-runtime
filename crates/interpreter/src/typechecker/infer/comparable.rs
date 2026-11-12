@@ -140,6 +140,34 @@ impl Proof<'_> {
             (Type::Function { .. }, Type::Function { .. }) => {
                 self.comparable_functions(source, target, ParameterVariance::Contravariant)
             }
+            (Type::Function { .. }, Type::InterfaceRef { .. })
+            | (Type::InterfaceRef { .. }, Type::Function { .. }) => {
+                self.step(source, target, |proof| {
+                    let iface = if matches!(target, Type::InterfaceRef { .. }) {
+                        target
+                    } else {
+                        source
+                    };
+                    let Some(form) =
+                        super::assignable::function_satisfiable_interface_form(iface, proof.types)
+                    else {
+                        return false;
+                    };
+                    let Some(call) = form.get("@call").filter(|call| !call.optional) else {
+                        return true;
+                    };
+                    let (source_fn, target_fn) = if matches!(target, Type::InterfaceRef { .. }) {
+                        (source, call.ty.peel())
+                    } else {
+                        (call.ty.peel(), target)
+                    };
+                    proof.comparable_functions(
+                        source_fn,
+                        target_fn,
+                        ParameterVariance::Contravariant,
+                    )
+                })
+            }
             _ if is_primitive_like(source) && is_primitive_like(target) => {
                 primitives_comparable(source, target, self.types)
             }
@@ -256,6 +284,7 @@ impl Proof<'_> {
             Type::Function {
                 params: source_params,
                 ret: source_ret,
+                optional: source_optional,
                 has_rest: source_rest,
                 ..
             },
@@ -269,17 +298,44 @@ impl Proof<'_> {
         else {
             return false;
         };
-        source_rest == target_rest
-            && Type::function_arity_fits(source_params.len(), target_params.len(), *source_rest)
-            && source_params
-                .iter()
-                .zip(target_params)
-                .all(|(source, target)| {
-                    self.comparable_to(target, source)
-                        || (matches!(variance, ParameterVariance::Bivariant)
-                            && self.comparable_to(source, target))
-                })
-            && (target_ret.is_void() || self.comparable_to(source_ret, target_ret))
+        let param_comparable = |proof: &mut Self, passed: &Type, declared: &Type| {
+            proof.comparable_to(passed, declared)
+                || (matches!(variance, ParameterVariance::Bivariant)
+                    && proof.comparable_to(declared, passed))
+        };
+        let params_ok = if *source_rest && !*target_rest {
+            super::assignable::rest_function_accepts(
+                source_params,
+                target_params,
+                |passed, declared| param_comparable(self, passed, declared),
+            )
+        } else if *source_rest == *target_rest {
+            let source_required = if *source_rest {
+                source_params.len()
+            } else {
+                source_params.len().saturating_sub(*source_optional)
+            };
+            Type::function_arity_fits(source_required, target_params.len(), *source_rest)
+                && source_params.iter().zip(target_params).enumerate().all(
+                    |(i, (source_param, target_param))| {
+                        let both_rest = *source_rest
+                            && i + 1 == source_params.len()
+                            && i + 1 == target_params.len();
+                        if both_rest {
+                            param_comparable(
+                                self,
+                                target_param.rest_array_ignoring_readonly(),
+                                source_param.rest_array_ignoring_readonly(),
+                            )
+                        } else {
+                            param_comparable(self, target_param, source_param)
+                        }
+                    },
+                )
+        } else {
+            false
+        };
+        params_ok && (target_ret.is_void() || self.comparable_to(source_ret, target_ret))
     }
 
     /// Member-by-member comparison against an object-like target. Each target

@@ -135,6 +135,10 @@ pub struct SymbolTable {
     /// The JavaScript string form of each static-dispatch interface's binding,
     /// which names the object the binding reads as when used as a value.
     static_value_tags: BTreeMap<MangledName, String>,
+    /// Static-dispatch bindings keyed by the binding's own mangled name, so a
+    /// user global whose type is a static-dispatch interface still reads its
+    /// own Wasm global rather than the host binding's value.
+    static_binding_tags: BTreeMap<MangledName, String>,
     /// Physical signature of each Direct/Static-dispatch interface wrapper,
     /// keyed by its `iface#method` dispatch key.
     iface_method_abi: BTreeMap<MangledName, MethodSlotAbi>,
@@ -977,6 +981,14 @@ impl SymbolTable {
         self.static_value_tags.get(iface).map(String::as_str)
     }
 
+    pub fn record_static_binding_tag(&mut self, binding: MangledName, tag: String) {
+        self.static_binding_tags.insert(binding, tag);
+    }
+
+    pub fn static_binding_tag(&self, binding: &MangledName) -> Option<&str> {
+        self.static_binding_tags.get(binding).map(String::as_str)
+    }
+
     pub fn iface_dispatch(&self, iface: &MangledName) -> Option<Dispatch> {
         self.iface_dispatch.get(iface).copied()
     }
@@ -1331,15 +1343,16 @@ impl SymbolTable {
     }
 }
 
-/// Names of a validator key's type arguments when every one is a generic
-/// parameter, so one validator serves each instantiation.
+/// Names of a validator key's type arguments when every one is a distinct
+/// generic parameter, so one validator serves each instantiation.
 fn generic_parameter_names(args: &[Type]) -> Option<Vec<String>> {
     if args.is_empty() {
         return None;
     }
+    let mut seen = BTreeSet::new();
     args.iter()
         .map(|arg| match arg {
-            Type::TypeVar(name) => Some(name.clone()),
+            Type::TypeVar(name) if seen.insert(name.as_str()) => Some(name.clone()),
             _ => None,
         })
         .collect()

@@ -4,7 +4,7 @@
 //! copy for emission, propagating boxed storage through uses before Wasm local
 //! and function signatures are allocated.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::{ExprId, Ident, MangledName, StmtId, Type, TypedAst};
 
@@ -36,6 +36,7 @@ struct Flow {
     widened: HashSet<Place>,
     live_reads: HashMap<ExprId, ExprId>,
     binding_types: HashMap<Ident, (Type, bool)>,
+    static_value_bindings: BTreeSet<MangledName>,
 }
 
 impl Flow {
@@ -45,6 +46,19 @@ impl Flow {
 
     fn value(&mut self, from: ExprId, to: Place) {
         self.edge(Place::Expr(from), to);
+    }
+
+    fn is_static_value_binding(
+        &self,
+        ast: &TypedAst,
+        id: ExprId,
+    ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+        let expr = ast.try_expr(id).map_err(crate::codegen::arena_failure)?;
+        Ok(matches!(
+            &expr.kind,
+            crate::TypedExprKind::GlobalRef { mangled, .. }
+                if self.static_value_bindings.contains(mangled)
+        ))
     }
 
     fn propagate(&mut self) {

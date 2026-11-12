@@ -37,6 +37,7 @@ pub(super) fn collect(
     let mut collector = Collector {
         ta,
         closures: Vec::new(),
+        walked_exprs: std::collections::BTreeSet::new(),
         out,
     };
     match root {
@@ -48,6 +49,7 @@ pub(super) fn collect(
 struct Collector<'a> {
     ta: &'a TypedAst,
     closures: Vec<ExprId>,
+    walked_exprs: std::collections::BTreeSet<ExprId>,
     out: &'a mut Vec<CheckCall>,
 }
 
@@ -171,6 +173,9 @@ impl Collector<'_> {
     }
 
     fn expr(&mut self, id: ExprId) -> Result<(), CompilerFailure> {
+        if !self.walked_exprs.insert(id) {
+            return Ok(());
+        }
         let ta = self.ta;
         let expr = ta.try_expr(id).map_err(crate::typechecker::arena_failure)?;
         let _: () = match &expr.kind {
@@ -179,6 +184,7 @@ impl Collector<'_> {
                     self.record(expr.span, args.clone());
                 }
                 self.exprs(args)?;
+                self.authored_call_arguments(expr.span)?;
             }
             TypedExprKind::GenericCall { mangled, args, .. } => {
                 if crate::stdlib::security::is_check(mangled) {
@@ -187,24 +193,31 @@ impl Collector<'_> {
                 for arg in args {
                     self.expr(arg.expr)?;
                 }
+                self.authored_call_arguments(expr.span)?;
             }
             TypedExprKind::VirtualCall { args, .. }
             | TypedExprKind::SuperCtorCall { args, .. }
             | TypedExprKind::SuperMethodCall { args, .. }
-            | TypedExprKind::IntrinsicCall { args, .. } => self.exprs(args)?,
+            | TypedExprKind::IntrinsicCall { args, .. } => {
+                self.exprs(args)?;
+                self.authored_call_arguments(expr.span)?;
+            }
             TypedExprKind::CallClosure { callee, args } => {
                 self.expr(*callee)?;
                 self.exprs(args)?;
+                self.authored_call_arguments(expr.span)?;
             }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.expr(*receiver)?;
                 self.exprs(args)?;
+                self.authored_call_arguments(expr.span)?;
             }
             TypedExprKind::GenericMethodCall { receiver, args, .. } => {
                 self.expr(*receiver)?;
                 for arg in args {
                     self.expr(arg.expr)?;
                 }
+                self.authored_call_arguments(expr.span)?;
             }
             TypedExprKind::Binary { lhs, rhs, .. }
             | TypedExprKind::NullishCoalesce { lhs, rhs } => {
@@ -313,14 +326,26 @@ impl Collector<'_> {
     fn chain_part(&mut self, part: &TypedChainPart) -> Result<(), CompilerFailure> {
         match part {
             TypedChainPart::Index { idx, .. } => self.expr(*idx),
-            TypedChainPart::Call { args, .. } | TypedChainPart::MethodCall { args, .. } => {
-                self.exprs(args)
+            TypedChainPart::Call { args, span, .. }
+            | TypedChainPart::MethodCall { args, span, .. } => {
+                self.exprs(args)?;
+                self.authored_call_arguments(*span)
             }
             TypedChainPart::Field { .. }
             | TypedChainPart::InterfaceProperty { .. }
             | TypedChainPart::NonNull { .. }
             | TypedChainPart::Constraint { .. } => Ok(()),
         }
+    }
+
+    fn authored_call_arguments(&mut self, span: Span) -> Result<(), CompilerFailure> {
+        let Some(elements) = self.ta.authored_call_arguments(span) else {
+            return Ok(());
+        };
+        for element in elements {
+            self.expr(element.expr_id())?;
+        }
+        Ok(())
     }
 
     fn record(&mut self, span: Span, args: Vec<ExprId>) {

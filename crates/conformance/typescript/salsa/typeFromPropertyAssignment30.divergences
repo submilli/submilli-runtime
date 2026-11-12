@@ -7,6 +7,3 @@ line 7: () => 1
 line 9: p
   tsc:  { [s: string]: number; } | undefined
   ours: Combo
-
-errors:
-line 7: ours: expected `Combo`, got `() => number` (tsc accepts)

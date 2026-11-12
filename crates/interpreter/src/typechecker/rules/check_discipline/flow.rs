@@ -479,28 +479,28 @@ impl<'a> Walker<'a, '_, '_> {
             }
             TypedExprKind::VirtualCall { tool, args, .. } => {
                 let args = self.package.authored(span, args);
-                self.consume_all(args, || Usage::PassedTo(tool.clone()))?;
+                self.consume_all(&args, || Usage::PassedTo(tool.clone()))?;
                 stable()
             }
             TypedExprKind::SuperCtorCall { args, .. } => {
                 let args = self.package.authored(span, args);
-                self.consume_all(args, || Usage::PassedTo("super".to_string()))?;
+                self.consume_all(&args, || Usage::PassedTo("super".to_string()))?;
                 stable()
             }
             TypedExprKind::SuperMethodCall { name, args, .. } => {
                 let args = self.package.authored(span, args);
-                self.consume_all(args, || Usage::PassedTo(format!("super.{}", name.name)))?;
+                self.consume_all(&args, || Usage::PassedTo(format!("super.{}", name.name)))?;
                 stable()
             }
             TypedExprKind::IntrinsicCall { kind, args } => {
                 let args = self.package.authored(span, args);
-                self.consume_all(args, || Usage::PassedTo(kind.name().to_string()))?;
+                self.consume_all(&args, || Usage::PassedTo(kind.name().to_string()))?;
                 stable()
             }
             TypedExprKind::CallClosure { callee, args } => {
                 self.consume(*callee, Use::Escape(Usage::Called))?;
                 let args = self.package.authored(span, args);
-                self.consume_all(args, || Usage::PassedToFunctionValue)?;
+                self.consume_all(&args, || Usage::PassedToFunctionValue)?;
                 stable()
             }
             TypedExprKind::MethodCall {
@@ -509,7 +509,8 @@ impl<'a> Walker<'a, '_, '_> {
                 args,
                 ..
             } => {
-                self.method_call(*receiver, name, self.package.authored(span, args))?;
+                let args = self.package.authored(span, args);
+                self.method_call(*receiver, name, &args)?;
                 stable()
             }
             TypedExprKind::GenericMethodCall {
@@ -519,7 +520,8 @@ impl<'a> Walker<'a, '_, '_> {
                 ..
             } => {
                 let args: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
-                self.method_call(*receiver, name, self.package.authored(span, &args))?;
+                let args = self.package.authored(span, &args);
+                self.method_call(*receiver, name, &args)?;
                 stable()
             }
             TypedExprKind::Binary { op, lhs, rhs } => self.binary(*op, *lhs, *rhs)?,
@@ -749,7 +751,7 @@ impl<'a> Walker<'a, '_, '_> {
             return args.iter().try_for_each(|arg| self.check_argument(*arg));
         }
         let callee = source_name(mangled);
-        self.consume_all(args, || Usage::PassedTo(callee.to_string()))
+        self.consume_all(&args, || Usage::PassedTo(callee.to_string()))
     }
 
     /// The context is usually a literal, whose members `check()` reads.
@@ -769,19 +771,31 @@ impl<'a> Walker<'a, '_, '_> {
         name: &Ident,
         args: &[ExprId],
     ) -> Result<(), CompilerFailure> {
+        // A call signature (`String(x)`, which interpolation of a generic or
+        // `unknown` lowers to) on a host binding is named by that binding; any
+        // other `@call` invokes a function value held in a callable interface.
+        if name.name == "@call" {
+            if let TypedExprKind::GlobalRef {
+                mangled,
+                name: global,
+            } = &self.expr_at(receiver)?.kind
+                && super::package::is_runtime_symbol(mangled)
+            {
+                self.consume(
+                    receiver,
+                    Use::Escape(Usage::MethodCalled(name.name.clone())),
+                )?;
+                let callee = global.name.clone();
+                return self.consume_all(args, || Usage::PassedTo(callee.clone()));
+            }
+            self.consume(receiver, Use::Escape(Usage::Called))?;
+            return self.consume_all(args, || Usage::PassedToFunctionValue);
+        }
         self.consume(
             receiver,
             Use::Escape(Usage::MethodCalled(name.name.clone())),
         )?;
-        // A call signature (`String(x)`, which interpolation of a generic or
-        // `unknown` lowers to) is named by the value called, not by `@call`.
-        let callee = match &self.expr_at(receiver)?.kind {
-            TypedExprKind::GlobalRef { name: global, .. } if name.name == "@call" => {
-                global.name.clone()
-            }
-            _ => name.name.clone(),
-        };
-        self.consume_all(args, || Usage::PassedTo(callee.clone()))
+        self.consume_all(args, || Usage::PassedTo(name.name.clone()))
     }
 
     fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId) -> Result<Yield, CompilerFailure> {
@@ -884,17 +898,24 @@ impl<'a> Walker<'a, '_, '_> {
                     self.escape(receiver, Usage::Called, chain);
                 }
                 let args = self.package.authored(*span, args);
-                self.consume_all(args, || Usage::PassedToFunctionValue)?;
+                self.consume_all(&args, || Usage::PassedToFunctionValue)?;
                 None
             }
             TypedChainPart::MethodCall {
                 name, args, span, ..
             } => {
-                if let Some(receiver) = &receiver {
-                    self.escape(receiver, Usage::MethodCalled(name.name.clone()), chain);
-                }
                 let args = self.package.authored(*span, args);
-                self.consume_all(args, || Usage::PassedTo(name.name.clone()))?;
+                if name.name == "@call" {
+                    if let Some(receiver) = &receiver {
+                        self.escape(receiver, Usage::Called, chain);
+                    }
+                    self.consume_all(&args, || Usage::PassedToFunctionValue)?;
+                } else {
+                    if let Some(receiver) = &receiver {
+                        self.escape(receiver, Usage::MethodCalled(name.name.clone()), chain);
+                    }
+                    self.consume_all(&args, || Usage::PassedTo(name.name.clone()))?;
+                }
                 None
             }
             TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => receiver,
