@@ -10,7 +10,7 @@ use crate::typechecker::rules::body_walk::{self, Visitor};
 use crate::{
     ClosureBody, DocCapability, ExportKind, ExprId, MangledName, PackageDeclaration, Param,
     PostfixTarget, Sources, Span, StmtId, Type, TypeKind, TypedAst, TypedChainPart,
-    TypedClassAccessor, TypedExprKind, TypedStmtKind, TypedTypeDecl, Visibility,
+    TypedClassAccessor, TypedExprKind, TypedStmt, TypedStmtKind, TypedTypeDecl, Visibility,
 };
 
 const MAX_CALLABLES: usize = 1 << 16;
@@ -1711,7 +1711,8 @@ struct CallVisitor<'a, 'b> {
 }
 
 impl Visitor for CallVisitor<'_, '_> {
-    fn visit_stmt(&mut self, kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
+    fn visit_stmt(&mut self, stmt: &TypedStmt) -> Result<(), CompilerFailure> {
+        let kind = &stmt.kind;
         if let TypedStmtKind::AssignField { receiver, name, .. } = kind {
             self.accessor(*receiver, &name.name, true, name.span)?;
         }

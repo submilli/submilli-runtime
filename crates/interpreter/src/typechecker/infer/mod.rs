@@ -696,7 +696,6 @@ fn infer_package_with_rules<'a>(
                 .with_prior_diagnostics(&tc.diagnostics)
                 .with_prior_diagnostics(&diagnostics)
         })?;
-        let starts = ModuleTypedAstStarts::new(&tc.typed_ast);
         tc.reset_for_package_module(source, ast, module.clone(), &inferred_modules)
             .map_err(|error| {
                 error
@@ -767,7 +766,6 @@ fn infer_package_with_rules<'a>(
                     .insert(f.mangled_name.clone());
             }
         }
-        diagnose_package_main_since(&tc.typed_ast, starts.functions, &mut tc.diagnostics);
         // A limit recorded in this module must not be reported against the next.
         tc.resolve_package_export_statements()
             .and_then(|()| tc.type_size_checkpoint(None))
@@ -898,40 +896,6 @@ pub(crate) struct TestModules<'a> {
 pub(crate) struct TestModule {
     pub(crate) declaration: PackageDeclaration,
     pub(crate) unexported: BTreeSet<String>,
-}
-
-#[derive(Clone, Copy)]
-struct ModuleTypedAstStarts {
-    functions: usize,
-}
-
-impl ModuleTypedAstStarts {
-    fn new(ast: &TypedAst) -> Self {
-        Self {
-            functions: ast.functions.len(),
-        }
-    }
-}
-
-fn diagnose_package_main_since(
-    ast: &TypedAst,
-    functions_start: usize,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for function in ast.functions.iter().skip(functions_start) {
-        if function.name.name == "main" {
-            diagnostics.push(Diagnostic {
-                severity: crate::Severity::Error,
-                span: function.name.span,
-                message: "packages cannot declare main".to_string(),
-                help: vec![
-                    "remove `main`; packages are libraries and export named declarations instead"
-                        .to_string(),
-                ],
-                notes: Vec::new(),
-            });
-        }
-    }
 }
 
 pub(super) struct ValueEntry {

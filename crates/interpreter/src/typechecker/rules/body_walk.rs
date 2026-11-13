@@ -6,13 +6,13 @@ use std::collections::BTreeSet;
 use crate::compiler_error::CompilerFailure;
 use crate::{
     ClosureBody, ExprId, PostfixTarget, StmtId, Type, TypedAst, TypedChainPart, TypedExprKind,
-    TypedStmtKind,
+    TypedStmt, TypedStmtKind,
 };
 
 /// Receives each node [`walk_program`] reaches, before the walk descends
 /// into it.
 pub(crate) trait Visitor {
-    fn visit_stmt(&mut self, _kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
+    fn visit_stmt(&mut self, _stmt: &TypedStmt) -> Result<(), CompilerFailure> {
         Ok(())
     }
 
@@ -90,12 +90,12 @@ struct Walk<'a, V> {
 
 impl<V: Visitor> Walk<'_, V> {
     fn stmt(&mut self, stmt_id: StmtId) -> Result<(), CompilerFailure> {
-        let kind = &self
+        let stmt = self
             .ta
             .try_stmt(stmt_id)
-            .map_err(crate::typechecker::arena_failure)?
-            .kind;
-        self.visitor.visit_stmt(kind)?;
+            .map_err(crate::typechecker::arena_failure)?;
+        self.visitor.visit_stmt(stmt)?;
+        let kind = &stmt.kind;
         let _: () = match kind {
             TypedStmtKind::Let { value, .. } | TypedStmtKind::Const { value, .. } => {
                 self.expr(*value)?;

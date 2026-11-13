@@ -234,9 +234,13 @@ fn type_errors_and_submilli_errors_report_together() {
     }
 }
 
-/// A package that stops before inference builds its tree: its errors, with
-/// no internal failure from the rules that have no tree to run on.
-fn package_errors(root_module: &str, source: &str) -> Vec<Vec<String>> {
+/// Runs `work` on the request to compile `source` as the package's one
+/// module, `lib`, rooted at `root_module`.
+fn with_package_request<T>(
+    root_module: &str,
+    source: &str,
+    work: impl FnOnce(&PackageRequest<'_>) -> T,
+) -> T {
     let stdlib = Stdlib::core().package_declarations();
     let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
     let sources = package_sources(&[PackageSourceModule {
@@ -246,29 +250,35 @@ fn package_errors(root_module: &str, source: &str) -> Vec<Vec<String>> {
     .unwrap();
     let modules = package_modules(&sources);
     let runtime = runtime_declarations();
-    let mut reports = Vec::new();
-    for front_end in front_ends() {
-        let error = compile_package_request(
-            front_end,
-            &PackageRequest {
-                name: PACKAGE,
-                root_module: &ModulePath::from(root_module),
-                modules: &modules,
-                sources: &sources,
-                prelude: runtime.prelude,
-                host: runtime.host,
-                stdlib: &stdlib,
-                dependencies: &[],
-                transitive: &[],
-                config: None,
-                surface: PackageSurface::Public,
-            },
-        )
-        .unwrap_err();
-        assert!(error.fatal.is_none(), "{error:?}");
-        reports.push(error_messages(error));
-    }
-    reports
+    work(&PackageRequest {
+        name: PACKAGE,
+        root_module: &ModulePath::from(root_module),
+        modules: &modules,
+        sources: &sources,
+        prelude: runtime.prelude,
+        host: runtime.host,
+        stdlib: &stdlib,
+        dependencies: &[],
+        transitive: &[],
+        config: None,
+        surface: PackageSurface::Public,
+    })
+}
+
+/// The errors compiling the package reports, through each front end. No
+/// report is an internal failure (`fatal`), such as a rule with no tree to
+/// run on.
+fn package_errors(root_module: &str, source: &str) -> Vec<Vec<String>> {
+    with_package_request(root_module, source, |request| {
+        front_ends()
+            .into_iter()
+            .map(|front_end| {
+                let error = compile_package_request(front_end, request).unwrap_err();
+                assert!(error.fatal.is_none(), "{error:?}");
+                error_messages(error)
+            })
+            .collect()
+    })
 }
 
 #[test]
@@ -331,4 +341,45 @@ fn imports_are_specifiers_in_source_order_once() {
         FileId(0),
     );
     assert_eq!(parsed.imports().unwrap(), ["@x/b", "@x/a", "@mcp/linear"]);
+}
+
+#[test]
+fn a_non_exhaustive_switch_is_reported_by_the_rules_for_either_front_end() {
+    let source = r#"
+        type Shape = { kind: "circle" } | { kind: "square" } | { kind: "line" };
+        function sides(shape: Shape): number {
+            switch (shape.kind) {
+                case "circle": return 0;
+                case "square": return 4;
+            }
+            return -1;
+        }
+        function main(): number { return sides({ kind: "line" }); }
+    "#;
+    let stdlib = Stdlib::core().package_declarations();
+    let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let checked = EngineFrontEnd
+        .parse_script(source.into(), FileId(0))
+        .check(&script_request(&stdlib))
+        .unwrap();
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    for front_end in front_ends() {
+        let errors = error_messages(compile_script(front_end, source, &[]).unwrap_err());
+        assert_eq!(
+            errors,
+            ["non-exhaustive `switch`: missing case(s) \"line\" for discriminant `.kind`"]
+        );
+    }
+}
+
+#[test]
+fn a_package_that_declares_main_is_reported_by_the_rules_for_either_front_end() {
+    let source = "/** The entry point. */\nexport function main(): void {}\n";
+    let checked = with_package_request("lib", source, |request| {
+        EngineFrontEnd.check_package(request).unwrap()
+    });
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    for errors in package_errors("lib", source) {
+        assert_eq!(errors, ["packages cannot declare main"]);
+    }
 }

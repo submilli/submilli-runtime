@@ -86,7 +86,7 @@ pub use typed_ast::{
     TypedNumberEnumMember, TypedObjectFieldOrigin, TypedObjectFieldSource, TypedObjectLiteralField,
     TypedObjectMember, TypedParam, TypedStmt, TypedStmtKind, TypedStringEnumDecl,
     TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl,
-    TypeofTagKind,
+    TypeofTagKind, UnmatchedCases,
 };
 pub use types::{
     IndexSignature, ObjectField, Package, PredicateKind, TupleType, Type, TypePredicate,

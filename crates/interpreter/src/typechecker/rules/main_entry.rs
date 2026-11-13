@@ -1,6 +1,6 @@
 use crate::{Diagnostic, FileId, Severity, Span, TypedAst};
 
-pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+pub(super) fn run_script(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
     let Some(main) = ta.functions.iter().find(|f| f.name.name == "main") else {
         // The parser already reported what is wrong with the `main` it dropped.
         if ta.unparsed_main {
@@ -30,9 +30,25 @@ pub(super) fn run(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
     }
 }
 
+/// A package is a library: it declares no `main`.
+pub(super) fn run_package(ta: &TypedAst, diags: &mut Vec<Diagnostic>) {
+    for function in ta.functions.iter().filter(|f| f.name.name == "main") {
+        diags.push(Diagnostic {
+            severity: Severity::Error,
+            span: function.name.span,
+            message: "packages cannot declare main".to_string(),
+            help: vec![
+                "remove `main`; packages are libraries and export named declarations instead"
+                    .to_string(),
+            ],
+            notes: Vec::new(),
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::test_util::{compile_messages, run_raw};
+    use super::super::test_util::{compile_messages, run_package, run_raw};
 
     #[test]
     fn missing_main_diagnoses() {
@@ -93,5 +109,30 @@ mod tests {
         let diags = run_raw("function main(): void { } function main(): void { }");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "duplicate declaration of `main`");
+    }
+
+    #[test]
+    fn each_main_a_package_declares_is_reported_in_its_module() {
+        let (_, _, diags) = run_package(
+            "@test/mains",
+            &[
+                (
+                    "lib",
+                    "import { helper } from \"./a\";\nexport function main(): number { return helper(); }\n",
+                ),
+                (
+                    "a",
+                    "export function helper(): number { return 1; }\nfunction main(): void {}\n",
+                ),
+            ],
+            &[],
+        );
+        let mains: Vec<_> = diags
+            .iter()
+            .filter(|diag| diag.message == "packages cannot declare main")
+            .map(|diag| diag.span.file)
+            .collect();
+        assert_eq!(mains.len(), 2, "{diags:?}");
+        assert_ne!(mains[0], mains[1], "{diags:?}");
     }
 }

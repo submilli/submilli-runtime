@@ -5,7 +5,7 @@ use super::body_walk::{self, Visitor};
 use super::control_flow::case_terminates;
 use super::declarations::TypeDeclarations;
 use crate::compiler_error::CompilerFailure;
-use crate::{Diagnostic, Severity, TypedAst, TypedStmtKind};
+use crate::{Diagnostic, Severity, TypedAst, TypedStmt, TypedStmtKind};
 
 pub(super) fn run(
     ta: &TypedAst,
@@ -29,7 +29,8 @@ struct Fallthrough<'a, 'd> {
 }
 
 impl Visitor for Fallthrough<'_, '_> {
-    fn visit_stmt(&mut self, kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
+    fn visit_stmt(&mut self, stmt: &TypedStmt) -> Result<(), CompilerFailure> {
+        let kind = &stmt.kind;
         let TypedStmtKind::Switch { cases, .. } = kind else {
             return Ok(());
         };

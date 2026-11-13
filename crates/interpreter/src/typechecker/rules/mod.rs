@@ -11,11 +11,12 @@ mod control_flow;
 mod declarations;
 mod definite_assignment;
 mod doc_consistency;
+mod exhaustive_switch;
 mod exported_docs;
 pub(crate) mod exported_signature_types;
 mod fallthrough;
 pub(crate) mod finalizers;
-mod main_required;
+mod main_entry;
 mod missing_return;
 mod return_outside_function;
 mod super_call;
@@ -230,11 +231,12 @@ fn run_submilli_rules(
     source: Source,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), CompilerFailure> {
+    exhaustive_switch::run(ta, diags)?;
     super_call::run(ta, diags)?;
     callable_arity::run(ta, diags)?;
-    if source == Source::Script {
-        // Inference reports a package that declares `main`.
-        main_required::run(ta, diags);
+    match source {
+        Source::Script => main_entry::run_script(ta, diags),
+        Source::Package => main_entry::run_package(ta, diags),
     }
     doc_consistency::run(ta, diags)?;
     capability_consistency::run(ta, declarations, diags)
