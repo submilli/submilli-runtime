@@ -4379,6 +4379,63 @@ mod tests {
     }
 
     #[test]
+    fn interface_instance_unions_combine_every_overload_return() {
+        let mut base = inheritance_package(
+            "@test/union-overloads",
+            r#"export interface Box<T> { value: T; read(): boolean; }"#,
+            &[],
+        );
+        let TypeKind::Interface {
+            methods,
+            properties,
+            ..
+        } = &mut base.types.get_mut("Box").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        methods
+            .get_mut("read")
+            .unwrap()
+            .overloads
+            .push(crate::MethodOverload {
+                generics: Default::default(),
+                params: vec![crate::Param::new(
+                    "value",
+                    Type::StringLiteral("value".into()),
+                )],
+                ret: properties["value"].ty.clone(),
+                predicate: None,
+            });
+        inheritance_package(
+            "@test/valid",
+            r#"
+            import { Box } from "@test/union-overloads";
+            export function read(value: Box<number> | Box<string>): number | string { return value.read("value"); }
+            export function chained(value: Box<number> | Box<string>): number | string { return value?.read("value"); }
+        "#,
+            &[&base],
+        );
+        let errors = crate::compile_package(
+            "@test/invalid",
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source: r#"
+                    import { Box } from "@test/union-overloads";
+                    export function wrong(value: Box<number> | Box<string>): number { return value.read("value"); }
+                "#,
+            }],
+            &[&base],
+        ).expect_err("every union arm contributes its overload result");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.severity == crate::Severity::Error),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn overloaded_recursive_method_relations_are_coinductive() {
         let mut base = inheritance_package(
             "@test/recursive",

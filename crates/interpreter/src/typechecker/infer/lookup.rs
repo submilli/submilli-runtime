@@ -261,7 +261,11 @@ impl<'a> Inferer<'a> {
         let mut interface: Option<crate::MangledName> = None;
         for member in members {
             let (sig, bindings, mangled, dispatch) = self.find_method(member, name)?;
-            if dispatch != crate::Dispatch::VTable || !sig.generics.is_empty() {
+            if dispatch != crate::Dispatch::VTable
+                || sig
+                    .signatures()
+                    .any(|signature| !signature.generics.is_empty())
+            {
                 return None;
             }
             if *interface.get_or_insert_with(|| mangled.clone()) != mangled {
@@ -272,15 +276,34 @@ impl<'a> Inferer<'a> {
             );
         }
         let mangled = interface?;
-        let mut combined = sigs.first()?.clone();
-        if sigs.iter().any(|sig| {
-            sig.params != combined.params
-                || sig.predicate != combined.predicate
-                || sig.optional != combined.optional
-        }) {
-            return None;
+        let mut signatures: Vec<_> = sigs
+            .first()?
+            .signatures()
+            .map(|sig| (sig, Vec::new()))
+            .collect();
+        for sig in &sigs {
+            if sig.overloads.len() + 1 != signatures.len() {
+                return None;
+            }
+            for ((combined, returns), other) in signatures.iter_mut().zip(sig.signatures()) {
+                if !self.type_limits.spend_work(1)
+                    || combined.params != other.params
+                    || combined.predicate != other.predicate
+                    || combined.optional != other.optional
+                {
+                    return None;
+                }
+                returns.push(other.ret);
+            }
         }
-        combined.ret = Type::union(sigs.into_iter().map(|sig| sig.ret).collect());
+        let mut signatures = signatures.into_iter().map(|(mut sig, returns)| {
+            sig.ret = Type::union(returns);
+            sig
+        });
+        let mut combined = signatures.next()?;
+        for signature in signatures {
+            combined.append_signatures(signature);
+        }
         Some((combined, BTreeMap::new(), mangled, crate::Dispatch::VTable))
     }
 
