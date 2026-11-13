@@ -694,8 +694,8 @@ pub fn compile_function_set(
 /// [`compile_function_set`] for an embedder that enables optional stdlib
 /// packages (`submilli:agents`, `submilli:skills`) in `stdlib`.
 ///
-/// Must be called on a thread meeting
-/// [`COMPILER_STACK_BYTES`](crate::compiler_limits::COMPILER_STACK_BYTES).
+/// The functions compile one after another on one compiler thread, so the
+/// caller needn't size its stack.
 pub fn compile_function_set_for(
     stdlib: Stdlib,
     engine: &Engine,
@@ -750,22 +750,37 @@ pub fn compile_function_set_for(
     }
 
     let deps_digest = dependency_declarations_digest(stdlib, dependencies, transitive)?;
-    let mut compiled_functions = Vec::with_capacity(set.functions.len());
-    let mut fn_declarations = Vec::with_capacity(set.functions.len());
-    for (def, export_name) in set.functions.iter().zip(validated_names) {
-        let (compiled_fn, fn_decl) = compile_single_function(
-            stdlib,
-            engine,
-            def,
-            export_name,
-            dependencies,
-            transitive,
-            &deps_digest,
-            cache,
-        )?;
-        compiled_functions.push(compiled_fn);
-        fn_declarations.push(fn_decl);
-    }
+    // One compiler thread for the whole set: each function's compile runs in
+    // place on it.
+    let (compiled_functions, fn_declarations) = crate::compiler_thread::on_compiler_stack(|| {
+        let mut compiled_functions = Vec::with_capacity(set.functions.len());
+        let mut fn_declarations = Vec::with_capacity(set.functions.len());
+        for (def, export_name) in set.functions.iter().zip(validated_names) {
+            let (compiled_fn, fn_decl) = compile_single_function(
+                stdlib,
+                engine,
+                def,
+                export_name,
+                dependencies,
+                transitive,
+                &deps_digest,
+                cache,
+            )?;
+            compiled_functions.push(compiled_fn);
+            fn_declarations.push(fn_decl);
+        }
+        Ok((compiled_functions, fn_declarations))
+    })
+    .map_err(|error| {
+        compile_error_to_function_failure(
+            FUNCTIONS_PACKAGE,
+            "",
+            crate::compiler_error::CompilerFailure::Unavailable {
+                message: error.to_string(),
+            }
+            .into(),
+        )
+    })??;
 
     let package_declaration =
         build_functions_package_declaration(&compiled_functions, &fn_declarations);
