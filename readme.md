@@ -11,7 +11,6 @@ The developer could try to add that rule as a safeguard to the prompt, but due t
 [Set up with your agent](https://submilli.ai/docs/quickstart/#agent-setup) ·
 [Quickstart](https://submilli.ai/docs/quickstart) ·
 [Roadmap](ROADMAP.md) ·
-[Discord](https://discord.gg/VphpukeGGj) ·
 [Website](https://submilli.ai)
 
 [![CI](https://github.com/submilli/submilli-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/submilli/submilli-runtime/actions/workflows/ci.yml)
@@ -20,7 +19,6 @@ The developer could try to add that rule as a safeguard to the prompt, but due t
 [![Helm chart](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2Fsubmilli%2Fsubmilli-runtime%2Fmain%2Fcharts%2Fsubmilli%2FChart.yaml&query=%24.version&label=helm%20chart&logo=helm&color=0F1689)](https://github.com/submilli/submilli-runtime/pkgs/container/charts%2Fsubmilli)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-submilli.ai-informational)](https://submilli.ai/docs/)
-[![Discord](https://img.shields.io/discord/1553732232928165958?label=discord)](https://discord.gg/VphpukeGGj)
 
 ## Demo
 
@@ -153,8 +151,7 @@ Submilli is open source. If you’re thinking of using it, we’d love to talk t
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Contributions need the
 [CLA](CLA.md). Report security issues as described in
-[SECURITY.md](SECURITY.md), not in public issues. Questions are welcome on
-[Discord](https://discord.gg/VphpukeGGj).
+[SECURITY.md](SECURITY.md), not in public issues.
 
 ## License
 

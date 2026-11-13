@@ -256,7 +256,7 @@ The event inventory is `$pageview` (`page_path`, `$current_url`),
 `booking_cta_clicked` contract (`cta_location: docs` or `docs-invitation`,
 `booking_provider: google_calendar`, `destination`, `external`) so website
 funnels can include docs traffic. CTA IDs cover `meeting`, `website`, `github`,
-`discord`, `agent_setup`, `view_markdown`, and `agent_docs`.
+`agent_setup`, `view_markdown`, and `agent_docs`.
 Synthetic verification can add `?analytics_test=1` (or a verification UTM). The
 marker is sticky for the browser tab session, but marked sessions are suppressed:
 the SDK does not initialize and no events are captured, including after navigating
