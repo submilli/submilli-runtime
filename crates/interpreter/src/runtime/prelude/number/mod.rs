@@ -511,7 +511,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Number".to_string(),
             mangled_name: crate::mangle::prelude("Number"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Number)),
@@ -609,7 +609,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "NumberConstructor".to_string(),
             mangled_name: crate::mangle::prelude("NumberConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (

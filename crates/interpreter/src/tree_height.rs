@@ -875,6 +875,11 @@ struct AnnotationChildren<'a> {
     fields: std::slice::Iter<'a, crate::ast::TypeAnnotationField>,
     trailing: Option<&'a TypeAnnotation>,
     key: Option<&'a TypeAnnotation>,
+    /// An object type's index signatures, whose keys and values come after
+    /// the trailing child.
+    indexes: std::slice::Iter<'a, crate::IndexSignatureAnnotation>,
+    /// The key of the signature whose value `next` just gave.
+    index_key: Option<&'a TypeAnnotation>,
 }
 
 impl<'a> AnnotationChildren<'a> {
@@ -883,6 +888,8 @@ impl<'a> AnnotationChildren<'a> {
             members: [].iter(),
             fields: [].iter(),
             trailing: None,
+            indexes: [].iter(),
+            index_key: None,
             key: None,
         };
         match &ty.kind {
@@ -909,10 +916,9 @@ impl<'a> AnnotationChildren<'a> {
                 children.trailing = Some(object);
                 children.key = Some(index);
             }
-            TypeAnnotationKind::Object { fields, index } => {
+            TypeAnnotationKind::Object { fields, indexes } => {
                 children.fields = fields.iter();
-                children.trailing = index.as_ref().map(|index| &index.value);
-                children.key = index.as_ref().map(|index| &index.key);
+                children.indexes = indexes.iter();
             }
             TypeAnnotationKind::Function {
                 params,
@@ -933,6 +939,12 @@ impl<'a> Iterator for AnnotationChildren<'a> {
         self.trailing
             .take()
             .or_else(|| self.key.take())
+            .or_else(|| self.index_key.take())
+            .or_else(|| {
+                let index = self.indexes.next_back()?;
+                self.index_key = Some(&index.key);
+                Some(&index.value)
+            })
             .or_else(|| self.fields.next_back().map(|field| &field.ty))
             .or_else(|| self.members.next_back())
     }
@@ -1361,12 +1373,12 @@ mod tests {
             (
                 TypeAnnotationKind::Object {
                     fields: vec![annotation_field(first.clone())],
-                    index: Some(Box::new(crate::IndexSignatureAnnotation {
+                    indexes: vec![crate::IndexSignatureAnnotation {
                         key: first.clone(),
                         value: second.clone(),
                         readonly: false,
                         span: second.span,
-                    })),
+                    }],
                 },
                 vec![first.clone(), first.clone(), second.clone()],
             ),

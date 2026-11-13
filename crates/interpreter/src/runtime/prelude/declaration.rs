@@ -113,6 +113,7 @@ pub(crate) fn insert_temporal_plain_type(
             kind: TypeKind::Interface {
                 extends: Vec::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods,
                 properties,
@@ -168,6 +169,7 @@ pub(crate) fn insert_temporal_plain_type(
             kind: TypeKind::Interface {
                 extends: Vec::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: ctor_methods,
                 properties: BTreeMap::new(),

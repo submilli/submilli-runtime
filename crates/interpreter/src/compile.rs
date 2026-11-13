@@ -1535,6 +1535,7 @@ mod importless_library_tests {
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     extends: Vec::new(),
+                    more_indexes: Vec::new(),
                     index: None,
                     generics: Default::default(),
                     methods,
@@ -1575,6 +1576,7 @@ mod importless_library_tests {
                 ObjectField::required(Type::Array(Box::new(tree_ref()))),
             );
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields,
             }

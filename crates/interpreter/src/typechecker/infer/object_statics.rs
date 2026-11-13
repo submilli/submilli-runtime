@@ -28,6 +28,7 @@ impl Inferer<'_> {
         let mut result = Type::Object {
             fields: BTreeMap::new(),
             index: None,
+            more_indexes: Vec::new(),
         };
         for &id in args {
             let ty = &self
@@ -36,15 +37,6 @@ impl Inferer<'_> {
                 .map_err(super::arena_failure)?
                 .ty;
             let shape = self.assignment_input_shape(ty);
-            if self.index_composition_conflicts(&result, &shape) {
-                let span = self
-                    .typed_ast
-                    .try_expr(id)
-                    .map_err(super::arena_failure)?
-                    .span;
-                self.error(span, "Object.assign cannot combine index signatures with different key and value types".into());
-                return Ok(Type::Error);
-            }
             result = match self.assign_intersection(&result, &shape, 1, &mut budget) {
                 Ok(result) => result,
                 Err(exceeded) => {
@@ -52,6 +44,24 @@ impl Inferer<'_> {
                     return Ok(Type::Error);
                 }
             };
+            // Sources may bring signatures a declaration would be refused for:
+            // overlapping without nesting, or nested with values that don't.
+            let span = self
+                .typed_ast
+                .try_expr(id)
+                .map_err(super::arena_failure)?
+                .span;
+            match self.refused_signatures(&result) {
+                Some(RefusedSignatures::Inconsistent(narrow, wide)) => {
+                    self.report_inconsistent_signature(&narrow, &wide, span);
+                    return Ok(Type::Error);
+                }
+                Some(RefusedSignatures::Overlapping(left, right)) => {
+                    self.report_overlapping_signatures(&left, &right, span);
+                    return Ok(Type::Error);
+                }
+                None => {}
+            }
         }
         if matches!(target.peel(), Type::Array(_) | Type::Tuple(_)) {
             return Ok(target);
@@ -69,23 +79,27 @@ impl Inferer<'_> {
         }
     }
 
-    fn index_composition_conflicts(&self, left: &Type, right: &Type) -> bool {
-        if let Type::Union(members) = left.peel() {
-            return members
-                .iter()
-                .any(|member| self.index_composition_conflicts(member, right));
-        }
-        if let Type::Union(members) = right.peel() {
-            return members
-                .iter()
-                .any(|member| self.index_composition_conflicts(left, member));
-        }
-        self.resolver()
-            .index_signature(left)
-            .zip(self.resolver().index_signature(right))
-            .is_some_and(|(left, right)| {
-                left.key.peel() != right.key.peel() && left.value.peel() != right.value.peel()
+    /// The first pair of signatures in any alternative of `result` that a
+    /// declaration would be refused for.
+    fn refused_signatures(&self, result: &Type) -> Option<RefusedSignatures> {
+        let alternatives: &[Type] = match result.peel() {
+            Type::Union(members) => members,
+            _ => std::slice::from_ref(result),
+        };
+        let types = self.resolver();
+        alternatives.iter().find_map(|alternative| {
+            let signatures = types.index_signatures(alternative);
+            let inconsistent = super::records::inconsistent_signatures(&signatures, types)
+                .next()
+                .map(|(narrow, wide)| {
+                    RefusedSignatures::Inconsistent(narrow.clone(), wide.clone())
+                });
+            inconsistent.or_else(|| {
+                super::records::overlapping_signatures(&signatures, types).map(|(left, right)| {
+                    RefusedSignatures::Overlapping(left.clone(), right.clone())
+                })
             })
+        })
     }
 
     fn assignment_input_shape(&self, ty: &Type) -> Type {
@@ -98,6 +112,7 @@ impl Inferer<'_> {
             ),
             Type::Unknown => Type::Unknown,
             Type::String | Type::StringLiteral(_) => Type::Object {
+                more_indexes: Vec::new(),
                 fields: BTreeMap::new(),
                 index: Some(crate::types::IndexSignature {
                     string_keyof_includes_number: false,
@@ -106,10 +121,15 @@ impl Inferer<'_> {
                     readonly: false,
                 }),
             },
-            _ => Type::Object {
-                fields: self.assign_shape(ty).unwrap_or_default(),
-                index: self.resolver().index_signature(ty),
-            },
+            _ => {
+                let (index, more_indexes) =
+                    crate::split_index_signatures(self.resolver().index_signatures(ty));
+                Type::Object {
+                    more_indexes,
+                    fields: self.assign_shape(ty).unwrap_or_default(),
+                    index,
+                }
+            }
         }
     }
 
@@ -178,21 +198,35 @@ impl Inferer<'_> {
                 fields.insert(name, field);
             }
         }
-        let index = match (
-            self.resolver().index_signature(left),
-            self.resolver().index_signature(right),
-        ) {
-            (Some(a), Some(b)) => Some(crate::types::IndexSignature {
-                string_keyof_includes_number: a.string_keyof_includes_number
-                    || b.string_keyof_includes_number,
-                key: Box::new(Type::union(vec![(*a.key).clone(), (*b.key).clone()])),
-                value: Box::new(self.assign_intersection(&a.value, &b.value, depth + 1, budget)?),
-                readonly: a.readonly && b.readonly,
-            }),
-            (index, None) | (None, index) => index,
-        };
-        Ok(Type::Object { fields, index })
+        // The result is both sources at once (tsc's `T & U`): it has each
+        // one's signatures, and a key both have reads as both values.
+        let mut indexes = self.resolver().index_signatures(left);
+        for b in self.resolver().index_signatures(right) {
+            if let Some(a) = indexes.iter_mut().find(|a| a.key.peel() == b.key.peel()) {
+                a.string_keyof_includes_number |= b.string_keyof_includes_number;
+                *a.value = self.assign_intersection(&a.value, &b.value, depth + 1, budget)?;
+                a.readonly &= b.readonly;
+            } else {
+                budget.charge_copy(&b.value, depth + 1)?;
+                indexes.push(b);
+            }
+        }
+        let (index, more_indexes) = crate::split_index_signatures(indexes);
+        Ok(Type::Object {
+            fields,
+            index,
+            more_indexes,
+        })
     }
+}
+
+/// Signatures an `Object.assign` result would hold that a declaration is
+/// refused for.
+enum RefusedSignatures {
+    /// A key within another's whose value doesn't fit (TS2413).
+    Inconsistent(IndexSignature, IndexSignature),
+    /// Keys that overlap without nesting.
+    Overlapping(IndexSignature, IndexSignature),
 }
 
 /// What `Object.values` or `Object.entries` lists for one argument.
@@ -283,25 +317,30 @@ impl Inferer<'_> {
                 // values: tsc's implicit index signature. `{}` lists none
                 // statically, but may hold any object, so it still needs the
                 // check.
-                Type::Object { fields, index } => {
+                Type::Object {
+                    fields,
+                    index,
+                    more_indexes,
+                } => {
                     from_fields = true;
                     if fields.is_empty() && index.is_none() {
                         continue;
                     }
-                    Type::union(field_value_types(fields, index.as_ref()).collect())
+                    Type::union(field_value_types(fields, index, more_indexes).collect())
                 }
                 // Unlike an object type, an interface has no implicit index
                 // signature, so only one that declares one is enumerated.
                 interface @ Type::InterfaceRef { .. } => {
                     let Some(Type::Object {
                         fields,
-                        index: Some(index),
+                        index: index @ Some(_),
+                        more_indexes,
                     }) = expand_interface_data_shape(interface, self.resolver())
                     else {
                         return None;
                     };
                     from_fields = true;
-                    Type::union(field_value_types(&fields, Some(&index)).collect())
+                    Type::union(field_value_types(&fields, &index, &more_indexes).collect())
                 }
                 _ => return None,
             };
@@ -340,12 +379,13 @@ impl Inferer<'_> {
     }
 }
 
-/// The types of the values an object type lists: its index signature's and
+/// The types of the values an object type lists: its index signatures' and
 /// its fields'. A present optional field may hold `undefined`, which is
 /// listed, so it adds `undefined` as its read does, where tsc leaves it out.
 fn field_value_types<'a>(
     fields: &'a BTreeMap<String, ObjectField>,
-    index: Option<&'a IndexSignature>,
+    index: &'a Option<IndexSignature>,
+    more_indexes: &'a [IndexSignature],
 ) -> impl Iterator<Item = Type> + 'a {
     let field_types = fields.values().map(|field| {
         if field.optional {
@@ -354,8 +394,7 @@ fn field_value_types<'a>(
             field.ty.clone()
         }
     });
-    index
+    crate::stored_index_signatures(index, more_indexes)
         .map(|index| (*index.value).clone())
-        .into_iter()
         .chain(field_types)
 }

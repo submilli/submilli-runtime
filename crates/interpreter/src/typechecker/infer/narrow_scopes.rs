@@ -1011,10 +1011,13 @@ impl<'a> Inferer<'a> {
                     .iter()
                     .any(|element| self.declares_readonly_within(element, opened))
             }
-            Type::Object { fields, index } => {
-                index
-                    .as_ref()
-                    .is_some_and(|i| i.readonly || self.declares_readonly_within(&i.value, opened))
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
+                crate::stored_index_signatures(index, more_indexes)
+                    .any(|i| i.readonly || self.declares_readonly_within(&i.value, opened))
                     || fields
                         .values()
                         .any(|f| f.readonly || self.declares_readonly_within(&f.ty, opened))
@@ -1368,8 +1371,18 @@ impl<'a> Inferer<'a> {
         field_name: &str,
     ) -> Option<Type> {
         match receiver_ty.peel() {
-            Type::Object { fields, index } => field_member_ty(fields, field_name)
-                .or_else(|| index.as_ref().map(crate::IndexSignature::read_ty)),
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => field_member_ty(fields, field_name).or_else(|| {
+                crate::types::named_index(
+                    crate::stored_index_signatures(index, more_indexes),
+                    field_name,
+                    &self.type_limits,
+                )
+                .map(crate::IndexSignature::read_ty)
+            }),
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -1905,9 +1918,14 @@ fn has_function_part(ty: &Type) -> bool {
         Type::Union(members) => members.iter().any(has_function_part),
         Type::Tuple(members) => members.iter().any(has_function_part),
         Type::Array(elem) => has_function_part(elem),
-        Type::Object { fields, index } => {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
             fields.values().any(|field| has_function_part(&field.ty))
-                || index.as_ref().is_some_and(|i| has_function_part(&i.value))
+                || crate::stored_index_signatures(index, more_indexes)
+                    .any(|i| has_function_part(&i.value))
         }
         _ => false,
     }

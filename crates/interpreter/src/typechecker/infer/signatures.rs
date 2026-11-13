@@ -196,6 +196,7 @@ impl<'a> Inferer<'a> {
                             kind: TypeKind::Interface {
                                 extends: Vec::new(),
                                 index: None,
+                                more_indexes: Vec::new(),
                                 generics: generic_names,
                                 methods: BTreeMap::new(),
                                 properties: BTreeMap::new(),
@@ -400,28 +401,36 @@ impl<'a> Inferer<'a> {
         let mut method_sigs: BTreeMap<String, MethodSig> = BTreeMap::new();
         let mut property_sigs: BTreeMap<String, PropertySig> = BTreeMap::new();
         let mut typed_members: Vec<crate::TypedInterfaceMember> = Vec::new();
-        let mut index = None;
+        let mut inherited = Vec::new();
         let mut bases = Vec::new();
         for base in extends {
             bases.extend(self.inherit_interface(
                 &base,
                 &mut method_sigs,
                 &mut property_sigs,
-                &mut index,
+                &mut inherited,
             )?);
         }
+        let own_indexes: Vec<_> = members
+            .iter()
+            .filter_map(|member| match member {
+                InterfaceMember::IndexSignature(annotation) => Some(annotation.clone()),
+                _ => None,
+            })
+            .collect();
+        let own_indexes = self.resolve_index_signatures(&own_indexes)?;
+        // An own signature replaces an inherited one of the same key.
+        inherited.retain(|base: &crate::IndexSignature| {
+            !own_indexes
+                .iter()
+                .any(|own| own.key.peel() == base.key.peel())
+        });
+        inherited.extend(own_indexes);
+        let (index, more_indexes) = crate::split_index_signatures(inherited);
         let mut own_names = BTreeSet::new();
-        let mut own_index = false;
         for member in members {
             match member {
-                InterfaceMember::IndexSignature(annotation) => {
-                    let resolved = self.resolve_index_signature(&annotation)?;
-                    if own_index {
-                        self.error(annotation.span, "duplicate string index signature".into());
-                    }
-                    own_index = true;
-                    index = Some(resolved);
-                }
+                InterfaceMember::IndexSignature(_) => {}
                 InterfaceMember::Method {
                     name: m_name,
                     generics: m_generics,
@@ -567,6 +576,7 @@ impl<'a> Inferer<'a> {
         }
         self.pop_signature_generics();
         let typed_decl = crate::TypedTypeDecl::Interface(crate::TypedInterfaceDecl {
+            more_indexes: more_indexes.clone(),
             property_names: property_sigs.keys().cloned().collect(),
             name: name.clone(),
             generics: generic_names.clone(),
@@ -582,6 +592,7 @@ impl<'a> Inferer<'a> {
             declaration_span: name.span,
             kind: TypeKind::Interface {
                 extends: bases,
+                more_indexes,
                 index,
                 generics: generic_names,
                 methods: method_sigs,

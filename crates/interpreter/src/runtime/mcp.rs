@@ -313,18 +313,21 @@ mod tests {
         let mut arg_fields = BTreeMap::new();
         arg_fields.insert("msg".to_string(), ObjectField::required(Type::String));
         let arg_obj = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: arg_fields,
         };
         let mut ret_fields = BTreeMap::new();
         ret_fields.insert("reply".to_string(), ObjectField::required(Type::String));
         let ret_obj = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: ret_fields,
         };
         let mut opt_fields = BTreeMap::new();
         opt_fields.insert("user".to_string(), ObjectField::optional(Type::String));
         let opt_arg_obj = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: opt_fields,
         };

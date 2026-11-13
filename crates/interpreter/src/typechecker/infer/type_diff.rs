@@ -92,6 +92,7 @@ fn weak_type_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderE
         Type::Object {
             fields: expected_fields,
             index: None,
+            ..
         },
         Type::Object {
             fields: got_fields, ..
@@ -162,13 +163,15 @@ pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<Str
                 Type::Object {
                     fields: a,
                     index: ai,
+                    more_indexes: am,
                 },
                 Type::Object {
                     fields: b,
                     index: bi,
+                    more_indexes: bm,
                 },
             ) => {
-                if ai == bi {
+                if ai == bi && am == bm {
                     write_object_diff(out, a, b)
                 } else {
                     write_expected(out, expected, got)
@@ -468,6 +471,7 @@ mod tests {
             fields.insert((*k).to_string(), ObjectField::required(v.clone()));
         }
         Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields,
         }

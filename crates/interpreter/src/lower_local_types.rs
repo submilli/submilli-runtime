@@ -1280,11 +1280,11 @@ impl Lifter {
                     self.walk_type(item)?;
                 }
             }
-            TypeAnnotationKind::Object { fields, index } => {
+            TypeAnnotationKind::Object { fields, indexes } => {
                 for field in fields.iter_mut() {
                     self.walk_type(&mut field.ty)?;
                 }
-                if let Some(index) = index {
+                for index in indexes {
                     self.walk_type(&mut index.key)?;
                     self.walk_type(&mut index.value)?;
                 }

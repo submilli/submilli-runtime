@@ -290,6 +290,7 @@ fn lower_iterator_like(
         );
         Type::Object {
             index: None,
+            more_indexes: Vec::new(),
             fields,
         }
     };
@@ -301,6 +302,7 @@ fn lower_iterator_like(
         );
         Type::Object {
             index: None,
+            more_indexes: Vec::new(),
             fields,
         }
     };

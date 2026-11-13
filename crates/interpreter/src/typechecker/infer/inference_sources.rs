@@ -379,10 +379,15 @@ impl<'a> Inferer<'a> {
         };
         Some(FieldTypes {
             named,
-            index: self
-                .resolver()
-                .index_signature(ty)
-                .map(|index| *index.value),
+            index: {
+                let values: Vec<Type> = self
+                    .resolver()
+                    .index_signatures(ty)
+                    .into_iter()
+                    .map(|index| *index.value)
+                    .collect();
+                (!values.is_empty()).then(|| Type::union(values))
+            },
         })
     }
 

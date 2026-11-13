@@ -668,6 +668,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         );
         Type::Object {
             index: None,
+            more_indexes: Vec::new(),
             fields,
         }
     };
@@ -699,6 +700,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         );
         Type::Object {
             index: None,
+            more_indexes: Vec::new(),
             fields,
         }
     };
@@ -758,7 +760,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Iterator".to_string(),
             mangled_name: crate::mangle::prelude("Iterator"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::from([(
                     "next".to_string(),
@@ -808,7 +810,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Iterable".to_string(),
             mangled_name: crate::mangle::prelude("Iterable"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::from([(
                     "iterator".to_string(),

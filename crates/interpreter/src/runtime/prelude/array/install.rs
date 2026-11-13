@@ -790,6 +790,7 @@ pub(crate) fn array_like_type() -> Type {
             },
         )]),
         index: None,
+        more_indexes: Vec::new(),
     }
 }
 
@@ -1032,7 +1033,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Array".to_string(),
             mangled_name: crate::mangle::prelude("Array"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::from([
                     (
@@ -1848,7 +1849,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "ArrayConstructor".to_string(),
             mangled_name: crate::mangle::prelude("ArrayConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "from".to_string(),

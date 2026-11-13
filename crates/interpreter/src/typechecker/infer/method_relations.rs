@@ -226,11 +226,16 @@ impl TypeResolver<'_> {
                         },
                     );
                 }
-                let index = self.index_signature(ty);
+                let (index, more_indexes) =
+                    crate::split_index_signatures(self.index_signatures(ty));
                 if fields.is_empty() && index.is_none() {
                     Type::Unknown
                 } else {
-                    Type::Object { fields, index }
+                    Type::Object {
+                        fields,
+                        index,
+                        more_indexes,
+                    }
                 }
             }
             _ => ty.clone(),

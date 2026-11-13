@@ -1005,18 +1005,31 @@ impl<'a> Unifier<'a> {
                 Type::Object {
                     fields: a,
                     index: ai,
+                    more_indexes: am,
                 },
                 Type::Object {
                     fields: b,
                     index: bi,
+                    more_indexes: bm,
                 },
             ) => {
                 if let Some(index) = ai {
-                    if let Some(actual) = bi {
-                        self.unify(&index.value, &actual.value)?;
-                    }
-                    for field in b.values() {
-                        self.unify(&index.value, &field.ty)?;
+                    if am.is_empty() && bm.is_empty() {
+                        // One signature on each side infers from every value
+                        // the argument holds, each in turn.
+                        if let Some(actual) = bi {
+                            self.unify(&index.value, &actual.value)?;
+                        }
+                        for field in b.values() {
+                            self.unify(&index.value, &field.ty)?;
+                        }
+                    } else {
+                        for param_index in crate::stored_index_signatures(ai, am) {
+                            let read = index_inference_sources(param_index, bi, bm, b, self.limits);
+                            if !read.is_empty() {
+                                self.unify(&param_index.value, &Type::union(read))?;
+                            }
+                        }
                     }
                     for (name, expected) in a {
                         let Some(actual) = b.get(name) else {
@@ -2261,7 +2274,12 @@ fn reverse_mapped(utility: crate::typechecker::infer::utility_types::Utility, ty
         _ => element.clone(),
     };
     match ty {
-        Type::Object { fields, index } => Type::Object {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Type::Object {
+            more_indexes: more_indexes.clone(),
             fields: fields
                 .iter()
                 .map(|(name, field)| {
@@ -2394,10 +2412,13 @@ fn holds_class_instance(ty: &Type) -> bool {
         Type::Tuple(tuple) => tuple.elements.iter().any(holds_class_instance),
         Type::Union(elems) => elems.iter().any(holds_class_instance),
         Type::Function { ret, .. } => holds_class_instance(ret),
-        Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|i| holds_class_instance(&i.value))
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            crate::stored_index_signatures(index, more_indexes)
+                .any(|i| holds_class_instance(&i.value))
                 || fields.values().any(|f| holds_class_instance(&f.ty))
         }
         Type::Alias { ty: inner, .. } => holds_class_instance(inner),
@@ -2411,6 +2432,39 @@ fn restore_entry(map: &mut BTreeMap<String, Type>, before: &BTreeMap<String, Typ
         Some(ty) => map.insert(name.to_string(), ty.clone()),
         None => map.remove(name),
     };
+}
+
+/// What a parameter's `index` signature infers from, gathered into one
+/// candidate as tsc's `inferFromIndexTypes` does: the argument's
+/// signatures it applies to (a `string` one reads all; another reads those of
+/// its own key, else the argument's `string` one) and the fields its key names.
+fn index_inference_sources(
+    index: &crate::IndexSignature,
+    argument_index: &Option<crate::IndexSignature>,
+    argument_more: &[crate::IndexSignature],
+    argument_fields: &BTreeMap<String, crate::ObjectField>,
+    limits: &TypeLimits,
+) -> Vec<Type> {
+    let signatures = crate::stored_index_signatures(argument_index, argument_more);
+    let mut read: Vec<Type> = signatures
+        .clone()
+        .filter(|actual| index.is_string() || actual.key.peel() == index.key.peel())
+        .map(|actual| (*actual.value).clone())
+        .collect();
+    if read.is_empty() {
+        read.extend(
+            signatures
+                .filter(|actual| actual.is_string())
+                .map(|actual| (*actual.value).clone()),
+        );
+    }
+    read.extend(
+        argument_fields
+            .iter()
+            .filter(|(name, _)| crate::property_keys::matches_name(&index.key, name, limits))
+            .map(|(_, field)| field.ty.clone()),
+    );
+    read
 }
 
 #[cfg(test)]
@@ -2444,6 +2498,7 @@ mod tests {
             fields.insert((*k).to_string(), crate::ObjectField::required(v.clone()));
         }
         Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields,
         }

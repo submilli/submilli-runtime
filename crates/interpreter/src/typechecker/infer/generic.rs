@@ -156,7 +156,15 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         | Type::Intersection(_) => {
             crate::type_size::map_children_infallible(ty, erase_generic_params)
         }
-        Type::Object { fields, index } => Type::Object {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Type::Object {
+            more_indexes: more_indexes
+                .iter()
+                .map(|i| i.map_types(erase_generic_params))
+                .collect(),
             index: index.as_ref().map(|i| i.map_types(erase_generic_params)),
             fields: fields
                 .iter()
@@ -1908,12 +1916,12 @@ impl Inferer<'_> {
         literal: ExprId,
         name: &str,
         expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
-        expected_index: Option<&crate::IndexSignature>,
+        expected_indexes: &[crate::IndexSignature],
     ) -> Option<Type> {
         super::reserved::override_field_signature(name)
             .or_else(|| self.argument_slot_hint(literal, name))
             .or_else(|| {
-                expected_field_hint(name, expected_fields, expected_index, &self.type_limits)
+                expected_field_hint(name, expected_fields, expected_indexes, self.resolver())
             })
     }
 
@@ -1931,7 +1939,7 @@ impl Inferer<'_> {
         literal: ExprId,
         members: &[crate::ObjectLiteralMember],
         expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
-        expected_index: Option<&crate::IndexSignature>,
+        expected_indexes: &[crate::IndexSignature],
         inferred: &mut super::expr::InferredObjectFields,
     ) -> Result<std::collections::BTreeSet<ExprId>, CompilerFailure> {
         let mut ahead = std::collections::BTreeSet::new();
@@ -1962,7 +1970,7 @@ impl Inferer<'_> {
                 continue;
             }
             let name = &field.name.name;
-            let hint = self.object_field_hint(literal, name, expected_fields, expected_index);
+            let hint = self.object_field_hint(literal, name, expected_fields, expected_indexes);
             let expected_field_ty = expected_fields
                 .and_then(|fields| fields.get(name))
                 .map(|field| &field.ty);
@@ -2720,6 +2728,7 @@ impl Inferer<'_> {
         let shape = Type::Object {
             fields,
             index: None,
+            more_indexes: Vec::new(),
         };
         let diagnostics_before = self.diagnostics.len();
         let scratch = self.infer_expr(arg_id, Some(&shape));
@@ -2857,7 +2866,7 @@ impl Inferer<'_> {
     /// Whether an array-like source may hold entries JavaScript reads as its
     /// elements: a string index signature, or a field named by an array index.
     fn has_keyed_entries(&self, source: &Type) -> bool {
-        if self.resolver().index_signature(source).is_some() {
+        if self.resolver().has_index_signature(source) {
             return true;
         }
         match source.peel() {
@@ -3549,7 +3558,7 @@ fn mentions_only_in_functions(ty: &Type, name: &str) -> bool {
         Type::Union(members) => members
             .iter()
             .all(|member| mentions_only_in_functions(member, name)),
-        Type::Object { fields, index } => {
+        Type::Object { fields, index, .. } => {
             index.is_none()
                 && fields
                     .values()
@@ -3568,21 +3577,22 @@ fn is_literal_member_of(arg: &Type, param: &Type) -> bool {
 }
 
 /// The type field `name` of an object literal is expected to have, from the
-/// expected type's own field or its index signature.
+/// expected type's own field or the index signature that applies to it.
 fn expected_field_hint(
     name: &str,
     expected_fields: Option<&BTreeMap<String, crate::ObjectField>>,
-    expected_index: Option<&crate::IndexSignature>,
-    limits: &crate::type_size::TypeLimits,
+    expected_indexes: &[crate::IndexSignature],
+    types: super::assignable::TypeResolver<'_>,
 ) -> Option<Type> {
     // An optional field also takes `undefined`; a record key's value doesn't.
     expected_fields
         .and_then(|fields| fields.get(name))
         .map(crate::ObjectField::read_ty)
         .or_else(|| {
-            expected_index
-                .filter(|index| crate::property_keys::matches_name(&index.key, name, limits))
-                .map(|index| (*index.value).clone())
+            super::records::applicable_index(expected_indexes, &types, |index| {
+                crate::property_keys::matches_name(&index.key, name, types.limits)
+            })
+            .map(|index| *index.value)
         })
 }
 
@@ -3745,7 +3755,15 @@ fn expand_inferred_interfaces(
             expansion.expanding.pop();
             expanded
         }
-        Type::Object { fields, index } => Type::Object {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Type::Object {
+            more_indexes: more_indexes
+                .iter()
+                .map(|index| index.map_types(|value| expand(value, expansion)))
+                .collect(),
             fields: fields
                 .iter()
                 .map(|(name, field)| {

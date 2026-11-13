@@ -451,7 +451,11 @@ fn emit_structural_test_inner(
             emitter.instruction(Instruction::I32Const(0));
             emitter.emit_end();
         }
-        Type::Object { fields, index } => {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
             let shape_idx = ctx.symbols.object_shape_type_idx().ok_or_else(|| {
                 crate::codegen::internal_failure("$ObjectShape intrinsic registered")
             })?;
@@ -482,7 +486,8 @@ fn emit_structural_test_inner(
                 )?;
                 emitter.instruction(Instruction::I32And);
             }
-            if let Some(index) = index {
+            // Each property must fit every signature whose key matches its name.
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 emit_index_conformance(
                     emitter,
                     ctx,
@@ -1362,7 +1367,7 @@ fn emit_interface_test_inner(
         }
         emitter.instruction(Instruction::I32And);
     }
-    if let Some(index) = &test.index {
+    for index in crate::stored_index_signatures(&test.index, &test.more_indexes) {
         emit_index_conformance(
             emitter,
             ctx,

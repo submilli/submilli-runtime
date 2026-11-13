@@ -339,6 +339,7 @@ fn object_type(
         fields.insert(name.clone(), field);
     }
     Some(Type::Object {
+        more_indexes: Vec::new(),
         index: None,
         fields,
     })
@@ -746,6 +747,7 @@ mod tests {
         assert_eq!(
             args_fields(&defs, "search")["filter"].ty,
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: inner
             }
@@ -904,6 +906,7 @@ mod tests {
         assert_eq!(
             func_ret(&defs, "getUser"),
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields
             }
@@ -928,6 +931,7 @@ mod tests {
         fields.insert("id".to_string(), ObjectField::required(Type::String));
         assert!(
             defs.shapes.contains(&Shape::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields
             }),
@@ -1080,6 +1084,7 @@ mod tests {
         assert_eq!(
             func_ret(&defs, "act"),
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields
             }
@@ -1115,6 +1120,7 @@ mod tests {
         assert_eq!(
             func_ret(&defs, "act"),
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields
             }

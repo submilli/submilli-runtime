@@ -460,7 +460,13 @@ fn is_named(ty: &crate::Type) -> bool {
         Type::Object {
             fields,
             index: Some(index),
-        } => fields.is_empty() && is_named(&index.value),
+            more_indexes,
+        } => {
+            fields.is_empty()
+                && std::iter::once(index)
+                    .chain(more_indexes)
+                    .all(|index| is_named(&index.value))
+        }
         _ => false,
     }
 }

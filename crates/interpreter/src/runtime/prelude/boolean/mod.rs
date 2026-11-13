@@ -105,7 +105,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Boolean".to_string(),
             mangled_name: crate::mangle::prelude("Boolean"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Boolean)),
@@ -148,6 +148,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { extends: Vec::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "@call".to_string(),

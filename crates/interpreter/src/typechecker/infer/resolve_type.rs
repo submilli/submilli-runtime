@@ -709,7 +709,7 @@ impl<'a> Inferer<'a> {
                 Type::union(vec![self.resolve_type(inner)?, Type::Undefined])
             }
             TypeAnnotationKind::Readonly(operand) => readonly_of(self.resolve_type(operand)?),
-            TypeAnnotationKind::Object { fields, index } => {
+            TypeAnnotationKind::Object { fields, indexes } => {
                 let mut resolved: std::collections::BTreeMap<String, crate::ObjectField> =
                     std::collections::BTreeMap::new();
                 for field in fields {
@@ -742,12 +742,11 @@ impl<'a> Inferer<'a> {
                             method: field.method,
                         });
                 }
-                let index = index
-                    .as_ref()
-                    .map(|annotation| self.resolve_index_signature(annotation))
-                    .transpose()?;
-                self.check_index_fields(&resolved, index.as_ref(), annot.span)?;
+                let indexes = self.resolve_index_signatures(indexes)?;
+                self.check_index_fields(&resolved, &indexes, annot.span)?;
+                let (index, more_indexes) = crate::split_index_signatures(indexes);
                 Type::Object {
+                    more_indexes,
                     index,
                     fields: resolved,
                 }
@@ -1004,16 +1003,13 @@ impl<'a> Inferer<'a> {
         span: crate::Span,
     ) -> Result<Option<Type>, CompilerFailure> {
         Ok(match ty.peel() {
-            Type::Object { fields, index } => fields
+            Type::Object { fields, .. } => fields
                 .get(field)
                 .map(crate::types::ObjectField::read_ty)
                 .or_else(|| {
-                    index
-                        .as_ref()
-                        .filter(|index| {
-                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
-                        })
-                        .map(crate::IndexSignature::read_ty)
+                    self.resolver()
+                        .index_for_name(ty, field)
+                        .map(|index| index.read_ty())
                 }),
             Type::InterfaceRef { .. } => {
                 let Some((sig, bindings, _, _)) = self.lookup_interface_property(ty, field) else {
@@ -1222,6 +1218,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 extends: Vec::new(),
+                more_indexes: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
@@ -1236,6 +1233,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 extends: Vec::new(),
+                more_indexes: Vec::new(),
                 index: None,
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::new(),

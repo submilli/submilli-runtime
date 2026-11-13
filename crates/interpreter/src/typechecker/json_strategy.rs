@@ -418,6 +418,7 @@ mod tests {
             );
         }
         Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: map,
         }
@@ -600,6 +601,7 @@ mod invariant_tests {
     fn inconsistent_object_expansion_is_an_internal_failure() {
         let calls = std::cell::Cell::new(0);
         let object = Type::Object {
+            more_indexes: Vec::new(),
             fields: BTreeMap::new(),
             index: None,
         };

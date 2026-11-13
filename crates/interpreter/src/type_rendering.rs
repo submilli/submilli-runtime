@@ -22,6 +22,10 @@ enum ListKind {
     Tuple { optional_from: usize },
 }
 
+/// An object type's index signatures, `index` then `more_indexes`.
+type IndexSignatures<'a> =
+    std::iter::Chain<std::option::Iter<'a, IndexSignature>, std::slice::Iter<'a, IndexSignature>>;
+
 enum Frame<'a> {
     Type(&'a Type, usize),
     Text(&'a str),
@@ -41,7 +45,7 @@ enum Frame<'a> {
     Optional(&'a Type, usize),
     Fields {
         fields: std::collections::btree_map::Iter<'a, String, ObjectField>,
-        index: Option<&'a IndexSignature>,
+        indexes: IndexSignatures<'a>,
         first: bool,
         depth: usize,
     },
@@ -163,7 +167,7 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
             }
             Frame::Fields {
                 mut fields,
-                index,
+                mut indexes,
                 first,
                 depth,
             } => {
@@ -180,13 +184,22 @@ pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError>
                         &mut frames,
                         Frame::Fields {
                             fields,
-                            index,
+                            indexes,
                             first: false,
                             depth,
                         },
                     )?;
                     push(&mut frames, Frame::Type(&field.ty, depth))?;
-                } else if let Some(index) = index {
+                } else if let Some(index) = indexes.next() {
+                    push(
+                        &mut frames,
+                        Frame::Fields {
+                            fields,
+                            indexes,
+                            first: false,
+                            depth,
+                        },
+                    )?;
                     if !first {
                         out.push("; ")?;
                     }
@@ -407,7 +420,11 @@ fn write_node<'a>(
                 },
             )
         }
-        Type::Object { fields, index } => {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
             if fields.is_empty() && index.is_none() {
                 return out.push("{}");
             }
@@ -417,7 +434,7 @@ fn write_node<'a>(
                 frames,
                 Frame::Fields {
                     fields: fields.iter(),
-                    index: index.as_ref(),
+                    indexes: index.iter().chain(more_indexes),
                     first: true,
                     depth: child,
                 },
@@ -855,6 +872,7 @@ mod tests {
             readonly,
         };
         let brand = Type::Object {
+            more_indexes: Vec::new(),
             fields: [(
                 "brand".to_string(),
                 ObjectField::required(Type::BooleanLiteral(true)),
@@ -959,6 +977,7 @@ mod tests {
             Type::Never
         );
         let brand = Type::Object {
+            more_indexes: Vec::new(),
             fields: [("b".to_string(), ObjectField::required(Type::Boolean))].into(),
             index: None,
         };

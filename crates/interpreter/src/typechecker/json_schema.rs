@@ -114,7 +114,11 @@ fn walk(
         Type::Boolean => Ok(json!({ "type": "boolean" })),
         Type::BooleanLiteral(b) => Ok(json!({ "const": b })),
         Type::Null => Ok(json!({ "type": "null" })),
-        Type::Object { fields, index } => {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
             // `BTreeMap` iteration is field-name order, so `properties` and
             // `required` come out canonical without sorting here.
             let mut properties = serde_json::Map::new();
@@ -137,10 +141,15 @@ fn walk(
                 "required": Value::Array(required),
                 "additionalProperties": false,
             });
-            if let Some(index) = index {
+            // A `string` signature constrains the names no pattern matches. The
+            // names a pattern matches fit its value, which fits the `string`
+            // one's too: declarations reject signatures that disagree.
+            let mut patterns = serde_json::Map::new();
+            let mut string_value = None;
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 let value = walk(&index.value, expand, path, seen)?;
                 if matches!(index.key.peel(), Type::String) {
-                    schema["additionalProperties"] = value;
+                    string_value = Some(value);
                 } else if contains_number_domain(&index.key) {
                     return Err(reject(
                         path,
@@ -149,11 +158,15 @@ fn walk(
                 } else {
                     let pattern = crate::property_keys::pattern(&index.key)
                         .ok_or_else(|| reject(path, "unsupported index key domain in schema"))?;
-                    let mut patterns = serde_json::Map::new();
                     patterns.insert(format!("^(?:{pattern})$(?![\\s\\S])"), value);
-                    schema["patternProperties"] = Value::Object(patterns);
-                    schema["additionalProperties"] = Value::Bool(true);
                 }
+            }
+            if !patterns.is_empty() {
+                schema["patternProperties"] = Value::Object(patterns);
+                schema["additionalProperties"] = Value::Bool(true);
+            }
+            if let Some(value) = string_value {
+                schema["additionalProperties"] = value;
             }
             Ok(schema)
         }
@@ -316,6 +329,7 @@ mod tests {
 
     fn obj(fields: &[(&str, Type, bool)]) -> Type {
         Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields
                 .iter()
@@ -360,6 +374,7 @@ mod tests {
             r"^(?:\u0069\u0064\u005f\ud800[\s\S][\s\S]*\u0065\u006e\u0064)$(?![\s\S])"
         );
         let record = Type::Object {
+            more_indexes: Vec::new(),
             fields: Default::default(),
             index: Some(crate::IndexSignature {
                 string_keyof_includes_number: false,
@@ -371,6 +386,42 @@ mod tests {
         let schema = json_schema(&record).unwrap();
         assert_eq!(schema["patternProperties"].as_object().unwrap().len(), 1);
         assert_eq!(schema["additionalProperties"], true);
+    }
+
+    #[test]
+    fn several_signatures_give_a_pattern_each_beside_the_string_one() {
+        let signature = |key: Type, value: Type| crate::IndexSignature {
+            string_keyof_includes_number: true,
+            key: Box::new(key),
+            value: Box::new(value),
+            readonly: false,
+        };
+        let pattern = |prefix: &str| Type::TemplateLiteral {
+            parts: vec![prefix.into(), String::new()],
+            substitutions: vec![Type::String],
+        };
+        let patterns_only = Type::Object {
+            fields: Default::default(),
+            index: Some(signature(pattern("a"), Type::Number)),
+            more_indexes: vec![signature(pattern("b"), Type::String)],
+        };
+        let schema = json_schema(&patterns_only).unwrap();
+        let properties = schema["patternProperties"].as_object().unwrap();
+        assert_eq!(properties.len(), 2);
+        assert!(properties.values().any(|value| value["type"] == "number"));
+        assert!(properties.values().any(|value| value["type"] == "string"));
+        assert_eq!(schema["additionalProperties"], true);
+        let with_string = Type::Object {
+            fields: Default::default(),
+            index: Some(signature(
+                Type::String,
+                Type::union(vec![Type::Number, Type::String]),
+            )),
+            more_indexes: vec![signature(pattern("a"), Type::Number)],
+        };
+        let schema = json_schema(&with_string).unwrap();
+        assert_eq!(schema["patternProperties"].as_object().unwrap().len(), 1);
+        assert!(schema["additionalProperties"].is_object(), "{schema}");
     }
 
     #[test]
@@ -386,6 +437,7 @@ mod tests {
                 .contains("faithfully")
         );
         let record = Type::Object {
+            more_indexes: Vec::new(),
             fields: Default::default(),
             index: Some(crate::IndexSignature {
                 string_keyof_includes_number: false,

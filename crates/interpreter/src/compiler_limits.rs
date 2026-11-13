@@ -57,6 +57,12 @@ pub const MAX_TYPE_DEPTH: u32 = 512;
 /// 2 million.
 pub const MAX_TYPE_WORK: u64 = 1 << 24;
 
+/// Intersections of index values one may open inside another
+/// (`TypeLimits::enter_intersection`). Relating the values of one can read a
+/// bound's `T[K]` and intersect again, outside the guard of the relation that
+/// led there, and each re-entry costs a relation's stack frames.
+pub const MAX_OPEN_INTERSECTIONS: u32 = 4;
+
 /// Steps of inline code one runtime type check may emit: one per structural
 /// test of a type, union member, field or element, and one per segment of the
 /// failure path each test records. Interface checks are inlined with their

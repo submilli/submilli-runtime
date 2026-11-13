@@ -61,8 +61,12 @@ fn walk_alias_refs(ty: &Type, visit: &mut dyn FnMut(&MangledName)) {
         Type::Mapped { .. } | Type::Conditional { .. } | Type::Intersection(_) => {
             crate::type_size::for_each_child(ty, |child| walk_alias_refs(child, visit));
         }
-        Type::Object { fields, index } => {
-            if let Some(i) = index {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            for i in crate::stored_index_signatures(index, more_indexes) {
                 walk_alias_refs(&i.value, visit);
             }
             for f in fields.values() {
@@ -668,13 +672,14 @@ fn for_each_member_type_mut(kind: &mut TypeKind, settle: &mut dyn FnMut(&mut Typ
             methods,
             properties,
             index,
+            more_indexes,
             ..
         } => {
             methods.values_mut().for_each(|sig| method(sig, settle));
             properties
                 .values_mut()
                 .for_each(|property| settle(&mut property.ty));
-            if let Some(index) = index {
+            for index in index.iter_mut().chain(more_indexes.iter_mut()) {
                 settle(&mut index.value);
             }
         }

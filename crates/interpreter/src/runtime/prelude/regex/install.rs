@@ -459,7 +459,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "RegExp".to_string(),
             mangled_name: crate::mangle::prelude("RegExp"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (
@@ -560,7 +560,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         defs.types.insert(interface.to_string(), TypeSymbol {
             name: interface.to_string(), mangled_name: crate::mangle::prelude(interface),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None, generics: Default::default(), methods: BTreeMap::new(),
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(), generics: Default::default(), methods: BTreeMap::new(),
                 properties: BTreeMap::from([
                     // Numeric keys lower to array reads, so no host getter is imported.
                     ("0".to_string(), PropertySig { readonly: false, intrinsic: true, ..property(Type::String, false) }),
@@ -580,7 +580,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "RegExpConstructor".to_string(),
             mangled_name: crate::mangle::prelude("RegExpConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "escape".to_string(),
@@ -685,6 +685,7 @@ pub(crate) fn replacement_type() -> Type {
 fn groups_type() -> Type {
     Type::union(vec![
         Type::Object {
+            more_indexes: Vec::new(),
             fields: BTreeMap::new(),
             index: Some(crate::IndexSignature {
                 string_keyof_includes_number: false,

@@ -432,8 +432,12 @@ impl DependencyUsage {
                     self.collect_type(inner);
                 }
             }
-            Type::Object { fields, index } => {
-                if let Some(index) = index {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     self.collect_type(&index.value);
                     for helper in RECORD_HELPERS {
                         self.note_member(crate::mangle::extend(

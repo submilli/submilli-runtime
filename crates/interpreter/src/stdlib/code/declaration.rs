@@ -165,6 +165,7 @@ pub fn package_declaration() -> PackageDeclaration {
 fn object(fields: &[(&str, Type)], optional: bool) -> Type {
     Type::Object {
         index: None,
+        more_indexes: Vec::new(),
         fields: fields
             .iter()
             .map(|(name, ty)| {

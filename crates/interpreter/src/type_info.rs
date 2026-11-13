@@ -131,6 +131,7 @@ impl TypeInfoTable {
         let Type::Object {
             fields,
             index: None,
+            ..
         } = ty.peel()
         else {
             return false;
@@ -343,7 +344,12 @@ impl TypeInfoBuilder {
 
 fn canonical_type(shape: &Shape) -> Type {
     match shape {
-        Shape::Object { fields, index } => Type::Object {
+        Shape::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Type::Object {
+            more_indexes: more_indexes.clone(),
             index: index.clone(),
             fields: fields.clone(),
         },
@@ -363,12 +369,14 @@ mod tests {
     fn index_finds_the_same_object_type_id_as_the_scan() {
         let inner = BTreeMap::from([("v".to_string(), ObjectField::required(Type::Number))]);
         let inner_ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: inner.clone(),
         };
         let outer =
             BTreeMap::from([("inner".to_string(), ObjectField::required(inner_ty.clone()))]);
         let outer_ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: outer.clone(),
         };
@@ -376,6 +384,7 @@ mod tests {
             "main",
             &[
                 Shape::Object {
+                    more_indexes: Vec::new(),
                     index: None,
                     fields: outer,
                 },
@@ -392,6 +401,7 @@ mod tests {
         assert_eq!(index.object_type_id(&table, &array), None);
         // A type the table never collected falls back to the structural scan.
         let uncollected = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: BTreeMap::from([("w".to_string(), ObjectField::required(Type::Number))]),
         };
@@ -405,12 +415,14 @@ mod tests {
             ("name".to_string(), ObjectField::required(Type::String)),
         ]);
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields.clone(),
         };
         let table = TypeInfoTable::collect_from_shapes(
             "main",
             &[Shape::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields,
             }],

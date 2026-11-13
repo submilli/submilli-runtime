@@ -118,4 +118,5 @@ pub use typed_ast::{
 };
 pub use types::{
     IndexSignature, ObjectField, Package, PredicateKind, TupleType, Type, TypePredicate,
+    split_index_signatures, stored_index_signatures,
 };

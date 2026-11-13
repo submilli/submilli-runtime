@@ -1205,6 +1205,7 @@ fn group_by_params() -> Vec<Param> {
 
 fn group_by_output() -> Type {
     Type::Object {
+        more_indexes: Vec::new(),
         fields: std::collections::BTreeMap::new(),
         index: Some(crate::types::IndexSignature {
             string_keyof_includes_number: false,
@@ -1232,6 +1233,7 @@ fn from_entries_input() -> Type {
 
 fn from_entries_output() -> Type {
     Type::Object {
+        more_indexes: Vec::new(),
         fields: std::collections::BTreeMap::new(),
         index: Some(crate::types::IndexSignature {
             string_keyof_includes_number: false,
@@ -1257,7 +1259,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Object".to_string(),
             mangled_name: crate::mangle::prelude("Object"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (
@@ -1301,7 +1303,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "ObjectConstructor".to_string(),
             mangled_name: crate::mangle::prelude("ObjectConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (

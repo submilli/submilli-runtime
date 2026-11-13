@@ -1,4 +1,4 @@
-// expect-error: incompatible inherited string index signatures
+// expect-error: incompatible inherited index signatures for key
 // expect-error: cannot assign through readonly index signature
 // expect-error: incompatible inherited member
 interface Wide { [key: string]: number | string; }

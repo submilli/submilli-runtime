@@ -1260,6 +1260,9 @@ pub(super) fn assignable_rec(
             ) else {
                 return false;
             };
+            if !class_members_fit(&class_form, &types.index_signatures(expected), types, seen) {
+                return false;
+            }
             if weak_type_rejects(&class_form, &iface_form) {
                 return false;
             }
@@ -1302,15 +1305,21 @@ pub(super) fn assignable_rec(
                 })
                 && types.required_methods_satisfied(actual, expected, seen)
         }
-        (Type::ClassRef { mangled, args, .. }, Type::Object { fields, index }) => {
+        (
+            Type::ClassRef { mangled, args, .. },
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            },
+        ) => {
             let Some(class_form) = types.class_full_form(mangled, args) else {
                 return false;
             };
-            if index.as_ref().is_some_and(|i| {
-                class_form
-                    .values()
-                    .any(|f| !assignable_rec(&f.ty, &i.value, types, seen))
-            }) {
+            let signatures: Vec<_> = crate::stored_index_signatures(index, more_indexes)
+                .cloned()
+                .collect();
+            if !class_members_fit(&class_form, &signatures, types, seen) {
                 return false;
             }
             if weak_type_rejects(&class_form, fields) {
@@ -1430,13 +1439,18 @@ pub(super) fn assignable_rec(
             Type::Object {
                 fields: a_fields,
                 index: a_index,
+                more_indexes: a_more,
             },
             Type::Object {
                 fields: e_fields,
                 index: e_index,
+                more_indexes: e_more,
             },
         ) => {
-            if let Some(expected_index) = e_index {
+            let actual_indexes: Vec<_> = crate::stored_index_signatures(a_index, a_more)
+                .cloned()
+                .collect();
+            for expected_index in crate::stored_index_signatures(e_index, e_more) {
                 if !a_fields
                     .iter()
                     .filter(|(name, _)| {
@@ -1446,10 +1460,12 @@ pub(super) fn assignable_rec(
                 {
                     return false;
                 }
-                if let Some(actual_index) = a_index
-                    && index_domains_related(&actual_index.key, &expected_index.key, types)
-                    && !assignable_rec(&actual_index.value, &expected_index.value, types, seen)
-                {
+                if !super::records::source_indexes_fit(
+                    &actual_indexes,
+                    expected_index,
+                    types,
+                    |value| assignable_rec(value, &expected_index.value, types, seen),
+                ) {
                     return false;
                 }
             }
@@ -1780,22 +1796,27 @@ fn satisfies_structurally(
     if weak_type_rejects(&actual_form, &expected_form) {
         return false;
     }
-    if let Some(index) = types.index_signature(expected) {
+    let expected_indexes = types.index_signatures(expected);
+    if !expected_indexes.is_empty() {
         if !matches!(
             actual.peel(),
             Type::Object { .. } | Type::ClassRef { .. } | Type::InterfaceRef { .. }
         ) {
             return false;
         }
+        let actual_indexes = types.index_signatures(actual);
         seen.push(key.clone());
-        let compatible = actual_form
-            .iter()
-            .filter(|(name, _)| crate::property_keys::matches_name(&index.key, name, types.limits))
-            .all(|(_, field)| assignable_rec(&field.ty, &index.value, types, seen))
-            && types.index_signature(actual).is_none_or(|actual| {
-                !index_domains_related(&actual.key, &index.key, types)
-                    || assignable_rec(&actual.value, &index.value, types, seen)
-            });
+        let compatible = expected_indexes.iter().all(|index| {
+            actual_form
+                .iter()
+                .filter(|(name, _)| {
+                    crate::property_keys::matches_name(&index.key, name, types.limits)
+                })
+                .all(|(_, field)| assignable_rec(&field.ty, &index.value, types, seen))
+                && super::records::source_indexes_fit(&actual_indexes, index, types, |value| {
+                    assignable_rec(value, &index.value, types, seen)
+                })
+        });
         seen.pop();
         if !compatible {
             return false;
@@ -1903,10 +1924,17 @@ fn type_nesting_depth(ty: &Type) -> usize {
             type_argument_depth(params).max(type_nesting_depth(ret))
         }
         Type::Refined { original, ty } => type_nesting_depth(original).max(type_nesting_depth(ty)),
-        Type::Object { fields, index } => fields
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => fields
             .values()
             .map(|field| type_nesting_depth(&field.ty))
-            .chain(index.iter().map(|i| type_nesting_depth(&i.value)))
+            .chain(
+                crate::stored_index_signatures(index, more_indexes)
+                    .map(|i| type_nesting_depth(&i.value)),
+            )
             .max()
             .unwrap_or(0),
         _ => 0,
@@ -1946,6 +1974,21 @@ pub(super) fn has_required_generic_method(
     })
 }
 
+/// Whether every member of a class instance fits every one of `signatures`:
+/// a class has no index signature of its own to say which keys it holds.
+fn class_members_fit(
+    class_form: &BTreeMap<String, ObjectField>,
+    signatures: &[crate::IndexSignature],
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    signatures.iter().all(|index| {
+        class_form
+            .values()
+            .all(|field| assignable_rec(&field.ty, &index.value, types, seen))
+    })
+}
+
 /// The full member form of `ty` when it is a non-host-backed `InterfaceRef`
 /// with no index signature, no required generic methods, and only optional
 /// non-`@call` members — i.e., an interface whose shape a function or a
@@ -1955,7 +1998,7 @@ pub(super) fn function_satisfiable_interface_form(
     types: TypeResolver,
 ) -> Option<BTreeMap<String, ObjectField>> {
     let ty = ty.peel();
-    if is_host_backed_interface(ty) || types.index_signature(ty).is_some() {
+    if is_host_backed_interface(ty) || types.has_index_signature(ty) {
         return None;
     }
     let Type::InterfaceRef {
@@ -2006,8 +2049,10 @@ pub(crate) fn expand_interface_data_shape(ty: &Type, types: TypeResolver) -> Opt
     else {
         return None;
     };
+    let (index, more_indexes) = crate::split_index_signatures(types.index_signatures(ty));
     Some(Type::Object {
-        index: types.index_signature(ty),
+        more_indexes,
+        index,
         fields: types.interface_data_shape(mangled, name, args)?,
     })
 }
@@ -2368,12 +2413,14 @@ fn without_index_signature(ty: Type, types: TypeResolver) -> Type {
         Type::Object { fields, .. } => Type::Object {
             fields: fields.clone(),
             index: None,
+            more_indexes: Vec::new(),
         },
-        Type::InterfaceRef { .. } if types.index_signature(&ty).is_some() => {
+        Type::InterfaceRef { .. } if types.has_index_signature(&ty) => {
             match expand_interface_data_shape(&ty, types) {
                 Some(Type::Object { fields, .. }) => Type::Object {
                     fields,
                     index: None,
+                    more_indexes: Vec::new(),
                 },
                 _ => ty,
             }
@@ -2884,13 +2931,6 @@ fn refinement_fits_union(
         .all(|piece| assignable_rec(piece, expected, types, seen))
 }
 
-pub(super) fn index_domains_related(actual: &Type, expected: &Type, types: TypeResolver) -> bool {
-    matches!(actual.peel(), Type::String)
-        || matches!(expected.peel(), Type::String)
-        || assignable(actual, expected, types)
-        || assignable(expected, actual, types)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3012,6 +3052,7 @@ mod tests {
     #[test]
     fn optional_object_field_accepts_explicit_undefined() {
         let object = |field| Type::Object {
+            more_indexes: Vec::new(),
             fields: [("value".to_string(), field)].into_iter().collect(),
             index: None,
         };
@@ -3210,6 +3251,7 @@ mod tests {
             Type::Null,
             Type::Array(Box::new(Type::Number)),
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: std::collections::BTreeMap::new(),
             },
@@ -3257,6 +3299,7 @@ mod tests {
 
     fn obj(fields: Vec<(&str, Type, bool)>) -> Type {
         Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields
                 .into_iter()
@@ -3334,6 +3377,7 @@ mod tests {
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     extends: Vec::new(),
+                    more_indexes: Vec::new(),
                     index: None,
                     generics: Default::default(),
                     methods,

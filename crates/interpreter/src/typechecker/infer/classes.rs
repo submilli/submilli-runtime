@@ -1804,8 +1804,11 @@ impl<'a> Inferer<'a> {
         let target = interface_ty.clone();
         let non_shape_carriers =
             self.non_shape_interface_carriers(&target, package, name, dispatch, &members);
+        let (index, more_indexes) =
+            crate::split_index_signatures(self.resolver().index_signatures(interface_ty));
         Some(crate::InterfaceNarrowingTest {
-            index: self.resolver().index_signature(interface_ty),
+            more_indexes,
+            index,
             members,
             methods: methods.keys().cloned().collect(),
             shape_allowed: *dispatch == crate::Dispatch::VTable
@@ -1920,8 +1923,9 @@ impl<'a> Inferer<'a> {
         // candidate is `void`.
         let index_constrains_members = self
             .resolver()
-            .index_signature(target)
-            .is_some_and(|index| !matches!(index.value.peel(), Type::Unknown));
+            .index_signatures(target)
+            .iter()
+            .any(|index| !matches!(index.value.peel(), Type::Unknown));
         if index_constrains_members
             || self.carrier_members_mention_parameters(&mangled, name, target_members)
         {
@@ -2285,7 +2289,9 @@ impl<'a> Inferer<'a> {
                 crate::FieldNarrowingTest::Interface(interface)
             } else {
                 let mut inner_subtree = RuntimeTestSubtree::default();
-                if let Some(index) = &interface.index {
+                for index in
+                    crate::stored_index_signatures(&interface.index, &interface.more_indexes)
+                {
                     inner_subtree.merge(self.record_runtime_type_test_inner(
                         &index.value,
                         RuntimeTestMode::AllowAliasRefs,
@@ -2478,6 +2484,7 @@ impl<'a> Inferer<'a> {
         }
         let shape = Type::Object {
             index: None,
+            more_indexes: Vec::new(),
             fields,
         };
         self.typed_ast
@@ -2521,8 +2528,12 @@ impl<'a> Inferer<'a> {
                     record(element, subtree)?;
                 }
             }
-            Type::Object { fields, index } => {
-                if let Some(i) = index {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
+                for i in crate::stored_index_signatures(index, more_indexes) {
                     record(&i.value, subtree)?;
                 }
                 for field in fields.values() {
@@ -4621,8 +4632,12 @@ fn collect_runtime_carrier_candidates(ty: &Type, out: &mut Vec<Type>) {
                 collect_runtime_carrier_candidates(element, out);
             }
         }
-        Type::Object { fields, index } => {
-            if let Some(index) = index {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 collect_runtime_carrier_candidates(&index.value, out);
             }
             for field in fields.values() {
@@ -5066,10 +5081,13 @@ fn type_mentions_erased_parameter(ty: &Type) -> bool {
         Type::Array(elem) => type_mentions_erased_parameter(elem),
         Type::Tuple(elems) => elems.iter().any(type_mentions_erased_parameter),
         Type::Union(elems) => elems.iter().any(type_mentions_erased_parameter),
-        Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|i| type_mentions_erased_parameter(&i.value))
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            crate::stored_index_signatures(index, more_indexes)
+                .any(|i| type_mentions_erased_parameter(&i.value))
                 || fields
                     .values()
                     .any(|field| type_mentions_erased_parameter(&field.ty))

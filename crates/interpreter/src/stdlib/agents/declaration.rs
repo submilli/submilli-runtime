@@ -135,6 +135,7 @@ fn insert_agent_info_interface(defs: &mut PackageDeclaration) {
             kind: TypeKind::Interface {
                 extends: Vec::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,

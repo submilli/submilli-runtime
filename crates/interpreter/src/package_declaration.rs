@@ -298,9 +298,13 @@ impl PackageDeclaration {
             .for_each(|symbol| type_symbol_types(symbol, visit));
         for shape in shapes {
             match shape {
-                Shape::Object { fields, index } => {
+                Shape::Object {
+                    fields,
+                    index,
+                    more_indexes,
+                } => {
                     fields.values().for_each(|field| visit(&field.ty));
-                    if let Some(index) = index {
+                    for index in crate::stored_index_signatures(index, more_indexes) {
                         visit(&index.value);
                     }
                 }
@@ -426,6 +430,7 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
             methods,
             properties,
             index,
+            more_indexes,
             dispatch: _,
             doc: _,
         } => {
@@ -434,7 +439,7 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
                 .values()
                 .for_each(|method| method_types(method, visit));
             properties.values().for_each(|property| visit(&property.ty));
-            if let Some(index) = index {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 visit(&index.value);
             }
         }
@@ -500,6 +505,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
         crate::FieldNarrowingTest::Interface(interface) => {
             let crate::InterfaceNarrowingTest {
                 index,
+                more_indexes,
                 members,
                 methods: _,
                 non_shape_carriers,
@@ -507,7 +513,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                 nullable: _,
                 undefined: _,
             } = interface;
-            if let Some(index) = index {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 visit(&index.value);
             }
             members.values().for_each(|member| visit(&member.ty));
@@ -627,12 +633,13 @@ impl PackageShapeCollector {
                 methods,
                 properties,
                 index,
+                more_indexes,
                 ..
             } => {
                 for base in extends {
                     self.collect_type(base);
                 }
-                if let Some(index) = index {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     self.collect_type(&index.value);
                 }
                 for method in methods.values() {
@@ -1047,6 +1054,9 @@ pub enum TypeKind {
         /// these additional constraints on the callable value.
         properties: BTreeMap<String, PropertySig>,
         index: Option<crate::IndexSignature>,
+        /// The signatures beside `index`, as on `Type::Object`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        more_indexes: Vec<crate::IndexSignature>,
         dispatch: Dispatch,
         doc: Option<crate::DocComment>,
     },
@@ -1674,6 +1684,7 @@ mod type_limit_checks {
                 methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 dispatch: Dispatch::VTable,
                 doc: None,
             };

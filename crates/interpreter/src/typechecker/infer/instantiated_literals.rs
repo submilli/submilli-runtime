@@ -119,6 +119,7 @@ impl Inferer<'_> {
             Type::Object {
                 fields: own_fields,
                 index,
+                more_indexes,
             },
             Some(Type::Object {
                 fields: slot_fields,
@@ -148,6 +149,7 @@ impl Inferer<'_> {
             }
         }
         Ok(changed.then(|| Type::Object {
+            more_indexes: more_indexes.clone(),
             fields: retyped_fields,
             index: index.clone(),
         }))

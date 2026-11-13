@@ -330,7 +330,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Map".to_string(),
             mangled_name: crate::mangle::prelude("Map"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                 methods: BTreeMap::from([
                     (
@@ -523,7 +523,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "MapConstructor".to_string(),
             mangled_name: crate::mangle::prelude("MapConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "groupBy".to_string(),

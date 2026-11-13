@@ -152,7 +152,7 @@ impl Rule<'_> {
                 }
             }
         }
-        if let Some(index) = &interface.index {
+        for index in crate::stored_index_signatures(&interface.index, &interface.more_indexes) {
             self.check_type(&index.value, span);
         }
     }

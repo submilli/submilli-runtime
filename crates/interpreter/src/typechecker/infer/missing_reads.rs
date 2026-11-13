@@ -368,8 +368,9 @@ impl Inferer<'_> {
         !declared
             && self
                 .resolver()
-                .index_signature(receiver)
-                .is_some_and(|index| {
+                .index_signatures(receiver)
+                .iter()
+                .any(|index| {
                     crate::property_keys::matches_name(&index.key, name, &self.type_limits)
                 })
     }

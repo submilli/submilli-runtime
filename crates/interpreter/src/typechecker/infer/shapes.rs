@@ -80,8 +80,12 @@ impl<'a> ShapeCollector<'a> {
                     self.collect(inner);
                 }
             }
-            Type::Object { fields, index } => {
-                if let Some(i) = index {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
+                for i in crate::stored_index_signatures(index, more_indexes) {
                     self.collect(&i.value);
                 }
                 if let Some(shape) = Shape::from_type(ty)
@@ -250,6 +254,7 @@ pub(super) fn collect_from_stmt(
                     );
                     Type::Object {
                         index: None,
+                        more_indexes: Vec::new(),
                         fields,
                     }
                 };
@@ -261,6 +266,7 @@ pub(super) fn collect_from_stmt(
                     );
                     Type::Object {
                         index: None,
+                        more_indexes: Vec::new(),
                         fields,
                     }
                 };

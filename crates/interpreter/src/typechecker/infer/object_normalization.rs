@@ -337,6 +337,7 @@ pub(super) fn has_excess_field(source: &Type, target: &Type) -> bool {
             Type::Object {
                 fields: target_fields,
                 index,
+                ..
             },
         ) => source_fields
             .iter()
@@ -375,6 +376,7 @@ fn with_sibling_fields(ty: &Type, siblings: &[&Type], normalizing: &NormalizingF
         Type::Object {
             fields,
             index: None,
+            ..
         } => {
             let mut fields = fields.clone();
             for (name, nested) in &normalizing.nested {
@@ -396,6 +398,7 @@ fn with_sibling_fields(ty: &Type, siblings: &[&Type], normalizing: &NormalizingF
             Type::Object {
                 fields: fields_with_missing(fields, names),
                 index: None,
+                more_indexes: Vec::new(),
             }
         }
         _ => ty.clone(),

@@ -445,6 +445,7 @@ fn insert_interface(
             kind: TypeKind::Interface {
                 extends: Vec::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 generics: crate::GenericParameters::unconstrained(generics),
                 methods: BTreeMap::new(),
                 properties,

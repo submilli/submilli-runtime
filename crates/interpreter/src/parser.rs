@@ -4427,7 +4427,7 @@ impl<'a> Parser<'a> {
     fn parse_object_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let open = self.advance();
         let mut fields: Vec<TypeAnnotationField> = Vec::new();
-        let mut index = None;
+        let mut indexes = Vec::new();
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
             && !self.peek_starts_top_level_item()
         {
@@ -4438,15 +4438,7 @@ impl<'a> Parser<'a> {
             } else if self.peek_is_construct_signature() {
                 self.reject_construct_signature()?;
             } else if matches!(self.peek().kind, TokenKind::LeftBracket) {
-                let signature = self.parse_index_signature(readonly)?;
-                if index.is_some() {
-                    self.error_at_with_help(
-                        signature.span,
-                        "duplicate string index signature",
-                        vec![],
-                    );
-                }
-                index = Some(Box::new(signature));
+                indexes.push(self.parse_index_signature(readonly)?);
             } else {
                 let field = self.parse_object_type_field(readonly, member_start)?;
                 if let Some(existing) = fields.iter().find(|f| f.name.name == field.name.name) {
@@ -4468,7 +4460,7 @@ impl<'a> Parser<'a> {
         }
         let close = self.advance();
         Some(TypeAnnotation {
-            kind: TypeAnnotationKind::Object { index, fields },
+            kind: TypeAnnotationKind::Object { indexes, fields },
             span: self.span(open.span.start, close.span.end),
         })
     }

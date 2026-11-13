@@ -502,6 +502,7 @@ fn intersection_method_package() -> CompiledPackage {
                 methods: BTreeMap::from([("@call".into(), call)]),
                 properties: BTreeMap::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 dispatch: submilli_engine::Dispatch::VTable,
                 doc: None,
             },

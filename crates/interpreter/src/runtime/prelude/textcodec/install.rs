@@ -161,7 +161,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "TextEncoder".to_string(),
             mangled_name: crate::mangle::prelude("TextEncoder"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "encode".to_string(),
@@ -191,7 +191,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "TextDecoder".to_string(),
             mangled_name: crate::mangle::prelude("TextDecoder"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "decode".to_string(),
@@ -221,7 +221,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "TextEncoderConstructor".to_string(),
             mangled_name: crate::mangle::prelude("TextEncoderConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "new".to_string(),
@@ -251,7 +251,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "TextDecoderConstructor".to_string(),
             mangled_name: crate::mangle::prelude("TextDecoderConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "new".to_string(),
