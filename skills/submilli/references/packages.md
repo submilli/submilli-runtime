@@ -446,6 +446,41 @@ destination URL that will carry the credential, or log headers. Provision
 values with `submilli secret put` or the server's secret commands, never by
 pasting them into chat or source control.
 
+## Paid services
+
+When an operation calls a service that bills per call or per unit, report the
+cost with `report` from `submilli:cost`, once per paid response. Without it the
+run's `cost` omits the package and its total understates the run.
+
+```ts
+import { report } from "submilli:cost";
+
+function reportCost(model: string, inputTokens: number): void {
+    const price = PRICE_PER_MILLION.get(model); // the version the service says answered
+    try {
+        report({
+            usd: price === undefined ? undefined : inputTokens * price / 1000000,
+            usage: { input_tokens: inputTokens },
+            label: model,
+        });
+    } catch (error: unknown) {
+        // The call is paid; a refused report must not lose its answer.
+    }
+}
+```
+
+- Report after the response is decoded, and only for a call the service
+  billed. Catch around `report`: the blueprint may not grant `cost.report`.
+- Price by the id the response names, not the requested alias. Leave `usd`
+  out for an unknown id; `usage` alone reports it unpriced.
+- `usd` is dollars. Hard-code the vendor's list price with a source link, or
+  take it from build configuration (see "Package build configuration" above).
+- `label` is at most 256 characters and `usage` at most 32 units. Report a
+  stable label, such as the model id, not a per-call value: a run keeps 256
+  labels per package.
+- The build derives `cost.report` into `capabilities.yaml`; it has no filter
+  and only packages hold it.
+
 ## Model-facing documentation
 
 A package has two readmes. The root `README.md` is for the people who install
