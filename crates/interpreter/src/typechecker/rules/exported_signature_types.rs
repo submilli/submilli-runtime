@@ -130,12 +130,13 @@ fn run_symbols<'a>(
                 methods,
                 properties,
                 index,
+                more_indexes,
                 ..
             } => {
                 for base in extends {
                     collect_signature_named_types(package_name, base, &mut used);
                 }
-                if let Some(index) = index {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     collect_signature_named_types(package_name, &index.value, &mut used);
                 }
                 for method in methods.values() {
@@ -342,8 +343,12 @@ fn collect_signature_named_types(
                 collect_signature_named_types(package_name, &predicate.asserted_type, out);
             }
         }
-        Type::Object { fields, index } => {
-            if let Some(index) = index {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 collect_signature_named_types(package_name, &index.value, out);
             }
             for field in fields.values() {

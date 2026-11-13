@@ -1724,14 +1724,7 @@ impl Inferer<'_> {
         } else if let Some(fields) = self.assignment_target_fields(&receiver_ty) {
             let field_lookup = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
-                    .index_signature(&receiver_ty)
-                    .filter(|index| {
-                        crate::property_keys::matches_name(
-                            &index.key,
-                            &name.name,
-                            &self.type_limits,
-                        )
-                    })
+                    .index_for_name(&receiver_ty, &name.name)
                     .map(|i| crate::ObjectField {
                         ty: *i.value,
                         optional: false,
@@ -2854,14 +2847,7 @@ impl Inferer<'_> {
         } else if let Some(fields) = self.assignment_target_fields(&receiver_ty) {
             if let Some(field) = fields.get(&name.name).cloned().or_else(|| {
                 self.resolver()
-                    .index_signature(&receiver_ty)
-                    .filter(|index| {
-                        crate::property_keys::matches_name(
-                            &index.key,
-                            &name.name,
-                            &self.type_limits,
-                        )
-                    })
+                    .index_for_name(&receiver_ty, &name.name)
                     .map(|index| crate::ObjectField {
                         ty: *index.value,
                         optional: false,

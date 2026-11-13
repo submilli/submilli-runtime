@@ -1094,6 +1094,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { extends: Vec::new(),
                 index: None,
+                more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties: BTreeMap::from([(

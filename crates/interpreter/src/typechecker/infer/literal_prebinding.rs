@@ -837,8 +837,12 @@ pub(super) fn holds_error_type(ty: &Type) -> bool {
         Type::Function { params, ret, .. } => {
             params.iter().any(holds_error_type) || holds_error_type(ret)
         }
-        Type::Object { fields, index } => {
-            index.as_ref().is_some_and(|i| holds_error_type(&i.value))
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            crate::stored_index_signatures(index, more_indexes).any(|i| holds_error_type(&i.value))
                 || fields.values().any(|f| holds_error_type(&f.ty))
         }
         Type::InterfaceRef { args, .. }

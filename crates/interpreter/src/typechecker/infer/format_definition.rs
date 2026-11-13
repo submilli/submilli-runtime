@@ -102,6 +102,7 @@ pub(super) fn format_definition(
             Type::Object {
                 fields,
                 index: None,
+                ..
             } if !fields.is_empty() => {
                 out.push("{\n")?;
                 for (name, field) in fields {
@@ -221,6 +222,7 @@ fn write_interface(
         methods,
         properties,
         index,
+        more_indexes,
         doc,
         ..
     } = &symbol.kind
@@ -242,11 +244,13 @@ fn write_interface(
         return out.push(" {}");
     }
     out.push(" {\n")?;
-    if let Some(index) = index {
+    for index in crate::stored_index_signatures(index, more_indexes) {
         out.format(format_args!(
-            "  {}[key: string]: ",
+            "  {}[key: ",
             if index.readonly { "readonly " } else { "" }
         ))?;
+        write_type(out, &index.key)?;
+        out.push("]: ")?;
         write_type(out, &substituted(&index.value, &sub, limits)?)?;
         out.push(";\n")?;
     }
@@ -782,6 +786,7 @@ mod tests {
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
                     extends: Vec::new(),
+                    more_indexes: Vec::new(),
                     index: None,
                     generics: crate::GenericParameters::unconstrained(generics),
                     methods: m,
@@ -923,6 +928,7 @@ mod tests {
         fields.insert("name".to_string(), ObjectField::required(Type::String));
         let out = format_definition(
             &Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields,
             },
@@ -1071,6 +1077,7 @@ mod tests {
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
                 extends: Vec::new(),
+                more_indexes: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),

@@ -338,6 +338,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
 fn object(fields: &[(&str, Type)], optional: bool) -> Type {
     Type::Object {
         index: None,
+        more_indexes: Vec::new(),
         fields: fields
             .iter()
             .map(|(name, ty)| {

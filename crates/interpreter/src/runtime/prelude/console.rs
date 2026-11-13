@@ -129,7 +129,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Console".to_string(),
             mangled_name: crate::mangle::prelude("Console"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "log".to_string(),

@@ -642,6 +642,7 @@ pub(crate) fn like_type(local: &str) -> crate::Type {
     }
     variants.push(Type::Object {
         index: None,
+        more_indexes: Vec::new(),
         fields,
     });
     Type::union(variants)
@@ -654,6 +655,7 @@ pub(crate) fn overflow_param() -> crate::Param {
         Type::union(vec![
             Type::Object {
                 index: None,
+                more_indexes: Vec::new(),
                 fields: std::collections::BTreeMap::from([(
                     "overflow".to_string(),
                     ObjectField::optional(Type::union(vec![

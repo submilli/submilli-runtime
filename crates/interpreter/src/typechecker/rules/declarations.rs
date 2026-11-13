@@ -208,7 +208,11 @@ impl<'a> TypeDeclarations<'a> {
     /// primitive, so its phantom members are not found here.
     fn member_within(&self, ty: &Type, member: &str, expansions_left: u32) -> Member {
         match ty.peel() {
-            Type::Object { fields, index } => object_member(fields, index.as_ref(), member),
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => object_member(fields, index, more_indexes, member),
             Type::Union(alternatives) => self.union_member(alternatives, member, expansions_left),
             Type::Intersection(members) => {
                 self.intersection_member(members, member, expansions_left)
@@ -417,7 +421,11 @@ impl<'a> Declared<'a> {
             // known.
             Self::Typed(TypedTypeDecl::Interface(declaration)) => {
                 listed_property(&declaration.members, member)
-                    .or_else(|| index_value(declaration.index.as_ref()))
+                    // An unlisted member without a signature to read through
+                    // may still be inherited, so it stays unknown here too.
+                    .or_else(|| {
+                        sole_index_value(&declaration.index, &declaration.more_indexes).flatten()
+                    })
                     .map(|ty| (declaration.generics.names.as_slice(), Some(ty)))
             }
             Self::Typed(
@@ -431,14 +439,15 @@ impl<'a> Declared<'a> {
                     generics,
                     properties,
                     index,
+                    more_indexes,
                     ..
-                } => Some((
-                    generics.names.as_slice(),
-                    properties
-                        .get(member)
-                        .map(|property| &property.ty)
-                        .or_else(|| index_value(index.as_ref())),
-                )),
+                } => {
+                    let found = match properties.get(member) {
+                        Some(property) => Some(&property.ty),
+                        None => sole_index_value(index, more_indexes)?,
+                    };
+                    Some((generics.names.as_slice(), found))
+                }
                 TypeKind::Class { .. }
                 | TypeKind::NumberEnum { .. }
                 | TypeKind::StringEnum { .. }
@@ -495,16 +504,25 @@ fn declared_name(declaration: &TypedTypeDecl) -> &str {
 }
 
 /// A field a type declares, or what its index signature holds under any name.
+/// A name no field declares may read through any index signature, whose key
+/// this rule does not match.
 fn object_member(
     fields: &BTreeMap<String, ObjectField>,
-    index: Option<&IndexSignature>,
+    index: &Option<IndexSignature>,
+    more_indexes: &[IndexSignature],
     member: &str,
 ) -> Member {
-    fields
-        .get(member)
-        .map(|field| &field.ty)
-        .or_else(|| index_value(index))
-        .map_or(Member::Missing, |ty| Member::Found(ty.clone()))
+    if let Some(field) = fields.get(member) {
+        return Member::Found(field.ty.clone());
+    }
+    let values: Vec<Type> = crate::stored_index_signatures(index, more_indexes)
+        .map(|index| (*index.value).clone())
+        .collect();
+    if values.is_empty() {
+        Member::Missing
+    } else {
+        Member::Found(Type::union(values))
+    }
 }
 
 fn listed_property<'a>(members: &'a [TypedInterfaceMember], member: &str) -> Option<&'a Type> {
@@ -514,8 +532,18 @@ fn listed_property<'a>(members: &'a [TypedInterfaceMember], member: &str) -> Opt
     })
 }
 
-fn index_value(index: Option<&IndexSignature>) -> Option<&Type> {
-    index.map(|index| &*index.value)
+/// The value a name no member declares reads through the interface's
+/// signature, `Some(None)` when it has none. `None` when it has several:
+/// which one a name reads through is not told here, as their keys are not
+/// matched.
+fn sole_index_value<'a>(
+    index: &'a Option<IndexSignature>,
+    more_indexes: &[IndexSignature],
+) -> Option<Option<&'a Type>> {
+    if !more_indexes.is_empty() {
+        return None;
+    }
+    Some(index.as_ref().map(|index| &*index.value))
 }
 
 fn number_value(value: f64) -> LiteralValue {

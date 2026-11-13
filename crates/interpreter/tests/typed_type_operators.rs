@@ -345,6 +345,7 @@ fn branded(alias: &str) -> Option<Type> {
     Some(Type::intersection(vec![
         primitive,
         Type::Object {
+            more_indexes: Vec::new(),
             fields: BTreeMap::from([(
                 "brand".to_string(),
                 ObjectField::required(Type::BooleanLiteral(true)),

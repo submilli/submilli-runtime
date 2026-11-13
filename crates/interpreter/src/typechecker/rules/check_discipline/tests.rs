@@ -107,6 +107,7 @@ fn a_type_the_caller_can_change_or_run_code_behind_is_not_primitive() {
             optional: 0,
         },
         Type::Object {
+            more_indexes: Vec::new(),
             fields: std::collections::BTreeMap::new(),
             index: None,
         },

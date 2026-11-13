@@ -147,9 +147,14 @@ impl Inferer<'_> {
                 ..
             } => self.structural_form(mangled, name, args).map_or_else(
                 || ty.clone(),
-                |fields| Type::Object {
-                    fields,
-                    index: self.resolver().index_signature(ty.peel()),
+                |fields| {
+                    let (index, more_indexes) =
+                        crate::split_index_signatures(self.resolver().index_signatures(ty.peel()));
+                    Type::Object {
+                        more_indexes,
+                        fields,
+                        index,
+                    }
                 },
             ),
             shape => shape.clone(),

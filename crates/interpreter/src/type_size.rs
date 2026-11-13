@@ -16,7 +16,9 @@ use std::cell::Cell;
 
 use crate::Type;
 use crate::compiler_error::{CompilerFailure, CompilerStage};
-use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES, MAX_TYPE_WORK};
+use crate::compiler_limits::{
+    MAX_OPEN_INTERSECTIONS, MAX_TYPE_DEPTH, MAX_TYPE_NODES, MAX_TYPE_WORK,
+};
 use crate::span::Span;
 
 /// A type limit or operational failure encountered while validating a type.
@@ -209,15 +211,21 @@ impl TypeBudget<'_> {
 }
 
 /// Type limit state for one compiler phase: the work allowance its
-/// substitutions and comparisons draw from, and the first limit met where the caller could not
-/// return an error, such as inside assignability or diagnostic rendering. Such
-/// a caller continues with [`Type::Error`], which suppresses follow-on
-/// diagnostics, and the phase turns the recorded failure into a compiler limit
-/// error at its next checkpoint, so compilation never succeeds past it.
+/// substitutions and comparisons draw from, the method comparisons open
+/// across assignability walks, how many index-value intersections are open
+/// (which bounds their re-entry), and the first limit met where the caller
+/// could not return an error, such as inside assignability or diagnostic
+/// rendering. Such a caller continues with [`Type::Error`], which suppresses
+/// follow-on diagnostics, and the phase turns the recorded failure into a
+/// compiler limit error at its next checkpoint, so compilation never succeeds
+/// past it.
 pub struct TypeLimits {
     work_left: Cell<u64>,
     exceeded: Cell<Option<TypeTooLarge>>,
     method_comparisons: Cell<Vec<(crate::MethodSig, crate::MethodSig)>>,
+    /// How many index-value intersections are open (see
+    /// [`enter_intersection`](Self::enter_intersection)).
+    open_intersections: Cell<u32>,
 }
 
 impl std::fmt::Debug for TypeLimits {
@@ -225,7 +233,17 @@ impl std::fmt::Debug for TypeLimits {
         f.debug_struct("TypeLimits")
             .field("work_left", &self.work_left)
             .field("exceeded", &self.exceeded)
+            .field("open_intersections", &self.open_intersections)
             .finish_non_exhaustive()
+    }
+}
+
+/// An open index-value intersection; closing it on drop.
+pub(crate) struct OpenIntersection<'a>(&'a Cell<u32>);
+
+impl Drop for OpenIntersection<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
     }
 }
 
@@ -235,6 +253,7 @@ impl Default for TypeLimits {
             work_left: Cell::new(MAX_TYPE_WORK),
             exceeded: Cell::new(None),
             method_comparisons: Cell::default(),
+            open_intersections: Cell::new(0),
         }
     }
 }
@@ -247,6 +266,7 @@ impl TypeLimits {
             work_left: Cell::new(nodes),
             exceeded: Cell::new(None),
             method_comparisons: Cell::default(),
+            open_intersections: Cell::new(0),
         }
     }
 
@@ -344,6 +364,18 @@ impl TypeLimits {
         }
     }
 
+    /// Opens one index-value intersection, which relates its values and may
+    /// open another. `None` once [`MAX_OPEN_INTERSECTIONS`] are open: the
+    /// caller then keeps the plain intersection, which needs no relating, so
+    /// the recursion ends whatever path led back to it.
+    pub(crate) fn enter_intersection(&self) -> Option<OpenIntersection<'_>> {
+        let open = self.open_intersections.get();
+        (open < MAX_OPEN_INTERSECTIONS).then(|| {
+            self.open_intersections.set(open + 1);
+            OpenIntersection(&self.open_intersections)
+        })
+    }
+
     /// The recorded failure, clearing it.
     pub fn take(&self) -> Result<(), TypeTooLarge> {
         match self.exceeded.take() {
@@ -361,9 +393,13 @@ pub(crate) fn child_count(ty: &Type) -> usize {
         } => params
             .len()
             .saturating_add(1 + usize::from(predicate.is_some())),
-        Type::Object { fields, index } => fields
-            .len()
-            .saturating_add(2 * usize::from(index.is_some())),
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => fields.len().saturating_add(
+            2_usize.saturating_mul(usize::from(index.is_some()).saturating_add(more_indexes.len())),
+        ),
         Type::Array(_) | Type::Readonly(_) => 1,
         Type::Tuple(tuple) => tuple.elements.len(),
         Type::TemplateLiteral {
@@ -418,9 +454,13 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
                 visit(&predicate.asserted_type);
             }
         }
-        Type::Object { fields, index } => {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
             fields.values().for_each(|field| visit(&field.ty));
-            if let Some(index) = index {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 visit(&index.key);
                 visit(&index.value);
             }
@@ -537,7 +577,15 @@ pub fn map_children<E>(
                 optional: *optional,
             }
         }
-        Type::Object { fields, index } => Type::Object {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Type::Object {
+            more_indexes: more_indexes
+                .iter()
+                .map(|index| index.try_map_types(&mut map))
+                .collect::<Result<_, E>>()?,
             fields: fields
                 .iter()
                 .map(|(name, field)| {
@@ -690,6 +738,11 @@ struct TypeChildren<'a> {
     members: std::slice::Iter<'a, Type>,
     fields: Option<std::collections::btree_map::Values<'a, String, crate::ObjectField>>,
     trailing: [Option<&'a Type>; 4],
+    /// An object's signatures beyond the first, whose keys and values come
+    /// before the trailing children (`index`'s), last first.
+    more_indexes: std::slice::Iter<'a, crate::IndexSignature>,
+    /// The value of the signature whose key `next` just gave.
+    index_value: Option<&'a Type>,
 }
 
 impl<'a> TypeChildren<'a> {
@@ -698,6 +751,8 @@ impl<'a> TypeChildren<'a> {
             members: [].iter(),
             fields: None,
             trailing: [None; 4],
+            more_indexes: [].iter(),
+            index_value: None,
         };
         match ty {
             Type::Function {
@@ -710,10 +765,15 @@ impl<'a> TypeChildren<'a> {
                 children.trailing[0] = Some(ret);
                 children.trailing[1] = predicate.as_ref().map(|p| &p.asserted_type);
             }
-            Type::Object { fields, index } => {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
                 children.fields = Some(fields.values());
                 children.trailing[0] = index.as_ref().map(|index| index.key.as_ref());
                 children.trailing[1] = index.as_ref().map(|index| index.value.as_ref());
+                children.more_indexes = more_indexes.iter();
             }
             Type::Array(inner) | Type::Readonly(inner) | Type::KeyOf(inner) => {
                 children.trailing[0] = Some(inner);
@@ -786,10 +846,14 @@ impl<'a> Iterator for TypeChildren<'a> {
     type Item = &'a Type;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.trailing
-            .iter_mut()
-            .rev()
-            .find_map(Option::take)
+        self.index_value
+            .take()
+            .or_else(|| {
+                let index = self.more_indexes.next_back()?;
+                self.index_value = Some(&index.key);
+                Some(&index.value)
+            })
+            .or_else(|| self.trailing.iter_mut().rev().find_map(Option::take))
             .or_else(|| self.fields.as_mut()?.next_back().map(|field| &field.ty))
             .or_else(|| self.members.next_back())
     }
@@ -817,6 +881,7 @@ pub(crate) mod tests {
     fn pair_of_t() -> Type {
         let field = || ObjectField::required(Type::TypeVar("T".into()));
         Type::Object {
+            more_indexes: Vec::new(),
             fields: BTreeMap::from([("a".into(), field()), ("b".into(), field())]),
             index: None,
         }
@@ -1054,7 +1119,25 @@ pub(crate) mod tests {
 
     #[test]
     fn map_children_rebuilds_every_variant_unchanged() {
+        let pattern = |prefix: &str| Type::TemplateLiteral {
+            parts: vec![prefix.into(), String::new()],
+            substitutions: vec![Type::String],
+        };
         let object = Type::Object {
+            more_indexes: vec![
+                crate::IndexSignature {
+                    string_keyof_includes_number: true,
+                    key: Box::new(pattern("a")),
+                    value: Box::new(Type::Number),
+                    readonly: false,
+                },
+                crate::IndexSignature {
+                    string_keyof_includes_number: true,
+                    key: Box::new(pattern("b")),
+                    value: Box::new(Type::Null),
+                    readonly: false,
+                },
+            ],
             fields: BTreeMap::from([("f".into(), ObjectField::required(Type::String))]),
             index: Some(crate::IndexSignature {
                 string_keyof_includes_number: false,

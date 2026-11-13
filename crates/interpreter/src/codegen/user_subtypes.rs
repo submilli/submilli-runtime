@@ -42,7 +42,12 @@ pub fn collect_object_shapes<'a>(
 
 fn canonical_type(shape: &Shape) -> Type {
     match shape {
-        Shape::Object { fields, index } => Type::Object {
+        Shape::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Type::Object {
+            more_indexes: more_indexes.clone(),
             index: index.clone(),
             fields: fields.clone(),
         },

@@ -855,6 +855,7 @@ pub fn narrow_field_presence(
             (
                 Type::Object {
                     index: None,
+                    more_indexes: Vec::new(),
                     fields,
                 },
                 receiver_ty.clone(),
@@ -872,6 +873,7 @@ pub fn narrow_field_presence(
             (
                 Type::Object {
                     index: None,
+                    more_indexes: Vec::new(),
                     fields: present,
                 },
                 absent,
@@ -1974,6 +1976,7 @@ mod analyzer_tests {
     #[test]
     fn presence_keeps_optional_read_undefined() {
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             fields: BTreeMap::from([("value".into(), crate::ObjectField::optional(Type::Number))]),
             index: None,
         };
@@ -2417,6 +2420,7 @@ mod tests {
                         declaration_span: crate::Span::at(crate::FileId(0)),
                         kind: crate::TypeKind::Interface {
                             extends: Vec::new(),
+                            more_indexes: Vec::new(),
                             index: None,
                             generics: Default::default(),
                             methods,

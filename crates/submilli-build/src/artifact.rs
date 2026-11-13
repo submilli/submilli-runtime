@@ -32,6 +32,8 @@ use crate::CapabilitySchema;
 // v12: a package exporting `finalizer` also exports the check embedders restore
 // its argument through; without it, cleanup cannot run.
 // v15: interface narrowing metadata can carry `RegExpMatchArray`.
+// v19: object types and interface declarations carry several index signatures
+// (`more_indexes`).
 //
 // The release skill increments this on every runtime release, even when the
 // metadata and declaration shapes are unchanged. A mismatch means `pkg.wasm`
@@ -39,7 +41,7 @@ use crate::CapabilitySchema;
 // retained sources and does not execute it. The number still gates those file
 // shapes, so a reader that asks for a runnable artifact refuses a version it
 // does not understand instead of decoding it with the wrong types.
-pub const ARTIFACT_SCHEMA_VERSION: u32 = 18;
+pub const ARTIFACT_SCHEMA_VERSION: u32 = 19;
 
 const WASM_FILE: &str = "pkg.wasm";
 const CAPABILITIES_FILE: &str = "capabilities.yaml";
@@ -847,6 +849,7 @@ mod tests {
                 declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
                     extends: Vec::new(),
+                    more_indexes: Vec::new(),
                     index: None,
                     generics: Default::default(),
                     methods,
@@ -887,6 +890,7 @@ mod tests {
         fields.insert("label".to_string(), ObjectField::required(Type::String));
         fields.insert("count".to_string(), ObjectField::optional(Type::Number));
         defs.shapes.push(interpreter::Shape::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields,
         });

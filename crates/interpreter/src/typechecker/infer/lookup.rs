@@ -349,6 +349,7 @@ impl<'a> Inferer<'a> {
         let object = Type::Object {
             fields: BTreeMap::new(),
             index: None,
+            more_indexes: Vec::new(),
         };
         self.find_method(&object, name)
     }
@@ -417,16 +418,13 @@ impl<'a> Inferer<'a> {
             return Err(MemberFieldMiss::Method);
         }
         match member.peel() {
-            Type::Object { fields, index } => fields
+            Type::Object { fields, .. } => fields
                 .get(field)
                 .map(ObjectField::read_ty)
                 .or_else(|| {
-                    index
-                        .as_ref()
-                        .filter(|index| {
-                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
-                        })
-                        .map(crate::IndexSignature::read_ty)
+                    self.resolver()
+                        .index_for_name(member, field)
+                        .map(|index| index.read_ty())
                 })
                 .ok_or(MemberFieldMiss::Absent),
             Type::InterfaceRef { .. } => {
@@ -436,10 +434,7 @@ impl<'a> Inferer<'a> {
                     // An index signature backs every name it doesn't declare.
                     return self
                         .resolver()
-                        .index_signature(member)
-                        .filter(|index| {
-                            crate::property_keys::matches_name(&index.key, field, &self.type_limits)
-                        })
+                        .index_for_name(member, field)
                         .map(|index| index.read_ty())
                         .ok_or(MemberFieldMiss::Absent);
                 };
@@ -545,10 +540,13 @@ impl<'a> Inferer<'a> {
                 && args.iter().all(|a| self.name_resolves_here(a));
         }
         match ty.peel() {
-            Type::Object { fields, index } => {
-                index
-                    .as_ref()
-                    .is_none_or(|i| self.name_resolves_here(&i.value))
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
+                crate::stored_index_signatures(index, more_indexes)
+                    .all(|i| self.name_resolves_here(&i.value))
                     && fields.values().all(|f| self.name_resolves_here(&f.ty))
             }
             Type::Array(elem) => self.name_resolves_here(elem),
@@ -598,12 +596,15 @@ impl<'a> Inferer<'a> {
             return None;
         }
         match member.peel() {
-            Type::Object { fields, index } => {
+            Type::Object { fields, .. } => {
                 let Some(f) = fields.get(field) else {
-                    return index.as_ref().map(|i| FieldWrite {
-                        ty: (*i.value).clone(),
-                        writable: !i.readonly,
-                    });
+                    return self
+                        .resolver()
+                        .index_for_name(member, field)
+                        .map(|i| FieldWrite {
+                            ty: *i.value,
+                            writable: !i.readonly,
+                        });
                 };
                 Some(FieldWrite {
                     ty: ObjectField::widen_optional(f.optional, f.ty.clone()),
@@ -938,10 +939,13 @@ fn generic_flows_in(ty: &Type, generics: &[String]) -> bool {
         Type::Union(elements) => elements
             .iter()
             .any(|element| generic_flows_in(element, generics)),
-        Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|index| generic_flows_in(&index.value, generics))
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            crate::stored_index_signatures(index, more_indexes)
+                .any(|index| generic_flows_in(&index.value, generics))
                 || fields
                     .values()
                     .any(|field| generic_flows_in(&field.ty, generics))

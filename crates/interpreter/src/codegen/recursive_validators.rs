@@ -265,6 +265,7 @@ impl ValidatorBodies {
                     .collect::<Result<_, TypeTooLarge>>()?;
                 Type::Object {
                     index: None,
+                    more_indexes: Vec::new(),
                     fields,
                 }
             }
@@ -321,6 +322,7 @@ fn inherited_fields(
     crate::type_size::check(&Type::Object {
         fields: fields.clone(),
         index: None,
+        more_indexes: Vec::new(),
     })?;
     Ok(Some(fields))
 }
@@ -358,6 +360,7 @@ fn base_fields(
                 &Type::Object {
                     fields: fields.clone(),
                     index: None,
+                    more_indexes: Vec::new(),
                 },
                 limits,
             )?;
@@ -426,10 +429,12 @@ fn intersect_field_types(
         Type::Object {
             fields: left,
             index: None,
+            ..
         },
         Type::Object {
             fields: right,
             index: None,
+            ..
         },
     ) = (left.peel(), right.peel())
     {
@@ -438,6 +443,7 @@ fn intersect_field_types(
         return Ok(Type::Object {
             fields,
             index: None,
+            more_indexes: Vec::new(),
         });
     }
     Ok(Type::intersection(vec![left.clone(), right.clone()]))
@@ -551,7 +557,9 @@ impl<'a> Discovery<'a> {
             match test {
                 crate::FieldNarrowingTest::Shape(shape) => self.walk(shape)?,
                 crate::FieldNarrowingTest::Interface(interface) => {
-                    if let Some(index) = &interface.index {
+                    for index in
+                        crate::stored_index_signatures(&interface.index, &interface.more_indexes)
+                    {
                         self.walk(&index.value)?;
                     }
                     for member in interface.members.values() {
@@ -655,8 +663,13 @@ impl<'a> Discovery<'a> {
             collect_descriptor_arguments(&plan.body, &mut descriptor_types);
         }
         for shape in &self.shapes {
-            if let Shape::Object { fields, index } = shape {
-                if let Some(index) = index {
+            if let Shape::Object {
+                fields,
+                index,
+                more_indexes,
+            } = shape
+            {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     collect_descriptor_arguments(&index.value, &mut descriptor_types);
                 }
                 for field in fields.values() {
@@ -678,10 +691,8 @@ fn interface_test_is_recursive(
     interface: &crate::InterfaceNarrowingTest,
 ) -> bool {
     let mut visited = BTreeSet::from([key.clone()]);
-    interface
-        .index
-        .as_ref()
-        .is_some_and(|index| type_reaches_interface(&index.value, key.peel(), ta, &mut visited))
+    crate::stored_index_signatures(&interface.index, &interface.more_indexes)
+        .any(|index| type_reaches_interface(&index.value, key.peel(), ta, &mut visited))
         || interface
             .members
             .values()
@@ -703,10 +714,13 @@ fn type_reaches_interface(
         Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => elements
             .iter()
             .any(|element| type_reaches_interface(element, target, ta, visited)),
-        Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_some_and(|i| type_reaches_interface(&i.value, target, ta, visited))
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            crate::stored_index_signatures(index, more_indexes)
+                .any(|i| type_reaches_interface(&i.value, target, ta, visited))
                 || fields
                     .values()
                     .any(|field| type_reaches_interface(&field.ty, target, ta, visited))
@@ -787,15 +801,20 @@ impl<'a, 'b> Traversal<'a, 'b> {
     fn walk(&mut self, ty: &Type) -> Result<bool, crate::compiler_error::CompilerFailure> {
         let peeled = ty.peel();
         Ok(match peeled {
-            Type::Object { fields, index } => {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
                 if self.plain_objects.contains(peeled) {
                     return Ok(false);
                 }
                 let mut references = false;
-                if let Some(index) = index {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     references |= self.walk(&index.value)?;
                 }
                 self.shapes.insert(Shape::Object {
+                    more_indexes: more_indexes.clone(),
                     index: index.clone(),
                     fields: fields.clone(),
                 });
@@ -930,8 +949,12 @@ fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
                 collect_descriptor_arguments(ty, out);
             }
         }
-        Type::Object { fields, index } => {
-            if let Some(i) = index {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            for i in crate::stored_index_signatures(index, more_indexes) {
                 collect_descriptor_arguments(&i.value, out);
             }
             for field in fields.values() {
@@ -987,6 +1010,7 @@ mod inheritance_tests {
             }],
             property_names: BTreeSet::from(["value".into()]),
             index: None,
+            more_indexes: Vec::new(),
             doc: None,
         }
     }
@@ -1172,6 +1196,7 @@ mod inheritance_tests {
                         },
                     )]),
                     index: None,
+                    more_indexes: Vec::new(),
                     dispatch: crate::Dispatch::VTable,
                     doc: None,
                 },
@@ -1241,6 +1266,7 @@ mod inheritance_tests {
                     .map(|ty| Type::Object {
                         fields: BTreeMap::from([("x".into(), ObjectField::required(ty))]),
                         index: None,
+                        more_indexes: Vec::new(),
                     })
                     .collect(),
             )],

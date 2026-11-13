@@ -2639,6 +2639,7 @@ function main(): string {
             crate::compile::compile_script(source, "script.subm", crate::FileId(0), &[], &[])
                 .expect("script should compile");
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: std::collections::BTreeMap::from([
                 ("id".to_string(), ObjectField::required(Type::Number)),
@@ -4431,6 +4432,7 @@ function main(): string {
     #[test]
     fn generated_bodies_stop_at_the_engine_size_limit() {
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: std::collections::BTreeMap::from([(
                 "wide".to_string(),

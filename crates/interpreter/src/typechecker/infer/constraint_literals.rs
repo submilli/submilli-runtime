@@ -228,7 +228,6 @@ impl Inferer<'_> {
             match &expression.kind {
                 ExprKind::ObjectLiteral { members } => {
                     let fields = self.field_slots(&ty).unwrap_or_default();
-                    let index = self.resolver().index_signature(&ty);
                     for member in members {
                         let (name, value) = match member {
                             ObjectLiteralMember::Field(field) => {
@@ -242,18 +241,11 @@ impl Inferer<'_> {
                             }
                             ObjectLiteralMember::Spread { .. } => continue,
                         };
-                        if let Some(slot) = fields.get(&name).or_else(|| {
-                            index
-                                .as_ref()
-                                .filter(|index| {
-                                    crate::property_keys::matches_name(
-                                        &index.key,
-                                        &name,
-                                        &self.type_limits,
-                                    )
-                                })
-                                .map(|index| index.value.as_ref())
-                        }) {
+                        let index_value = self
+                            .resolver()
+                            .index_for_name(&ty, &name)
+                            .map(|index| *index.value);
+                        if let Some(slot) = fields.get(&name).or(index_value.as_ref()) {
                             enqueue(&mut pending, &mut budget, value, slot, false)
                                 .map_err(type_limit_at(span))?;
                         }

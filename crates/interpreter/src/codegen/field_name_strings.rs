@@ -96,10 +96,12 @@ mod tests {
         b.insert("width".to_string(), ObjectField::required(Type::Number));
         let shapes = vec![
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: a,
             },
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: b,
             },

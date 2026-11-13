@@ -1983,6 +1983,7 @@ fn render_ts_type(
             methods,
             properties,
             index,
+            more_indexes,
             ..
         } => {
             let parents = render_ts_interface_parents(
@@ -2002,7 +2003,7 @@ fn render_ts_type(
                 ts_interface_generics(name, generics, export_prefix),
                 parents
             );
-            if let Some(index) = index {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 let ro = if index.readonly { "readonly " } else { "" };
                 let _ = writeln!(
                     out,
@@ -2428,7 +2429,11 @@ fn ts_type(ty: &Type) -> String {
             );
             format!("({params}) => {ret}")
         }
-        Type::Object { fields, index } => {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
             let mut members: Vec<String> = fields
                 .iter()
                 .map(|(name, field)| {
@@ -2438,7 +2443,7 @@ fn ts_type(ty: &Type) -> String {
                     format!("{ro}{name}{opt}: {}", ts_type(&field.ty))
                 })
                 .collect();
-            if let Some(index) = index {
+            for index in crate::stored_index_signatures(index, more_indexes) {
                 let ro = if index.readonly { "readonly " } else { "" };
                 members.push(format!(
                     "{ro}[key: {}]: {}",
@@ -4143,6 +4148,7 @@ mod tests {
                         crate::ObjectField::required(Type::String),
                     )]),
                     index: None,
+                    more_indexes: Vec::new(),
                 },
                 Type::Object {
                     fields: BTreeMap::from([(
@@ -4150,6 +4156,7 @@ mod tests {
                         crate::ObjectField::required(Type::Number),
                     )]),
                     index: None,
+                    more_indexes: Vec::new(),
                 },
             ]);
         }
@@ -4201,6 +4208,7 @@ mod tests {
                         crate::ObjectField::required(Type::String),
                     )]),
                     index: None,
+                    more_indexes: Vec::new(),
                 },
             ]);
         }
@@ -4237,6 +4245,7 @@ mod tests {
                     .map(|ty| Type::Object {
                         fields: BTreeMap::from([("x".into(), crate::ObjectField::required(ty))]),
                         index: None,
+                        more_indexes: Vec::new(),
                     })
                     .collect(),
             );
@@ -4282,15 +4291,18 @@ mod tests {
                 crate::ObjectField::required(Type::TypeVar("T".into())),
             )]),
             index: None,
+            more_indexes: Vec::new(),
         });
         extends.push(Type::intersection(vec![
             Type::Object {
                 fields: BTreeMap::from([("x".into(), crate::ObjectField::required(Type::Number))]),
                 index: None,
+                more_indexes: Vec::new(),
             },
             Type::Object {
                 fields: BTreeMap::from([("y".into(), crate::ObjectField::required(Type::String))]),
                 index: None,
+                more_indexes: Vec::new(),
             },
         ]));
         let rendered = render_packages_d_ts(&[&defs], &[]);

@@ -1387,14 +1387,21 @@ fn field_position<'a>(
     name: &str,
     limits: &crate::type_size::TypeLimits,
 ) -> Option<&'a Type> {
-    let Type::Object { fields, index } = object else {
+    let Type::Object {
+        fields,
+        index,
+        more_indexes,
+    } = object
+    else {
         return None;
     };
     fields.get(name).map(|field| &field.ty).or_else(|| {
-        index
-            .as_ref()
-            .filter(|index| crate::property_keys::matches_name(&index.key, name, limits))
-            .map(|index| &*index.value)
+        crate::types::named_index(
+            crate::stored_index_signatures(index, more_indexes),
+            name,
+            limits,
+        )
+        .map(|index| &*index.value)
     })
 }
 
@@ -1552,9 +1559,13 @@ fn deep_literals(ty: &Type) -> BTreeSet<Type> {
                 pending.extend(params);
                 pending.push(ret);
             }
-            Type::Object { fields, index } => {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
                 pending.extend(fields.values().map(|field| &field.ty));
-                if let Some(index) = index {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     pending.push(&index.value);
                 }
             }

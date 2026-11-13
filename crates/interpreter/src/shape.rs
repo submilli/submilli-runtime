@@ -11,6 +11,9 @@ pub enum Shape {
     Object {
         fields: BTreeMap<String, ObjectField>,
         index: Option<crate::IndexSignature>,
+        /// The signatures beside `index`, as on `Type::Object`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        more_indexes: Vec<crate::IndexSignature>,
     },
     Array(Box<Type>),
     /// Lowers to `$Array`; no distinct Wasm type is emitted.
@@ -21,7 +24,12 @@ pub enum Shape {
 impl Shape {
     pub fn from_type(ty: &Type) -> Option<Shape> {
         match ty {
-            Type::Object { fields, index } => Some(Shape::Object {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => Some(Shape::Object {
+                more_indexes: more_indexes.clone(),
                 index: index.clone(),
                 fields: fields.clone(),
             }),
@@ -41,7 +49,12 @@ impl Shape {
 impl fmt::Display for Shape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Shape::Object { fields, index } => Type::Object {
+            Shape::Object {
+                fields,
+                index,
+                more_indexes,
+            } => Type::Object {
+                more_indexes: more_indexes.clone(),
                 fields: fields.clone(),
                 index: index.clone(),
             }
@@ -83,6 +96,7 @@ mod tests {
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         fields.insert("y".to_string(), ObjectField::required(Type::Number));
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields.clone(),
         };
@@ -90,6 +104,7 @@ mod tests {
         assert_eq!(
             shape,
             Shape::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields
             }
@@ -103,6 +118,7 @@ mod tests {
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         fields.insert("y".to_string(), ObjectField::optional(Type::String));
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields.clone(),
         };
@@ -110,6 +126,7 @@ mod tests {
         assert_eq!(
             shape,
             Shape::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields
             }
@@ -210,10 +227,12 @@ mod tests {
         let mut fields_b = BTreeMap::new();
         fields_b.insert("x".to_string(), ObjectField::required(Type::Number));
         set.insert(Shape::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields_a,
         });
         set.insert(Shape::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields_b,
         });
@@ -226,10 +245,12 @@ mod tests {
         let mut fields = BTreeMap::new();
         fields.insert("x".to_string(), ObjectField::required(Type::Number));
         let ty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: fields.clone(),
         };
         let shape = Shape::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields,
         };

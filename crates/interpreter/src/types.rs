@@ -226,6 +226,58 @@ impl IndexSignature {
     pub fn read_ty(&self) -> Type {
         (*self.value).clone()
     }
+
+    /// Whether this is the `string` signature, which TypeScript applies to a
+    /// key only when no other signature does.
+    pub fn is_string(&self) -> bool {
+        matches!(self.key.peel(), Type::String)
+    }
+}
+
+/// Every index signature of an object type or interface: `index`, then
+/// `more_indexes`.
+pub fn stored_index_signatures<'a>(
+    index: &'a Option<IndexSignature>,
+    more_indexes: &'a [IndexSignature],
+) -> impl Iterator<Item = &'a IndexSignature> + Clone {
+    index.iter().chain(more_indexes)
+}
+
+/// The signature among `signatures` a property `name` reads through, where no
+/// resolver is at hand (contextual hints, literal freshness, narrowed field
+/// reads): the first other than `string` whose key matches, else the `string`
+/// one. Overlapping signatures are not combined, unlike
+/// `TypeResolver::index_for_name`.
+pub fn named_index<'a>(
+    signatures: impl Iterator<Item = &'a IndexSignature> + Clone,
+    name: &str,
+    limits: &crate::type_size::TypeLimits,
+) -> Option<&'a IndexSignature> {
+    let mut matching =
+        signatures.filter(|index| crate::property_keys::matches_name(&index.key, name, limits));
+    matching
+        .clone()
+        .find(|index| !index.is_string())
+        .or_else(|| matching.find(|index| index.is_string()))
+}
+
+/// `signatures` as an object type stores them (ts-rust contract CD-013): the
+/// `string` signature, else the first, as `index`, and the rest, in order, as
+/// `more_indexes`. Equal signatures collapse to one.
+pub fn split_index_signatures(
+    mut signatures: Vec<IndexSignature>,
+) -> (Option<IndexSignature>, Vec<IndexSignature>) {
+    signatures.sort();
+    signatures.dedup();
+    if signatures.is_empty() {
+        return (None, signatures);
+    }
+    let first = signatures
+        .iter()
+        .position(IndexSignature::is_string)
+        .unwrap_or(0);
+    let index = signatures.remove(first);
+    (Some(index), signatures)
 }
 
 /// What a function says about one of its parameters: a type guard
@@ -379,9 +431,16 @@ pub enum Type {
         has_rest: bool,
     },
     /// `BTreeMap` gives structural `==`, deterministic iteration, and canonical field order for codegen.
+    /// An object's index signatures (ts-rust contract CD-013): `index` is the
+    /// `string` signature if there is one, otherwise the first;
+    /// `more_indexes` holds the others, each with its own key, value and
+    /// `readonly`, in `IndexSignature` order. One signature leaves
+    /// `more_indexes` empty. See [`index_signatures`].
     Object {
         fields: BTreeMap<String, ObjectField>,
         index: Option<IndexSignature>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        more_indexes: Vec<IndexSignature>,
     },
     Array(Box<Type>),
     /// Parser rejects empty tuples. Index access requires an integer literal; out-of-range and
@@ -1018,6 +1077,7 @@ impl Type {
     /// also holds primitives that have no object representation.
     pub fn any_object() -> Type {
         Type::Object {
+            more_indexes: Vec::new(),
             index: Some(IndexSignature {
                 string_keyof_includes_number: false,
                 key: Box::new(crate::Type::String),
@@ -1033,6 +1093,7 @@ impl Type {
         Type::Object {
             fields: BTreeMap::new(),
             index: None,
+            more_indexes: Vec::new(),
         }
     }
 
@@ -1045,7 +1106,7 @@ impl Type {
         while let Type::Alias { ty, .. } | Type::Readonly(ty) = t {
             t = ty;
         }
-        matches!(t, Type::Object { fields, index: None } if fields.is_empty())
+        matches!(t, Type::Object { fields, index: None, .. } if fields.is_empty())
     }
 
     /// [`peel`](Self::peel), with `{}` and `object` read as `unknown`: the type whose
@@ -1983,7 +2044,65 @@ impl fmt::Display for Type {
 
 #[cfg(test)]
 mod tests {
-    use super::{Package, PredicateKind, Type, TypePredicate};
+    use super::{IndexSignature, Package, PredicateKind, Type, TypePredicate};
+
+    fn signature(key: Type, value: Type) -> IndexSignature {
+        IndexSignature {
+            string_keyof_includes_number: true,
+            key: Box::new(key),
+            value: Box::new(value),
+            readonly: false,
+        }
+    }
+
+    fn pattern(prefix: &str) -> Type {
+        Type::TemplateLiteral {
+            parts: vec![prefix.into(), String::new()],
+            substitutions: vec![Type::String],
+        }
+    }
+
+    #[test]
+    fn several_index_signatures_keep_the_string_one_first() {
+        let (index, more) = super::split_index_signatures(vec![
+            signature(pattern("b"), Type::Number),
+            signature(Type::String, Type::Unknown),
+            signature(Type::Number, Type::Number),
+            signature(pattern("b"), Type::Number),
+        ]);
+        assert_eq!(index, Some(signature(Type::String, Type::Unknown)));
+        assert_eq!(more.len(), 2, "equal signatures collapse: {more:?}");
+        let (index, more) = super::split_index_signatures(vec![
+            signature(pattern("b"), Type::String),
+            signature(pattern("a"), Type::Number),
+        ]);
+        assert_eq!(index, Some(signature(pattern("a"), Type::Number)));
+        assert_eq!(more, vec![signature(pattern("b"), Type::String)]);
+    }
+
+    #[test]
+    fn more_indexes_are_serialized_only_when_present() {
+        let one = Type::Object {
+            fields: Default::default(),
+            index: Some(signature(Type::String, Type::Number)),
+            more_indexes: Vec::new(),
+        };
+        let json = serde_json::to_string(&one).unwrap();
+        assert!(!json.contains("more_indexes"), "{json}");
+        assert_eq!(serde_json::from_str::<Type>(&json).unwrap(), one);
+        let two = Type::Object {
+            fields: Default::default(),
+            index: Some(signature(pattern("a"), Type::Number)),
+            more_indexes: vec![signature(pattern("b"), Type::String)],
+        };
+        let json = serde_json::to_string(&two).unwrap();
+        assert!(json.contains("more_indexes"), "{json}");
+        assert_eq!(serde_json::from_str::<Type>(&json).unwrap(), two);
+        assert_eq!(
+            two.to_string(),
+            "{ [key: `a${string}`]: number; [key: `b${string}`]: string }"
+        );
+    }
 
     #[test]
     fn predicate_kind_is_serialized_only_for_an_assertion() {
@@ -2205,6 +2324,7 @@ mod tests {
         fields.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         fields.insert("y".to_string(), crate::ObjectField::required(Type::Number));
         Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields,
         }
@@ -2222,10 +2342,12 @@ mod tests {
 
         assert_eq!(
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: a
             },
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: b
             }
@@ -2240,10 +2362,12 @@ mod tests {
         b.insert("y".to_string(), crate::ObjectField::required(Type::Number));
         assert_ne!(
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: a
             },
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: b
             }
@@ -2254,6 +2378,7 @@ mod tests {
     fn object_display() {
         assert_eq!(point_type().to_string(), "{ x: number; y: number }");
         let empty = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: std::collections::BTreeMap::new(),
         };
@@ -2266,6 +2391,7 @@ mod tests {
         fields.insert("x".to_string(), crate::ObjectField::required(Type::Number));
         fields.insert("y".to_string(), crate::ObjectField::optional(Type::String));
         let t = Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields,
         };
@@ -2280,10 +2406,12 @@ mod tests {
         b.insert("x".to_string(), crate::ObjectField::optional(Type::Number));
         assert_ne!(
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: a
             },
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: b
             }

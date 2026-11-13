@@ -1,6 +1,6 @@
 // expect-error: unsupported Record key type
 // expect-error: expects two type arguments
-// expect-error: does not satisfy string index value type
+// expect-error: does not satisfy index signature
 // expect-error: cannot assign through readonly index signature
 // expect-error: expected
 interface BadMethods {

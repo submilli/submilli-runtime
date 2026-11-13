@@ -276,6 +276,7 @@ impl Inferer<'_> {
         let combined = Type::Object {
             fields,
             index: None,
+            more_indexes: Vec::new(),
         };
         types
             .iter()

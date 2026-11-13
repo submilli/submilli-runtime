@@ -363,6 +363,7 @@ impl CodegenAnalysis {
             }
             crate::FieldNarrowingTest::Interface(test) => {
                 let shape = Type::Object {
+                    more_indexes: test.more_indexes.clone(),
                     index: test.index.clone(),
                     fields: test.members.clone(),
                 };
@@ -420,8 +421,12 @@ impl CodegenAnalysis {
     /// nesting arm in `emit_structural_test` needs one here too.
     fn note_shape_member_names(&mut self, ty: &Type) {
         match ty.peel() {
-            Type::Object { fields, index } => {
-                if let Some(index) = index {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     self.note_record_helpers();
                     self.note_shape_member_names(&index.value);
                 }
@@ -471,11 +476,15 @@ impl CodegenAnalysis {
 
     fn visit_type(&mut self, ty: &Type) -> Result<(), crate::compiler_error::CompilerFailure> {
         if let Type::Object {
-            index: Some(index), ..
+            index,
+            more_indexes,
+            ..
         } = ty.peel()
         {
-            self.note_record_helpers();
-            self.visit_type(&index.value)?;
+            for index in crate::stored_index_signatures(index, more_indexes) {
+                self.note_record_helpers();
+                self.visit_type(&index.value)?;
+            }
         }
         self.dependency_usage.collect_type(ty);
         crate::codegen::closures::walk_type(ty, &mut self.mentioned_closure_sigs)?;

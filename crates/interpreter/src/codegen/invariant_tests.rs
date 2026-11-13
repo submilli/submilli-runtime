@@ -216,6 +216,7 @@ fn structural_subtypes_reject_unrepresentable_layouts() {
         )
     };
     let object = |ty| Type::Object {
+        more_indexes: Vec::new(),
         fields: [("a".to_string(), crate::ObjectField::required(ty))].into(),
         index: None,
     };

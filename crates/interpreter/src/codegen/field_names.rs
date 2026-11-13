@@ -377,10 +377,12 @@ mod tests {
         b.insert("x".to_string(), ObjectField::required(Type::String));
         let shapes = vec![
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: a,
             },
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: b,
             },
@@ -408,10 +410,12 @@ mod tests {
         b.insert("y".to_string(), ObjectField::required(Type::Number));
         let shapes = vec![
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: a,
             },
             Type::Object {
+                more_indexes: Vec::new(),
                 index: None,
                 fields: b,
             },

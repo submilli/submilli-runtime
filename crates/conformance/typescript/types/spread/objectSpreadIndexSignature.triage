@@ -1,1 +1,1 @@
-line 6, 9 type: by-design spec §1.2 a spread of a record keeps its index signature beside other fields and widens named fields by it, where tsc drops it or leaves the fields alone
+line 9 type: by-design spec §1.2 a spread widens an earlier named field by the value of a later source's index signature that matches its name, since that source may overwrite it, where tsc leaves the field alone

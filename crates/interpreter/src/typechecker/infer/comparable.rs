@@ -78,7 +78,7 @@ struct OpenPair {
 
 type Members = BTreeMap<String, ObjectField>;
 
-type MemberForm = (Members, Option<IndexSignature>);
+type MemberForm = (Members, Vec<IndexSignature>);
 
 impl Proof<'_> {
     /// Whether some value of `source` relates to `target`.
@@ -385,25 +385,23 @@ impl Proof<'_> {
     fn index_comparable(
         &mut self,
         source_form: &Members,
-        source_index: Option<IndexSignature>,
-        target_index: Option<IndexSignature>,
+        source_indexes: Vec<IndexSignature>,
+        target_indexes: Vec<IndexSignature>,
     ) -> bool {
-        let Some(target_index) = target_index else {
-            return true;
-        };
-        source_form
-            .iter()
-            .filter(|(name, _)| {
-                crate::property_keys::matches_name(&target_index.key, name, self.types.limits)
-            })
-            .all(|(_, field)| self.comparable_to(&field.ty, &target_index.value))
-            && source_index.is_none_or(|source| {
-                !super::assignable::index_domains_related(
-                    &source.key,
-                    &target_index.key,
+        target_indexes.iter().all(|target_index| {
+            source_form
+                .iter()
+                .filter(|(name, _)| {
+                    crate::property_keys::matches_name(&target_index.key, name, self.types.limits)
+                })
+                .all(|(_, field)| self.comparable_to(&field.ty, &target_index.value))
+                && super::records::source_indexes_fit(
+                    &source_indexes,
+                    target_index,
                     self.types,
-                ) || self.comparable_to(&source.value, &target_index.value)
-            })
+                    |value| self.comparable_to(value, &target_index.value),
+                )
+        })
     }
 
     /// A member's types compared, a function type's parameters by `variance`.
@@ -629,12 +627,23 @@ fn is_enum(ty: &Type) -> bool {
 /// members from.
 fn member_form(ty: &Type, types: TypeResolver) -> Option<MemberForm> {
     match ty {
-        Type::Object { fields, index } => Some((fields.clone(), index.clone())),
-        Type::ClassRef { mangled, args, .. } => Some((types.class_full_form(mangled, args)?, None)),
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => Some((
+            fields.clone(),
+            crate::stored_index_signatures(index, more_indexes)
+                .cloned()
+                .collect(),
+        )),
+        Type::ClassRef { mangled, args, .. } => {
+            Some((types.class_full_form(mangled, args)?, Vec::new()))
+        }
         _ => {
             let (mangled, _, name, args) = ty.interface_routing()?;
             let form = types.interface_full_form(&mangled, name, &args)?;
-            Some((form, types.index_signature(ty)))
+            Some((form, types.index_signatures(ty)))
         }
     }
 }
@@ -750,7 +759,13 @@ impl InstanceShape {
                             (name, ObjectField { ty, ..field })
                         })
                         .collect();
-                    (members, index.map(|index| index.map_types(replace)))
+                    (
+                        members,
+                        index
+                            .into_iter()
+                            .map(|index| index.map_types(replace))
+                            .collect(),
+                    )
                 }),
                 private.map(|private| {
                     private

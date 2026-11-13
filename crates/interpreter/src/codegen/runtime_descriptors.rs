@@ -60,8 +60,12 @@ fn collect_parameters(ty: &Type, names: &mut BTreeSet<String>) {
                 collect_parameters(ty, names);
             }
         }
-        Type::Object { fields, index } => {
-            if let Some(i) = index {
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            for i in crate::stored_index_signatures(index, more_indexes) {
                 collect_parameters(&i.value, names);
             }
             for field in fields.values() {

@@ -207,12 +207,8 @@ types/keyof/keyofAndIndexedAccess2.ts 47 type
 types/keyof/keyofAndIndexedAccess2.ts 52 type
 types/keyof/keyofAndIndexedAccess2.ts 54 type
 types/keyof/keyofAndIndexedAccess2.ts 68 type
-types/keyof/keyofAndIndexedAccess2.ts 84 extra
-types/keyof/keyofAndIndexedAccess2.ts 89 type
 types/keyof/keyofAndIndexedAccess2.ts 90 type
 types/keyof/keyofAndIndexedAccess2.ts 90 extra
-types/keyof/keyofAndIndexedAccess2.ts 94 type
-types/keyof/keyofAndIndexedAccess2.ts 100 type
 types/keyof/keyofAndIndexedAccess2.ts 100 extra
 types/keyof/keyofAndIndexedAccess2.ts 123 type
 types/keyof/keyofAndIndexedAccess2.ts 124 type

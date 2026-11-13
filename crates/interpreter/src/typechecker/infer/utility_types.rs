@@ -238,8 +238,8 @@ struct Evaluator<'a> {
 
 type Outcome = Result<Type, Option<String>>;
 
-/// An object type's fields and index signature, as a mapped type reads them.
-type Structure = (BTreeMap<String, ObjectField>, Option<crate::IndexSignature>);
+/// An object type's fields and index signatures, as a mapped type reads them.
+type Structure = (BTreeMap<String, ObjectField>, Vec<crate::IndexSignature>);
 
 impl Evaluator<'_> {
     /// `Partial`, `Required` and `Readonly`: tsc's homomorphic mapped types,
@@ -291,10 +291,20 @@ impl Evaluator<'_> {
                 Ok(Type::Readonly(Box::new(map_container(utility, inner))))
             }
             Type::Readonly(inner) => self.homomorphic(utility, inner, next),
-            Type::Object { fields, index } => Ok(map_object(utility, fields, index.as_ref())),
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => Ok(map_object(
+                utility,
+                fields,
+                crate::stored_index_signatures(index, more_indexes)
+                    .cloned()
+                    .collect(),
+            )),
             Type::InterfaceRef { .. } | Type::ClassRef { .. } => {
-                let (fields, index) = self.structure(operand)?;
-                Ok(map_object(utility, &fields, index.as_ref()))
+                let (fields, indexes) = self.structure(operand)?;
+                Ok(map_object(utility, &fields, indexes))
             }
             Type::Refined { ty, .. } => self.homomorphic(utility, ty, depth),
             Type::Uint8Array => Err(Some(format!(
@@ -332,6 +342,7 @@ impl Evaluator<'_> {
                 let TypeKind::Interface {
                     methods,
                     index,
+                    more_indexes,
                     generics,
                     ..
                 } = &symbol.kind
@@ -347,23 +358,34 @@ impl Evaluator<'_> {
                     .types
                     .interface_full_form(mangled, name, args)
                     .unwrap_or_default();
-                let index = index.as_ref().map(|index| {
-                    let bindings: BTreeMap<String, Type> =
-                        generics.iter().cloned().zip(args.iter().cloned()).collect();
-                    index.map_types(|ty| {
-                        super::generic::substitute_or_record(ty, &bindings, self.types.limits)
+                let bindings: BTreeMap<String, Type> =
+                    generics.iter().cloned().zip(args.iter().cloned()).collect();
+                let indexes = crate::stored_index_signatures(index, more_indexes)
+                    .map(|index| {
+                        index.map_types(|ty| {
+                            super::generic::substitute_or_record(ty, &bindings, self.types.limits)
+                        })
                     })
-                });
-                Ok((fields, index))
+                    .collect();
+                Ok((fields, indexes))
             }
             Type::ClassRef { mangled, args, .. } => {
                 let fields = self
                     .types
                     .class_full_form(mangled, args)
                     .ok_or_else(|| Some(format!("`{ty}` has no declaration")))?;
-                Ok((fields, None))
+                Ok((fields, Vec::new()))
             }
-            Type::Object { fields, index } => Ok((fields.clone(), index.clone())),
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => Ok((
+                fields.clone(),
+                crate::stored_index_signatures(index, more_indexes)
+                    .cloned()
+                    .collect(),
+            )),
             _ => Err(Some(format!("`{ty}` is not an object type"))),
         }
     }
@@ -405,25 +427,33 @@ impl Evaluator<'_> {
         let members = self.object_members(object)?;
         let available = common_keys(&members);
         let mut fields = BTreeMap::new();
-        let mut index = None;
+        let mut indexes = Vec::new();
+        let shared = shared_indexes(&members);
         // A key outside `keyof T` fails `Pick`'s constraint, which reports it.
         for key in self.key_members(keys) {
-            if matches!(key.without_aliases(), Type::String | Type::Number) {
-                // `Pick<Record<string, V>, string>` keeps the index signature.
-                index = Some(shared_index(&members).ok_or(None)?);
-                continue;
-            }
             let Some(name) = key_name(&key) else {
-                return Err(None);
+                // `Pick<Record<string, V>, string>` keeps the index signature
+                // of that key.
+                let index = shared
+                    .iter()
+                    .find(|index| index.key.peel() == key.peel())
+                    .ok_or(None)?;
+                indexes.push(index.clone());
+                continue;
             };
             if !available.iter().any(|known| known == &name)
-                && !members.iter().all(|(_, index)| index.is_some())
+                && !members.iter().all(|(_, indexes)| !indexes.is_empty())
             {
                 return Err(None);
             }
-            fields.insert(name.clone(), merged_field(&members, &name));
+            fields.insert(name.clone(), merged_field(&members, &name, self.types));
         }
-        Ok(Type::Object { fields, index })
+        let (index, more_indexes) = crate::split_index_signatures(indexes);
+        Ok(Type::Object {
+            fields,
+            index,
+            more_indexes,
+        })
     }
 
     /// The keys a key-type argument names: a union's members, with an enum
@@ -446,10 +476,13 @@ impl Evaluator<'_> {
     /// on `T` makes `keyof T` all strings, so only the signature survives.
     fn omit(&self, object: &Type, keys: &Type) -> Outcome {
         let members = self.object_members(object)?;
-        if let Some(index) = shared_index(&members) {
+        let shared = shared_indexes(&members);
+        if !shared.is_empty() {
+            let (index, more_indexes) = crate::split_index_signatures(shared);
             return Ok(Type::Object {
+                more_indexes,
                 fields: BTreeMap::new(),
-                index: Some(index),
+                index,
             });
         }
         let omitted: Vec<Type> = self.key_members(keys);
@@ -467,13 +500,14 @@ impl Evaluator<'_> {
                     .iter()
                     .any(|key| key_name(key).as_deref() == Some(name.as_str()));
             if !dropped {
-                let field = merged_field(&members, &name);
+                let field = merged_field(&members, &name, self.types);
                 fields.insert(name, field);
             }
         }
         Ok(Type::Object {
             fields,
             index: None,
+            more_indexes: Vec::new(),
         })
     }
 
@@ -712,7 +746,7 @@ fn map_tuple(utility: Utility, tuple: &crate::TupleType) -> crate::TupleType {
 fn map_object(
     utility: Utility,
     fields: &BTreeMap<String, ObjectField>,
-    index: Option<&crate::IndexSignature>,
+    indexes: Vec<crate::IndexSignature>,
 ) -> Type {
     let fields = fields
         .iter()
@@ -733,18 +767,25 @@ fn map_object(
             (name.clone(), field)
         })
         .collect();
-    let index = index.map(|index| {
-        let mut index = index.clone();
-        match utility {
-            Utility::Partial => {
-                index.value = Box::new(Type::union(vec![*index.value, Type::Undefined]));
+    let indexes = indexes
+        .into_iter()
+        .map(|mut index| {
+            match utility {
+                Utility::Partial => {
+                    index.value = Box::new(Type::union(vec![*index.value, Type::Undefined]));
+                }
+                Utility::Readonly => index.readonly = true,
+                _ => {}
             }
-            Utility::Readonly => index.readonly = true,
-            _ => {}
-        }
-        index
-    });
-    Type::Object { fields, index }
+            index
+        })
+        .collect();
+    let (index, more_indexes) = crate::split_index_signatures(indexes);
+    Type::Object {
+        fields,
+        index,
+        more_indexes,
+    }
 }
 
 /// The property a key type names: a string or number literal, or a string
@@ -777,43 +818,51 @@ fn common_keys(members: &[Structure]) -> Vec<String> {
         .collect()
 }
 
-/// The index signature every member has, joined, if any.
-fn shared_index(members: &[Structure]) -> Option<crate::IndexSignature> {
-    let mut indexes = members.iter().map(|(_, index)| index.as_ref());
-    let mut joined = indexes.next()??.clone();
-    for index in indexes {
-        let index = index?;
-        joined.value = Box::new(Type::union(vec![
-            *joined.value,
-            index.value.as_ref().clone(),
-        ]));
-        joined.readonly |= index.readonly;
-    }
-    Some(joined)
+/// The index signatures every member has, by key, each joined.
+fn shared_indexes(members: &[Structure]) -> Vec<crate::IndexSignature> {
+    let Some(((_, first), rest)) = members.split_first() else {
+        return Vec::new();
+    };
+    first
+        .iter()
+        .filter_map(|index| {
+            let mut joined = index.clone();
+            for (_, indexes) in rest {
+                let other = indexes
+                    .iter()
+                    .find(|other| other.key.peel() == index.key.peel())?;
+                joined.value = Box::new(Type::union(vec![*joined.value, (*other.value).clone()]));
+                joined.readonly |= other.readonly;
+            }
+            Some(joined)
+        })
+        .collect()
 }
 
 /// Property `name` across `members` (`T[name]` for a union `T`): the union of
 /// their types, optional or readonly when any member's is. A member without
 /// the property supplies its index signature's value.
-fn merged_field(members: &[Structure], name: &str) -> ObjectField {
-    let mut types = Vec::new();
+fn merged_field(members: &[Structure], name: &str, types: TypeResolver<'_>) -> ObjectField {
+    let mut values = Vec::new();
     let mut optional = false;
     let mut readonly = false;
     let mut method = true;
-    for (fields, index) in members {
+    for (fields, indexes) in members {
         if let Some(field) = fields.get(name) {
-            types.push(field.ty.clone());
+            values.push(field.ty.clone());
             optional |= field.optional;
             readonly |= field.readonly;
             method &= field.method;
-        } else if let Some(index) = index {
-            types.push(index.value.as_ref().clone());
+        } else if let Some(index) = super::records::applicable_index(indexes, &types, |index| {
+            crate::property_keys::matches_name(&index.key, name, types.limits)
+        }) {
+            values.push(*index.value);
             readonly |= index.readonly;
             method = false;
         }
     }
     ObjectField {
-        ty: Type::union(types),
+        ty: Type::union(values),
         optional,
         readonly,
         method,
@@ -919,7 +968,7 @@ impl Evaluator<'_> {
                 _ => self.index_one(&view, key, next),
             };
         }
-        let (fields, index) = match object {
+        let (fields, indexes) = match object {
             // Interface members, generic methods aside, whose types an index
             // reads where a mapped type would have to carry them.
             Type::InterfaceRef {
@@ -943,7 +992,7 @@ impl Evaluator<'_> {
                     self.types
                         .interface_full_form(mangled, name, args)
                         .ok_or_else(cannot)?,
-                    self.types.index_signature(object),
+                    self.types.index_signatures(object),
                 )
             }
             _ => self.structure(object).map_err(|_| cannot())?,
@@ -952,22 +1001,22 @@ impl Evaluator<'_> {
             if let Some(field) = fields.get(&name) {
                 return Ok(field.read_ty());
             }
-            if let Some(index) = &index
-                && crate::property_keys::matches_name(&index.key, &name, self.types.limits)
-            {
-                return Ok(index.value.as_ref().clone());
+            if let Some(index) = super::records::applicable_index(&indexes, &self.types, |index| {
+                crate::property_keys::matches_name(&index.key, &name, self.types.limits)
+            }) {
+                return Ok(*index.value);
             }
             return Err(format!(
                 "Property `{name}` does not exist on type `{object}`"
             ));
         }
-        if let Some(index) = &index
-            && (matches!(key_ty, Type::String) && matches!(index.key.peel(), Type::String)
-                || matches!(key_ty, Type::Number))
-        {
-            return Ok(index.value.as_ref().clone());
-        }
-        Err(cannot())
+        // A key type reads the signature tsc applies to it; a `string`
+        // signature also takes `number`.
+        super::records::applicable_index(&indexes, &self.types, |index| {
+            super::records::index_accepts_key(index, key_ty, self.types)
+        })
+        .map(|index| *index.value)
+        .ok_or_else(cannot)
     }
 }
 
@@ -1243,8 +1292,9 @@ pub(crate) fn keyof_type(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
         Type::Error => return Some(Type::Error),
         _ => {}
     }
-    if let Some(index) = types.index_signature(ty) {
-        if matches!(index.key.peel(), Type::String) {
+    let indexes = types.index_signatures(ty);
+    if !indexes.is_empty() {
+        if let Some(index) = indexes.iter().find(|index| index.is_string()) {
             return Some(if index.string_keyof_includes_number {
                 Type::union(vec![Type::String, Type::Number])
             } else {
@@ -1256,7 +1306,7 @@ pub(crate) fn keyof_type(ty: &Type, types: TypeResolver<'_>) -> Option<Type> {
             .into_iter()
             .flat_map(key_literals)
             .collect();
-        keys.push(*index.key);
+        keys.extend(indexes.into_iter().map(|index| *index.key));
         return Some(Type::union(keys));
     }
     // An array, tuple, string or byte array is indexed by number besides its

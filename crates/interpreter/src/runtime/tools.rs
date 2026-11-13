@@ -264,6 +264,7 @@ mod tests {
         let mut defs = PackageDeclaration::with_package(pkg);
         defs.virtual_dispatch = Some(VirtualDispatch::Tools);
         let object = |field: &str| Type::Object {
+            more_indexes: Vec::new(),
             index: None,
             fields: BTreeMap::from([(field.to_string(), ObjectField::required(Type::String))]),
         };

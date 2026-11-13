@@ -845,7 +845,8 @@ pub enum TypeAnnotationKind {
     Readonly(Box<TypeAnnotation>),
     Object {
         fields: Vec<TypeAnnotationField>,
-        index: Option<Box<IndexSignatureAnnotation>>,
+        /// Every index signature, in source order.
+        indexes: Vec<IndexSignatureAnnotation>,
     },
     /// Function type annotation. Only the named-parameter form is accepted.
     Function {

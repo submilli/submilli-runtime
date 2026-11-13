@@ -592,12 +592,12 @@ impl<'a> Validator<'a> {
                         self.annotation(member)?;
                     }
                 }
-                TypeAnnotationKind::Object { fields, index } => {
+                TypeAnnotationKind::Object { fields, indexes } => {
                     for field in fields {
                         self.span(field.name.span)?;
                         self.annotation(&field.ty)?;
                     }
-                    if let Some(index) = index {
+                    for index in indexes {
                         self.span(index.span)?;
                         self.annotation(&index.key)?;
                         self.annotation(&index.value)?;

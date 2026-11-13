@@ -159,7 +159,7 @@ pub fn package_declaration() -> PackageDeclaration {
             name: "URL".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "URL"),
             declaration_span: Span::at(crate::FileId::URL),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,

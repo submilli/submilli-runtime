@@ -21,7 +21,9 @@ function main(): string {
   assert(Object.keys(values).length === 2);
   const spread = { ...record };
   assert(spread[key] === 3);
-  const computed = { [key]: 4, ...record, ["total"]: 9 };
+  // As in tsc, the written-out `total` after the spread drops the record's
+  // signature from the literal's own type, so the record type is stated.
+  const computed: Record<string, number> = { [key]: 4, ...record, ["total"]: 9 };
   assert(computed[key] === 3);
   assert(computed.total === 9);
   const strings: Record<string, string> = { total: "replaced" };

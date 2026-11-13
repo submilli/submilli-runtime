@@ -470,6 +470,7 @@ pub fn object_literal_layout(ty: &Type, fields: &[TypedObjectFieldOrigin]) -> Ty
         .collect();
     Type::Object {
         index: None,
+        more_indexes: Vec::new(),
         fields,
     }
 }
@@ -1347,6 +1348,9 @@ pub enum FieldNarrowingTest {
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InterfaceNarrowingTest {
     pub index: Option<crate::IndexSignature>,
+    /// The signatures beside `index`, as on `Type::Object`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more_indexes: Vec<crate::IndexSignature>,
     pub members: std::collections::BTreeMap<String, crate::ObjectField>,
     pub methods: std::collections::BTreeSet<String>,
     pub non_shape_carriers: std::collections::BTreeSet<InterfaceCarrier>,
@@ -1445,10 +1449,13 @@ fn runtime_type_is_testable_inner(ty: &Type, allow_recursive_ref: bool) -> bool 
         Type::Union(elems) => elems
             .iter()
             .all(|elem| runtime_type_is_testable_inner(elem, allow_recursive_ref)),
-        Type::Object { fields, index } => {
-            index
-                .as_ref()
-                .is_none_or(|i| runtime_type_is_testable_inner(&i.value, allow_recursive_ref))
+        Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } => {
+            crate::stored_index_signatures(index, more_indexes)
+                .all(|i| runtime_type_is_testable_inner(&i.value, allow_recursive_ref))
                 && fields
                     .values()
                     .all(|field| runtime_type_is_testable_inner(&field.ty, allow_recursive_ref))
@@ -1499,6 +1506,8 @@ pub struct TypedInterfaceDecl {
     /// Complete property names, including inherited properties, for payload validation.
     pub property_names: std::collections::BTreeSet<String>,
     pub index: Option<crate::IndexSignature>,
+    /// The signatures beside `index`, as on `Type::Object`.
+    pub more_indexes: Vec<crate::IndexSignature>,
     pub name: Ident,
     pub generics: crate::GenericParameters,
     /// The bases the `extends` clause names, with their type arguments.

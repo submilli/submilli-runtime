@@ -346,6 +346,7 @@ impl VarianceWalk<'_, '_> {
                 methods,
                 properties,
                 index,
+                more_indexes,
                 ..
             } => {
                 let bindings: BTreeMap<String, Type> = generics
@@ -366,7 +367,7 @@ impl VarianceWalk<'_, '_> {
                 for sig in properties.values() {
                     self.substituted(&sig.ty, &bindings, Polarity::Covariant);
                 }
-                if let Some(index) = index {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     self.substituted(&index.value, &bindings, Polarity::Covariant);
                 }
                 Some(())
@@ -453,11 +454,15 @@ impl VarianceWalk<'_, '_> {
                     self.walk(item, polarity);
                 }
             }
-            Type::Object { fields, index } => {
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => {
                 for field in fields.values() {
                     self.walk(&field.ty, polarity);
                 }
-                if let Some(index) = index {
+                for index in crate::stored_index_signatures(index, more_indexes) {
                     self.walk(&index.value, polarity);
                 }
             }

@@ -60,7 +60,11 @@ impl Walk<'_> {
         self.charge(1)?;
         Some(match ty {
             Type::InterfaceRef { .. } => return self.interface(ty),
-            Type::Object { fields, index } => self.object(fields, index.as_ref())?,
+            Type::Object {
+                fields,
+                index,
+                more_indexes,
+            } => self.object(fields, index, more_indexes)?,
             Type::Array(element) => Type::Array(Box::new(self.structural(element)?)),
             Type::Tuple(tuple) => Type::Tuple(
                 tuple
@@ -89,7 +93,7 @@ impl Walk<'_> {
         if !test.methods.is_empty() || !test.shape_allowed || !self.active.insert(key.clone()) {
             return None;
         }
-        let object = self.object(&test.members, test.index.as_ref());
+        let object = self.object(&test.members, &test.index, &test.more_indexes);
         self.active.remove(&key);
         object
     }
@@ -103,7 +107,8 @@ impl Walk<'_> {
     fn object(
         &mut self,
         fields: &BTreeMap<String, ObjectField>,
-        index: Option<&IndexSignature>,
+        index: &Option<IndexSignature>,
+        more_indexes: &[IndexSignature],
     ) -> Option<Type> {
         self.charge(OBJECT_BYTES)?;
         let mut structural_fields = BTreeMap::new();
@@ -121,16 +126,18 @@ impl Walk<'_> {
                 },
             );
         }
-        let index = match index {
-            Some(index) => Some(IndexSignature {
+        let mut indexes = Vec::new();
+        for index in crate::stored_index_signatures(index, more_indexes) {
+            indexes.push(IndexSignature {
                 string_keyof_includes_number: index.string_keyof_includes_number,
                 key: index.key.clone(),
                 value: Box::new(self.structural(&index.value)?),
                 readonly: index.readonly,
-            }),
-            None => None,
-        };
+            });
+        }
+        let (index, more_indexes) = crate::split_index_signatures(indexes);
         Some(Type::Object {
+            more_indexes,
             fields: structural_fields,
             index,
         })
