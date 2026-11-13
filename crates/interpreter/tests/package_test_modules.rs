@@ -104,7 +104,14 @@ fn compile_test(
         diagnostics
             .into_iter()
             .filter(|diagnostic| diagnostic.severity == Severity::Error)
-            .map(|diagnostic| format!("{} | {}", diagnostic.message, diagnostic.help.join(" ")))
+            .map(|diagnostic| {
+                format!(
+                    "{} at {} | {}",
+                    diagnostic.message,
+                    diagnostic.span.start,
+                    diagnostic.help.join(" ")
+                )
+            })
             .collect()
     })
 }
@@ -365,4 +372,217 @@ fn check_discipline_sees_a_non_entry_function_as_internal_in_both_builds() {
     );
     assert_eq!(public.warnings, test.warnings);
     assert!(export_names(&test.wasm).contains(&format!("mod:{PACKAGE}#ops#guard")));
+}
+
+fn intersection_method_package() -> CompiledPackage {
+    let mut package = compile(
+        &[(
+            "lib",
+            r#"
+        export interface Numbers { read(value: number): number; }
+        export interface Strings { read(value: string): string; }
+        export interface Generic { read<T>(value: T): T; }
+        export interface OptionalNumbers { read?(value: number): number; }
+        export interface OptionalStrings { read?(value: string): string; }
+        export interface NumberCall { (value: number): number; }
+        export interface StringCall { (value: string): string; }
+        export const identity: (value: unknown) => unknown = (value: unknown): unknown => value;
+        export class Identity { read(value: unknown): unknown { return value; } }
+    "#,
+        )],
+        PackageSurface::Public,
+    );
+    // Model an external front end's generic identity method over the same
+    // erased implementation; source instance-method generics are separate.
+    if let submilli_engine::TypeKind::Class { methods, .. } =
+        &mut package.declaration.types.get_mut("Identity").unwrap().kind
+    {
+        let method = methods.get_mut("read").unwrap();
+        method.generics = submilli_engine::GenericParameters::unconstrained(vec!["T".into()]);
+        method.params[0].ty = submilli_engine::Type::TypeVar("T".into());
+        method.ret = submilli_engine::Type::TypeVar("T".into());
+    }
+    let reference = |name: &str| {
+        submilli_engine::Type::interface_ref(
+            submilli_engine::Package(PACKAGE.into()),
+            name,
+            package.declaration.types[name].mangled_name.clone(),
+            vec![],
+        )
+    };
+    let body = submilli_engine::Type::intersection(vec![
+        reference("Numbers"),
+        reference("Strings"),
+        reference("Generic"),
+    ]);
+    package.declaration.types.insert(
+        "Both".into(),
+        submilli_engine::TypeSymbol {
+            name: "Both".into(),
+            mangled_name: submilli_engine::mangle::package_symbol(PACKAGE, "Both"),
+            declaration_span: submilli_engine::Span::at(FileId(0)),
+            kind: submilli_engine::TypeKind::Alias {
+                generics: Default::default(),
+                ty: body,
+                doc: None,
+            },
+        },
+    );
+    let body = submilli_engine::Type::intersection(
+        ["OptionalNumbers", "OptionalStrings"]
+            .into_iter()
+            .map(|name| {
+                submilli_engine::Type::interface_ref(
+                    submilli_engine::Package(PACKAGE.into()),
+                    name,
+                    package.declaration.types[name].mangled_name.clone(),
+                    vec![],
+                )
+            })
+            .collect(),
+    );
+    package.declaration.types.insert(
+        "Maybe".into(),
+        submilli_engine::TypeSymbol {
+            name: "Maybe".into(),
+            mangled_name: submilli_engine::mangle::package_symbol(PACKAGE, "Maybe"),
+            declaration_span: submilli_engine::Span::at(FileId(0)),
+            kind: submilli_engine::TypeKind::Alias {
+                generics: Default::default(),
+                ty: body,
+                doc: None,
+            },
+        },
+    );
+    let body = submilli_engine::Type::intersection(
+        ["NumberCall", "StringCall"]
+            .into_iter()
+            .map(|name| {
+                submilli_engine::Type::interface_ref(
+                    submilli_engine::Package(PACKAGE.into()),
+                    name,
+                    package.declaration.types[name].mangled_name.clone(),
+                    vec![],
+                )
+            })
+            .collect(),
+    );
+    package.declaration.types.insert(
+        "Callable".into(),
+        submilli_engine::TypeSymbol {
+            name: "Callable".into(),
+            mangled_name: submilli_engine::mangle::package_symbol(PACKAGE, "Callable"),
+            declaration_span: submilli_engine::Span::at(FileId(0)),
+            kind: submilli_engine::TypeKind::Alias {
+                generics: Default::default(),
+                ty: body,
+                doc: None,
+            },
+        },
+    );
+    // An external front end supplies the overloaded public callable contract;
+    // runtime_globals retains the compiled closure's erased physical signature.
+    let mut call = match &package.declaration.types["NumberCall"].kind {
+        submilli_engine::TypeKind::Interface { methods, .. } => methods["@call"].clone(),
+        _ => panic!("callable interface"),
+    };
+    let string = match &package.declaration.types["StringCall"].kind {
+        submilli_engine::TypeKind::Interface { methods, .. } => &methods["@call"],
+        _ => panic!("callable interface"),
+    };
+    call.overloads.push(submilli_engine::MethodOverload {
+        generics: string.generics.clone(),
+        params: string.params.clone(),
+        ret: string.ret.clone(),
+        predicate: string.predicate.clone(),
+    });
+    let mangled = submilli_engine::mangle::package_symbol(PACKAGE, "CallableValue");
+    package.declaration.types.insert(
+        "CallableValue".into(),
+        submilli_engine::TypeSymbol {
+            name: "CallableValue".into(),
+            mangled_name: mangled.clone(),
+            declaration_span: submilli_engine::Span::at(FileId(0)),
+            kind: submilli_engine::TypeKind::Interface {
+                extends: vec![],
+                generics: Default::default(),
+                methods: BTreeMap::from([("@call".into(), call)]),
+                properties: BTreeMap::new(),
+                index: None,
+                dispatch: submilli_engine::Dispatch::VTable,
+                doc: None,
+            },
+        },
+    );
+    let submilli_engine::ValueKind::Const { ty, .. } =
+        &mut package.declaration.values.get_mut("identity").unwrap().kind
+    else {
+        panic!("identity closure");
+    };
+    *ty = submilli_engine::Type::interface_ref(
+        submilli_engine::Package(PACKAGE.into()),
+        "CallableValue",
+        mangled,
+        vec![],
+    );
+    package
+}
+
+#[test]
+fn intersection_method_overloads_preserve_runtime_values_and_argument_effects() {
+    let package = intersection_method_package();
+    assert_eq!(
+        run_test(
+            &package,
+            r#"
+        import { Both, Maybe, Callable, Identity, identity } from "@test/paths";
+        interface Child extends Both {}
+        interface OptionalChild extends Maybe {}
+        interface Calls extends Callable {}
+        let count: number = 0;
+        function numberArg(): number { count++; return 3; }
+        function stringArg(): string { count++; return "ok"; }
+        function missingReader(): OptionalChild { return {}; }
+        function main(): string {
+            const reader: Child = new Identity();
+            const n: number = reader.read(numberArg());
+            const s: string = reader.read(stringArg());
+            const b: boolean = reader.read(true);
+            const explicit: boolean = reader.read<boolean>(false);
+            const chained: string | undefined = reader?.read("chain");
+            const genericChain: boolean | undefined = reader?.read(true);
+            const fn: Calls = identity;
+            const called: string = fn?.("called");
+            const direct: number = fn(7);
+            assert(called === "called" && direct === 7);
+            const missing: OptionalChild = missingReader();
+            const absent = missing.read?.(stringArg());
+            assert(absent === undefined && chained === "chain" && genericChain === true);
+            assert(n === 3 && s === "ok" && b && !explicit && count === 2);
+            return s;
+        }
+    "#
+        ),
+        "ok"
+    );
+}
+
+#[test]
+fn intersection_method_implementation_must_cover_every_overload() {
+    let package = intersection_method_package();
+    let errors = compile_test(
+        &package,
+        "tests/missing",
+        r#"
+        import { Both } from "@test/paths";
+        interface Child extends Both {}
+        class Bad implements Child { read(value: number): number { return value; } }
+        function main(): void {}
+    "#,
+    )
+    .expect_err("one signature does not implement every overload");
+    assert!(
+        errors.iter().any(|error| error.contains("read")),
+        "{errors:?}"
+    );
 }

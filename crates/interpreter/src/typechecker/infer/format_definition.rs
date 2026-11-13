@@ -216,6 +216,7 @@ fn write_interface(
         "interface definition is absent",
     ))?;
     let TypeKind::Interface {
+        extends,
         generics,
         methods,
         properties,
@@ -233,6 +234,10 @@ fn write_interface(
         write_doc_block(out, "", doc)?;
     }
     write_name(out, "interface", name, args)?;
+    for (position, base) in extends.iter().enumerate() {
+        out.push(if position == 0 { " extends " } else { ", " })?;
+        write_type(out, &substituted(base, &sub, limits)?)?;
+    }
     if methods.is_empty() && properties.is_empty() && index.is_none() {
         return out.push(" {}");
     }
@@ -636,6 +641,16 @@ fn write_method(
     sub: &TypeParamSubstitution,
     limits: &CopyBudget,
 ) -> Result<(), RenderError> {
+    if !sig.overloads.is_empty() {
+        for (position, signature) in sig.signatures().enumerate() {
+            if position > 0 {
+                out.push("\n  ")?;
+            }
+            write_method(out, name, &signature, sub, limits)?;
+        }
+        return Ok(());
+    }
+
     out.push(name)?;
     if sig.optional {
         out.push("?")?;
@@ -766,6 +781,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol("test", iface),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
+                    extends: Vec::new(),
                     index: None,
                     generics: crate::GenericParameters::unconstrained(generics),
                     methods: m,
@@ -790,6 +806,7 @@ mod tests {
 
     fn no_arg_string_ret() -> MethodSig {
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![],
@@ -868,6 +885,7 @@ mod tests {
     #[test]
     fn array_substitutes_interface_generic() {
         let map_sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
             params: vec![Param::new(
@@ -933,6 +951,7 @@ mod tests {
     #[test]
     fn interface_ref_substitutes_multiple_args() {
         let get_sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
@@ -1051,6 +1070,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("submilli:lib", "Resp"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),

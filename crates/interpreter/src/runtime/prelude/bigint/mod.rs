@@ -187,13 +187,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "BigInt".to_string(),
             mangled_name: crate::mangle::prelude("BigInt"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::BigInt)),
                     (
                         "toString".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::with_default(
@@ -210,7 +210,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toJson".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -236,11 +236,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "BigIntConstructor".to_string(),
             mangled_name: crate::mangle::prelude("BigIntConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "@call".to_string(),
-                    MethodSig {
+                    MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: vec![Param::new(

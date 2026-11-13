@@ -90,8 +90,8 @@ pub use lower_patterns::lower as lower_patterns;
 pub use mangle::MangledName;
 pub use package_declaration::{
     AccessorSig, ClassExtends, DefaultValue, Dispatch, EnumVariantValue, FieldSig,
-    GenericParameters, MethodSig, NamespaceSymbol, PackageDeclaration, Param, PropertySig,
-    RuntimeFunction, TypeKind, TypeSymbol, ValueKind, ValueSymbol, VirtualDispatch,
+    GenericParameters, MethodOverload, MethodSig, NamespaceSymbol, PackageDeclaration, Param,
+    PropertySig, RuntimeFunction, TypeKind, TypeSymbol, ValueKind, ValueSymbol, VirtualDispatch,
 };
 pub use parser::parse;
 pub use runtime::{RunResult, RuntimeConfig, dispatch_main_async, instantiate_program_async};

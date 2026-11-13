@@ -443,6 +443,7 @@ fn insert_interface(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::LLM),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: crate::GenericParameters::unconstrained(generics),
                 methods: BTreeMap::new(),

@@ -51,6 +51,7 @@ fn insert_static(
     statics.insert(
         name.into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params,
@@ -84,6 +85,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "status".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![],
@@ -104,7 +106,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     );
     methods.insert(
         "log".into(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![options(&[
@@ -122,7 +124,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     );
     methods.insert(
         "diff".into(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![options(&[
@@ -144,6 +146,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "show".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![string("ref"), string("path")],
@@ -155,6 +158,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "branches".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![],
@@ -173,6 +177,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "remotes".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![],
@@ -189,7 +194,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     );
     methods.insert(
         "add".into(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("paths", array(Type::String))],
@@ -200,7 +205,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     );
     methods.insert(
         "commit".into(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![string("message")],
@@ -212,6 +217,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "createBranch".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![string("name"), default_string("start", "HEAD")],
@@ -226,6 +232,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "switchBranch".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![string("name")],
@@ -240,6 +247,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "addRemote".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![string("name"), string("url")],
@@ -254,6 +262,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     methods.insert(
         "setRemoteUrl".into(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![string("name"), string("url")],
@@ -264,7 +273,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     );
     methods.insert(
         "fetch".into(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![
@@ -278,7 +287,7 @@ fn insert_repository_class(defs: &mut PackageDeclaration, statics: BTreeMap<Stri
     );
     methods.insert(
         "pull".into(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![

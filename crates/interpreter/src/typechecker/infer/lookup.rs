@@ -171,6 +171,7 @@ impl<'a> Inferer<'a> {
                     if matches!(name, "toString" | "toJson") {
                         return Some((
                             MethodSig {
+                                overloads: Vec::new(),
                                 optional: false,
                                 generics: Default::default(),
                                 params: Vec::new(),

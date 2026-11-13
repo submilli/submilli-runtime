@@ -2665,7 +2665,10 @@ impl Inferer<'_> {
     /// own right: an unresolved name or a bad nested call in one is a second
     /// real problem, and skipping the walk would hide it until the first is
     /// fixed.
-    fn walk_rejected_call_args(&mut self, args: &[ExprId]) -> Result<(), CompilerFailure> {
+    pub(super) fn walk_rejected_call_args(
+        &mut self,
+        args: &[ExprId],
+    ) -> Result<(), CompilerFailure> {
         for arg in args {
             let _ = self.infer_expr(*arg, None)?;
         }
@@ -3206,6 +3209,24 @@ impl Inferer<'_> {
                 ret_ty,
             ));
         }
+        if matches!(callee_ty.peel(), Type::Intersection(_))
+            && let Some(signature) = MethodSig::from_function_type(&callee_ty, false)
+        {
+            return self.infer_overloaded_method_call(
+                typed_callee,
+                crate::mangle::prelude("Object"),
+                Ident {
+                    name: "@call".into(),
+                    span,
+                },
+                signature,
+                BTreeMap::new(),
+                type_args,
+                args,
+                expected,
+                span,
+            );
+        }
         let (typed_callee, callee_ty) =
             self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
         // call-signature dispatch — when the callee types
@@ -3224,29 +3245,16 @@ impl Inferer<'_> {
                 name: "@call".to_string(),
                 span,
             };
-            return Ok(
-                if interface_bindings.is_empty() && sig.generics.is_empty() {
-                    self.infer_method_call(
-                        typed_callee,
-                        iface_mangled,
-                        call_name,
-                        sig,
-                        type_args,
-                        args,
-                        span,
-                    )?
-                } else {
-                    self.infer_generic_method_call(
-                        typed_callee,
-                        iface_mangled,
-                        call_name,
-                        sig,
-                        interface_bindings,
-                        type_args,
-                        args,
-                        expected,
-                        span,
-                    )?
+            return self.infer_found_method_call(
+                typed_callee,
+                &callee_ty,
+                (sig, interface_bindings, iface_mangled, _dispatch),
+                MethodCallSite {
+                    name: call_name,
+                    type_args,
+                    args,
+                    expected,
+                    span,
                 },
             );
         }
@@ -3709,6 +3717,19 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        if !sig.overloads.is_empty() {
+            return self.infer_overloaded_method_call(
+                typed_receiver,
+                iface_mangled,
+                name,
+                sig,
+                BTreeMap::new(),
+                type_args,
+                args,
+                None,
+                span,
+            );
+        }
         if !sig.generics.is_empty() {
             return Err(
                 super::inference_failure("generic method reached non-generic dispatch")
@@ -4189,29 +4210,16 @@ impl Inferer<'_> {
         // is just an instance method whose name happens to be `new`,
         // and the prefix form is a perfectly valid alias for the
         // dotted form.
-        Ok(
-            if interface_bindings.is_empty() && sig.generics.is_empty() {
-                self.infer_method_call(
-                    typed_callee,
-                    iface_mangled,
-                    new_name,
-                    sig,
-                    type_args,
-                    args,
-                    span,
-                )?
-            } else {
-                self.infer_generic_method_call(
-                    typed_callee,
-                    iface_mangled,
-                    new_name,
-                    sig,
-                    interface_bindings,
-                    type_args,
-                    args,
-                    expected,
-                    span,
-                )?
+        self.infer_found_method_call(
+            typed_callee,
+            &callee_ty,
+            (sig, interface_bindings, iface_mangled, _dispatch),
+            MethodCallSite {
+                name: new_name,
+                type_args,
+                args,
+                expected,
+                span,
             },
         )
     }
@@ -9631,6 +9639,16 @@ impl Inferer<'_> {
         // user-object field path. `lookup_interface_property` returns `None`
         // for `Object` so user-object reads aren't shadowed by a hypothetical
         // `Object.foo`.
+        if self.is_composite_callable_member(&receiver_ty, &name.name) {
+            self.try_report_method_reference(name.span, &receiver_ty, &name.name);
+            return Ok((
+                TypedExprKind::FieldAccess {
+                    receiver: typed_receiver,
+                    name,
+                },
+                Type::Error,
+            ));
+        }
         if let Some((prop_sig, bindings, iface_mangled, dispatch)) =
             self.lookup_interface_property(&receiver_ty, &name.name)
         {
@@ -9873,6 +9891,19 @@ impl Inferer<'_> {
             );
             self.walk_rejected_call_args(&args)?;
             return Ok((TypedExprKind::Undefined, Type::Error));
+        }
+        if !sig.overloads.is_empty() {
+            return self.infer_overloaded_method_call(
+                typed_receiver,
+                iface_mangled,
+                name,
+                sig,
+                interface_bindings,
+                type_args,
+                args,
+                expected,
+                span,
+            );
         }
         // `flat` un-nests `depth` array levels — a return type the
         // generic machinery can't express. Validate the literal depth
@@ -13302,7 +13333,7 @@ impl Inferer<'_> {
             }
             ChainPart::Call {
                 args,
-                type_args: _,
+                type_args,
                 optional,
                 span,
             } => {
@@ -13320,6 +13351,19 @@ impl Inferer<'_> {
                         )],
                     );
                 }
+                if let Some(method) = &resolved_method
+                    && !method.sig.overloads.is_empty()
+                {
+                    return self.infer_overloaded_chain_method_call(
+                        method,
+                        type_args,
+                        args,
+                        typed_parts,
+                        optional,
+                        span,
+                    );
+                }
+
                 // The call form of a method-level-generic method: genuinely
                 // unimplemented, unlike the bare reference `chain_method_field`
                 // defers to us. Falls through rather than returning so the
@@ -13448,9 +13492,13 @@ impl Inferer<'_> {
                     ));
                 }
 
-                if let Some(call_part) =
-                    self.infer_chain_call_signature(receiver_ty, &args, optional, span)?
-                {
+                if let Some(call_part) = self.infer_chain_call_signature(
+                    receiver_ty,
+                    &args,
+                    type_args.clone(),
+                    optional,
+                    span,
+                )? {
                     return Ok(call_part);
                 }
 
@@ -13527,13 +13575,203 @@ impl Inferer<'_> {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn infer_overloaded_chain_method_call(
+        &mut self,
+        method: &ChainMethod,
+        type_args: Option<Vec<TypeAnnotation>>,
+        args: Vec<ExprId>,
+        typed_parts: &mut Vec<TypedChainPart>,
+        optional: bool,
+        span: Span,
+    ) -> Result<(TypedChainPart, Type), CompilerFailure> {
+        let Some((sig, bindings, iface, _)) = self.find_method(&method.receiver_ty, &method.name)
+        else {
+            return Err(
+                super::inference_failure("resolved chain method has no declaration")
+                    .with_span(span),
+            );
+        };
+        // The synthetic receiver supplies only a type to overload
+        // inference. The chain retains and evaluates its real receiver.
+        let receiver =
+            self.push_synthetic_expr(TypedExprKind::Undefined, method.receiver_ty.clone(), span)?;
+        let (call, ret_ty) = self.infer_overloaded_method_call(
+            receiver,
+            iface.clone(),
+            Ident {
+                name: method.name.clone(),
+                span: method.span,
+            },
+            sig,
+            bindings,
+            type_args,
+            args,
+            None,
+            span,
+        )?;
+        let args = match call {
+            TypedExprKind::MethodCall { args, .. } => args,
+            TypedExprKind::GenericMethodCall { args, .. } => {
+                args.into_iter().map(|arg| arg.expr).collect()
+            }
+            TypedExprKind::Undefined if ret_ty == Type::Error => Vec::new(),
+            _ => {
+                return Err(super::inference_failure(
+                    "overload inference produced a non-method call",
+                )
+                .with_span(span));
+            }
+        };
+        let Some(
+            TypedChainPart::InterfaceProperty {
+                name,
+                optional: field_optional,
+                span: field_span,
+                ..
+            }
+            | TypedChainPart::Field {
+                name,
+                optional: field_optional,
+                span: field_span,
+                ..
+            },
+        ) = typed_parts.pop()
+        else {
+            return Err(
+                super::inference_failure("chain method has no preceding field").with_span(span),
+            );
+        };
+        if optional && method.sig.optional {
+            let params = args
+                .iter()
+                .map(|arg| {
+                    self.typed_ast
+                        .try_expr(*arg)
+                        .map(|expr| expr.ty.clone())
+                        .map_err(super::arena_failure)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let function = Type::Function {
+                params,
+                ret: Box::new(ret_ty.clone()),
+                predicate: None,
+                has_rest: false,
+                optional: 0,
+            };
+            typed_parts.push(TypedChainPart::Field {
+                name,
+                optional: field_optional,
+                result_ty: crate::ObjectField::widen_optional(true, function),
+                span: field_span,
+            });
+            return Ok((
+                TypedChainPart::Call {
+                    args,
+                    optional: true,
+                    result_ty: ret_ty.clone(),
+                    union_signature: None,
+                    span,
+                },
+                ret_ty,
+            ));
+        }
+        Ok((
+            TypedChainPart::MethodCall {
+                iface,
+                name,
+                args,
+                optional: field_optional,
+                result_ty: ret_ty.clone(),
+                span: Span {
+                    file: span.file,
+                    start: field_span.start.min(span.start),
+                    end: field_span.end.max(span.end),
+                },
+            },
+            ret_ty,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn infer_overloaded_chain_call(
+        &mut self,
+        receiver_ty: &Type,
+        signature: MethodSig,
+        bindings: BTreeMap<String, Type>,
+        iface: crate::MangledName,
+        args: &[ExprId],
+        type_args: Option<Vec<TypeAnnotation>>,
+        optional: bool,
+        span: Span,
+    ) -> Result<(TypedChainPart, Type), CompilerFailure> {
+        let receiver =
+            self.push_synthetic_expr(TypedExprKind::Undefined, receiver_ty.clone(), span)?;
+        let name = Ident {
+            name: "@call".into(),
+            span,
+        };
+        let (call, ret_ty) = self.infer_overloaded_method_call(
+            receiver,
+            iface.clone(),
+            name.clone(),
+            signature,
+            bindings,
+            type_args,
+            args.to_vec(),
+            None,
+            span,
+        )?;
+        let args = match call {
+            TypedExprKind::MethodCall { args, .. } => args,
+            TypedExprKind::GenericMethodCall { args, .. } => {
+                args.into_iter().map(|arg| arg.expr).collect()
+            }
+            TypedExprKind::Undefined if ret_ty == Type::Error => Vec::new(),
+            _ => {
+                return Err(super::inference_failure(
+                    "overload inference produced a non-callable chain",
+                )
+                .with_span(span));
+            }
+        };
+        Ok((
+            TypedChainPart::MethodCall {
+                iface,
+                name,
+                args,
+                optional,
+                result_ty: ret_ty.clone(),
+                span,
+            },
+            ret_ty,
+        ))
+    }
+
     fn infer_chain_call_signature(
         &mut self,
         receiver_ty: &Type,
         args: &[ExprId],
+        type_args: Option<Vec<TypeAnnotation>>,
         optional: bool,
         span: Span,
     ) -> Result<Option<(TypedChainPart, Type)>, CompilerFailure> {
+        if receiver_ty.is_callable_intersection()
+            && let Some(signature) = MethodSig::from_function_type(receiver_ty, false)
+        {
+            return self
+                .infer_overloaded_chain_call(
+                    receiver_ty,
+                    signature,
+                    BTreeMap::new(),
+                    crate::mangle::prelude("Object"),
+                    args,
+                    type_args,
+                    optional,
+                    span,
+                )
+                .map(Some);
+        }
         if !matches!(receiver_ty.peel(), Type::InterfaceRef { .. }) {
             return Ok(None);
         }
@@ -13542,6 +13780,20 @@ impl Inferer<'_> {
         else {
             return Ok(None);
         };
+        if !sig.overloads.is_empty() {
+            return self
+                .infer_overloaded_chain_call(
+                    receiver_ty,
+                    sig,
+                    interface_bindings,
+                    iface_mangled,
+                    args,
+                    type_args,
+                    optional,
+                    span,
+                )
+                .map(Some);
+        }
         if !sig.generics.is_empty() {
             self.error(
                 span,
@@ -13996,6 +14248,11 @@ impl Inferer<'_> {
         {
             return found;
         }
+        if self.is_composite_callable_member(receiver_ty, &name.name)
+            && let Some(method) = self.chain_method_lookup(receiver_ty, name, span)
+        {
+            return method;
+        }
         match receiver_ty.peel() {
             // An object literal carries the prelude `Object` interface's members
             // (`toJson`, …) beside its own fields, so a miss on the field map is
@@ -14113,6 +14370,13 @@ impl Inferer<'_> {
                 ChainField::plain(Type::Error)
             }
         }
+    }
+
+    fn is_composite_callable_member(&self, receiver: &Type, member: &str) -> bool {
+        let Some((mangled, _, name, _)) = receiver.interface_routing() else {
+            return false;
+        };
+        matches!(self.resolver().lookup(&mangled, name).map(|symbol| &symbol.kind), Some(crate::TypeKind::Interface { methods, properties, .. }) if methods.contains_key(member) && properties.contains_key(member))
     }
 
     /// The name resolved as a method on `receiver_ty`, in the form a chain step

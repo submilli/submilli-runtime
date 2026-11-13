@@ -657,11 +657,11 @@ fn rehydrate_reachable(
 /// constructor's parameters.
 fn for_each_member_type_mut(kind: &mut TypeKind, settle: &mut dyn FnMut(&mut Type)) {
     let method = |method: &mut crate::MethodSig, settle: &mut dyn FnMut(&mut Type)| {
-        method
-            .params
-            .iter_mut()
-            .for_each(|param| settle(&mut param.ty));
-        settle(&mut method.ret);
+        let _: Result<(), std::convert::Infallible> = method.try_map_types(|ty| {
+            let mut ty = ty.clone();
+            settle(&mut ty);
+            Ok(ty)
+        });
     };
     match kind {
         TypeKind::Interface {

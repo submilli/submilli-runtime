@@ -511,13 +511,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Number".to_string(),
             mangled_name: crate::mangle::prelude("Number"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Number)),
                     (
                         "toString".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::with_default(
@@ -534,7 +534,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toFixed".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::with_default(
@@ -551,7 +551,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toPrecision".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::with_default(
@@ -568,7 +568,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toExponential".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::with_default(
@@ -585,7 +585,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toJson".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -609,12 +609,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "NumberConstructor".to_string(),
             mangled_name: crate::mangle::prelude("NumberConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "@call".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![call_value()],
@@ -627,7 +627,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isNaN".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
@@ -640,7 +640,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isFinite".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
@@ -653,7 +653,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isInteger".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
@@ -666,7 +666,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isSafeInteger".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::Unknown)],
@@ -679,7 +679,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "parseInt".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![
@@ -695,7 +695,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "parseFloat".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("s", Type::String)],

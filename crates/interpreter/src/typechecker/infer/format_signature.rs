@@ -494,6 +494,7 @@ mod tests {
     #[test]
     fn method_no_generics() {
         let sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![],
@@ -516,6 +517,7 @@ mod tests {
     #[test]
     fn method_on_union_receiver_parenthesizes_it() {
         let sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![],
@@ -542,6 +544,7 @@ mod tests {
     #[test]
     fn method_substitutes_interface_generic_with_named_param() {
         let sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
             params: vec![Param::new(
@@ -573,6 +576,7 @@ mod tests {
     #[test]
     fn method_on_interface_ref_multi_arg_with_named_param() {
         let sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
@@ -604,6 +608,7 @@ mod tests {
     #[test]
     fn method_falls_back_to_positional_when_names_empty() {
         let sig = MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::anon(Type::TypeVar("K".to_string()))],

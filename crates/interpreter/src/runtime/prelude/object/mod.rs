@@ -1257,12 +1257,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Object".to_string(),
             mangled_name: crate::mangle::prelude("Object"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "toString".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -1273,7 +1273,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toJson".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -1301,12 +1301,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "ObjectConstructor".to_string(),
             mangled_name: crate::mangle::prelude("ObjectConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (
                         "keys".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("obj", Type::Unknown)],
@@ -1319,7 +1319,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "values".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("obj", Type::Unknown)],
@@ -1332,7 +1332,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "entries".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("obj", Type::Unknown)],
@@ -1346,19 +1346,19 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ),
                         },
                     ),
-                    ("assign".into(), MethodSig {
+                    ("assign".into(), MethodSig { overloads: Vec::new(),
                         optional: false, generics: crate::GenericParameters::unconstrained(vec!["T".into()]), params: assign_params(),
                         ret: Type::TypeVar("T".into()), predicate: None,
                         doc: doc("/** Copies own enumerable values from sources to the original target, in source order. Nullish sources are ignored. */"),
                     }),
-                    ("groupBy".into(), MethodSig {
+                    ("groupBy".into(), MethodSig { overloads: Vec::new(),
                         optional: false, generics: crate::GenericParameters::unconstrained(vec!["K".into(), "T".into()]), params: group_by_params(),
                         ret: group_by_output(), predicate: None,
                         doc: doc("/** Groups iterable elements by the callback's property key. The callback receives the element and its index; missing groups read as undefined. */"),
                     }),
                     (
                         "fromEntries".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                             params: vec![Param::new("entries", from_entries_input())],
@@ -1371,7 +1371,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "hasOwn".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![
@@ -1387,7 +1387,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "is".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![

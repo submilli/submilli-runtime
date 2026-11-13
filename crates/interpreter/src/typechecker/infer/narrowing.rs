@@ -1453,7 +1453,9 @@ fn typeof_object_narrowing(ty: &Type, peeled: &Type) -> Option<Type> {
 /// whose values a test narrows by refinement (`T & {}`), as it knows none of
 /// them statically.
 fn holds_any_value_of_a_parameter(peeled: &Type) -> bool {
-    peeled.lowers_to_erased_slot() && !matches!(peeled, Type::TypeVar(_))
+    peeled.lowers_to_erased_slot()
+        && !matches!(peeled, Type::TypeVar(_))
+        && !peeled.is_callable_intersection()
 }
 
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
@@ -2414,6 +2416,7 @@ mod tests {
                         ),
                         declaration_span: crate::Span::at(crate::FileId(0)),
                         kind: crate::TypeKind::Interface {
+                            extends: Vec::new(),
                             index: None,
                             generics: Default::default(),
                             methods,
@@ -2430,6 +2433,7 @@ mod tests {
             BTreeMap::from([(
                 "@call".to_string(),
                 crate::MethodSig {
+                    overloads: Vec::new(),
                     optional: false,
                     generics: Default::default(),
                     params: Vec::new(),

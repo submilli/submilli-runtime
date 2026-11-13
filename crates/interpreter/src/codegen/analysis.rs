@@ -113,6 +113,15 @@ impl CodegenAnalysis {
             }
             analysis.dependency_usage.note_shape(shape.clone());
         }
+        // A local interface's bases may be used only by validator planning;
+        // expressions and flattened primitive members don't retain that identity.
+        for decl in &ta.types {
+            if let crate::TypedTypeDecl::Interface(iface) = decl {
+                for base in &iface.extends {
+                    analysis.visit_type_at(base, iface.name.span)?;
+                }
+            }
+        }
         for g in &ta.globals {
             analysis.visit_type_at(&g.ty, g.span)?;
         }

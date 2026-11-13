@@ -194,6 +194,7 @@ impl<'a> Inferer<'a> {
                             mangled_name: mangled,
                             declaration_span: name.span,
                             kind: TypeKind::Interface {
+                                extends: Vec::new(),
                                 index: None,
                                 generics: generic_names,
                                 methods: BTreeMap::new(),
@@ -509,6 +510,7 @@ impl<'a> Inferer<'a> {
                     method_sigs.insert(
                         m_name.name,
                         MethodSig {
+                            overloads: Vec::new(),
                             optional,
                             generics: m_generic_names,
                             params: resolved_params,
@@ -568,7 +570,7 @@ impl<'a> Inferer<'a> {
             property_names: property_sigs.keys().cloned().collect(),
             name: name.clone(),
             generics: generic_names.clone(),
-            extends: bases,
+            extends: bases.clone(),
             members: typed_members,
             index: index.clone(),
             doc: doc.clone(),
@@ -579,6 +581,7 @@ impl<'a> Inferer<'a> {
             mangled_name: mangled,
             declaration_span: name.span,
             kind: TypeKind::Interface {
+                extends: bases,
                 index,
                 generics: generic_names,
                 methods: method_sigs,

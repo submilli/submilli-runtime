@@ -301,6 +301,7 @@ fn insert_recursive_options(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "RecursiveOptions"),
             declaration_span: Span::at(crate::FileId::FS),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
@@ -341,7 +342,7 @@ fn insert_stat_interface(defs: &mut PackageDeclaration) {
             name: "Stat".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Stat"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
@@ -386,7 +387,7 @@ fn insert_peek_interface(defs: &mut PackageDeclaration) {
             name: "Peek".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Peek"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
@@ -431,7 +432,7 @@ fn insert_dir_entry_interface(defs: &mut PackageDeclaration) {
             name: "DirEntry".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DirEntry"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
@@ -482,7 +483,7 @@ fn insert_info_interface(defs: &mut PackageDeclaration) {
             name: "Info".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Info"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
@@ -542,7 +543,7 @@ fn insert_mount_info_interface(defs: &mut PackageDeclaration) {
             name: "MountInfo".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "MountInfo"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
@@ -559,7 +560,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
     let mut methods = BTreeMap::new();
     methods.insert(
         "close".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: Vec::new(),
@@ -572,7 +573,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
     );
     methods.insert(
         "writeBytes".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("bytes", Type::Uint8Array)],
@@ -585,7 +586,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
     );
     methods.insert(
         "writeLine".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("line", Type::String)],
@@ -602,7 +603,7 @@ fn insert_file_writer_interface(defs: &mut PackageDeclaration) {
             name: "FileWriter".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "FileWriter"),
             declaration_span: Span::at(crate::FileId::FS),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods,
                 properties: BTreeMap::new(),

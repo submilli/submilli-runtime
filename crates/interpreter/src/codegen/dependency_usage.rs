@@ -357,18 +357,24 @@ impl DependencyUsage {
         match &ty_sym.kind {
             TypeKind::Alias { ty, .. } => self.collect_type(ty),
             TypeKind::Interface {
+                extends,
                 properties,
                 methods,
                 ..
             } => {
+                for base in extends {
+                    self.collect_type(base);
+                }
                 for sig in properties.values() {
                     self.collect_type(&sig.ty);
                 }
                 for sig in methods.values() {
-                    for p in &sig.params {
-                        self.collect_type(&p.ty);
+                    for sig in sig.signatures() {
+                        for p in &sig.params {
+                            self.collect_type(&p.ty);
+                        }
+                        self.collect_type(&sig.ret);
                     }
-                    self.collect_type(&sig.ret);
                 }
             }
             TypeKind::Class {
@@ -383,10 +389,12 @@ impl DependencyUsage {
                     self.collect_type(&sig.ty);
                 }
                 for sig in methods.values().chain(statics.values()) {
-                    for p in &sig.params {
-                        self.collect_type(&p.ty);
+                    for sig in sig.signatures() {
+                        for p in &sig.params {
+                            self.collect_type(&p.ty);
+                        }
+                        self.collect_type(&sig.ret);
                     }
-                    self.collect_type(&sig.ret);
                 }
                 for sig in static_fields.values() {
                     self.collect_type(&sig.ty);
@@ -444,7 +452,7 @@ impl DependencyUsage {
                     self.collect_type(elem);
                 }
             }
-            Type::Union(members) => {
+            Type::Union(members) | Type::Intersection(members) => {
                 for member in members {
                     self.collect_type(member);
                 }
@@ -491,8 +499,7 @@ impl DependencyUsage {
             | Type::KeyOf(_)
             | Type::IndexedAccess { .. }
             | Type::Mapped { .. }
-            | Type::Conditional { .. }
-            | Type::Intersection(_) => {}
+            | Type::Conditional { .. } => {}
         }
     }
 

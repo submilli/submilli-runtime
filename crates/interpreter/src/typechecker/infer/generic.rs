@@ -610,6 +610,19 @@ impl Inferer<'_> {
         expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        if !sig.overloads.is_empty() {
+            return self.infer_overloaded_method_call(
+                typed_receiver,
+                iface_mangled,
+                name,
+                sig,
+                interface_bindings,
+                type_args,
+                args,
+                expected,
+                span,
+            );
+        }
         // The no-mapper form preserves the source type; the mapped form has
         // an independent result parameter, like TypeScript's two overloads.
         let mut sig = sig;
@@ -641,6 +654,9 @@ impl Inferer<'_> {
         ));
 
         for (k, v) in interface_bindings {
+            if sig.generics.names.contains(&k) {
+                continue;
+            }
             sub.insert(k, v);
         }
         // The receiver instantiates the signature before the call is checked,
@@ -3972,6 +3988,29 @@ fn writable_view_for(ret: &Type, want: &Type) -> Type {
         }
         _ => want.clone(),
     }
+}
+
+pub(super) fn instantiate_method_signature(
+    signature: &crate::MethodSig,
+    bindings: &BTreeMap<String, Type>,
+    limits: &crate::type_size::TypeLimits,
+) -> Result<crate::MethodSig, crate::type_size::TypeTooLarge> {
+    let substitute = |candidate: &mut crate::MethodSig| {
+        let bindings: BTreeMap<_, _> = bindings
+            .iter()
+            .filter(|(name, _)| !candidate.generics.names.contains(name))
+            .map(|(name, ty)| (name.clone(), ty.clone()))
+            .collect();
+        candidate.try_map_types(|ty| substitute_typevars(ty, &bindings, limits))
+    };
+    let mut result = signature.clone();
+    result.overloads.clear();
+    substitute(&mut result)?;
+    for mut candidate in signature.signatures().skip(1) {
+        substitute(&mut candidate)?;
+        result.append_signatures(candidate);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

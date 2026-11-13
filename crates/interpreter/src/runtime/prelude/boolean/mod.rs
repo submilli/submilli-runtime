@@ -105,13 +105,13 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Boolean".to_string(),
             mangled_name: crate::mangle::prelude("Boolean"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     ("valueOf".to_string(), crate::runtime::prelude::value_of::signature(Type::Boolean)),
                     (
                         "toString".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -122,7 +122,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "toJson".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -146,12 +146,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "BooleanConstructor".to_string(),
             mangled_name: crate::mangle::prelude("BooleanConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "@call".to_string(),
-                    MethodSig {
+                    MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: vec![call_value()],

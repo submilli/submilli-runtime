@@ -47,6 +47,7 @@ pub(crate) fn insert_temporal_plain_type(
         (
             "toString".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: Vec::new(),
@@ -58,6 +59,7 @@ pub(crate) fn insert_temporal_plain_type(
         (
             "toJSON".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: Vec::new(),
@@ -69,6 +71,7 @@ pub(crate) fn insert_temporal_plain_type(
         (
             "equals".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: vec![Param::new("other", super::temporal::like::like_type(local))],
@@ -108,6 +111,7 @@ pub(crate) fn insert_temporal_plain_type(
             mangled_name: crate::mangle::extend(temporal_prefix, local),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods,
@@ -122,6 +126,7 @@ pub(crate) fn insert_temporal_plain_type(
     let mut ctor_methods = BTreeMap::from([(
         "from".to_string(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![
@@ -139,6 +144,7 @@ pub(crate) fn insert_temporal_plain_type(
         ctor_methods.insert(
             "compare".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: vec![
@@ -160,6 +166,7 @@ pub(crate) fn insert_temporal_plain_type(
             mangled_name: crate::mangle::extend(temporal_prefix, &ctor_local),
             declaration_span: Span::at(FileId::PRELUDE),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: ctor_methods,

@@ -214,10 +214,19 @@ impl TypeBudget<'_> {
 /// a caller continues with [`Type::Error`], which suppresses follow-on
 /// diagnostics, and the phase turns the recorded failure into a compiler limit
 /// error at its next checkpoint, so compilation never succeeds past it.
-#[derive(Debug)]
 pub struct TypeLimits {
     work_left: Cell<u64>,
     exceeded: Cell<Option<TypeTooLarge>>,
+    method_comparisons: Cell<Vec<(crate::MethodSig, crate::MethodSig)>>,
+}
+
+impl std::fmt::Debug for TypeLimits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypeLimits")
+            .field("work_left", &self.work_left)
+            .field("exceeded", &self.exceeded)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for TypeLimits {
@@ -225,6 +234,7 @@ impl Default for TypeLimits {
         Self {
             work_left: Cell::new(MAX_TYPE_WORK),
             exceeded: Cell::new(None),
+            method_comparisons: Cell::default(),
         }
     }
 }
@@ -236,7 +246,52 @@ impl TypeLimits {
         Self {
             work_left: Cell::new(nodes),
             exceeded: Cell::new(None),
+            method_comparisons: Cell::default(),
         }
+    }
+
+    /// Unification may start a new assignability walk. Keep method coinduction
+    /// across those walks, and bound native depth for non-repeating comparisons.
+    pub(crate) fn compare_methods(
+        &self,
+        actual: &crate::MethodSig,
+        expected: &crate::MethodSig,
+        compare: impl FnOnce() -> Result<bool, TypeTooLarge>,
+    ) -> Result<bool, TypeTooLarge> {
+        let mut active = self.method_comparisons.take();
+        if active.iter().any(|(a, b)| a == actual && b == expected) {
+            self.method_comparisons.set(active);
+            return Ok(true);
+        }
+        if active.len() >= MAX_TYPE_DEPTH as usize {
+            self.method_comparisons.set(active);
+            return Err(TypeTooLarge::Depth);
+        }
+        if active.try_reserve(1).is_err() {
+            self.method_comparisons.set(active);
+            return Err(TypeTooLarge::Allocation);
+        }
+        let mut budget = self.budget();
+        let mut copied = Ok(());
+        for signature in [actual, expected] {
+            crate::package_declaration::method_types(signature, &mut |ty| {
+                if copied.is_ok() {
+                    copied = budget.charge_copy(ty, 1);
+                }
+            });
+        }
+        if let Err(limit) = copied {
+            self.method_comparisons.set(active);
+            return Err(limit);
+        }
+        active.push((actual.clone(), expected.clone()));
+        // The stack is back in phase state before re-entering inference.
+        self.method_comparisons.set(active);
+        let result = compare();
+        let mut active = self.method_comparisons.take();
+        active.pop();
+        self.method_comparisons.set(active);
+        result
     }
 
     /// A budget for one substitution, drawing on this phase's work allowance.
@@ -782,6 +837,39 @@ pub(crate) mod tests {
             .unwrap()
             .join()
             .unwrap()
+    }
+
+    #[test]
+    fn method_comparisons_bound_depth_and_discard_failed_work() {
+        fn nested(depth: u32, limits: &TypeLimits) -> Result<bool, TypeTooLarge> {
+            let signature = crate::MethodSig {
+                overloads: Vec::new(),
+                optional: false,
+                generics: Default::default(),
+                params: vec![],
+                ret: Type::NumberLiteral(crate::types::LiteralF64(f64::from(depth))),
+                predicate: None,
+                doc: None,
+            };
+            limits.compare_methods(&signature, &signature, || nested(depth + 1, limits))
+        }
+        on_compiler_stack(|| {
+            let limits = TypeLimits::default();
+            assert_eq!(nested(0, &limits), Err(TypeTooLarge::Depth));
+            let signature = crate::MethodSig {
+                overloads: Vec::new(),
+                optional: false,
+                generics: Default::default(),
+                params: vec![],
+                ret: Type::Number,
+                predicate: None,
+                doc: None,
+            };
+            assert_eq!(
+                limits.compare_methods(&signature, &signature, || Ok(true)),
+                Ok(true)
+            );
+        });
     }
 
     #[test]

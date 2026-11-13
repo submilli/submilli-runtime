@@ -72,6 +72,9 @@ struct RuntimeTestWalk {
 }
 
 /// A static member found by [`Inferer::class_static_in_chain`].
+// This transient result owns declaration metadata; boxing both variants would
+// add an allocation to every static-member lookup.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum StaticResolution {
     Method(MethodSig, Visibility),
     Field(FieldSig),
@@ -286,6 +289,7 @@ impl<'a> Inferer<'a> {
                     statics.insert(
                         m_name.name.clone(),
                         MethodSig {
+                            overloads: Vec::new(),
                             optional: *optional,
                             generics: m_generic_names,
                             params: resolved_params,
@@ -375,6 +379,7 @@ impl<'a> Inferer<'a> {
                     methods.insert(
                         m_name.name.clone(),
                         MethodSig {
+                            overloads: Vec::new(),
                             optional: *optional,
                             generics: m_generic_names,
                             params: resolved_params,
@@ -4809,31 +4814,7 @@ pub(super) fn substitute_method_sig(
     bindings: &BTreeMap<String, Type>,
     limits: &TypeLimits,
 ) -> Result<MethodSig, TypeTooLarge> {
-    use super::generic::substitute_typevars;
-    Ok(MethodSig {
-        optional: sig.optional,
-        generics: sig.generics.clone(),
-        params: sig
-            .params
-            .iter()
-            .map(|p| {
-                Ok(Param {
-                    ty: substitute_typevars(&p.ty, bindings, limits)?,
-                    ..p.clone()
-                })
-            })
-            .collect::<Result<_, TypeTooLarge>>()?,
-        ret: substitute_typevars(&sig.ret, bindings, limits)?,
-        predicate: match &sig.predicate {
-            Some(p) => Some(crate::TypePredicate {
-                parameter_index: p.parameter_index,
-                asserted_type: substitute_typevars(&p.asserted_type, bindings, limits)?,
-                kind: p.kind,
-            }),
-            None => None,
-        },
-        doc: sig.doc.clone(),
-    })
+    super::generic::instantiate_method_signature(sig, bindings, limits)
 }
 
 /// A class's own instance field `name`, if it is backed by a payload slot.
