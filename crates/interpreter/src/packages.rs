@@ -1106,6 +1106,7 @@ fn module_description(name: &str) -> &'static str {
         "submilli:agents" => {
             "Harness sub-agents: runText(agent, input) and run<T>(agent, input), and list() to discover them."
         }
+        "submilli:cost" => "Packages report what their calls cost, so the run's cost includes it.",
         "submilli:crypto" => "Hashing, HMAC, and random bytes.",
         "submilli:code" => {
             "Workspace tools: numbered reads, search, glob, tree, anchored edits and unified diffs."

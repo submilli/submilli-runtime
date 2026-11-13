@@ -699,6 +699,9 @@ pub(crate) struct ShowResult {
     pub(crate) started_at_micros: u64,
     pub(crate) started_at: String,
     pub(crate) wall_ms: u64,
+    /// What the run cost. Absent when it cost nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cost: Option<submilli_shared::cost::RunCost>,
     pub(crate) outcome: Outcome,
     /// The denials the program saw, by ref: with a `completed` outcome, the ones it
     /// caught; with a denied one, the last is the one that ended it.
@@ -969,6 +972,7 @@ pub(crate) fn show_stored(
         started_at_micros: run.started_at_micros,
         started_at: super::render::rfc3339(run.started_at_micros),
         wall_ms: run.wall_ms,
+        cost: run.cost.clone(),
         outcome,
         denied,
         session: run.recording.session_id.clone(),

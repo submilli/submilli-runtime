@@ -39,6 +39,11 @@ export function executionLabel(show: Show): string {
   }
 }
 
+/** A run's cost for its meta line: "$0.00421", or "$0.00421+" when part is unpriced. */
+export function costText(cost: { total_usd: string; complete: boolean }): string {
+  return "$" + cost.total_usd + (cost.complete ? "" : "+");
+}
+
 /** How long a run took: milliseconds under a second, then seconds with one decimal. */
 export function duration(ms: number): string {
   if (ms < 1000) return ms + " ms";

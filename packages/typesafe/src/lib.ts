@@ -1,3 +1,4 @@
+import { report } from "submilli:cost";
 import { post } from "submilli:http";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
@@ -250,7 +251,39 @@ function evaluate(request: BatchRequest): BatchResponse {
     const body = buildRequestBody(request);
     const response = post("https://api.typesafe.ai/v1/systemone", body, authHeaders());
     if (!response.ok) throw typesafeHttpError(response.status, response.headers.get("retry-after") ?? null);
-    return decodeResponse(response.body, request.questions);
+    const decoded = decodeResponse(response.body, request.questions);
+    reportCost(decoded);
+    return decoded;
+}
+
+/**
+ * Dollars per million input tokens, by the versioned model id a response names
+ * (https://docs.typesafe.ai/models). Output tokens are free.
+ */
+const INPUT_PRICE_PER_MILLION = new Map<string, number>([
+    ["jev-1.14.0", 0.042],
+    ["jev-1.13.0", 0.042],
+]);
+
+/**
+ * Report the request's cost, so the run's cost includes it. A model version
+ * missing from the price list is reported with its usage and no amount.
+ * Reporting is best effort: the request is already paid, so a refused report
+ * (no `cost.report` grant) must not lose its answer.
+ * @param response The decoded response, naming the version that answered.
+ */
+function reportCost(response: BatchResponse): void {
+    const price = INPUT_PRICE_PER_MILLION.get(response.model);
+    const usd = price === undefined ? undefined : response.usage.input_tokens * price / 1000000;
+    try {
+        report({
+            usd: usd,
+            usage: { input_tokens: response.usage.input_tokens, output_tokens: response.usage.output_tokens },
+            label: response.model,
+        });
+    } catch (error: unknown) {
+        // The answer stands; the run's cost misses this request.
+    }
 }
 
 /**

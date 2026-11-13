@@ -591,7 +591,7 @@ async fn run_attempt(
         state.units(),
         run,
         &history,
-        &RunResolution::Completed(response.output()),
+        &RunResolution::Completed(Box::new(response.output())),
         Some(&staged),
     )
     .await;

@@ -408,15 +408,17 @@ fn parse_anthropic(value: &Value) -> Result<ProviderResponse, ProviderFailure> {
 /// Absent fields stay absent rather than becoming zero: [`sum_present`] returns
 /// `None` when every field is missing, so an unreported count is still
 /// indeterminate and keeps its held reserve.
+///
+/// The two cache counts are also kept apart, as parts of that sum, for pricing.
 fn anthropic_usage(value: &Value) -> ProviderUsage {
     let usage = value.get("usage");
+    let cache_write = number_at(usage, "cache_creation_input_tokens");
+    let cache_read = number_at(usage, "cache_read_input_tokens");
     ProviderUsage {
-        input_tokens: sum_present(&[
-            number_at(usage, "input_tokens"),
-            number_at(usage, "cache_creation_input_tokens"),
-            number_at(usage, "cache_read_input_tokens"),
-        ]),
+        input_tokens: sum_present(&[number_at(usage, "input_tokens"), cache_write, cache_read]),
         output_tokens: number_at(usage, "output_tokens"),
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
     }
 }
 
@@ -509,6 +511,9 @@ fn parse_google(value: &Value) -> Result<ProviderResponse, ProviderFailure> {
             number_at(usage, "candidatesTokenCount"),
             number_at(usage, "thoughtsTokenCount"),
         ]),
+        // Part of `promptTokenCount`, not added to it.
+        cache_read_tokens: number_at(usage, "cachedContentTokenCount"),
+        cache_write_tokens: None,
     };
 
     let text = candidate
@@ -571,6 +576,12 @@ fn parse_openai(value: &Value) -> Result<ProviderResponse, ProviderFailure> {
     let usage = ProviderUsage {
         input_tokens: number_at(usage, "prompt_tokens"),
         output_tokens: number_at(usage, "completion_tokens"),
+        // Part of `prompt_tokens`, not added to it. OpenAI bills no cache write.
+        cache_read_tokens: number_at(
+            usage.and_then(|usage| usage.get("prompt_tokens_details")),
+            "cached_tokens",
+        ),
+        cache_write_tokens: None,
     };
 
     let text = choice

@@ -414,9 +414,14 @@ mod tests {
                     } else {
                         "\"@pied-piper/pkg\""
                     };
+                    let filter = if cap.example_filter.is_empty() {
+                        String::new()
+                    } else {
+                        format!("      filter: {}\n", cap.example_filter)
+                    };
                     format!(
-                        "name: f\npermissions:\n  {caller}:\n    - capability: {}\n      filter: {}\n      action: allow\n",
-                        cap.name, cap.example_filter
+                        "name: f\npermissions:\n  {caller}:\n    - capability: {}\n{filter}      action: allow\n",
+                        cap.name
                     )
                 };
                 submilli_blueprint::parse(&yaml)

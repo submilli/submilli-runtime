@@ -784,6 +784,7 @@ fn finish_file_tool_run(
         }),
         result: None,
         console: String::new(),
+        cost: None,
         usage: interpreter::runtime::limits::ExecutionUsage::default(),
         log: log.finish(),
         mcp_catalog: None,

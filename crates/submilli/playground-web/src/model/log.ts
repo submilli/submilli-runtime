@@ -1,7 +1,7 @@
 // The log pane: a row per run, its permission checks, and the tests and reruns of it.
 import type { Explain, RuleRef, Show, ShowDecision } from "../api/types";
 import { bpRuleLine } from "./blueprint";
-import { askedFor, boundVars, capitalize, ctx, differing, duration, end, ordinal, outcomeLabel, plainBy, plural, size, tone, when, type Tone, type ValuesNote } from "./format";
+import { askedFor, boundVars, capitalize, costText, ctx, differing, duration, end, ordinal, outcomeLabel, plainBy, plural, size, tone, when, type Tone, type ValuesNote } from "./format";
 import { decisionRef, forAsst, runRef } from "./refs";
 import { countWords, followUps } from "./summary";
 import { byAgent, callTarget, endedRuns, fileTool, followUpName, runIdentity, programNumber, type Frame } from "./steps";
@@ -485,7 +485,7 @@ function runRow(f: Frame, r: Show, i: number, runs: Show[]): RunRow {
     status: outcomeLabel(word),
     tone: tone(word),
     meta:
-      when(r.started_at) + " · " + duration(r.wall_ms) + " · blueprint v" + r.blueprint_version +
+      when(r.started_at) + " · " + duration(r.wall_ms) + (r.cost ? " · " + costText(r.cost) : "") + " · blueprint v" + r.blueprint_version +
       (!byAgent(f, n) || word === "cancelled" ? "" : word === "completed" ? " · returned to agent " + size(returned || 0) : " · error sent to agent" + (returned ? ", " + size(returned) : "")),
     preview: !open && err.text ? err.text.split("\n")[0] : "",
     error: err.text,

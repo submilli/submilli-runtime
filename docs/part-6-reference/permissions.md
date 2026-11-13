@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "1aeaae70df6bee6d69b2bd2698709c4738d23a6d85501769dd2e49cb5cdeb173"
+  contentHash: "bc2fe2fa8c4eec6cb565370097401effea522b4b095e475661247285b568511f"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -127,13 +127,14 @@ These are refused before the rules are read, whatever `default` says:
 - `variables.get` from `main`. Configuration is available only to Packages.
 - `secrets.get` from `main`. A secret's value is available only to Packages,
   and `submilli blueprint capability add` refuses to write the rule.
+- `cost.report` from `main`. Cost reports are available only to Packages.
 - A write to a volume the Blueprint mounts read-only.
 
 ## Capabilities
 
 | Source | Names | Fields |
 | --- | --- | --- |
-| The standard library | `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `variables.get`, `session.*` | In the tables below |
+| The standard library | `cost.report`, `embedding.embed`, `fs.*`, `git.*`, `http.*`, `llm.call`, `secrets.get`, `variables.get`, `session.*` | In the tables below |
 | A Package | Chosen by its author, such as `pied-piper.example/credits.apply` | Declared by its `@capability` tags ([Package manifest](/docs/reference/package-manifest)) |
 | An MCP server the Blueprint declares | `mcp.<server>`, such as `mcp.linear` | `tool`, `transport` ([MCP servers](/docs/reference/mcp-servers)) |
 | The application's tools a harness declares for a session | `tools.call` | `tool` ([Application tools](/docs/reference/http-api#application-tools)) |
@@ -190,6 +191,12 @@ out, and a condition on a missing field is false.
 read checks the requested alias name and grants no access to its target name.
 
 <!-- generated:capabilities -->
+
+### `submilli:cost`
+
+| Capability | Fields | Operation | Example filter |
+| --- | --- | --- | --- |
+| `cost.report` |  | Report what a package's own call cost, so the run's cost includes it |  |
 
 ### `submilli:embedding`
 

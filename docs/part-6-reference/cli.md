@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c23cd973b67d39b71a910032b5a4aa19d7c1d74e0871a5acab02900eb45a260c"
+  contentHash: "760fe654d64df554390b14e5933693a60603e73fc8d7cf65ef7e93b33c281df0"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -396,7 +396,7 @@ Options:
           Fuel budget. Defaults to the runtime's `RuntimeConfig::default()` value
 
       --report
-          Print fuel, peak accounted memory, and timings to stderr after execution
+          Print fuel, peak accounted memory, timings, and the run cost to stderr after execution
 
       --max-stack <MAX_STACK>
           Maximum wasm stack in bytes

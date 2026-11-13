@@ -40,6 +40,10 @@ pub(crate) struct StoredRun {
     pub(crate) result: Option<String>,
     pub(crate) console: String,
     pub(crate) usage: ExecutionUsage,
+    /// What the run cost. Absent when it cost nothing, and on runs stored before
+    /// cost was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cost: Option<submilli_shared::cost::RunCost>,
     /// Decisions the recorder did not keep at all.
     pub(crate) decisions_dropped: u64,
     /// Calls the recorder did not keep at all.
@@ -193,6 +197,7 @@ impl StoredRun {
             result: finished.result.clone(),
             console: finished.console.clone(),
             usage: finished.usage,
+            cost: finished.cost.clone(),
             decisions_dropped: finished.log.dropped,
             calls_dropped: finished.log.calls_dropped,
             recording: RecordedRun::from_parts(start, finished),
@@ -228,6 +233,17 @@ pub(crate) struct RunSummary {
     pub(crate) decisions: usize,
     pub(crate) denied: usize,
     pub(crate) test_of: Option<RunLink>,
+    /// The run's total cost, for listing. Absent when it cost nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cost: Option<CostTotal>,
+}
+
+/// A run's cost total without its entries: what a run list shows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CostTotal {
+    pub(crate) total_usd: submilli_blueprint::Usd,
+    /// Some part of the run was not priced, so the total is a lower bound.
+    pub(crate) complete: bool,
 }
 
 impl RunSummary {
@@ -254,6 +270,10 @@ impl RunSummary {
                 .filter(|decision| !decision.allowed && !decision.filtered)
                 .count(),
             test_of: run.test_of.clone(),
+            cost: run.cost.as_ref().map(|cost| CostTotal {
+                total_usd: cost.total_usd,
+                complete: cost.complete,
+            }),
         }
     }
 }

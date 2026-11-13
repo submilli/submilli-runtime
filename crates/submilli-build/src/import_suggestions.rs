@@ -34,7 +34,7 @@ impl ImportSuggestionSource {
         for declaration in interpreter::runtime::stdlib_package_declarations() {
             if matches!(
                 declaration.package_name.as_str(),
-                "submilli:secrets" | "submilli:variables"
+                "submilli:cost" | "submilli:secrets" | "submilli:variables"
             ) || (!self.git_enabled && declaration.package_name == "submilli:git")
             {
                 continue;

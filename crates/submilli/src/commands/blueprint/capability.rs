@@ -360,7 +360,7 @@ fn stdlib_entry(cap: &capabilities::Capability) -> Entry {
             .map(|f| format!("{}: {}", f.name, f.ty))
             .collect::<Vec<_>>()
             .join(", "),
-        example: Some(cap.example_filter.to_string()),
+        example: (!cap.example_filter.is_empty()).then(|| cap.example_filter.to_string()),
         main_denial: cap.main_denial,
     }
 }

@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "c657ecc2b8b8c61bd529895abf807c220ffe1e0a09b4baab0819a66ca96fe453"
+  contentHash: "5de732e388dabfa5635d86da61e3a9177267454b1cd49f58c0f78b8848f48e48"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -32,6 +32,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | `submilli:uuid` | UUID v4 and v7 | Nothing |
 | `submilli:variables` | Immutable session configuration, for Packages | `variables.get` |
 | `submilli:secrets` | A declared secret's value, for Packages | `secrets.get` |
+| `submilli:cost` | `report`, for Packages: what a call to a paid service cost | `cost.report` |
 | `submilli:security` | `check`, for Packages | The capability it names |
 | `submilli:test` | `label` and `expectException`, for test files | Nothing |
 
@@ -237,6 +238,25 @@ caller and authorize the resource independently.
 Variables hold non-secret configuration and remain fixed for the session.
 Use secrets for credentials and `submilli:session` for mutable key-value state.
 
+## Package cost
+
+`submilli:cost.report(entry)` adds what one of the Package's own calls cost to
+the [run cost](/docs/reference/http-api#run-cost), under the `cost.report`
+capability. `entry.usd` is the amount in US dollars, `entry.usage` the counts
+behind it keyed by unit, and `entry.label` what was called, such as a model id.
+Give `usd`, `usage`, or both; a report without `usd` is listed unpriced.
+
+```typescript
+import { report } from "submilli:cost";
+
+report({ usd: inputTokens * 0.042 / 1000000, usage: { input_tokens: inputTokens }, label: model });
+```
+
+The run cost names the reporting Package itself, so a Package cannot report
+under another name. Reports from `main` are always refused, even under
+`default: allow`. A report is not recorded for replay: a resumed durable run
+reports again as it re-runs.
+
 ## Durable package finalizers
 
 Packages can register cleanup for remote resources owned by a runtime session:
@@ -337,6 +357,14 @@ Workspace tools: numbered reads, search, glob, tree, anchored edits and unified 
 | `read(path: string, offset?: number, limit?: number): { lines: { line: number; text: string }[]; path: string; truncated: boolean }` |  | Numbered UTF-8 lines; one-based offset, default 200 lines. |
 | `search(pattern: string, options?: { caseSensitive?: boolean; context?: number; exclude?: string[]; include?: string[]; limit?: number; mode?: string; path?: string }): { counts: { count: number; path: string }[]; files: string[]; matches: { after: { line: number; text: string }[]; before: { line: number; text: string }[]; line: number; path: string; text: string }[]; truncated: boolean }` |  | Regex search, ignoring hidden and ignored paths. |
 | `tree(path: string, depth?: number): { entries: { depth: number; kind: string; modifiedAt: number; path: string }[]; truncated: boolean }` |  | Ignored/hidden paths omitted; symlinks listed but never traversed. |
+
+## `submilli:cost`
+
+Packages report what their calls cost, so the run's cost includes it.
+
+| Function | Capability | Description |
+| --- | --- | --- |
+| `report(entry: { label?: string; usage?: { [key: string]: number }; usd?: number }): void` | `cost.report` | Report what one of this package's calls cost, so the run's cost includes it. |
 
 ## `submilli:crypto`
 

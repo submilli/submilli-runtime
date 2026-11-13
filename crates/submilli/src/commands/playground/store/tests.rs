@@ -182,6 +182,7 @@ fn call(call_index: u64, capability: &str, response: Option<&str>) -> CallRecord
         usage: Some(ModelUsage {
             input_tokens: Some(3),
             output_tokens: None,
+            ..ModelUsage::default()
         }),
     }
 }
@@ -192,6 +193,7 @@ fn finished(decisions: Vec<DecisionRecord>, calls: Vec<CallRecord>) -> FinishedR
         error: None,
         result: Some("done".into()),
         console: "hello\n".into(),
+        cost: None,
         usage: ExecutionUsage {
             fuel: 10,
             wasm_fuel: 7,
@@ -1911,6 +1913,7 @@ fn a_host_run_is_stored_with_its_events() {
         error: None,
         result: Some("x".into()),
         console: String::new(),
+        cost: None,
         usage: ExecutionUsage::default(),
         log: DecisionLogOutput {
             records: vec![decided.clone()],

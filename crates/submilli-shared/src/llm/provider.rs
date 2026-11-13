@@ -121,8 +121,14 @@ impl StopReason {
 /// and `NaN` must reach [`LlmOutcome`] as `None` rather than as `0`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ProviderUsage {
+    /// Every prompt token, cached or not. Budgets charge this.
     pub input_tokens: Option<f64>,
     pub output_tokens: Option<f64>,
+    /// The part of [`Self::input_tokens`] read from the provider's prompt cache.
+    /// Pricing needs it apart: a cache read costs a fraction of fresh input.
+    pub cache_read_tokens: Option<f64>,
+    /// The part of [`Self::input_tokens`] written to the provider's prompt cache.
+    pub cache_write_tokens: Option<f64>,
 }
 
 impl Eq for ProviderUsage {}
@@ -132,6 +138,7 @@ impl ProviderUsage {
         Self {
             input_tokens: Some(input_tokens),
             output_tokens: Some(output_tokens),
+            ..Self::default()
         }
     }
 
@@ -143,6 +150,14 @@ impl ProviderUsage {
         (
             finite_count(self.input_tokens),
             finite_count(self.output_tokens),
+        )
+    }
+
+    /// The cache counts under the same guard as [`Self::resolved`].
+    fn resolved_cache(self) -> (Option<u64>, Option<u64>) {
+        (
+            finite_count(self.cache_read_tokens),
+            finite_count(self.cache_write_tokens),
         )
     }
 }
@@ -395,6 +410,7 @@ fn classify(result: Result<ProviderResponse, ProviderFailure>) -> LlmOutcome {
 /// read as an answer.
 fn classify_response(response: ProviderResponse) -> LlmOutcome {
     let (input_tokens, output_tokens) = response.usage.resolved();
+    let (cache_read, cache_write) = response.usage.resolved_cache();
     let outcome = match response.stop_reason.failure_reason() {
         None => LlmOutcome::success(response.text.unwrap_or_default()),
         Some(reason) => LlmOutcome::failed(
@@ -403,7 +419,9 @@ fn classify_response(response: ProviderResponse) -> LlmOutcome {
             response.text,
         ),
     };
-    outcome.with_usage(input_tokens, output_tokens)
+    outcome
+        .with_usage(input_tokens, output_tokens)
+        .with_cache_usage(cache_read, cache_write)
 }
 
 fn classify_failure(mut failure: ProviderFailure) -> LlmOutcome {
@@ -444,7 +462,10 @@ fn classify_failure(mut failure: ProviderFailure) -> LlmOutcome {
                     error = error.with_finish_reason(stop_reason.as_str());
                 }
                 let (input_tokens, output_tokens) = usage.resolved();
-                LlmOutcome::failed(error, None::<String>).with_usage(input_tokens, output_tokens)
+                let (cache_read, cache_write) = usage.resolved_cache();
+                LlmOutcome::failed(error, None::<String>)
+                    .with_usage(input_tokens, output_tokens)
+                    .with_cache_usage(cache_read, cache_write)
             }
 
             ProviderFailure::ApiCall {

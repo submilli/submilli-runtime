@@ -153,6 +153,26 @@ export interface Outcome {
   error?: string;
 }
 
+/** What a run cost: dollar amounts are exact decimal strings. */
+export interface RunCost {
+  total_usd: string;
+  /** False when some part has no price or a package report was dropped, so the total is a lower bound. */
+  complete: boolean;
+  entries: CostEntry[];
+  dropped_reports?: number;
+}
+
+export interface CostEntry {
+  source: "llm" | "embedding" | "package";
+  name: string;
+  /** A package's own label, such as the model it called: written by package code. */
+  label?: string;
+  usd: string | null;
+  complete?: boolean;
+  pricing?: "blueprint" | "builtin";
+  usage?: Record<string, number>;
+}
+
 /** `GET /api/runs/{run}?program=true`. */
 export interface Show {
   run: number;
@@ -162,6 +182,8 @@ export interface Show {
   source: string;
   started_at: string;
   wall_ms: number;
+  /** Absent when the run made no model call and no package reported a cost. */
+  cost?: RunCost;
   outcome: Outcome;
   denied: string[];
   session: string | null;

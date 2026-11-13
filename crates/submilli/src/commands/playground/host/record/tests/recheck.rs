@@ -374,6 +374,7 @@ fn a_recorded_run_is_built_from_its_start_and_end_and_serializes() {
         error: None,
         result: None,
         console: String::new(),
+        cost: None,
         usage: ExecutionUsage::default(),
         log: DecisionLogOutput {
             records: vec![decision(0, "http.get", http_context("api.test"), None)],

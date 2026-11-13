@@ -49,7 +49,7 @@ pub struct Args {
     #[arg(long)]
     fuel: Option<u64>,
 
-    /// Print fuel, peak accounted memory, and timings to stderr after execution.
+    /// Print fuel, peak accounted memory, timings, and the run cost to stderr after execution.
     #[arg(long)]
     report: bool,
 
@@ -646,6 +646,12 @@ fn execute_on_this_thread(
             compile_elapsed.as_millis(),
             run_elapsed.as_millis(),
         );
+        let cost = blueprint
+            .as_deref()
+            .and_then(|blueprint| submilli_shared::cost::price_run(blueprint, store.data()));
+        for line in cost.iter().flat_map(submilli_shared::cost::RunCost::lines) {
+            eprintln!("{line}");
+        }
     }
     exit
 }

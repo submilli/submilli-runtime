@@ -61,6 +61,7 @@ fn services() -> HostServices {
         llm_budget: None,
         embedding_provider: None,
         embedding_budget: None,
+        cost_blueprint: None,
         cancel_requested: None,
     }
 }
@@ -340,7 +341,7 @@ async fn recorded_run_reopens(threshold: Option<usize>) {
             units.clone(),
             &first,
             &replay,
-            &RunResolution::Completed(response.clone()),
+            &RunResolution::Completed(Box::new(response.clone())),
             Some(&last)
         )
         .await
@@ -350,7 +351,7 @@ async fn recorded_run_reopens(threshold: Option<usize>) {
         units.clone(),
         &resumed,
         &replay,
-        &RunResolution::Completed(response.clone()),
+        &RunResolution::Completed(Box::new(response.clone())),
         Some(&last),
     )
     .await

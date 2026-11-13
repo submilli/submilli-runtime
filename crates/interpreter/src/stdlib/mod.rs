@@ -1,5 +1,5 @@
 //! Standard-library packages user code reaches via `import` —
-//! `submilli:crypto` / `submilli:embedding` / `submilli:fs` / `submilli:http` / `submilli:llm` /
+//! `submilli:cost` / `submilli:crypto` / `submilli:embedding` / `submilli:fs` / `submilli:http` / `submilli:llm` /
 //! `submilli:secrets` / `submilli:security` / `submilli:session` /
 //! `submilli:url` / `submilli:uuid`.
 //!
@@ -13,6 +13,7 @@ pub mod agents;
 pub mod capabilities;
 pub(crate) mod checked_call;
 pub mod code;
+pub mod cost;
 pub mod crypto;
 pub(crate) mod dot_segments;
 pub mod embedding;
@@ -224,6 +225,7 @@ fn core_package_declarations() -> Vec<PackageDeclaration> {
     vec![
         // Alphabetical by package name; codegen import-emission relies on this order.
         code::package_declaration(),
+        cost::package_declaration(),
         crypto::package_declaration(),
         embedding::package_declaration(),
         fs::package_declaration(),
@@ -241,6 +243,7 @@ fn core_package_declarations() -> Vec<PackageDeclaration> {
 
 fn install_core_host_functions(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     code::install(linker)?;
+    cost::install(linker)?;
     crypto::install(linker)?;
     embedding::install(linker)?;
     fs::install(linker)?;

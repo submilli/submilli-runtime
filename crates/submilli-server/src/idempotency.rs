@@ -443,7 +443,8 @@ impl ReservationGuard {
     }
 
     pub async fn complete(self, output: RunOutput) {
-        self.resolve(RunResolution::Completed(output)).await;
+        self.resolve(RunResolution::Completed(Box::new(output)))
+            .await;
     }
     pub async fn finish_unkeyed(self) {
         self.resolve(RunResolution::Finished).await;

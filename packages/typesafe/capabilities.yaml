@@ -4,6 +4,7 @@ provides:
   description: Evaluate independent semantic judgments together; code owns subsequent actions.
   fields: {}
 requires:
+- capability: cost.report
 - capability: http.post
   filter: host == "api.typesafe.ai" and path == "/v1/systemone"
 - capability: secrets.get

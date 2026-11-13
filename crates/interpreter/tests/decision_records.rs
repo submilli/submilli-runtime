@@ -1862,6 +1862,7 @@ function main(): string { const r = llm.text("open", "what is two plus two"); re
         Some(submilli_engine::runtime::ModelUsage {
             input_tokens: Some(10),
             output_tokens: Some(10),
+            ..submilli_engine::runtime::ModelUsage::default()
         })
     );
 }
@@ -1914,6 +1915,7 @@ function main(): string {
         Some(submilli_engine::runtime::ModelUsage {
             input_tokens: Some(7),
             output_tokens: None,
+            ..submilli_engine::runtime::ModelUsage::default()
         })
     );
 }
@@ -1926,6 +1928,7 @@ async fn a_failed_embed_call_keeps_the_usage_its_sent_batches_reported() {
             Some(submilli_engine::runtime::ModelUsage {
                 input_tokens: Some(4),
                 output_tokens: None,
+                ..submilli_engine::runtime::ModelUsage::default()
             }),
         ),
         ("open-embed-dark", None),
@@ -2003,6 +2006,7 @@ function main(): string {
         Some(submilli_engine::runtime::ModelUsage {
             input_tokens: Some(13),
             output_tokens: None,
+            ..submilli_engine::runtime::ModelUsage::default()
         })
     );
 }

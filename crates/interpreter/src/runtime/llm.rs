@@ -559,6 +559,14 @@ pub struct LlmOutcome {
     /// Tokens the provider reported for the completion. Same
     /// `None`-means-indeterminate rule as [`Self::input_tokens`].
     pub output_tokens: Option<u64>,
+    /// The part of [`Self::input_tokens`] read from the provider's prompt
+    /// cache. Only pricing reads it; budgets charge the whole input. Defaulted
+    /// so a history recorded before the field existed still decodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    /// The part of [`Self::input_tokens`] written to the provider's prompt cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
 }
 
 impl LlmOutcome {
@@ -571,6 +579,8 @@ impl LlmOutcome {
             failure: None,
             input_tokens: None,
             output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
         }
     }
 
@@ -584,6 +594,8 @@ impl LlmOutcome {
             failure: Some(failure),
             input_tokens: None,
             output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
         }
     }
 
@@ -591,6 +603,13 @@ impl LlmOutcome {
     pub fn with_usage(mut self, input_tokens: Option<u64>, output_tokens: Option<u64>) -> Self {
         self.input_tokens = input_tokens;
         self.output_tokens = output_tokens;
+        self
+    }
+
+    /// Attach the cache part of the reported input.
+    pub fn with_cache_usage(mut self, read: Option<u64>, write: Option<u64>) -> Self {
+        self.cache_read_tokens = read;
+        self.cache_write_tokens = write;
         self
     }
 }
@@ -1351,6 +1370,38 @@ mod tests {
         for reason in FailureReason::ALL {
             assert_eq!(reason.to_string(), reason.as_str());
         }
+    }
+
+    /// Durable history encodes outcomes as msgpack struct maps. One recorded
+    /// before the cache counts existed must still decode, with no cache counts.
+    #[test]
+    fn an_outcome_recorded_without_cache_counts_still_decodes() {
+        #[derive(serde::Serialize)]
+        struct Before {
+            ok: bool,
+            text: Option<String>,
+            failure: Option<LlmFailure>,
+            input_tokens: Option<u64>,
+            output_tokens: Option<u64>,
+        }
+        let mut bytes = Vec::new();
+        let before = Before {
+            ok: true,
+            text: Some("hi".into()),
+            failure: None,
+            input_tokens: Some(3),
+            output_tokens: Some(4),
+        };
+        serde::Serialize::serialize(
+            &before,
+            &mut rmp_serde::Serializer::new(&mut bytes).with_struct_map(),
+        )
+        .unwrap();
+        let decoded: LlmOutcome = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(
+            decoded,
+            LlmOutcome::success("hi").with_usage(Some(3), Some(4))
+        );
     }
 
     /// `ok` keys off a natural stop, not off "didn't throw"; absent usage is

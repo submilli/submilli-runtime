@@ -142,6 +142,8 @@ fn answer(
                 failure,
                 input_tokens,
                 output_tokens,
+                cache_read_tokens: tokens(&usage[at]["cache_read_tokens"]),
+                cache_write_tokens: tokens(&usage[at]["cache_write_tokens"]),
             })
         })
         .collect();

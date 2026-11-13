@@ -8,6 +8,7 @@
 //! server enforces in production.
 
 pub mod blueprint_validation;
+pub mod cost;
 pub mod docs_scope;
 pub mod embedding;
 pub mod github;

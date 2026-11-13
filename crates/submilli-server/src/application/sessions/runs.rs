@@ -96,7 +96,7 @@ impl<'a> PrepareRun<'a> {
 }
 
 pub(crate) enum RunResolution {
-    Completed(RunOutput),
+    Completed(Box<RunOutput>),
     Finished,
     Undispatched,
     Indeterminate,
@@ -162,7 +162,7 @@ impl ResolveRun {
         let effect = match resolution {
             RunResolution::Completed(outcome) => {
                 let result =
-                    request.complete(reservation.reservation_id(), outcome.clone(), now)?;
+                    request.complete(reservation.reservation_id(), (**outcome).clone(), now)?;
                 unit.save_run_result(result).await?;
                 if let Some(mut session) = unit.get_session(session_id).await?
                     && (session.require_available(now).is_ok()
@@ -226,7 +226,7 @@ impl ResolveRun {
                                 run.status() == RunStatus::Completed
                                     && result.as_ref().is_some_and(|result| {
                                         result.run_id() == run.reservation_id()
-                                            && result.output() == outcome
+                                            && result.output() == &**outcome
                                     })
                             }
                             RunResolution::Finished => run.status() == RunStatus::Completed,

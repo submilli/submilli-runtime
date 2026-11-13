@@ -520,6 +520,7 @@ async fn absent_and_non_finite_usage_both_report_null_never_zero() {
         usage: ProviderUsage {
             input_tokens: Some(42.0),
             output_tokens: None,
+            ..ProviderUsage::default()
         },
     }))
     .await;
