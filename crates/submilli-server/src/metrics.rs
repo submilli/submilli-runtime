@@ -66,12 +66,11 @@ pub fn server_start() {
 }
 
 /// Per-phase compile latency for one successful `compile_script`. Emitted as a
-/// distribution per phase so each (`lex`, `parse`, `typecheck`, `capture`,
+/// distribution per phase so each (`parse`, `typecheck`, `capture`,
 /// `desugar`, `codegen`) is independently filterable by the `phase` attribute —
 /// the shape of LLM-generated programs flowing through `/v1/execute`.
 pub fn compile_phases(timings: &PhaseTimings) {
     let phases = [
-        ("lex", timings.lex),
         ("parse", timings.parse),
         ("typecheck", timings.typecheck),
         ("capture", timings.capture),

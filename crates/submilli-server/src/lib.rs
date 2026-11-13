@@ -8,7 +8,6 @@ mod app_tools;
 mod application;
 pub mod auth;
 pub mod blueprint;
-mod compiler_thread;
 pub mod config;
 pub mod database;
 mod docs_scopes;

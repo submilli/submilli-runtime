@@ -3,14 +3,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use submilli_engine::compile::compile_package_configured;
+use submilli_engine::compile::{
+    compile_package_request, compile_parsed_script, package_modules, package_sources,
+};
 use submilli_engine::runtime::{
     LinkedPackageModule, StoreData, Vfs, install_package_modules_async, install_runtime_async,
     install_tenant_limits,
 };
 use submilli_engine::{
-    CompiledPackage, FileId, ModulePath, PackageSourceModule, PackageSurface, PackageTestSurface,
-    RuntimeConfig, Severity, Stdlib, compile_package_test, compile_script, dispatch_main_async,
+    CompiledPackage, EngineFrontEnd, FileId, FrontEnd, ModulePath, PackageDeclaration,
+    PackageRequest, PackageSourceModule, PackageSurface, PackageTest, PackageTestSurface,
+    RuntimeConfig, ScriptOwner, ScriptRequest, Severity, Stdlib, compile_script,
+    dispatch_main_async, runtime_declarations, script_request,
 };
 use wasmtime::{Linker, Module};
 
@@ -56,15 +60,27 @@ fn modules<'a>(entries: &[(&str, &'a str)]) -> Vec<PackageSourceModule<'a>> {
 }
 
 fn compile(entries: &[(&str, &str)], surface: PackageSurface) -> CompiledPackage {
-    compile_package_configured(
-        Stdlib::core(),
-        PACKAGE,
-        ModulePath::from("lib"),
-        &modules(entries),
-        &[],
-        &[],
-        &BTreeMap::new(),
-        surface,
+    let stdlib = Stdlib::core().package_declarations();
+    let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let sources = package_sources(&modules(entries)).expect("sources");
+    let package_modules = package_modules(&sources);
+    let runtime = runtime_declarations();
+    let config = BTreeMap::new();
+    compile_package_request(
+        &EngineFrontEnd,
+        &PackageRequest {
+            name: PACKAGE,
+            root_module: &ModulePath::from("lib"),
+            modules: &package_modules,
+            sources: &sources,
+            prelude: runtime.prelude,
+            host: runtime.host,
+            stdlib: &stdlib,
+            dependencies: &[],
+            transitive: &[],
+            config: Some(&config),
+            surface,
+        },
     )
     .expect("package compiles")
 }
@@ -91,17 +107,26 @@ fn compile_test(
     source: &str,
 ) -> Result<submilli_engine::CompiledScript, Vec<String>> {
     let no_modules = PackageTestSurface::default();
-    compile_package_test(
-        &package.declaration,
-        package.test_surface.as_ref().unwrap_or(&no_modules),
-        &ModulePath::from(importer),
-        source,
+    let stdlib = Stdlib::core().package_declarations();
+    let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let importer = ModulePath::from(importer);
+    let request = ScriptRequest {
+        owner: ScriptOwner::Test(PackageTest {
+            owner: &package.declaration,
+            surface: package.test_surface.as_ref().unwrap_or(&no_modules),
+            importer: &importer,
+        }),
+        dependencies: &[&package.declaration],
+        ..script_request(&stdlib)
+    };
+    compile_parsed_script(
+        EngineFrontEnd.parse_script(source.to_owned(), FileId(0)),
         "paths.test.ts",
-        FileId(0),
-        &[&package.declaration],
+        &request,
     )
-    .map_err(|diagnostics| {
-        diagnostics
+    .map_err(|error| {
+        error
+            .into_diagnostics(FileId(0))
             .into_iter()
             .filter(|diagnostic| diagnostic.severity == Severity::Error)
             .map(|diagnostic| format!("{} | {}", diagnostic.message, diagnostic.help.join(" ")))

@@ -1,258 +1,50 @@
-//! End-to-end source-to-Wasm pipeline.
+//! The source-to-Wasm pipeline: a [`FrontEnd`] followed by the engine's back
+//! end (capture, desugar and codegen).
 //!
-//! Callers run these entry points on a thread with at least
-//! [`crate::compiler_limits::COMPILER_STACK_BYTES`] of stack.
+//! Every entry point runs on its own compiler-sized thread
+//! ([`crate::compiler_thread`]), so callers don't size stacks.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use crate::compile_capabilities;
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
-use crate::runtime::prelude;
+#[cfg(test)]
+use crate::front_end::has_errors;
+use crate::front_end::{
+    EngineFrontEnd, runtime_declarations, script_declarations, script_request, warnings_only,
+};
 use crate::stdlib::Stdlib;
-use crate::typechecker::infer::{TestModule, TestModules};
-use crate::typechecker::rules::check_script;
 use crate::typed_ast::TypedAst;
 use crate::{
-    Asi, Ast, DerivedCapability, Diagnostic, FileId, ModulePath, PackageDeclaration, Severity,
-    Sources, StmtKind, Token, TokenKind, capture, desugar, lower_patterns, runtime,
+    Ast, CheckedPackage, CheckedScript, Diagnostic, FileId, FrontEnd, ModulePath,
+    PackageDeclaration, PackageModule, PackageRequest, ParsedScript, ScriptOwner, ScriptRequest,
+    Sources, capture, desugar, lower_patterns,
 };
+pub use submilli_front_end::front_end::{PackageSurface, PackageTestSurface, ScriptImports};
 
-/// Wall-clock spent in each compile phase, filled in as the pipeline runs. A
-/// phase that never runs (e.g. `codegen` when the front-end errors) stays zero.
-/// Surfaced on [`CompiledScript`] for embedders that report compile-time
-/// performance.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PhaseTimings {
-    pub lex: Duration,
-    /// Parse plus pattern-lowering — both run together in the front-end.
-    pub parse: Duration,
-    /// Type inference plus the post-inference check pass.
-    pub typecheck: Duration,
-    pub capture: Duration,
-    pub desugar: Duration,
-    pub codegen: Duration,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScriptImports {
-    pub stdlib: BTreeSet<String>,
-    pub registry_packages: BTreeSet<String>,
-    pub mcp_servers: BTreeSet<String>,
-    /// The script imports `@tools`, the session's application tools.
-    pub tools: bool,
-    /// The script imports `@functions`, the harness-supplied function set.
-    pub functions: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct ParsedScript {
-    file: FileId,
-    source: String,
-    failure: Option<CompileError>,
-    ast: Ast,
-    diagnostics: Vec<Diagnostic>,
-    timings: PhaseTimings,
-}
-
-impl ParsedScript {
-    pub fn external_imports(&self) -> Result<ScriptImports, CompileError> {
-        self.external_imports_with_stdlib(&runtime::stdlib_package_declarations())
-    }
-
-    /// Classify imports using declarations the caller already prepared, without
-    /// constructing the standard library a second time.
-    pub fn external_imports_with_stdlib(
-        &self,
-        stdlib: &[PackageDeclaration],
-    ) -> Result<ScriptImports, CompileError> {
-        let stdlib_names: BTreeSet<&str> = stdlib
-            .iter()
-            .map(|defs| defs.package_name.as_str())
-            .collect();
-        let mut imports = ScriptImports::default();
-        for stmt_id in &self.ast.top_level {
-            let StmtKind::Import { module, .. } = &self
-                .ast
-                .try_stmt(*stmt_id)
-                .map_err(|error| {
-                    CompileError::from(
-                        error.into_compiler_failure(crate::compiler_error::CompilerStage::Parse),
-                    )
-                    .with_prior_diagnostics(&self.diagnostics)
-                })?
-                .kind
-            else {
-                continue;
-            };
-            if crate::source::is_relative_specifier(module) {
-                continue;
-            }
-            if let Some(server) = module.strip_prefix("@mcp/") {
-                imports.mcp_servers.insert(server.to_string());
-            } else if module == runtime::TOOLS_PACKAGE {
-                imports.tools = true;
-            } else if module == crate::functions::FUNCTIONS_PACKAGE {
-                imports.functions = true;
-            } else if stdlib_names.contains(module.as_str())
-                || module == crate::stdlib::functions::MODULE_NAME
-                || crate::stdlib::OptionalPackage::from_module_name(module).is_some()
-            {
-                // An optional package counts as stdlib whether or not the embedder
-                // enables it: a disabled one is reported as unavailable, never
-                // looked up as a registry package.
-                imports.stdlib.insert(module.clone());
-            } else {
-                imports.registry_packages.insert(module.clone());
-            }
-        }
-        Ok(imports)
-    }
-
-    pub fn has_errors(&self) -> bool {
-        self.failure.is_some() || has_errors(&self.diagnostics)
-    }
-
-    pub fn diagnostics(&self) -> &[Diagnostic] {
-        &self.diagnostics
-    }
-}
-
-pub fn parse_script(source: &str, file: FileId) -> ParsedScript {
-    let mut timings = PhaseTimings::default();
-
-    let lex_start = Instant::now();
-    let mut asi = Asi::new(source, file);
-    let mut tokens: Vec<Token> = Vec::new();
-    loop {
-        let tok = asi.next_token();
-        let is_eof = matches!(tok.kind, TokenKind::Eof);
-        tokens.push(tok);
-        if is_eof {
-            break;
-        }
-    }
-    let (mut diagnostics, mut failure) = match asi.finish() {
-        Ok(diagnostics) => (diagnostics, None),
-        Err(error) => (error.clone().into_diagnostics(file), Some(error)),
-    };
-    timings.lex = lex_start.elapsed();
-
-    let parse_start = Instant::now();
-    let (mut ast, parse_diags) = if failure.is_some() {
-        (Ast::new(), Vec::new())
-    } else {
-        match crate::parser::parse_checked(source, tokens, file) {
-            Ok(result) => result,
-            Err(mut error) => {
-                error.diagnostics.splice(0..0, diagnostics.clone());
-                let rendered = error.clone().into_diagnostics(file);
-                diagnostics.clear();
-                failure = Some(error);
-                (Ast::new(), rendered)
-            }
-        }
-    };
-    diagnostics.extend(parse_diags);
-    // must run before type-checking; the typechecker assumes patterns are already lowered
-    if failure.is_none() {
-        match lower_patterns(ast) {
-            Ok(lowered) => ast = lowered,
-            Err(fatal) => {
-                let error = CompileError {
-                    diagnostics: diagnostics.clone(),
-                    fatal: Some(fatal),
-                };
-                diagnostics = error.clone().into_diagnostics(file);
-                failure = Some(error);
-                ast = Ast::new();
-            }
-        }
-    }
-    timings.parse = parse_start.elapsed();
-
-    ParsedScript {
-        file,
-        source: source.to_owned(),
-        failure,
-        ast,
-        diagnostics,
-        timings,
-    }
-}
-
-/// Run the front-end (infer → check) and return the typed
-/// AST alongside the accumulated diagnostics and per-phase timings. Shared by
-/// [`compile_script`] and [`typecheck`]; the typed AST is only meaningful when
-/// `diags` is error-free. `file` is the [`FileId`] the caller assigned this
-/// source in its [`Sources`](crate::Sources) registry; every span is stamped
-/// with it so diagnostics resolve against that entry. `packages` join the stdlib
-/// in the set the typechecker resolves imports against (e.g. the server's
-/// `@mcp/<server>` virtual packages).
-fn front_end(
-    source: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
-    front_end_with_transitive(None, source, parsed, stdlib_defs, packages, &[], None)
-}
-
-fn front_end_with_transitive(
-    owning_package: Option<&str>,
-    source: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-    test_modules: Option<TestModules<'_>>,
-) -> Result<(TypedAst, Vec<Diagnostic>, PhaseTimings), CompileError> {
-    if source != parsed.source {
-        return Err(CompilerFailure::Internal {
-            stage: CompilerStage::Infer,
-            span: None,
-            message: "parsed script does not belong to the supplied source".into(),
-        }
-        .into());
-    }
-    if let Some(error) = &parsed.failure {
-        return Err(error.clone());
-    }
-    let mut timings = parsed.timings;
-    let mut diags = parsed.diagnostics.clone();
-    let typecheck_start = Instant::now();
-    let (prelude_defs, host_defs, _) = prelude::cached_runtime_package_declarations();
-    let mut infer_refs: Vec<&crate::PackageDeclaration> = prelude_defs.iter().collect();
-    infer_refs.extend(host_defs.iter());
-    infer_refs.extend(stdlib_defs.iter());
-    infer_refs.extend_from_slice(packages);
-    let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive_for_owner_checked(
-        owning_package,
-        source,
-        crate::mangle::USER_PACKAGE,
-        &parsed.ast,
-        &infer_refs,
-        transitive,
-        test_modules,
-    )
-    .map_err(|mut error| {
-        error.diagnostics.splice(0..0, diags.clone());
-        error
-    })?;
-    diags.extend(infer_diags);
-    infer_refs.extend_from_slice(transitive);
-    diags.extend(
-        check_script(&ta, &infer_refs).map_err(|error| error.with_prior_diagnostics(&diags))?,
-    );
-    timings.typecheck = typecheck_start.elapsed();
-
-    Ok((ta, diags, timings))
-}
-
+/// A package module as callers hand it to the engine, before it has a
+/// [`FileId`] in a [`Sources`].
 #[derive(Clone, Debug)]
 pub struct PackageSourceModule<'a> {
     pub path: ModulePath,
     pub source: &'a str,
+}
+
+/// Wall-clock spent in each compile phase, filled in as the pipeline runs. A
+/// phase that never runs (e.g. `codegen` when the front end errors) stays zero.
+/// Surfaced on [`CompiledScript`] for embedders that report compile-time
+/// performance.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PhaseTimings {
+    /// Lexing, parsing and pattern lowering: [`FrontEnd::parse_script`]. Zero
+    /// unless the caller that parsed records it.
+    pub parse: Duration,
+    /// Type inference plus the rule pass: [`ParsedScript::check`].
+    pub typecheck: Duration,
+    pub capture: Duration,
+    pub desugar: Duration,
+    pub codegen: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -260,36 +52,12 @@ pub struct CompiledPackage {
     pub wasm: Vec<u8>,
     pub type_info: crate::TypeInfoTable,
     pub declaration: PackageDeclaration,
-    pub required_capabilities: Vec<DerivedCapability>,
+    pub required_capabilities: Vec<crate::DerivedCapability>,
     pub authority_map: crate::AuthorityMap,
     pub warnings: Vec<Diagnostic>,
     /// The non-entry modules the package's tests may import. `Some` only for
     /// [`PackageSurface::WithTestModules`].
     pub test_surface: Option<PackageTestSurface>,
-}
-
-/// What a compiled package's Wasm exports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PackageSurface {
-    /// The entry module's exports: what programs and other packages link against.
-    Public,
-    /// Also every function, global and class static that a non-entry module
-    /// exports, for the package's own tests under `submilli build test`. Never
-    /// publish such a build: Wasm compiled elsewhere could import an internal
-    /// helper and skip the checks the public functions run. A public build
-    /// still exports every class's constructor and methods, internal classes'
-    /// included, so keep secrets and checks out of internal classes. Internal
-    /// functions escape in this build, so their Wasm signatures can be wider
-    /// than the public build's.
-    WithTestModules,
-}
-
-/// The exports of a package's non-entry modules, by path under `src/`, which
-/// [`compile_package_test_checked`] binds a test's relative imports to. The
-/// declaration, capabilities, docs and authority map never include them.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PackageTestSurface {
-    pub modules: BTreeMap<ModulePath, crate::InternalModuleExports>,
 }
 
 #[derive(Clone, Debug)]
@@ -300,312 +68,132 @@ pub struct CompiledScript {
     pub timings: PhaseTimings,
 }
 
-/// Typecheck only — runs the front-end and stops before codegen. Returns
-/// `Ok(warnings)` when the program is error-free (warnings are non-fatal),
-/// `Err(diagnostics)` if any phase errors. Backs `submilli check`.
-pub fn typecheck_checked(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
-    typecheck_script(source, file).map_err(|error| {
-        error.with_limit_span_cut(|span_file| (span_file == file).then_some(source))
-    })
-}
-
-fn typecheck_script(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
-    let parsed = parse_script(source, file);
-    let stdlib_defs = runtime::stdlib_package_declarations();
-    typecheck_parsed_script(source, &parsed, &stdlib_defs)
-}
-
-/// [`typecheck_checked`] for an already parsed script, against `stdlib_defs`
-/// (see [`Stdlib::package_declarations`](crate::stdlib::Stdlib::package_declarations)).
-pub fn typecheck_parsed_checked(
-    source: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-) -> Result<Vec<Diagnostic>, CompileError> {
-    let file = parsed.file;
-    typecheck_parsed_script(source, parsed, stdlib_defs).map_err(|error| {
-        error.with_limit_span_cut(|span_file| (span_file == file).then_some(source))
-    })
-}
-
-fn typecheck_parsed_script(
-    source: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-) -> Result<Vec<Diagnostic>, CompileError> {
-    let file = parsed.file;
-    let (ta, diags, _timings) = front_end(source, parsed, stdlib_defs, &[])?;
-    if has_errors(&diags) {
-        return Err(diags.into());
-    }
-    // Lowering deepens the typed tree, so check enforces compilation's limit on
-    // the lowered tree too.
-    let with_front_end_diagnostics = |failure| CompileError {
-        diagnostics: diags.clone(),
-        fatal: Some(failure),
-    };
-    let ta = capture(ta).map_err(with_front_end_diagnostics)?;
-    desugar(ta, file).map_err(with_front_end_diagnostics)?;
-    Ok(warnings_only(diags))
-}
-
-/// Typecheck and return the typed AST together with every diagnostic, errors
-/// included. For tools that inspect what the typechecker inferred — the
-/// TypeScript baseline comparison in `crates/conformance` — rather than compile.
-/// The typed AST is only meaningful where the diagnostics are error-free.
-pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diagnostic>) {
-    let parsed = parse_script(source, file);
-    let stdlib_defs = runtime::stdlib_package_declarations();
-    match front_end(source, &parsed, &stdlib_defs, &[]) {
-        Ok((ta, diags, _)) => (ta, diags),
-        Err(error) => (
-            TypedAst::new(),
-            error
-                .with_limit_span_cut(|span_file| (span_file == file).then_some(source))
-                .into_diagnostics(file),
-        ),
-    }
-}
-
-/// [`typecheck_to_typed_ast`] for the modules of one package, which import each
-/// other by relative path. Every module is checked, imported or not, and inference
-/// runs past syntax errors, as for a script. The typed AST holds every module's
-/// declarations; each span carries the [`FileId`] of its module, which is its index
-/// in `modules`.
-pub fn typecheck_package_to_typed_ast(
-    package_name: &str,
-    root_module: ModulePath,
-    modules: &[PackageSourceModule<'_>],
-) -> (TypedAst, Vec<Diagnostic>) {
-    let mut sources = Sources::new();
-    let mut diagnostics = Vec::new();
-    let Some(parsed_modules) = parse_modules_past_errors(&mut sources, modules, &mut diagnostics)
-    else {
-        return (TypedAst::new(), diagnostics);
-    };
-    let module_refs = parsed_modules
-        .iter()
-        .map(|(path, file, ast)| (path.clone(), *file, ast))
-        .collect();
-    let stdlib_defs = runtime::stdlib_package_declarations();
-    match crate::typechecker::infer::infer_package_checked(
-        package_name,
-        root_module,
-        module_refs,
-        &sources,
-        runtime_external_packages(&stdlib_defs),
-        BTreeMap::new(),
-    ) {
-        Ok((ta, _, package_diagnostics)) => {
-            diagnostics.extend(package_diagnostics);
-            (ta, diagnostics)
-        }
-        Err(error) => {
-            let error =
-                error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text));
-            diagnostics.extend(error.into_diagnostics(FileId(0)));
-            (TypedAst::new(), diagnostics)
-        }
-    }
-}
-
-/// Lower a parsed module that has syntax errors: `parse_package_module` leaves
-/// such a module unlowered, but inference past syntax errors assumes lowering.
-fn lower_recovered_module(
-    (ast, diagnostics): (Ast, Vec<Diagnostic>),
-) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
-    if ast.lowered_local_types.is_some() {
-        return Ok((ast, diagnostics));
-    }
-    match lower_patterns(ast) {
-        Ok(ast) => Ok((ast, diagnostics)),
-        Err(fatal) => Err(CompileError {
-            diagnostics,
-            fatal: Some(fatal),
-        }),
-    }
-}
-
-/// Registers, parses and lowers each module, adding its diagnostics, errors
-/// included, to `diagnostics`. `None` when one fails fatally, so nothing can be
-/// checked.
-fn parse_modules_past_errors(
-    sources: &mut Sources,
-    modules: &[PackageSourceModule<'_>],
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Vec<(ModulePath, FileId, Ast)>> {
-    let mut parsed_modules = Vec::with_capacity(modules.len());
-    for module in modules {
-        let file = match sources.add(module.path.clone(), module.source) {
-            Ok(file) => file,
-            Err(error) => {
-                let error = CompileError::from(error.into_compiler_failure(CompilerStage::Parse));
-                diagnostics.extend(error.into_diagnostics(FileId(0)));
-                return None;
+/// Check `parsed` and compile it to Wasm. `filename` is the DWARF
+/// compile-unit name for backtrace source mapping.
+///
+/// Warnings are non-fatal and come back on [`CompiledScript::warnings`]. Any
+/// error is an `Err`.
+pub fn compile_parsed_script(
+    parsed: Box<dyn ParsedScript>,
+    filename: &str,
+    request: &ScriptRequest<'_>,
+) -> Result<CompiledScript, CompileError> {
+    let source = parsed.source().to_owned();
+    let file = parsed.file();
+    crate::compiler_thread::run(|| {
+        let mut timings = PhaseTimings::default();
+        let (ta, warnings) = check_and_lower(parsed, request, &mut timings)?;
+        let codegen_start = Instant::now();
+        let generated = codegen_script(&ta, &source, filename, file, request).map_err(|fatal| {
+            CompileError {
+                diagnostics: warnings.clone(),
+                fatal: Some(fatal),
             }
-        };
-        // A config module has no blocks to lower.
-        let (ast, mut module_diagnostics) = match if module.path.as_str() == "config" {
-            parse_config_module(module.source, file, &BTreeMap::new())
-        } else {
-            parse_package_module(module.source, file).and_then(lower_recovered_module)
-        } {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                diagnostics.extend(error.into_diagnostics(file));
-                return None;
-            }
-        };
-        diagnostics.append(&mut module_diagnostics);
-        parsed_modules.push((module.path.clone(), file, ast));
-    }
-    Some(parsed_modules)
+        })?;
+        timings.codegen = codegen_start.elapsed();
+        Ok(CompiledScript {
+            wasm: generated.wasm,
+            type_info: generated.type_info,
+            warnings,
+            timings,
+        })
+    })
+    .map_err(|error| cut_script_limit_span(error, &source, file))
 }
 
-/// The packages every package may import without declaring them: the stdlib's,
-/// the prelude's and the host's, by name.
-fn runtime_external_packages(
-    stdlib_defs: &[PackageDeclaration],
-) -> BTreeMap<String, PackageDeclaration> {
-    let (prelude_defs, host_defs, _) = prelude::cached_runtime_package_declarations();
-    stdlib_defs
+/// Check `parsed` without generating code: what `submilli check` runs.
+/// Returns its warnings. The lowering passes still run, because they deepen
+/// the tree, so a check enforces compilation's limits.
+pub fn check_parsed_script(
+    parsed: Box<dyn ParsedScript>,
+    request: &ScriptRequest<'_>,
+) -> Result<Vec<Diagnostic>, CompileError> {
+    let source = parsed.source().to_owned();
+    let file = parsed.file();
+    crate::compiler_thread::run(|| {
+        let (_, warnings) = check_and_lower(parsed, request, &mut PhaseTimings::default())?;
+        Ok(warnings)
+    })
+    .map_err(|error| cut_script_limit_span(error, &source, file))
+}
+
+/// Check `parsed`, then capture and desugar the tree, timing each phase.
+/// Returns the lowered tree and the warnings.
+fn check_and_lower(
+    parsed: Box<dyn ParsedScript>,
+    request: &ScriptRequest<'_>,
+    timings: &mut PhaseTimings,
+) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    let file = parsed.file();
+    let typecheck_start = Instant::now();
+    let CheckedScript {
+        typed_ast,
+        warnings,
+    } = parsed.check(request)?;
+    timings.typecheck = typecheck_start.elapsed();
+    let with_warnings = |fatal| CompileError {
+        diagnostics: warnings.clone(),
+        fatal: Some(fatal),
+    };
+
+    let capture_start = Instant::now();
+    let ta = capture(typed_ast).map_err(with_warnings)?;
+    timings.capture = capture_start.elapsed();
+
+    let desugar_start = Instant::now();
+    let ta = desugar(ta, file).map_err(with_warnings)?;
+    timings.desugar = desugar_start.elapsed();
+    Ok((ta, warnings))
+}
+
+/// Generate a script's Wasm. A test file links against the package build
+/// with its internal exports.
+fn codegen_script(
+    ta: &TypedAst,
+    source: &str,
+    filename: &str,
+    file: FileId,
+    request: &ScriptRequest<'_>,
+) -> Result<crate::codegen::GeneratedModule, CompilerFailure> {
+    let codegen_owner = request
+        .owner
+        .test()
+        .map(|test| test_codegen_owner(test.owner, test.surface));
+    let runtime = runtime_declarations();
+    let mut dependencies: Vec<&PackageDeclaration> = request
+        .prelude
         .iter()
-        .chain(prelude_defs)
-        .chain(host_defs)
-        .map(|defs| (defs.package_name.clone(), defs.clone()))
-        .collect()
-}
-
-/// Compile a script module. `filename` is the DWARF compile-unit name for
-/// backtrace source mapping; `file` is this source's [`FileId`] in the caller's
-/// [`Sources`](crate::Sources) registry. `packages` are real package
-/// declarations that emit Wasm imports; `mcps` are declaration-only virtual MCP
-/// packages.
-///
-/// Returns [`CompiledScript`] on success. Warnings are non-fatal and should be
-/// surfaced without aborting; callers that only need Wasm bytes can read
-/// [`CompiledScript::wasm`]. Returns `Err(diagnostics)` if any phase errors.
-pub fn compile_script_checked(
-    source: &str,
-    filename: &str,
-    file: FileId,
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, CompileError> {
-    let parsed = parse_script(source, file);
-    let stdlib_defs = runtime::stdlib_package_declarations();
-    compile_parsed_script_timed_checked(source, filename, &parsed, &stdlib_defs, packages, mcps)
-}
-
-/// Compiles a script whose code belongs to `owning_package` rather than to `main`.
-///
-/// The one caller is a package's test file: it compiles as a script, so its entry point stays
-/// mangled as `main`, but its gated calls must be attributed to the package that ships it.
-pub fn compile_script_owned_by_checked(
-    owning_package: &str,
-    source: &str,
-    filename: &str,
-    file: FileId,
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, CompileError> {
-    let parsed = parse_script(source, file);
-    let stdlib_defs = runtime::stdlib_package_declarations();
-    let declarations = [packages, mcps].concat();
-    compile_parsed_script_owned_by(
-        Some(owning_package),
-        source,
-        filename,
-        &parsed,
-        &stdlib_defs,
-        &declarations,
-        &[],
-        None,
-    )
-}
-
-/// Compiles a test file of `owner`'s package, which runs under `submilli build test`.
-///
-/// It compiles as [`compile_script_owned_by_checked`] does, and may also import
-/// the package's non-entry modules by relative path (`../src/paths`). Those
-/// imports bind to the exports in `surface`, so the test must link against the
-/// [`PackageSurface::WithTestModules`] build that produced it. `importer` is the
-/// test file's path in the package directory without its extension
-/// (`tests/paths.test`).
-pub fn compile_package_test_checked(
-    owner: &PackageDeclaration,
-    surface: &PackageTestSurface,
-    importer: &ModulePath,
-    source: &str,
-    filename: &str,
-    file: FileId,
-    packages: &[&PackageDeclaration],
-) -> Result<CompiledScript, CompileError> {
-    let modules: BTreeMap<ModulePath, TestModule> = surface
-        .modules
-        .iter()
-        .map(|(path, exports)| (path.clone(), test_module(owner, exports)))
+        .chain(request.host)
+        .chain(runtime.internal)
+        .chain(request.stdlib)
+        .copied()
         .collect();
-    crate::typechecker::infer::check_declaration_types(
-        modules.values().map(|module| &module.declaration),
-    )?;
-    let codegen_owner = test_codegen_owner(owner, surface);
-    let mut declarations = packages.to_vec();
-    if !declarations
-        .iter()
-        .any(|declaration| declaration.package_name == owner.package_name)
-    {
-        declarations.push(owner);
+    dependencies.extend(script_declarations(request).into_iter().map(|declaration| {
+        match &codegen_owner {
+            Some(owner) if owner.package_name == declaration.package_name => owner,
+            _ => declaration,
+        }
+    }));
+    dependencies.extend_from_slice(request.transitive);
+    match request.owner.package() {
+        Some(owner) => {
+            crate::codegen::codegen_owned_by(owner, source, filename, file, ta, &dependencies)
+        }
+        None => crate::codegen::codegen_with_type_info(source, filename, file, ta, &dependencies),
     }
-    let parsed = parse_script(source, file);
-    let stdlib_defs = runtime::stdlib_package_declarations();
-    compile_parsed_script_owned_by(
-        Some(&owner.package_name),
-        source,
-        filename,
-        &parsed,
-        &stdlib_defs,
-        &declarations,
-        &[],
-        Some(TestBuild {
-            modules: TestModules {
-                importer,
-                owner: &owner.package_name,
-                modules: &modules,
-            },
-            codegen_owner: &codegen_owner,
-        }),
-    )
 }
 
-/// What a test file compiles against besides its declared packages.
-#[derive(Clone, Copy)]
-struct TestBuild<'a> {
-    modules: TestModules<'a>,
-    /// The owner's declaration with its internal exports added. It replaces the
-    /// owner in codegen only, which must import what the typechecker bound to
-    /// the package's modules; the typechecker keeps the public declaration, so
-    /// `from "<owner>"` still reaches only the entry module.
-    codegen_owner: &'a PackageDeclaration,
-}
-
-/// A module's exports as a declaration named after its package, so a test
-/// binds them as it binds a package's.
-fn test_module(owner: &PackageDeclaration, exports: &crate::InternalModuleExports) -> TestModule {
-    let mut declaration = PackageDeclaration::with_package(owner.package_name.clone());
-    declaration.values = exports.values.clone();
-    declaration.types = exports.types.clone();
-    declaration.refresh_shapes();
-    TestModule {
-        declaration,
-        unexported: exports.unexported.clone(),
-    }
+fn cut_script_limit_span(error: CompileError, source: &str, file: FileId) -> CompileError {
+    error.with_limit_span_cut(|span_file| (span_file == file).then_some(source))
 }
 
 /// `owner` plus the internal values and classes in `surface`, keyed by their
 /// mangled names, which no source identifier can spell. A class joins `types`
 /// so its statics are imported as a public class's are; its layout stays in
-/// `runtime_types`.
+/// `runtime_types`. It replaces the owner in codegen only, which must import
+/// what the typechecker bound to the package's modules; the typechecker keeps
+/// the public declaration, so `from "<owner>"` still reaches only the entry
+/// module.
 fn test_codegen_owner(
     owner: &PackageDeclaration,
     surface: &PackageTestSurface,
@@ -645,250 +233,42 @@ fn test_codegen_owner(
     declaration
 }
 
-pub fn compile_parsed_script_timed_checked(
-    source: &str,
-    filename: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, CompileError> {
-    compile_parsed_script_with_transitive_checked(
-        source,
-        filename,
-        parsed,
-        stdlib_defs,
-        packages,
-        mcps,
-        &[],
-    )
-}
-
-/// Compile with declarations needed to reconstruct imported types without
-/// exposing those transitive packages to source-level imports.
-pub fn compile_parsed_script_with_transitive_checked(
-    source: &str,
-    filename: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-) -> Result<CompiledScript, CompileError> {
-    let declarations = [packages, mcps].concat();
-    compile_parsed_script_owned_by(
-        None,
-        source,
-        filename,
-        parsed,
-        stdlib_defs,
-        &declarations,
-        transitive,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compile_parsed_script_owned_by(
-    owning_package: Option<&str>,
-    source: &str,
-    filename: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    external_declarations: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-    test: Option<TestBuild<'_>>,
-) -> Result<CompiledScript, CompileError> {
-    compile_parsed_script(
-        owning_package,
-        source,
-        filename,
-        parsed,
-        stdlib_defs,
-        external_declarations,
-        transitive,
-        test,
-    )
-    .map_err(|error| error.with_limit_span_cut(|file| (file == parsed.file).then_some(source)))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compile_parsed_script(
-    owning_package: Option<&str>,
-    source: &str,
-    filename: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    external_declarations: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-    test: Option<TestBuild<'_>>,
-) -> Result<CompiledScript, CompileError> {
-    let (mut ta, diags, mut timings) = front_end_with_transitive(
-        owning_package,
-        source,
-        parsed,
-        stdlib_defs,
-        external_declarations,
-        transitive,
-        test.map(|test| test.modules),
-    )?;
-    if has_errors(&diags) {
-        return Err(diags.into());
-    }
-    let capture_start = Instant::now();
-    ta = capture(ta).map_err(|fatal| CompileError {
-        diagnostics: diags.clone(),
-        fatal: Some(fatal),
-    })?;
-    timings.capture = capture_start.elapsed();
-
-    let desugar_start = Instant::now();
-    ta = desugar(ta, parsed.file).map_err(|fatal| CompileError {
-        diagnostics: diags.clone(),
-        fatal: Some(fatal),
-    })?;
-    timings.desugar = desugar_start.elapsed();
-
-    let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
-    let mut dependencies: Vec<&crate::PackageDeclaration> = prelude_defs.iter().collect();
-    for defs in host_defs {
-        dependencies.push(defs);
-    }
-    for defs in internal_defs {
-        dependencies.push(defs);
-    }
-    for defs in stdlib_defs {
-        dependencies.push(defs);
-    }
-    dependencies.extend(external_declarations.iter().map(|declaration| match test {
-        Some(test) if test.codegen_owner.package_name == declaration.package_name => {
-            test.codegen_owner
-        }
-        _ => *declaration,
-    }));
-    dependencies.extend_from_slice(transitive);
-
-    let codegen_start = Instant::now();
-    let generated = match owning_package {
-        Some(pkg) => {
-            crate::codegen::codegen_owned_by(pkg, source, filename, parsed.file, &ta, &dependencies)
-        }
-        None => crate::codegen::codegen_with_type_info(
-            source,
-            filename,
-            parsed.file,
-            &ta,
-            &dependencies,
-        ),
-    }
-    .map_err(|fatal| CompileError {
-        diagnostics: diags.clone(),
-        fatal: Some(fatal),
-    })?;
-    timings.codegen = codegen_start.elapsed();
-
-    Ok(CompiledScript {
-        wasm: generated.wasm,
-        type_info: generated.type_info,
-        warnings: warnings_only(diags),
-        timings,
-    })
-}
-
-pub fn compile_package_checked(
-    package_name: &str,
-    root_module: ModulePath,
-    modules: &[PackageSourceModule<'_>],
-    dependencies: &[&PackageDeclaration],
-) -> Result<CompiledPackage, CompileError> {
-    compile_package_with_transitive_checked(package_name, root_module, modules, dependencies, &[])
-}
-
-/// [`compile_package`] with the rest of the dependency closure supplied
-/// separately.
-///
-/// `dependencies` is what the package declares, and only those are importable.
-/// `transitive` is everything they in turn depend on: a direct dependency's
-/// public surface can name a class from one of them — as a parent, a return
-/// type, a static's type — and resolving that needs the declaration even though
-/// this package must not `import` from it. Without it the ancestor walk
-/// truncates silently and codegen reconstructs a layout that doesn't
-/// canonicalize against the producer's, which surfaces at link time as
-/// `imported global type mismatch`.
-pub fn compile_package_with_transitive_checked(
-    package_name: &str,
-    root_module: ModulePath,
-    modules: &[PackageSourceModule<'_>],
-    dependencies: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-) -> Result<CompiledPackage, CompileError> {
-    compile_package_with_transitive_checked_for(
-        Stdlib::core(),
-        package_name,
-        root_module,
-        modules,
-        dependencies,
-        transitive,
-    )
-}
-
-/// [`compile_package_with_transitive_checked`] for an embedder that offers
-/// `stdlib`, so the package may import its optional packages.
-pub fn compile_package_with_transitive_checked_for(
-    stdlib: Stdlib,
-    package_name: &str,
-    root_module: ModulePath,
-    modules: &[PackageSourceModule<'_>],
-    dependencies: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-) -> Result<CompiledPackage, CompileError> {
-    compile_package_configured(
-        stdlib,
-        package_name,
-        root_module,
-        modules,
-        dependencies,
-        transitive,
-        &BTreeMap::new(),
-        PackageSurface::Public,
-    )
-}
-
-/// Compile a package with immutable overrides for its root config module.
-#[allow(clippy::too_many_arguments)]
-pub fn compile_package_configured(
-    stdlib: Stdlib,
-    package_name: &str,
-    root_module: ModulePath,
-    modules: &[PackageSourceModule<'_>],
-    dependencies: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-    config: &BTreeMap<String, String>,
-    surface: PackageSurface,
-) -> Result<CompiledPackage, CompileError> {
-    if !modules
-        .iter()
-        .any(|module| module.path.as_str() == "config")
-    {
-        crate::package_config::resolve(&[], config, FileId(0))?;
-    }
+/// Register `modules` in a new [`Sources`], in order, for a [`PackageRequest`].
+pub fn package_sources(modules: &[PackageSourceModule<'_>]) -> Result<Sources, CompileError> {
     let mut sources = Sources::new();
-    let stdlib_defs = stdlib.package_declarations();
-    compile_package_sources(
-        &mut sources,
-        &stdlib_defs,
-        package_name,
-        root_module,
-        modules,
-        dependencies,
-        transitive,
-        Some(config),
-        surface,
-    )
-    .map(|(compiled, _)| compiled)
-    .map_err(|error| {
-        error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
-    })
+    for module in modules {
+        sources
+            .add(module.path.clone(), module.source)
+            .map_err(|error| {
+                CompileError::from(error.into_compiler_failure(CompilerStage::Parse))
+            })?;
+    }
+    Ok(sources)
+}
+
+/// Every file of `sources` as a package module, in order.
+pub fn package_modules(sources: &Sources) -> Vec<PackageModule<'_>> {
+    sources
+        .iter()
+        .map(|(file, source)| PackageModule {
+            path: &source.path,
+            file,
+        })
+        .collect()
+}
+
+/// Check and compile the package `request` describes with `front_end`.
+pub fn compile_package_request(
+    front_end: &dyn FrontEnd,
+    request: &PackageRequest<'_>,
+) -> Result<CompiledPackage, CompileError> {
+    crate::compiler_thread::run(|| compile_checked_package(front_end, request))
+        .map(|(compiled, _)| compiled)
+        .map_err(|error| cut_package_limit_span(error, request.sources))
+}
+
+fn cut_package_limit_span(error: CompileError, sources: &Sources) -> CompileError {
+    error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
 }
 
 /// Compile a single-module `@functions/<name>` source with `submilli:functions`
@@ -902,106 +282,44 @@ pub(crate) fn compile_function_module(
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<(CompiledPackage, Option<crate::FunctionInvokePlan>), CompileError> {
-    let mut sources = Sources::new();
     let mut stdlib_defs = stdlib.package_declarations();
     stdlib_defs.push(crate::stdlib::functions::package_declaration());
     stdlib_defs.sort_by(|a, b| a.package_name.cmp(&b.package_name));
-    let modules = [PackageSourceModule {
+    let stdlib_refs: Vec<&PackageDeclaration> = stdlib_defs.iter().collect();
+    let sources = package_sources(&[PackageSourceModule {
         path: root_module.clone(),
         source,
-    }];
-    compile_package_sources(
-        &mut sources,
-        &stdlib_defs,
-        package_name,
-        root_module,
-        &modules,
+    }])?;
+    let modules = package_modules(&sources);
+    let runtime = runtime_declarations();
+    let request = PackageRequest {
+        name: package_name,
+        root_module: &root_module,
+        modules: &modules,
+        sources: &sources,
+        prelude: runtime.prelude,
+        host: runtime.host,
+        stdlib: &stdlib_refs,
         dependencies,
         transitive,
-        None,
-        PackageSurface::Public,
-    )
-    .map_err(|error| {
-        error.with_limit_span_cut(|file| sources.get(file).map(crate::SourceFile::text))
-    })
+        config: None,
+        surface: PackageSurface::Public,
+    };
+    crate::compiler_thread::run(|| compile_checked_package(&EngineFrontEnd, &request))
+        .map_err(|error| cut_package_limit_span(error, &sources))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn compile_package_sources(
-    sources: &mut Sources,
-    stdlib_defs: &[PackageDeclaration],
-    package_name: &str,
-    root_module: ModulePath,
-    modules: &[PackageSourceModule<'_>],
-    dependencies: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-    config: Option<&BTreeMap<String, String>>,
-    surface: PackageSurface,
+fn compile_checked_package(
+    front_end: &dyn FrontEnd,
+    request: &PackageRequest<'_>,
 ) -> Result<(CompiledPackage, Option<crate::FunctionInvokePlan>), CompileError> {
-    // Public declarations may be constructed directly. Validate recursive
-    // metadata before cloning them into the inference registries.
-    crate::typechecker::infer::check_declaration_types(
-        dependencies.iter().chain(transitive).copied(),
-    )?;
-    let mut parsed_modules = Vec::with_capacity(modules.len());
-    let mut diagnostics = Vec::new();
-    for module in modules {
-        let file = sources
-            .add(module.path.clone(), module.source)
-            .map_err(|error| {
-                CompileError::from(error.into_compiler_failure(CompilerStage::Parse))
-                    .with_prior_diagnostics(&diagnostics)
-            })?;
-        let (ast, mut module_diags) = if let Some(config) = config
-            && module.path.as_str() == "config"
-        {
-            parse_config_module(module.source, file, config)
-        } else {
-            parse_package_module(module.source, file)
-        }
-        .map_err(|mut error| {
-            error.diagnostics.splice(0..0, diagnostics.clone());
-            error
-        })?;
-        diagnostics.append(&mut module_diags);
-        parsed_modules.push((module.path.clone(), file, ast));
-    }
-    if has_errors(&diagnostics) {
-        return Err(diagnostics.into());
-    }
-
-    let module_refs: Vec<_> = parsed_modules
-        .iter()
-        .map(|(path, file, ast)| (path.clone(), *file, ast))
-        .collect();
-    let mut external_packages = runtime_external_packages(stdlib_defs);
-    for defs in dependencies {
-        external_packages.insert(defs.package_name.clone(), (*defs).clone());
-    }
-    let transitive_packages: BTreeMap<String, PackageDeclaration> = transitive
-        .iter()
-        .filter(|defs| !external_packages.contains_key(&defs.package_name))
-        .map(|defs| (defs.package_name.clone(), (*defs).clone()))
-        .collect();
-    let (mut ta, mut declaration, mut package_diags) =
-        crate::typechecker::infer::infer_package_checked(
-            package_name,
-            root_module.clone(),
-            module_refs,
-            sources,
-            external_packages,
-            transitive_packages,
-        )
-        .map_err(|mut error| {
-            error.diagnostics.splice(0..0, diagnostics.clone());
-            error
-        })?;
-    diagnostics.append(&mut package_diags);
-    if has_errors(&diagnostics) {
-        return Err(diagnostics.into());
-    }
+    let CheckedPackage {
+        typed_ast: mut ta,
+        mut declaration,
+        warnings: mut diagnostics,
+    } = front_end.check_package(request)?;
     let internal_modules = std::mem::take(&mut ta.internal_modules);
-    let test_surface = match surface {
+    let test_surface = match request.surface {
         PackageSurface::Public => None,
         PackageSurface::WithTestModules => Some(own_test_surface(&ta, internal_modules)),
     };
@@ -1009,61 +327,64 @@ fn compile_package_sources(
         compile_capabilities::derive_package_requirements(
             &declaration,
             &ta,
-            stdlib_defs,
-            dependencies,
-            transitive,
+            request.stdlib,
+            request.dependencies,
+            request.transitive,
         )
         .map_err(|error| error.with_prior_diagnostics(&diagnostics))?;
     diagnostics.extend(capability_warnings);
-    let (prelude_defs, host_defs, internal_defs) = prelude::cached_runtime_package_declarations();
+    let with_diagnostics = |fatal| CompileError {
+        diagnostics: diagnostics.clone(),
+        fatal: Some(fatal),
+    };
     let authority_map = crate::authority::analyse(
         &declaration,
         &ta,
-        sources,
-        stdlib_defs
+        request.sources,
+        request
+            .stdlib
             .iter()
-            .chain(prelude_defs)
-            .chain(host_defs)
-            .chain(dependencies.iter().copied())
-            .chain(transitive.iter().copied()),
+            .chain(request.prelude)
+            .chain(request.host)
+            .chain(request.dependencies)
+            .chain(request.transitive)
+            .copied(),
     )
-    .map_err(|fatal| CompileError {
-        diagnostics: diagnostics.clone(),
-        fatal: Some(fatal),
-    })?;
-    ta = capture(ta).map_err(|fatal| CompileError {
-        diagnostics: diagnostics.clone(),
-        fatal: Some(fatal),
-    })?;
-    let root_file = parsed_modules
+    .map_err(with_diagnostics)?;
+    ta = capture(ta).map_err(with_diagnostics)?;
+    let root_file = request
+        .modules
         .iter()
-        .find(|(path, _, _)| *path == root_module)
-        .map(|(_, file, _)| *file)
+        .find(|module| module.path == request.root_module)
+        .map(|module| module.file)
         .ok_or_else(|| CompilerFailure::Internal {
             stage: CompilerStage::Infer,
             span: None,
             message: "compiled package root module is missing".into(),
         })?;
-    ta = desugar(ta, root_file).map_err(|fatal| CompileError {
-        diagnostics: diagnostics.clone(),
-        fatal: Some(fatal),
-    })?;
+    ta = desugar(ta, root_file).map_err(with_diagnostics)?;
     if let Some(surface) = &test_surface {
         ta.test_exports = test_exports(surface, &ta.exports);
     }
 
-    let mut codegen_deps: Vec<&PackageDeclaration> = prelude_defs.iter().collect();
-    codegen_deps.extend(host_defs.iter());
-    codegen_deps.extend(internal_defs.iter());
-    codegen_deps.extend(stdlib_defs.iter());
-    codegen_deps.extend_from_slice(dependencies);
-    codegen_deps.extend_from_slice(transitive);
-    let generated =
-        crate::codegen::codegen_package_with_type_info(sources, root_file, &ta, &codegen_deps)
-            .map_err(|fatal| CompileError {
-                diagnostics: diagnostics.clone(),
-                fatal: Some(fatal),
-            })?;
+    let runtime = runtime_declarations();
+    let codegen_deps: Vec<&PackageDeclaration> = request
+        .prelude
+        .iter()
+        .chain(request.host)
+        .chain(runtime.internal)
+        .chain(request.stdlib)
+        .chain(request.dependencies)
+        .chain(request.transitive)
+        .copied()
+        .collect();
+    let generated = crate::codegen::codegen_package_with_type_info(
+        request.sources,
+        root_file,
+        &ta,
+        &codegen_deps,
+    )
+    .map_err(with_diagnostics)?;
     declaration.runtime_functions = generated.runtime_functions;
     declaration.runtime_globals = generated.runtime_globals;
     declaration.closure_caches = generated.closure_caches;
@@ -1156,55 +477,249 @@ fn test_exports(
     exports
 }
 
-fn parse_config_module(
-    source: &str,
-    file: FileId,
-    config: &BTreeMap<String, String>,
-) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
-    let tokens = crate::package_config::resolved_tokens(source, file, config)?;
-    let (ast, diagnostics) = crate::parser::parse_checked(source, tokens, file)?;
-    Ok((ast, diagnostics))
+// ---------------------------------------------------------------------------
+// Conveniences: the engine front end with the core stdlib and the runtime's
+// declarations. They back tests and examples; embedders build a request.
+
+/// Check a script with the core stdlib and nothing to import. Returns its
+/// warnings.
+pub fn typecheck_checked(source: &str, file: FileId) -> Result<Vec<Diagnostic>, CompileError> {
+    let stdlib = crate::runtime::stdlib_package_declarations();
+    let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let parsed = EngineFrontEnd.parse_script(source.to_owned(), file);
+    check_parsed_script(parsed, &script_request(&stdlib_refs))
 }
 
-fn parse_package_module(
-    source: &str,
-    file: FileId,
-) -> Result<(crate::Ast, Vec<Diagnostic>), CompileError> {
-    let mut asi = Asi::new(source, file);
-    let mut tokens: Vec<Token> = Vec::new();
-    loop {
-        let tok = asi.next_token();
-        let is_eof = matches!(tok.kind, TokenKind::Eof);
-        tokens.push(tok);
-        if is_eof {
-            break;
-        }
-    }
-    let mut diagnostics = asi.finish()?;
-    let (mut ast, parse_diags) =
-        crate::parser::parse_checked(source, tokens, file).map_err(|mut error| {
-            error.diagnostics.splice(0..0, diagnostics.clone());
+/// Typecheck and return the typed AST together with every diagnostic, errors
+/// included. For tools that inspect what the typechecker inferred — the
+/// TypeScript baseline comparison in `crates/conformance` — rather than compile.
+/// The typed AST is only meaningful where the diagnostics are error-free.
+pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diagnostic>) {
+    let stdlib = crate::runtime::stdlib_package_declarations();
+    let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let request = script_request(&stdlib_refs);
+    let result = crate::compiler_thread::run(|| {
+        crate::front_end::parse(source.to_owned(), file).infer(&request)
+    });
+    match result {
+        Ok(result) => result,
+        Err(error) => (
+            TypedAst::new(),
             error
-        })?;
-    diagnostics.extend(parse_diags);
-    if !has_errors(&diagnostics) {
-        ast = lower_patterns(ast).map_err(|fatal| CompileError {
-            diagnostics: diagnostics.clone(),
-            fatal: Some(fatal),
-        })?;
+                .with_limit_span_cut(|span_file| (span_file == file).then_some(source))
+                .into_diagnostics(file),
+        ),
     }
-    Ok((ast, diagnostics))
 }
 
-fn has_errors(diags: &[Diagnostic]) -> bool {
-    diags.iter().any(|d| d.severity == Severity::Error)
+/// [`typecheck_to_typed_ast`] for the modules of one package, which import each
+/// other by relative path. Every module is checked, imported or not, and inference
+/// runs past syntax errors, as for a script. The typed AST holds every module's
+/// declarations; each span carries the [`FileId`] of its module, which is its index
+/// in `modules`.
+pub fn typecheck_package_to_typed_ast(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+) -> (TypedAst, Vec<Diagnostic>) {
+    let mut sources = Sources::new();
+    let result = crate::compiler_thread::run(|| {
+        let mut diagnostics = Vec::new();
+        let Some(parsed_modules) =
+            parse_modules_past_errors(&mut sources, modules, &mut diagnostics)
+        else {
+            return Ok((TypedAst::new(), diagnostics));
+        };
+        let module_refs = parsed_modules
+            .iter()
+            .map(|(path, file, ast)| (path.clone(), *file, ast))
+            .collect();
+        let stdlib = crate::runtime::stdlib_package_declarations();
+        let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
+        let runtime = runtime_declarations();
+        match crate::typechecker::infer::infer_package_checked(
+            package_name,
+            root_module,
+            module_refs,
+            &sources,
+            crate::front_end::external_packages(runtime.prelude, runtime.host, &stdlib_refs),
+            BTreeMap::new(),
+        ) {
+            Ok((ta, _, package_diagnostics)) => {
+                diagnostics.extend(package_diagnostics);
+                Ok((ta, diagnostics))
+            }
+            Err(error) => {
+                let error = cut_package_limit_span(error, &sources);
+                diagnostics.extend(error.into_diagnostics(FileId(0)));
+                Ok((TypedAst::new(), diagnostics))
+            }
+        }
+    });
+    result.unwrap_or_else(|error| (TypedAst::new(), error.into_diagnostics(FileId(0))))
 }
 
-fn warnings_only(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
-    diags
-        .into_iter()
-        .filter(|d| d.severity == Severity::Warning)
-        .collect()
+/// Lower a parsed module that has syntax errors: `parse_package_module` leaves
+/// such a module unlowered, but inference past syntax errors assumes lowering.
+fn lower_recovered_module(
+    (ast, diagnostics): (Ast, Vec<Diagnostic>),
+) -> Result<(Ast, Vec<Diagnostic>), CompileError> {
+    if ast.lowered_local_types.is_some() {
+        return Ok((ast, diagnostics));
+    }
+    match lower_patterns(ast) {
+        Ok(ast) => Ok((ast, diagnostics)),
+        Err(fatal) => Err(CompileError {
+            diagnostics,
+            fatal: Some(fatal),
+        }),
+    }
+}
+
+/// Registers, parses and lowers each module, adding its diagnostics, errors
+/// included, to `diagnostics`. `None` when one fails fatally, so nothing can be
+/// checked.
+fn parse_modules_past_errors(
+    sources: &mut Sources,
+    modules: &[PackageSourceModule<'_>],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Vec<(ModulePath, FileId, Ast)>> {
+    let mut parsed_modules = Vec::with_capacity(modules.len());
+    for module in modules {
+        let file = match sources.add(module.path.clone(), module.source) {
+            Ok(file) => file,
+            Err(error) => {
+                let error = CompileError::from(error.into_compiler_failure(CompilerStage::Parse));
+                diagnostics.extend(error.into_diagnostics(FileId(0)));
+                return None;
+            }
+        };
+        // A config module has no blocks to lower.
+        let (ast, mut module_diagnostics) = match if module.path.as_str() == "config" {
+            crate::front_end::parse_config_module(module.source, file, &BTreeMap::new())
+        } else {
+            crate::front_end::parse_package_module(module.source, file)
+                .and_then(lower_recovered_module)
+        } {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                diagnostics.extend(error.into_diagnostics(file));
+                return None;
+            }
+        };
+        diagnostics.append(&mut module_diagnostics);
+        parsed_modules.push((module.path.clone(), file, ast));
+    }
+    Some(parsed_modules)
+}
+
+/// Compile a script module with the core stdlib. `filename` is the DWARF
+/// compile-unit name for backtrace source mapping; `file` is this source's
+/// [`FileId`] in the caller's [`Sources`](crate::Sources) registry. `packages`
+/// are real package declarations that emit Wasm imports; `mcps` are
+/// declaration-only virtual MCP packages.
+pub fn compile_script_checked(
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+) -> Result<CompiledScript, CompileError> {
+    compile_script_for(ScriptOwner::Main, source, filename, file, packages, mcps)
+}
+
+/// Compiles a script whose code belongs to `owning_package` rather than to `main`.
+pub fn compile_script_owned_by_checked(
+    owning_package: &str,
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+) -> Result<CompiledScript, CompileError> {
+    compile_script_for(
+        ScriptOwner::Package(owning_package),
+        source,
+        filename,
+        file,
+        packages,
+        mcps,
+    )
+}
+
+fn compile_script_for(
+    owner: ScriptOwner<'_>,
+    source: &str,
+    filename: &str,
+    file: FileId,
+    packages: &[&PackageDeclaration],
+    mcps: &[&PackageDeclaration],
+) -> Result<CompiledScript, CompileError> {
+    let stdlib = crate::runtime::stdlib_package_declarations();
+    let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let parse_start = Instant::now();
+    let parsed = EngineFrontEnd.parse_script(source.to_owned(), file);
+    let parse = parse_start.elapsed();
+    let request = ScriptRequest {
+        owner,
+        dependencies: packages,
+        mcp: mcps,
+        ..script_request(&stdlib_refs)
+    };
+    let mut compiled = compile_parsed_script(parsed, filename, &request)?;
+    compiled.timings.parse = parse;
+    Ok(compiled)
+}
+
+pub fn compile_package_checked(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+) -> Result<CompiledPackage, CompileError> {
+    compile_package_with_transitive_checked(package_name, root_module, modules, dependencies, &[])
+}
+
+/// [`compile_package`] with the rest of the dependency closure supplied
+/// separately.
+///
+/// `dependencies` is what the package declares, and only those are importable.
+/// `transitive` is everything they in turn depend on: a direct dependency's
+/// public surface can name a class from one of them — as a parent, a return
+/// type, a static's type — and resolving that needs the declaration even though
+/// this package must not `import` from it. Without it the ancestor walk
+/// truncates silently and codegen reconstructs a layout that doesn't
+/// canonicalize against the producer's, which surfaces at link time as
+/// `imported global type mismatch`.
+pub fn compile_package_with_transitive_checked(
+    package_name: &str,
+    root_module: ModulePath,
+    modules: &[PackageSourceModule<'_>],
+    dependencies: &[&PackageDeclaration],
+    transitive: &[&PackageDeclaration],
+) -> Result<CompiledPackage, CompileError> {
+    let stdlib = Stdlib::core().package_declarations();
+    let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let sources = package_sources(modules)?;
+    let package_modules = package_modules(&sources);
+    let runtime = runtime_declarations();
+    let no_config = BTreeMap::new();
+    compile_package_request(
+        &EngineFrontEnd,
+        &PackageRequest {
+            name: package_name,
+            root_module: &root_module,
+            modules: &package_modules,
+            sources: &sources,
+            prelude: runtime.prelude,
+            host: runtime.host,
+            stdlib: &stdlib_refs,
+            dependencies,
+            transitive,
+            config: Some(&no_config),
+            surface: PackageSurface::Public,
+        },
+    )
 }
 
 /// Compatibility adapter returning source and fatal failures as diagnostics.
@@ -1238,55 +753,6 @@ pub fn compile_script_owned_by(
 }
 
 /// Compatibility adapter returning source and fatal failures as diagnostics.
-pub fn compile_package_test(
-    owner: &PackageDeclaration,
-    surface: &PackageTestSurface,
-    importer: &ModulePath,
-    source: &str,
-    filename: &str,
-    file: FileId,
-    packages: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
-    compile_package_test_checked(owner, surface, importer, source, filename, file, packages)
-        .map_err(|error| error.into_diagnostics(file))
-}
-
-/// Compatibility adapter returning source and fatal failures as diagnostics.
-pub fn compile_parsed_script_timed(
-    source: &str,
-    filename: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
-    compile_parsed_script_timed_checked(source, filename, parsed, stdlib_defs, packages, mcps)
-        .map_err(|error| error.into_diagnostics(parsed.file))
-}
-
-/// Compatibility adapter returning source and fatal failures as diagnostics.
-pub fn compile_parsed_script_with_transitive(
-    source: &str,
-    filename: &str,
-    parsed: &ParsedScript,
-    stdlib_defs: &[PackageDeclaration],
-    packages: &[&PackageDeclaration],
-    mcps: &[&PackageDeclaration],
-    transitive: &[&PackageDeclaration],
-) -> Result<CompiledScript, Vec<Diagnostic>> {
-    compile_parsed_script_with_transitive_checked(
-        source,
-        filename,
-        parsed,
-        stdlib_defs,
-        packages,
-        mcps,
-        transitive,
-    )
-    .map_err(|error| error.into_diagnostics(parsed.file))
-}
-
-/// Compatibility adapter returning source and fatal failures as diagnostics.
 pub fn compile_package(
     package_name: &str,
     root_module: ModulePath,
@@ -1315,13 +781,35 @@ pub fn compile_package_with_transitive(
     .map_err(|error| error.into_diagnostics(FileId(0)))
 }
 
+/// The engine's parse of `source`, for tests that look inside it.
+#[cfg(test)]
+pub(crate) fn parse_script(source: &str, file: FileId) -> crate::front_end::EngineParsedScript {
+    crate::front_end::parse(source.to_owned(), file)
+}
+
+/// Infer and check `parsed` against the runtime, `stdlib_defs` and
+/// `packages`, keeping every diagnostic, errors included.
+#[cfg(test)]
+fn front_end(
+    parsed: &crate::front_end::EngineParsedScript,
+    stdlib_defs: &[PackageDeclaration],
+    packages: &[&PackageDeclaration],
+) -> Result<(TypedAst, Vec<Diagnostic>), CompileError> {
+    let stdlib_refs: Vec<&PackageDeclaration> = stdlib_defs.iter().collect();
+    let request = ScriptRequest {
+        dependencies: packages,
+        ..script_request(&stdlib_refs)
+    };
+    parsed.infer(&request)
+}
+
 #[cfg(test)]
 mod parsed_script_tests {
     use super::*;
 
     #[test]
     fn a_package_build_reports_every_module_syntax_error() {
-        crate::type_size::tests::on_compiler_stack(|| {
+        submilli_front_end::test_support::on_compiler_stack(|| {
             // A module with syntax errors isn't lowered for a build: a recovered
             // parse can leave nodes lowering would trip on, and the build
             // stops before inference anyway.
@@ -1347,7 +835,7 @@ mod parsed_script_tests {
 
     #[test]
     fn package_inference_past_syntax_errors_sees_lowered_modules() {
-        crate::type_size::tests::on_compiler_stack(|| {
+        submilli_front_end::test_support::on_compiler_stack(|| {
             // Inference runs past `lib`'s syntax error, so `lib` is lowered
             // anyway: its local interface is lifted and its destructured
             // parameter lowered, and the other module's type error is still
@@ -1421,24 +909,6 @@ mod parsed_script_tests {
                 .count(),
             1
         );
-
-        let parsed = parse_script("function main(): number { return 42; }", FileId(0));
-        let internal = compile_parsed_script_timed_checked(
-            "different source",
-            "test.ts",
-            &parsed,
-            &[],
-            &[],
-            &[],
-        )
-        .expect_err("source metadata mismatch");
-        assert!(matches!(
-            internal.fatal,
-            Some(CompilerFailure::Internal {
-                stage: CompilerStage::Infer,
-                ..
-            })
-        ));
     }
 
     #[test]
@@ -1670,8 +1140,7 @@ mod importless_library_tests {
     fn errors(source: &str, packages: &[&PackageDeclaration]) -> Vec<String> {
         let parsed = super::parse_script(source, crate::FileId(0));
         let stdlib_defs = crate::runtime::stdlib_package_declarations();
-        let (_ta, diags, _timings) =
-            super::front_end(source, &parsed, &stdlib_defs, packages).expect("front end");
+        let (_ta, diags) = super::front_end(&parsed, &stdlib_defs, packages).expect("front end");
         diags
             .into_iter()
             .filter(|d| d.severity == crate::Severity::Error)
@@ -1840,6 +1309,13 @@ mod untyped_arena_failures {
 
     #[test]
     fn parser_arena_limit_is_fatal_and_keeps_prior_diagnostics() {
+        // The node limit is this thread's, so the compiler must run on it.
+        submilli_front_end::test_support::on_compiler_stack(
+            parser_arena_limit_is_fatal_and_keeps_prior_diagnostics_inner,
+        );
+    }
+
+    fn parser_arena_limit_is_fatal_and_keeps_prior_diagnostics_inner() {
         let source = "let = 0; function main(): number { return 1; }";
         for arena in [ArenaKind::Expressions, ArenaKind::Statements] {
             let error = with_node_limit(arena, 0, || {
@@ -1875,6 +1351,13 @@ mod untyped_arena_failures {
 
     #[test]
     fn lowering_arena_limit_stops_script_before_inference() {
+        // The node limit is this thread's, so the compiler must run on it.
+        submilli_front_end::test_support::on_compiler_stack(
+            lowering_arena_limit_stops_script_before_inference_inner,
+        );
+    }
+
+    fn lowering_arena_limit_stops_script_before_inference_inner() {
         let source = "function main(): number { const [x] = [1]; return x; }";
         let mut lexer = crate::Asi::new(source, FileId(0));
         let mut tokens = Vec::new();
@@ -1914,6 +1397,13 @@ mod untyped_arena_failures {
 
     #[test]
     fn package_arena_limit_returns_no_artifact() {
+        // The node limit is this thread's, so the compiler must run on it.
+        submilli_front_end::test_support::on_compiler_stack(
+            package_arena_limit_returns_no_artifact_inner,
+        );
+    }
+
+    fn package_arena_limit_returns_no_artifact_inner() {
         let modules = [PackageSourceModule {
             path: ModulePath::from("lib"),
             source: "export function value(): number { return 1; }",
@@ -1958,6 +1448,13 @@ mod typed_arena_failures {
 
     #[test]
     fn typed_allocation_failure_stops_script_and_package_compilation() {
+        // The node limit is this thread's, so the compiler must run on it.
+        submilli_front_end::test_support::on_compiler_stack(
+            typed_allocation_failure_stops_script_and_package_compilation_inner,
+        );
+    }
+
+    fn typed_allocation_failure_stops_script_and_package_compilation_inner() {
         let source = "function main(): number { return 1; }";
         let modules = [PackageSourceModule {
             path: ModulePath::from("lib"),
@@ -1993,6 +1490,13 @@ mod typed_arena_failures {
 
     #[test]
     fn typed_allocation_failure_keeps_prior_inference_diagnostics() {
+        // The node limit is this thread's, so the compiler must run on it.
+        submilli_front_end::test_support::on_compiler_stack(
+            typed_allocation_failure_keeps_prior_inference_diagnostics_inner,
+        );
+    }
+
+    fn typed_allocation_failure_keeps_prior_inference_diagnostics_inner() {
         let source = "function main(): number { let value: number = \"wrong\"; return 2; }";
         let (ast, diagnostics) = typecheck_to_typed_ast(source, FileId(0));
         assert!(!diagnostics.is_empty());
@@ -2015,7 +1519,8 @@ mod typed_arena_failures {
         let (ast, diagnostics) = typecheck_to_typed_ast(source, FileId(0));
         assert!(diagnostics.is_empty());
         let ast = desugar(capture(ast).unwrap(), FileId(0)).unwrap();
-        let (prelude, host, internal) = prelude::cached_runtime_package_declarations();
+        let (prelude, host, internal) =
+            crate::runtime::prelude::cached_runtime_package_declarations();
         let dependencies: Vec<_> = prelude.iter().chain(host).chain(internal).collect();
         let failure = with_node_limit(
             ArenaKind::TypedExpressions,
@@ -2234,8 +1739,8 @@ mod alias_reference_value_tests {
         for statements in USES {
             let source = source(statements);
             let parsed = super::parse_script(&source, crate::FileId(0));
-            let (mut ta, diagnostics, _) =
-                super::front_end(&source, &parsed, &stdlib_defs, &[&kit]).expect("front end");
+            let (mut ta, diagnostics) =
+                super::front_end(&parsed, &stdlib_defs, &[&kit]).expect("front end");
             assert!(
                 !super::has_errors(&diagnostics),
                 "{statements}: {diagnostics:?}"
@@ -2250,11 +1755,11 @@ mod alias_reference_value_tests {
                     expr.ty = reference(alias);
                 }
             }
-            let ta = super::desugar(super::capture(ta).unwrap(), parsed.file).unwrap();
+            let ta = super::desugar(super::capture(ta).unwrap(), crate::FileId(0)).unwrap();
             let loaded = crate::codegen::codegen_with_type_info(
                 &source,
                 "main.ts",
-                parsed.file,
+                crate::FileId(0),
                 &ta,
                 &dependencies,
             )

@@ -42,7 +42,7 @@ struct CapabilityLookup<'a> {
 pub fn derive_package_requirements(
     package: &PackageDeclaration,
     ta: &TypedAst,
-    stdlib_defs: &[PackageDeclaration],
+    stdlib_defs: &[&PackageDeclaration],
     dependencies: &[&PackageDeclaration],
     transitive: &[&PackageDeclaration],
 ) -> Result<(Vec<DerivedCapability>, Vec<Diagnostic>), crate::compiler_error::CompileError> {
@@ -50,7 +50,9 @@ pub fn derive_package_requirements(
         package,
         stdlib_defs
             .iter()
-            .chain(dependencies.iter().chain(transitive).copied()),
+            .chain(dependencies)
+            .chain(transitive)
+            .copied(),
     );
     let mut required = Vec::new();
     let mut warnings = Vec::new();

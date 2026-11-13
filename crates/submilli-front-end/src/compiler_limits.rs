@@ -1,10 +1,10 @@
 //! Compiler limits, and the native stack embedders provide for compilation.
 
-/// Native stack a thread needs to run a [`crate::compile`] entry point or a
-/// public phase API on any program within the structural limits below and in
-/// [`crate::tree_height`], including types at [`MAX_TYPE_DEPTH`]. The
-/// interpreter creates no threads: embedders run compilation on a thread of at
-/// least this size. Only touched pages are committed. The deepest programs at
+/// Native stack a thread needs to compile any program within the structural
+/// limits below and the engine's tree-height limits, including types at
+/// [`MAX_TYPE_DEPTH`]. Compilation runs on a thread of this size
+/// ([`crate::compiler_thread::run`]), so callers don't size stacks; the
+/// engine's public phase APIs still need one. Only touched pages are committed. The deepest programs at
 /// the limits measured about 63 MiB in unoptimized builds and 2 MiB in
 /// optimized ones; each size keeps at least twice that.
 pub const COMPILER_STACK_BYTES: usize = if cfg!(debug_assertions) {

@@ -134,8 +134,17 @@ fn checked_source_registration_keeps_text_and_file_identity_together() {
 fn checked_source_inference_rejects_corrupt_type_metadata_before_resolution() {
     let source = "function main(x: number): number { return x; }";
     for corrupt in 0..3 {
-        let parsed = submilli_engine::parse_script(source, FileId(0));
-        assert!(!parsed.has_errors());
+        let parsed = submilli_engine::FrontEnd::parse_script(
+            &submilli_engine::EngineFrontEnd,
+            source.to_owned(),
+            FileId(0),
+        );
+        assert!(
+            !parsed
+                .diagnostics()
+                .iter()
+                .any(|d| d.severity == submilli_engine::Severity::Error)
+        );
         // Parse separately because ParsedScript intentionally encapsulates its AST.
         let mut lexer = submilli_engine::Asi::new(source, FileId(0));
         let mut tokens = Vec::new();
@@ -251,8 +260,19 @@ fn checked_source_multiline_unicode_docs_keep_original_positions() {
         panic!("literal");
     };
     assert_eq!(span.text(source, file).unwrap(), "\"é😀é😀é😀\"");
-    let parsed = submilli_engine::parse_script(source, file);
-    assert!(!parsed.has_errors(), "{parsed:?}");
+    let parsed = submilli_engine::FrontEnd::parse_script(
+        &submilli_engine::EngineFrontEnd,
+        source.to_owned(),
+        file,
+    );
+    assert!(
+        !parsed
+            .diagnostics()
+            .iter()
+            .any(|d| d.severity == submilli_engine::Severity::Error),
+        "{:?}",
+        parsed.diagnostics()
+    );
 }
 
 #[test]

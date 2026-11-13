@@ -146,7 +146,7 @@ fn write_diagnostic(
     Ok(())
 }
 
-pub(crate) fn validate_span(sources: &Sources, span: Span) -> Result<(), SourceError> {
+pub fn validate_span(sources: &Sources, span: Span) -> Result<(), SourceError> {
     Span::new(span.file, span.start, span.end)?;
     if span.file.reserved_path().is_some() {
         return Ok(());
@@ -179,7 +179,7 @@ fn write_context(
     write_source_block(out, index, span, width)
 }
 
-pub(crate) fn write_source_block(
+pub fn write_source_block(
     out: &mut Writer,
     index: &LineIndex,
     span: Span,
@@ -188,8 +188,8 @@ pub(crate) fn write_source_block(
     span.text(index.source(), span.file)?;
     let (start, start_col) = index.line_col(span.start)?;
     let (end, end_col) = index.line_col(span.end)?;
-    if start > 1 {
-        write_line(out, index, start - 1, width)?;
+    if let Some(before) = start.checked_sub(1).filter(|&line| line >= 1) {
+        write_line(out, index, before, width)?;
     }
     for line in start..=end {
         out.step()?;
@@ -213,8 +213,10 @@ pub(crate) fn write_source_block(
         out.repeat('^', carets)?;
         out.push("\n")?;
     }
-    if end < index.line_count() {
-        write_line(out, index, end + 1, width)?;
+    if end < index.line_count()
+        && let Some(after) = end.checked_add(1)
+    {
+        write_line(out, index, after, width)?;
     }
     Ok(())
 }
@@ -232,7 +234,7 @@ fn write_line(
     for (i, segment) in text.split('\t').enumerate() {
         out.step()?;
         if i != 0 {
-            let spaces = 4 - column % 4;
+            let spaces = tab_width(column);
             out.repeat(' ', spaces)?;
             column = column.checked_add(spaces).ok_or(RenderError::Formatting)?;
         }
@@ -243,6 +245,11 @@ fn write_line(
             .ok_or(RenderError::Formatting)?;
     }
     out.push("\n")
+}
+
+/// The columns a tab at `column` advances to the next stop of 4.
+fn tab_width(column: usize) -> usize {
+    4usize.saturating_sub(column.checked_rem(4).unwrap_or(0))
 }
 
 fn display_column(out: &mut Writer, line: &str, offset: u32) -> Result<usize, RenderError> {
@@ -257,7 +264,7 @@ fn display_column(out: &mut Writer, line: &str, offset: u32) -> Result<usize, Re
         out.step()?;
         if i != 0 {
             column = column
-                .checked_add(4 - column % 4)
+                .checked_add(tab_width(column))
                 .ok_or(RenderError::Formatting)?;
         }
         // A line successfully emitted above is already bounded by the output limit.
@@ -277,7 +284,7 @@ pub fn render_list(
     let mut remaining = RenderLimits::collection().bytes;
     let mut steps = RenderLimits::collection().steps;
     for diagnostic in diagnostics.iter().take(RenderLimits::collection().steps) {
-        if remaining < crate::rendering::TRUNCATED.len() * 2 || steps == 0 {
+        if remaining < crate::rendering::TRUNCATED.len().saturating_mul(2) || steps == 0 {
             break;
         }
         let rendered = render_with_limits(

@@ -149,6 +149,13 @@ Record justified invariant and poisoned-lock panics in SUB-633 as accepted
 exceptions, with their reasoning, rather than as removed panics or unresolved
 violations. Apply these exceptions when following review and no-panic workflows.
 
+`crates/submilli-front-end` holds a stricter bar, because ts-rust's product code
+depends on it. It forbids unsafe code, and clippy denies `unwrap`, `expect`,
+`panic!`, `unreachable!`, unchecked indexing and slicing, unchecked arithmetic
+and lossy casts outside tests (its `Cargo.toml` lists the lints). The invariant
+exceptions above don't apply there: make the state impossible, or return an
+error.
+
 ## Fuel for host functions
 
 Fuel bounds the CPU a program spends, wherever it spends it. Wasm instructions

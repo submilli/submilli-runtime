@@ -31,32 +31,9 @@ use crate::{
     SwitchCase, SwitchDefault, TypeAnnotation, TypeAnnotationKind,
 };
 
-/// Separates a local type's source name from the rest of its key. No
-/// identifier, package or mangled name contains it.
-const MARKER: char = '%';
-
-/// The source name of a type: a local type's key without its suffix.
-pub(crate) fn display_type_name(name: &str) -> &str {
-    name.split_once(MARKER).map_or(name, |(source, _)| source)
-}
-
-/// The type arguments, or parameters, of the type named `name` that the source
-/// writes: all but those lifted from a local type's enclosing scope.
-pub(crate) fn written_type_args<'a, T>(name: &str, args: &'a [T]) -> &'a [T] {
-    args.get(lifted_type_params(name)..).unwrap_or_default()
-}
-
-/// Whether `name` is the key of a type declared in a block.
-pub(crate) fn is_local_type_name(name: &str) -> bool {
-    name.contains(MARKER)
-}
-
-fn lifted_type_params(name: &str) -> usize {
-    name.split(MARKER)
-        .nth(2)
-        .and_then(|count| count.parse().ok())
-        .unwrap_or(0)
-}
+pub(crate) use submilli_front_end::local_type_names::{
+    MARKER, display_type_name, is_local_type_name, written_type_args,
+};
 
 /// Lift the module's local type declarations. Returns the diagnostics for
 /// local types that can't be lifted or clash with another name, and the scope
@@ -1708,7 +1685,7 @@ mod tests {
 
     /// The `did you mean` suggestions compiling `source` reports.
     fn suggestions(source: &'static str) -> Vec<String> {
-        crate::type_size::tests::on_compiler_stack(move || {
+        submilli_front_end::test_support::on_compiler_stack(move || {
             let error = crate::compile::compile_script_checked(
                 source,
                 "suggest.ts",

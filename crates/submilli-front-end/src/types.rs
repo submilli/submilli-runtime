@@ -243,24 +243,6 @@ pub fn stored_index_signatures<'a>(
     index.iter().chain(more_indexes)
 }
 
-/// The signature among `signatures` a property `name` reads through, where no
-/// resolver is at hand (contextual hints, literal freshness, narrowed field
-/// reads): the first other than `string` whose key matches, else the `string`
-/// one. Overlapping signatures are not combined, unlike
-/// `TypeResolver::index_for_name`.
-pub fn named_index<'a>(
-    signatures: impl Iterator<Item = &'a IndexSignature> + Clone,
-    name: &str,
-    limits: &crate::type_size::TypeLimits,
-) -> Option<&'a IndexSignature> {
-    let mut matching =
-        signatures.filter(|index| crate::property_keys::matches_name(&index.key, name, limits));
-    matching
-        .clone()
-        .find(|index| !index.is_string())
-        .or_else(|| matching.find(|index| index.is_string()))
-}
-
 /// `signatures` as an object type stores them (ts-rust contract CD-013): the
 /// `string` signature, else the first, as `index`, and the rest, in order, as
 /// `more_indexes`. Equal signatures collapse to one.
@@ -976,7 +958,7 @@ impl Type {
     /// one.
     pub fn is_utility_application(&self) -> bool {
         matches!(self, Type::AliasRef { mangled, .. }
-            if crate::typechecker::infer::utility_types::utility(mangled).is_some())
+            if crate::utility_names::utility(mangled).is_some())
     }
 
     /// Whether this is `keyof T`, `T[K]`, a mapped, conditional or
@@ -996,7 +978,7 @@ impl Type {
                 | Type::Mapped { .. }
                 | Type::Conditional { .. }
                 | Type::Intersection(_)
-        ) || crate::typechecker::infer::utility_types::deferred_application(self).is_some()
+        ) || crate::utility_names::deferred_application(self).is_some()
     }
 
     /// Remove display aliases while retaining generic guard identity.
@@ -1236,7 +1218,7 @@ impl Type {
     /// in the typechecker *and* in codegen — must answer the same way for
     /// `type V = void` as for `void`: a bare `matches!(ty, Type::Void)` hands an
     /// aliased `void` a value slot that
-    /// [`SymbolTable::value_type`](crate::codegen::symbol_table::SymbolTable::value_type)
+    /// codegen's `SymbolTable::value_type`
     /// then refuses to lower. A typecheck gate must not start peeling ahead of
     /// its codegen counterpart, which turns a clean diagnostic into a panic.
     pub fn is_void(&self) -> bool {
@@ -1352,7 +1334,7 @@ impl Type {
     /// The unboxed primitive (`Type::Number` for `f64`, `Type::Boolean` for `i32`)
     /// a homogeneous union collapses to in Wasm value lowering, if any.
     ///
-    /// Must agree with [`crate::codegen::SymbolTable::value_type`], which lowers a
+    /// Must agree with codegen's `SymbolTable::value_type`, which lowers a
     /// union whose members share one lowering to that lowering, so typecheck-time
     /// box/cast gates and JSON/output encoders match signature lowering. Members
     /// are compared after `lowered()`, as `value_type` does. Numeric enums stay
@@ -1537,7 +1519,7 @@ impl Type {
 
     /// The concrete function intersection used for an overload set, whose
     /// values are callable and cannot be nullish despite the erased ABI.
-    pub(crate) fn is_callable_intersection(&self) -> bool {
+    pub fn is_callable_intersection(&self) -> bool {
         matches!(self.peel(), Type::Intersection(members) if members.len() >= 2 && members.iter().all(|member| matches!(member.peel(), Type::Function { .. })))
     }
 
@@ -1591,7 +1573,7 @@ impl Type {
 
     /// The members of a union of two or more interface instances, such as
     /// `Iterator<number> | Iterator<string>`; `None` for any other type.
-    pub(crate) fn interface_instance_union_members(&self) -> Option<&[Type]> {
+    pub fn interface_instance_union_members(&self) -> Option<&[Type]> {
         let Type::Union(members) = self.peel() else {
             return None;
         };
@@ -1604,7 +1586,7 @@ impl Type {
 
     /// The distinct primitive receiver types of a union, if every member is
     /// primitive. Literal members share their base type's methods.
-    pub(crate) fn primitive_union_members(&self) -> Option<Vec<Type>> {
+    pub fn primitive_union_members(&self) -> Option<Vec<Type>> {
         let Type::Union(members) = self.peel() else {
             return None;
         };
@@ -1729,7 +1711,7 @@ impl Type {
 /// Every renderer of optional parameters shows them through this, except
 /// `type_rendering`'s `Frame::Optional`, which applies the same rule to
 /// borrowed members.
-pub(crate) fn shown_beside_optional_marker(ty: &Type) -> Type {
+pub fn shown_beside_optional_marker(ty: &Type) -> Type {
     match ty.peel() {
         Type::Union(members) => Type::union(
             members
@@ -1744,7 +1726,7 @@ pub(crate) fn shown_beside_optional_marker(ty: &Type) -> Type {
 
 /// `s` escaped for a double-quoted string the way `tsc` prints a string literal
 /// type (`escapeString` in TypeScript's `utilities.ts`): `"G\"HI"`, `"a\nb"`.
-pub(crate) fn escape_string_literal(s: &str) -> String {
+pub fn escape_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = crate::literal_units::literal_chars(s).peekable();
     while let Some(c) = chars.next() {

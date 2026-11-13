@@ -33,8 +33,8 @@ use submilli_shared::github::{
 };
 
 use crate::app::AppState;
-use crate::compiler_thread;
 use crate::packages::{self, DocLookup};
+use interpreter::compiler_thread;
 
 #[derive(Debug, Serialize)]
 pub struct InstalledPackage {
@@ -530,8 +530,9 @@ pub struct InstallResponse {
 
 /// `POST /v1/packages/install` — fetch a GitHub repo, compile it, and install
 /// into the server's package store. The fetch + compile blocks, so it runs
-/// off the async workers, on a compiler-sized thread because it compiles
-/// package sources.
+/// off the async workers. Compiling runs on its own stack, but the install
+/// also reads artifacts and derives schemas from their declarations, which
+/// recurse with type depth, so the whole install keeps the compiler's stack.
 pub async fn install(
     State(state): State<AppState>,
     Json(req): Json<InstallRequest>,
@@ -542,7 +543,7 @@ pub async fn install(
     let audit = crate::audit::mutation_owner();
     tokio::task::spawn_blocking(move || {
         let install = || install_with_server_token(&store, req, token_file);
-        let outcome = match compiler_thread::run(install) {
+        let outcome = match compiler_thread::on_compiler_stack(install) {
             Ok(outcome) => outcome,
             Err(error) => Err(internal_install_error(error)),
         };

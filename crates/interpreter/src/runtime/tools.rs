@@ -30,10 +30,7 @@ use crate::runtime::mcp::McpResponse;
 use crate::stdlib::shared::{audit_denial_in, check_and_approve_call, running_package};
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
-/// The internal host module every `@tools` call dispatches through.
-pub const TOOLS_MODULE_NAME: &str = "submilli:tools";
-/// The source-level name of the virtual package.
-pub const TOOLS_PACKAGE: &str = "@tools";
+pub use crate::mangle::{TOOLS_MODULE_NAME, TOOLS_PACKAGE};
 /// The capability every call is checked against, with the tool in its `tool` field.
 pub const TOOLS_CAPABILITY: &str = "tools.call";
 

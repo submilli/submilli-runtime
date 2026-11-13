@@ -239,7 +239,7 @@ impl std::fmt::Debug for TypeLimits {
 }
 
 /// An open index-value intersection; closing it on drop.
-pub(crate) struct OpenIntersection<'a>(&'a Cell<u32>);
+pub struct OpenIntersection<'a>(&'a Cell<u32>);
 
 impl Drop for OpenIntersection<'_> {
     fn drop(&mut self) {
@@ -260,8 +260,8 @@ impl Default for TypeLimits {
 
 impl TypeLimits {
     /// Limits whose phase may build only `nodes` by substitution.
-    #[cfg(test)]
-    pub(crate) fn with_work_allowance(nodes: u64) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_work_allowance(nodes: u64) -> Self {
         Self {
             work_left: Cell::new(nodes),
             exceeded: Cell::new(None),
@@ -272,7 +272,7 @@ impl TypeLimits {
 
     /// Unification may start a new assignability walk. Keep method coinduction
     /// across those walks, and bound native depth for non-repeating comparisons.
-    pub(crate) fn compare_methods(
+    pub fn compare_methods(
         &self,
         actual: &crate::MethodSig,
         expected: &crate::MethodSig,
@@ -368,10 +368,10 @@ impl TypeLimits {
     /// open another. `None` once [`MAX_OPEN_INTERSECTIONS`] are open: the
     /// caller then keeps the plain intersection, which needs no relating, so
     /// the recursion ends whatever path led back to it.
-    pub(crate) fn enter_intersection(&self) -> Option<OpenIntersection<'_>> {
+    pub fn enter_intersection(&self) -> Option<OpenIntersection<'_>> {
         let open = self.open_intersections.get();
         (open < MAX_OPEN_INTERSECTIONS).then(|| {
-            self.open_intersections.set(open + 1);
+            self.open_intersections.set(open.saturating_add(1));
             OpenIntersection(&self.open_intersections)
         })
     }
@@ -386,13 +386,14 @@ impl TypeLimits {
 }
 
 /// How many types [`for_each_child`] visits directly inside `ty`.
-pub(crate) fn child_count(ty: &Type) -> usize {
+pub fn child_count(ty: &Type) -> usize {
     match ty {
         Type::Function {
             params, predicate, ..
         } => params
             .len()
-            .saturating_add(1 + usize::from(predicate.is_some())),
+            .saturating_add(1)
+            .saturating_add(usize::from(predicate.is_some())),
         Type::Object {
             fields,
             index,
@@ -409,7 +410,7 @@ pub(crate) fn child_count(ty: &Type) -> usize {
         | Type::Union(members) => members.len(),
         Type::Refined { .. } | Type::IndexedAccess { .. } => 2,
         Type::KeyOf(_) => 1,
-        Type::Mapped { name, .. } => 2 + usize::from(name.is_some()),
+        Type::Mapped { name, .. } => usize::from(name.is_some()).saturating_add(2),
         Type::Conditional { .. } => 4,
         Type::Intersection(members) => members.len(),
         Type::InterfaceRef { args, .. }
@@ -860,12 +861,12 @@ impl<'a> Iterator for TypeChildren<'a> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
     use crate::ObjectField;
-    use crate::typechecker::type_param_substitution::TypeParamSubstitution;
+    use crate::test_support::on_compiler_stack;
 
     /// A tuple of `n - 1` numbers: `n` nodes, depth 2.
     fn nodes(n: u64) -> Type {
@@ -875,33 +876,6 @@ pub(crate) mod tests {
     /// `depth - 1` arrays around a number.
     fn nested(depth: u32) -> Type {
         (1..depth).fold(Type::Number, |inner, _| Type::Array(Box::new(inner)))
-    }
-
-    /// `{ a: T; b: T }`: each application doubles its argument.
-    fn pair_of_t() -> Type {
-        let field = || ObjectField::required(Type::TypeVar("T".into()));
-        Type::Object {
-            more_indexes: Vec::new(),
-            fields: BTreeMap::from([("a".into(), field()), ("b".into(), field())]),
-            index: None,
-        }
-    }
-
-    fn binding(ty: Type) -> TypeParamSubstitution {
-        TypeParamSubstitution::from_pairs(&["T".to_string()], &[ty])
-    }
-
-    /// Runs `test` on a thread of the stack compilation is given: substitution
-    /// and drop recurse once per level of a type at the depth limit.
-    pub(crate) fn on_compiler_stack<T: Send + 'static>(
-        test: impl FnOnce() -> T + Send + 'static,
-    ) -> T {
-        std::thread::Builder::new()
-            .stack_size(crate::compiler_limits::COMPILER_STACK_BYTES)
-            .spawn(test)
-            .unwrap()
-            .join()
-            .unwrap()
     }
 
     #[test]
@@ -960,7 +934,7 @@ pub(crate) mod tests {
     fn wide_types_use_only_ancestor_frames() {
         let wide = nodes(100_001);
         for max_nodes in [0, 1, 7, 100_001] {
-            let (extent, observed) = crate::type_walk::tests::observe(None, || {
+            let (extent, observed) = crate::type_walk::test_support::observe(None, || {
                 measure(&wide, max_nodes, u32::MAX).unwrap()
             });
             assert_eq!(extent.nodes, 100_001.min(max_nodes + 1));
@@ -968,8 +942,9 @@ pub(crate) mod tests {
             assert!(observed.reservations <= 1);
         }
         // Once a limit is crossed, even a pending reservation failure is irrelevant.
-        let (extent, observed) =
-            crate::type_walk::tests::observe(Some(0), || measure(&wide, 0, u32::MAX).unwrap());
+        let (extent, observed) = crate::type_walk::test_support::observe(Some(0), || {
+            measure(&wide, 0, u32::MAX).unwrap()
+        });
         assert_eq!(extent.nodes, 1);
         assert_eq!(observed.reservations, 0);
     }
@@ -977,11 +952,12 @@ pub(crate) mod tests {
     #[test]
     fn allocation_failure_is_preserved_by_validation_and_copy_charging() {
         let ty = nodes(3);
-        let (result, _) = crate::type_walk::tests::observe(Some(0), || check(&ty));
+        let (result, _) = crate::type_walk::test_support::observe(Some(0), || check(&ty));
         assert_eq!(result, Err(TypeTooLarge::Allocation));
         let limits = TypeLimits::default();
-        let (result, _) =
-            crate::type_walk::tests::observe(Some(0), || limits.budget().charge_copy(&ty, 1));
+        let (result, _) = crate::type_walk::test_support::observe(Some(0), || {
+            limits.budget().charge_copy(&ty, 1)
+        });
         assert_eq!(result, Err(TypeTooLarge::Allocation));
         assert_eq!(limits.work_left.get(), MAX_TYPE_WORK);
         let span = Span::at(crate::FileId(7));
@@ -998,8 +974,9 @@ pub(crate) mod tests {
             elements: vec![nested(6), nodes(100_001), nested(3)],
             optional: 0,
         });
-        let (extent, observed) =
-            crate::type_walk::tests::observe(None, || measure(&ty, u64::MAX, u32::MAX).unwrap());
+        let (extent, observed) = crate::type_walk::test_support::observe(None, || {
+            measure(&ty, u64::MAX, u32::MAX).unwrap()
+        });
         assert_eq!(
             extent,
             TypeExtent {
@@ -1017,8 +994,9 @@ pub(crate) mod tests {
             measure(&ty, u64::MAX, 0).unwrap(),
             TypeExtent { nodes: 1, depth: 1 }
         );
-        let (failed, _) =
-            crate::type_walk::tests::observe(Some(1), || measure(&nested(20), u64::MAX, u32::MAX));
+        let (failed, _) = crate::type_walk::test_support::observe(Some(1), || {
+            measure(&nested(20), u64::MAX, u32::MAX)
+        });
         assert_eq!(failed, Err(TypeTooLarge::Allocation));
     }
 
@@ -1048,50 +1026,6 @@ pub(crate) mod tests {
         let mut budget = limits.budget();
         assert_eq!(budget.charge_copy(&nodes(MAX_TYPE_NODES), 1), Ok(()));
         assert_eq!(budget.charge(1), Err(TypeTooLarge::Nodes));
-    }
-
-    #[test]
-    fn substitution_stops_at_the_size_limit_instead_of_building_it() {
-        let limits = TypeLimits::default();
-        let half = nodes(MAX_TYPE_NODES / 2);
-        // `{ a: T; b: T }` is one node plus two copies of the argument.
-        assert_eq!(
-            binding(half).apply(&pair_of_t(), &limits),
-            Err(TypeTooLarge::Nodes)
-        );
-        let fits = nodes(MAX_TYPE_NODES / 2 - 1);
-        let applied = binding(fits).apply(&pair_of_t(), &limits).unwrap();
-        assert_eq!(
-            measure(&applied, u64::MAX, u32::MAX).unwrap().nodes,
-            MAX_TYPE_NODES - 1
-        );
-    }
-
-    #[test]
-    fn substitution_stops_at_the_depth_limit() {
-        on_compiler_stack(substitution_stops_at_the_depth_limit_inner);
-    }
-
-    fn substitution_stops_at_the_depth_limit_inner() {
-        let limits = TypeLimits::default();
-        let deep = binding(nested(MAX_TYPE_DEPTH - 1));
-        // The object adds one level above the argument.
-        assert!(deep.apply(&pair_of_t(), &limits).is_ok());
-        let deeper = binding(nested(MAX_TYPE_DEPTH));
-        assert_eq!(
-            deeper.apply(&pair_of_t(), &limits),
-            Err(TypeTooLarge::Depth)
-        );
-    }
-
-    #[test]
-    fn substitutions_share_the_phase_work_allowance() {
-        let limits = TypeLimits::with_work_allowance(29);
-        let sub = binding(nodes(5));
-        // Each application builds 1 + 2 * 5 nodes and chases two bindings.
-        assert!(sub.apply(&pair_of_t(), &limits).is_ok());
-        assert!(sub.apply(&pair_of_t(), &limits).is_ok());
-        assert_eq!(sub.apply(&pair_of_t(), &limits), Err(TypeTooLarge::Work));
     }
 
     #[test]

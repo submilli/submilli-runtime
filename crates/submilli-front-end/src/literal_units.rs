@@ -18,17 +18,22 @@ const LOW_SURROGATES: std::ops::RangeInclusive<u32> = 0xDC00..=0xDFFF;
 /// Append the code unit `unit` to literal text if it is a surrogate, returning
 /// whether it was. A low surrogate right after a lone high one joins it into
 /// one character, so `"\u{D83D}\u{DE00}"` is the same text as `"😀"`.
-pub(crate) fn push_lone_surrogate(out: &mut String, unit: u32) -> bool {
+pub fn push_lone_surrogate(out: &mut String, unit: u32) -> bool {
     let Some(named) = SURROGATES
         .contains(&unit)
-        .then(|| char::from_u32(SURROGATE_BASE + (unit - 0xD800)))
+        .then(|| {
+            unit.checked_sub(0xD800)
+                .and_then(|offset| offset.checked_add(SURROGATE_BASE))
+                .and_then(char::from_u32)
+        })
         .flatten()
     else {
         return false;
     };
     if LOW_SURROGATES.contains(&unit)
         && let Some(high) = trailing_high_surrogate(out)
-        && let Some(Ok(pair)) = char::decode_utf16([high, unit as u16]).next()
+        && let Ok(unit) = u16::try_from(unit)
+        && let Some(Ok(pair)) = char::decode_utf16([high, unit]).next()
     {
         // Drop the marker and the name the high half was written as.
         out.pop();
@@ -44,7 +49,7 @@ pub(crate) fn push_lone_surrogate(out: &mut String, unit: u32) -> bool {
 /// Append literal text to literal text, joining a lone high surrogate at the
 /// end of `out` with a lone low surrogate at the start of `text`, as
 /// concatenating the strings they stand for does.
-pub(crate) fn push_literal_text(out: &mut String, text: &str) {
+pub fn push_literal_text(out: &mut String, text: &str) {
     let mut chars = text.chars();
     if chars.next() == Some(MARKER)
         && let Some(low) = chars.next().and_then(named_surrogate)
@@ -71,7 +76,7 @@ fn trailing_high_surrogate(out: &str) -> Option<u16> {
 }
 
 /// Append a character to literal text, escaping [`MARKER`].
-pub(crate) fn push_literal_char(out: &mut String, c: char) {
+pub fn push_literal_char(out: &mut String, c: char) {
     out.push(c);
     if c == MARKER {
         out.push(MARKER);
@@ -79,14 +84,14 @@ pub(crate) fn push_literal_char(out: &mut String, c: char) {
 }
 
 /// The UTF-16 code units that literal text stands for.
-pub(crate) fn literal_units(text: &str) -> Vec<u16> {
+pub fn literal_units(text: &str) -> Vec<u16> {
     let mut units = Vec::with_capacity(text.len());
     extend_literal_units(&mut units, text);
     units
 }
 
 /// Decode literal text after reserving its maximum UTF-16 length fallibly.
-pub(crate) fn try_literal_units(text: &str) -> Result<Vec<u16>, std::collections::TryReserveError> {
+pub fn try_literal_units(text: &str) -> Result<Vec<u16>, std::collections::TryReserveError> {
     let mut units = Vec::new();
     units.try_reserve(text.len())?;
     extend_literal_units(&mut units, text);
@@ -116,15 +121,18 @@ fn extend_literal_units(units: &mut Vec<u16>, text: &str) {
 
 /// The characters literal text stands for, with each lone surrogate as `Err`
 /// of its code unit, for printing the text back as source.
-pub(crate) fn literal_chars(text: &str) -> impl Iterator<Item = Result<char, u16>> {
+pub fn literal_chars(text: &str) -> impl Iterator<Item = Result<char, u16>> {
     char::decode_utf16(literal_units(text)).map(|c| c.map_err(|lone| lone.unpaired_surrogate()))
 }
 
 /// The surrogate a code point after [`MARKER`] names, if it names one.
 fn named_surrogate(named: char) -> Option<u16> {
     let offset = u32::from(named).checked_sub(SURROGATE_BASE)?;
-    let unit = 0xD800 + offset;
-    SURROGATES.contains(&unit).then_some(unit as u16)
+    let unit = offset.checked_add(0xD800)?;
+    SURROGATES
+        .contains(&unit)
+        .then(|| u16::try_from(unit).ok())
+        .flatten()
 }
 
 #[cfg(test)]

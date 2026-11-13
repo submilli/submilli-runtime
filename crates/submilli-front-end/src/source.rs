@@ -184,7 +184,7 @@ impl SourceFile {
 /// source by path, so codegen qualifies a package's debug paths with its name
 /// and embedders register the package's sources under the same paths
 /// ([`Sources::add_package_module`]). Compile diagnostics keep the module path.
-pub(crate) fn package_frame_path(package: &str, module: &str) -> String {
+pub fn package_frame_path(package: &str, module: &str) -> String {
     format!("{package}/{module}")
 }
 
@@ -229,6 +229,11 @@ impl Sources {
 
     pub fn get(&self, id: FileId) -> Option<&SourceFile> {
         self.files.get(id.0 as usize)
+    }
+
+    /// Every file, in the order it was added, with its id.
+    pub fn iter(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {
+        self.files.iter().map(|file| (file.id, file))
     }
 
     pub fn find_path(&self, path: &str) -> Option<(FileId, &SourceFile)> {

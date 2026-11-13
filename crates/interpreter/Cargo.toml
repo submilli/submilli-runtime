@@ -22,7 +22,8 @@ wasmparser = { workspace = true }
 wast = { workspace = true }
 gimli = { workspace = true }
 unicode-ident = { workspace = true }
-unicode-width = "0.2.2"
+unicode-width = { workspace = true }
+submilli-front-end = { workspace = true }
 unicode-normalization = { workspace = true }
 icu_collator = { workspace = true }
 async-trait = { workspace = true }
@@ -76,6 +77,7 @@ libc = { workspace = true }
 cap-primitives = { workspace = true }
 
 [dev-dependencies]
+submilli-front-end = { workspace = true, features = ["test-support"] }
 tokio-rustls = "0.26"
 insta = { workspace = true }
 httpmock = { workspace = true }

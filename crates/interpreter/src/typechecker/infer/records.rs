@@ -2407,7 +2407,7 @@ mod tests {
             span,
         };
         let mut nodes_left = 10;
-        let (result, _) = crate::type_walk::tests::observe(Some(0), || {
+        let (result, _) = submilli_front_end::type_walk::test_support::observe(Some(0), || {
             substitute_base_names(&annotation, &BTreeMap::new(), 0, &mut nodes_left)
         });
         assert!(matches!(result,

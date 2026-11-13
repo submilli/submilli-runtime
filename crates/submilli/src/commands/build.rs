@@ -616,13 +616,15 @@ mod test_runner {
     use std::process::ExitCode;
 
     use anyhow::Context;
+    use interpreter::compile::compile_parsed_script;
     use interpreter::runtime::{
         LinkedPackageModule, RuntimeConfig, StoreData, Vfs, install_package_modules_async,
         install_runtime_async, install_tenant_limits,
     };
     use interpreter::{
-        BacktraceMode, ModulePath, PackageDeclaration, PackageTestSurface, Sources,
-        compile_package_test, dispatch_main_async, failure_message, instantiate_program_async,
+        BacktraceMode, ModulePath, PackageDeclaration, PackageTest, PackageTestSurface,
+        ScriptOwner, ScriptRequest, Sources, dispatch_main_async, failure_message,
+        instantiate_program_async, script_request,
     };
     use submilli_build::{
         Artifact, ArtifactSource, BuiltPackage, DriverError, PackageName, PackageStore,
@@ -1070,15 +1072,19 @@ mod test_runner {
         let no_modules = PackageTestSurface::default();
         let surface = pkg.test_surface.as_ref().unwrap_or(&no_modules);
 
-        let (bytes, type_info) = match compile_package_test(
-            &pkg.declaration,
-            surface,
-            &importer,
-            &source,
-            &filename,
-            file,
-            declarations,
-        ) {
+        let stdlib = interpreter::runtime::stdlib_package_declarations();
+        let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+        let request = ScriptRequest {
+            owner: ScriptOwner::Test(PackageTest {
+                owner: &pkg.declaration,
+                surface,
+                importer: &importer,
+            }),
+            dependencies: declarations,
+            ..script_request(&stdlib)
+        };
+        let parsed = crate::commands::front_end().parse_script(source.clone(), file);
+        let (bytes, type_info) = match compile_parsed_script(parsed, &filename, &request) {
             Ok(compiled) => {
                 crate::commands::check::render(&compiled.warnings, &sources)?;
                 *warning_count += compiled.warnings.len();
@@ -1088,8 +1094,8 @@ mod test_runner {
                 }
                 (compiled.wasm, compiled.type_info)
             }
-            Err(diags) => {
-                crate::commands::check::render(&diags, &sources)?;
+            Err(error) => {
+                crate::commands::check::render(&error.into_diagnostics(file), &sources)?;
                 println!("FAIL {filename}  (compile error)");
                 return Ok((0, 1));
             }

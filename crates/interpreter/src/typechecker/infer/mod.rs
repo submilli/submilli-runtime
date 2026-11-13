@@ -1733,8 +1733,9 @@ mod tests {
             crate::mangle::prelude("value"),
             Type::Array(Box::new(Type::Number)),
         );
-        let (result, _) =
-            crate::type_walk::tests::observe(Some(0), || check_declaration_types([&declaration]));
+        let (result, _) = submilli_front_end::type_walk::test_support::observe(Some(0), || {
+            check_declaration_types([&declaration])
+        });
         let failure = result.unwrap_err();
         assert!(matches!(
             failure,

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/conformance",
     "crates/interpreter",
+    "crates/submilli-front-end",
     "crates/submilli",
     "crates/submilli-build",
     "crates/submilli-blueprint",
@@ -23,6 +24,7 @@ publish = false
 # Published crates depend on each other at exactly the workspace version: the
 # package artifact format and the host ABI change together. Bump these with
 # `[workspace.package].version`.
+submilli-front-end = { path = "crates/submilli-front-end", version = "=0.6.2" }
 interpreter = { package = "submilli-engine", path = "crates/interpreter", version = "=0.6.2" }
 submilli-policy = { path = "crates/submilli-policy", version = "=0.6.2" }
 submilli-build = { path = "crates/submilli-build", version = "=0.6.2" }
@@ -37,6 +39,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 insta = "1"
 unicode-ident = "1"
+unicode-width = "0.2.2"
 unicode-normalization = "0.1"
 icu_collator = "2"
 base64 = "0.22"

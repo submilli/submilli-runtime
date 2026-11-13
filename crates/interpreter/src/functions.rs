@@ -16,11 +16,12 @@
 //! use submilli_engine::runtime::{
 //!     StoreData, Vfs, install_package_modules_async, install_runtime_async_for,
 //! };
+//! use submilli_engine::compile::compile_parsed_script;
 //! use submilli_engine::{
-//!     FileId, FunctionCache, FunctionDefinition, FunctionError, FunctionSet, OptionalPackage,
-//!     RuntimeConfig, Stdlib, compile_function_set_for, compile_parsed_script_timed,
-//!     dispatch_main_async, install_functions_async, instantiate_program_async, invoke_function_async,
-//!     parse_script,
+//!     EngineFrontEnd, FileId, FrontEnd, FunctionCache, FunctionDefinition, FunctionError,
+//!     FunctionSet, OptionalPackage, PackageDeclaration, RuntimeConfig, ScriptRequest,
+//!     Stdlib, compile_function_set_for, dispatch_main_async,
+//!     install_functions_async, instantiate_program_async, invoke_function_async, script_request,
 //! };
 //! use wasmtime::{Linker, Module};
 //!
@@ -55,14 +56,16 @@
 //!
 //! let main_src =
 //!     r#"import { leadScan } from "@functions"; function main(): number { return leadScan(4); }"#;
-//! let parsed = parse_script(main_src, FileId(0));
-//! let main = compile_parsed_script_timed(
-//!     main_src,
+//! let stdlib = compiled_set.stdlib().package_declarations();
+//! let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+//! let parsed = EngineFrontEnd.parse_script(main_src.to_owned(), FileId(0));
+//! let main = compile_parsed_script(
+//!     parsed,
 //!     "main.ts",
-//!     &parsed,
-//!     &compiled_set.stdlib().package_declarations(),
-//!     &[compiled_set.package_declaration()],
-//!     &[],
+//!     &ScriptRequest {
+//!         dependencies: &[compiled_set.package_declaration()],
+//!         ..script_request(&stdlib)
+//!     },
 //! )
 //! .expect("compile main");
 //! let main_module = Module::new(&engine, &main.wasm)?;

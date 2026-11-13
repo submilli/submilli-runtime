@@ -84,7 +84,7 @@ impl Server {
 }
 
 fn publish(root: &std::path::Path, name: &str, source: &str, version: &str) {
-    let compiled = crate::compiler_thread::run(|| {
+    let compiled = interpreter::compiler_thread::on_compiler_stack(|| {
         interpreter::compile_package(
             name,
             interpreter::ModulePath::from("lib"),
@@ -439,7 +439,7 @@ async fn dependency_package_cleanup_checks_installed_versions() {
         let dependency =
             submilli_build::read_package_artifact(server.root.path().join("packages/@test/a"))
                 .unwrap();
-        let compiled = crate::compiler_thread::run(|| interpreter::compile_package(
+        let compiled = interpreter::compiler_thread::on_compiler_stack(|| interpreter::compile_package(
         "@test/root", interpreter::ModulePath::from("lib"), &[interpreter::PackageSourceModule {
             path: interpreter::ModulePath::from("lib"),
             source: r#"import { retain } from "@test/a"; export function open(): void { retain("dependency", false); }"#,

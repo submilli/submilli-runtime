@@ -2,7 +2,20 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use submilli_engine::{Asi, FileId, TokenKind, parse, parse_script};
+use submilli_engine::{
+    Asi, EngineFrontEnd, FileId, FrontEnd, ParsedScript, Severity, TokenKind, parse,
+};
+
+fn parse_script(source: &str, file: FileId) -> Box<dyn ParsedScript> {
+    EngineFrontEnd.parse_script(source.to_owned(), file)
+}
+
+fn has_errors(parsed: &dyn ParsedScript) -> bool {
+    parsed
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+}
 
 #[test]
 fn parser_depth_is_bounded() {
@@ -81,7 +94,7 @@ fn check_recursive_syntax() {
             "direct parser accepted case {case}"
         );
         let parsed = parse_script(&source, FileId(0));
-        assert!(parsed.has_errors(), "pipeline accepted case {case}");
+        assert!(has_errors(&*parsed), "pipeline accepted case {case}");
         if case == 0 || case == 13 {
             assert!(
                 parsed
@@ -93,6 +106,6 @@ fn check_recursive_syntax() {
             );
         }
         let healthy = parse_script("function main(): number { return 42; }", FileId(0));
-        assert!(!healthy.has_errors(), "{:?}", healthy.diagnostics());
+        assert!(!has_errors(&*healthy), "{:?}", healthy.diagnostics());
     }
 }

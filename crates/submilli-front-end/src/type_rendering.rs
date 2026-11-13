@@ -1,5 +1,5 @@
 //! Iterative type spelling; frames borrow the input and never clone recursive types.
-use crate::lower_local_types::{display_type_name, written_type_args};
+use crate::local_type_names::{display_type_name, written_type_args};
 use crate::rendering::{RenderError, RenderLimits, RenderedText, Writer};
 use crate::types::MappedModifier;
 use crate::{IndexSignature, ObjectField, Type};
@@ -55,11 +55,11 @@ enum Frame<'a> {
     LeaveInfers,
 }
 
-pub(crate) fn render(ty: &Type, limits: RenderLimits) -> Result<RenderedText, RenderError> {
+pub fn render(ty: &Type, limits: RenderLimits) -> Result<RenderedText, RenderError> {
     Writer::render(limits, |out| write_type(out, ty))
 }
 
-pub(crate) fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError> {
+pub fn write_type(out: &mut Writer, ty: &Type) -> Result<(), RenderError> {
     let mut frames = Vec::new();
     let mut infers: Vec<&[String]> = Vec::new();
     push(&mut frames, Frame::Type(ty, 1))?;
@@ -232,7 +232,7 @@ fn write_node<'a>(
             out.push(digits)?;
             out.push("n")
         }
-        Type::NumberLiteral(value) => out.push(&crate::runtime::number::format_number_js(value.0)),
+        Type::NumberLiteral(value) => out.push(&crate::number_format::format_number_js(value.0)),
         Type::String => out.push("string"),
         Type::TemplateLiteral {
             parts,
@@ -557,13 +557,13 @@ fn write_field_name(out: &mut Writer, name: &str) -> Result<(), RenderError> {
 
 /// A member name as TypeScript prints it: bare when it is an identifier,
 /// quoted otherwise.
-pub(crate) fn render_field_name(name: &str) -> Result<String, RenderError> {
+pub fn render_field_name(name: &str) -> Result<String, RenderError> {
     Writer::render(RenderLimits::default(), |out| write_field_name(out, name)).map(|r| r.text)
 }
 
 /// Whether a member name can be written bare, as an identifier (keywords
 /// included), rather than as a quoted string.
-pub(crate) fn is_identifier_name(name: &str) -> bool {
+pub fn is_identifier_name(name: &str) -> bool {
     let mut chars = name.chars();
     chars
         .next()
@@ -571,7 +571,7 @@ pub(crate) fn is_identifier_name(name: &str) -> bool {
         && chars.all(|c| c == '_' || c == '$' || unicode_ident::is_xid_continue(c))
 }
 
-pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderError> {
+pub fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderError> {
     out.push("\"")?;
     let mut chars = crate::literal_units::literal_chars(value).peekable();
     while let Some(ch) = chars.next() {
@@ -609,9 +609,9 @@ pub(crate) fn write_string(out: &mut Writer, value: &str) -> Result<(), RenderEr
 
 /// Diagnostic substitutions own a separate allowance for copied nodes and text.
 /// This is shared by every substitution/binding in one lifted definition.
-pub(crate) struct CopyBudget {
+pub struct CopyBudget {
     remaining: std::cell::Cell<usize>,
-    pub(crate) types: crate::type_size::TypeLimits,
+    pub types: crate::type_size::TypeLimits,
 }
 
 impl Default for CopyBudget {
@@ -624,7 +624,7 @@ impl Default for CopyBudget {
 }
 
 impl CopyBudget {
-    pub(crate) fn charge(&self, bytes: usize) -> Result<(), RenderError> {
+    pub fn charge(&self, bytes: usize) -> Result<(), RenderError> {
         let remaining = self
             .remaining
             .get()
@@ -634,19 +634,16 @@ impl CopyBudget {
         Ok(())
     }
 
-    pub(crate) fn check(&self, root: &Type) -> Result<(), RenderError> {
-        self.check_substitution(
-            root,
-            &crate::typechecker::type_param_substitution::TypeParamSubstitution::new(),
-        )
+    pub fn check(&self, root: &Type) -> Result<(), RenderError> {
+        self.check_substitution(root, |_| None)
     }
 
     /// Mirrors substitution's var-to-var cycle rule without constructing types.
     /// Validate the expanded result before the recursive copier can allocate it.
-    pub(crate) fn check_substitution<'a>(
+    pub fn check_substitution<'a>(
         &self,
         root: &'a Type,
-        substitution: &'a crate::typechecker::type_param_substitution::TypeParamSubstitution,
+        substitution: impl Fn(&str) -> Option<&'a Type>,
     ) -> Result<(), RenderError> {
         use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES};
         let mut pending = Vec::new();
@@ -667,7 +664,7 @@ impl CopyBudget {
             }
             self.charge(std::mem::size_of::<Type>())?;
             if let Type::TypeVar(name) = ty
-                && let Some(bound) = substitution.get(name)
+                && let Some(bound) = substitution(name)
                 && !open.contains(&name.as_str())
             {
                 if open.len() >= MAX_TYPE_DEPTH as usize {
@@ -696,7 +693,7 @@ impl CopyBudget {
                 .try_reserve(children)
                 .map_err(|_| RenderError::Allocation)?;
             crate::type_size::for_each_child(ty, |child| {
-                pending.push(CopyFrame::Type(child, depth + 1));
+                pending.push(CopyFrame::Type(child, depth.saturating_add(1)));
             });
         }
         Ok(())
@@ -708,7 +705,7 @@ enum CopyFrame<'a> {
     LeaveBinding,
 }
 
-pub(crate) fn check_for_copy(root: &Type) -> Result<(), RenderError> {
+pub fn check_for_copy(root: &Type) -> Result<(), RenderError> {
     CopyBudget::default().check(root)
 }
 
@@ -834,26 +831,25 @@ mod tests {
 
     #[test]
     fn copy_budget_bounds_text_aggregate_inputs_and_expansion() {
-        use crate::typechecker::type_param_substitution::TypeParamSubstitution;
         let huge = Type::StringLiteral("x".repeat(2 * 1024 * 1024));
         assert!(matches!(check_for_copy(&huge), Err(RenderError::Truncated)));
         let chunk = Type::StringLiteral("x".repeat(600 * 1024));
         let budget = CopyBudget::default();
         assert!(budget.check(&chunk).is_ok());
         assert!(matches!(budget.check(&chunk), Err(RenderError::Truncated)));
-        let sub = TypeParamSubstitution::from_pairs(&["T".into()], &[chunk]);
+        let sub = std::collections::BTreeMap::from([("T", chunk)]);
         let repeated = Type::Tuple(crate::types::TupleType {
             elements: vec![Type::TypeVar("T".into()); 2],
             optional: 0,
         });
         assert!(matches!(
-            CopyBudget::default().check_substitution(&repeated, &sub),
+            CopyBudget::default().check_substitution(&repeated, |name| sub.get(name)),
             Err(RenderError::Truncated)
         ));
-        let cycle = TypeParamSubstitution::from_pairs(&["T".into()], &[Type::TypeVar("T".into())]);
+        let cycle = std::collections::BTreeMap::from([("T", Type::TypeVar("T".into()))]);
         assert!(
             CopyBudget::default()
-                .check_substitution(&Type::TypeVar("T".into()), &cycle)
+                .check_substitution(&Type::TypeVar("T".into()), |name| cycle.get(name))
                 .is_ok()
         );
     }

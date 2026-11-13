@@ -254,7 +254,7 @@ fn named_type(ty: &Type) -> Option<(&str, &MangledName, &Package)> {
 #[cfg(test)]
 mod tests {
     fn diagnostics(source: &'static str) -> Vec<crate::Diagnostic> {
-        crate::type_size::tests::on_compiler_stack(move || {
+        submilli_front_end::test_support::on_compiler_stack(move || {
             crate::compile::compile_script_checked(source, "names.ts", crate::FileId(0), &[], &[])
                 .unwrap_err()
                 .diagnostics
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn module_origins_use_the_declaring_files() {
-        crate::type_size::tests::on_compiler_stack(|| {
+        submilli_front_end::test_support::on_compiler_stack(|| {
             let errors = crate::compile::compile_package("cards", "lib".into(), &[
                 crate::PackageSourceModule { path: "lib".into(), source: "import { card } from \"./other\";\ninterface T { id: string }\nconst local: T = card();\n" },
                 crate::PackageSourceModule { path: "other".into(), source: "/** A card from the other module. */\nexport interface T {\n/** Its value. */\nvalue: number;\n}\n/** Make a card.\n * @returns A card.\n */\nexport function card(): T { return { value: 1 }; }\n" },
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn package_mismatch_explains_missing_field() {
-        crate::type_size::tests::on_compiler_stack(|| {
+        submilli_front_end::test_support::on_compiler_stack(|| {
             let venmo = crate::compile::compile_package(
                 "@appworld/venmo",
                 "lib".into(),

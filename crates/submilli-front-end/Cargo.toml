@@ -1,0 +1,65 @@
+[package]
+name = "submilli-front-end"
+description = "The contract between a Submilli front end and the engine: typed trees, package declarations, types and diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["submilli", "typescript", "compiler"]
+categories = ["compilers"]
+publish = true
+exclude = ["**/snapshots/**"]
+
+[features]
+# Fault-injection hooks the engine's tests drive (arena node caps, frame
+# reservation failures, work allowances). Off in every build that ships.
+test-support = []
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+unicode-ident = { workspace = true }
+unicode-width = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+insta = { workspace = true }
+
+# Not `workspace = true`: Cargo can't add lints on top of the workspace table,
+# so it is repeated here. ts-rust's product code depends on this crate, so the
+# crate meets ts-rust's safety bar: no unsafe code, and no panics, unchecked
+# indexing, unchecked arithmetic or lossy casts outside tests (`lib.rs` allows
+# them under `cfg(test)`).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+# The workspace's readability lints.
+uninlined_format_args = "deny"
+map_unwrap_or = "deny"
+single_match_else = "deny"
+redundant_closure_for_method_calls = "deny"
+explicit_iter_loop = "deny"
+if_not_else = "deny"
+redundant_else = "deny"
+unnested_or_patterns = "deny"
+manual_let_else = "deny"
+items_after_statements = "deny"
+semicolon_if_nothing_returned = "deny"
+# ts-rust's safety bar.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+dbg_macro = "deny"
+exit = "deny"
+string_slice = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+cast_precision_loss = "deny"

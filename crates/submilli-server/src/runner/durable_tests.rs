@@ -82,6 +82,7 @@ async fn execute(
     });
     let mcps = Arc::new(McpCatalog::empty());
     super::durable::run(
+        &interpreter::EngineFrontEnd,
         run,
         program,
         history,

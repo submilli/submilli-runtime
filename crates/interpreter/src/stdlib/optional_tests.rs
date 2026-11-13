@@ -240,16 +240,7 @@ impl Harness {
     /// Compile `source` under the harness set and run it; `main`'s result.
     async fn run(self, source: &str) -> wasmtime::Result<String> {
         let stdlib = harness_stdlib();
-        let parsed = crate::parse_script(source, crate::FileId(0));
-        let compiled = crate::compile_parsed_script_timed(
-            source,
-            "test.ts",
-            &parsed,
-            &stdlib.package_declarations(),
-            &[],
-            &[],
-        )
-        .expect("compile clean");
+        let compiled = compile_with(source, stdlib).expect("compile clean");
         let cfg = RuntimeConfig::default();
         let engine = cfg.engine().expect("engine");
         let mut data = StoreData::with_vfs("test-run".into(), Vfs::tempdir().expect("tempdir"));
@@ -275,16 +266,33 @@ impl Harness {
     }
 }
 
+/// `source` compiled by the engine front end against `stdlib`.
+fn compile_with(
+    source: &str,
+    stdlib: Stdlib,
+) -> Result<crate::CompiledScript, Vec<crate::Diagnostic>> {
+    use crate::FrontEnd;
+    let declarations = stdlib.package_declarations();
+    let stdlib_refs: Vec<&crate::PackageDeclaration> = declarations.iter().collect();
+    let parsed = crate::EngineFrontEnd.parse_script(source.to_owned(), crate::FileId(0));
+    crate::compile::compile_parsed_script(parsed, "test.ts", &crate::script_request(&stdlib_refs))
+        .map_err(|error| error.into_diagnostics(crate::FileId(0)))
+}
+
+/// `source` checked by the engine front end against `stdlib`.
+fn typecheck_with(
+    source: &str,
+    stdlib: Stdlib,
+) -> Result<Vec<crate::Diagnostic>, crate::CompileError> {
+    use crate::FrontEnd;
+    let declarations = stdlib.package_declarations();
+    let stdlib_refs: Vec<&crate::PackageDeclaration> = declarations.iter().collect();
+    let parsed = crate::EngineFrontEnd.parse_script(source.to_owned(), crate::FileId(0));
+    crate::compile::check_parsed_script(parsed, &crate::script_request(&stdlib_refs))
+}
+
 fn compile_errors(source: &str, stdlib: Stdlib) -> Vec<String> {
-    let parsed = crate::parse_script(source, crate::FileId(0));
-    match crate::compile_parsed_script_timed(
-        source,
-        "test.ts",
-        &parsed,
-        &stdlib.package_declarations(),
-        &[],
-        &[],
-    ) {
+    match compile_with(source, stdlib) {
         Ok(_) => Vec::new(),
         Err(diagnostics) => diagnostics
             .into_iter()
@@ -305,7 +313,7 @@ fn a_disabled_package_is_not_available_in_this_harness() {
                 .any(|e| e.contains(&format!("`{module}` is not available in this harness"))),
             "{errors:?}"
         );
-        let parsed = crate::parse_script(&source, crate::FileId(0));
+        let parsed = crate::compile::parse_script(&source, crate::FileId(0));
         let imports = parsed.external_imports().expect("imports");
         assert!(
             imports.stdlib.contains(module),
@@ -890,21 +898,8 @@ fn an_unknown_type_argument_is_refused_in_agents_words() {
 #[test]
 fn a_parsed_script_typechecks_against_an_enabling_set() {
     let source = "import { list } from \"submilli:skills\";\nfunction main(): void { list(); }\n";
-    let parsed = crate::parse_script(source, crate::FileId(0));
-    crate::compile::typecheck_parsed_checked(
-        source,
-        &parsed,
-        &harness_stdlib().package_declarations(),
-    )
-    .expect("skills is available");
-    assert!(
-        crate::compile::typecheck_parsed_checked(
-            source,
-            &parsed,
-            &Stdlib::core().package_declarations()
-        )
-        .is_err()
-    );
+    typecheck_with(source, harness_stdlib()).expect("skills is available");
+    assert!(typecheck_with(source, Stdlib::core()).is_err());
 }
 
 #[test]
@@ -915,13 +910,27 @@ fn a_package_compiles_against_an_enabling_set() {
         path: crate::ModulePath::from("lib"),
         source,
     }];
-    crate::compile::compile_package_with_transitive_checked_for(
-        harness_stdlib(),
-        "@pied-piper/fanout",
-        crate::ModulePath::from("lib"),
-        &modules,
-        &[],
-        &[],
+    let declarations = harness_stdlib().package_declarations();
+    let stdlib_refs: Vec<&crate::PackageDeclaration> = declarations.iter().collect();
+    let sources = crate::compile::package_sources(&modules).unwrap();
+    let package_modules = crate::compile::package_modules(&sources);
+    let runtime = crate::runtime_declarations();
+    let root = crate::ModulePath::from("lib");
+    crate::compile::compile_package_request(
+        &crate::EngineFrontEnd,
+        &crate::PackageRequest {
+            name: "@pied-piper/fanout",
+            root_module: &root,
+            modules: &package_modules,
+            sources: &sources,
+            prelude: runtime.prelude,
+            host: runtime.host,
+            stdlib: &stdlib_refs,
+            dependencies: &[],
+            transitive: &[],
+            config: None,
+            surface: crate::PackageSurface::Public,
+        },
     )
     .expect("agents is importable");
     assert!(

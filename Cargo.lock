@@ -5584,6 +5584,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "similar",
+ "submilli-front-end",
  "submilli-wasm",
  "tempfile",
  "thiserror 2.0.21",
@@ -5600,6 +5601,17 @@ dependencies = [
  "wasmparser 0.248.0",
  "wast",
  "zstd",
+]
+
+[[package]]
+name = "submilli-front-end"
+version = "0.6.2"
+dependencies = [
+ "insta",
+ "serde",
+ "serde_json",
+ "unicode-ident",
+ "unicode-width",
 ]
 
 [[package]]

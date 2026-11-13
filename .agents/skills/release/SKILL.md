@@ -44,8 +44,8 @@ Default to stable releases. Prereleases and older maintenance lines require
 checking container aliases and GitHub prerelease/latest flags; do not move stable
 aliases back to an older release. This workflow does not publish crates,
 TypeScript packages or `skill-v*` releases unless
-separately requested. The release workflow also publishes `submilli-engine`,
-`submilli-policy`, `submilli-build`, `submilli-blueprint`, `submilli-shared` and
+separately requested. The release workflow also publishes `submilli-front-end`,
+`submilli-engine`, `submilli-policy`, `submilli-build`, `submilli-blueprint`, `submilli-shared` and
 `submilli-durable` to crates.io, after a reviewer approves
 its job in the `crates-io` environment; the `Publish crates` workflow does the
 same by hand. The workflow refuses to publish a crate when a sibling at the same
@@ -58,8 +58,9 @@ new crates.
 - Update root `Cargo.toml` `[workspace.package].version`. Member crates inherit
   it; inspect their manifests for exceptions and internal version requirements.
   The published crates pin each other at exactly that version in
-  `[workspace.dependencies]` (`interpreter`, `submilli-policy`, `submilli-build`,
-  `submilli-blueprint` and `submilli-shared`); bump those
+  `[workspace.dependencies]` (`submilli-front-end`, `interpreter`,
+  `submilli-policy`, `submilli-build`, `submilli-blueprint` and
+  `submilli-shared`); bump those
   pins with it.
   Do not bump independent dependencies such as `submilli-wasm` or package versions
   just because the runtime changes.

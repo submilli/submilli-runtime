@@ -405,7 +405,7 @@ mod tests {
 
     /// The help lines of every diagnostic compiling `source` reports.
     fn help_lines(source: &'static str) -> Vec<String> {
-        crate::type_size::tests::on_compiler_stack(move || {
+        submilli_front_end::test_support::on_compiler_stack(move || {
             let error = crate::compile::compile_script_checked(
                 source,
                 "names.ts",
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn rendering_failure_retains_triggering_type_mismatch() {
-        crate::type_size::tests::on_compiler_stack(|| {
+        submilli_front_end::test_support::on_compiler_stack(|| {
             FAIL_RENDER.with(|fail| fail.set(true));
             let error = crate::compile::compile_script_checked(
                 "function main(): number { return \"wrong\"; }",

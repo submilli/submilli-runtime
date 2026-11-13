@@ -6,7 +6,7 @@ use crate::type_size::TypeExtent;
 
 /// `children` yields the reverse of declaration order, preserving the former
 /// eager LIFO walk. Only ancestor iterators are retained, never a child frontier.
-pub(crate) fn measure<'a, T, I: Iterator<Item = &'a T>>(
+pub fn measure<'a, T, I: Iterator<Item = &'a T>>(
     root: &'a T,
     max_nodes: u64,
     max_depth: u32,
@@ -40,21 +40,24 @@ pub(crate) fn measure<'a, T, I: Iterator<Item = &'a T>>(
 }
 
 fn reserve_frame<T>(frames: &mut Vec<T>) -> Result<(), TryReserveError> {
-    #[cfg(test)]
-    tests::before_reservation(frames.len(), frames.capacity())?;
+    #[cfg(any(test, feature = "test-support"))]
+    test_support::before_reservation(frames.len(), frames.capacity())?;
     if frames.len() == frames.capacity() {
         frames.try_reserve(1)?;
     }
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// Fault injection for frame reservations, for this crate's and the
+/// engine's tests.
+#[cfg(any(test, feature = "test-support"))]
+#[allow(clippy::arithmetic_side_effects)]
+pub mod test_support {
     use super::*;
     use std::cell::Cell;
 
     #[derive(Clone, Copy, Default)]
-    pub(crate) struct Observation {
+    pub struct Observation {
         pub peak_frames: usize,
         pub reservations: usize,
         fail_after: Option<usize>,
@@ -64,10 +67,7 @@ pub(crate) mod tests {
         static OBSERVATION: Cell<Observation> = Cell::new(Observation::default());
     }
 
-    pub(crate) fn observe<R>(
-        fail_after: Option<usize>,
-        run: impl FnOnce() -> R,
-    ) -> (R, Observation) {
+    pub fn observe<R>(fail_after: Option<usize>, run: impl FnOnce() -> R) -> (R, Observation) {
         struct Restore(Observation);
         impl Drop for Restore {
             fn drop(&mut self) {

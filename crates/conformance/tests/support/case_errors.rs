@@ -3,9 +3,17 @@
 //! `typescript_case_errors` example the pruner calls, so the two judge an error
 //! the same way.
 use interpreter::{
-    Diagnostic, FileId, ModulePath, PackageSourceModule, Severity, TypedAst, parse_script,
-    typecheck_package_to_typed_ast, typecheck_to_typed_ast,
+    Diagnostic, EngineFrontEnd, FileId, FrontEnd, ModulePath, PackageSourceModule, Severity,
+    TypedAst, typecheck_package_to_typed_ast, typecheck_to_typed_ast,
 };
+
+/// The diagnostics parsing `source` alone reports.
+fn parse_diagnostics(source: &str, file: FileId) -> Vec<Diagnostic> {
+    EngineFrontEnd
+        .parse_script(source.to_owned(), file)
+        .diagnostics()
+        .to_vec()
+}
 
 use super::case_files;
 
@@ -137,9 +145,9 @@ pub(super) fn case_errors(source: &str) -> (TypedAst, Vec<CaseError>) {
     let (typed, diags, syntax_errors) = if let Some(files) = case_files::split(source) {
         typecheck_files(&files)
     } else {
-        let parsed = parse_script(source, FileId(0));
+        let parsed = parse_diagnostics(source, FileId(0));
         let (typed, diags) = typecheck_to_typed_ast(source, FileId(0));
-        (typed, diags, parsed.diagnostics().to_vec())
+        (typed, diags, parsed)
     };
     let errors = diags
         .iter()
@@ -166,7 +174,7 @@ fn typecheck_files(files: &[case_files::CaseFile]) -> (TypedAst, Vec<Diagnostic>
         .iter()
         // A file's id is its index, as `typecheck_package_to_typed_ast` gives it.
         .zip(0u32..)
-        .flat_map(|(file, id)| parse_script(&file.text, FileId(id)).diagnostics().to_vec())
+        .flat_map(|(file, id)| parse_diagnostics(&file.text, FileId(id)))
         .collect();
     let modules: Vec<PackageSourceModule<'_>> = files
         .iter()

@@ -1251,6 +1251,7 @@ impl TypedChildren {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ParsedScript;
     use crate::compile::parse_script;
     use crate::{Expr, FileId, Type, TypedExpr};
 
@@ -1285,13 +1286,16 @@ mod tests {
         ]));
         for budget in [0, 1, 7, 100_001] {
             let (nodes, observed) =
-                crate::type_walk::tests::observe(None, || annotation_nodes(&root, budget).unwrap());
+                submilli_front_end::type_walk::test_support::observe(None, || {
+                    annotation_nodes(&root, budget).unwrap()
+                });
             assert_eq!(nodes, 100_001.min(budget + 1));
             assert!(observed.peak_frames <= 1);
             assert!(observed.reservations <= 1);
         }
-        let (height, observed) =
-            crate::type_walk::tests::observe(None, || annotation_height(&root).unwrap());
+        let (height, observed) = submilli_front_end::type_walk::test_support::observe(None, || {
+            annotation_height(&root).unwrap()
+        });
         assert_eq!(height, 2);
         assert_eq!(observed.peak_frames, 1);
     }
@@ -1306,7 +1310,7 @@ mod tests {
             annotation(TypeAnnotationKind::Tuple(vec![leaf; 100_000])),
             deep,
         ]));
-        let (extent, observed) = crate::type_walk::tests::observe(None, || {
+        let (extent, observed) = submilli_front_end::type_walk::test_support::observe(None, || {
             measure_annotation(&root, u64::MAX, u32::MAX).unwrap()
         });
         assert_eq!(
@@ -1321,7 +1325,9 @@ mod tests {
             measure_annotation(&root, 3, u32::MAX).unwrap(),
             crate::type_size::TypeExtent { nodes: 4, depth: 4 }
         );
-        let (failure, _) = crate::type_walk::tests::observe(Some(1), || annotation_height(&root));
+        let (failure, _) = submilli_front_end::type_walk::test_support::observe(Some(1), || {
+            annotation_height(&root)
+        });
         assert!(matches!(failure, Err(CompilerFailure::Internal { .. })));
     }
 
@@ -1416,7 +1422,9 @@ mod tests {
         let root = annotation(TypeAnnotationKind::Array(Box::new(annotation(
             TypeAnnotationKind::BooleanLiteral(true),
         ))));
-        let (count, _) = crate::type_walk::tests::observe(Some(0), || annotation_nodes(&root, 10));
+        let (count, _) = submilli_front_end::type_walk::test_support::observe(Some(0), || {
+            annotation_nodes(&root, 10)
+        });
         assert!(
             matches!(count, Err(CompilerFailure::Internal { span: Some(s), .. }) if s == root.span)
         );
@@ -1434,7 +1442,8 @@ mod tests {
         }
         let (ast, diagnostics) = crate::parser::parse_checked(source, tokens, FileId(3)).unwrap();
         assert!(diagnostics.is_empty());
-        let (result, _) = crate::type_walk::tests::observe(Some(0), || check_syntax(&ast));
+        let (result, _) =
+            submilli_front_end::type_walk::test_support::observe(Some(0), || check_syntax(&ast));
         assert!(matches!(
             result,
             Err(CompilerFailure::Internal {

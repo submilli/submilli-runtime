@@ -13,7 +13,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use interpreter::{ModulePath, PackageSourceModule};
+use interpreter::PackageSourceModule;
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::{self, ArtifactError, ArtifactMetadata, ArtifactSource, PackageIdentity};
@@ -437,12 +437,26 @@ fn publish_locked(
     Ok(PublishOutcome::Published)
 }
 
+/// Why a stale artifact was not rebuilt.
+#[derive(Debug)]
+pub(crate) enum RecompileError {
+    /// The sources don't build: recorded, so later loads fail fast until they
+    /// or the dependencies change.
+    Failed(String),
+    /// The compiler could not run. Says nothing about the sources, so it is
+    /// not recorded and a later load tries again.
+    CompilerUnavailable(String),
+}
+
 pub(crate) fn recompile(
+    front_end: &dyn interpreter::FrontEnd,
     identity: &PackageIdentity,
     dependencies: &[Artifact],
-) -> Result<Recompiled, String> {
+) -> Result<Recompiled, RecompileError> {
     if identity.sources.is_empty() {
-        return Err("sources are missing; refusing to run the installed wasm".to_string());
+        return Err(RecompileError::Failed(
+            "sources are missing; refusing to run the installed wasm".to_string(),
+        ));
     }
     let direct_names: Vec<&str> = identity
         .metadata
@@ -469,18 +483,20 @@ pub(crate) fn recompile(
         })
         .collect();
     let overrides = &identity.metadata.config.overrides;
-    let config = resolved_config(&identity.sources, overrides)?;
-    let compiled = interpreter::compile::compile_package_configured(
-        interpreter::Stdlib::core(),
+    let config = resolved_config(&identity.sources, overrides).map_err(RecompileError::Failed)?;
+    let compiled = crate::compile::compile_package(
+        front_end,
         &identity.metadata.package_name,
-        ModulePath::from("lib"),
         &modules,
         &direct,
         &transitive,
         overrides,
         interpreter::PackageSurface::Public,
     )
-    .map_err(|error| render_compile_error(&identity.sources, error))?;
+    .map_err(|error| match error.unavailable() {
+        Some(fatal) => RecompileError::CompilerUnavailable(fatal.to_string()),
+        None => RecompileError::Failed(render_compile_error(&identity.sources, error)),
+    })?;
     let stdlib_declarations = interpreter::runtime::stdlib_package_declarations();
     let (prelude_declarations, host_declarations, _) =
         interpreter::runtime::prelude::cached_runtime_package_declarations();
@@ -1046,6 +1062,51 @@ mod tests {
         assert_ne!(loaded.wasm, b"STALE-WASM");
     }
 
+    /// A front end whose package check panics: the compiler could not run.
+    struct PanickingFrontEnd;
+
+    impl interpreter::FrontEnd for PanickingFrontEnd {
+        fn id(&self) -> &str {
+            "panicking"
+        }
+
+        fn parse_script(
+            &self,
+            source: String,
+            file: interpreter::FileId,
+        ) -> Box<dyn interpreter::ParsedScript> {
+            interpreter::EngineFrontEnd.parse_script(source, file)
+        }
+
+        fn check_package(
+            &self,
+            _request: &interpreter::PackageRequest<'_>,
+        ) -> Result<interpreter::CheckedPackage, interpreter::CompileError> {
+            panic!("injected compiler panic")
+        }
+    }
+
+    #[test]
+    fn a_rebuild_the_compiler_could_not_run_is_retried_not_recorded() {
+        let root = tempfile::tempdir().unwrap();
+        write_stale(root.path(), "@t/lib", "1.0.0", &[("lib", LIB)], &[], false);
+        let broken = PackageStore::new(root.path()).with_front_end(Arc::new(PanickingFrontEnd));
+
+        let error = broken
+            .load("@t/lib")
+            .expect_err("the compiler could not run");
+        assert!(matches!(error, PackageStoreError::Unavailable { .. }));
+        assert!(
+            error.to_string().contains("compiler unavailable"),
+            "{error}"
+        );
+
+        let rebuilt = PackageStore::new(root.path())
+            .load("@t/lib")
+            .expect("nothing was recorded against the sources");
+        assert_ne!(rebuilt.wasm, b"STALE-WASM");
+    }
+
     #[test]
     fn a_cycle_through_a_current_package_is_an_error_not_a_stack_overflow() {
         let root = tempfile::tempdir().unwrap();
@@ -1298,7 +1359,7 @@ mod tests {
         let identity =
             artifact::read_package_identity(&package_dir_under(root.path(), "@t/lib").unwrap())
                 .unwrap();
-        let compiled = recompile(&identity, &[]).unwrap();
+        let compiled = recompile(&interpreter::EngineFrontEnd, &identity, &[]).unwrap();
         let first = Arc::new(compiled);
         let mut second = first.wasm.clone();
         second.extend_from_slice(b"-other");

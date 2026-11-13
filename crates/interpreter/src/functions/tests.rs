@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use wasmtime::Linker;
 
 use super::*;
+use crate::compile::parse_script;
 use crate::compiler_limits::{COMPILER_STACK_BYTES, MAX_TYPE_DEPTH};
 use crate::docs_view::{Availability, DocAvailability};
 use crate::packages::DocAudience;
@@ -24,7 +25,6 @@ use crate::stdlib::http::transport::{
 };
 use crate::{
     DocCapability, FileId, ModulePath, PackageSourceModule, compile_package, compile_script,
-    parse_script,
 };
 
 struct OpenAvailability;
