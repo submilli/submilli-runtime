@@ -110,3 +110,35 @@ pub(crate) fn dynamic_member_interface(iface: &MangledName) -> bool {
         .iter()
         .any(|name| iface == &crate::mangle::prelude(name))
 }
+
+/// Whether a method on `iface` called on `recv_ty` dispatches through the live
+/// member helpers: a union of primitives, or a wrapper-interface receiver.
+pub(crate) fn method_dispatches_live(recv_ty: &Type, iface: &MangledName) -> bool {
+    crate::typechecker::infer::narrowing::strip_nullish(recv_ty)
+        .primitive_union_members()
+        .is_some()
+        || is_wrapper_interface_receiver(recv_ty, iface)
+}
+
+/// Whether `iface` is a primitive wrapper interface (`Number`, `Boolean`,
+/// `String`, `BigInt`) reached through a non-primitive receiver (`Number`,
+/// `T extends Number`, or a structural user class, optionally nullable).
+/// Such receivers lower to `(ref null $Object)` rather than the primitive Wasm
+/// slot their direct wrapper expects, and may hold a structural object at
+/// runtime, so they dispatch through the live member helpers.
+pub(crate) fn is_wrapper_interface_receiver(recv_ty: &Type, iface: &MangledName) -> bool {
+    let Some(wrapper) = crate::typechecker::infer::assignable::wrapper_interface_name(iface) else {
+        return false;
+    };
+    let concrete = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
+    match wrapper {
+        "Number" => !matches!(
+            concrete.primitive_behavior(),
+            Type::Number | Type::NumberLiteral(_)
+        ),
+        "Boolean" => !concrete
+            .all_members(&|member| matches!(member, Type::Boolean | Type::BooleanLiteral(_))),
+        "String" => !concrete.is_string_shaped(),
+        _ => !concrete.is_bigint(),
+    }
+}

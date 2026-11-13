@@ -1245,6 +1245,47 @@ impl Type {
             .then_some(widened)
     }
 
+    /// The unboxed primitive (`Type::Number` for `f64`, `Type::Boolean` for `i32`)
+    /// a homogeneous union collapses to in Wasm value lowering, if any.
+    ///
+    /// Must agree with [`crate::codegen::SymbolTable::value_type`], which lowers a
+    /// union whose members share one lowering to that lowering, so typecheck-time
+    /// box/cast gates and JSON/output encoders match signature lowering. Members
+    /// are compared after `lowered()`, as `value_type` does. Numeric enums stay
+    /// excluded because they lower to `(ref $BoxedNumber)`, not `f64`.
+    pub fn unboxed_union_primitive(&self) -> Option<&'static Type> {
+        let Type::Union(members) = self.lowered() else {
+            return None;
+        };
+        if members.is_empty() {
+            return None;
+        }
+        if Self::all_lowered_members(members, &|member| {
+            matches!(member, Type::Number | Type::NumberLiteral(_))
+        }) {
+            Some(&Type::Number)
+        } else if Self::all_lowered_members(members, &|member| {
+            matches!(member, Type::Boolean | Type::BooleanLiteral(_))
+        }) {
+            Some(&Type::Boolean)
+        } else {
+            None
+        }
+    }
+
+    /// Whether this union lowers to a reference slot (`$Object` and friends)
+    /// rather than an unboxed scalar.
+    pub fn is_boxed_union(&self) -> bool {
+        matches!(self.peel(), Type::Union(_)) && self.unboxed_union_primitive().is_none()
+    }
+
+    fn all_lowered_members(members: &[Type], leaf: &dyn Fn(&Type) -> bool) -> bool {
+        members.iter().all(|member| match member.lowered() {
+            Type::Union(inner) => Self::all_lowered_members(inner, leaf),
+            lowered => leaf(lowered),
+        })
+    }
+
     /// Whether every part of this type is a string — a `string`, a
     /// string-literal type, or a union of those.
     ///

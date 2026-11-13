@@ -1988,3 +1988,62 @@ permissions:
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output).trim(), "alice");
 }
+
+#[test]
+fn main_returning_number_literal_unions_and_wrapper_methods_matches_node() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cases = [
+        ("two.ts", "function main(): 1 | 2 { return 2; }", "2\n"),
+        ("zero.ts", "function main(): 0 | 1 | 2 { return 0; }", "0\n"),
+        (
+            "float.ts",
+            "function main(): 1.5 | 2.5 { return 2.5; }",
+            "2.5\n",
+        ),
+        (
+            "alias.ts",
+            "type Code = 1 | 2;\nfunction main(): Code { return 1; }",
+            "1\n",
+        ),
+        (
+            "escaped.ts",
+            "export const ref = main;\nfunction main(): 1 | 2 { return 2; }",
+            "2\n",
+        ),
+        (
+            "generic_return.ts",
+            r#"
+            function g<T>(_x: T): 1 | 2 { return 2; }
+            function s<T>(x: T): -1 | 1 { return x ? 1 : -1; }
+            function main(): string {
+                const n: number = g(0);
+                return `${String(g(0))}:${n}:${s(false)}`;
+            }
+            "#,
+            "2:2:-1\n",
+        ),
+        (
+            "wrapper.ts",
+            r#"
+            function callNum<T extends Number>(x: T): string { return x.toFixed(1); }
+            function callStr<T extends String>(x: T): string { return `${x.length}:${x.toUpperCase()}`; }
+            function callBool<T extends Boolean>(x: T): string { return `${x.valueOf()}:${x.toString()}`; }
+            function main(): string {
+                const n: Number = 3.25;
+                const s: String = "ab";
+                const b: Boolean = false;
+                return `${n.toFixed(2)}|${callNum(n)}|${s.toUpperCase()}|${callStr(s)}|${b.toString()}|${callBool(b)}`;
+            }
+            "#,
+            "3.25|3.3|AB|2:AB|false|false:false\n",
+        ),
+    ];
+
+    for (filename, source, expected) in cases {
+        let script = tmp.path().join(filename);
+        fs::write(&script, source).expect("write script");
+        let out = run(&["run".as_ref(), script.as_os_str()]);
+        assert!(out.status.success(), "{filename} failed: {}", stderr(&out));
+        assert_eq!(stdout(&out), expected, "unexpected output for {filename}");
+    }
+}

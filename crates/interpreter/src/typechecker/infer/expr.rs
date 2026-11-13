@@ -3769,7 +3769,7 @@ impl Inferer<'_> {
         // member is already an `$Object` subtype, `emit_box` is a
         // no-op so the extra flag is harmless.
         let needs_box = |t: &Type| -> bool {
-            matches!(t.peel(), Type::TypeVar(_) | Type::Unknown | Type::Union(_))
+            matches!(t.peel(), Type::TypeVar(_) | Type::Unknown) || t.is_boxed_union()
         };
         let any_object_shaped = sig.params.iter().any(|p| needs_box(&p.ty));
         let return_is_object_shaped = needs_box(&sig.ret);
@@ -5809,16 +5809,14 @@ impl Inferer<'_> {
 
         if arg_count > 2 {
             let (typed_space, space_ty) = self.infer_call_arg_at(&args, expanded_args, 2, None)?;
-            if !matches!(
+            // Unions of number literals (`2 | 4`) lower to `f64`, and string-shaped
+            // types (`"  " | "\t"`, template literals) to `$string`, like the bases.
+            let space_accepted = matches!(
                 space_ty.peel(),
-                Type::Number
-                    | Type::NumberLiteral(_)
-                    | Type::String
-                    | Type::StringLiteral(_)
-                    | Type::Null
-                    | Type::Undefined
-                    | Type::Error
-            ) {
+                Type::Number | Type::NumberLiteral(_) | Type::Null | Type::Undefined | Type::Error
+            ) || space_ty.unboxed_union_primitive() == Some(&Type::Number)
+                || space_ty.is_string_shaped();
+            if !space_accepted {
                 self.error_with_help(
                     self.typed_ast.try_expr(typed_space).map_err(super::arena_failure)?.span,
                     "`JSON.stringify` space argument must be `number`, `string`, `null`, or `undefined`"
@@ -7765,9 +7763,10 @@ impl Inferer<'_> {
                 }
                 ref interface @ Type::InterfaceRef { ref name, .. }
                     if !interface.is_regexp_match_array()
-                        && self
-                            .interface_narrowing_test(interface)
-                            .is_some_and(|test| !test.shape_allowed) =>
+                        && (assignable::is_wrapper_interface(interface)
+                            || self
+                                .interface_narrowing_test(interface)
+                                .is_some_and(|test| !test.shape_allowed)) =>
                 {
                     self.error_with_help(
                         span,

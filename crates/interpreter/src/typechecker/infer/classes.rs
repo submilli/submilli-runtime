@@ -1804,7 +1804,8 @@ impl<'a> Inferer<'a> {
             members,
             methods: methods.keys().cloned().collect(),
             shape_allowed: *dispatch == crate::Dispatch::VTable
-                || non_shape_carriers.contains(&crate::InterfaceCarrier::ObjectShape),
+                || non_shape_carriers.contains(&crate::InterfaceCarrier::ObjectShape)
+                || super::assignable::is_wrapper_interface(interface_ty),
             non_shape_carriers,
             nullable,
             undefined,

@@ -2691,6 +2691,22 @@ pub(crate) fn is_host_backed_interface(ty: &Type) -> bool {
     })
 }
 
+/// The prelude wrappers of a primitive (`Number`, `Boolean`, `String`,
+/// `BigInt`). A value of one holds either the primitive or a structural object.
+pub(crate) fn is_wrapper_interface(ty: &Type) -> bool {
+    let Type::InterfaceRef { mangled, .. } = ty.peel() else {
+        return false;
+    };
+    wrapper_interface_name(mangled).is_some()
+}
+
+/// The prelude name of `mangled` when it is a primitive wrapper interface.
+pub(crate) fn wrapper_interface_name(mangled: &crate::MangledName) -> Option<&'static str> {
+    ["Number", "Boolean", "String", "BigInt"]
+        .into_iter()
+        .find(|name| *mangled == crate::mangle::prelude(name))
+}
+
 /// `null` and `undefined` are excluded: they narrow through `predicate_envs_eq_nullish`.
 pub(super) fn literal_value_of(kind: &crate::TypedExprKind) -> Option<narrowing::LiteralValue> {
     use crate::TypedExprKind;
