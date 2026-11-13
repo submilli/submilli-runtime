@@ -835,7 +835,7 @@ fn check_refreshes_generated_editor_declarations() {
         fs::read_to_string(project.join(".submilli/types/lib.submilli.d.ts")).expect("read lib");
     assert!(stdlib.contains("declare module \"submilli:uuid\" {"));
     assert!(stdlib.contains("declare module \"submilli:http\" {"));
-    assert!(lib.contains("namespace JSON {"));
+    assert!(lib.contains("declare const JSON: JSON;"));
     assert!(lib.contains("interface Array<"));
 }
 

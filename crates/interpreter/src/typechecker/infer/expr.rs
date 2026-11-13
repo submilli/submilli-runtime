@@ -9611,8 +9611,9 @@ impl Inferer<'_> {
                 length_ty,
             ));
         }
-        // A function's `length` without a `Function` interface: the spec has
-        // no `Function` type, and `length` is the one property it reads.
+        // A function's `length`. The prelude declares it on `Function` for
+        // front ends; this checker still types the read itself and does not
+        // bind that name.
         if name.name == "length" && matches!(receiver_ty.peel(), Type::Function { .. }) {
             return Ok((
                 TypedExprKind::InterfacePropertyAccess {
@@ -19693,6 +19694,45 @@ function main(): void { if (result < 10) { } }
     /// emitter still rejects it — there is no schema — but the rejection is
     /// `cascading` and must stay silent rather than blame the same mistake
     /// twice.
+    #[test]
+    fn declared_builtins_do_not_change_the_checker() {
+        let (_, diags) = run("let f: Function = (() => 1);");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("unknown type `Function`")),
+            "{diags:?}"
+        );
+        let (_, diags) = run("const x = JSON;");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("compiler intrinsic")),
+            "{diags:?}"
+        );
+        for source in [
+            "function main(): string { return \"ab\"[0]; }",
+            "function main(): number { const b = Uint8Array.fromArray([1]); return b[0]; }",
+            "function main(): unknown { return JSON.parse(\"{}\"); }",
+            "function main(): void { assert(true); }",
+            "function main(): number { const f = (a: number, b: number) => a; return f.length; }",
+            "function main(): bigint { return BigInt.fromString(\"1\"); }",
+        ] {
+            let (_, diags) = run(source);
+            assert!(diags.is_empty(), "{source}\n{diags:?}");
+        }
+        // The declarations must not leak into mapped types, heritage, or the
+        // constructor's structural members.
+        for source in [
+            "type P = Partial<String>; function f(p: P): string { return p[0]; }",
+            "interface S extends String {} function f(s: S): string { return s[0]; }",
+            "function f(k: keyof BigIntConstructor): void {} function main(): void { f(\"fromString\"); }",
+        ] {
+            let (_, diags) = run(source);
+            assert!(!diags.is_empty(), "still rejected:\n{source}\n{diags:?}");
+        }
+    }
+
     #[test]
     fn a_cascading_schema_reject_emits_no_second_diagnostic() {
         let src = "import llm from \"submilli:llm\"; \

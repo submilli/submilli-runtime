@@ -238,22 +238,37 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
-                methods: BTreeMap::from([(
-                    "@call".to_string(),
-                    MethodSig { overloads: Vec::new(),
-                        optional: false,
-                        generics: Default::default(),
-                        params: vec![Param::new(
-                            "value",
-                            Type::Union(vec![Type::String, Type::Number]),
-                        )],
-                        ret: Type::BigInt,
-                        predicate: None,
-                        doc: doc(
-                            "/**\n * Convert a `string` or `number` to a `bigint`.\n * - String input is parsed as a decimal of arbitrary length. Throws `Error` on a malformed string.\n * - Number input must be a finite integer. Throws on NaN, ±Inf, or non-integer values.\n */",
-                        ),
-                    },
-                )]),
+                methods: BTreeMap::from([
+                    (
+                        "@call".to_string(),
+                        MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![Param::new(
+                                "value",
+                                Type::Union(vec![Type::String, Type::Number]),
+                            )],
+                            ret: Type::BigInt,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Convert a `string` or `number` to a `bigint`.\n * - String input is parsed as a decimal of arbitrary length. Throws `Error` on a malformed string.\n * - Number input must be a finite integer. Throws on NaN, ±Inf, or non-integer values.\n */",
+                            ),
+                        },
+                    ),
+                    (
+                        "fromString".to_string(),
+                        MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![Param::new("value", Type::String)],
+                            ret: Type::BigInt,
+                            predicate: None,
+                            doc: doc(
+                                "/** Parse a decimal string as a bigint. Throws `Error` on a malformed string. */",
+                            ),
+                        },
+                    ),
+                ]),
                 properties: BTreeMap::new(),
                 dispatch: Dispatch::Static,
                 doc: doc(

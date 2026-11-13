@@ -42,7 +42,7 @@ impl<'a> TypeRegistry<'a> {
             .insert(sym.mangled_name.clone(), TypeRegistryEntry::Borrowed(sym));
     }
 
-    pub(super) fn insert_owned(&mut self, sym: TypeSymbol) {
+    pub(in crate::typechecker) fn insert_owned(&mut self, sym: TypeSymbol) {
         self.variances.get_mut().clear();
         self.entries.insert(
             sym.mangled_name.clone(),
