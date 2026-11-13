@@ -287,6 +287,7 @@ mod tests {
         };
         insert("echo", vec![Param::new("args", args)], ret);
         insert("raw", Vec::new(), Type::Unknown);
+        insert("main", Vec::new(), Type::Unknown);
         defs
     }
 
@@ -544,6 +545,83 @@ mod tests {
             "{:?}",
             run.clock_paused
         );
+    }
+
+    #[tokio::test]
+    async fn a_tool_read_as_a_value_is_a_function_that_calls_the_tool() {
+        let run = run(
+            r#"import { echo, raw } from "@tools";
+               function apply(f: (args: { msg: string }) => { reply: string }): string {
+                   return f({ msg: "passed" }).reply;
+               }
+               function main(): string {
+                   const f = echo;
+                   const g: () => unknown = raw;
+                   const mapped = [{ msg: "mapped" }].map(echo);
+                   return [
+                       typeof echo,
+                       f({ msg: "bound" }).reply,
+                       apply(echo),
+                       mapped[0].reply,
+                       JSON.stringify(g()) ?? "",
+                       String(f === echo),
+                   ].join(" ");
+               }"#,
+            Ok(serde_json::json!({ "reply": "r" })),
+        )
+        .await;
+        assert_eq!(
+            run.result.unwrap().as_deref(),
+            Some(r#"function r r r {"reply":"r"} true"#)
+        );
+        let calls = run.calls.lock().unwrap();
+        let sent: Vec<_> = calls
+            .iter()
+            .map(|(tool, args)| (tool.as_str(), args.as_str()))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("echo", r#"{"msg":"mapped"}"#),
+                ("echo", r#"{"msg":"bound"}"#),
+                ("echo", r#"{"msg":"passed"}"#),
+                ("raw", "{}"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_named_main_read_as_a_value_leaves_the_program_main_the_entry() {
+        let run = run(
+            r#"import { main as runMain, echo as e } from "@tools";
+               function main(): string {
+                   const f = runMain;
+                   f();
+                   return typeof f + " " + String(e === e);
+               }"#,
+            Ok(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(run.result.unwrap().as_deref(), Some("function true"));
+        assert_eq!(
+            *run.calls.lock().unwrap(),
+            [("main".to_string(), "{}".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_value_checks_the_answer_like_a_direct_call() {
+        let run = run(
+            r#"import { echo } from "@tools";
+               function main(): string {
+                   const f = echo;
+                   try { return f({ msg: "hi" }).reply; }
+                   catch (e) { return e instanceof TypeError ? "type" : "other"; }
+               }"#,
+            Ok(serde_json::json!({ "reply": 5 })),
+        )
+        .await;
+        assert_eq!(run.result.unwrap().as_deref(), Some("type"));
     }
 
     #[test]

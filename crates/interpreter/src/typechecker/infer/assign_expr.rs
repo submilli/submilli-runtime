@@ -247,7 +247,7 @@ impl Inferer<'_> {
         Ok(held_value)
     }
 
-    fn push_typed_stmt(
+    pub(super) fn push_typed_stmt(
         &mut self,
         kind: TypedStmtKind,
         span: Span,

@@ -60,6 +60,7 @@ mod union_call;
 pub(crate) mod utility_types;
 mod value_operand;
 pub(crate) mod variance;
+mod virtual_values;
 
 use std::collections::{BTreeMap, BTreeSet};
 

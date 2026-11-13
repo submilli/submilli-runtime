@@ -35,9 +35,9 @@ use super::{Inferer, assignable, narrowing, object_normalization};
 pub(super) type InferredObjectFields = std::collections::BTreeMap<ExprId, (ExprId, Type, bool)>;
 
 pub(super) struct StaticCallTarget<'a> {
-    package: &'a str,
-    symbol: &'a str,
-    mangled: crate::MangledName,
+    pub(super) package: &'a str,
+    pub(super) symbol: &'a str,
+    pub(super) mangled: crate::MangledName,
 }
 
 /// What a use of a class's constructor does, for the help a private one gets.
@@ -1292,6 +1292,21 @@ impl Inferer<'_> {
                     Type::Error,
                 ));
             }
+            if let ValueKind::Function { params, ret, .. } = &entry.kind
+                && self.is_virtual_package(&entry.package_name)
+            {
+                let (package, symbol) = (entry.package_name.clone(), entry.symbol_name.clone());
+                let (params, ret) = (params.clone(), ret.clone());
+                let adapter =
+                    self.virtual_function_value(&package, &symbol, &mangled, &params, &ret, span)?;
+                return Ok((
+                    TypedExprKind::FunctionRef {
+                        mangled: adapter,
+                        name: ident,
+                    },
+                    function_value_type(&params, &ret, None),
+                ));
+            }
             let (kind, ty) = match &entry.kind {
                 ValueKind::Function {
                     params,
@@ -1303,17 +1318,7 @@ impl Inferer<'_> {
                         mangled,
                         name: ident,
                     },
-                    Type::Function {
-                        params: params.iter().map(callable_parameter_type).collect(),
-                        ret: Box::new(ret.clone()),
-                        predicate: type_predicate.clone().map(Box::new),
-                        // lift the rest flag from the resolved
-                        // signature so a function-as-value reference
-                        // (`const f = sum;`) carries the variadic shape
-                        // through to its callers.
-                        has_rest: params.last().is_some_and(|p| p.rest),
-                        optional: crate::package_declaration::optional_parameter_count(params),
-                    },
+                    function_value_type(params, ret, type_predicate.as_ref()),
                 ),
                 ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => (
                     TypedExprKind::GlobalRef {
@@ -7386,8 +7391,12 @@ impl Inferer<'_> {
             std::collections::BTreeMap::new();
         for (name, (mut field, source)) in merged {
             // A generic interface's member at its arguments (`Readonly<T>` at
-            // `I<{ a: number }>`) is laid out as the type it stands for.
-            field.ty = super::utility_types::normalize(&field.ty, self.resolver())
+            // `I<{ a: number }>`) is laid out as the type it stands for. A
+            // recursive alias's back-edge (`meta?: T` in `T`) is rehydrated:
+            // codegen keys the literal's vtable on this layout, and the shape
+            // collector records it rehydrated.
+            field.ty = self
+                .rehydrate_and_evaluate(&field.ty)
                 .map_err(super::type_limit_at(span))?;
             field_origins.push(crate::TypedObjectFieldOrigin {
                 name: Ident {
@@ -7831,6 +7840,20 @@ impl Inferer<'_> {
         let omitted: std::collections::BTreeSet<String> =
             exclude.iter().map(|name| name.name.clone()).collect();
         fields.retain(|name, _| !omitted.contains(name));
+        // A recursive alias's back-edge is rehydrated, as an object literal's
+        // field is: codegen keys the rest's vtable on its fields and index
+        // signatures, and the shape collector records them rehydrated.
+        for field in fields.values_mut() {
+            field.ty = self
+                .rehydrate_and_evaluate(&field.ty)
+                .map_err(super::type_limit_at(span))?;
+        }
+        let mut kept_signatures = signatures.kept;
+        for signature in &mut kept_signatures {
+            *signature.value = self
+                .rehydrate_and_evaluate(&signature.value)
+                .map_err(super::type_limit_at(span))?;
+        }
         // Every rest is read by name, so its mask can leave the excluded names
         // out; a lone object's fields need no value check.
         let checked = self
@@ -7864,7 +7887,7 @@ impl Inferer<'_> {
                 ty: field.ty.clone(),
             })
             .collect();
-        let (index, more_indexes) = crate::split_index_signatures(signatures.kept);
+        let (index, more_indexes) = crate::split_index_signatures(kept_signatures);
         let ty = Type::Object {
             index,
             fields,
@@ -16388,6 +16411,23 @@ fn append_tuple_literal_types(
         elements,
         optional: length.saturating_sub(required),
     })
+}
+
+/// The type of a top-level function read as a value. The rest flag comes from
+/// the signature, so a reference (`const f = sum;`) keeps its variadic shape
+/// for its callers.
+fn function_value_type(
+    params: &[crate::Param],
+    ret: &Type,
+    predicate: Option<&crate::TypePredicate>,
+) -> Type {
+    Type::Function {
+        params: params.iter().map(callable_parameter_type).collect(),
+        ret: Box::new(ret.clone()),
+        predicate: predicate.cloned().map(Box::new),
+        has_rest: params.last().is_some_and(|p| p.rest),
+        optional: crate::package_declaration::optional_parameter_count(params),
+    }
 }
 
 pub(super) fn callable_parameter_type(param: &crate::Param) -> Type {

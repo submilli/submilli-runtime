@@ -1356,6 +1356,26 @@ fn emit_checked_record_read(
         }
     }
     emitter.emit_end();
+    if matches!(read_ty.peel(), Type::Never) {
+        // A missing key of a `never` record (`Record<string, never>`, an
+        // empty object) reads `undefined`, as in JavaScript; only a value the
+        // record holds is checked, and no value is a `never`.
+        emitter.instruction(Instruction::LocalGet(value));
+        emit_is_undefined(emitter, ctx)?;
+        emitter.emit_if(BlockType::Result(ctx.symbols.value_type(read_ty)?));
+        emitter.instruction(Instruction::LocalGet(value));
+        cast::emit_cast_to(emitter, ctx, read_ty)?;
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(value));
+        crate::codegen::cast_check::emit_checked_cast_on_stack(
+            emitter,
+            ctx,
+            &Type::Unknown,
+            read_ty,
+        )?;
+        emitter.emit_end();
+        return Ok(());
+    }
     emitter.instruction(Instruction::LocalGet(value));
     crate::codegen::cast_check::emit_checked_cast_on_stack(emitter, ctx, &Type::Unknown, read_ty)?;
     Ok(())
