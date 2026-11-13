@@ -13991,6 +13991,14 @@ impl Inferer<'_> {
         {
             return ChainField::property(length_ty, crate::mangle::prelude("Array"));
         }
+        // A union of one interface's instances offers that interface's methods
+        // (see `find_interface_instances_method`); check them before the union
+        // field rule below, which reads only fields.
+        if receiver_ty.interface_instance_union_members().is_some()
+            && let Some(found) = self.chain_method_lookup(receiver_ty, name, span)
+        {
+            return found;
+        }
         match receiver_ty.peel() {
             // An object literal carries the prelude `Object` interface's members
             // (`toJson`, …) beside its own fields, so a miss on the field map is

@@ -276,6 +276,13 @@ pub fn emit_coerce_to_wasm_slot(
         (ValType::Ref(_), ValType::I32) if matches!(source_ty, Type::Unknown) => {
             emit_condition_to_i32(emitter, ctx, source_ty)?;
         }
+        // A boolean kept as a bare alias reference unboxes as a boolean.
+        (ValType::Ref(_), ValType::I32)
+            if alias_reference_body(ctx, source_ty)?
+                .is_some_and(|body| matches!(body.primitive_behavior(), Type::Boolean)) =>
+        {
+            emit_cast_to(emitter, ctx, &Type::Boolean)?;
+        }
         (ValType::Ref(_), ValType::F64) => {
             emit_cast_to(emitter, ctx, &Type::Number)?;
         }
@@ -303,6 +310,79 @@ pub fn emit_coerce_to_wasm_slot(
         }
     };
     Ok(())
+}
+
+/// The type a value kept as a bare alias reference stands for where an operator
+/// or a member call reads it: the alias body, through aliases of aliases, when
+/// that is a primitive or an array. A declaration may type a value by a
+/// reference to one of its aliases (`Type::AliasRef`, no inline body), which
+/// lowers to the reference's `(ref null $Object)` slot, while the primitive or
+/// array it names has a representation of its own. `None` for any other type,
+/// and for a body codegen has no declaration of.
+pub fn alias_reference_body(
+    ctx: &CodegenCtx<'_>,
+    ty: &Type,
+) -> Result<Option<Type>, crate::compiler_error::CompilerFailure> {
+    let peeled = ty.peel();
+    if !matches!(peeled, Type::AliasRef { .. }) {
+        return Ok(None);
+    }
+    let mut body = peeled.clone();
+    let mut seen = std::collections::BTreeSet::new();
+    while let Type::AliasRef { mangled, .. } = &body {
+        if !seen.insert(mangled.clone()) {
+            return Ok(None);
+        }
+        let expanded = ctx.validator_bodies.expand_one(&body).map_err(|exceeded| {
+            exceeded.into_failure(crate::compiler_error::CompilerStage::Codegen, None)
+        })?;
+        if expanded == body {
+            return Ok(None);
+        }
+        body = expanded;
+    }
+    let has_own_representation = matches!(
+        body.primitive_behavior(),
+        Type::Number
+            | Type::NumberLiteral(_)
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Array(_)
+    );
+    Ok(has_own_representation.then_some(body))
+}
+
+/// Convert the value on top of the stack, of static type `ty`, to its alias
+/// body's representation when it is kept as a bare alias reference (see
+/// [`alias_reference_body`]). Returns the type the value now has.
+pub fn emit_alias_reference_as_body(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    ty: &Type,
+) -> Result<Type, crate::compiler_error::CompilerFailure> {
+    let Some(body) = alias_reference_body(ctx, ty)? else {
+        return Ok(ty.clone());
+    };
+    emit_coerce_to_wasm_slot(emitter, ctx, ty, ctx.symbols.value_type(&body)?)?;
+    Ok(body)
+}
+
+/// Convert the value on top of the stack, read as `read_ty`, to the slot of
+/// `target_ty` when the read is kept as a bare alias reference (see
+/// [`alias_reference_body`]) — a call result typed by the declaration's
+/// reference, a discriminant compared as the alias body. A no-op otherwise.
+pub fn emit_alias_reference_to(
+    emitter: &mut FunctionEmitter<'_>,
+    ctx: &CodegenCtx<'_>,
+    read_ty: &Type,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    if alias_reference_body(ctx, read_ty)?.is_none() {
+        return Ok(());
+    }
+    emit_coerce_to_wasm_slot(emitter, ctx, read_ty, ctx.symbols.value_type(target_ty)?)
 }
 
 /// Coerce the returned value on top of the stack (static type `source_ty`) into

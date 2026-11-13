@@ -1100,11 +1100,7 @@ impl CodegenAnalysis {
                         | BinOp::NullishCoalesce => {}
                     }
                 }
-                if ta
-                    .try_expr(*lhs)
-                    .map_err(crate::codegen::arena_failure)?
-                    .ty
-                    .is_bigint()
+                if may_be_bigint(&ta.try_expr(*lhs).map_err(crate::codegen::arena_failure)?.ty)
                     && matches!(
                         op,
                         BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge
@@ -1143,11 +1139,13 @@ impl CodegenAnalysis {
                     .map_err(crate::codegen::arena_failure)?
                     .ty
                     .peel();
-                if matches!(op, crate::UnOp::Neg) && operand_ty.is_bigint() {
+                if matches!(op, crate::UnOp::Neg) && may_be_bigint(operand_ty) {
                     self.dependency_usage.collect_bigint_host_value("neg");
                 }
                 if matches!(op, crate::UnOp::Pos)
                     && (operand_ty.is_string_shaped()
+                        // A bare alias reference may name a string alias; see `may_be_bigint`.
+                        || matches!(operand_ty, crate::Type::AliasRef { .. })
                         || matches!(operand_ty.primitive_behavior(), crate::Type::Union(_)))
                 {
                     self.dependency_usage.collect_number_coercion_host_value();
@@ -1789,4 +1787,11 @@ fn is_shaped_receiver(ty: &Type) -> bool {
             .any(|m| matches!(m.peel(), Type::InterfaceRef { .. } | Type::Object { .. })),
         _ => false,
     }
+}
+
+/// Whether an operand may be a bigint, so its operator needs the bigint host
+/// operations. A value kept as a bare alias reference may name a bigint alias;
+/// its body is resolved only at emission, so it counts here.
+fn may_be_bigint(ty: &Type) -> bool {
+    ty.is_bigint() || matches!(ty.peel(), Type::AliasRef { .. })
 }
