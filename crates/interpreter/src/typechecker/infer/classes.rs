@@ -4804,7 +4804,7 @@ pub(super) fn parent_hop(
 /// A method signature with the declaring class's type parameters substituted
 /// from `bindings` — param types, return, and the guard predicate's asserted
 /// type. Method-level generics and doc pass through unchanged.
-fn substitute_method_sig(
+pub(super) fn substitute_method_sig(
     sig: &MethodSig,
     bindings: &BTreeMap<String, Type>,
     limits: &TypeLimits,

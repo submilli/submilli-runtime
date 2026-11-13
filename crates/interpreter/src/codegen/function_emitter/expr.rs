@@ -903,6 +903,10 @@ fn emit_symbol_call(
             &target.ret,
             args,
         )?;
+        // A declaration may type the result by a bare reference to one of its
+        // aliases, which returns in the reference's slot, where the call's own
+        // type is the alias body.
+        cast::emit_alias_reference_to(emitter, ctx, &target.ret, result_ty)?;
     }
     if result_ty.is_void() {
         cast::emit_box(emitter, ctx, &target.ret)?;
@@ -4281,13 +4285,7 @@ fn emit_binary(
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
             // bigint → inline `bigint.cmp` host call; number → f64 ops;
             // string → `string_cmp` (signed lexicographic diff) vs 0.
-            let operand_ty = ctx
-                .ta
-                .try_expr(lhs)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .primitive_behavior()
-                .clone();
+            let operand_ty = operand_type(ctx, lhs)?.primitive_behavior().clone();
             if operand_ty.is_bigint() {
                 emit_bigint_cmp_inline(emitter, ctx, lhs, rhs, op)?;
                 return Ok(());
@@ -4623,12 +4621,28 @@ fn emit_primitive_operand(
         .try_expr(expr)
         .map_err(crate::codegen::arena_failure)?
         .ty;
+    let ty = &super::cast::emit_alias_reference_as_body(emitter, ctx, ty)?;
     let _: () = if matches!(ty.primitive_behavior(), Type::Number)
         && ctx.symbols.value_type(ty)? != ValType::F64
     {
         super::cast::emit_cast_to(emitter, ctx, &Type::Number)?;
     };
     Ok(())
+}
+
+/// An operand's type as its operator reads it: a value kept as a bare alias
+/// reference reads as its alias body, which [`emit_primitive_operand`]
+/// converts it to.
+fn operand_type(
+    ctx: &CodegenCtx,
+    expr: ExprId,
+) -> Result<Type, crate::compiler_error::CompilerFailure> {
+    let ty = &ctx
+        .ta
+        .try_expr(expr)
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
+    Ok(super::cast::alias_reference_body(ctx, ty)?.unwrap_or_else(|| ty.clone()))
 }
 
 /// `"field" in obj` codegen. Walks the receiver's
@@ -6092,11 +6106,7 @@ fn has_numeric_operands(
         return Ok(false);
     }
     for &operand in operands {
-        let ty = &ctx
-            .ta
-            .try_expr(operand)
-            .map_err(crate::codegen::arena_failure)?
-            .ty;
+        let ty = operand_type(ctx, operand)?;
         if !matches!(
             ty.primitive_behavior(),
             Type::Number | Type::NumberLiteral(_)
@@ -6222,13 +6232,7 @@ fn emit_unary(
         UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {
             // bigint negation routes to inline host call.
-            if ctx
-                .ta
-                .try_expr(operand)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .is_bigint()
-            {
+            if operand_type(ctx, operand)?.is_bigint() {
                 emit_primitive_operand(emitter, ctx, operand)?;
                 emit_bigint_extract_to_stack(emitter, ctx);
                 let host_idx = ctx
@@ -6253,12 +6257,7 @@ fn emit_unary(
             // the same host parse `Number(s)` calls. On a number it is the
             // identity, so the operand's value is already what we want. A
             // `number | string` operand picks one of the two at run time.
-            let operand_ty = ctx
-                .ta
-                .try_expr(operand)
-                .map_err(crate::codegen::arena_failure)?
-                .ty
-                .clone();
+            let operand_ty = operand_type(ctx, operand)?;
             if operand_ty.is_string_shaped() {
                 emit_primitive_operand(emitter, ctx, operand)?;
                 emitter.instruction(Instruction::Call(to_number_host(ctx)?));
@@ -6376,7 +6375,7 @@ fn emit_method_call_at(
     call_ret_ty: &Type,
     call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let recv_ty = ctx
+    let mut recv_ty = ctx
         .ta
         .source_type(receiver)
         .map_err(crate::codegen::arena_failure)?
@@ -6413,6 +6412,9 @@ fn emit_method_call_at(
             );
         }
         emit_receiver(emitter, ctx, receiver)?;
+        // A string's or a number's method takes the receiver in its own
+        // representation, not as the reference a bare alias reference keeps.
+        recv_ty = super::cast::emit_alias_reference_as_body(emitter, ctx, &recv_ty)?;
     }
     emit_method_call_with_receiver_on_stack(
         emitter,
@@ -6603,8 +6605,11 @@ fn emit_method_call_with_receiver_on_stack(
     // field-name scan → cast to closure → call_ref, exactly as if
     // the user had written `(recv.method)(args)` against a
     // function-typed field. Reuses the `$ObjectShape` field-name scan
-    // machinery and the closure ABI.
-    if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
+    // machinery and the closure ABI. A union of the interface's instances
+    // (`Box<number> | Box<string>`) holds a value of the interface either way.
+    if matches!(recv_ty.lowered(), Type::InterfaceRef { .. })
+        || recv_ty.interface_instance_union_members().is_some()
+    {
         emit_interface_method_via_shape_with_receiver_on_stack(
             emitter,
             ctx,
@@ -7695,7 +7700,7 @@ fn emit_bigint_binop_inline(
     rhs: ExprId,
     op_name: &str,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_expr(emitter, ctx, lhs)?;
+    emit_primitive_operand(emitter, ctx, lhs)?;
     emit_bigint_extract_to_stack(emitter, ctx);
     let raw_bigint_idx = ctx
         .symbols
@@ -7711,7 +7716,7 @@ fn emit_bigint_binop_inline(
     emitter.instruction(Instruction::LocalSet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_limbs));
-    emit_expr(emitter, ctx, rhs)?;
+    emit_primitive_operand(emitter, ctx, rhs)?;
     emit_bigint_extract_to_stack(emitter, ctx);
     let host_idx = ctx
         .symbols
@@ -7842,7 +7847,7 @@ fn emit_bigint_cmp_call(
     lhs: ExprId,
     rhs: ExprId,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    emit_expr(emitter, ctx, lhs)?;
+    emit_primitive_operand(emitter, ctx, lhs)?;
     emit_bigint_extract_to_stack(emitter, ctx);
     let raw_bigint_idx = ctx
         .symbols
@@ -7858,7 +7863,7 @@ fn emit_bigint_cmp_call(
     emitter.instruction(Instruction::LocalSet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_sign));
     emitter.instruction(Instruction::LocalGet(lhs_limbs));
-    emit_expr(emitter, ctx, rhs)?;
+    emit_primitive_operand(emitter, ctx, rhs)?;
     emit_bigint_extract_to_stack(emitter, ctx);
     let cmp_idx = ctx
         .symbols

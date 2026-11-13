@@ -44,7 +44,8 @@ use crate::runtime::prelude::collection::{
     is_a, iterator_result_value, object_field, read_array_vals,
 };
 use crate::runtime::prelude::iterator::{
-    IterKind, IteratorSource, build_iterator, iter_done, iter_yield, next_closure_type, shared_next,
+    IterKind, IteratorSource, IteratorTag, build_iterator, iter_done, iter_yield,
+    next_closure_type, shared_next,
 };
 use crate::runtime::prelude::keep::KeptValue;
 use crate::runtime::prelude::ledger::{
@@ -644,7 +645,7 @@ fn make_map_iterator(
         next_ty,
         move |caller, params, results| map_next_step(caller, params, results, kind),
     )?;
-    build_iterator(caller, next_struct, next, cursor)
+    build_iterator(caller, IteratorTag::Map, next_struct, next, cursor)
 }
 
 /// One `next()` step: yield the projected entry at the cursor's next live

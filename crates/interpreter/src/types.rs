@@ -1516,6 +1516,19 @@ impl Type {
         flat.into_iter().next().unwrap_or(Type::Unknown)
     }
 
+    /// The members of a union of two or more interface instances, such as
+    /// `Iterator<number> | Iterator<string>`; `None` for any other type.
+    pub(crate) fn interface_instance_union_members(&self) -> Option<&[Type]> {
+        let Type::Union(members) = self.peel() else {
+            return None;
+        };
+        (members.len() > 1
+            && members
+                .iter()
+                .all(|member| matches!(member.peel(), Type::InterfaceRef { .. })))
+        .then_some(members.as_slice())
+    }
+
     /// The distinct primitive receiver types of a union, if every member is
     /// primitive. Literal members share their base type's methods.
     pub(crate) fn primitive_union_members(&self) -> Option<Vec<Type>> {

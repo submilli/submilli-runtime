@@ -359,6 +359,7 @@ Engine: the `regex` crate 1.12.3 (`regex-automata` 0.4.14), built in `prelude/re
 | `$string` vtable slot `equals` (`string_equals`, `prelude/vtable.rs:279`) | Check string type, identity and length before reading units; compare distinct equal-length strings | `CALL`; distinct equal lengths add `COPY(2n) + SCAN(n)` | before copies | SUB-1292 shares one implementation with `String#equals`. Identical or unequal-length strings cost only `CALL`; the old vtable hook copied both inputs and omitted scanning fuel. |
 | `$string` vtable slots `toString` and `hash` | Identity toString; lazy cached hash | `CALL`; hash adds `COPY(n) + SCAN(n)` only on a cache miss | before | SUB-1292: cached hashes on immutable strings; see the vtable table. |
 | `$regex` vtable slot `toString` (`regex_to_string`, `prelude/vtable.rs:1226`) | Builds `/source/flags` | `CALL + COPY(len(source) + len(flags))` | before | Not read in detail; `prelude/regex/mod.rs:8-11` says the regex and match-box vtables are otherwise Wasm-built (guest fuel already covers those). |
+| Built-in iterator vtable slot `toString` (`build_iterator_vtable`, `prelude/vtable.rs`) | Returns the iterator's own `toString` result when it has one, else writes its tag (`[object Array Iterator]`, `Map`, `Set`, `String`, `RegExp String`) | Same as the object vtable's `toString`: `CALL` plus the shared own-hook lookup and string write | before | SUB-2275. Slots `toJson`, `equals` and `hash` are the object vtable's bodies, with their formulas. |
 
 ### Findings
 

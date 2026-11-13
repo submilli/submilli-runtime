@@ -66,6 +66,7 @@ pub(super) fn create(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasm
     )?;
     iterator::build_iterator(
         caller,
+        iterator::IteratorTag::RegExpString,
         closure_type,
         next,
         Val::AnyRef(Some(env.to_anyref())),

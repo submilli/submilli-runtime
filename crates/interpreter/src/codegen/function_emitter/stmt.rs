@@ -1077,11 +1077,20 @@ fn emit_switch(
     cases: &[TypedSwitchCase],
     default: Option<StmtId>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // A discriminant kept as a bare alias reference compares as its alias body.
+    let compared_ty = &super::cast::alias_reference_body(ctx, discriminant_ty)?
+        .unwrap_or_else(|| discriminant_ty.clone());
+    emit_expr(emitter, ctx, discriminant)?;
+    let read_ty = &ctx
+        .ta
+        .try_expr(discriminant)
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
+    super::cast::emit_alias_reference_to(emitter, ctx, read_ty, compared_ty)?;
     // Stash discriminant in an anonymous local; numeric enums unboxed to f64
     // so per-case tests use f64.eq instead of a structural-equality call.
-    emit_expr(emitter, ctx, discriminant)?;
-    let disc_val = switch_disc_local_type(ctx, discriminant_ty)?;
-    if matches!(discriminant_ty.lowered(), Type::NumberEnum { .. }) {
+    let disc_val = switch_disc_local_type(ctx, compared_ty)?;
+    if matches!(compared_ty.lowered(), Type::NumberEnum { .. }) {
         let boxed_idx = ctx.symbols.boxed_number_type_idx().ok_or_else(|| {
             crate::codegen::internal_failure("boxed_number type registered with intrinsics")
         })?;
@@ -1107,7 +1116,7 @@ fn emit_switch(
     for (source_idx, case) in cases.iter().enumerate() {
         emitter.record_span(case.span);
         for value in &case.values {
-            emit_case_comparison(emitter, ctx, disc_local, discriminant_ty, value)?;
+            emit_case_comparison(emitter, ctx, disc_local, compared_ty, value)?;
             emitter.instruction(Instruction::BrIf(crate::codegen::wasm_u32(source_idx)?));
         }
     }

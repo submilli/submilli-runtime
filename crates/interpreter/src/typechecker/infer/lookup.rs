@@ -129,6 +129,9 @@ impl<'a> Inferer<'a> {
         if let Some(members) = recv_ty.primitive_union_members() {
             return self.find_primitive_union_method(&members, name);
         }
+        if let Some(members) = recv_ty.interface_instance_union_members() {
+            return self.find_interface_instances_method(members, name);
+        }
         if recv_ty.is_regexp_match_array() {
             return self.find_method(&Type::Array(Box::new(Type::regexp_element())), name);
         }
@@ -237,14 +240,60 @@ impl<'a> Inferer<'a> {
         Some(combined)
     }
 
+    /// A method of a union whose members are all instances of one interface
+    /// (`Iterator<number> | Iterator<string>`): each member is a value of the
+    /// interface, so the call dispatches as on one instance. The members'
+    /// signatures, with their own type arguments substituted, must take the
+    /// same parameters; the call returns the union of their results. Method
+    /// generics and differing type guards stay unsupported.
+    fn find_interface_instances_method(
+        &self,
+        members: &[Type],
+        name: &str,
+    ) -> Option<(
+        MethodSig,
+        BTreeMap<String, Type>,
+        crate::MangledName,
+        crate::Dispatch,
+    )> {
+        let mut sigs = Vec::new();
+        let mut interface: Option<crate::MangledName> = None;
+        for member in members {
+            let (sig, bindings, mangled, dispatch) = self.find_method(member, name)?;
+            if dispatch != crate::Dispatch::VTable || !sig.generics.is_empty() {
+                return None;
+            }
+            if *interface.get_or_insert_with(|| mangled.clone()) != mangled {
+                return None;
+            }
+            sigs.push(
+                super::classes::substitute_method_sig(&sig, &bindings, &self.type_limits).ok()?,
+            );
+        }
+        let mangled = interface?;
+        let mut combined = sigs.first()?.clone();
+        if sigs.iter().any(|sig| {
+            sig.params != combined.params
+                || sig.predicate != combined.predicate
+                || sig.optional != combined.optional
+        }) {
+            return None;
+        }
+        combined.ret = Type::union(sigs.into_iter().map(|sig| sig.ret).collect());
+        Some((combined, BTreeMap::new(), mangled, crate::Dispatch::VTable))
+    }
+
     /// `toString` on a structural interface that does not declare it.
     ///
     /// Every non-null value answers `toString` (spec §1.6). Such a value is an
     /// object, so the call dispatches as `Object`'s does, through vtable slot 0: the
     /// value's own `toString`, else `"[object Object]"`. An interface whose
     /// `toString` is a property keeps that property's rules, so an optional one
-    /// still needs a guard. Data-only runtime shapes use the same object path;
-    /// other runtime interfaces keep their own method contracts.
+    /// still needs a guard. Data-only runtime shapes use the same object path,
+    /// and so does `Iterator`, whose built-in values print their JavaScript tag
+    /// (`[object Array Iterator]`). Other runtime interfaces keep their own
+    /// method contracts: their host values would print `[object Object]` where
+    /// JavaScript names the class.
     fn undeclared_interface_to_string(
         &self,
         sym: &crate::TypeSymbol,
@@ -265,9 +314,10 @@ impl<'a> Inferer<'a> {
             return None;
         };
         let is_runtime_interface = sym.mangled_name.as_str().starts_with("submilli:");
+        let prints_its_tag = sym.mangled_name == crate::mangle::prelude("Iterator");
         if name != "toString"
             || dispatch != crate::Dispatch::VTable
-            || (is_runtime_interface && !methods.is_empty())
+            || (is_runtime_interface && !methods.is_empty() && !prints_its_tag)
             || properties.contains_key(name)
         {
             return None;

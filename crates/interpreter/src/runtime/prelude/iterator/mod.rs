@@ -27,10 +27,11 @@ use crate::runtime::StoreData;
 use crate::runtime::fuel::host_func;
 use crate::runtime::gc_singleton::{singleton_func, singleton_struct};
 use crate::runtime::host::{
-    host_boxed_boolean_vtable, host_closure_vtable, host_object_vtable,
+    host_boxed_boolean_vtable, host_closure_vtable, host_iterator_vtable, host_object_vtable,
     write_submilli_array_struct, write_submilli_string_struct,
 };
 use crate::runtime::intrinsic_types::{IntrinsicTypes, intrinsic_types};
+pub(crate) use crate::runtime::prelude::vtable::IteratorTag;
 
 /// The `$closure_0_value` func + struct types: `next: () => IteratorResult<T>`
 /// under the closure ABI. See [`value_closure_type`].
@@ -225,21 +226,22 @@ fn build_result(
     Ok(Val::AnyRef(Some(st.to_anyref())))
 }
 
-/// Assemble the iterator object: `$ObjectShape { object_vtable, ["next"], [next_closure] }`
+/// Assemble the iterator object: `$ObjectShape { iterator_vtable, ["next"], [next_closure] }`
 /// where `next_closure = $closure_0_value { closure_vtable, next_fn, env }`.
 ///
-/// The wrapper carries the host-owned generic `object_vtable`; the inner `next`
-/// closure carries `closure_vtable`. `for…of` only reads the `next`/`done`/`value`
-/// fields, so the wrapper's identity slots are never invoked.
+/// The wrapper carries the host-owned iterator vtable of `tag`, the object
+/// vtable's slots with a `toString` naming the tag; the inner `next` closure
+/// carries `closure_vtable`.
 pub(crate) fn build_iterator(
     caller: &mut Caller<'_, StoreData>,
+    tag: IteratorTag,
     next_struct_ty: StructType,
     next_fn: Func,
     env: Val,
 ) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let closure_vtable = host_closure_vtable(caller)?;
-    let object_vtable = host_object_vtable(caller)?;
+    let iterator_vtable = host_iterator_vtable(caller, tag)?;
 
     let closure_pre = StructRefPre::new(&mut *caller, next_struct_ty);
     let closure = StructRef::new(
@@ -273,7 +275,7 @@ pub(crate) fn build_iterator(
         &mut *caller,
         &obj_pre,
         &[
-            object_vtable,
+            iterator_vtable,
             Val::AnyRef(Some(names.to_anyref())),
             Val::AnyRef(Some(fields.to_anyref())),
             Val::AnyRef(None),
@@ -407,6 +409,18 @@ pub(crate) enum IteratorSource {
     Regex,
 }
 
+impl IteratorSource {
+    pub(crate) fn tag(&self) -> IteratorTag {
+        match self {
+            Self::Array | Self::Bytes => IteratorTag::Array,
+            Self::Map => IteratorTag::Map,
+            Self::Set => IteratorTag::Set,
+            Self::String => IteratorTag::String,
+            Self::Regex => IteratorTag::RegExpString,
+        }
+    }
+}
+
 pub(crate) fn shared_next(
     caller: &mut Caller<'_, StoreData>,
     source: IteratorSource,
@@ -487,6 +501,7 @@ pub(crate) fn make_index_iterator(
     let intr = intrinsic_types(&mut *caller)?;
     let cursor = make_cursor(caller, payload)?;
     let (next_ty, next_struct) = next_closure_type(caller.engine(), &intr)?;
+    let tag = source.tag();
     let next = shared_next(
         caller,
         source,
@@ -494,7 +509,7 @@ pub(crate) fn make_index_iterator(
         next_ty,
         move |caller, params, results| index_step(caller, params, results, kind, step),
     )?;
-    build_iterator(caller, next_struct, next, cursor)
+    build_iterator(caller, tag, next_struct, next, cursor)
 }
 
 /// Build the `String#iterator` cursor: yields one `$string` per CODE POINT — a
@@ -514,7 +529,7 @@ pub(crate) fn make_string_iterator(
         next_ty,
         string_step,
     )?;
-    build_iterator(caller, next_struct, next, cursor)
+    build_iterator(caller, IteratorTag::String, next_struct, next, cursor)
 }
 
 /// The `String#iterator` step: read the code point at the cursor position from

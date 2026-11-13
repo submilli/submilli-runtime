@@ -113,6 +113,7 @@ fn install_prelude(
         closure_vtable: vtables.closure,
         regex_vtable: vtables.regex,
         opaque_vtable: vtables.opaque,
+        iterator_vtables: vtables.iterators,
         temporal,
         map_tombstone,
         collection_null,
@@ -786,6 +787,7 @@ pub struct HostAbi {
     /// Identity vtable for host-only backing structs (stdlib `URL`, `Response`,
     /// fs `Stat`, …) — opaque `toString`/`toJson`, reference equality.
     pub(crate) opaque_vtable: Global,
+    pub(crate) iterator_vtables: super::prelude::vtable::IteratorVtables,
     pub(crate) temporal: super::prelude::temporal::TemporalAbi,
     // The host-owned `Map`/`Set` tombstone sentinel — a bare `$Object` marking a
     // deleted probe slot. Compared by reference identity during probing.
@@ -888,6 +890,13 @@ pub(crate) fn host_object_vtable(
     ctx: &mut impl AsContextMut<Data = StoreData>,
 ) -> wasmtime::Result<Val> {
     host_vtable(ctx, |abi| abi.object_vtable)
+}
+
+pub(crate) fn host_iterator_vtable(
+    ctx: &mut impl AsContextMut<Data = StoreData>,
+    tag: super::prelude::vtable::IteratorTag,
+) -> wasmtime::Result<Val> {
+    host_vtable(ctx, |abi| abi.iterator_vtables.get(tag))
 }
 
 pub(crate) fn host_boxed_number_vtable(

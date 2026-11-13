@@ -2055,3 +2055,215 @@ mod typed_arena_failures {
         desugar(ast, FileId(0)).unwrap();
     }
 }
+
+#[cfg(test)]
+mod alias_reference_value_tests {
+    //! SUB-2273: a package value typed by a bare reference to one of its
+    //! aliases (`Type::AliasRef`, no inline body) is kept as a reference of no
+    //! shape. A member call, an operator or a typed slot that reads it directly
+    //! needs the alias body's own representation, so the module must convert
+    //! it there, as it does when the value is first bound to a local.
+
+    use crate::mangle::package_symbol;
+    use crate::package_declaration::{TypeKind, ValueKind};
+    use crate::{Package, PackageDeclaration, Span, Type, TypeSymbol, ValueSymbol};
+
+    const KIT: &str = "@acme/kit";
+
+    /// Each function of `@acme/kit` and the alias its result is typed by.
+    const RESULTS: [(&str, &str); 6] = [
+        ("mkBig", "Big"),
+        ("mkId", "Id"),
+        ("mkNum", "Num"),
+        ("mkFlag", "Flag"),
+        ("mkStrs", "Strs"),
+        ("mkNumAlias", "NumAlias"),
+    ];
+
+    fn reference(name: &str) -> Type {
+        Type::AliasRef {
+            mangled: package_symbol(KIT, name),
+            package: Package(KIT.to_string()),
+            name: name.to_string(),
+            args: Vec::new(),
+        }
+    }
+
+    fn kit() -> PackageDeclaration {
+        let mut defs = PackageDeclaration::with_package(KIT);
+        for (name, ty) in [
+            ("Id", Type::String),
+            ("Num", Type::Number),
+            ("Flag", Type::Boolean),
+            ("Big", Type::BigInt),
+            ("Strs", Type::Array(Box::new(Type::String))),
+            ("NumAlias", reference("Num")),
+        ] {
+            defs.types.insert(
+                name.to_string(),
+                TypeSymbol {
+                    name: name.to_string(),
+                    mangled_name: package_symbol(KIT, name),
+                    declaration_span: Span::at(crate::FileId(0)),
+                    kind: TypeKind::Alias {
+                        generics: Default::default(),
+                        ty,
+                        doc: None,
+                    },
+                },
+            );
+        }
+        let returning = |alias: &str| ValueKind::Function {
+            generics: Default::default(),
+            params: Vec::new(),
+            ret: reference(alias),
+            type_predicate: None,
+            doc: None,
+        };
+        for (name, alias) in RESULTS {
+            let kind = returning(alias);
+            defs.values.insert(
+                name.to_string(),
+                ValueSymbol {
+                    name: name.to_string(),
+                    mangled_name: package_symbol(KIT, name),
+                    declaration_span: Span::at(crate::FileId(0)),
+                    kind,
+                },
+            );
+        }
+        defs
+    }
+
+    /// Uses TypeScript accepts of a value typed by an alias reference. The
+    /// front end reads a package constant only where it is called, so each use
+    /// reads a function's result.
+    const USES: &[&str] = &[
+        "const u = kit.mkId().toUpperCase();",
+        "const n = kit.mkId().length;",
+        "const j = kit.mkStrs().join(\",\");",
+        "const s = kit.mkNum().toFixed(1);",
+        "const y = kit.mkNum() + 1;",
+        "const y = kit.mkNum() * 2;",
+        "const y = -kit.mkNum();",
+        "const y = +kit.mkId();",
+        "const t = kit.mkNum() < 3;",
+        "const t = kit.mkNum() < kit.mkNumAlias();",
+        "const t = kit.mkId() < \"x\";",
+        "const c = kit.mkId() + \"!\";",
+        "const y = kit.mkNumAlias() + 1;",
+        "let x: number = 7;\nx %= kit.mkNum();",
+        "const b = kit.mkNum() === 1;",
+        "const f = kit.mkFlag();",
+        "const f: boolean = kit.mkFlag();",
+        "let b = true;\nb = kit.mkFlag();",
+        "function h(b: boolean): boolean { return b; }\nconst r = h(kit.mkFlag());",
+        "function g(): boolean { return kit.mkFlag(); }",
+        "const n = !kit.mkFlag();",
+        "if (kit.mkFlag()) { console.log(\"y\"); }",
+        "const f = kit.mkFlag() ? 1 : 0;",
+        "const b = kit.mkNum() !== 2;",
+        "const s = `${kit.mkNum()}`;",
+        "switch (kit.mkNum()) { case 1: break; }",
+        "const e = kit.mkStrs()[0];",
+        "const l = kit.mkStrs().length;",
+        "let t = 0;\nfor (const s of kit.mkStrs()) { t += s.length; }",
+        "const c = [...kit.mkStrs()];",
+        "const n = kit.mkId()?.length;",
+        "const y = kit.mkBig() + 1n;",
+        "const y = -kit.mkBig();",
+        "const t = kit.mkBig() < 2n;",
+    ];
+
+    fn source(statements: &str) -> String {
+        format!(
+            "import * as kit from \"{KIT}\";\n{statements}\nfunction main(): number {{ return 0; }}\n"
+        )
+    }
+
+    /// The front end types each call as the alias it names, written out; the
+    /// result still returns in the reference's slot.
+    #[test]
+    fn uses_of_a_result_typed_by_an_alias_reference_load() {
+        let kit = kit();
+        let engine = crate::runtime::RuntimeConfig::default().engine().unwrap();
+        let mut failures = Vec::new();
+        for statements in USES {
+            match super::compile_script(
+                &source(statements),
+                "main.ts",
+                crate::FileId(0),
+                &[&kit],
+                &[],
+            ) {
+                Ok(compiled) => {
+                    if let Err(error) = wasmtime::Module::new(&engine, &compiled.wasm) {
+                        failures.push(format!("{statements}: does not load: {error:#}"));
+                    }
+                }
+                Err(diagnostics) => failures.push(format!(
+                    "{statements}: {:?}",
+                    diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+                )),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// A front end may instead type the read itself as the declaration's alias
+    /// reference, so the tree and the slot agree; each operator and member call
+    /// then reads the reference. Retyping each call as its declared result
+    /// gives that tree.
+    #[test]
+    fn uses_of_a_value_typed_as_the_alias_reference_load() {
+        let kit = kit();
+        let engine = crate::runtime::RuntimeConfig::default().engine().unwrap();
+        let stdlib_defs = crate::runtime::stdlib_package_declarations();
+        let (prelude_defs, host_defs, internal_defs) =
+            crate::runtime::prelude::cached_runtime_package_declarations();
+        let mut dependencies: Vec<&PackageDeclaration> = prelude_defs.iter().collect();
+        dependencies.extend(host_defs);
+        dependencies.extend(internal_defs);
+        dependencies.extend(stdlib_defs.iter());
+        dependencies.push(&kit);
+        let mut failures = Vec::new();
+        for statements in USES {
+            let source = source(statements);
+            let parsed = super::parse_script(&source, crate::FileId(0));
+            let (mut ta, diagnostics, _) =
+                super::front_end(&source, &parsed, &stdlib_defs, &[&kit]).expect("front end");
+            assert!(
+                !super::has_errors(&diagnostics),
+                "{statements}: {diagnostics:?}"
+            );
+            for index in 0..ta.exprs_len() {
+                let expr = ta.try_expr_mut(crate::ExprId(index as u32)).unwrap();
+                if let crate::TypedExprKind::Call { mangled, .. } = &expr.kind
+                    && let Some((_, alias)) = RESULTS
+                        .iter()
+                        .find(|(name, _)| *mangled == package_symbol(KIT, name))
+                {
+                    expr.ty = reference(alias);
+                }
+            }
+            let ta = super::desugar(super::capture(ta).unwrap(), parsed.file).unwrap();
+            let loaded = crate::codegen::codegen_with_type_info(
+                &source,
+                "main.ts",
+                parsed.file,
+                &ta,
+                &dependencies,
+            )
+            .map_err(|failure| format!("{failure:?}"))
+            .and_then(|generated| {
+                wasmtime::Module::new(&engine, &generated.wasm)
+                    .map(drop)
+                    .map_err(|error| format!("does not load: {error:#}"))
+            });
+            if let Err(failure) = loaded {
+                failures.push(format!("{statements}: {failure}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

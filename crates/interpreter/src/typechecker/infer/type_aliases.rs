@@ -601,6 +601,17 @@ fn rehydrate_reachable(
                     body => super::utility_types::label(utility, rehydrated_args, body),
                 });
             }
+            // An alias of an alias (`type NumAlias = Num`) is the type the named
+            // alias stands for, so its own reference expands too. The names
+            // already on the chain stay references, which ends a cycle.
+            let body = match body {
+                Type::AliasRef { .. } => {
+                    let mut chain = skip.clone();
+                    chain.insert(mangled.clone());
+                    rehydrate_reachable(&body, types, &chain, child, budget)?
+                }
+                body => body,
+            };
             Ok(Type::alias_ty(
                 package.clone(),
                 name.clone(),

@@ -39,7 +39,8 @@ use crate::runtime::prelude::collection::{
     is_a, iterator_result_value, object_field, read_array_vals,
 };
 use crate::runtime::prelude::iterator::{
-    IterKind, IteratorSource, build_iterator, iter_done, iter_yield, next_closure_type, shared_next,
+    IterKind, IteratorSource, IteratorTag, build_iterator, iter_done, iter_yield,
+    next_closure_type, shared_next,
 };
 use crate::runtime::prelude::keep::KeptValue;
 use crate::runtime::prelude::ledger::{
@@ -579,7 +580,7 @@ fn make_set_iterator(
         next_ty,
         move |caller, params, results| set_next_step(caller, params, results, kind),
     )?;
-    build_iterator(caller, next_struct, next, cursor)
+    build_iterator(caller, IteratorTag::Set, next_struct, next, cursor)
 }
 
 /// One `next()` step: yield the element at the cursor's next live ledger slot,

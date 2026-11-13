@@ -72,6 +72,56 @@ pub(crate) struct HostVtables {
     /// `Response`, fs `Stat`, …): `toString` → "[object Object]", `toJson` →
     /// the value's properties, reference-identity equality, hash 0.
     pub opaque: Global,
+    pub iterators: IteratorVtables,
+}
+
+/// The `Symbol.toStringTag` JavaScript gives a built-in iterator, which its
+/// `toString` names: `[object Array Iterator]`.
+#[derive(Clone, Copy)]
+pub(crate) enum IteratorTag {
+    /// An array's iterator, and a `Uint8Array`'s (JavaScript's typed arrays
+    /// share the array iterator).
+    Array,
+    Map,
+    Set,
+    String,
+    /// `String#matchAll`'s iterator.
+    RegExpString,
+}
+
+impl IteratorTag {
+    fn to_string_text(self) -> &'static str {
+        match self {
+            Self::Array => "[object Array Iterator]",
+            Self::Map => "[object Map Iterator]",
+            Self::Set => "[object Set Iterator]",
+            Self::String => "[object String Iterator]",
+            Self::RegExpString => "[object RegExp String Iterator]",
+        }
+    }
+}
+
+/// One vtable per [`IteratorTag`]: the object vtable's slots, with a
+/// `toString` that names the tag.
+#[derive(Clone, Copy)]
+pub(crate) struct IteratorVtables {
+    array: Global,
+    map: Global,
+    set: Global,
+    string: Global,
+    regexp_string: Global,
+}
+
+impl IteratorVtables {
+    pub(crate) fn get(&self, tag: IteratorTag) -> Global {
+        match tag {
+            IteratorTag::Array => self.array,
+            IteratorTag::Map => self.map,
+            IteratorTag::Set => self.set,
+            IteratorTag::String => self.string,
+            IteratorTag::RegExpString => self.regexp_string,
+        }
+    }
 }
 
 /// Build the host-owned vtable globals and define them under
@@ -111,6 +161,25 @@ pub fn install_vtable_module(
         bigint: define_vtable(linker, store, &intr, "bigint_vtable", bigint_vt)?,
         closure: define_vtable(linker, store, &intr, "closure_vtable", closure_vt)?,
         regex: define_vtable(linker, store, &intr, "regex_vtable", regex_vt)?,
+        iterators: install_iterator_vtables(linker, store, &intr)?,
+    })
+}
+
+fn install_iterator_vtables(
+    linker: &mut Linker<StoreData>,
+    store: &mut Store<StoreData>,
+    intr: &IntrinsicTypes,
+) -> wasmtime::Result<IteratorVtables> {
+    let mut define = |name: &str, tag: IteratorTag| {
+        let slots = build_iterator_vtable(store, intr, tag)?;
+        define_vtable(linker, store, intr, name, slots)
+    };
+    Ok(IteratorVtables {
+        array: define("array_iterator_vtable", IteratorTag::Array)?,
+        map: define("map_iterator_vtable", IteratorTag::Map)?,
+        set: define("set_iterator_vtable", IteratorTag::Set)?,
+        string: define("string_iterator_vtable", IteratorTag::String)?,
+        regexp_string: define("regexp_string_iterator_vtable", IteratorTag::RegExpString)?,
     })
 }
 
@@ -743,6 +812,35 @@ fn build_object_vtable(
         },
     );
 
+    Ok([to_string, to_json, equals, hash])
+}
+
+/// A built-in iterator's vtable: the object vtable's, with a `toString` that
+/// names `tag` unless the iterator carries its own `toString`.
+fn build_iterator_vtable(
+    store: &mut Store<StoreData>,
+    intr: &IntrinsicTypes,
+    tag: IteratorTag,
+) -> wasmtime::Result<[HostVtableFunction; 4]> {
+    let [_, to_json, equals, hash] = build_object_vtable(store, intr)?;
+    let to_string = host_vtable_func(
+        &mut *store,
+        intr.to_string_fn.clone(),
+        move |caller, params, results| {
+            Box::new(async move {
+                let text =
+                    match object_override(&mut *caller, abi_arg(params, 0)?, "toString").await? {
+                        Some(value) => value,
+                        None => Val::AnyRef(Some(
+                            write_submilli_string_struct(&mut *caller, tag.to_string_text())?
+                                .to_anyref(),
+                        )),
+                    };
+                *abi_result(results, 0)? = text;
+                Ok(())
+            })
+        },
+    );
     Ok([to_string, to_json, equals, hash])
 }
 
