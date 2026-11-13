@@ -440,6 +440,23 @@ impl TemplateBuilder {
     }
 }
 
+/// The signature among `signatures` a property `name` reads through, where no
+/// resolver is at hand (contextual hints, literal freshness, narrowed field
+/// reads): the first other than `string` whose key matches, else the `string`
+/// one. Overlapping signatures are not combined, unlike
+/// `TypeResolver::index_for_name`.
+pub fn named_index<'a>(
+    signatures: impl Iterator<Item = &'a crate::IndexSignature> + Clone,
+    name: &str,
+    limits: &crate::type_size::TypeLimits,
+) -> Option<&'a crate::IndexSignature> {
+    let mut matching = signatures.filter(|index| matches_name(&index.key, name, limits));
+    matching
+        .clone()
+        .find(|index| !index.is_string())
+        .or_else(|| matching.find(|index| index.is_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

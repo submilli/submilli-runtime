@@ -723,7 +723,7 @@ mod tests {
         }
         // Compilation runs on the documented compiler stack; the test
         // harness's default thread is far smaller.
-        crate::type_size::tests::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             let shallow = expression_count(4);
             let deep = expression_count(8);
             assert!(

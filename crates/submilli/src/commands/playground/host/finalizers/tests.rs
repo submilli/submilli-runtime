@@ -66,7 +66,7 @@ fn publish_with(root: &Path, name: &str, source: &str, version: &str, dependenci
         .map(|dependency| store.load(dependency).unwrap().package_declaration)
         .collect();
     let refs: Vec<_> = declarations.iter().collect();
-    let compiled = super::super::run::on_compiler_thread(|| {
+    let compiled = interpreter::compiler_thread::on_compiler_stack(|| {
         interpreter::compile_package(
             name,
             interpreter::ModulePath::from("lib"),

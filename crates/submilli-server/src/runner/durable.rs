@@ -72,6 +72,7 @@ pub(crate) fn history(
 /// Callers must drain the previous attempt before opening its mounts here.
 #[allow(clippy::too_many_arguments)] // Same explicit runtime/import/mount inputs as the ordinary runner.
 pub(crate) async fn run(
+    front_end: &dyn interpreter::FrontEnd,
     run: &Run,
     program: &RunProgram,
     history: Arc<History>,
@@ -106,7 +107,7 @@ pub(crate) async fn run(
     }
     services.effects.get_or_insert_with(|| history.clone());
     services.variables = Arc::new(program.variables.clone());
-    let parsed = super::parse(&program.source)?;
+    let parsed = super::parse(front_end, &program.source)?;
     let outcome = super::run(
         &program.source,
         parsed,

@@ -533,7 +533,7 @@ pub(crate) async fn prepare_execution(
         )))
     };
 
-    let parsed = match runner::parse(code) {
+    let parsed = match runner::parse(state.front_end(), code) {
         Ok(parsed) => parsed,
         Err(error) => return Err(fail_to_parse(error.to_string())),
     };

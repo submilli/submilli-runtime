@@ -6,6 +6,7 @@
 
 pub mod artifact;
 pub mod capabilities;
+mod compile;
 pub mod config;
 pub mod doc_examples;
 pub mod driver;

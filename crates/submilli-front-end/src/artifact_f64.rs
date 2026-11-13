@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Deserializer, Serializer, de};
 
-pub(crate) fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
+pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
     if v.is_finite() {
         s.serialize_f64(*v)
     } else if v.is_nan() {
@@ -20,7 +20,7 @@ pub(crate) fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error>
     }
 }
 
-pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
     // `expecting` replaces serde's default "data did not match any variant of
     // untagged enum Repr", which leaks a private name at the one caller that
     // matters: an artifact written before this bridge existed holds `null` here.
@@ -51,16 +51,13 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Err
 /// attribute has nowhere to sit on the `f64` inside the tuple. `Variant`
 /// serializes as a two-element sequence, exactly as the bare tuple does, so
 /// the wire format is unchanged for finite values.
-pub(crate) mod pairs {
+pub mod pairs {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     #[derive(Serialize, Deserialize)]
     struct Variant(String, #[serde(with = "super")] f64);
 
-    pub(crate) fn serialize<S: Serializer>(
-        variants: &[(String, f64)],
-        s: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(variants: &[(String, f64)], s: S) -> Result<S::Ok, S::Error> {
         variants
             .iter()
             .map(|(name, value)| Variant(name.clone(), *value))
@@ -68,9 +65,7 @@ pub(crate) mod pairs {
             .serialize(s)
     }
 
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<Vec<(String, f64)>, D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(String, f64)>, D::Error> {
         Ok(Vec::<Variant>::deserialize(d)?
             .into_iter()
             .map(|Variant(name, value)| (name, value))

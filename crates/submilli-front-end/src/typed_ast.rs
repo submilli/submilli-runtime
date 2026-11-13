@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::arena::{self, ArenaError, ArenaKind};
-use crate::typechecker::infer::narrowing::{CastInfo, ReferencePath};
+use crate::narrowing::{CastInfo, ReferencePath};
 use crate::{BinOp, BindingKind, ExprId, Ident, MangledName, Span, StmtId, Type, UnOp};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +38,7 @@ pub enum TypedExprKind {
     /// `#` prefix. No `boxed` field — shadows are region-scoped and never mutated.
     LocalNarrowRef {
         binding: Ident,
-        path: crate::typechecker::infer::narrowing::ReferencePath,
+        path: crate::narrowing::ReferencePath,
     },
     GlobalRef {
         mangled: MangledName,
@@ -835,7 +835,7 @@ pub enum TypedSwitchValue {
         comparison: ExprId,
         /// The one value the label can have, when its type is a single literal:
         /// it then counts toward exhaustiveness as a literal label would.
-        literal: Option<crate::typechecker::infer::narrowing::LiteralValue>,
+        literal: Option<crate::narrowing::LiteralValue>,
         span: Span,
     },
     String {
@@ -923,7 +923,7 @@ pub struct MaybeMissingLocal {
 /// guarantee; [`crate::type_size::check`] checks a replacement type's bounds, not
 /// the semantic validity of the containing tree.
 ///
-/// [`crate::tree_height::check_typed`] checks arena structure, not these payload
+/// The engine's `tree_height::check_typed` checks arena structure, not these payload
 /// invariants. Clone, formatting, and destruction can recurse through payloads,
 /// including destruction when an owning phase returns an error. Keep their
 /// bounds valid before transferring ownership, and perform phase work and
@@ -1023,7 +1023,7 @@ pub struct TypedAst {
     pub rebindable_globals: std::collections::BTreeMap<MangledName, String>,
     /// Top-level function declarations. Hoisted — codegen doesn't depend on source order.
     pub functions: Vec<TypedFunction>,
-    /// [`crate::Ast::unparsed_main`]: a `main` was declared but did not parse.
+    /// The parser's `Ast::unparsed_main`: a `main` was declared but did not parse.
     pub unparsed_main: bool,
     /// Source-order `_start` body — currently one `AssignGlobal` per global initializer.
     pub top_level_statements: Vec<StmtId>,
@@ -1411,7 +1411,8 @@ pub enum InterfaceCarrier {
 /// Whether codegen can validate every value admitted by `ty` with
 /// `cast_check::emit_structural_test`. Keeping the allowlist beside the
 /// serialized narrowing-test model gives typechecking and codegen one answer.
-pub(crate) fn runtime_type_is_testable(ty: &Type) -> bool {
+#[doc(hidden)]
+pub fn runtime_type_is_testable(ty: &Type) -> bool {
     runtime_type_is_testable_inner(ty, false)
 }
 
@@ -1419,7 +1420,8 @@ pub(crate) fn runtime_type_is_testable(ty: &Type) -> bool {
 /// or interface back-edges. General expression descriptors cannot: polymorphic
 /// recursion can grow its type arguments forever while enumerating every
 /// expression type.
-pub(crate) fn field_runtime_type_is_testable(ty: &Type) -> bool {
+#[doc(hidden)]
+pub fn field_runtime_type_is_testable(ty: &Type) -> bool {
     runtime_type_is_testable_inner(ty, true)
 }
 
@@ -1573,7 +1575,8 @@ pub struct TypedTypeAliasDecl {
 }
 
 impl TypedAst {
-    pub(crate) fn has_string_index(&self, ty: &Type) -> bool {
+    #[doc(hidden)]
+    pub fn has_string_index(&self, ty: &Type) -> bool {
         match ty.peel() {
             Type::Object { index, .. } => index.is_some(),
             Type::Union(members) => members.iter().any(|member| self.has_string_index(member)),

@@ -534,6 +534,7 @@ async fn run_attempt(
         )));
     }
     let outcome = runner::durable::run(
+        state.front_end(),
         run,
         &program,
         history.clone(),

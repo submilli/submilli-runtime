@@ -22,20 +22,29 @@ pub enum CompilerFailure {
         span: Option<Span>,
         message: String,
     },
+    /// The compiler could not run: its thread could not start, which may pass,
+    /// or it panicked, which is a compiler bug. Either way it says nothing
+    /// about the program, so callers must not report or record it as the
+    /// program's error.
+    Unavailable { message: String },
 }
 
 impl CompilerFailure {
-    pub(crate) fn with_span(mut self, source_span: Span) -> Self {
-        let (Self::Limit { span, .. } | Self::Internal { span, .. }) = &mut self;
-        if span.is_none() {
+    #[doc(hidden)]
+    pub fn with_span(mut self, source_span: Span) -> Self {
+        if let Self::Limit { span, .. } | Self::Internal { span, .. } = &mut self
+            && span.is_none()
+        {
             *span = Some(source_span);
         }
         self
     }
 
-    pub(crate) fn with_stage(mut self, current_stage: CompilerStage) -> Self {
+    #[doc(hidden)]
+    pub fn with_stage(mut self, current_stage: CompilerStage) -> Self {
         match &mut self {
             Self::Limit { stage, .. } | Self::Internal { stage, .. } => *stage = current_stage,
+            Self::Unavailable { .. } => {}
         }
         self
     }
@@ -46,6 +55,7 @@ impl std::fmt::Display for CompilerFailure {
         let (category, stage, message) = match self {
             Self::Limit { stage, message, .. } => ("compiler limit", stage, message),
             Self::Internal { stage, message, .. } => ("internal compiler failure", stage, message),
+            Self::Unavailable { message } => return write!(f, "compiler unavailable: {message}"),
         };
         write!(f, "{category} during {stage:?}: {message}")
     }
@@ -62,6 +72,14 @@ pub struct CompileError {
 }
 
 impl CompileError {
+    /// The failure when the compiler could not run at all
+    /// ([`CompilerFailure::Unavailable`]).
+    pub fn unavailable(&self) -> Option<&CompilerFailure> {
+        self.fatal
+            .as_ref()
+            .filter(|fatal| matches!(fatal, CompilerFailure::Unavailable { .. }))
+    }
+
     pub fn with_prior_diagnostics(mut self, diagnostics: &[Diagnostic]) -> Self {
         self.diagnostics.splice(0..0, diagnostics.iter().cloned());
         self
@@ -72,10 +90,8 @@ impl CompileError {
     /// literals, whose source can run to thousands of lines. `text_of` returns
     /// a file's source. The compile and typecheck entry points in `compile.rs`
     /// apply it; the stage functions they call return uncut spans.
-    pub(crate) fn with_limit_span_cut<'a>(
-        mut self,
-        text_of: impl Fn(FileId) -> Option<&'a str>,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn with_limit_span_cut<'a>(mut self, text_of: impl Fn(FileId) -> Option<&'a str>) -> Self {
         if let Some(CompilerFailure::Limit {
             span: Some(span), ..
         }) = &mut self.fatal
@@ -94,6 +110,7 @@ impl CompileError {
                 CompilerFailure::Limit { span, .. } | CompilerFailure::Internal { span, .. } => {
                     *span
                 }
+                CompilerFailure::Unavailable { .. } => None,
             };
             let (message, help) = match &fatal {
                 CompilerFailure::Limit { message, help, .. } => (message.clone(), help.clone()),
@@ -101,6 +118,7 @@ impl CompileError {
                     fatal.to_string(),
                     vec!["report this compiler error with the source program".into()],
                 ),
+                CompilerFailure::Unavailable { .. } => (fatal.to_string(), Vec::new()),
             };
             self.diagnostics.push(Diagnostic {
                 severity: Severity::Error,

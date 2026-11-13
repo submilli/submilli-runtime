@@ -192,7 +192,8 @@ impl LineIndex {
         Self::from_owned(text)
     }
 
-    pub(crate) fn from_owned(source: String) -> Result<Self, SourceError> {
+    #[doc(hidden)]
+    pub fn from_owned(source: String) -> Result<Self, SourceError> {
         SourceError::check_source_len(source.len())?;
         let mut line_starts = Vec::new();
         line_starts
@@ -202,13 +203,13 @@ impl LineIndex {
         let mut bytes = source.bytes().enumerate().peekable();
         while let Some((offset, byte)) = bytes.next() {
             let end = match byte {
-                b'\n' => offset + 1,
+                b'\n' => offset.saturating_add(1),
                 b'\r' => match bytes.peek() {
                     Some((_, b'\n')) => {
                         bytes.next();
-                        offset + 2
+                        offset.saturating_add(2)
                     }
-                    _ => offset + 1,
+                    _ => offset.saturating_add(1),
                 },
                 _ => continue,
             };
@@ -250,7 +251,7 @@ impl LineIndex {
 
     pub fn line_count(&self) -> u32 {
         // Source length is bounded below u32::MAX; each line consumes a byte.
-        self.line_starts.len() as u32
+        u32::try_from(self.line_starts.len()).unwrap_or(u32::MAX)
     }
 
     pub fn byte_offset(&self, line: u32, col: u32) -> Result<u32, SourceError> {

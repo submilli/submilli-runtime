@@ -3,6 +3,9 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use interpreter::FrontEnd;
 
 use crate::artifact::{ArtifactReadBudget, ArtifactReadLimits, read_package_artifact_with_budget};
 use crate::{Artifact, ArtifactError};
@@ -17,10 +20,24 @@ const MAX_DEPENDENCY_DEPTH: usize = 128;
 /// root first, then each fallback in order, so an owned copy shadows a fallback
 /// copy. The server uses this to read packages the CLI published locally
 /// without ever writing into the CLI's store.
-#[derive(Clone, Debug)]
+///
+/// A stale artifact is rebuilt from its sources with the store's front end,
+/// the engine's unless [`PackageStore::with_front_end`] sets another. Builds
+/// that read dependencies from the store use the same one.
+#[derive(Clone)]
 pub struct PackageStore {
     root: PathBuf,
     fallbacks: Vec<PathBuf>,
+    front_end: Arc<dyn FrontEnd>,
+}
+
+impl fmt::Debug for PackageStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PackageStore")
+            .field("root", &self.root)
+            .field("fallbacks", &self.fallbacks)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A package directory found by a search across the store's roots.
@@ -37,7 +54,19 @@ impl PackageStore {
         Self {
             root: root.into(),
             fallbacks: Vec::new(),
+            front_end: Arc::new(interpreter::EngineFrontEnd),
         }
+    }
+
+    /// Compile with `front_end` instead of the engine's.
+    pub fn with_front_end(mut self, front_end: Arc<dyn FrontEnd>) -> Self {
+        self.front_end = front_end;
+        self
+    }
+
+    /// The front end builds and rebuilds compile with.
+    pub fn front_end(&self) -> &dyn FrontEnd {
+        &*self.front_end
     }
 
     /// Add a read-only root searched after the owned root (and any fallback
@@ -475,9 +504,12 @@ impl PackageStore {
         {
             return self.fail_rebuild(name, state, detail);
         }
-        let compiled = match crate::rebuild::recompile(identity, &dependencies) {
+        let compiled = match crate::rebuild::recompile(self.front_end(), identity, &dependencies) {
             Ok(compiled) => compiled,
-            Err(detail) => {
+            Err(crate::rebuild::RecompileError::CompilerUnavailable(detail)) => {
+                return self.fail_rebuild(name, state, detail);
+            }
+            Err(crate::rebuild::RecompileError::Failed(detail)) => {
                 crate::rebuild::record_failure(
                     self.root(),
                     name,

@@ -2,14 +2,13 @@
 //! caller sees.
 //!
 //! Copied from `submilli-server`'s `runner.rs` (parse, compile diagnostics, runtime
-//! error classification) and `compiler_thread.rs`.
+//! error classification).
 
-use interpreter::compiler_limits::COMPILER_STACK_BYTES;
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::is_memory_exhausted;
 use interpreter::{
-    BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources, failure_message,
-    parse_script,
+    BacktraceMode, Diagnostic, FileId, PackageDeclaration, ParsedScript, ScriptImports, Sources,
+    failure_message,
 };
 use wasmtime::Trap;
 
@@ -25,13 +24,15 @@ pub(super) const FILENAME: &str = "<execute>";
 pub(crate) struct ParsedExecute {
     pub(super) sources: Sources,
     pub(super) file: FileId,
-    pub(super) parsed: ParsedScript,
+    pub(super) parsed: Box<dyn ParsedScript>,
 }
 
 impl ParsedExecute {
     /// What the program imports, or the rendered reason its imports cannot be read.
     pub(crate) fn imports(&self) -> Result<ScriptImports, String> {
-        self.parsed.external_imports().map_err(|error| {
+        let stdlib = interpreter::runtime::stdlib_package_declarations();
+        let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+        let specifiers = self.parsed.imports().map_err(|error| {
             let diagnostics = error.into_diagnostics(self.file);
             diagnostics::render_collection(&diagnostics, &self.sources).map_or_else(
                 |failure| {
@@ -42,52 +43,18 @@ impl ParsedExecute {
                 },
                 |rendered| rendered.text,
             )
-        })
+        })?;
+        Ok(interpreter::classify_imports(&specifiers, &stdlib))
     }
 }
 
 pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::SourceError> {
     let (sources, file) = Sources::single(FILENAME, code)?;
-    let parsed = parse_script(code, file);
+    let parsed = crate::commands::front_end().parse_script(code.to_owned(), file);
     Ok(ParsedExecute {
         sources,
         file,
         parsed,
-    })
-}
-
-/// Why a compile could not run on its own thread.
-#[derive(Debug)]
-pub(crate) enum CompilerThreadError {
-    Spawn(std::io::Error),
-    Panicked,
-}
-
-impl std::fmt::Display for CompilerThreadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Spawn(error) => write!(f, "cannot start the compiler thread: {error}"),
-            Self::Panicked => f.write_str("the compiler thread panicked"),
-        }
-    }
-}
-
-impl std::error::Error for CompilerThreadError {}
-
-/// Runs `work` on a compiler-sized thread and waits for it, blocking the caller.
-/// Compilation recurses with program nesting and needs the interpreter's
-/// documented stack, several times a runtime worker's 2 MiB.
-pub(crate) fn on_compiler_thread<T: Send>(
-    work: impl FnOnce() -> T + Send,
-) -> Result<T, CompilerThreadError> {
-    std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .name("submilli-compile".into())
-            .stack_size(COMPILER_STACK_BYTES)
-            .spawn_scoped(scope, work)
-            .map_err(CompilerThreadError::Spawn)?
-            .join()
-            .map_err(|_| CompilerThreadError::Panicked)
     })
 }
 

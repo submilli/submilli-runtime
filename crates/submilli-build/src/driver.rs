@@ -226,10 +226,9 @@ fn build_configured(
             .collect();
         let transitive_refs =
             transitive_dependency_decls(package, &scoped, &built, &external_cache);
-        let compiled = interpreter::compile::compile_package_configured(
-            interpreter::Stdlib::core(),
+        let compiled = crate::compile::compile_package(
+            externals.front_end(),
             package.name.as_str(),
-            ModulePath::from("lib"),
             &module_refs,
             &dependency_refs,
             &transitive_refs,

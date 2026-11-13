@@ -1,17 +1,8 @@
 use crate::arena::{self, ArenaError, ArenaKind};
 use crate::{DocComment, Span};
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ExprId(pub u32);
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct StmtId(pub u32);
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Ident {
-    pub name: String,
-    pub span: Span,
-}
+pub use submilli_front_end::syntax::{
+    BinOp, BindingKind, ExprId, Ident, PostfixOp, StmtId, UnOp, Visibility,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
@@ -144,14 +135,6 @@ pub enum ExprKind {
     },
 }
 
-/// Postfix only — prefix `++x`/`--x` is not supported.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum PostfixOp {
-    Inc,
-    Dec,
-    NonNullAssert,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChainPart {
     Field {
@@ -267,62 +250,6 @@ impl ArrayLiteralElement {
             ArrayLiteralElement::Spread { value, .. } => *value,
         }
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    /// `a ** b` — right-associative exponentiation.
-    Pow,
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    Shr,
-    UnsignedShr,
-    Eq,
-    NotEq,
-    Lt,
-    Gt,
-    Le,
-    Ge,
-    And,
-    Or,
-    In,
-    /// `a ?? b` — nullish coalescing. Parser rejects mixing with `||`/`&&` without parentheses.
-    NullishCoalesce,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum UnOp {
-    Not,
-    BitNot,
-    Neg,
-    Pos,
-}
-
-impl BinOp {
-    pub(crate) fn bitwise_name(self) -> Option<&'static str> {
-        match self {
-            Self::BitAnd => Some("bitand"),
-            Self::BitOr => Some("bitor"),
-            Self::BitXor => Some("bitxor"),
-            Self::Shl => Some("shl"),
-            Self::Shr => Some("shr"),
-            Self::UnsignedShr => Some("ushr"),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum BindingKind {
-    Let,
-    Const,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -584,20 +511,6 @@ pub enum InterfaceMember {
         span: Span,
         doc: Option<DocComment>,
     },
-}
-
-/// Member visibility. No `protected` — it is rejected at parse time.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum Visibility {
-    #[default]
-    Public,
-    Private,
-}
-
-impl Visibility {
-    pub fn is_public(&self) -> bool {
-        *self == Visibility::Public
-    }
 }
 
 /// Modifiers on a class field or method. `readonly`/`visibility_span` carry spans so

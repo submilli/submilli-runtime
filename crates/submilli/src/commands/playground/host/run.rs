@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use interpreter::compile::compile_parsed_script;
 use interpreter::runtime::durable::RunId;
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::session_finalizers::SessionFinalizers;
@@ -31,7 +32,7 @@ use interpreter::runtime::{
     SharedTokenBudget, StoreData, Vfs, VfsInfo, VfsMode, install_package_modules_async,
     install_runtime_host_functions, install_runtime_store_bound, install_tenant_limits,
 };
-use interpreter::{compile_parsed_script_timed, dispatch_main_async, instantiate_program_async};
+use interpreter::{dispatch_main_async, instantiate_program_async};
 use serde::Serialize;
 use submilli_blueprint::{Blueprint, HarnessSecretBindings, VarBindings, VfsConfig};
 use submilli_build::PackageStore;
@@ -58,7 +59,7 @@ mod console;
 mod packages;
 mod timeout;
 
-pub(crate) use compile::{ParsedExecute, on_compiler_thread, parse};
+pub(crate) use compile::{ParsedExecute, parse};
 pub(crate) use packages::{PackageCache, PreparedPackages, finalizer_package_versions};
 
 use compile::{
@@ -1623,28 +1624,28 @@ async fn run_inner(
     if let Err(error) = register_package_sources(&mut parsed.sources, packages) {
         return RunOutcome::internal_failure(&error.to_string());
     }
-    let compiled = on_compiler_thread(|| {
-        let mut compiled = compile_parsed_script_timed(
-            code,
-            FILENAME,
-            &parsed.parsed,
-            &packages.stdlib_declarations,
-            &package_refs,
-            &virtual_refs,
-        );
-        if let Err(diagnostics) = &mut compiled
-            && let Some(suggestions) = &packages.import_suggestions
-        {
-            for error in suggestions.enrich(code, diagnostics) {
-                tracing::warn!(%error, "import hint lookup failed");
+    let stdlib_refs: Vec<&interpreter::PackageDeclaration> =
+        packages.stdlib_declarations.iter().collect();
+    let request = interpreter::ScriptRequest {
+        dependencies: &package_refs,
+        mcp: &virtual_refs,
+        ..interpreter::script_request(&stdlib_refs)
+    };
+    let compiled = match compile_parsed_script(parsed.parsed, FILENAME, &request) {
+        Ok(compiled) => compiled,
+        // The compiler could not run: say nothing about the program.
+        Err(error) => {
+            if let Some(fatal) = error.unavailable() {
+                return RunOutcome::internal_failure(&fatal.to_string());
             }
+            let mut diags = error.into_diagnostics(parsed.file);
+            if let Some(suggestions) = &packages.import_suggestions {
+                for error in suggestions.enrich(code, &mut diags) {
+                    tracing::warn!(%error, "import hint lookup failed");
+                }
+            }
+            return compile_failure(&parsed.sources, &diags, discovery_warnings);
         }
-        compiled
-    });
-    let compiled = match compiled {
-        Ok(Ok(out)) => out,
-        Ok(Err(diags)) => return compile_failure(&parsed.sources, &diags, discovery_warnings),
-        Err(error) => return RunOutcome::internal_failure(&error.to_string()),
     };
 
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));

@@ -24,8 +24,7 @@ use crate::runtime::host::{intrinsic_string_type, read_string_arg, register_host
 use crate::stdlib::shared::check_and_approve_call;
 use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
-/// The single internal host module every MCP call dispatches through.
-pub const MCP_MODULE_NAME: &str = "submilli:mcp";
+pub use crate::mangle::MCP_MODULE_NAME;
 pub const MCP_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 mod response;

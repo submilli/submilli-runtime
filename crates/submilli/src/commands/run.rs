@@ -377,7 +377,7 @@ fn execute_on_this_thread(
         },
         None => Arc::new(VarBindings::new()),
     };
-    let parsed = interpreter::parse_script(&source, file);
+    let parsed = crate::commands::front_end().parse_script(source.clone(), file);
     let mut stdlib = interpreter::runtime::stdlib_package_declarations();
     let (direct_packages, package_artifacts) = match blueprint.as_ref() {
         Some(bp) => match load_blueprint_packages(bp) {
@@ -387,7 +387,7 @@ fn execute_on_this_thread(
                 return Ok(ExitCode::from(1));
             }
         },
-        None => load_project_packages(&parsed, &stdlib)?,
+        None => load_project_packages(&*parsed, &stdlib)?,
     };
     register_package_sources(&mut sources, &package_artifacts)?;
 
@@ -461,21 +461,21 @@ fn execute_on_this_thread(
     let mcp_defs = mcp_catalog.defs_refs();
     let git_enabled = blueprint.as_ref().is_some_and(|bp| bp.git.is_some());
     stdlib.retain(|decl| git_enabled || decl.package_name != "submilli:git");
-    let compiled = interpreter::compile::compile_parsed_script_with_transitive(
-        &source,
-        &filename,
-        &parsed,
-        &stdlib,
-        &package_refs,
-        &mcp_defs,
-        &transitive_refs,
-    );
+    let stdlib_refs: Vec<&interpreter::PackageDeclaration> = stdlib.iter().collect();
+    let request = interpreter::ScriptRequest {
+        dependencies: &package_refs,
+        transitive: &transitive_refs,
+        mcp: &mcp_defs,
+        ..interpreter::script_request(&stdlib_refs)
+    };
+    let compiled = interpreter::compile::compile_parsed_script(parsed, &filename, &request);
     let compiled = match compiled {
         Ok(compiled) => {
             crate::commands::check::render(&compiled.warnings, &sources)?;
             compiled
         }
-        Err(mut diags) => {
+        Err(error) => {
+            let mut diags = error.into_diagnostics(file);
             if let Err(error) = add_import_suggestions(&source, &mut diags, blueprint.as_deref()) {
                 tracing::warn!(%error, "import hint lookup failed");
             }
@@ -788,10 +788,11 @@ fn project_package_versions() -> anyhow::Result<BTreeMap<String, Option<String>>
 }
 
 fn load_project_packages(
-    parsed: &interpreter::ParsedScript,
+    parsed: &dyn interpreter::ParsedScript,
     stdlib: &[interpreter::PackageDeclaration],
 ) -> anyhow::Result<(std::collections::BTreeSet<String>, Vec<Artifact>)> {
-    let imports = parsed.external_imports_with_stdlib(stdlib)?;
+    let stdlib: Vec<&interpreter::PackageDeclaration> = stdlib.iter().collect();
+    let imports = interpreter::classify_imports(&parsed.imports()?, &stdlib);
     if imports.registry_packages.is_empty() {
         return Ok((std::collections::BTreeSet::new(), Vec::new()));
     }

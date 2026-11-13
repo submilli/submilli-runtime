@@ -40,11 +40,17 @@ jobs:
       - name: Clippy (gate)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      # The engine, policy, build, blueprint, shared and durable crates go to crates.io.
+      # The workspace gate builds submilli-front-end with the engine's
+      # `test-support` feature on; lint the configuration that ships too.
+      - name: Clippy (submilli-front-end as published)
+        run: cargo clippy --locked -p submilli-front-end --lib -- -D warnings
+
+      # The front-end contract, engine, policy, build, blueprint, shared and durable
+      # crates go to crates.io.
       # Packaging builds each from its packaged files alone, so a source file
       # left out of a package fails here rather than at release.
       - name: Package for crates.io
-        run: cargo publish --dry-run --locked -p submilli-engine -p submilli-policy -p submilli-build -p submilli-blueprint -p submilli-shared -p submilli-durable
+        run: cargo publish --dry-run --locked -p submilli-front-end -p submilli-engine -p submilli-policy -p submilli-build -p submilli-blueprint -p submilli-shared -p submilli-durable
 
       # The workspace build always turns on `submilli-policy`'s `engine`
       # feature; embedders may not, so lint and test it without the feature too.

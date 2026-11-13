@@ -841,7 +841,7 @@ mod tests {
             proven_log: Vec::new(),
         };
         let ty = Type::Array(Box::new(Type::Number));
-        let (related, _) = crate::type_walk::tests::observe(Some(0), || {
+        let (related, _) = submilli_front_end::type_walk::test_support::observe(Some(0), || {
             proof.step(&ty, &ty, |_| {
                 panic!("failed measurement must stop before relation")
             })

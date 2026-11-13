@@ -129,14 +129,23 @@ pub fn parse_doc_comment(raw: &RawDoc) -> Result<DocComment, crate::source::Sour
         unknown_tags: Vec::new(),
     };
     let inner = strip_delimiters(&raw.text);
-    // +3 skips the opening `/**`.
-    let inner_start = raw.span.start + 3;
-    let lines = split_lines_with_offsets(inner, inner_start);
+    let advance = |offset: u32, by: usize| {
+        u32::try_from(by)
+            .ok()
+            .and_then(|by| offset.checked_add(by))
+            .ok_or(SourceError::InvalidSpan {
+                span: raw.span,
+                reason: "documentation offset is out of range",
+            })
+    };
+    // 3 skips the opening `/**`.
+    let inner_start = advance(raw.span.start, 3)?;
+    let lines = split_lines_with_offsets(inner);
 
     let mut cleaned: Vec<(u32, &str)> = Vec::with_capacity(lines.len());
-    for (offset, line) in lines {
+    for (start, line) in lines {
         let (skipped, rest) = strip_star_prefix(line);
-        cleaned.push((offset + skipped as u32, rest));
+        cleaned.push((advance(inner_start, start.saturating_add(skipped))?, rest));
     }
 
     let mut current_tag: Option<PendingTag> = None;
@@ -146,14 +155,20 @@ pub fn parse_doc_comment(raw: &RawDoc) -> Result<DocComment, crate::source::Sour
             if let Some(t) = current_tag.take() {
                 push_tag(&mut doc, t)?;
             }
-            let tag_byte = *offset + tag_offset as u32;
-            let after_at = &text[tag_offset + 1..];
+            let tag_byte = advance(*offset, tag_offset)?;
+            let after_at = text
+                .get(tag_offset..)
+                .and_then(|tag| tag.strip_prefix('@'))
+                .unwrap_or_default();
             let (tag_name, name_end) = read_tag_name(after_at);
             let tag_name_str = tag_name.to_string();
-            let tag_span = Span::new(raw.span.file, tag_byte, tag_byte + 1 + name_end as u32)?;
-            let body_start = tag_offset + 1 + name_end;
-            let body = text[body_start..].trim_start();
-            let body_offset = *offset + (text.len() - body.len()) as u32;
+            let tag_span = Span::new(
+                raw.span.file,
+                tag_byte,
+                advance(tag_byte, name_end.saturating_add(1))?,
+            )?;
+            let body = after_at.get(name_end..).unwrap_or_default().trim_start();
+            let body_offset = advance(*offset, text.len().saturating_sub(body.len()))?;
             current_tag = Some(PendingTag {
                 tag_span,
                 name: tag_name_str,
@@ -176,7 +191,10 @@ pub fn parse_doc_comment(raw: &RawDoc) -> Result<DocComment, crate::source::Sour
                 tag.segments.push(BodySegment {
                     start: tag.body.len(),
                     len: trimmed.len(),
-                    source_start: *offset + (text.len() - text.trim_start().len()) as u32,
+                    source_start: advance(
+                        *offset,
+                        text.len().saturating_sub(text.trim_start().len()),
+                    )?,
                 });
                 tag.body.push_str(trimmed);
             }
@@ -250,12 +268,21 @@ impl PendingTag {
 fn push_tag(doc: &mut DocComment, t: PendingTag) -> Result<(), crate::source::SourceError> {
     let trimmed = t.body.trim();
     let body = strip_jsdoc_type(trimmed);
-    let body_start = t.body.len() - t.body.trim_start().len() + trimmed.len() - body.len();
+    let body_start = t
+        .body
+        .len()
+        .saturating_sub(t.body.trim_start().len())
+        .saturating_add(trimmed.len().saturating_sub(body.len()));
     match t.name.as_str() {
         "param" => {
             let (param_name, name_len_with_ws) = read_param_name(body);
-            let name_span = t.source_span(body_start, body_start + param_name.len())?;
-            let description = body[name_len_with_ws..].trim().to_string();
+            let name_span =
+                t.source_span(body_start, body_start.saturating_add(param_name.len()))?;
+            let description = body
+                .get(name_len_with_ws..)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             doc.params.push(DocParam {
                 tag_span: t.tag_span,
                 name: param_name.to_string(),
@@ -273,8 +300,8 @@ fn push_tag(doc: &mut DocComment, t: PendingTag) -> Result<(), crate::source::So
             let mut capability = parse_capability_tag(t.tag_span, body, 0);
             let remap = |span: &mut Span| -> Result<(), crate::source::SourceError> {
                 *span = t.source_span(
-                    body_start + span.start as usize,
-                    body_start + span.end as usize,
+                    body_start.saturating_add(span.start as usize),
+                    body_start.saturating_add(span.end as usize),
                 )?;
                 Ok(())
             };
@@ -320,69 +347,48 @@ fn strip_delimiters(text: &str) -> &str {
     inner.strip_suffix("*/").unwrap_or(inner)
 }
 
-fn split_lines_with_offsets(text: &str, base: u32) -> Vec<(u32, &str)> {
+/// The lines of `text` with the byte offset each starts at. `\n`, `\r\n` and
+/// a lone `\r` end a line; a final line with no text is left out.
+fn split_lines_with_offsets(text: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
-    let mut start = 0;
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\n' {
-            out.push((base + start as u32, &text[start..i]));
-            start = i + 1;
-        } else if bytes[i] == b'\r' {
-            out.push((base + start as u32, &text[start..i]));
-            start = if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-                i + 2
-            } else {
-                i + 1
-            };
-            i = start;
-            continue;
-        }
-        i += 1;
+    let mut rest = text;
+    let mut start = 0usize;
+    while let Some(line_end) = rest.find(['\n', '\r']) {
+        let (line, tail) = rest.split_at(line_end);
+        out.push((start, line));
+        let ending = if tail.starts_with("\r\n") { 2 } else { 1 };
+        rest = tail.get(ending..).unwrap_or_default();
+        start = start.saturating_add(line_end).saturating_add(ending);
     }
-    if start < bytes.len() {
-        out.push((base + start as u32, &text[start..]));
+    if !rest.is_empty() {
+        out.push((start, rest));
     }
     out
 }
 
 /// Returns (bytes_skipped, remaining_text).
 fn strip_star_prefix(line: &str) -> (usize, &str) {
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b'*' {
-        i += 1;
-        if i < bytes.len() && bytes[i] == b' ' {
-            i += 1;
-        }
-    }
-    (i, &line[i..])
+    let rest = line.trim_start_matches([' ', '\t']);
+    let rest = rest
+        .strip_prefix('*')
+        .map_or(rest, |after| after.strip_prefix(' ').unwrap_or(after));
+    (line.len().saturating_sub(rest.len()), rest)
 }
 
 /// Only recognises `@` at the start of a trimmed line.
 fn first_at_offset(line: &str) -> Option<usize> {
-    let trimmed_start = line.len() - line.trim_start().len();
-    if line[trimmed_start..].starts_with('@') {
-        Some(trimmed_start)
-    } else {
-        None
-    }
+    let trimmed = line.trim_start();
+    trimmed
+        .starts_with('@')
+        .then(|| line.len().saturating_sub(trimmed.len()))
 }
 
 fn read_tag_name(text: &str) -> (&str, usize) {
-    let mut end = 0;
-    for (i, c) in text.char_indices() {
-        if c.is_alphanumeric() {
-            end = i + c.len_utf8();
-        } else {
-            break;
-        }
-    }
-    (&text[..end], end)
+    let end = text
+        .char_indices()
+        .find(|(_, c)| !c.is_alphanumeric())
+        .map_or(text.len(), |(i, _)| i);
+    (text.get(..end).unwrap_or_default(), end)
 }
 
 /// Returns (name, bytes_including_trailing_ws); name chars: `[alnum_$]+`.
@@ -390,11 +396,13 @@ fn read_param_name(body: &str) -> (&str, usize) {
     let end = body
         .char_indices()
         .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '_' | '$' | '.'))
-        .map(|(i, c)| i + c.len_utf8())
+        .map(|(i, c)| i.saturating_add(c.len_utf8()))
         .last()
         .unwrap_or(0);
     let (name, rest) = body.split_at(end);
-    let tail = body.len() - rest.trim_start_matches([' ', '\t']).len();
+    let tail = body
+        .len()
+        .saturating_sub(rest.trim_start_matches([' ', '\t']).len());
     (name, tail)
 }
 
@@ -407,11 +415,14 @@ fn strip_jsdoc_type(s: &str) -> &str {
     let mut depth = 0u32;
     for (i, c) in s.char_indices() {
         match c {
-            '{' => depth += 1,
+            '{' => depth = depth.saturating_add(1),
             '}' => {
-                depth -= 1;
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return s[i + 1..].trim_start();
+                    return s
+                        .get(i.saturating_add(1)..)
+                        .unwrap_or_default()
+                        .trim_start();
                 }
             }
             _ => {}
@@ -677,7 +688,7 @@ impl CapabilityParser<'_> {
             }
             self.bump_char();
         }
-        &self.body[start..self.pos]
+        self.body.get(start..self.pos).unwrap_or_default()
     }
 
     fn read_ident(&mut self) -> &str {
@@ -689,7 +700,7 @@ impl CapabilityParser<'_> {
                 break;
             }
         }
-        &self.body[start..self.pos]
+        self.body.get(start..self.pos).unwrap_or_default()
     }
 
     fn read_number(&mut self) -> &str {
@@ -704,7 +715,7 @@ impl CapabilityParser<'_> {
                 break;
             }
         }
-        &self.body[start..self.pos]
+        self.body.get(start..self.pos).unwrap_or_default()
     }
 
     fn skip_ws(&mut self) {
@@ -719,15 +730,21 @@ impl CapabilityParser<'_> {
 
     fn bump_char(&mut self) {
         if let Some(c) = self.peek_char() {
-            self.pos += c.len_utf8();
+            self.pos = self.pos.saturating_add(c.len_utf8());
         }
     }
 
     fn span(&self, start: usize, end: usize) -> Span {
+        // Saturating: the caller maps the span back to source, which rejects
+        // an offset past the comment.
+        let offset = |at: usize| {
+            self.body_offset
+                .saturating_add(u32::try_from(at).unwrap_or(u32::MAX))
+        };
         Span {
             file: self.file,
-            start: self.body_offset + start as u32,
-            end: self.body_offset + end as u32,
+            start: offset(start),
+            end: offset(end),
         }
     }
 
@@ -736,7 +753,7 @@ impl CapabilityParser<'_> {
             .body
             .get(pos..)
             .and_then(|tail| tail.chars().next())
-            .map_or(pos, |character| pos + character.len_utf8());
+            .map_or(pos, |character| pos.saturating_add(character.len_utf8()));
         self.diagnostics.push(DocCapabilityDiagnostic {
             span: self.span(pos, end),
             message: message.to_string(),

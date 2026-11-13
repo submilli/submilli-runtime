@@ -147,7 +147,7 @@ pub(super) fn substituted(
     limits: &CopyBudget,
 ) -> Result<Type, RenderError> {
     // Validate before substitution can clone a malformed, over-deep input.
-    limits.check_substitution(ty, sub)?;
+    limits.check_substitution(ty, |name| sub.get(name))?;
     sub.apply(ty, &limits.types)
         .map_err(|_| RenderError::Truncated)
 }

@@ -16,3 +16,8 @@ pub mod secret;
 pub mod server;
 pub mod skill;
 pub mod upgrade;
+
+/// The front end the CLI compiles scripts with.
+pub(crate) fn front_end() -> &'static dyn interpreter::FrontEnd {
+    &interpreter::EngineFrontEnd
+}

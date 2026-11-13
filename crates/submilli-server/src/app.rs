@@ -1005,6 +1005,11 @@ impl AppState {
         &self.inner.package_store
     }
 
+    /// The front end scripts and packages compile with: the package store's.
+    pub(crate) fn front_end(&self) -> &dyn interpreter::FrontEnd {
+        self.inner.package_store.front_end()
+    }
+
     /// The blueprint `name` and the documentation it lets programs see:
     /// built once per revision and set of declared package artifacts, then
     /// shared. A declared package whose artifact does not load is left out.

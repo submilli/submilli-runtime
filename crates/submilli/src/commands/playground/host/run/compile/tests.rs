@@ -8,11 +8,9 @@ fn a_compile_at_the_limits_fits_from_a_worker_sized_caller() {
     );
     let compiled = std::thread::Builder::new()
         .stack_size(2 * 1024 * 1024)
+        // The compiler runs on its own stack, so a worker-sized caller needs none.
         .spawn(move || {
-            on_compiler_thread(|| {
-                interpreter::compile_script(&source, "limits.ts", FileId(0), &[], &[]).is_ok()
-            })
-            .unwrap()
+            interpreter::compile_script(&source, "limits.ts", FileId(0), &[], &[]).is_ok()
         })
         .unwrap()
         .join()
@@ -22,8 +20,13 @@ fn a_compile_at_the_limits_fits_from_a_worker_sized_caller() {
 
 #[test]
 fn a_panicking_compile_is_reported_not_propagated() {
-    let result = on_compiler_thread(|| -> () { panic!("injected compiler panic") });
-    assert!(matches!(result, Err(CompilerThreadError::Panicked)));
+    let result = interpreter::compiler_thread::on_compiler_stack(|| -> () {
+        panic!("injected compiler panic")
+    });
+    assert!(matches!(
+        result,
+        Err(interpreter::compiler_thread::CompilerThreadError::Panicked)
+    ));
 }
 
 #[test]

@@ -10,89 +10,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::mangle::MangledName;
 use crate::{ObjectField, Package, Type, TypeKind};
 
 use super::assignable::{TypeResolver, assignable, is_host_backed_interface};
 use super::narrowing::strip_undefined;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Utility {
-    Partial,
-    Required,
-    Readonly,
-    Pick,
-    Omit,
-    Exclude,
-    Extract,
-    NonNullable,
-    Parameters,
-    ReturnType,
-    NoInfer,
-    Uppercase,
-    Lowercase,
-    Capitalize,
-    Uncapitalize,
-}
-
-/// The utility a prelude alias names, keyed on its mangled identity so a user
-/// type of the same name never matches.
-pub(crate) fn utility(mangled: &MangledName) -> Option<Utility> {
-    let name = mangled
-        .as_str()
-        .strip_prefix(crate::mangle::PRELUDE_PACKAGE)?
-        .strip_prefix(crate::mangle::SEP)?;
-    Utility::ALL
-        .into_iter()
-        .find(|utility| utility.name() == name)
-}
-
-impl Utility {
-    pub(crate) const ALL: [Utility; 15] = [
-        Utility::Partial,
-        Utility::Required,
-        Utility::Readonly,
-        Utility::Pick,
-        Utility::Omit,
-        Utility::Exclude,
-        Utility::Extract,
-        Utility::NonNullable,
-        Utility::Parameters,
-        Utility::ReturnType,
-        Utility::NoInfer,
-        Utility::Uppercase,
-        Utility::Lowercase,
-        Utility::Capitalize,
-        Utility::Uncapitalize,
-    ];
-
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Utility::Partial => "Partial",
-            Utility::Required => "Required",
-            Utility::Readonly => "Readonly",
-            Utility::Pick => "Pick",
-            Utility::Omit => "Omit",
-            Utility::Exclude => "Exclude",
-            Utility::Extract => "Extract",
-            Utility::NonNullable => "NonNullable",
-            Utility::Parameters => "Parameters",
-            Utility::ReturnType => "ReturnType",
-            Utility::NoInfer => "NoInfer",
-            Utility::Uppercase => "Uppercase",
-            Utility::Lowercase => "Lowercase",
-            Utility::Capitalize => "Capitalize",
-            Utility::Uncapitalize => "Uncapitalize",
-        }
-    }
-
-    pub(crate) fn is_string_mapping(self) -> bool {
-        matches!(
-            self,
-            Utility::Uppercase | Utility::Lowercase | Utility::Capitalize | Utility::Uncapitalize
-        )
-    }
-}
+pub(crate) use submilli_front_end::utility_names::{
+    Utility, deferred_application, holds_type_parameter, utility,
+};
 
 /// The outcome of evaluating one application.
 #[derive(Debug)]
@@ -103,19 +27,6 @@ pub(crate) enum Evaluated {
     /// The application has no representation here. `None` when a constraint
     /// check of the same application already reports it.
     Invalid(Option<String>),
-}
-
-/// Whether a type parameter occurs anywhere in `ty`, either a signature
-/// `TypeVar` or a body `GenericParam`.
-pub(crate) fn holds_type_parameter(ty: &Type) -> bool {
-    let mut pending = vec![ty];
-    while let Some(ty) = pending.pop() {
-        if matches!(ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
-            return true;
-        }
-        crate::type_size::for_each_child(ty, |child| pending.push(child));
-    }
-    false
 }
 
 /// The application of `utility` to `args`, or the reason it has none.
@@ -1458,16 +1369,4 @@ fn known_shape(ty: &Type) -> bool {
         Type::Refined { .. } => false,
         other => !other.lowers_to_erased_slot(),
     }
-}
-
-/// The utility and arguments of an application that still mentions a type
-/// parameter.
-pub(crate) fn deferred_application(ty: &Type) -> Option<(Utility, &[Type])> {
-    let Type::AliasRef { mangled, args, .. } = ty else {
-        return None;
-    };
-    let utility = utility(mangled)?;
-    args.iter()
-        .any(holds_type_parameter)
-        .then_some((utility, args.as_slice()))
 }

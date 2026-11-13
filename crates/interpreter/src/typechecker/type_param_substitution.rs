@@ -2916,3 +2916,85 @@ mod tests {
         assert_eq!(resolved, vec![Type::Number]);
     }
 }
+
+/// Substitution against the type limits (moved from `type_size` when it
+/// became part of `submilli-front-end`).
+#[cfg(test)]
+mod limit_tests {
+    use std::collections::BTreeMap;
+
+    use crate::compiler_thread::on_test_stack as on_compiler_stack;
+
+    use super::TypeParamSubstitution;
+    use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES};
+    use crate::type_size::{TypeLimits, TypeTooLarge, measure};
+    use crate::{ObjectField, Type};
+
+    /// A tuple of `n - 1` numbers: `n` nodes, depth 2.
+    fn nodes(n: u64) -> Type {
+        Type::Tuple((1..n).map(|_| Type::Number).collect::<Vec<_>>().into())
+    }
+
+    /// `depth - 1` arrays around a number.
+    fn nested(depth: u32) -> Type {
+        (1..depth).fold(Type::Number, |inner, _| Type::Array(Box::new(inner)))
+    }
+
+    /// `{ a: T; b: T }`: each application doubles its argument.
+    fn pair_of_t() -> Type {
+        let field = || ObjectField::required(Type::TypeVar("T".into()));
+        Type::Object {
+            more_indexes: Vec::new(),
+            fields: BTreeMap::from([("a".into(), field()), ("b".into(), field())]),
+            index: None,
+        }
+    }
+
+    fn binding(ty: Type) -> TypeParamSubstitution {
+        TypeParamSubstitution::from_pairs(&["T".to_string()], &[ty])
+    }
+
+    #[test]
+    fn substitution_stops_at_the_size_limit_instead_of_building_it() {
+        let limits = TypeLimits::default();
+        let half = nodes(MAX_TYPE_NODES / 2);
+        // `{ a: T; b: T }` is one node plus two copies of the argument.
+        assert_eq!(
+            binding(half).apply(&pair_of_t(), &limits),
+            Err(TypeTooLarge::Nodes)
+        );
+        let fits = nodes(MAX_TYPE_NODES / 2 - 1);
+        let applied = binding(fits).apply(&pair_of_t(), &limits).unwrap();
+        assert_eq!(
+            measure(&applied, u64::MAX, u32::MAX).unwrap().nodes,
+            MAX_TYPE_NODES - 1
+        );
+    }
+
+    #[test]
+    fn substitution_stops_at_the_depth_limit() {
+        on_compiler_stack(substitution_stops_at_the_depth_limit_inner);
+    }
+
+    #[test]
+    fn substitutions_share_the_phase_work_allowance() {
+        let limits = TypeLimits::with_work_allowance(29);
+        let sub = binding(nodes(5));
+        // Each application builds 1 + 2 * 5 nodes and chases two bindings.
+        assert!(sub.apply(&pair_of_t(), &limits).is_ok());
+        assert!(sub.apply(&pair_of_t(), &limits).is_ok());
+        assert_eq!(sub.apply(&pair_of_t(), &limits), Err(TypeTooLarge::Work));
+    }
+
+    fn substitution_stops_at_the_depth_limit_inner() {
+        let limits = TypeLimits::default();
+        let deep = binding(nested(MAX_TYPE_DEPTH - 1));
+        // The object adds one level above the argument.
+        assert!(deep.apply(&pair_of_t(), &limits).is_ok());
+        let deeper = binding(nested(MAX_TYPE_DEPTH));
+        assert_eq!(
+            deeper.apply(&pair_of_t(), &limits),
+            Err(TypeTooLarge::Depth)
+        );
+    }
+}

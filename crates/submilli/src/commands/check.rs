@@ -7,8 +7,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
+use interpreter::compile::check_parsed_script;
 use interpreter::diagnostics;
-use interpreter::{Sources, typecheck};
+use interpreter::{PackageDeclaration, Sources, script_request};
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -22,13 +23,16 @@ pub fn execute(args: Args) -> anyhow::Result<ExitCode> {
     let filename = args.script.to_string_lossy().into_owned();
     let (sources, file) = Sources::single(filename, source.clone())?;
 
-    match typecheck(&source, file) {
+    let stdlib = interpreter::runtime::stdlib_package_declarations();
+    let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+    let parsed = super::front_end().parse_script(source.clone(), file);
+    match check_parsed_script(parsed, &script_request(&stdlib)) {
         Ok(warnings) => {
             render(&warnings, &sources)?;
             Ok(ExitCode::SUCCESS)
         }
-        Err(diags) => {
-            render(&diags, &sources)?;
+        Err(error) => {
+            render(&error.into_diagnostics(file), &sources)?;
             Ok(ExitCode::from(1))
         }
     }

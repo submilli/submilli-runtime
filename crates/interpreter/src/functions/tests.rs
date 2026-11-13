@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use wasmtime::Linker;
 
 use super::*;
+use crate::compile::parse_script;
 use crate::compiler_limits::{COMPILER_STACK_BYTES, MAX_TYPE_DEPTH};
 use crate::docs_view::{Availability, DocAvailability};
 use crate::packages::DocAudience;
@@ -24,7 +25,6 @@ use crate::stdlib::http::transport::{
 };
 use crate::{
     DocCapability, FileId, ModulePath, PackageSourceModule, compile_package, compile_script,
-    parse_script,
 };
 
 struct OpenAvailability;
@@ -1930,4 +1930,35 @@ fn round_one_regressions_config_name_narrowing_classes_closure_return_surrogates
             assert_eq!(out.as_deref(), Some("8"));
         }
     });
+}
+
+#[test]
+fn a_function_set_compiles_from_a_worker_sized_thread() {
+    // The set compiles on one compiler thread of its own, so a caller with a
+    // runtime worker's stack is enough.
+    let compiled = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let engine = RuntimeConfig::default().engine().expect("engine");
+            let set = FunctionSet::new(vec![
+                FunctionDefinition {
+                    name: "first".into(),
+                    description: "The first.".into(),
+                    source: "export function run(n: number): number { return n + 1; }".into(),
+                },
+                FunctionDefinition {
+                    name: "second".into(),
+                    description: "The second.".into(),
+                    source: "export function run(n: number): number { return n * 2; }".into(),
+                },
+            ]);
+            compile_function_set(&engine, &set, &[], &[], None)
+                .expect("compile set")
+                .functions
+                .len()
+        })
+        .expect("spawn a worker-sized thread")
+        .join()
+        .expect("the worker-sized thread does not panic");
+    assert_eq!(compiled, 2);
 }

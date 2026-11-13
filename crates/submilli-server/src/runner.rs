@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use interpreter::compile::compile_parsed_script;
 use interpreter::diagnostics::{self, Severity};
 use interpreter::runtime::limits::ExecutionUsage;
 use interpreter::runtime::{
@@ -21,15 +22,14 @@ use interpreter::runtime::{
     is_memory_exhausted,
 };
 use interpreter::{
-    BacktraceMode, Diagnostic, FileId, ParsedScript, ScriptImports, Sources,
-    compile_parsed_script_timed, dispatch_main_async, failure_message, instantiate_program_async,
-    parse_script,
+    BacktraceMode, Diagnostic, FileId, FrontEnd, PackageDeclaration, ParsedScript, ScriptImports,
+    ScriptRequest, Sources, dispatch_main_async, failure_message, instantiate_program_async,
+    script_request,
 };
 use tracing::debug;
 use wasmtime::{Engine, Linker, Module, Trap};
 
 use crate::app::PreparedBlueprintPackages;
-use crate::compiler_thread;
 use crate::error::{DenialDetails, DiagnosticNote, DiagnosticPayload, ErrorKind, ExecuteError};
 use crate::mcp::McpCatalog;
 
@@ -59,12 +59,17 @@ const FILENAME: &str = "<execute>";
 pub(crate) struct ParsedExecute {
     sources: Sources,
     file: FileId,
-    parsed: ParsedScript,
+    parsed: Box<dyn ParsedScript>,
+    /// How long [`FrontEnd::parse_script`] took.
+    parse_time: std::time::Duration,
 }
 
 impl ParsedExecute {
+    /// What the script imports, classified against the core stdlib.
     pub(crate) fn imports(&self) -> Result<ScriptImports, String> {
-        self.parsed.external_imports().map_err(|error| {
+        let stdlib = interpreter::runtime::stdlib_package_declarations();
+        let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
+        let specifiers = self.parsed.imports().map_err(|error| {
             let diagnostics = error.into_diagnostics(self.file);
             diagnostics::render_collection(&diagnostics, &self.sources).map_or_else(
                 |failure| {
@@ -75,17 +80,23 @@ impl ParsedExecute {
                 },
                 |rendered| rendered.text,
             )
-        })
+        })?;
+        Ok(interpreter::classify_imports(&specifiers, &stdlib))
     }
 }
 
-pub(crate) fn parse(code: &str) -> Result<ParsedExecute, interpreter::source::SourceError> {
+pub(crate) fn parse(
+    front_end: &dyn FrontEnd,
+    code: &str,
+) -> Result<ParsedExecute, interpreter::source::SourceError> {
     let (sources, file) = Sources::single(FILENAME, code)?;
-    let parsed = parse_script(code, file);
+    let started = Instant::now();
+    let parsed = front_end.parse_script(code.to_owned(), file);
     Ok(ParsedExecute {
         sources,
         file,
         parsed,
+        parse_time: started.elapsed(),
     })
 }
 
@@ -314,30 +325,32 @@ async fn run_inner(
     if let Err(error) = register_package_sources(&mut parsed.sources, imports.packages) {
         return internal_failure(&error.to_string());
     }
-    let compiled = compiler_thread::run(|| {
-        let mut compiled = compile_parsed_script_timed(
-            code,
-            FILENAME,
-            &parsed.parsed,
-            &imports.packages.stdlib_declarations,
-            &package_refs,
-            &virtual_refs,
-        );
-        if let Err(diagnostics) = &mut compiled
-            && let Some(suggestions) = &imports.packages.import_suggestions
-        {
-            for error in suggestions.enrich(code, diagnostics) {
-                tracing::warn!(%error, "import hint lookup failed");
-            }
+    let stdlib_refs: Vec<&PackageDeclaration> =
+        imports.packages.stdlib_declarations.iter().collect();
+    let request = ScriptRequest {
+        dependencies: &package_refs,
+        mcp: &virtual_refs,
+        ..script_request(&stdlib_refs)
+    };
+    let compiled = match compile_parsed_script(parsed.parsed, FILENAME, &request) {
+        Ok(mut compiled) => {
+            compiled.timings.parse = parsed.parse_time;
+            compiled
         }
-        compiled
-    });
-    let compiled = match compiled {
-        Ok(Ok(out)) => out,
-        Ok(Err(diags)) => {
+        // The compiler could not run: say nothing about the program, and keep a
+        // durable run resumable.
+        Err(error) => {
+            if let Some(fatal) = error.unavailable() {
+                return internal_failure(&fatal.to_string());
+            }
+            let mut diags = error.into_diagnostics(parsed.file);
+            if let Some(suggestions) = &imports.packages.import_suggestions {
+                for error in suggestions.enrich(code, &mut diags) {
+                    tracing::warn!(%error, "import hint lookup failed");
+                }
+            }
             return compile_failure(&parsed.sources, parsed.file, &diags, discovery_warnings);
         }
-        Err(error) => return internal_failure(&error.to_string()),
     };
     crate::metrics::compile_phases(&compiled.timings);
 
@@ -742,8 +755,7 @@ fn log_phase_breakdown(
     rt: &crate::metrics::RuntimePhaseTimings,
 ) {
     let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
-    let total = compile.lex
-        + compile.parse
+    let total = compile.parse
         + compile.typecheck
         + compile.capture
         + compile.desugar
@@ -755,10 +767,9 @@ fn log_phase_breakdown(
         + rt.instantiate
         + rt.execute;
     debug!(
-        "run phases (ms): lex={:.2} parse={:.2} typecheck={:.2} capture={:.2} \
+        "run phases (ms): parse={:.2} typecheck={:.2} capture={:.2} \
          desugar={:.2} codegen={:.2} | store_init={:.2} module_compile={:.2} \
          link_runtime={:.2} link_packages={:.2} instantiate={:.2} execute={:.2} | total={:.2}",
-        ms(compile.lex),
         ms(compile.parse),
         ms(compile.typecheck),
         ms(compile.capture),
@@ -1146,7 +1157,7 @@ mod tests {
         let run_id = "test-run".into();
         let mut request = Box::pin(run(
             code,
-            parse(code).unwrap(),
+            parse(&interpreter::EngineFrontEnd, code).unwrap(),
             RunnerRuntime {
                 run_id: &run_id,
                 blueprint: "test",

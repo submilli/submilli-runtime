@@ -1376,7 +1376,7 @@ impl<'a> Inferer<'a> {
                 index,
                 more_indexes,
             } => field_member_ty(fields, field_name).or_else(|| {
-                crate::types::named_index(
+                crate::property_keys::named_index(
                     crate::stored_index_signatures(index, more_indexes),
                     field_name,
                     &self.type_limits,

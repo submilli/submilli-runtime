@@ -112,7 +112,8 @@ impl std::error::Error for ArenaError {
     }
 }
 
-pub(crate) fn get<T>(nodes: &[T], id: u32, arena: ArenaKind) -> Result<&T, ArenaError> {
+#[doc(hidden)]
+pub fn get<T>(nodes: &[T], id: u32, arena: ArenaKind) -> Result<&T, ArenaError> {
     usize::try_from(id)
         .ok()
         .and_then(|index| nodes.get(index))
@@ -124,7 +125,8 @@ pub(crate) fn get<T>(nodes: &[T], id: u32, arena: ArenaKind) -> Result<&T, Arena
         })
 }
 
-pub(crate) fn get_mut<T>(nodes: &mut [T], id: u32, arena: ArenaKind) -> Result<&mut T, ArenaError> {
+#[doc(hidden)]
+pub fn get_mut<T>(nodes: &mut [T], id: u32, arena: ArenaKind) -> Result<&mut T, ArenaError> {
     let len = nodes.len();
     usize::try_from(id)
         .ok()
@@ -137,20 +139,22 @@ pub(crate) fn get_mut<T>(nodes: &mut [T], id: u32, arena: ArenaKind) -> Result<&
         })
 }
 
-pub(crate) fn push<T>(nodes: &mut Vec<T>, node: T, arena: ArenaKind) -> Result<u32, ArenaError> {
-    #[cfg(test)]
+#[doc(hidden)]
+pub fn push<T>(nodes: &mut Vec<T>, node: T, arena: ArenaKind) -> Result<u32, ArenaError> {
+    #[cfg(any(test, feature = "test-support"))]
     let limit = TEST_NODE_LIMIT.with(|limit| {
         limit
             .get()
             .filter(|(kind, _)| *kind == arena)
             .map_or(u32::MAX, |(_, limit)| limit)
     });
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-support")))]
     let limit = u32::MAX;
     push_with_limit(nodes, node, arena, limit)
 }
 
-pub(crate) fn ids(len: usize, arena: ArenaKind) -> Result<Range<u32>, ArenaError> {
+#[doc(hidden)]
+pub fn ids(len: usize, arena: ArenaKind) -> Result<Range<u32>, ArenaError> {
     let end = u32::try_from(len).map_err(|_| ArenaError::Capacity {
         arena,
         operation: ArenaOperation::Iterate,
@@ -196,13 +200,16 @@ fn reserve<T>(nodes: &mut Vec<T>, additional: usize, arena: ArenaKind) -> Result
 
 // A scoped, thread-local cap exercises real phase allocation failures without
 // allocating billions of nodes or leaking fault injection into parallel tests.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 thread_local! {
     static TEST_NODE_LIMIT: std::cell::Cell<Option<(ArenaKind, u32)>> = const { std::cell::Cell::new(None) };
 }
 
-#[cfg(test)]
-pub(crate) fn with_node_limit<T>(arena: ArenaKind, limit: u32, run: impl FnOnce() -> T) -> T {
+/// Runs `run` with `arena` capped at `limit` nodes on this thread, for tests
+/// of allocation failures.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn with_node_limit<T>(arena: ArenaKind, limit: u32, run: impl FnOnce() -> T) -> T {
     struct Restore(Option<(ArenaKind, u32)>);
     impl Drop for Restore {
         fn drop(&mut self) {

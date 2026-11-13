@@ -1,7 +1,8 @@
 name: Publish crates
 
-# Publishes the engine, policy, build, blueprint, shared and durable crates
-# to crates.io in dependency order at exactly the workspace version.
+# Publishes the front-end contract, engine, policy, build, blueprint, shared
+# and durable crates to crates.io in dependency order at exactly the
+# workspace version.
 # The release workflow calls this with
 # its tagged commit; started by hand, it publishes from main. The `crates-io`
 # environment holds the token, takes only main and `v*` tags, and waits for a
@@ -49,7 +50,7 @@ jobs:
           head=$(git rev-parse HEAD)
           crates=""
           published=""
-          for crate in submilli-engine submilli-policy submilli-build submilli-blueprint submilli-shared submilli-durable; do
+          for crate in submilli-front-end submilli-engine submilli-policy submilli-build submilli-blueprint submilli-shared submilli-durable; do
             version=$(cargo metadata --format-version 1 --no-deps --locked \
               | jq -r --arg crate "$crate" '.packages[] | select(.name == $crate) | .version')
             status=$(curl -s -o /dev/null -w '%{http_code}' -A "$agent" \

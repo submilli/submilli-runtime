@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 pub const PRELUDE_PACKAGE: &str = "submilli:prelude";
 pub const USER_PACKAGE: &str = "main";
 pub const SEP: char = '#';
+/// The internal host module every `@tools` call dispatches through.
+pub const TOOLS_MODULE_NAME: &str = "submilli:tools";
+/// The source-level name of the virtual `@tools` package.
+pub const TOOLS_PACKAGE: &str = "@tools";
+/// The single internal host module every MCP call dispatches through.
+pub const MCP_MODULE_NAME: &str = "submilli:mcp";
 const MODULE_PREFIX: &str = "mod:";
 
 /// Opaque newtype; construct via the module builders to keep the format centralised.

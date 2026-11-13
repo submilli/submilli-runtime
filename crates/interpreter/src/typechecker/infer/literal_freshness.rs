@@ -1396,7 +1396,7 @@ fn field_position<'a>(
         return None;
     };
     fields.get(name).map(|field| &field.ty).or_else(|| {
-        crate::types::named_index(
+        crate::property_keys::named_index(
             crate::stored_index_signatures(index, more_indexes),
             name,
             limits,

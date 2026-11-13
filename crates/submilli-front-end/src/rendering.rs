@@ -77,7 +77,8 @@ impl From<RenderError> for crate::compiler_error::CompilerFailure {
     }
 }
 
-pub(crate) struct Writer {
+#[doc(hidden)]
+pub struct Writer {
     text: String,
     limits: RenderLimits,
     steps: usize,
@@ -86,17 +87,20 @@ pub(crate) struct Writer {
 }
 
 impl RenderedText {
-    pub(crate) fn steps(&self) -> usize {
+    #[doc(hidden)]
+    pub fn steps(&self) -> usize {
         self.steps
     }
 }
 
 impl Writer {
-    pub(crate) fn remaining_steps(&self) -> usize {
+    #[doc(hidden)]
+    pub fn remaining_steps(&self) -> usize {
         self.limits.steps.saturating_sub(self.steps)
     }
 
-    pub(crate) fn render(
+    #[doc(hidden)]
+    pub fn render(
         limits: RenderLimits,
         render: impl FnOnce(&mut Self) -> Result<(), RenderError>,
     ) -> Result<RenderedText, RenderError> {
@@ -141,7 +145,8 @@ impl Writer {
         }
     }
 
-    pub(crate) fn append(&mut self, rendered: RenderedText) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn append(&mut self, rendered: RenderedText) -> Result<(), RenderError> {
         self.abbreviated |= rendered.truncated;
         self.steps = self
             .steps
@@ -150,7 +155,8 @@ impl Writer {
         self.push(&rendered.text)
     }
 
-    pub(crate) fn child_limits(&self) -> RenderLimits {
+    #[doc(hidden)]
+    pub fn child_limits(&self) -> RenderLimits {
         RenderLimits {
             bytes: self
                 .limits
@@ -167,15 +173,17 @@ impl Writer {
         }
     }
 
-    pub(crate) fn step(&mut self) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn step(&mut self) -> Result<(), RenderError> {
         if self.steps >= self.limits.steps {
             return Err(RenderError::Truncated);
         }
-        self.steps += 1;
+        self.steps = self.steps.saturating_add(1);
         Ok(())
     }
 
-    pub(crate) fn depth(&self, depth: usize) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn depth(&self, depth: usize) -> Result<(), RenderError> {
         if depth > self.limits.type_depth {
             Err(RenderError::Truncated)
         } else {
@@ -183,7 +191,8 @@ impl Writer {
         }
     }
 
-    pub(crate) fn push(&mut self, text: &str) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn push(&mut self, text: &str) -> Result<(), RenderError> {
         self.step()?;
         let remaining = self.limits.bytes.saturating_sub(self.text.len());
         let mut end = remaining.min(text.len());
@@ -201,18 +210,21 @@ impl Writer {
         Ok(())
     }
 
-    pub(crate) fn character(&mut self, ch: char) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn character(&mut self, ch: char) -> Result<(), RenderError> {
         self.push(ch.encode_utf8(&mut [0; 4]))
     }
 
-    pub(crate) fn format(&mut self, args: fmt::Arguments<'_>) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn format(&mut self, args: fmt::Arguments<'_>) -> Result<(), RenderError> {
         match fmt::write(self, args) {
             Ok(()) => Ok(()),
             Err(_) => Err(self.failure.take().unwrap_or(RenderError::Formatting)),
         }
     }
 
-    pub(crate) fn repeat(&mut self, ch: char, count: usize) -> Result<(), RenderError> {
+    #[doc(hidden)]
+    pub fn repeat(&mut self, ch: char, count: usize) -> Result<(), RenderError> {
         for _ in 0..count {
             self.character(ch)?;
         }
