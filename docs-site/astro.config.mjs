@@ -122,6 +122,7 @@ export default defineConfig({
       },
       sidebar: [
         { label: "Start here", items: [{ autogenerate: { directory: "../docs/part-1-start-here" } }] },
+        { label: "Connect your coding agent", slug: "connect-your-coding-agent" },
         { label: "Blueprints", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-2-blueprints" } }] },
         { label: "Packages", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-3-packages" } }] },
         { label: "Server", collapsed: true, items: [{ autogenerate: { directory: "../docs/part-4-server" } }] },
