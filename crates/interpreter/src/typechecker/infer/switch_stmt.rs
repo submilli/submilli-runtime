@@ -349,6 +349,7 @@ impl Inferer<'_> {
         let mut label_writes: Vec<narrowing::ReferencePath> = Vec::new();
         // Whether the `case`s, with no `default`, match every value.
         let mut covers_every_value = false;
+        let mut unmatched = None;
         // The clause last in the source leaves the switch when it runs off
         // its end, as a `break` there would.
         let last_clause = cases
@@ -467,9 +468,7 @@ impl Inferer<'_> {
             let leaves_values_unmatched =
                 !matches!(residual, Type::Never) && !narrowing::is_ruled_out(&residual);
             if leaves_values_unmatched {
-                if !self.reads_typeof_value(typed_disc)? && requires_every_case(&disc_ty) {
-                    self.emit_non_exhaustive(&residual, &site, switch_span);
-                }
+                unmatched = Some(self.unmatched_cases(typed_disc, &disc_ty, &residual, &site)?);
                 any_arm_reachable_exit |= entry_reachable;
             } else {
                 self.typed_ast.exhaustive_switches.insert(typed_disc);
@@ -530,6 +529,7 @@ impl Inferer<'_> {
             discriminant_ty: disc_ty,
             cases: typed_cases,
             default: typed_default,
+            unmatched,
         })
     }
 
@@ -1326,78 +1326,27 @@ impl Inferer<'_> {
         Ok(env)
     }
 
-    fn emit_non_exhaustive(&mut self, residual: &Type, site: &ResidualSite, switch_span: Span) {
-        let (missing, suffix) = match site {
+    /// What the cases leave unmatched, for the rule that a `switch` lists
+    /// every value it can.
+    fn unmatched_cases(
+        &self,
+        typed_disc: ExprId,
+        disc_ty: &Type,
+        residual: &Type,
+        site: &ResidualSite,
+    ) -> Result<crate::UnmatchedCases, CompilerFailure> {
+        let (values, discriminant_key) = match site {
             ResidualSite::DiscriminatedReceiver {
                 disc_key, missing, ..
-            } => (
-                format_residual_missing(missing),
-                format!(" for discriminant `.{disc_key}`"),
-            ),
-            ResidualSite::Scrutinee { .. } | ResidualSite::Anonymous => {
-                (format_residual_missing(residual), String::new())
-            }
+            } => (missing.clone(), Some(disc_key.clone())),
+            ResidualSite::Scrutinee { .. } | ResidualSite::Anonymous => (residual.clone(), None),
         };
-        let help = if missing.is_empty() {
-            "add a `default:` clause".to_string()
-        } else {
-            format!("add a `default:` clause or cases for: {missing}")
-        };
-        let message = if missing.is_empty() {
-            format!("non-exhaustive `switch`{suffix}")
-        } else {
-            format!("non-exhaustive `switch`: missing case(s) {missing}{suffix}")
-        };
-        self.diagnostics.push(Diagnostic {
-            severity: Severity::Error,
-            span: switch_span,
-            message,
-            help: vec![help],
-            notes: vec![],
-        });
-    }
-}
-
-/// Whether a `switch` without `default` must list every value of its
-/// discriminant: when its type is made of literals alone, which cases can
-/// cover. One with a member such as `string`, `null` or `undefined`, even in
-/// a single member of a discriminated union, can't be listed out, so the
-/// switch may simply fall through.
-fn requires_every_case(disc_ty: &Type) -> bool {
-    narrowing::union_members(disc_ty).into_iter().all(|member| {
-        narrowing::unit_literal_value(member).is_some() || matches!(member.peel(), Type::Boolean)
-    })
-}
-
-fn format_residual_missing(residual: &Type) -> String {
-    let parts: Vec<String> = match residual.peel() {
-        Type::Union(members) => members.iter().filter_map(format_one_literal).collect(),
-        single => format_one_literal(single).into_iter().collect(),
-    };
-    parts.join(", ")
-}
-
-fn format_one_literal(ty: &Type) -> Option<String> {
-    match ty.peel() {
-        Type::StringLiteral(s) => Some(format!("\"{}\"", crate::types::escape_string_literal(s))),
-        Type::NumberLiteral(n) => Some(format!("{}", n.0)),
-        Type::BooleanLiteral(b) => Some(b.to_string()),
-        Type::Null => Some("null".to_string()),
-        Type::Undefined => Some("undefined".to_string()),
-        Type::Object { fields, .. } => {
-            // Discriminated-union residuals are object variants; find the discriminant field's
-            // literal. Only a direct literal field can be the discriminant, so nested objects
-            // are skipped.
-            for field in fields.values() {
-                if !matches!(field.ty.peel(), Type::Object { .. })
-                    && let Some(lit) = format_one_literal(&field.ty)
-                {
-                    return Some(lit);
-                }
-            }
-            None
-        }
-        _ => None,
+        Ok(crate::UnmatchedCases {
+            values,
+            discriminant_key,
+            discriminant_ty: disc_ty.clone(),
+            reads_typeof: self.reads_typeof_value(typed_disc)?,
+        })
     }
 }
 

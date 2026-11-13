@@ -286,6 +286,7 @@ pub(super) fn collect_from_stmt(
             discriminant_ty,
             cases,
             default,
+            ..
         } => {
             c.collect(discriminant_ty);
             collect_from_expr(ast, *discriminant, c)?;

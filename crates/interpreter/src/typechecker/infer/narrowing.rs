@@ -519,7 +519,7 @@ pub fn has_type_parameter_member(ty: &Type) -> bool {
     }
 }
 
-pub(super) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
+pub(in crate::typechecker) fn unit_literal_value(ty: &Type) -> Option<LiteralValue> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
         Type::NumberLiteral(n) => Some(LiteralValue::Number(*n)),
@@ -919,7 +919,7 @@ pub fn negation_type(ty: &Type) -> Type {
     Type::Boolean
 }
 
-pub(super) fn union_members(ty: &Type) -> Vec<&Type> {
+pub(in crate::typechecker) fn union_members(ty: &Type) -> Vec<&Type> {
     match ty.peel() {
         Type::Union(members) => members.iter().collect(),
         // `ty` itself, not its peel: peeling drops a `readonly` wrapper.

@@ -727,6 +727,9 @@ pub enum TypedStmtKind {
         discriminant_ty: Type,
         cases: Vec<TypedSwitchCase>,
         default: Option<StmtId>,
+        /// For a `switch` without `default`, what its cases leave unmatched;
+        /// `None` when they match every value or there is a `default`.
+        unmatched: Option<UnmatchedCases>,
     },
     Break,
     /// Desugar injects the update step before the jump in `for`/`for-of`.
@@ -801,6 +804,31 @@ pub struct TypedCatchClause {
     pub body: StmtId,
     pub boxed: bool,
     pub span: Span,
+}
+
+/// What the cases of a `switch` without `default` leave unmatched: the values
+/// that run past every case. Submilli's rules decide from it whether the
+/// `switch` must list them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnmatchedCases {
+    /// The values no case matches. When `discriminant_key` names the
+    /// discriminant of a union, the discriminant values held by the members
+    /// no case matches. When the union is read from an expression that is no
+    /// reference (`f().kind`), `discriminant_key` is `None` and these are the
+    /// members themselves.
+    pub values: Type,
+    /// On a discriminated union read from a reference, the discriminant the
+    /// `switch` reads off it: the field name (`kind`) or the tuple position
+    /// (`[0]`).
+    pub discriminant_key: Option<String>,
+    /// The discriminant's type as the `switch` reads it. It differs from
+    /// [`TypedStmtKind::Switch`]'s `discriminant_ty` only where the read may
+    /// find no value: that one is widened with `undefined`, this one is not.
+    pub discriminant_ty: Type,
+    /// Whether the discriminant is a `typeof` value: the expression itself,
+    /// or a binding declared with its type (all eight tags, however written).
+    /// The rules don't ask such a `switch` to list every tag.
+    pub reads_typeof: bool,
 }
 
 /// Multiple entries in `values` when consecutive `case` labels share a body.

@@ -325,6 +325,7 @@ pub fn emit_statement(
             discriminant_ty,
             cases,
             default,
+            ..
         } => {
             emit_switch(
                 emitter,

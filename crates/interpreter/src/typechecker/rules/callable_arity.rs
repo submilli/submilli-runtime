@@ -22,7 +22,7 @@ use crate::compiler_limits::{UnsupportedClosureArity, checked_closure_arity};
 use crate::typechecker::rules::body_walk::{self, Visitor};
 use crate::{
     Diagnostic, ExprId, GenericParameters, Severity, Span, Type, TypedAst, TypedClassAccessor,
-    TypedClassDecl, TypedExprKind, TypedInterfaceDecl, TypedInterfaceMember, TypedParam,
+    TypedClassDecl, TypedExprKind, TypedInterfaceDecl, TypedInterfaceMember, TypedParam, TypedStmt,
     TypedStmtKind, TypedTypeDecl,
 };
 
@@ -266,7 +266,8 @@ impl Visitor for Closures<'_, '_> {
 struct BodyTypes<'r, 'a>(&'r mut Rule<'a>);
 
 impl Visitor for BodyTypes<'_, '_> {
-    fn visit_stmt(&mut self, kind: &TypedStmtKind) -> Result<(), CompilerFailure> {
+    fn visit_stmt(&mut self, stmt: &TypedStmt) -> Result<(), CompilerFailure> {
+        let kind = &stmt.kind;
         if let TypedStmtKind::Let { name, ty, .. } | TypedStmtKind::Const { name, ty, .. } = kind {
             self.0.check_held_type(ty, name.span);
         }
