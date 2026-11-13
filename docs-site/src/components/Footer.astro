@@ -1,5 +1,4 @@
 ---
-import DiscordLink from './DiscordLink.astro';
 import EditLink from './EditLink.astro';
 import LastUpdated from './LastUpdated.astro';
 import Pagination from './Pagination.astro';
@@ -17,7 +16,6 @@ const slug = entry.id === 'index' ? '' : entry.id;
 			<nav class="resource-links print:hidden" aria-label="Page resources">
 				<a href={markdownPath(slug)} data-analytics-cta="view_markdown">View Markdown</a>
 				<a href={DOCS_INDEX} data-analytics-cta="agent_docs">Documentation for agents</a>
-				<DiscordLink variant="text" />
 			</nav>
 		)}
 		<div class="meta">

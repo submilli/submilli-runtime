@@ -75,4 +75,4 @@ Next, we want an agent to ask a person for missing information and continue with
 
 ## Help shape the work
 
-Tell us which planned area would help you ship, and what you need it to do. Share a use case in a [GitHub issue](https://github.com/submilli/submilli-runtime/issues) or join us on [Discord](https://discord.gg/VphpukeGGj).
+Tell us which planned area would help you ship, and what you need it to do. Share a use case in a [GitHub issue](https://github.com/submilli/submilli-runtime/issues).

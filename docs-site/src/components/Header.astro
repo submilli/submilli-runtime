@@ -1,7 +1,6 @@
 ---
 import Analytics from './Analytics.astro';
 import Search from '@astrojs/starlight/components/Search.astro';
-import DiscordLink from './DiscordLink.astro';
 import GitHubLink from './GitHubLink.astro';
 import MeetingLink from './MeetingLink.astro';
 import SiteTitle from './SiteTitle.astro';
@@ -39,7 +38,6 @@ const WEBSITE_URL = 'https://submilli.ai';
 		<a href="/docs/quickstart/#agent-setup" data-analytics-cta="agent_setup" class="setup-link">Agent setup</a>
 		<div class="utilities">
 			<GitHubLink variant="icon" />
-			<DiscordLink variant="icon" />
 			<ThemeSelect />
 		</div>
 		<MeetingLink />
