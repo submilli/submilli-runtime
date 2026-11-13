@@ -469,6 +469,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_mcp_tool_read_as_a_value_calls_the_server() {
+        let (out, calls) = run(
+            r#"import { echo, getTeams } from "@mcp/test";
+               function main(): string {
+                   const f = echo;
+                   const teams: (args?: { user?: string }) => unknown = getTeams;
+                   teams();
+                   return typeof getTeams + " " + f({ msg: "hi" }).reply;
+               }"#,
+            serde_json::json!({ "reply": "hello" }),
+            None,
+        )
+        .await;
+        assert_eq!(out.unwrap().as_deref(), Some("function hello"));
+        let calls = calls.lock().unwrap();
+        let sent: Vec<_> = calls
+            .iter()
+            .map(|(server, tool, args)| (server.as_str(), tool.as_str(), args.as_str()))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("test", "getTeams", "{}"),
+                ("test", "echo", r#"{"msg":"hi"}"#),
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn internal_client_failure_bypasses_guest_catch_and_keeps_runtime_usable() {
         let package = test_mcp_package();
         let source = r#"import test from "@mcp/test"; function main(): number { try { test.raw(); } catch (e) { return 7; } return 9; }"#;

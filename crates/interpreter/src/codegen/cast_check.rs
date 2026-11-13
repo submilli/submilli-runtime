@@ -858,12 +858,54 @@ pub(crate) fn emit_checked_cast_on_stack(
     if diagnostic::has_nested_paths(target_ty) {
         diagnostic::begin(emitter, ctx);
     }
+    emit_checked_value_test(emitter, ctx, scratch, target_ty)?;
+    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
+    emitter.instruction(Instruction::LocalGet(scratch));
+    cast::emit_cast_to(emitter, ctx, target_ty)?;
+    emitter.emit_else();
+    emit_cast_throw(emitter, ctx, scratch, target_ty);
+    emitter.emit_end();
+    emitter.cast_diagnostic = previous_diagnostic;
+    Ok(())
+}
+
+/// Pushes i32 1 if the `(ref null $Object)` in `scratch` is a value of
+/// `target_ty`, 0 otherwise: the test behind [`emit_checked_cast_on_stack`].
+fn emit_checked_value_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    scratch: u32,
+    target_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    // No value is a `never`. It is registered with the representation test,
+    // which would accept any reference.
+    if matches!(target_ty.lowered(), Type::Never) {
+        emitter.instruction(Instruction::I32Const(0));
+        return Ok(());
+    }
     match ctx.ta.runtime_type_tests.get(target_ty.lowered()) {
         Some(crate::FieldNarrowingTest::Interface(test)) => {
             emit_interface_test(emitter, ctx, scratch, target_ty, test)?;
         }
         Some(crate::FieldNarrowingTest::Shape(shape)) => {
             emit_structural_test(emitter, ctx, scratch, shape, target_ty)?;
+        }
+        // A value of an intersection is a value of each of its members; the
+        // representation test would check only the common slot. One with a
+        // primitive member (a brand, `string & { kind: "id" }`) lowers as
+        // that primitive, so it is tested as the primitive below.
+        _ if let Type::Intersection(members) = target_ty.lowered() => {
+            emit_all_members_test(emitter, ctx, scratch, members)?;
+        }
+        // This front end keeps an intersection of interfaces as the original
+        // of a refinement whose shape is its representation: both must hold.
+        // `peel` leaves a brand to the shape's test, as above.
+        _ if let Type::Refined { original, ty } = target_ty.without_aliases()
+            && let Type::Intersection(members) = original.peel() =>
+        {
+            emit_all_members_test(emitter, ctx, scratch, members)?;
+            emit_checked_value_test(emitter, ctx, scratch, ty)?;
+            emitter.instruction(Instruction::I32And);
         }
         // A function that declares fewer parameters than the target, or
         // trailing defaults, still fits when its adapter can stand for the
@@ -873,13 +915,22 @@ pub(crate) fn emit_checked_cast_on_stack(
         }
         _ => emit_target_test(emitter, ctx, scratch, target_ty)?,
     }
-    emitter.emit_if(BlockType::Result(ctx.symbols.value_type(target_ty)?));
-    emitter.instruction(Instruction::LocalGet(scratch));
-    cast::emit_cast_to(emitter, ctx, target_ty)?;
-    emitter.emit_else();
-    emit_cast_throw(emitter, ctx, scratch, target_ty);
-    emitter.emit_end();
-    emitter.cast_diagnostic = previous_diagnostic;
+    Ok(())
+}
+
+/// Pushes i32 1 if the value in `scratch` passes the test of every one of
+/// `members`, 0 otherwise.
+fn emit_all_members_test(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    scratch: u32,
+    members: &[Type],
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emitter.instruction(Instruction::I32Const(1));
+    for member in members {
+        emit_checked_value_test(emitter, ctx, scratch, member)?;
+        emitter.instruction(Instruction::I32And);
+    }
     Ok(())
 }
 
