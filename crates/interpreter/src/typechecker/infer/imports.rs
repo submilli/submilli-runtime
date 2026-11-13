@@ -17,6 +17,32 @@ use super::{Inferer, NamespaceBinding, ValueEntry};
 /// into the FQN registry under the package's name. Namespaced types use the same
 /// dotted key [`flatten_namespace_types`] gives the import-scoped namespace, so a
 /// `Temporal.Instant`-shaped `InterfaceRef` resolves identically through either.
+/// The checker's copy of a prelude symbol whose declaration carries a fact
+/// the checker types itself. `None` when the symbol can be used as declared.
+pub(in crate::typechecker) fn checker_view(sym: &crate::TypeSymbol) -> Option<crate::TypeSymbol> {
+    if super::records::prelude_index_is_descriptive(&sym.mangled_name) {
+        let mut stripped = sym.clone();
+        if let TypeKind::Interface {
+            index,
+            more_indexes,
+            ..
+        } = &mut stripped.kind
+        {
+            *index = None;
+            more_indexes.clear();
+        }
+        return Some(stripped);
+    }
+    if sym.mangled_name == crate::mangle::prelude("BigIntConstructor") {
+        let mut stripped = sym.clone();
+        if let TypeKind::Interface { methods, .. } = &mut stripped.kind {
+            methods.remove("fromString");
+        }
+        return Some(stripped);
+    }
+    None
+}
+
 pub(super) fn register_package_types<'a>(reg: &mut TypeRegistry<'a>, defs: &'a PackageDeclaration) {
     for (name, sym) in &defs.types {
         let _ = name;
@@ -106,6 +132,19 @@ impl<'a> Inferer<'a> {
                 super::inference_failure("typechecker requires prelude package declaration")
             })?;
         for (name, sym) in &prelude.types {
+            // `Function` and `JSON` are declared so a front end can see them.
+            // Binding the names would make them types the checker does not have.
+            if matches!(name.as_str(), "Function" | "JSON") {
+                continue;
+            }
+            if let Some(stripped) = checker_view(sym) {
+                self.types.insert(
+                    name.clone(),
+                    crate::mangle::PRELUDE_PACKAGE.to_string(),
+                    stripped,
+                );
+                continue;
+            }
             if matches!(
                 sym.kind,
                 TypeKind::Interface { .. } | TypeKind::Alias { .. } | TypeKind::Class { .. },
@@ -115,6 +154,11 @@ impl<'a> Inferer<'a> {
             }
         }
         for (name, sym) in &prelude.values {
+            // `JSON` would bind as a constructor (its type is an interface).
+            // `assert` is a declared function. Both stay compiler intrinsics.
+            if matches!(name.as_str(), "JSON" | "assert") {
+                continue;
+            }
             let is_constructor_binding = matches!(
                 &sym.kind,
                 ValueKind::Const {
@@ -219,6 +263,21 @@ impl<'a> Inferer<'a> {
         }
         for module in test_modules.iter().flat_map(|test| test.modules.values()) {
             register_package_types(&mut self.type_registry, &module.declaration);
+        }
+        // Front ends read the prelude declaration, including index signatures
+        // and `BigInt.fromString`. The checker types those itself. Its copy
+        // omits them so mapped types, `extends`, and constructor assignability
+        // stay as they were.
+        if let Some(prelude) = self
+            .packages_by_name
+            .get(crate::mangle::PRELUDE_PACKAGE)
+            .copied()
+        {
+            for sym in prelude.types.values() {
+                if let Some(stripped) = checker_view(sym) {
+                    self.type_registry.insert_owned(stripped);
+                }
+            }
         }
     }
 

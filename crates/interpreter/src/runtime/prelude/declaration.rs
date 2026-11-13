@@ -213,10 +213,158 @@ pub fn prelude_package_declaration() -> PackageDeclaration {
     super::error::declare_types(&mut defs);
     super::temporal::shared::declare_types(&mut defs);
     super::utility_types::declare_types(&mut defs);
-
-    // namespace bindings.
+    declare_checker_builtins(&mut defs);
 
     defs
+}
+
+/// Built-ins the type checker types in Rust rather than by reading these
+/// declarations. They are here so `PackageDeclaration` alone describes the
+/// global scope a front end builds. The checker keeps its own handling and
+/// does not bind `Function` or `JSON`, so its results stay the same.
+fn declare_checker_builtins(defs: &mut PackageDeclaration) {
+    use std::collections::BTreeMap;
+
+    defs.types.insert(
+        "Function".to_string(),
+        TypeSymbol {
+            name: "Function".to_string(),
+            mangled_name: crate::mangle::prelude("Function"),
+            declaration_span: Span::at(FileId::PRELUDE),
+            kind: TypeKind::Interface {
+                extends: Vec::new(),
+                index: None,
+                more_indexes: Vec::new(),
+                generics: Default::default(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::from([(
+                    "length".to_string(),
+                    crate::PropertySig {
+                        ty: Type::Number,
+                        readonly: true,
+                        intrinsic: false,
+                        optional: false,
+                        doc: doc(
+                            "/** The parameters before the first optional, defaulted or rest one. */",
+                        ),
+                    },
+                )]),
+                dispatch: Dispatch::Direct,
+                doc: doc("/** A function value. */"),
+            },
+        },
+    );
+
+    defs.types.insert(
+        "JSON".to_string(),
+        TypeSymbol {
+            name: "JSON".to_string(),
+            mangled_name: crate::mangle::prelude("JSON"),
+            declaration_span: Span::at(FileId::PRELUDE),
+            kind: TypeKind::Interface {
+                extends: Vec::new(),
+                index: None,
+                more_indexes: Vec::new(),
+                generics: Default::default(),
+                methods: BTreeMap::from([
+                    (
+                        "parse".to_string(),
+                        MethodSig {
+                            overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![Param::new("text", Type::String)],
+                            ret: Type::Unknown,
+                            predicate: None,
+                            doc: doc(
+                                "/** Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. */",
+                            ),
+                        },
+                    ),
+                    (
+                        "stringify".to_string(),
+                        MethodSig {
+                            overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![
+                                Param::new("value", Type::Unknown),
+                                Param::optional(
+                                    "replacer",
+                                    Type::union(vec![Type::Null, Type::Undefined]),
+                                ),
+                                Param::optional(
+                                    "space",
+                                    Type::union(vec![
+                                        Type::Number,
+                                        Type::String,
+                                        Type::Null,
+                                        Type::Undefined,
+                                    ]),
+                                ),
+                            ],
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/** Serialize a value to a JSON string. The replacer is `null` or `undefined`; `space` indents with a number or a string. */",
+                            ),
+                        },
+                    ),
+                ]),
+                properties: BTreeMap::new(),
+                dispatch: Dispatch::Static,
+                doc: doc(
+                    "/** The `JSON` value. Calls are compiler intrinsics; this declaration names their types. */",
+                ),
+            },
+        },
+    );
+    defs.values.insert(
+        "JSON".to_string(),
+        ValueSymbol {
+            name: "JSON".to_string(),
+            mangled_name: crate::mangle::prelude("JSON"),
+            declaration_span: Span::at(FileId::PRELUDE),
+            kind: ValueKind::Const {
+                ty: Type::prelude_interface("JSON".to_string(), Vec::new()),
+                doc: doc("/** `JSON.parse` and `JSON.stringify`. Call them directly. */"),
+            },
+        },
+    );
+    defs.values.insert(
+        "assert".to_string(),
+        ValueSymbol {
+            name: "assert".to_string(),
+            mangled_name: crate::mangle::prelude("assert"),
+            declaration_span: Span::at(FileId::PRELUDE),
+            kind: ValueKind::Function {
+                generics: Default::default(),
+                params: vec![
+                    Param::new("condition", Type::Boolean),
+                    Param::with_default(
+                        "message",
+                        Type::String,
+                        crate::DefaultValue::String("assertion failed".to_string()),
+                    ),
+                ],
+                ret: Type::Void,
+                type_predicate: None,
+                doc: doc(
+                    "/** Throw `Error(message)` if `condition` is false. Compiler intrinsic — always in scope, not imported. */",
+                ),
+            },
+        },
+    );
+}
+
+/// `[n: number]: value`. `readonly` matches whether the checker allows a write.
+pub(crate) fn numeric_index(value: Type, readonly: bool) -> crate::IndexSignature {
+    crate::IndexSignature {
+        string_keyof_includes_number: false,
+        key: Box::new(Type::Number),
+        value: Box::new(value),
+        readonly,
+    }
 }
 
 pub fn cached_runtime_package_declarations() -> (
@@ -355,11 +503,13 @@ mod tests {
                 "ErrorOptions",
                 "Exclude",
                 "Extract",
+                "Function",
                 "Iterable",
                 "Iterator",
                 "IteratorResult",
                 "IteratorReturnResult",
                 "IteratorYieldResult",
+                "JSON",
                 "Lowercase",
                 "Map",
                 "MapConstructor",
@@ -498,6 +648,7 @@ mod tests {
                 "BigInt",
                 "Boolean",
                 "Infinity",
+                "JSON",
                 "Map",
                 "NaN",
                 "Number",
@@ -508,6 +659,7 @@ mod tests {
                 "TextDecoder",
                 "TextEncoder",
                 "Uint8Array",
+                "assert",
                 "console",
                 "isFinite",
                 "isNaN",
@@ -565,5 +717,119 @@ mod tests {
                 other => panic!("expected Const, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn prelude_declares_the_builtins_the_checker_types_itself() {
+        let defs = prelude_package_declaration();
+        let TypeKind::Interface {
+            properties,
+            methods,
+            index,
+            ..
+        } = &defs.types["Function"].kind
+        else {
+            panic!("Function is an interface");
+        };
+        assert!(methods.is_empty());
+        assert_eq!(properties["length"].ty, Type::Number);
+        assert!(properties["length"].readonly);
+        assert!(index.is_none());
+
+        let TypeKind::Interface { methods, .. } = &defs.types["JSON"].kind else {
+            panic!("JSON is an interface");
+        };
+        assert_eq!(
+            methods["parse"].params,
+            vec![Param::new("text", Type::String)]
+        );
+        assert_eq!(methods["parse"].ret, Type::Unknown);
+        assert_eq!(
+            methods["stringify"].params[0],
+            Param::new("value", Type::Unknown)
+        );
+        assert!(methods["stringify"].params[1].optional);
+        assert_eq!(
+            methods["stringify"].params[1].ty,
+            Type::union(vec![Type::Null, Type::Undefined])
+        );
+        assert_eq!(
+            methods["stringify"].params[2].ty,
+            Type::union(vec![
+                Type::Number,
+                Type::String,
+                Type::Null,
+                Type::Undefined
+            ])
+        );
+        assert_eq!(methods["stringify"].ret, Type::String);
+        assert!(matches!(
+            defs.values["JSON"].kind,
+            ValueKind::Const {
+                ty: Type::InterfaceRef { .. },
+                ..
+            }
+        ));
+
+        let ValueKind::Function { params, ret, .. } = &defs.values["assert"].kind else {
+            panic!("assert is a function");
+        };
+        assert_eq!(params[0], Param::new("condition", Type::Boolean));
+        assert!(params[1].optional);
+        assert_eq!(params[1].ty, Type::String);
+        assert_eq!(*ret, Type::Void);
+
+        let TypeKind::Interface { methods, .. } = &defs.types["BigIntConstructor"].kind else {
+            panic!("BigIntConstructor");
+        };
+        assert_eq!(
+            methods["fromString"].params,
+            vec![Param::new("value", Type::String)]
+        );
+        assert_eq!(methods["fromString"].ret, Type::BigInt);
+
+        for name in ["String", "Uint8Array"] {
+            let TypeKind::Interface { index, .. } = &defs.types[name].kind else {
+                panic!("{name}");
+            };
+            let index = index.as_ref().unwrap_or_else(|| panic!("{name} index"));
+            assert_eq!(index.key.as_ref(), &Type::Number);
+            assert_eq!(
+                index.value.as_ref(),
+                &(if name == "String" {
+                    Type::String
+                } else {
+                    Type::Number
+                })
+            );
+            assert_eq!(index.readonly, name == "String");
+        }
+
+        for name in ["RegExpMatchArray", "RegExpExecArray"] {
+            let TypeKind::Interface { extends, index, .. } = &defs.types[name].kind else {
+                panic!("{name}");
+            };
+            assert_eq!(
+                extends,
+                &vec![Type::prelude_interface(
+                    "Array".to_string(),
+                    vec![Type::regexp_element()]
+                )]
+            );
+            let index = index.as_ref().unwrap_or_else(|| panic!("{name} index"));
+            assert_eq!(index.key.as_ref(), &Type::Number);
+            assert_eq!(index.value.as_ref(), &Type::String);
+            assert!(index.readonly);
+        }
+
+        let (merged, _, _) = super::cached_runtime_package_declarations();
+        let merged = &merged[0];
+        assert!(merged.values.contains_key("JSON"));
+        assert!(merged.values.contains_key("assert"));
+        assert!(merged.types.contains_key("Function"));
+        let TypeKind::Interface { methods, .. } = &merged.types["BigIntConstructor"].kind else {
+            panic!("merged BigIntConstructor");
+        };
+        assert!(methods.contains_key("fromString"));
     }
 }

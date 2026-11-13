@@ -16,10 +16,11 @@ use crate::runtime::prelude::declaration::prelude_package_declaration;
 use crate::stdlib::Stdlib;
 use crate::types::escape_string_literal;
 use crate::{
-    ClassExtends, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, FileId,
-    NamespaceSymbol, PackageDeclaration, Param, Span, Type, TypeKind, TypePredicate, TypeSymbol,
-    ValueKind, ValueSymbol,
+    ClassExtends, DocCapabilityBindingKind, DocCapabilityLiteral, DocComment, NamespaceSymbol,
+    PackageDeclaration, Param, Type, TypeKind, TypePredicate, TypeSymbol, ValueKind,
 };
+#[cfg(test)]
+use crate::{FileId, Span, ValueSymbol};
 
 /// Internal plumbing imported by the fs/http shims; never user-facing.
 const INTERNAL_MODULE: &str = "submilli:security";
@@ -426,8 +427,8 @@ pub struct Builtins {
     pub namespaces: Vec<String>,
 }
 
-/// `JSON` is a compiler intrinsic (special-cased in the typechecker, not a
-/// prelude `PackageDeclaration` entry), so it's catalogued and rendered by hand.
+/// `JSON` is declared as a value. The catalog still lists it with the
+/// namespaces agents already look in (`Math`, `Temporal`).
 const JSON_BUILTIN: &str = "JSON";
 
 /// Prelude types that exist for the type system but that an agent never writes
@@ -443,6 +444,9 @@ const SUPPORTING_TYPES: &[&str] = &[
     "IteratorResult",
     "IteratorYieldResult",
     "IteratorReturnResult",
+    // Declared for front ends. The checker does not bind these names.
+    "Function",
+    "JSON",
 ];
 
 fn is_headline_type(name: &str) -> bool {
@@ -520,11 +524,6 @@ pub fn builtin_lookup(name: &str) -> BuiltinLookup {
     if head.eq_ignore_ascii_case("Record") && rest.is_empty() {
         return BuiltinLookup::Found("/** Record<K, V> accepts string, number, enum, literal-union, and template-pattern keys. With K = string, reads return V | undefined and writes require V. Finite literal keys are all required. Equivalent open syntax: { [key: string]: V }. */\ntype Record<K extends string | number, V> = { [P in K]: V };\n".into());
     }
-    if head.eq_ignore_ascii_case(JSON_BUILTIN) {
-        let defs = json_package_declaration();
-        return walk_namespace(JSON_BUILTIN, &defs.namespaces[JSON_BUILTIN], rest);
-    }
-
     let defs = builtin_package_declaration();
     if let Some(canonical) = resolve_ignore_case(defs.namespaces.keys(), head) {
         return walk_namespace(&canonical, &defs.namespaces[&canonical], rest);
@@ -1646,8 +1645,6 @@ pub fn render_lib_submilli_d_ts() -> String {
     render_ts_declarations(&mut out, &defs, "", "declare ", &parent);
     render_ts_compiler_globals(&mut out, &defs);
     render_ts_declarations(&mut out, &global_functions(), "", "declare ", &|_| None);
-    let json = json_package_declaration();
-    render_ts_declarations(&mut out, &json, "", "declare ", &|_| None);
     out.trim_end().to_string()
 }
 
@@ -1686,10 +1683,6 @@ fn render_ts_compiler_globals(out: &mut String, defs: &PackageDeclaration) {
     out.push_str("interface CallableFunction extends Function {}\n\n");
     out.push_str("interface NewableFunction extends Function {}\n\n");
     out.push_str("interface IArguments {}\n\n");
-    out.push_str(
-        "/** Throw `Error(message)` if `condition` is false. Compiler intrinsic — always in scope, not imported. */\n\
-         declare function assert(condition: boolean, message?: string): void;\n\n",
-    );
     render_ts_checker_plumbing(out, defs);
 }
 
@@ -1790,7 +1783,7 @@ fn render_ts_declarations(
                 &sym.kind,
                 indent,
                 export_prefix,
-                parent.as_deref().or_else(|| intrinsic_array_parent(sym)),
+                parent.as_deref(),
                 &occupied,
             );
         }
@@ -1888,12 +1881,6 @@ fn interface_parents(
     } else {
         format!(" extends {}", parents.join(", "))
     }
-}
-
-fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
-    (sym.mangled_name == crate::mangle::prelude("RegExpMatchArray")
-        || sym.mangled_name == crate::mangle::prelude("RegExpExecArray"))
-    .then_some("Array<string | undefined>")
 }
 
 /// The `lib.es5.d.ts` text of a built-in utility type, whose alias body is an
@@ -2586,71 +2573,6 @@ fn is_ts_reserved_word(name: &str) -> bool {
     )
 }
 
-fn json_package_declaration() -> PackageDeclaration {
-    let mut defs = PackageDeclaration::with_package(crate::mangle::PRELUDE_PACKAGE);
-    let json_prefix = crate::mangle::prelude(JSON_BUILTIN);
-    let mut json = NamespaceSymbol {
-        name: JSON_BUILTIN.to_string(),
-        mangled_prefix: json_prefix.clone(),
-        declaration_span: Span::at(FileId::JSON),
-        values: BTreeMap::new(),
-        types: BTreeMap::new(),
-        namespaces: BTreeMap::new(),
-        doc: None,
-    };
-    json.values.insert(
-        "stringify".to_string(),
-        ValueSymbol {
-            name: "stringify".to_string(),
-            mangled_name: crate::mangle::extend(&json_prefix, "stringify"),
-            declaration_span: Span::at(FileId::JSON),
-            kind: ValueKind::Function {
-                generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
-                params: vec![
-                    Param::new("value", Type::TypeVar("T".to_string())),
-                    Param {
-                        name: "replacer".to_string(),
-                        ty: Type::union(vec![Type::Null, Type::Undefined]),
-                        default: Some(crate::DefaultValue::Undefined),
-                        optional: false,
-                        rest: false,
-                    },
-                    Param {
-                        name: "space".to_string(),
-                        ty: Type::union(vec![Type::Number, Type::String, Type::Null, Type::Undefined]),
-                        default: Some(crate::DefaultValue::Undefined),
-                        optional: false,
-                        rest: false,
-                    },
-                ],
-                ret: Type::String,
-                type_predicate: None,
-                doc: crate::doc(FileId::JSON, "/** Serialize a value to a JSON string. An `undefined` or function value has no JSON text: the call throws `MissingValueError` where the result is read as `string`, and is `undefined` at a check or where the type includes `undefined`. */"),
-            },
-        },
-    );
-    json.values.insert(
-        "parse".to_string(),
-        ValueSymbol {
-            name: "parse".to_string(),
-            mangled_name: crate::mangle::extend(&json_prefix, "parse"),
-            declaration_span: Span::at(FileId::JSON),
-            kind: ValueKind::Function {
-                generics: Default::default(),
-                params: vec![Param::new("text", Type::String)],
-                ret: Type::Unknown,
-                type_predicate: None,
-                doc: crate::doc(
-                    FileId::JSON,
-                    "/** Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. */",
-                ),
-            },
-        },
-    );
-    defs.namespaces.insert(JSON_BUILTIN.to_string(), json);
-    defs
-}
-
 fn render_value(out: &mut String, name: &str, kind: &ValueKind, indent: &str) {
     match kind {
         ValueKind::Function {
@@ -2695,8 +2617,7 @@ fn render_type_for(
             properties,
             ..
         } => {
-            let parent =
-                interface_parents(extends, intrinsic_array_parent(sym), ToString::to_string);
+            let parent = interface_parents(extends, None, ToString::to_string);
             let _ = writeln!(
                 out,
                 "{indent}interface {name}{}{parent} {{",
@@ -3424,8 +3345,8 @@ mod tests {
         assert!(!max.contains("function min("), "{max}");
 
         let parse = builtin_docs("JSON.parse").expect("JSON.parse");
-        assert!(parse.contains("function parse("), "{parse}");
-        assert!(!parse.contains("function stringify("), "{parse}");
+        assert!(parse.contains("parse(text: string): unknown;"), "{parse}");
+        assert!(!parse.contains("stringify("), "{parse}");
     }
 
     #[test]
@@ -3784,10 +3705,11 @@ mod tests {
     #[test]
     fn builtin_docs_handles_json_intrinsic() {
         let docs = builtin_docs("JSON").expect("JSON built-in");
-        assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
-        ));
-        assert!(docs.contains("function parse(text: string): unknown;"));
+        assert!(docs.contains("parse(text: string): unknown;"), "{docs}");
+        assert!(
+            docs.contains("stringify(value: unknown, replacer?: null, space?: number | string | null): string;"),
+            "{docs}"
+        );
     }
 
     #[test]
@@ -5143,8 +5065,10 @@ mod tests {
         assert!(docs.contains("interface Array<"));
         for name in ["RegExpMatchArray", "RegExpExecArray"] {
             assert!(docs.contains(&format!(
-                "interface {name} extends Array<string | undefined> {{\n  \"0\": string;"
+                "interface {name} extends Array<string | undefined> {{"
             )));
+            assert!(docs.contains("readonly [key: number]: string;"));
+            assert!(docs.contains("\"0\": string;"));
         }
         assert!(docs.contains("interface ArrayConstructor"));
         assert!(docs.contains("declare const Array: ArrayConstructor;"));
@@ -5156,11 +5080,14 @@ mod tests {
         assert!(docs.contains("declare const console: Console;"));
         assert!(docs.contains("declare namespace Math {"));
         assert!(docs.contains("declare namespace Temporal {"));
-        assert!(docs.contains("declare namespace JSON {"));
+        assert!(docs.contains("declare const JSON: JSON;"));
         assert!(docs.contains(
-            "function stringify<T>(value: T, replacer?: null, space?: number | string | null): string;"
+            "stringify(value: unknown, replacer?: null, space?: number | string | null): string;"
         ));
-        assert!(docs.contains("interface Function {\n  /** The parameters before the first optional, defaulted or rest one. */\n  readonly length: number;\n}"));
+        assert!(
+            docs.contains("declare function assert(condition: boolean, message?: string): void;")
+        );
+        assert!(docs.contains("readonly length: number;"));
         assert!(docs.contains("interface IArguments {}"));
         assert!(docs.contains("declare class Error {"));
         assert!(docs.contains("static isError(value?: unknown): value is Error;"));

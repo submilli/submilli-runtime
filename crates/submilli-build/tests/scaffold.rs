@@ -324,7 +324,7 @@ fn generated_editor_declarations_cover_prelude_and_stdlib() {
         fs::read_to_string(tmp.path().join(".submilli/types/stdlib.d.ts")).expect("stdlib d.ts");
 
     assert!(lib.contains("interface Array<"), "got: {lib}");
-    assert!(lib.contains("namespace JSON {"), "got: {lib}");
+    assert!(lib.contains("declare const JSON: JSON;"), "got: {lib}");
     assert!(stdlib.contains("declare module \"submilli:uuid\" {"));
     assert!(stdlib.contains("declare module \"submilli:http\" {"));
     assert!(stdlib.contains("declare module \"submilli:security\""));
@@ -345,7 +345,7 @@ fn refresh_editor_files_rewrites_generated_files() {
     let stdlib = fs::read_to_string(types_dir.join("stdlib.d.ts")).expect("read stdlib");
     let lib = fs::read_to_string(types_dir.join("lib.submilli.d.ts")).expect("read lib");
     assert!(stdlib.contains("declare module \"submilli:uuid\" {"));
-    assert!(lib.contains("namespace JSON {"));
+    assert!(lib.contains("declare const JSON: JSON;"));
 }
 
 #[test]

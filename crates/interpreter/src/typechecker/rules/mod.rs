@@ -175,6 +175,13 @@ pub(in crate::typechecker) fn check_package_rules(
         {
             registry.insert_borrowed(symbol);
         }
+        if declaration.package_name.as_str() == crate::mangle::PRELUDE_PACKAGE {
+            for symbol in declaration.types.values() {
+                if let Some(view) = super::infer::checker_view(symbol) {
+                    registry.insert_owned(view);
+                }
+            }
+        }
     }
     let namespace = super::infer::type_namespace::TypeNamespace::new();
     let constraints = Default::default();

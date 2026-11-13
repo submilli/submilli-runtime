@@ -186,6 +186,12 @@ impl DependencyUsage {
     }
 
     pub fn is_interface_member_used(&self, ty: &TypeSymbol, member: &str) -> bool {
+        // `BigInt.fromString` is declared for front ends only: it is a compiler
+        // intrinsic with no host function under this member's name to import.
+        if member == "fromString" && ty.mangled_name == crate::mangle::prelude("BigIntConstructor")
+        {
+            return false;
+        }
         self.is_type_used(&ty.mangled_name)
             || self.is_member_used(&crate::mangle::extend(&ty.mangled_name, member))
     }
@@ -362,8 +368,15 @@ impl DependencyUsage {
                 methods,
                 ..
             } => {
-                for base in extends {
-                    self.collect_type(base);
+                // A match array's `Array` heritage is declared for front ends;
+                // the compiler types its reads itself and needs no Array members.
+                let declared_heritage = ty_sym.mangled_name
+                    == crate::mangle::prelude("RegExpMatchArray")
+                    || ty_sym.mangled_name == crate::mangle::prelude("RegExpExecArray");
+                if !declared_heritage {
+                    for base in extends {
+                        self.collect_type(base);
+                    }
                 }
                 for sig in properties.values() {
                     self.collect_type(&sig.ty);

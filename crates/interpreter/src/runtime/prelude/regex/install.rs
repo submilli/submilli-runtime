@@ -560,7 +560,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         defs.types.insert(interface.to_string(), TypeSymbol {
             name: interface.to_string(), mangled_name: crate::mangle::prelude(interface),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(), generics: Default::default(), methods: BTreeMap::new(),
+            kind: TypeKind::Interface { extends: vec![Type::prelude_interface("Array".to_string(), vec![Type::regexp_element()])], index: Some(crate::runtime::prelude::declaration::numeric_index(Type::String, true)), more_indexes: Vec::new(), generics: Default::default(), methods: BTreeMap::new(),
                 properties: BTreeMap::from([
                     // Numeric keys lower to array reads, so no host getter is imported.
                     ("0".to_string(), PropertySig { readonly: false, intrinsic: true, ..property(Type::String, false) }),

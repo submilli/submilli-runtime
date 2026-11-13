@@ -11,6 +11,19 @@ use super::generic::{substitute_or_record, substitute_typevars};
 use super::{Inferer, assignable, type_limit_at, type_limit_unlocated};
 use crate::type_size::{TypeLimits, TypeTooLarge};
 
+/// Whether `mangled` is a prelude interface whose index signature is only
+/// for front ends. The checker types those reads itself.
+pub(in crate::typechecker) fn prelude_index_is_descriptive(mangled: &crate::MangledName) -> bool {
+    [
+        "String",
+        "Uint8Array",
+        "RegExpMatchArray",
+        "RegExpExecArray",
+    ]
+    .into_iter()
+    .any(|name| mangled == &crate::mangle::prelude(name))
+}
+
 impl TypeResolver<'_> {
     /// Every index signature of `ty`, an object type or an interface (with
     /// the interface's type arguments substituted).

@@ -985,7 +985,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Uint8Array".to_string(),
             mangled_name: crate::mangle::prelude("Uint8Array"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
+            kind: TypeKind::Interface { extends: Vec::new(), index: Some(crate::runtime::prelude::declaration::numeric_index(Type::Number, false)), more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (

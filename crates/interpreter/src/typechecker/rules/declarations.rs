@@ -444,6 +444,14 @@ impl<'a> Declared<'a> {
                 } => {
                     let found = match properties.get(member) {
                         Some(property) => Some(&property.ty),
+                        // The prelude's descriptive indexes are for front ends.
+                        // The checker types those reads itself.
+                        None if crate::typechecker::infer::prelude_index_is_descriptive(
+                            &symbol.mangled_name,
+                        ) =>
+                        {
+                            None
+                        }
                         None => sole_index_value(index, more_indexes)?,
                     };
                     Some((generics.names.as_slice(), found))
