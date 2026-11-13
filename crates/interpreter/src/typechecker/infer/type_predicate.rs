@@ -61,14 +61,22 @@ impl Inferer<'_> {
             );
             return Ok(None);
         };
-        let asserted_type = self.resolve_type(&pred.asserted)?;
-        if matches!(asserted_type, Type::Error) {
-            return Ok(None);
-        }
-        self.check_predicate_fits_parameter(pred, &asserted_type, &params[idx].ty);
+        // `asserts x` asserts no type, only that the argument is truthy.
+        let asserted_type = match &pred.asserted {
+            Some(asserted) => {
+                let asserted_type = self.resolve_type(asserted)?;
+                if matches!(asserted_type, Type::Error) {
+                    return Ok(None);
+                }
+                self.check_predicate_fits_parameter(asserted, &asserted_type, &params[idx].ty);
+                asserted_type
+            }
+            None => Type::Unknown,
+        };
         Ok(Some(crate::TypePredicate {
             parameter_index: idx as u32,
             asserted_type,
+            kind: pred.kind(),
         }))
     }
 
@@ -78,7 +86,7 @@ impl Inferer<'_> {
     /// type parameter on either side is left to the call that binds it.
     fn check_predicate_fits_parameter(
         &mut self,
-        pred: &crate::TypePredicateAnnotation,
+        annotation: &crate::TypeAnnotation,
         asserted: &Type,
         param: &Type,
     ) {
@@ -90,7 +98,7 @@ impl Inferer<'_> {
             return;
         }
         self.error(
-            pred.asserted.span,
+            annotation.span,
             format!("a type predicate's type must be assignable to its parameter's type: `{asserted}` is not a `{param}`"),
         );
     }
@@ -276,6 +284,11 @@ impl Inferer<'_> {
         let Some((predicate, param_name)) = self.current_type_predicate.clone() else {
             return Ok(());
         };
+        // As in tsc, an assertion's body is not checked to assert: it returns
+        // `void`, and a call that returns at all is taken to prove it.
+        if predicate.kind.is_assertion() {
+            return Ok(());
+        }
         let Some(scope_entry) = self.scopes.get(&param_name).cloned() else {
             return Ok(());
         };

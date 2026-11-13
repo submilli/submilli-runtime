@@ -616,17 +616,23 @@ impl State<'_> {
                 let b = self.require_source(THIS_BINDING)?;
                 self.mark_cross_frame_capture(THIS_BINDING, &b)?;
             }
-            TypedExprKind::LocalNarrowRef { path, .. } => {
+            TypedExprKind::LocalNarrowRef {
+                binding: narrow_binding,
+                path,
+            } => {
                 if path.chain.is_empty()
                     && let super::infer::narrowing::BindingId::Local { name, .. } = &path.root
                 {
                     let binding = self
                         .require_source(name)
                         .map_err(|failure| failure.with_span(span))?;
-                    // Codegen reads a local narrowed to `never` as it is (a
-                    // `never[]` an alias filled holds real values), so a
-                    // closure needs it.
-                    if matches!(expr_ty, Type::Never) {
+                    // Codegen reads the local itself for a narrowing rebound
+                    // to it (after an `if` or an assertion call), and for a
+                    // local narrowed to `never` (a `never[]` an alias filled
+                    // holds real values), so a closure needs it. A closure
+                    // may read it no other way: `check(ok); v.length` where
+                    // `ok` holds `typeof v === "string"`.
+                    if narrow_binding.name == *name || matches!(expr_ty, Type::Never) {
                         self.mark_cross_frame_capture(name, &binding)?;
                     }
                     self.resolved.reads.insert(id, binding.name_ident);

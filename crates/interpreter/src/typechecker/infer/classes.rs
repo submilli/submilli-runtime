@@ -4828,6 +4828,7 @@ fn substitute_method_sig(
             Some(p) => Some(crate::TypePredicate {
                 parameter_index: p.parameter_index,
                 asserted_type: substitute_typevars(&p.asserted_type, bindings, limits)?,
+                kind: p.kind,
             }),
             None => None,
         },

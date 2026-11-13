@@ -1256,6 +1256,15 @@ impl Inferer<'_> {
         )
     }
 
+    /// Whether the module variable `mangled` is this module's and has no
+    /// annotated type. An import's type is always declared.
+    pub(super) fn is_global_inferred(&self, mangled: &MangledName) -> bool {
+        self.literal_freshness
+            .globals
+            .get(mangled)
+            .is_some_and(|origin| !matches!(origin, LiteralOrigin::Declared))
+    }
+
     fn global_literal_origin(&self, mangled: &MangledName) -> Option<(LiteralOrigin, Type)> {
         let origin = self.literal_freshness.globals.get(mangled)?;
         let declared_ty = self.declared_root_ty(&narrowing::ReferencePath::root(

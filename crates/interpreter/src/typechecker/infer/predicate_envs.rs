@@ -1,7 +1,7 @@
 //! Predicate-environment extraction for the narrowing engine.
 
 use crate::compiler_error::CompilerFailure;
-use crate::{ExprId, Ident, Span, Type, TypedExpr};
+use crate::{ExprId, Ident, Span, Type, TypedExpr, TypedExprKind};
 
 use super::assignable::{literal_to_type, literal_value_of};
 use super::{Inferer, narrowing};
@@ -443,41 +443,19 @@ impl<'a> Inferer<'a> {
                 // See through `Narrowed` wrappers that `wrap_narrow_exprs` installs on `&&`/`||` RHS.
                 self.predicate_envs_unfiltered(inner)?
             }
-            TypedExprKind::Call {
-                args,
-                type_predicate: Some(predicate),
+            TypedExprKind::Call { .. }
+            | TypedExprKind::CallClosure { .. }
+            | TypedExprKind::GenericCall { .. }
+            | TypedExprKind::MethodCall {
+                type_predicate: Some(_),
                 ..
-            } => self.guard_envs(&predicate, &args, cond_expr_id)?,
-            TypedExprKind::CallClosure { callee, args, .. } => {
-                let Type::Function {
-                    predicate: Some(predicate),
-                    ..
-                } = self
-                    .typed_ast
-                    .try_expr(callee)
-                    .map_err(crate::typechecker::arena_failure)?
-                    .ty
-                    .peel()
-                    .clone()
-                else {
-                    return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
-                };
-                self.guard_envs(&predicate, &args, cond_expr_id)?
             }
-            TypedExprKind::GenericCall {
-                args,
-                type_predicate: Some(predicate),
-                ..
-            } => {
-                // `asserted_type` already substituted with type-arg bindings during inference.
-                let exprs: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-                self.guard_envs(&predicate, &exprs, cond_expr_id)?
+            | TypedExprKind::GenericMethodCall { .. } => {
+                match self.called_predicate(cond_expr_id)? {
+                    Some((predicate, args)) => self.guard_envs(&predicate, &args, cond_expr_id)?,
+                    None => (narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()),
+                }
             }
-            TypedExprKind::MethodCall {
-                args,
-                type_predicate: Some(predicate),
-                ..
-            } => self.guard_envs(&predicate, &args, cond_expr_id)?,
             TypedExprKind::MethodCall {
                 receiver,
                 iface,
@@ -486,14 +464,6 @@ impl<'a> Inferer<'a> {
                 type_predicate: None,
             } if name.name == "every" && iface == crate::mangle::prelude("Array") => {
                 self.every_guard_envs(receiver, &args, cond_expr_id)?
-            }
-            TypedExprKind::GenericMethodCall {
-                args,
-                type_predicate: Some(predicate),
-                ..
-            } => {
-                let exprs: Vec<ExprId> = args.iter().map(|a| a.expr).collect();
-                self.guard_envs(&predicate, &exprs, cond_expr_id)?
             }
             TypedExprKind::LocalRef { .. }
             | TypedExprKind::LocalNarrowRef { .. }
@@ -511,8 +481,185 @@ impl<'a> Inferer<'a> {
         })
     }
 
+    /// The predicate a call's callee declares, with the call's arguments.
+    /// `asserted_type` is already substituted with a generic call's bindings.
+    fn called_predicate(
+        &self,
+        call: ExprId,
+    ) -> Result<Option<(crate::TypePredicate, Vec<ExprId>)>, crate::compiler_error::CompilerFailure>
+    {
+        use crate::TypedExprKind;
+        let kind = &self
+            .typed_ast
+            .try_expr(call)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind;
+        Ok(match kind {
+            TypedExprKind::Call {
+                args,
+                type_predicate: Some(predicate),
+                ..
+            }
+            | TypedExprKind::MethodCall {
+                args,
+                type_predicate: Some(predicate),
+                ..
+            } => Some(((**predicate).clone(), args.clone())),
+            TypedExprKind::GenericCall {
+                args,
+                type_predicate: Some(predicate),
+                ..
+            }
+            | TypedExprKind::GenericMethodCall {
+                args,
+                type_predicate: Some(predicate),
+                ..
+            } => Some(((**predicate).clone(), args.iter().map(|a| a.expr).collect())),
+            TypedExprKind::CallClosure { callee, args } => {
+                match self
+                    .typed_ast
+                    .try_expr(*callee)
+                    .map_err(crate::typechecker::arena_failure)?
+                    .ty
+                    .peel()
+                {
+                    Type::Function {
+                        predicate: Some(predicate),
+                        ..
+                    } => Some(((**predicate).clone(), args.clone())),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    }
+
+    /// After a statement that calls an assertion function,
+    /// `assertIsString(v);`, the argument is narrowed for the statements that
+    /// follow: a call that returns proves the assertion. The narrowing is
+    /// installed the way `if (typeof v !== "string") throw …;` installs its
+    /// false side. As in tsc, a call target that is not declared with an
+    /// explicit type is an error (TS2775, TS2776) and narrows nothing.
+    pub(super) fn narrow_after_assertion(
+        &mut self,
+        call: ExprId,
+        span: crate::Span,
+    ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        let Some((predicate, args)) = self.called_predicate(call)? else {
+            return Ok(());
+        };
+        if predicate.kind.is_guard() {
+            return Ok(());
+        }
+        match self.assertion_target(call)? {
+            AssertionTarget::Declared => {}
+            AssertionTarget::Inferred => {
+                self.error(
+                    span,
+                    "assertions require every name in the call target to be declared with an explicit type annotation".to_string(),
+                );
+                return Ok(());
+            }
+            AssertionTarget::NotAName => {
+                self.error(
+                    span,
+                    "assertions require the call target to be an identifier or qualified name"
+                        .to_string(),
+                );
+                return Ok(());
+            }
+        }
+        let Some(&arg) = args.get(predicate.parameter_index as usize) else {
+            return Ok(());
+        };
+        if !self.reachable {
+            return Ok(());
+        }
+        // `asserts x is T` narrows `x` to `T`; `asserts x` narrows as the
+        // argument does when it is a condition, so `check(v !== null)` works.
+        let mut env = if predicate.kind == crate::PredicateKind::AssertsTruthy {
+            self.predicate_envs_unfiltered(arg)?.0
+        } else {
+            match self.predicate_envs_user_guard(&predicate, &args)? {
+                Some((true_env, _)) => true_env,
+                None => return Ok(()),
+            }
+        };
+        self.forget_later_writes(&mut env, arg, call)?;
+        self.retain_emittable_views(&mut env)?;
+        self.push_narrow_frame(env);
+        let narrowings = self.snapshot_active_narrowings(0).0;
+        self.pop_narrow_frame()?;
+        self.install_joined_narrowings(narrowings, span)
+    }
+
+    /// How an assertion call names its target, which tsc checks before it
+    /// narrows: every name in it must be declared with an explicit type.
+    fn assertion_target(
+        &self,
+        call: ExprId,
+    ) -> Result<AssertionTarget, crate::compiler_error::CompilerFailure> {
+        let TypedExprKind::CallClosure { callee, .. } = &self
+            .typed_ast
+            .try_expr(call)
+            .map_err(crate::typechecker::arena_failure)?
+            .kind
+        else {
+            // A function or method, called directly.
+            return Ok(AssertionTarget::Declared);
+        };
+        self.name_target(*callee)
+    }
+
+    /// A function, an import, a nested function declaration, or a variable
+    /// or parameter with a type annotation such as `typeof assertIsString` is
+    /// declared, and so is a member read off one or off `this`. A value whose
+    /// assertion was only inferred, `const check = (x: unknown): asserts x => …`,
+    /// is not.
+    fn name_target(
+        &self,
+        name: ExprId,
+    ) -> Result<AssertionTarget, crate::compiler_error::CompilerFailure> {
+        Ok(
+            match &self
+                .typed_ast
+                .try_expr(name)
+                .map_err(crate::typechecker::arena_failure)?
+                .kind
+            {
+                TypedExprKind::FunctionRef { .. } | TypedExprKind::This => {
+                    AssertionTarget::Declared
+                }
+                TypedExprKind::LocalRef { ident, .. } => {
+                    let nested_function = self
+                        .scopes
+                        .get(&ident.name)
+                        .is_some_and(|entry| entry.nested_function.is_some());
+                    if nested_function || self.is_local_annotated(&ident.name) {
+                        AssertionTarget::Declared
+                    } else {
+                        AssertionTarget::Inferred
+                    }
+                }
+                // A narrowed callee's type is not its declared type, so tsc
+                // reports it too.
+                TypedExprKind::LocalNarrowRef { .. } => AssertionTarget::Inferred,
+                TypedExprKind::GlobalRef { mangled, .. } if self.is_global_inferred(mangled) => {
+                    AssertionTarget::Inferred
+                }
+                TypedExprKind::GlobalRef { .. } => AssertionTarget::Declared,
+                TypedExprKind::FieldAccess { receiver, .. }
+                | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
+                    self.name_target(*receiver)?
+                }
+                _ => AssertionTarget::NotAName,
+            },
+        )
+    }
+
     /// A user-defined guard's narrowing of its argument, without what a later
-    /// argument writes.
+    /// argument writes. An assertion narrows nothing here: its call returns
+    /// `void`, which no condition accepts.
     fn guard_envs(
         &mut self,
         predicate: &crate::TypePredicate,
@@ -520,6 +667,9 @@ impl<'a> Inferer<'a> {
         call: ExprId,
     ) -> Result<(narrowing::NarrowEnv, narrowing::NarrowEnv), crate::compiler_error::CompilerFailure>
     {
+        if predicate.kind.is_assertion() {
+            return Ok((narrowing::NarrowEnv::new(), narrowing::NarrowEnv::new()));
+        }
         let Some((mut true_env, mut false_env)) =
             self.predicate_envs_user_guard(predicate, args)?
         else {
@@ -558,7 +708,8 @@ impl<'a> Inferer<'a> {
         else {
             return Ok(empty());
         };
-        if predicate.parameter_index != 0 {
+        // An assertion is not a guard: tsc picks the plain overload for it.
+        if !predicate.kind.is_guard() || predicate.parameter_index != 0 {
             return Ok(empty());
         }
         let asserted = Type::Array(Box::new(predicate.asserted_type));
@@ -3519,4 +3670,13 @@ fn tuple_element_read_ty(member: &Type, position: usize) -> Option<Type> {
     Some(elements.get(position).map_or(Type::Undefined, |element| {
         crate::ObjectField::widen_optional(position >= elements.required_len(), element.clone())
     }))
+}
+
+/// How an assertion call names its target.
+enum AssertionTarget {
+    Declared,
+    /// A name whose type at the call is not one it was declared with.
+    Inferred,
+    /// Not a name or a member of one: `checks[0](v)`.
+    NotAName,
 }

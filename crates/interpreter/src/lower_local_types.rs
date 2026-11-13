@@ -272,8 +272,8 @@ impl Lifter {
                 self.walk_constraints(generics)?;
                 let names = self.enter_params(ast, params)?;
                 self.walk_opt_type(return_type)?;
-                if let Some(predicate) = type_predicate {
-                    self.walk_type(&mut predicate.asserted)?;
+                if let Some(asserted) = type_predicate.as_mut().and_then(|p| p.asserted.as_mut()) {
+                    self.walk_type(asserted)?;
                 }
                 let signature = Signature {
                     type_params: generics,
@@ -1420,8 +1420,8 @@ impl Lifter {
             } => {
                 let names = self.enter_params(ast, params)?;
                 self.walk_opt_type(return_type)?;
-                if let Some(predicate) = type_predicate {
-                    self.walk_type(&mut predicate.asserted)?;
+                if let Some(asserted) = type_predicate.as_mut().and_then(|p| p.asserted.as_mut()) {
+                    self.walk_type(asserted)?;
                 }
                 match *body {
                     ArrowBody::Expr(body) => self.walk_expr(ast, body)?,

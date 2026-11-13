@@ -80,7 +80,7 @@ pub enum TypedExprKind {
     Call {
         mangled: MangledName,
         args: Vec<ExprId>,
-        /// Type guard predicate from callee's signature; codegen ignores it.
+        /// Guard or assertion predicate from callee's signature; codegen ignores it.
         type_predicate: Option<Box<crate::TypePredicate>>,
     },
     /// `call_ref` dispatch; distinct from `Call` (direct `call` instruction).
@@ -152,7 +152,7 @@ pub enum TypedExprKind {
         type_args: Vec<Type>,
         args: Vec<GenericArgument>,
         return_cast: Option<crate::Type>,
-        /// Guard predicate after type-arg substitution; codegen ignores it.
+        /// Guard or assertion predicate after type-arg substitution; codegen ignores it.
         type_predicate: Option<Box<crate::TypePredicate>>,
     },
     /// `fields` records the static shape in canonical order. `members` retains
@@ -1161,7 +1161,8 @@ pub struct TypedFunction {
     pub generics: crate::GenericParameters,
     pub params: Vec<TypedParam>,
     pub return_type: Type,
-    /// Type guard predicate. When set, `return_type` is always `Type::Boolean`.
+    /// Guard or assertion predicate. When set, `return_type` is `Type::Boolean`
+    /// for a guard and `Type::Void` for an assertion.
     pub type_predicate: Option<crate::TypePredicate>,
     pub body: StmtId,
     pub doc: Option<crate::DocComment>,

@@ -237,10 +237,23 @@ pub(super) fn guard_loss_note(got: &Type) -> Result<Option<String>, RenderError>
     else {
         return Ok(None);
     };
+    let index = predicate.parameter_index;
+    let (described, called) = if predicate.kind.is_guard() {
+        ("a type guard", "guard")
+    } else {
+        ("an assertion function", "assertion")
+    };
     Writer::render(RenderLimits::default(), |out| {
-        out.format(format_args!("this value is a type guard (`arg{} is ", predicate.parameter_index))?;
-        write_type(out, &predicate.asserted_type)?;
-        out.push("`), and the rendering above is lossy: no function-type annotation can carry a predicate, so a value declared at that type compiles and then narrows nothing. Only a direct call of the guard narrows.")
+        out.format(format_args!("this value is {described} (`"))?;
+        if predicate.kind.is_assertion() {
+            out.push("asserts ")?;
+        }
+        out.format(format_args!("arg{index}"))?;
+        if predicate.kind != crate::PredicateKind::AssertsTruthy {
+            out.push(" is ")?;
+            write_type(out, &predicate.asserted_type)?;
+        }
+        out.format(format_args!("`), and the rendering above is lossy: no function-type annotation can carry a predicate, so a value declared at that type compiles and then narrows nothing. Only a direct call of the {called} narrows."))
     }).map(|rendered| Some(rendered.text))
 }
 

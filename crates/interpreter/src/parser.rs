@@ -3715,6 +3715,29 @@ impl<'a> Parser<'a> {
             return Some((
                 None,
                 Some(crate::TypePredicateAnnotation {
+                    asserts: false,
+                    param,
+                    asserted: Some(asserted),
+                    span,
+                }),
+            ));
+        }
+        if self.starts_assertion(self.peek(), self.peek_at(1)) {
+            let start = self.advance().span.start;
+            let param_tok = self.advance();
+            let param = self.ident_from_token(&param_tok);
+            let asserted = if self.peek_identifier_text_is("is") {
+                self.advance();
+                Some(self.parse_type_annotation_in(type_pos)?)
+            } else {
+                None
+            };
+            let end = asserted.as_ref().map_or(param.span.end, |a| a.span.end);
+            let span = self.span(start, end);
+            return Some((
+                None,
+                Some(crate::TypePredicateAnnotation {
+                    asserts: true,
                     param,
                     asserted,
                     span,
@@ -3722,6 +3745,14 @@ impl<'a> Parser<'a> {
             ));
         }
         Some((Some(self.parse_type_annotation_in(type_pos)?), None))
+    }
+
+    /// `asserts` followed by a parameter name on the same line, as in tsc. A
+    /// type named `asserts` is still a type: `x: asserts` has no name after it.
+    fn starts_assertion(&self, first: &Token, second: &Token) -> bool {
+        self.token_is_word(first, "asserts")
+            && matches!(second.kind, TokenKind::Identifier)
+            && !self.source_has_line_break(first.span.end, second.span.start)
     }
 
     fn parse_type_annotation(&mut self) -> Option<TypeAnnotation> {
@@ -5074,6 +5105,18 @@ impl<'a> Parser<'a> {
             .is_some_and(|t| self.token_is_word(t, "is"))
         {
             return self.scan_past_type_annotation_at_depth(start + 2, type_pos, depth + 1);
+        }
+        if let (Some(first), Some(second)) = (self.tokens.get(start), self.tokens.get(start + 1))
+            && self.starts_assertion(first, second)
+        {
+            if self
+                .tokens
+                .get(start + 2)
+                .is_some_and(|t| self.token_is_word(t, "is"))
+            {
+                return self.scan_past_type_annotation_at_depth(start + 3, type_pos, depth + 1);
+            }
+            return Some(start + 2);
         }
         // Leading `|` (prettier's multiline union format).
         let start = if matches!(
@@ -7838,12 +7881,14 @@ mod tests {
         }
 
         // Type-predicate returns ride the same scanner.
-        let (_ast, diags) =
-            parse_str("function f(): void { const g = (v: unknown): v is string => x; }");
-        assert!(
-            diags.is_empty(),
-            "arrow lookahead rejected predicate return: {diags:?}",
-        );
+        for predicate in ["v is string", "asserts v is string", "asserts v"] {
+            let src = format!("function f(): void {{ const g = (v: unknown): {predicate} => x; }}");
+            let (_ast, diags) = parse_str(&src);
+            assert!(
+                diags.is_empty(),
+                "arrow lookahead rejected predicate return {predicate:?}: {diags:?}",
+            );
+        }
     }
 
     #[test]
@@ -8719,9 +8764,10 @@ mod tests {
                 );
                 let tp = type_predicate.as_ref().expect("predicate parsed");
                 assert_eq!(tp.param.name, "s");
+                assert!(!tp.asserts);
                 assert!(matches!(
-                    tp.asserted.kind,
-                    crate::TypeAnnotationKind::Name { .. }
+                    tp.asserted.as_ref().map(|a| &a.kind),
+                    Some(crate::TypeAnnotationKind::Name { .. })
                 ));
                 assert_eq!(tp.span, crate::Span::new(F, 29, 40).unwrap());
             }
@@ -8768,6 +8814,86 @@ mod tests {
                 assert!(type_predicate.is_none(), "plain form has no type_predicate",);
             }
             _ => panic!("expected Function"),
+        }
+    }
+
+    /// The predicate a single function declaration or `const f = (…) => …`
+    /// declares.
+    fn parsed_predicate(src: &str) -> crate::TypePredicateAnnotation {
+        let (ast, diags) = parse_str(src);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        match &single_stmt(&ast).kind {
+            crate::StmtKind::Function {
+                return_type,
+                type_predicate,
+                ..
+            } => {
+                assert!(return_type.is_none());
+                type_predicate.clone().expect("predicate parsed")
+            }
+            crate::StmtKind::Const { value, .. } => match &ast.try_expr(*value).unwrap().kind {
+                crate::ExprKind::Arrow {
+                    return_type,
+                    type_predicate,
+                    ..
+                } => {
+                    assert!(return_type.is_none());
+                    type_predicate.clone().expect("predicate parsed")
+                }
+                other => panic!("expected Arrow, got {other:?}"),
+            },
+            other => panic!("expected Function or const, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_assertion_return_annotations() {
+        let tp = parsed_predicate("function f(x: unknown): asserts x is string {}");
+        assert!(tp.asserts);
+        assert_eq!(tp.param.name, "x");
+        assert!(tp.asserted.is_some());
+        assert_eq!(tp.span, crate::Span::new(F, 24, 43).unwrap());
+
+        let tp = parsed_predicate("function f(x: unknown): asserts x {}");
+        assert!(tp.asserts);
+        assert!(tp.asserted.is_none());
+        assert_eq!(tp.span, crate::Span::new(F, 24, 33).unwrap());
+
+        let tp = parsed_predicate("const f = (x: unknown): asserts x is string => {};");
+        assert!(tp.asserts && tp.asserted.is_some());
+        let tp = parsed_predicate("const f = (x: unknown): asserts x => {};");
+        assert!(tp.asserts && tp.asserted.is_none());
+    }
+
+    #[test]
+    fn parse_asserts_as_a_name() {
+        // A guard on a parameter named `asserts`.
+        let tp =
+            parsed_predicate("function f(asserts: unknown): asserts is string { return true; }");
+        assert!(!tp.asserts);
+        assert_eq!(tp.param.name, "asserts");
+        // A type named `asserts`.
+        for src in [
+            "function f(x: unknown): asserts { return x; }",
+            "const f = (x: unknown): asserts => x;",
+        ] {
+            let (ast, diags) = parse_str(src);
+            assert!(
+                diags.is_empty(),
+                "unexpected diagnostics for {src}: {diags:?}"
+            );
+            let has_predicate = match &single_stmt(&ast).kind {
+                crate::StmtKind::Function { type_predicate, .. } => type_predicate.is_some(),
+                crate::StmtKind::Const { value, .. } => matches!(
+                    &ast.try_expr(*value).unwrap().kind,
+                    crate::ExprKind::Arrow {
+                        type_predicate: Some(_),
+                        ..
+                    }
+                ),
+                _ => true,
+            };
+            assert!(!has_predicate, "{src} has no predicate");
         }
     }
 

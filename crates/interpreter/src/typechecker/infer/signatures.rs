@@ -105,7 +105,7 @@ impl<'a> Inferer<'a> {
                     (Some(annot), _) => (self.resolve_type(annot)?, None),
                     (None, Some(pred)) => {
                         let resolved = self.resolve_type_predicate(pred, &resolved_params)?;
-                        (Type::Boolean, resolved)
+                        (pred.kind().return_type(), resolved)
                     }
                     (None, None) => {
                         return Err(super::inference_failure(
@@ -743,7 +743,7 @@ impl<'a> Inferer<'a> {
             }
             let names = self.push_declared_generics(generics)?;
             let signature = self
-                .seed_signature_parts(params, return_type.as_ref(), type_predicate.is_some())
+                .seed_signature_parts(params, return_type.as_ref(), type_predicate.as_ref())
                 .map(|(params, ret)| ValueKind::Function {
                     generics: names,
                     params,
@@ -765,7 +765,7 @@ impl<'a> Inferer<'a> {
         &mut self,
         params: &[crate::ParamDecl],
         return_type: Option<&crate::TypeAnnotation>,
-        has_type_predicate: bool,
+        type_predicate: Option<&crate::TypePredicateAnnotation>,
     ) -> Result<(Vec<Param>, Type), CompilerFailure> {
         let params = params
             .iter()
@@ -791,8 +791,7 @@ impl<'a> Inferer<'a> {
             .collect::<Result<Vec<_>, CompilerFailure>>()?;
         let ret = match return_type {
             Some(ret) => self.resolve_type(ret)?,
-            None if has_type_predicate => Type::Boolean,
-            None => Type::Error,
+            None => type_predicate.map_or(Type::Error, |pred| pred.kind().return_type()),
         };
         Ok((params, ret))
     }

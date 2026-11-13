@@ -2149,12 +2149,30 @@ fn ts_return_type(
     let Some(name) = names.get(predicate.parameter_index as usize) else {
         return ts_type(ret);
     };
-    let asserted = ts_type(&predicate.asserted_type);
-    match param.ty {
-        Type::TypeVar(_) | Type::GenericParam { .. } => {
-            format!("{name} is {} & {asserted}", ts_type(&param.ty))
+    let generic_param = matches!(param.ty, Type::TypeVar(_) | Type::GenericParam { .. });
+    ts_predicate(predicate, name, || {
+        if generic_param {
+            format!(
+                "{} & {}",
+                ts_type(&param.ty),
+                ts_type(&predicate.asserted_type)
+            )
+        } else {
+            ts_type(&predicate.asserted_type)
         }
-        _ => format!("{name} is {asserted}"),
+    })
+}
+
+/// `x is T`, `asserts x is T` or `asserts x`.
+fn ts_predicate(
+    predicate: &TypePredicate,
+    name: &str,
+    asserted: impl FnOnce() -> String,
+) -> String {
+    match predicate.kind {
+        crate::PredicateKind::Guard => format!("{name} is {}", asserted()),
+        crate::PredicateKind::Asserts => format!("asserts {name} is {}", asserted()),
+        crate::PredicateKind::AssertsTruthy => format!("asserts {name}"),
     }
 }
 
@@ -2204,7 +2222,10 @@ fn ts_type(ty: &Type) -> String {
                 .join(", ");
             let ret = predicate.as_deref().map_or_else(
                 || ts_type(ret),
-                |p| format!("arg{} is {}", p.parameter_index, ts_type(&p.asserted_type)),
+                |p| {
+                    let name = format!("arg{}", p.parameter_index);
+                    ts_predicate(p, &name, || ts_type(&p.asserted_type))
+                },
             );
             format!("({params}) => {ret}")
         }
@@ -4158,6 +4179,44 @@ mod tests {
         assert!(docs.contains("(value?: number | bigint | string | boolean): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
         assert!(!docs.contains("@call"));
+    }
+
+    #[test]
+    fn d_ts_renderer_prints_assertion_signatures() {
+        let asserts = TypePredicate {
+            parameter_index: 0,
+            asserted_type: Type::String,
+            kind: crate::PredicateKind::Asserts,
+        };
+        let truthy = TypePredicate {
+            parameter_index: 0,
+            asserted_type: Type::Unknown,
+            kind: crate::PredicateKind::AssertsTruthy,
+        };
+        let params = [Param::new("x", Type::Unknown)];
+        assert_eq!(
+            ts_return_type(&params, &Type::Void, Some(&asserts), None),
+            "asserts x is string"
+        );
+        assert_eq!(
+            ts_return_type(&params, &Type::Void, Some(&truthy), None),
+            "asserts x"
+        );
+        let function = |predicate: &TypePredicate| Type::Function {
+            params: vec![Type::Unknown],
+            ret: Box::new(Type::Void),
+            predicate: Some(Box::new(predicate.clone())),
+            has_rest: false,
+            optional: 0,
+        };
+        assert_eq!(
+            ts_type(&function(&asserts)),
+            "(arg0: unknown) => asserts arg0 is string"
+        );
+        assert_eq!(
+            ts_type(&function(&truthy)),
+            "(arg0: unknown) => asserts arg0"
+        );
     }
 
     fn class_with_constructor(

@@ -465,7 +465,9 @@ impl<'a> Validator<'a> {
         if let Some(predicate) = predicate {
             self.span(predicate.span)?;
             self.span(predicate.param.span)?;
-            self.annotation(&predicate.asserted)?;
+            if let Some(asserted) = &predicate.asserted {
+                self.annotation(asserted)?;
+            }
         }
         Ok(())
     }

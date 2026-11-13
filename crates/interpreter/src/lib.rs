@@ -116,4 +116,6 @@ pub use typed_ast::{
     TypedStringEnumMember, TypedSwitchCase, TypedSwitchValue, TypedTypeAliasDecl, TypedTypeDecl,
     TypeofTagKind,
 };
-pub use types::{IndexSignature, ObjectField, Package, TupleType, Type, TypePredicate};
+pub use types::{
+    IndexSignature, ObjectField, Package, PredicateKind, TupleType, Type, TypePredicate,
+};

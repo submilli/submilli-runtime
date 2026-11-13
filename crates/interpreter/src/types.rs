@@ -228,10 +228,50 @@ impl IndexSignature {
     }
 }
 
+/// What a function says about one of its parameters: a type guard
+/// (`x is T`) or an assertion (`asserts x is T`, `asserts x`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TypePredicate {
     pub parameter_index: u32,
     pub asserted_type: Type,
+    #[serde(default, skip_serializing_if = "PredicateKind::is_guard")]
+    pub kind: PredicateKind,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+pub enum PredicateKind {
+    /// `x is T`: returns `boolean`, and narrows where it returns `true`.
+    #[default]
+    Guard,
+    /// `asserts x is T`: returns `void`; the argument is `T` where a call
+    /// returns.
+    Asserts,
+    /// `asserts x`: returns `void`; the argument is truthy where a call
+    /// returns. `asserted_type` is `Type::Unknown`.
+    AssertsTruthy,
+}
+
+impl PredicateKind {
+    // `&self` because serde's `skip_serializing_if` passes a reference.
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    pub fn is_guard(&self) -> bool {
+        matches!(self, Self::Guard)
+    }
+
+    pub fn is_assertion(self) -> bool {
+        !self.is_guard()
+    }
+
+    /// What a call returns: a guard's `boolean`, an assertion's `void`.
+    pub fn return_type(self) -> Type {
+        if self.is_guard() {
+            Type::Boolean
+        } else {
+            Type::Void
+        }
+    }
 }
 
 /// Tuple positions and the number of trailing positions that may be omitted.
@@ -1918,7 +1958,31 @@ impl fmt::Display for Type {
 
 #[cfg(test)]
 mod tests {
-    use super::{Package, Type};
+    use super::{Package, PredicateKind, Type, TypePredicate};
+
+    #[test]
+    fn predicate_kind_is_serialized_only_for_an_assertion() {
+        let guard = TypePredicate {
+            parameter_index: 0,
+            asserted_type: Type::String,
+            kind: PredicateKind::Guard,
+        };
+        let json = serde_json::to_string(&guard).unwrap();
+        assert_eq!(json, r#"{"parameter_index":0,"asserted_type":"String"}"#);
+        assert_eq!(serde_json::from_str::<TypePredicate>(&json).unwrap(), guard);
+        for kind in [PredicateKind::Asserts, PredicateKind::AssertsTruthy] {
+            let assertion = TypePredicate {
+                kind,
+                ..guard.clone()
+            };
+            let json = serde_json::to_string(&assertion).unwrap();
+            assert!(json.contains(r#""kind""#), "{json}");
+            assert_eq!(
+                serde_json::from_str::<TypePredicate>(&json).unwrap(),
+                assertion
+            );
+        }
+    }
 
     #[test]
     fn tuple_mapping_preserves_optional_positions() {

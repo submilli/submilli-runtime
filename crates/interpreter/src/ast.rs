@@ -791,12 +791,25 @@ pub struct TypeAnnotation {
     pub span: Span,
 }
 
-/// Surface form of `<param> is <T>`. Only valid at a function return-type position.
+/// Surface form of `<param> is <T>`, `asserts <param> is <T>` or
+/// `asserts <param>`. Only valid at a function return-type position.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypePredicateAnnotation {
+    pub asserts: bool,
     pub param: Ident,
-    pub asserted: TypeAnnotation,
+    /// `None` only for `asserts <param>`.
+    pub asserted: Option<TypeAnnotation>,
     pub span: Span,
+}
+
+impl TypePredicateAnnotation {
+    pub fn kind(&self) -> crate::PredicateKind {
+        match (self.asserts, &self.asserted) {
+            (false, _) => crate::PredicateKind::Guard,
+            (true, Some(_)) => crate::PredicateKind::Asserts,
+            (true, None) => crate::PredicateKind::AssertsTruthy,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

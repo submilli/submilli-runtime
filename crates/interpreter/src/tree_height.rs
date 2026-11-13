@@ -595,7 +595,11 @@ impl SyntaxChildren {
             } => {
                 self.params(params);
                 self.annotations(return_type);
-                self.annotations(type_predicate.iter().map(|predicate| &predicate.asserted));
+                self.annotations(
+                    type_predicate
+                        .iter()
+                        .filter_map(|predicate| predicate.asserted.as_ref()),
+                );
                 match body {
                     ArrowBody::Expr(id) => self.expr(*id),
                     ArrowBody::Block(id) => self.stmt(*id),
@@ -650,7 +654,11 @@ impl SyntaxChildren {
                 self.annotations(generics.iter().filter_map(|p| p.constraint.as_ref()));
                 self.params(params);
                 self.annotations(return_type);
-                self.annotations(type_predicate.iter().map(|predicate| &predicate.asserted));
+                self.annotations(
+                    type_predicate
+                        .iter()
+                        .filter_map(|predicate| predicate.asserted.as_ref()),
+                );
                 self.stmt(*body);
             }
             StmtKind::If {
