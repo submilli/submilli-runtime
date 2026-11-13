@@ -104,14 +104,7 @@ fn compile_test(
         diagnostics
             .into_iter()
             .filter(|diagnostic| diagnostic.severity == Severity::Error)
-            .map(|diagnostic| {
-                format!(
-                    "{} at {} | {}",
-                    diagnostic.message,
-                    diagnostic.span.start,
-                    diagnostic.help.join(" ")
-                )
-            })
+            .map(|diagnostic| format!("{} | {}", diagnostic.message, diagnostic.help.join(" ")))
             .collect()
     })
 }
