@@ -9,11 +9,11 @@ use std::time::{Duration, Instant};
 
 use crate::compile_capabilities;
 use crate::compiler_error::{CompileError, CompilerFailure, CompilerStage};
-#[cfg(test)]
-use crate::front_end::has_errors;
 use crate::front_end::{
-    EngineFrontEnd, runtime_declarations, script_declarations, script_request, warnings_only,
+    EngineFrontEnd, has_errors, runtime_declarations, script_declarations, script_request,
+    script_rule_dependencies, warnings_only,
 };
+pub use crate::imports::ScriptImports;
 use crate::stdlib::Stdlib;
 use crate::typed_ast::TypedAst;
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
     PackageDeclaration, PackageModule, PackageRequest, ParsedScript, ScriptOwner, ScriptRequest,
     Sources, capture, desugar, lower_patterns,
 };
-pub use submilli_front_end::front_end::{PackageSurface, PackageTestSurface, ScriptImports};
+pub use submilli_front_end::front_end::{PackageSurface, PackageTestSurface};
 
 /// A package module as callers hand it to the engine, before it has a
 /// [`FileId`] in a [`Sources`].
@@ -128,9 +128,21 @@ fn check_and_lower(
     let typecheck_start = Instant::now();
     let CheckedScript {
         typed_ast,
-        warnings,
+        mut diagnostics,
     } = parsed.check(request)?;
+    // Submilli's rules are the engine's, whichever front end built the tree.
+    diagnostics.extend(
+        crate::typechecker::rules::check_script_submilli(
+            &typed_ast,
+            &script_rule_dependencies(request),
+        )
+        .map_err(|error| error.with_prior_diagnostics(&diagnostics))?,
+    );
     timings.typecheck = typecheck_start.elapsed();
+    if has_errors(&diagnostics) {
+        return Err(diagnostics.into());
+    }
+    let warnings = diagnostics;
     let with_warnings = |fatal| CompileError {
         diagnostics: warnings.clone(),
         fatal: Some(fatal),
@@ -233,6 +245,35 @@ fn test_codegen_owner(
     declaration
 }
 
+/// What a package's rules resolve its types against, in the order package
+/// inference saw them: everything it may import by name, a declared
+/// dependency winning over a runtime package of the same name, then the
+/// transitive declarations it may not import. Keep in step with how
+/// `infer_package_with_rules` builds `packages_by_name` and
+/// `type_only_packages`.
+fn package_rule_dependencies<'a>(request: &PackageRequest<'a>) -> Vec<&'a PackageDeclaration> {
+    let mut importable: BTreeMap<&str, &PackageDeclaration> = BTreeMap::new();
+    for declaration in request
+        .stdlib
+        .iter()
+        .chain(request.prelude)
+        .chain(request.host)
+        .chain(request.dependencies)
+    {
+        importable.insert(&declaration.package_name, declaration);
+    }
+    let type_only: BTreeMap<&str, &PackageDeclaration> = request
+        .transitive
+        .iter()
+        .filter(|declaration| !importable.contains_key(declaration.package_name.as_str()))
+        .map(|declaration| (declaration.package_name.as_str(), *declaration))
+        .collect();
+    importable
+        .into_values()
+        .chain(type_only.into_values())
+        .collect()
+}
+
 /// Register `modules` in a new [`Sources`], in order, for a [`PackageRequest`].
 pub fn package_sources(modules: &[PackageSourceModule<'_>]) -> Result<Sources, CompileError> {
     let mut sources = Sources::new();
@@ -316,8 +357,20 @@ fn compile_checked_package(
     let CheckedPackage {
         typed_ast: mut ta,
         mut declaration,
-        warnings: mut diagnostics,
+        mut diagnostics,
     } = front_end.check_package(request)?;
+    // Submilli's rules are the engine's, whichever front end built the tree.
+    diagnostics.extend(
+        crate::typechecker::rules::check_package_submilli(
+            &ta,
+            &declaration,
+            &package_rule_dependencies(request),
+        )
+        .map_err(|error| error.with_prior_diagnostics(&diagnostics))?,
+    );
+    if has_errors(&diagnostics) {
+        return Err(diagnostics.into());
+    }
     let internal_modules = std::mem::take(&mut ta.internal_modules);
     let test_surface = match request.surface {
         PackageSurface::Public => None,
@@ -499,7 +552,7 @@ pub fn typecheck_to_typed_ast(source: &str, file: FileId) -> (TypedAst, Vec<Diag
     let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
     let request = script_request(&stdlib_refs);
     let result = crate::compiler_thread::run(|| {
-        crate::front_end::parse(source.to_owned(), file).infer(&request)
+        crate::front_end::parse(source.to_owned(), file).infer_with_all_rules(&request)
     });
     match result {
         Ok(result) => result,
@@ -800,7 +853,7 @@ fn front_end(
         dependencies: packages,
         ..script_request(&stdlib_refs)
     };
-    parsed.infer(&request)
+    parsed.infer_with_all_rules(&request)
 }
 
 #[cfg(test)]
@@ -809,7 +862,7 @@ mod parsed_script_tests {
 
     #[test]
     fn a_package_build_reports_every_module_syntax_error() {
-        submilli_front_end::test_support::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             // A module with syntax errors isn't lowered for a build: a recovered
             // parse can leave nodes lowering would trip on, and the build
             // stops before inference anyway.
@@ -835,7 +888,7 @@ mod parsed_script_tests {
 
     #[test]
     fn package_inference_past_syntax_errors_sees_lowered_modules() {
-        submilli_front_end::test_support::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             // Inference runs past `lib`'s syntax error, so `lib` is lowered
             // anyway: its local interface is lifted and its destructured
             // parameter lowered, and the other module's type error is still
@@ -1310,7 +1363,7 @@ mod untyped_arena_failures {
     #[test]
     fn parser_arena_limit_is_fatal_and_keeps_prior_diagnostics() {
         // The node limit is this thread's, so the compiler must run on it.
-        submilli_front_end::test_support::on_compiler_stack(
+        crate::compiler_thread::on_test_stack(
             parser_arena_limit_is_fatal_and_keeps_prior_diagnostics_inner,
         );
     }
@@ -1352,7 +1405,7 @@ mod untyped_arena_failures {
     #[test]
     fn lowering_arena_limit_stops_script_before_inference() {
         // The node limit is this thread's, so the compiler must run on it.
-        submilli_front_end::test_support::on_compiler_stack(
+        crate::compiler_thread::on_test_stack(
             lowering_arena_limit_stops_script_before_inference_inner,
         );
     }
@@ -1398,9 +1451,7 @@ mod untyped_arena_failures {
     #[test]
     fn package_arena_limit_returns_no_artifact() {
         // The node limit is this thread's, so the compiler must run on it.
-        submilli_front_end::test_support::on_compiler_stack(
-            package_arena_limit_returns_no_artifact_inner,
-        );
+        crate::compiler_thread::on_test_stack(package_arena_limit_returns_no_artifact_inner);
     }
 
     fn package_arena_limit_returns_no_artifact_inner() {
@@ -1449,7 +1500,7 @@ mod typed_arena_failures {
     #[test]
     fn typed_allocation_failure_stops_script_and_package_compilation() {
         // The node limit is this thread's, so the compiler must run on it.
-        submilli_front_end::test_support::on_compiler_stack(
+        crate::compiler_thread::on_test_stack(
             typed_allocation_failure_stops_script_and_package_compilation_inner,
         );
     }
@@ -1491,7 +1542,7 @@ mod typed_arena_failures {
     #[test]
     fn typed_allocation_failure_keeps_prior_inference_diagnostics() {
         // The node limit is this thread's, so the compiler must run on it.
-        submilli_front_end::test_support::on_compiler_stack(
+        crate::compiler_thread::on_test_stack(
             typed_allocation_failure_keeps_prior_inference_diagnostics_inner,
         );
     }

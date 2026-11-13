@@ -69,7 +69,7 @@ impl ParsedExecute {
     pub(crate) fn imports(&self) -> Result<ScriptImports, String> {
         let stdlib = interpreter::runtime::stdlib_package_declarations();
         let stdlib: Vec<&PackageDeclaration> = stdlib.iter().collect();
-        self.parsed.imports(&stdlib).map_err(|error| {
+        let specifiers = self.parsed.imports().map_err(|error| {
             let diagnostics = error.into_diagnostics(self.file);
             diagnostics::render_collection(&diagnostics, &self.sources).map_or_else(
                 |failure| {
@@ -80,7 +80,8 @@ impl ParsedExecute {
                 },
                 |rendered| rendered.text,
             )
-        })
+        })?;
+        Ok(interpreter::classify_imports(&specifiers, &stdlib))
     }
 }
 

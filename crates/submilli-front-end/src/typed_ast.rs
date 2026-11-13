@@ -1411,6 +1411,7 @@ pub enum InterfaceCarrier {
 /// Whether codegen can validate every value admitted by `ty` with
 /// `cast_check::emit_structural_test`. Keeping the allowlist beside the
 /// serialized narrowing-test model gives typechecking and codegen one answer.
+#[doc(hidden)]
 pub fn runtime_type_is_testable(ty: &Type) -> bool {
     runtime_type_is_testable_inner(ty, false)
 }
@@ -1419,6 +1420,7 @@ pub fn runtime_type_is_testable(ty: &Type) -> bool {
 /// or interface back-edges. General expression descriptors cannot: polymorphic
 /// recursion can grow its type arguments forever while enumerating every
 /// expression type.
+#[doc(hidden)]
 pub fn field_runtime_type_is_testable(ty: &Type) -> bool {
     runtime_type_is_testable_inner(ty, true)
 }
@@ -1573,6 +1575,7 @@ pub struct TypedTypeAliasDecl {
 }
 
 impl TypedAst {
+    #[doc(hidden)]
     pub fn has_string_index(&self, ty: &Type) -> bool {
         match ty.peel() {
             Type::Object { index, .. } => index.is_some(),

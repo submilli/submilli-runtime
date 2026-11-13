@@ -146,6 +146,7 @@ fn write_diagnostic(
     Ok(())
 }
 
+#[doc(hidden)]
 pub fn validate_span(sources: &Sources, span: Span) -> Result<(), SourceError> {
     Span::new(span.file, span.start, span.end)?;
     if span.file.reserved_path().is_some() {
@@ -179,6 +180,7 @@ fn write_context(
     write_source_block(out, index, span, width)
 }
 
+#[doc(hidden)]
 pub fn write_source_block(
     out: &mut Writer,
     index: &LineIndex,

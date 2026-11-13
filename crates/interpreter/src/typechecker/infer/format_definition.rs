@@ -842,7 +842,7 @@ mod tests {
 
     #[test]
     fn rendering_failure_discards_compilation_and_preserves_prior_diagnostics() {
-        submilli_front_end::test_support::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             let source =
                 "function main(): void { const p: number = absent; const n = 1; n.missing; }";
             FAIL_RENDER.with(|fail| fail.set(true));

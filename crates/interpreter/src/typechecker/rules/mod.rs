@@ -32,8 +32,9 @@ pub fn check(ta: &TypedAst) -> Result<Vec<Diagnostic>, CompileError> {
     check_script(ta, &[])
 }
 
-/// Checks a script. `dependencies` are the packages it was inferred against,
-/// which declare the types it imports.
+/// Checks a script with every rule: TypeScript's, then Submilli's.
+/// `dependencies` are the packages it was inferred against, which declare the
+/// types it imports.
 ///
 /// The tree must satisfy [`TypedAst`]'s phase input contract. Dependency type
 /// limits are checked again because callers may have modified declarations
@@ -42,15 +43,43 @@ pub fn check_script(
     ta: &TypedAst,
     dependencies: &[&PackageDeclaration],
 ) -> Result<Vec<Diagnostic>, CompileError> {
+    let mut diags = check_script_typescript(ta, dependencies)?;
+    diags.extend(
+        check_script_submilli(ta, dependencies)
+            .map_err(|error| error.with_prior_diagnostics(&diags))?,
+    );
+    Ok(diags)
+}
+
+/// Checks only the TypeScript rules: what the engine's own front end checks.
+/// Submilli's rules run separately, on whatever tree a front end returns.
+pub fn check_script_typescript(
+    ta: &TypedAst,
+    dependencies: &[&PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError> {
     tree_height::check_typed(ta, CompilerStage::Infer)?;
     super::infer::check_declaration_types(dependencies.iter().copied())?;
     let declarations = TypeDeclarations::for_script(ta, dependencies);
     let mut diags = Vec::new();
-    run_rules(ta, &declarations, Source::Script, true, &mut diags).map_err(|fatal| {
-        CompileError {
-            diagnostics: diags.clone(),
-            fatal: Some(fatal),
-        }
+    run_typescript_rules(ta, &declarations, &mut diags).map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
+    })?;
+    Ok(diags)
+}
+
+/// [`check_script_typescript`] for a package.
+pub fn check_package_typescript(
+    typed_ast: &TypedAst,
+    package: &PackageDeclaration,
+    dependencies: &[&PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError> {
+    tree_height::check_typed(typed_ast, CompilerStage::Infer)?;
+    let declarations = TypeDeclarations::for_package(package, dependencies);
+    let mut diags = Vec::new();
+    run_typescript_rules(typed_ast, &declarations, &mut diags).map_err(|fatal| CompileError {
+        diagnostics: diags.clone(),
+        fatal: Some(fatal),
     })?;
     Ok(diags)
 }
@@ -64,7 +93,7 @@ pub fn check_script_submilli(
     super::infer::check_declaration_types(dependencies.iter().copied())?;
     let declarations = TypeDeclarations::for_script(ta, dependencies);
     let mut diags = Vec::new();
-    run_rules(ta, &declarations, Source::Script, false, &mut diags).map_err(|fatal| {
+    run_submilli_rules(ta, &declarations, Source::Script, &mut diags).map_err(|fatal| {
         CompileError {
             diagnostics: diags.clone(),
             fatal: Some(fatal),
@@ -100,13 +129,12 @@ pub fn check_package(
     package: &PackageDeclaration,
     dependencies: &[&PackageDeclaration],
 ) -> Result<Vec<Diagnostic>, CompileError> {
-    check_package_rules(
-        typed_ast,
-        package,
-        dependencies,
-        true,
-        &crate::type_size::TypeLimits::default(),
-    )
+    let mut diags = check_package_typescript(typed_ast, package, dependencies)?;
+    diags.extend(
+        check_package_submilli(typed_ast, package, dependencies)
+            .map_err(|error| error.with_prior_diagnostics(&diags))?,
+    );
+    Ok(diags)
 }
 
 /// Checks only the rules specific to Submilli on a package typed by either front end.
@@ -119,7 +147,6 @@ pub fn check_package_submilli(
         typed_ast,
         package,
         dependencies,
-        false,
         &crate::type_size::TypeLimits::default(),
     )
 }
@@ -128,7 +155,6 @@ pub(in crate::typechecker) fn check_package_rules(
     typed_ast: &TypedAst,
     package: &PackageDeclaration,
     dependencies: &[&PackageDeclaration],
-    include_typescript: bool,
     limits: &crate::type_size::TypeLimits,
 ) -> Result<Vec<Diagnostic>, CompileError> {
     tree_height::check_typed(typed_ast, CompilerStage::Infer)?;
@@ -182,18 +208,12 @@ pub(in crate::typechecker) fn check_package_rules(
     );
     exported_docs::run(typed_ast, package, exports, &mut diags);
     let declarations = TypeDeclarations::for_package(package, dependencies);
-    run_rules(
-        typed_ast,
-        &declarations,
-        Source::Package,
-        include_typescript,
-        &mut diags,
-    )
-    .and_then(|()| check_discipline::run(typed_ast, &mut diags))
-    .map_err(|fatal| CompileError {
-        diagnostics: diags.clone(),
-        fatal: Some(fatal),
-    })?;
+    run_submilli_rules(typed_ast, &declarations, Source::Package, &mut diags)
+        .and_then(|()| check_discipline::run(typed_ast, &mut diags))
+        .map_err(|fatal| CompileError {
+            diagnostics: diags.clone(),
+            fatal: Some(fatal),
+        })?;
     Ok(diags)
 }
 
@@ -203,21 +223,13 @@ enum Source {
     Package,
 }
 
-/// The rules a script and a package share, in the order they report.
-fn run_rules(
+/// Submilli's rules a script and a package share, in the order they report.
+fn run_submilli_rules(
     ta: &TypedAst,
     declarations: &TypeDeclarations<'_>,
     source: Source,
-    include_typescript: bool,
     diags: &mut Vec<Diagnostic>,
 ) -> Result<(), CompilerFailure> {
-    if include_typescript {
-        missing_return::run(ta, declarations, diags)?;
-        unreachable::run(ta, declarations, diags)?;
-        return_outside_function::run(ta, diags)?;
-        fallthrough::run(ta, declarations, diags)?;
-        definite_assignment::run(ta, diags)?;
-    }
     super_call::run(ta, diags)?;
     callable_arity::run(ta, diags)?;
     if source == Source::Script {
@@ -226,6 +238,19 @@ fn run_rules(
     }
     doc_consistency::run(ta, diags)?;
     capability_consistency::run(ta, declarations, diags)
+}
+
+/// The rules TypeScript itself checks, in the order they report.
+fn run_typescript_rules(
+    ta: &TypedAst,
+    declarations: &TypeDeclarations<'_>,
+    diags: &mut Vec<Diagnostic>,
+) -> Result<(), CompilerFailure> {
+    missing_return::run(ta, declarations, diags)?;
+    unreachable::run(ta, declarations, diags)?;
+    return_outside_function::run(ta, diags)?;
+    fallthrough::run(ta, declarations, diags)?;
+    definite_assignment::run(ta, diags)
 }
 
 #[cfg(test)]

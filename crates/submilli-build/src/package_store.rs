@@ -36,8 +36,7 @@ impl fmt::Debug for PackageStore {
         f.debug_struct("PackageStore")
             .field("root", &self.root)
             .field("fallbacks", &self.fallbacks)
-            .field("front_end", &self.front_end.id())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

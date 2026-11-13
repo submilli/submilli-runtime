@@ -104,6 +104,7 @@ impl PackageDeclaration {
 
     /// The source import surface for consumers outside this package. The engine
     /// invokes the reserved lifecycle entry point through the full declaration.
+    #[doc(hidden)]
     pub fn without_finalizer(mut self) -> Self {
         self.values.remove("finalizer");
         self
@@ -568,6 +569,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
     }
 }
 
+#[doc(hidden)]
 pub fn method_types(method: &MethodSig, visit: &mut dyn FnMut(&Type)) {
     for signature in &method.overloads {
         signature
@@ -823,6 +825,7 @@ impl Param {
 }
 
 /// Optional fixed parameters at the end of a signature, excluding its rest slot.
+#[doc(hidden)]
 pub fn optional_parameter_count(params: &[Param]) -> usize {
     params
         .iter()
@@ -886,6 +889,7 @@ impl Param {
 
 /// Lower a body-pass `TypedParam` to an exported `Param`, preserving `rest` and
 /// the resolved default so cross-module callers can omit the argument.
+#[doc(hidden)]
 pub fn param_from_typed(p: &crate::TypedParam) -> Param {
     Param {
         name: p.name.name.clone(),
@@ -999,6 +1003,7 @@ impl GenericParameters {
             constraints: Box::default(),
         }
     }
+    #[doc(hidden)]
     pub fn select_names(&self, names: &[String]) -> Self {
         Self {
             names: names.to_vec(),
@@ -1211,6 +1216,7 @@ impl MethodSig {
         })
     }
 
+    #[doc(hidden)]
     pub fn from_function_type(ty: &Type, optional_member: bool) -> Option<Self> {
         if let Type::Intersection(members) = ty.peel() {
             let mut members = members.iter();
@@ -1252,6 +1258,7 @@ impl MethodSig {
         })
     }
 
+    #[doc(hidden)]
     pub fn try_map_types<E>(
         &mut self,
         mut map: impl FnMut(&Type) -> Result<Type, E>,
@@ -1281,6 +1288,7 @@ impl MethodSig {
         Ok(())
     }
 
+    #[doc(hidden)]
     pub fn append_signatures(&mut self, other: MethodSig) {
         for signature in other.signatures() {
             self.overloads.push(MethodOverload {

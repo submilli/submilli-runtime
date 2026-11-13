@@ -25,10 +25,10 @@
 )]
 
 pub mod arena;
+#[doc(hidden)]
 pub mod artifact_f64;
 pub mod compiler_error;
 pub mod compiler_limits;
-pub mod compiler_thread;
 pub mod diagnostics;
 pub mod doc_comment;
 pub mod front_end;
@@ -43,10 +43,12 @@ pub mod shape;
 pub mod source;
 pub mod span;
 pub mod syntax;
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_support;
+#[cfg(test)]
+mod test_support;
+#[doc(hidden)]
 pub mod type_rendering;
 pub mod type_size;
+#[doc(hidden)]
 pub mod type_walk;
 pub mod typed_ast;
 pub mod types;
@@ -61,7 +63,7 @@ pub use doc_comment::{
 };
 pub use front_end::{
     CheckedPackage, CheckedScript, FrontEnd, PackageModule, PackageRequest, PackageSurface,
-    PackageTest, PackageTestSurface, ParsedScript, ScriptImports, ScriptOwner, ScriptRequest,
+    PackageTest, PackageTestSurface, ParsedScript, ScriptOwner, ScriptRequest,
 };
 pub use mangle::MangledName;
 pub use package_declaration::{

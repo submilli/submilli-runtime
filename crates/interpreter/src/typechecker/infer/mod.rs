@@ -383,6 +383,15 @@ pub fn infer_package<'a>(
     }
 }
 
+/// The rule pass package inference ends with: the tree, the package and the
+/// declarations it was inferred against.
+type PackageRules = fn(
+    &TypedAst,
+    &PackageDeclaration,
+    &[&PackageDeclaration],
+) -> Result<Vec<Diagnostic>, CompileError>;
+
+/// Infers a package and runs every rule, TypeScript's and Submilli's.
 pub fn infer_package_checked<'a>(
     package_name: &'a str,
     root_module: ModulePath,
@@ -391,6 +400,59 @@ pub fn infer_package_checked<'a>(
     external_packages: BTreeMap<String, PackageDeclaration>,
     transitive_packages: BTreeMap<String, PackageDeclaration>,
 ) -> Result<(TypedAst, PackageDeclaration, Vec<Diagnostic>), CompileError> {
+    infer_package_with_rules(
+        package_name,
+        root_module,
+        modules,
+        sources,
+        external_packages,
+        transitive_packages,
+        crate::typechecker::rules::check_package,
+    )
+    .map(|(typed_ast, declaration, diagnostics, _)| (typed_ast, declaration, diagnostics))
+}
+
+/// Infers a package and runs only TypeScript's rules: the engine front end's
+/// share. The engine runs Submilli's rules on the result.
+pub(crate) fn infer_package_typescript<'a>(
+    package_name: &'a str,
+    root_module: ModulePath,
+    modules: Vec<(ModulePath, crate::FileId, &'a Ast)>,
+    sources: &'a crate::Sources,
+    external_packages: BTreeMap<String, PackageDeclaration>,
+    transitive_packages: BTreeMap<String, PackageDeclaration>,
+) -> Result<(TypedAst, PackageDeclaration, Vec<Diagnostic>, Inferred), CompileError> {
+    infer_package_with_rules(
+        package_name,
+        root_module,
+        modules,
+        sources,
+        external_packages,
+        transitive_packages,
+        crate::typechecker::rules::check_package_typescript,
+    )
+}
+
+/// How far package inference got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Inferred {
+    /// Every module was inferred and the rule pass ran.
+    Complete,
+    /// Inference stopped at an error before building the whole tree (a
+    /// missing root module, a failed import graph, an interface inheritance
+    /// error), and no rule ran. The tree is not fit for any later pass.
+    Stopped,
+}
+
+fn infer_package_with_rules<'a>(
+    package_name: &'a str,
+    root_module: ModulePath,
+    modules: Vec<(ModulePath, crate::FileId, &'a Ast)>,
+    sources: &'a crate::Sources,
+    external_packages: BTreeMap<String, PackageDeclaration>,
+    transitive_packages: BTreeMap<String, PackageDeclaration>,
+    rules: PackageRules,
+) -> Result<(TypedAst, PackageDeclaration, Vec<Diagnostic>, Inferred), CompileError> {
     check_declaration_types(
         external_packages
             .values()
@@ -417,6 +479,7 @@ pub fn infer_package_checked<'a>(
             TypedAst::with_package(package_name),
             PackageDeclaration::with_package(package_name),
             diagnostics,
+            Inferred::Stopped,
         ));
     }
 
@@ -448,6 +511,7 @@ pub fn infer_package_checked<'a>(
             TypedAst::with_package(package_name),
             PackageDeclaration::with_package(package_name),
             diagnostics,
+            Inferred::Stopped,
         ));
     };
 
@@ -469,6 +533,8 @@ pub fn infer_package_checked<'a>(
             CompileError::from(inference_failure("module source is missing"))
                 .with_prior_diagnostics(&diagnostics)
         })?;
+    // `compile::package_rule_dependencies` rebuilds this order for the
+    // engine's rule pass; keep the two in step.
     let packages_by_name: BTreeMap<&str, &PackageDeclaration> = external_packages
         .values()
         .map(|d| (d.package_name.as_str(), d))
@@ -668,7 +734,12 @@ pub fn infer_package_checked<'a>(
                 .with_prior_diagnostics(&diagnostics)
             })?;
             diagnostics.extend(tc.diagnostics);
-            return Ok((tc.typed_ast, package_declaration, diagnostics));
+            return Ok((
+                tc.typed_ast,
+                package_declaration,
+                diagnostics,
+                Inferred::Stopped,
+            ));
         }
         tc.infer_global_variables().map_err(|fatal| {
             CompileError {
@@ -796,19 +867,20 @@ pub fn infer_package_checked<'a>(
         .chain(tc.type_only_packages.values())
         .copied()
         .collect();
-    let rule_diagnostics = crate::typechecker::rules::check_package(
-        &tc.typed_ast,
-        &package_declaration,
-        &dependencies,
-    )
-    .map_err(|error| {
-        error
-            .with_prior_diagnostics(&tc.diagnostics)
-            .with_prior_diagnostics(&diagnostics)
-    })?;
+    let rule_diagnostics =
+        rules(&tc.typed_ast, &package_declaration, &dependencies).map_err(|error| {
+            error
+                .with_prior_diagnostics(&tc.diagnostics)
+                .with_prior_diagnostics(&diagnostics)
+        })?;
     tc.diagnostics.extend(rule_diagnostics);
     diagnostics.extend(tc.diagnostics);
-    Ok((tc.typed_ast, package_declaration, diagnostics))
+    Ok((
+        tc.typed_ast,
+        package_declaration,
+        diagnostics,
+        Inferred::Complete,
+    ))
 }
 
 /// The non-entry modules of the package a test file belongs to, which the test
@@ -1699,14 +1771,9 @@ mod tests {
             "{diagnostics:?}"
         );
         let limits = crate::type_size::TypeLimits::with_work_allowance(0);
-        let error = crate::typechecker::rules::check_package_rules(
-            &typed_ast,
-            &package,
-            &[],
-            true,
-            &limits,
-        )
-        .unwrap_err();
+        let error =
+            crate::typechecker::rules::check_package_rules(&typed_ast, &package, &[], &limits)
+                .unwrap_err();
         assert!(
             matches!(
                 error.fatal,

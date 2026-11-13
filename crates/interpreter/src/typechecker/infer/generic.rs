@@ -4092,7 +4092,7 @@ mod tests {
 
     #[test]
     fn substitute_typevars_charges_each_copy_of_a_binding() {
-        submilli_front_end::test_support::on_compiler_stack(
+        crate::compiler_thread::on_test_stack(
             substitute_typevars_charges_each_copy_of_a_binding_inner,
         );
     }

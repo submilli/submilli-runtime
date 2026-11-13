@@ -1,10 +1,12 @@
 //! The [`FrontEnd`] trait: what turns source into a [`TypedAst`] for the
-//! engine's back end.
+//! engine.
 //!
-//! A front end parses and checks. The engine's back end (capture, desugar and
-//! codegen) takes what it returns. The engine ships its own front end, and
-//! ts-rust is another. Callers hold a `&dyn FrontEnd` and don't depend on
-//! which one runs.
+//! A front end parses and type-checks. It returns the typed tree, for a
+//! package the [`PackageDeclaration`] too, and its own diagnostics. That is
+//! all it does: the engine then runs Submilli's rules on the tree, whichever
+//! front end built it, and decides what each import is. The engine ships its
+//! own front end, and ts-rust is another. Callers hold a `&dyn FrontEnd` and
+//! don't depend on which one runs.
 //!
 //! Every implementation promises:
 //!
@@ -12,11 +14,12 @@
 //!   declaration and diagnostics.
 //! * It runs on a thread with the stack it needs, so callers don't size
 //!   stacks.
-//! * Its diagnostics are complete for the checks it owns. A result with an
-//!   error diagnostic is an `Err`, and the warnings of an `Ok` are all it
-//!   found.
+//! * Its diagnostics are complete for the checks it owns. A program with
+//!   errors still yields its tree, with the errors among the diagnostics, so
+//!   the engine's rules report alongside them. `Err` means there is no tree:
+//!   a syntax error, or a limit or failure that stopped checking.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{
     CompileError, Diagnostic, FileId, InternalModuleExports, ModulePath, PackageDeclaration,
@@ -28,9 +31,6 @@ use crate::{
 /// The trait is object safe, so the server and the CLI can hold a
 /// `&dyn FrontEnd`.
 pub trait FrontEnd: Send + Sync {
-    /// Name and version: what built a tree, for metadata and cache keys.
-    fn id(&self) -> &str;
-
     /// Parse a script. Parsing never fails outright: a syntax error, or a
     /// limit the parse hit, is in [`ParsedScript::diagnostics`] and fails
     /// [`ParsedScript::check`].
@@ -51,35 +51,28 @@ pub trait ParsedScript: Send {
     /// Syntax errors and warnings, before any package is loaded.
     fn diagnostics(&self) -> &[Diagnostic];
 
-    /// Whether the parse reported an error, so [`ParsedScript::check`] fails.
+    /// Whether the parse reported an error, so the script can't compile.
     fn has_errors(&self) -> bool {
         self.diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.severity == crate::Severity::Error)
     }
 
-    /// What the script imports, so the caller can load those packages.
-    /// `stdlib` names the standard-library packages the embedder offers.
-    fn imports(&self, stdlib: &[&PackageDeclaration]) -> Result<ScriptImports, CompileError>;
+    /// The modules the script imports, so the caller can load them: each
+    /// non-relative specifier as written, once, in source order. What each one
+    /// is (the standard library, a package, an MCP server) is the engine's
+    /// to decide.
+    fn imports(&self) -> Result<Vec<String>, CompileError>;
 
-    /// Check against the loaded packages. Consumes the parse.
+    /// Check against the loaded packages. Consumes the parse. A parse that
+    /// recovered from syntax errors may still yield a tree, with those errors
+    /// among its diagnostics.
     fn check(self: Box<Self>, request: &ScriptRequest<'_>) -> Result<CheckedScript, CompileError>;
 }
 
-/// What a script imports from outside its own source.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ScriptImports {
-    pub stdlib: BTreeSet<String>,
-    pub registry_packages: BTreeSet<String>,
-    pub mcp_servers: BTreeSet<String>,
-    /// The script imports `@tools`, the session's application tools.
-    pub tools: bool,
-    /// The script imports `@functions`, the harness-supplied function set.
-    pub functions: bool,
-}
-
-/// The declarations a script is checked against.
-#[derive(Clone, Copy, Debug, Default)]
+/// The declarations a script is checked against. [`ScriptRequest::new`]
+/// takes the prelude and the host, which every script resolves against.
+#[derive(Clone, Copy, Debug)]
 pub struct ScriptRequest<'a> {
     /// Whose code the script is.
     pub owner: ScriptOwner<'a>,
@@ -96,6 +89,22 @@ pub struct ScriptRequest<'a> {
     pub transitive: &'a [&'a PackageDeclaration],
     /// The `@mcp/<server>` virtual packages, which declare but emit no Wasm.
     pub mcp: &'a [&'a PackageDeclaration],
+}
+
+impl<'a> ScriptRequest<'a> {
+    /// A `main` script against the prelude and the host, with nothing else to
+    /// import.
+    pub fn new(prelude: &'a [&'a PackageDeclaration], host: &'a [&'a PackageDeclaration]) -> Self {
+        Self {
+            owner: ScriptOwner::Main,
+            prelude,
+            host,
+            stdlib: &[],
+            dependencies: &[],
+            transitive: &[],
+            mcp: &[],
+        }
+    }
 }
 
 /// Whose code a script is. Its entry point stays `main` either way; the owner
@@ -147,7 +156,9 @@ pub struct PackageTest<'a> {
 #[derive(Clone, Debug)]
 pub struct CheckedScript {
     pub typed_ast: TypedAst,
-    pub warnings: Vec<Diagnostic>,
+    /// Every diagnostic the front end reported, errors included. The tree is
+    /// only fit to compile when none is an error.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// One module of a package.
@@ -194,7 +205,9 @@ pub struct CheckedPackage {
     /// The package's public surface. Codegen fills in its runtime functions,
     /// runtime globals and closure caches later; here they are empty.
     pub declaration: PackageDeclaration,
-    pub warnings: Vec<Diagnostic>,
+    /// Every diagnostic the front end reported, errors included. The tree is
+    /// only fit to compile when none is an error.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 /// What a compiled package's Wasm exports.

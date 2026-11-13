@@ -24,6 +24,7 @@ pub mod docs_view;
 pub mod front_end;
 pub mod functions;
 pub mod import_suggestions;
+pub mod imports;
 pub mod lexer;
 pub(crate) mod lower_local_types;
 pub mod lower_patterns;
@@ -79,6 +80,7 @@ pub use functions::{
     MAX_FUNCTION_NAME_LEN, compile_function_set, compile_function_set_for, install_functions_async,
     invoke_function_async, validate_function_name,
 };
+pub use imports::{ScriptImports, classify_imports};
 pub use lexer::Lexer;
 pub use lower_patterns::lower as lower_patterns;
 pub use mangle::MangledName;
@@ -96,7 +98,7 @@ pub use stdlib::functions::Escalated;
 pub use stdlib::{OptionalPackage, Stdlib};
 pub use submilli_front_end::front_end::{
     CheckedPackage, CheckedScript, FrontEnd, PackageModule, PackageRequest, PackageSurface,
-    PackageTest, PackageTestSurface, ParsedScript, ScriptImports, ScriptOwner, ScriptRequest,
+    PackageTest, PackageTestSurface, ParsedScript, ScriptOwner, ScriptRequest,
 };
 pub use token::{Token, TokenKind};
 pub use type_info::{FieldInfo, TypeInfo, TypeInfoId, TypeInfoIndex, TypeInfoKind, TypeInfoTable};

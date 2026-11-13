@@ -1066,10 +1066,6 @@ mod tests {
     struct PanickingFrontEnd;
 
     impl interpreter::FrontEnd for PanickingFrontEnd {
-        fn id(&self) -> &str {
-            "panicking"
-        }
-
         fn parse_script(
             &self,
             source: String,

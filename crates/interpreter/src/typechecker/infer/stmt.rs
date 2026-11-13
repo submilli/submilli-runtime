@@ -4335,7 +4335,7 @@ mod tests {
     fn nested_loop_retries_do_not_multiply() {
         // Sixteen nested loops recurse past the test harness's default stack;
         // compilation runs on the documented compiler stack.
-        submilli_front_end::test_support::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             let shallow = nested_loop_expression_count(8);
             let deep = nested_loop_expression_count(16);
             assert!(
@@ -4348,7 +4348,7 @@ mod tests {
 
     #[test]
     fn nested_evolving_loop_retries_do_not_multiply() {
-        submilli_front_end::test_support::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             let shallow = nested_evolving_loop_expression_count(8, false);
             let deep = nested_evolving_loop_expression_count(16, false);
             assert!(
@@ -4360,7 +4360,7 @@ mod tests {
 
     #[test]
     fn nested_evolving_reads_do_not_multiply_retries() {
-        submilli_front_end::test_support::on_compiler_stack(|| {
+        crate::compiler_thread::on_test_stack(|| {
             let shallow = nested_evolving_loop_expression_count(8, true);
             let deep = nested_evolving_loop_expression_count(16, true);
             assert!(

@@ -239,6 +239,7 @@ impl std::fmt::Debug for TypeLimits {
 }
 
 /// An open index-value intersection; closing it on drop.
+#[doc(hidden)]
 pub struct OpenIntersection<'a>(&'a Cell<u32>);
 
 impl Drop for OpenIntersection<'_> {
@@ -261,6 +262,8 @@ impl Default for TypeLimits {
 impl TypeLimits {
     /// Limits whose phase may build only `nodes` by substitution.
     #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[doc(hidden)]
     pub fn with_work_allowance(nodes: u64) -> Self {
         Self {
             work_left: Cell::new(nodes),
@@ -272,6 +275,7 @@ impl TypeLimits {
 
     /// Unification may start a new assignability walk. Keep method coinduction
     /// across those walks, and bound native depth for non-repeating comparisons.
+    #[doc(hidden)]
     pub fn compare_methods(
         &self,
         actual: &crate::MethodSig,
@@ -368,6 +372,7 @@ impl TypeLimits {
     /// open another. `None` once [`MAX_OPEN_INTERSECTIONS`] are open: the
     /// caller then keeps the plain intersection, which needs no relating, so
     /// the recursion ends whatever path led back to it.
+    #[doc(hidden)]
     pub fn enter_intersection(&self) -> Option<OpenIntersection<'_>> {
         let open = self.open_intersections.get();
         (open < MAX_OPEN_INTERSECTIONS).then(|| {
@@ -386,6 +391,7 @@ impl TypeLimits {
 }
 
 /// How many types [`for_each_child`] visits directly inside `ty`.
+#[doc(hidden)]
 pub fn child_count(ty: &Type) -> usize {
     match ty {
         Type::Function {

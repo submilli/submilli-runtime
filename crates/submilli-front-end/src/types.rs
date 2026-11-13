@@ -1519,6 +1519,7 @@ impl Type {
 
     /// The concrete function intersection used for an overload set, whose
     /// values are callable and cannot be nullish despite the erased ABI.
+    #[doc(hidden)]
     pub fn is_callable_intersection(&self) -> bool {
         matches!(self.peel(), Type::Intersection(members) if members.len() >= 2 && members.iter().all(|member| matches!(member.peel(), Type::Function { .. })))
     }
@@ -1573,6 +1574,7 @@ impl Type {
 
     /// The members of a union of two or more interface instances, such as
     /// `Iterator<number> | Iterator<string>`; `None` for any other type.
+    #[doc(hidden)]
     pub fn interface_instance_union_members(&self) -> Option<&[Type]> {
         let Type::Union(members) = self.peel() else {
             return None;
@@ -1586,6 +1588,7 @@ impl Type {
 
     /// The distinct primitive receiver types of a union, if every member is
     /// primitive. Literal members share their base type's methods.
+    #[doc(hidden)]
     pub fn primitive_union_members(&self) -> Option<Vec<Type>> {
         let Type::Union(members) = self.peel() else {
             return None;
@@ -1711,6 +1714,7 @@ impl Type {
 /// Every renderer of optional parameters shows them through this, except
 /// `type_rendering`'s `Frame::Optional`, which applies the same rule to
 /// borrowed members.
+#[doc(hidden)]
 pub fn shown_beside_optional_marker(ty: &Type) -> Type {
     match ty.peel() {
         Type::Union(members) => Type::union(
@@ -1726,6 +1730,7 @@ pub fn shown_beside_optional_marker(ty: &Type) -> Type {
 
 /// `s` escaped for a double-quoted string the way `tsc` prints a string literal
 /// type (`escapeString` in TypeScript's `utilities.ts`): `"G\"HI"`, `"a\nb"`.
+#[doc(hidden)]
 pub fn escape_string_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = crate::literal_units::literal_chars(s).peekable();

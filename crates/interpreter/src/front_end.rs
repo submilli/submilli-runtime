@@ -8,22 +8,15 @@ use crate::compiler_error::{CompileError, CompilerStage};
 use crate::typechecker::infer::{TestModule, TestModules};
 use crate::{
     Asi, Ast, CheckedPackage, CheckedScript, Diagnostic, FileId, FrontEnd, ModulePath,
-    PackageDeclaration, PackageRequest, PackageTest, ParsedScript, ScriptImports, ScriptRequest,
-    Severity, StmtKind, Token, TokenKind, lower_patterns, runtime,
+    PackageDeclaration, PackageRequest, PackageTest, ParsedScript, ScriptRequest, Severity,
+    StmtKind, Token, TokenKind, lower_patterns,
 };
-
-/// The engine front end's [`FrontEnd::id`].
-pub const ENGINE_FRONT_END_ID: &str = concat!("submilli-engine/", env!("CARGO_PKG_VERSION"));
 
 /// The engine's front end.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EngineFrontEnd;
 
 impl FrontEnd for EngineFrontEnd {
-    fn id(&self) -> &str {
-        ENGINE_FRONT_END_ID
-    }
-
     /// Runs on the caller's thread: the parser bounds its own recursion and
     /// fits a runtime worker's 2 MiB stack (`tests/parser_depth.rs`).
     fn parse_script(&self, source: String, file: FileId) -> Box<dyn ParsedScript> {
@@ -68,11 +61,27 @@ pub fn runtime_declarations() -> RuntimeDeclarations {
 pub fn script_request<'a>(stdlib: &'a [&'a PackageDeclaration]) -> ScriptRequest<'a> {
     let runtime = runtime_declarations();
     ScriptRequest {
-        prelude: runtime.prelude,
-        host: runtime.host,
         stdlib,
-        ..ScriptRequest::default()
+        ..ScriptRequest::new(runtime.prelude, runtime.host)
     }
+}
+
+/// What a script's rules resolve its types against, in the order inference
+/// saw them: the runtime's, the stdlib's, what it imports, then the
+/// transitive declarations.
+pub(crate) fn script_rule_dependencies<'a>(
+    request: &ScriptRequest<'a>,
+) -> Vec<&'a PackageDeclaration> {
+    let mut dependencies: Vec<&PackageDeclaration> = request
+        .prelude
+        .iter()
+        .chain(request.host)
+        .chain(request.stdlib)
+        .copied()
+        .collect();
+    dependencies.extend(script_declarations(request));
+    dependencies.extend_from_slice(request.transitive);
+    dependencies
 }
 
 /// The declarations a script imports from besides the runtime's: its
@@ -105,8 +114,8 @@ pub(crate) struct EngineParsedScript {
 }
 
 impl EngineParsedScript {
-    /// Infer and check against `request`. The diagnostics include errors; the
-    /// tree is only meaningful when none is.
+    /// Infer against `request`, without any rule pass. The diagnostics include
+    /// errors; the tree is only fit to compile when none is.
     pub(crate) fn infer(
         &self,
         request: &ScriptRequest<'_>,
@@ -148,6 +157,8 @@ impl EngineParsedScript {
             .copied()
             .collect();
         infer_refs.extend(declarations);
+        // `infer_refs` is the script's importable set; `transitive` only
+        // resolves types.
         let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive_for_owner_checked(
             request.owner.package(),
             &self.source,
@@ -162,22 +173,33 @@ impl EngineParsedScript {
             error
         })?;
         diags.extend(infer_diags);
-        infer_refs.extend_from_slice(request.transitive);
-        diags.extend(
-            crate::typechecker::rules::check_script(&ta, &infer_refs)
-                .map_err(|error| error.with_prior_diagnostics(&diags))?,
-        );
         Ok((ta, diags))
+    }
+}
+
+impl EngineParsedScript {
+    /// [`EngineParsedScript::infer`] followed by every rule, TypeScript's and
+    /// Submilli's: the whole check, for tools that inspect the typed tree.
+    pub(crate) fn infer_with_all_rules(
+        &self,
+        request: &ScriptRequest<'_>,
+    ) -> Result<(crate::TypedAst, Vec<Diagnostic>), CompileError> {
+        let (typed_ast, mut diagnostics) = self.infer(request)?;
+        diagnostics.extend(
+            crate::typechecker::rules::check_script(&typed_ast, &script_rule_dependencies(request))
+                .map_err(|error| error.with_prior_diagnostics(&diagnostics))?,
+        );
+        Ok((typed_ast, diagnostics))
     }
 }
 
 #[cfg(test)]
 impl EngineParsedScript {
-    /// [`ParsedScript::imports`] against the core stdlib.
-    pub(crate) fn external_imports(&self) -> Result<ScriptImports, CompileError> {
-        let stdlib = runtime::stdlib_package_declarations();
+    /// [`ParsedScript::imports`], classified against the core stdlib.
+    pub(crate) fn external_imports(&self) -> Result<crate::ScriptImports, CompileError> {
+        let stdlib = crate::runtime::stdlib_package_declarations();
         let stdlib_refs: Vec<&PackageDeclaration> = stdlib.iter().collect();
-        self.imports(&stdlib_refs)
+        Ok(crate::classify_imports(&self.imports()?, &stdlib_refs))
     }
 }
 
@@ -194,12 +216,9 @@ impl ParsedScript for EngineParsedScript {
         &self.diagnostics
     }
 
-    fn imports(&self, stdlib: &[&PackageDeclaration]) -> Result<ScriptImports, CompileError> {
-        let stdlib_names: BTreeSet<&str> = stdlib
-            .iter()
-            .map(|defs| defs.package_name.as_str())
-            .collect();
-        let mut imports = ScriptImports::default();
+    fn imports(&self) -> Result<Vec<String>, CompileError> {
+        let mut specifiers: Vec<String> = Vec::new();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
         for stmt_id in &self.ast.top_level {
             let StmtKind::Import { module, .. } = &self
                 .ast
@@ -212,39 +231,26 @@ impl ParsedScript for EngineParsedScript {
             else {
                 continue;
             };
-            if crate::source::is_relative_specifier(module) {
-                continue;
-            }
-            if let Some(server) = module.strip_prefix("@mcp/") {
-                imports.mcp_servers.insert(server.to_string());
-            } else if module == runtime::TOOLS_PACKAGE {
-                imports.tools = true;
-            } else if module == crate::functions::FUNCTIONS_PACKAGE {
-                imports.functions = true;
-            } else if stdlib_names.contains(module.as_str())
-                || module == crate::stdlib::functions::MODULE_NAME
-                || crate::stdlib::OptionalPackage::from_module_name(module).is_some()
-            {
-                // An optional package counts as stdlib whether or not the embedder
-                // enables it: a disabled one is reported as unavailable, never
-                // looked up as a registry package.
-                imports.stdlib.insert(module.clone());
-            } else {
-                imports.registry_packages.insert(module.clone());
+            if !crate::source::is_relative_specifier(module) && seen.insert(module) {
+                specifiers.push(module.clone());
             }
         }
-        Ok(imports)
+        Ok(specifiers)
     }
 
     fn check(self: Box<Self>, request: &ScriptRequest<'_>) -> Result<CheckedScript, CompileError> {
         crate::compiler_thread::run(|| {
-            let (typed_ast, diags) = self.infer(request)?;
-            if has_errors(&diags) {
-                return Err(diags.into());
-            }
+            let (typed_ast, mut diagnostics) = self.infer(request)?;
+            diagnostics.extend(
+                crate::typechecker::rules::check_script_typescript(
+                    &typed_ast,
+                    &script_rule_dependencies(request),
+                )
+                .map_err(|error| error.with_prior_diagnostics(&diagnostics))?,
+            );
             Ok(CheckedScript {
                 typed_ast,
-                warnings: warnings_only(diags),
+                diagnostics,
             })
         })
     }
@@ -385,8 +391,8 @@ fn check_package(request: &PackageRequest<'_>) -> Result<CheckedPackage, Compile
         .filter(|defs| !external_packages.contains_key(&defs.package_name))
         .map(|defs| (defs.package_name.clone(), (*defs).clone()))
         .collect();
-    let (typed_ast, declaration, mut package_diags) =
-        crate::typechecker::infer::infer_package_checked(
+    let (typed_ast, declaration, mut package_diags, inferred) =
+        crate::typechecker::infer::infer_package_typescript(
             request.name,
             request.root_module.clone(),
             module_refs,
@@ -399,13 +405,15 @@ fn check_package(request: &PackageRequest<'_>) -> Result<CheckedPackage, Compile
             error
         })?;
     diagnostics.append(&mut package_diags);
-    if has_errors(&diagnostics) {
+    // Inference that stopped before building the whole tree leaves nothing
+    // for the engine's rules or the back end: the errors are the result.
+    if inferred == crate::typechecker::infer::Inferred::Stopped {
         return Err(diagnostics.into());
     }
     Ok(CheckedPackage {
         typed_ast,
         declaration,
-        warnings: warnings_only(diagnostics),
+        diagnostics,
     })
 }
 

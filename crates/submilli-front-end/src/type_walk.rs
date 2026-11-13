@@ -52,6 +52,7 @@ fn reserve_frame<T>(frames: &mut Vec<T>) -> Result<(), TryReserveError> {
 /// engine's tests.
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::arithmetic_side_effects)]
+#[doc(hidden)]
 pub mod test_support {
     use super::*;
     use std::cell::Cell;

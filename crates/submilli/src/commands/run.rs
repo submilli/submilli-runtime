@@ -792,7 +792,7 @@ fn load_project_packages(
     stdlib: &[interpreter::PackageDeclaration],
 ) -> anyhow::Result<(std::collections::BTreeSet<String>, Vec<Artifact>)> {
     let stdlib: Vec<&interpreter::PackageDeclaration> = stdlib.iter().collect();
-    let imports = parsed.imports(&stdlib)?;
+    let imports = interpreter::classify_imports(&parsed.imports()?, &stdlib);
     if imports.registry_packages.is_empty() {
         return Ok((std::collections::BTreeSet::new(), Vec::new()));
     }

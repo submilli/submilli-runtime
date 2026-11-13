@@ -184,6 +184,7 @@ impl SourceFile {
 /// source by path, so codegen qualifies a package's debug paths with its name
 /// and embedders register the package's sources under the same paths
 /// ([`Sources::add_package_module`]). Compile diagnostics keep the module path.
+#[doc(hidden)]
 pub fn package_frame_path(package: &str, module: &str) -> String {
     format!("{package}/{module}")
 }

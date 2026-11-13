@@ -2923,7 +2923,7 @@ mod tests {
 mod limit_tests {
     use std::collections::BTreeMap;
 
-    use submilli_front_end::test_support::on_compiler_stack;
+    use crate::compiler_thread::on_test_stack as on_compiler_stack;
 
     use super::TypeParamSubstitution;
     use crate::compiler_limits::{MAX_TYPE_DEPTH, MAX_TYPE_NODES};

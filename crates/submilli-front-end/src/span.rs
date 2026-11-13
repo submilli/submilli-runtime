@@ -192,6 +192,7 @@ impl LineIndex {
         Self::from_owned(text)
     }
 
+    #[doc(hidden)]
     pub fn from_owned(source: String) -> Result<Self, SourceError> {
         SourceError::check_source_len(source.len())?;
         let mut line_starts = Vec::new();

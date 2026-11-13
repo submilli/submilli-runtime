@@ -2,9 +2,9 @@
 
 /// Native stack a thread needs to compile any program within the structural
 /// limits below and the engine's tree-height limits, including types at
-/// [`MAX_TYPE_DEPTH`]. Compilation runs on a thread of this size
-/// ([`crate::compiler_thread::run`]), so callers don't size stacks; the
-/// engine's public phase APIs still need one. Only touched pages are committed. The deepest programs at
+/// [`MAX_TYPE_DEPTH`]. The engine's compile entry points run on a thread of
+/// this size, so their callers don't size stacks; its public phase APIs still
+/// need one. Only touched pages are committed. The deepest programs at
 /// the limits measured about 63 MiB in unoptimized builds and 2 MiB in
 /// optimized ones; each size keeps at least twice that.
 pub const COMPILER_STACK_BYTES: usize = if cfg!(debug_assertions) {

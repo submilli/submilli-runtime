@@ -77,6 +77,7 @@ impl From<RenderError> for crate::compiler_error::CompilerFailure {
     }
 }
 
+#[doc(hidden)]
 pub struct Writer {
     text: String,
     limits: RenderLimits,
@@ -86,16 +87,19 @@ pub struct Writer {
 }
 
 impl RenderedText {
+    #[doc(hidden)]
     pub fn steps(&self) -> usize {
         self.steps
     }
 }
 
 impl Writer {
+    #[doc(hidden)]
     pub fn remaining_steps(&self) -> usize {
         self.limits.steps.saturating_sub(self.steps)
     }
 
+    #[doc(hidden)]
     pub fn render(
         limits: RenderLimits,
         render: impl FnOnce(&mut Self) -> Result<(), RenderError>,
@@ -141,6 +145,7 @@ impl Writer {
         }
     }
 
+    #[doc(hidden)]
     pub fn append(&mut self, rendered: RenderedText) -> Result<(), RenderError> {
         self.abbreviated |= rendered.truncated;
         self.steps = self
@@ -150,6 +155,7 @@ impl Writer {
         self.push(&rendered.text)
     }
 
+    #[doc(hidden)]
     pub fn child_limits(&self) -> RenderLimits {
         RenderLimits {
             bytes: self
@@ -167,6 +173,7 @@ impl Writer {
         }
     }
 
+    #[doc(hidden)]
     pub fn step(&mut self) -> Result<(), RenderError> {
         if self.steps >= self.limits.steps {
             return Err(RenderError::Truncated);
@@ -175,6 +182,7 @@ impl Writer {
         Ok(())
     }
 
+    #[doc(hidden)]
     pub fn depth(&self, depth: usize) -> Result<(), RenderError> {
         if depth > self.limits.type_depth {
             Err(RenderError::Truncated)
@@ -183,6 +191,7 @@ impl Writer {
         }
     }
 
+    #[doc(hidden)]
     pub fn push(&mut self, text: &str) -> Result<(), RenderError> {
         self.step()?;
         let remaining = self.limits.bytes.saturating_sub(self.text.len());
@@ -201,10 +210,12 @@ impl Writer {
         Ok(())
     }
 
+    #[doc(hidden)]
     pub fn character(&mut self, ch: char) -> Result<(), RenderError> {
         self.push(ch.encode_utf8(&mut [0; 4]))
     }
 
+    #[doc(hidden)]
     pub fn format(&mut self, args: fmt::Arguments<'_>) -> Result<(), RenderError> {
         match fmt::write(self, args) {
             Ok(()) => Ok(()),
@@ -212,6 +223,7 @@ impl Writer {
         }
     }
 
+    #[doc(hidden)]
     pub fn repeat(&mut self, ch: char, count: usize) -> Result<(), RenderError> {
         for _ in 0..count {
             self.character(ch)?;

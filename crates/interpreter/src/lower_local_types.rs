@@ -1685,7 +1685,7 @@ mod tests {
 
     /// The `did you mean` suggestions compiling `source` reports.
     fn suggestions(source: &'static str) -> Vec<String> {
-        submilli_front_end::test_support::on_compiler_stack(move || {
+        crate::compiler_thread::on_test_stack(move || {
             let error = crate::compile::compile_script_checked(
                 source,
                 "suggest.ts",

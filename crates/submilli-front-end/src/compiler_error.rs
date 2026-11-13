@@ -30,6 +30,7 @@ pub enum CompilerFailure {
 }
 
 impl CompilerFailure {
+    #[doc(hidden)]
     pub fn with_span(mut self, source_span: Span) -> Self {
         if let Self::Limit { span, .. } | Self::Internal { span, .. } = &mut self
             && span.is_none()
@@ -39,6 +40,7 @@ impl CompilerFailure {
         self
     }
 
+    #[doc(hidden)]
     pub fn with_stage(mut self, current_stage: CompilerStage) -> Self {
         match &mut self {
             Self::Limit { stage, .. } | Self::Internal { stage, .. } => *stage = current_stage,
@@ -88,6 +90,7 @@ impl CompileError {
     /// literals, whose source can run to thousands of lines. `text_of` returns
     /// a file's source. The compile and typecheck entry points in `compile.rs`
     /// apply it; the stage functions they call return uncut spans.
+    #[doc(hidden)]
     pub fn with_limit_span_cut<'a>(mut self, text_of: impl Fn(FileId) -> Option<&'a str>) -> Self {
         if let Some(CompilerFailure::Limit {
             span: Some(span), ..
