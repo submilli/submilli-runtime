@@ -6,10 +6,9 @@ docType: how-to
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3dff856bf82ebe3a036bfa9df1b5306bb9740183462e36a611077770be24fdab"
+  contentHash: "3d83edcffcfe550027b15c3c2e6e7070dce9fc598dba7430b8d67ed22c8ba581"
   confirmedAt: "2026-11-13T23:05:53.386+02:00"
 ---
-
 A Submilli workspace can run an MCP server. MCP (Model Context
 Protocol) is the standard way coding agents such as Claude Code, Codex, and
 Cursor connect to outside tools. Connect yours, and it can read your
@@ -37,6 +36,13 @@ For another workspace, use its agent server address followed by `/mcp`.
   console.
 - Your client must support MCP over Streamable HTTP with OAuth sign-in. Claude
   Code, Codex, Cursor, and VS Code do.
+- Access is by signing in once, interactively, in the client. This server has
+  no service-account token, static bearer token, or environment-secret path.
+- Sign-in works after an OAuth consent fix is deployed to the workspace. That
+  fix is tracked in the private repository as
+  [submilli-agents#55](https://github.com/submilli/submilli-agents/pull/55).
+  Until it is live, the Allow button can look dead, or the browser may not
+  return to your client.
 - If the address returns 404, check it for typos. If it is right, MCP is
   turned off on that workspace. Ask the person who runs it to enable MCP.
 
@@ -124,43 +130,7 @@ choose HTTP:
 ```
 
 Other clients need only the server address. They find the sign-in page on their
-own.
-
-## Scripts and CI jobs
-
-A program with no browser cannot sign in as you. Use a service account instead:
-a space admin creates one, gives it a role, and issues an API token on its page
-in the console. The token starts with `sma_`. Send it as a bearer token, and
-keep it in an environment variable, never in a file you commit.
-
-In Claude Code, put the server in `.mcp.json` with a variable. Claude Code
-fills in `${SUBMILLI_TOKEN}` when it starts, so the file holds only the name:
-
-```json
-{
-  "mcpServers": {
-    "submilli_agents": {
-      "type": "http",
-      "url": "https://agents.i2.submilli.ai/mcp",
-      "headers": { "Authorization": "Bearer ${SUBMILLI_TOKEN}" }
-    }
-  }
-}
-```
-
-Do not pass the token to `claude mcp add --header`. The shell expands it and
-Claude Code saves the value.
-
-In Codex, name the variable in `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.submilli_agents]
-url = "https://agents.i2.submilli.ai/mcp"
-bearer_token_env_var = "SUBMILLI_TOKEN"
-```
-
-A token can use every tool the service account's roles allow, in every space
-where it has a role. Give the account the smallest role that works.
+own. A program with no browser cannot connect. This server has no token path.
 
 ## What you choose when you sign in
 
