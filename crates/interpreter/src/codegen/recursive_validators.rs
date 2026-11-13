@@ -660,6 +660,13 @@ impl<'a> Discovery<'a> {
             .collect::<Result<_, crate::compiler_error::CompilerFailure>>()?;
         let mut descriptor_types = self.descriptor_types;
         for plan in &plans {
+            // Generic validators store their environment in a predicate closure
+            // whose function is the unknown descriptor, even without source calls.
+            if !plan.rejects_polymorphic_edge
+                && !super::runtime_descriptors::parameters(&plan.key).is_empty()
+            {
+                descriptor_types.insert(Type::Unknown);
+            }
             collect_descriptor_arguments(&plan.body, &mut descriptor_types);
         }
         for shape in &self.shapes {
