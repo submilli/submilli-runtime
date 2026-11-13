@@ -134,7 +134,7 @@ pub fn allocate(
         targets.extend(main_type_args);
     }
     if !passes_type_arguments
-        && targets.len() == 1
+        && extra.is_empty()
         && ta.runtime_class_contexts.values().all(Vec::is_empty)
         && !ta
             .runtime_field_guards
