@@ -190,11 +190,10 @@ fn is_constructor_value(ctx: &CodegenCtx, ty: &Type) -> bool {
 fn emit_defined_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
     // Peel first: the scalar arms below lower unboxed, so an alias reaching the
     // `_` vtable arm would push an f64/i32 where a ref is expected. A union of
-    // number literals (`1 | 2`) lowers to an unboxed f64 too.
-    let peeled = match arg_ty.lowered() {
-        Type::Union(members) if is_unboxed_number_union(members) => &Type::Number,
-        peeled => peeled,
-    };
+    // number or boolean literals (`1 | 2`) lowers unboxed too.
+    let peeled = arg_ty
+        .unboxed_union_primitive()
+        .unwrap_or_else(|| arg_ty.lowered());
     match peeled {
         Type::Null => {
             // The value is a null ref; discard it and emit the literal `null`.
@@ -218,15 +217,6 @@ fn emit_defined_stringify_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx,
             emit_vtable_dispatch_on_object_stack(emitter, ctx, 1);
         }
     }
-}
-
-/// Whether a union holds only numbers and number literals, which lower to an
-/// unboxed f64 like `number` itself.
-fn is_unboxed_number_union(members: &[Type]) -> bool {
-    !members.is_empty()
-        && members
-            .iter()
-            .all(|member| matches!(member.lowered(), Type::Number | Type::NumberLiteral(_)))
 }
 
 fn emit_stringify_nullable(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
@@ -395,14 +385,23 @@ fn emit_stringify_space_arg(
         .map_err(crate::codegen::arena_failure)?
         .ty
         .clone();
-    Ok(match space_ty.lowered() {
+    // A union of number literals lowers to `f64`, and every string-shaped type
+    // (literals, template literals, string enums) to `$string`.
+    let lowered_space = if space_ty.unboxed_union_primitive() == Some(&Type::Number) {
+        &Type::Number
+    } else if space_ty.is_string_shaped() {
+        &Type::String
+    } else {
+        space_ty.lowered()
+    };
+    Ok(match lowered_space {
         Type::Number | Type::NumberLiteral(_) => {
             emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ValType::F64)?;
             emitter.instruction(Instruction::LocalSet(local));
             StringifySpace::Number(local)
         }
-        Type::String | Type::StringLiteral(_) => {
+        Type::String => {
             emit_expr(emitter, ctx, space)?;
             let local = emitter.add_anonymous_local(ctx.symbols.value_type(&space_ty)?)?;
             emitter.instruction(Instruction::LocalSet(local));
@@ -674,7 +673,10 @@ pub(crate) fn emit_function_json_return(
 /// Everything else (objects, arrays, tuples, interfaces, unions, `null`) routes through
 /// the shared JSON encoder, so structured returns match `JSON.stringify`.
 fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
-    match arg_ty {
+    let peeled = arg_ty
+        .unboxed_union_primitive()
+        .unwrap_or_else(|| arg_ty.lowered());
+    match peeled {
         Type::String | Type::StringLiteral(_) => {}
         Type::Number | Type::NumberLiteral(_) => emit_number_to_string_radix10(emitter, ctx),
         Type::Boolean | Type::BooleanLiteral(_) => emit_to_string_direct(emitter, ctx, "Boolean"),
@@ -689,7 +691,7 @@ fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_t
         | Type::Unknown
         | Type::TypeVar(_)
         | Type::GenericParam { .. } => emit_stringify_nullable(emitter, ctx),
-        _ => emit_defined_stringify_value(emitter, ctx, arg_ty),
+        _ => emit_defined_stringify_value(emitter, ctx, peeled),
     }
 }
 
@@ -707,6 +709,12 @@ fn is_primitive_union(members: &[Type]) -> bool {
             | Type::NumberLiteral(_)
             | Type::Boolean
             | Type::BooleanLiteral(_) => has_primitive = true,
+            Type::Union(inner) => {
+                if !is_primitive_union(inner) {
+                    return false;
+                }
+                has_primitive = true;
+            }
             _ => return false,
         }
     }

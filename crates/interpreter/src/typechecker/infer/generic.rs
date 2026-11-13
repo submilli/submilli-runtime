@@ -359,9 +359,10 @@ pub(super) fn erase_generic_params_in_stmt(stmt: &mut TypedStmt) {
 /// `(ref null $Object)` slot, so the substituted call result must be cast
 /// back to its concrete shape at the call boundary. Covers a bare `T`, an
 /// erased union (`T | null` and friends), and `unknown` — mirrors the
-/// `needs_box` shape used for the non-generic-method return path.
+/// `needs_box` shape used for the non-generic-method return path. Unions
+/// of number or boolean literals (`1 | 2`) stay unboxed `f64`/`i32`.
 fn return_erases_to_object_slot(ret: &Type) -> bool {
-    ret.lowers_to_erased_slot() || matches!(ret.peel(), Type::Unknown | Type::Union(_))
+    ret.lowers_to_erased_slot() || matches!(ret.peel(), Type::Unknown) || ret.is_boxed_union()
 }
 
 impl Inferer<'_> {

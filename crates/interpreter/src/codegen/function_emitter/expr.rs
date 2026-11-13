@@ -403,7 +403,7 @@ fn emit_expr_value(
             receiver,
             iface,
             name,
-        } => emit_interface_property(emitter, ctx, receiver, iface, name)?,
+        } => emit_interface_property(emitter, ctx, receiver, iface, name, &expr.ty)?,
         TypedExprKind::ArrayLiteral { elements, .. } => {
             emit_array_literal(emitter, ctx, elements)?;
         }
@@ -934,12 +934,14 @@ fn emit_interface_property(
     receiver: &ExprId,
     iface: &crate::MangledName,
     name: &Ident,
+    result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     // property dispatch. The typechecker resolved this
     // to an interface property at infer time and stamped the
     // interface's mangled name on the node, so codegen looks
-    // up the getter under `<iface>#<name>` directly — no
-    // receiver-type inspection needed.
+    // up the getter under `<iface>#<name>` directly. The exception is
+    // a wrapper interface (`Number`, `String`, …) read through a value
+    // that may hold a structural object, which resolves the member live.
     let key = crate::mangle::extend(iface, &name.name);
     // Static-interface properties (`Number.EPSILON`) import as
     // constant globals — no receiver, no getter call.
@@ -952,6 +954,16 @@ fn emit_interface_property(
         emitter.instruction(Instruction::GlobalGet(global_idx));
         return Ok(());
     }
+    let recv_ty = ctx
+        .ta
+        .source_type(*receiver)
+        .map_err(crate::codegen::arena_failure)?;
+    if crate::codegen::runtime_values::is_wrapper_interface_receiver(recv_ty, iface) {
+        emit_receiver(emitter, ctx, *receiver)?;
+        cast::emit_box(emitter, ctx, recv_ty)?;
+        emit_live_member_on_stack(emitter, ctx, iface, &name.name, None)?;
+        return cast::emit_cast_to(emitter, ctx, result_ty);
+    }
     if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
         emit_receiver(emitter, ctx, *receiver)?;
         emit_inline_length(emitter, ctx, struct_idx);
@@ -963,30 +975,24 @@ fn emit_interface_property(
         )
     })?;
     emit_receiver(emitter, ctx, *receiver)?;
-    // InterfaceRef-typed receivers (`Map<K, V>`,
-    // `Set<T>` — Direct dispatch) lower to
-    // `(ref null $Object)`, but the property getter wrapper
-    // takes `(ref $Object)` non-null. Coerce the same way
-    // `emit_method_call` does for the method path. Primitive
-    // Direct receivers (Array, Uint8Array, etc.) already have
-    // non-null Wasm types so no coercion needed.
-    //
-    // `peel` so an aliased InterfaceRef
-    // (`type Query = Map<string, string>` etc.) still hits
-    // this branch — `matches!` on the raw type would miss
-    // the wrapper.
-    if matches!(
-        ctx.ta
-            .source_type(*receiver)
-            .map_err(crate::codegen::arena_failure)?
-            .lowered(),
-        Type::InterfaceRef { .. }
-    ) {
+    // Primitive Direct receivers (Array, Uint8Array, etc.) already have
+    // non-null Wasm types; the rest are coerced for the getter.
+    if receiver_needs_non_null(recv_ty) {
         emitter.instruction(Instruction::RefAsNonNull);
     }
     emitter.instruction(Instruction::Call(func_idx));
 
     Ok(())
+}
+
+/// Whether a receiver lowers to `(ref null $Object)` — an interface, or an
+/// erased type parameter bounded by one — so it needs `ref.as_non_null` before
+/// a direct getter or method wrapper, which takes `(ref $Object)`.
+fn receiver_needs_non_null(recv_ty: &Type) -> bool {
+    matches!(
+        recv_ty.lowered(),
+        Type::InterfaceRef { .. } | Type::GenericParam { .. } | Type::TypeVar(_)
+    )
 }
 
 fn emit_index_access(
@@ -3197,11 +3203,14 @@ fn emit_chain_operation(
                 emit_live_member_return_cast(emitter, ctx, result_ty)?;
                 return Ok(());
             }
-            crate::TypedChainPart::InterfaceProperty { iface, name, .. }
-                if crate::codegen::runtime_values::dynamic_member_interface(iface) =>
-            {
+            crate::TypedChainPart::InterfaceProperty {
+                iface,
+                name,
+                result_ty,
+                ..
+            } if crate::codegen::runtime_values::dynamic_member_interface(iface) => {
                 emit_live_member_on_stack(emitter, ctx, iface, &name.name, None)?;
-                return Ok(());
+                return cast::emit_cast_to(emitter, ctx, result_ty);
             }
             _ => {}
         }
@@ -3985,7 +3994,12 @@ fn emit_chain_access(
                 }
             }
         }
-        crate::TypedChainPart::InterfaceProperty { iface, name, .. } => {
+        crate::TypedChainPart::InterfaceProperty {
+            iface,
+            name,
+            result_ty,
+            ..
+        } => {
             // same lookup the non-chain
             // `InterfacePropertyAccess` arm uses. The chain has the
             // receiver on stack already; the wrapper takes
@@ -3996,6 +4010,11 @@ fn emit_chain_access(
             // exactly this part's `result_ty` — `?.` adds `| null` once,
             // to the whole chain, never to a step's own result. So the
             // value already sits in the slot the next step expects.
+            if crate::codegen::runtime_values::is_wrapper_interface_receiver(receiver_ty, iface) {
+                cast::emit_box(emitter, ctx, receiver_ty)?;
+                emit_live_member_on_stack(emitter, ctx, iface, &name.name, None)?;
+                return cast::emit_cast_to(emitter, ctx, result_ty);
+            }
             if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
                 emit_inline_length(emitter, ctx, struct_idx);
                 return Ok(());
@@ -4006,7 +4025,7 @@ fn emit_chain_access(
                     "interface property getter recorded during the dependency-import pass",
                 )
             })?;
-            if matches!(receiver_ty.lowered(), Type::InterfaceRef { .. }) {
+            if receiver_needs_non_null(receiver_ty) {
                 emitter.instruction(Instruction::RefAsNonNull);
             }
             emitter.instruction(Instruction::Call(func_idx));
@@ -6462,22 +6481,21 @@ fn emit_method_call_with_receiver_on_stack(
     call_ret_ty: &Type,
     call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let concrete_receiver = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
+    if crate::codegen::runtime_values::method_dispatches_live(recv_ty, iface) {
+        // Authored arguments (spreads included) are evaluated once, by the
+        // live call itself, so they skip the discarded-argument pass below.
+        let live_args = call_span
+            .and_then(|span| ctx.ta.authored_call_arguments(span))
+            .map_or(CallArguments::Typed(args), CallArguments::Authored);
+        cast::emit_box(emitter, ctx, recv_ty)?;
+        emit_live_member_on_stack(emitter, ctx, iface, method, Some((live_args, None)))?;
+        return cast::emit_cast_to(emitter, ctx, call_ret_ty);
+    }
     if args.is_empty()
         && let Some(span) = call_span
     {
         emit_discarded_call_arguments(emitter, ctx, span)?;
-    }
-    let concrete_receiver = crate::typechecker::infer::narrowing::strip_nullish(recv_ty);
-    if concrete_receiver.primitive_union_members().is_some() {
-        cast::emit_box(emitter, ctx, recv_ty)?;
-        emit_live_member_on_stack(
-            emitter,
-            ctx,
-            iface,
-            method,
-            Some((CallArguments::Typed(args), None)),
-        )?;
-        return cast::emit_cast_to(emitter, ctx, call_ret_ty);
     }
     crate::codegen::field_guards::attach(emitter, ctx, &concrete_receiver)?;
     if recv_ty.is_regexp_match_array() && *iface == crate::mangle::prelude("Array") {
@@ -6511,7 +6529,7 @@ fn emit_method_call_with_receiver_on_stack(
                 // peel so aliased InterfaceRef (e.g.
                 // `type Query = Map<string, string>`) still
                 // triggers the coercion.
-                if matches!(recv_ty.lowered(), Type::InterfaceRef { .. }) {
+                if receiver_needs_non_null(recv_ty) {
                     emitter.instruction(Instruction::RefAsNonNull);
                 }
             }
