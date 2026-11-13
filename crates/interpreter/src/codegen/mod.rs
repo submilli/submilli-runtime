@@ -960,7 +960,8 @@ fn codegen_inner(
     // globals even when no literal of that shape appears in the program.
     let dependency_types = dependency_usage.dependency_types(dependencies);
     let validator_bodies =
-        recursive_validators::ValidatorBodies::collect(ta, dependency_types.iter());
+        recursive_validators::ValidatorBodies::collect(ta, dependency_types.iter())
+            .map_err(|limit| limit.into_failure(CompilerStage::Codegen, None))?;
     let recursive_validators =
         recursive_validators::discover(ta, dependency_types.iter(), &validator_bodies)?;
     let mut all_shapes = ta.shapes.clone();

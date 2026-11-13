@@ -1413,7 +1413,8 @@ mod tests {
             validator_bodies: crate::codegen::recursive_validators::ValidatorBodies::collect(
                 &TypedAst::new(),
                 &[],
-            ),
+            )
+            .expect("empty validator bodies"),
             type_info: crate::TypeInfoTable::default(),
         }
     }

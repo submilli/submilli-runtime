@@ -1221,6 +1221,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("test:ns", "SearchResult"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
@@ -1234,6 +1235,7 @@ mod tests {
             mangled_name: crate::mangle::package_symbol("test:ns", "Box"),
             declaration_span: Span::at(crate::FileId(0)),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::new(),
@@ -1719,6 +1721,7 @@ mod tests {
         methods.insert(
             "get".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: Vec::new(),
@@ -1730,6 +1733,7 @@ mod tests {
         methods.insert(
             "put".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: vec![Param::new("v", t())],

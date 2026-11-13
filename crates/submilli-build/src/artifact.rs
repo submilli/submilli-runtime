@@ -830,6 +830,7 @@ mod tests {
         methods.insert(
             "rename".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: vec![Param::new("name", Type::String)],
@@ -845,6 +846,7 @@ mod tests {
                 mangled_name: mangle::package_symbol("@pied-piper/util", "Thing"),
                 declaration_span: Span::new(file, 20, 40).unwrap(),
                 kind: TypeKind::Interface {
+                    extends: Vec::new(),
                     index: None,
                     generics: Default::default(),
                     methods,

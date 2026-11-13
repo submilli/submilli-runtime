@@ -44,7 +44,8 @@ impl ValidatorBodies {
     pub fn collect<'a>(
         ta: &TypedAst,
         dependency_types: impl IntoIterator<Item = &'a DependencyType<'a>>,
-    ) -> Self {
+    ) -> Result<Self, TypeTooLarge> {
+        let limits = TypeLimits::default();
         let mut imported_aliases = BTreeMap::new();
         let mut imported_interfaces = BTreeMap::new();
         for dependency_type in dependency_types {
@@ -60,11 +61,11 @@ impl ValidatorBodies {
                     methods,
                     properties,
                     ..
-                } if methods.is_empty() => {
+                } => {
                     imported_interfaces
                         .entry(sym.mangled_name.clone())
                         .or_insert_with(|| {
-                            let fields = properties
+                            let mut fields: BTreeMap<String, ObjectField> = properties
                                 .iter()
                                 .map(|(field, sig)| {
                                     (
@@ -78,39 +79,72 @@ impl ValidatorBodies {
                                     )
                                 })
                                 .collect();
+                            for name in methods.keys() {
+                                fields.insert(name.clone(), inherited_method());
+                            }
                             (generics.to_vec(), fields)
                         });
                 }
                 _ => {}
             }
         }
-        let mut local_aliases = BTreeMap::new();
+        let local_aliases = ta
+            .types
+            .iter()
+            .filter_map(|decl| match decl {
+                TypedTypeDecl::Alias(alias) => Some((
+                    alias.name.name.clone(),
+                    (alias.generics.to_vec(), alias.ty.clone()),
+                )),
+                _ => None,
+            })
+            .collect();
+        let mut pending: BTreeMap<_, _> = ta
+            .types
+            .iter()
+            .filter_map(|decl| match decl {
+                TypedTypeDecl::Interface(iface) => Some((iface.name.name.clone(), iface)),
+                _ => None,
+            })
+            .collect();
         let mut local_interfaces = BTreeMap::new();
-        for decl in &ta.types {
-            match decl {
-                TypedTypeDecl::Alias(alias) => {
-                    local_aliases.insert(
-                        alias.name.name.clone(),
-                        (alias.generics.to_vec(), alias.ty.clone()),
-                    );
+        // Resolve each declaration once, after its bases. Reusing flattened
+        // contracts avoids exponential walks through diamond inheritance.
+        while !pending.is_empty() {
+            let mut ready = None;
+            for (name, iface) in &pending {
+                if !limits.spend_work(1) {
+                    return Err(TypeTooLarge::Work);
                 }
-                TypedTypeDecl::Interface(iface) => {
-                    if let Some(fields) = data_only_fields(&iface.members) {
-                        local_interfaces
-                            .insert(iface.name.name.clone(), (iface.generics.to_vec(), fields));
-                    }
+                if let Some(fields) = inherited_fields(
+                    iface,
+                    &local_interfaces,
+                    &imported_interfaces,
+                    &ta.package_name,
+                    &limits,
+                )? {
+                    ready = Some((name.clone(), iface.generics.to_vec(), fields));
+                    break;
                 }
-                _ => {}
             }
+            let Some((name, generics, fields)) = ready else {
+                // Source binding rejects cycles; public TypedAst callers may
+                // still supply cyclic or unresolved heritage metadata.
+                return Err(TypeTooLarge::Depth);
+            };
+            pending.remove(&name);
+            local_interfaces.insert(name, (generics, fields));
         }
-        Self {
+        local_interfaces.retain(|_, (_, fields)| !fields.values().any(|field| field.method));
+        imported_interfaces.retain(|_, (_, fields)| !fields.values().any(|field| field.method));
+        Ok(Self {
             class_fields: ta.runtime_class_fields.clone(),
             imported_aliases,
             local_aliases,
             imported_interfaces,
             local_interfaces,
-            limits: TypeLimits::default(),
-        }
+            limits,
+        })
     }
 
     /// One helper per generic declaration, with its arguments supplied as predicates.
@@ -191,7 +225,8 @@ impl ValidatorBodies {
                 let expanded = if generics.is_empty() {
                     body.clone()
                 } else {
-                    TypeParamSubstitution::from_pairs(generics, args).apply(body, &self.limits)?
+                    TypeParamSubstitution::instantiation(generics, args)
+                        .apply(body, &self.limits)?
                 };
                 expanded.peel().clone()
             }
@@ -209,7 +244,7 @@ impl ValidatorBodies {
                     return Ok(ty.peel().clone());
                 };
                 let sub = (!generics.is_empty())
-                    .then(|| TypeParamSubstitution::from_pairs(generics, args));
+                    .then(|| TypeParamSubstitution::instantiation(generics, args));
                 let fields = fields
                     .iter()
                     .map(|(field, f)| {
@@ -238,33 +273,185 @@ impl ValidatorBodies {
     }
 }
 
-/// Property field map for a method-free interface, or `None` if any member is a
-/// method (a method-bearing interface has no plain-object representation).
-fn data_only_fields(members: &[TypedInterfaceMember]) -> Option<BTreeMap<String, ObjectField>> {
+/// Expand only heritage edges against already flattened contracts. Property
+/// types stay nominal so recursive fields remain validator back-edges.
+fn inherited_fields(
+    iface: &crate::TypedInterfaceDecl,
+    local: &BTreeMap<String, (Vec<String>, BTreeMap<String, ObjectField>)>,
+    imported: &BTreeMap<MangledName, (Vec<String>, BTreeMap<String, ObjectField>)>,
+    package: &str,
+    limits: &TypeLimits,
+) -> Result<Option<BTreeMap<String, ObjectField>>, TypeTooLarge> {
     let mut fields = BTreeMap::new();
-    for member in members {
-        match member {
-            TypedInterfaceMember::Method { .. } => return None,
+    let mut budget = limits.budget();
+    for base in &iface.extends {
+        let Some(inherited) = base_fields(base, local, imported, package, limits, &mut budget, 1)?
+        else {
+            return Ok(None);
+        };
+        fields.extend(inherited);
+    }
+    // Keep method markers until all overrides have been applied. A derived
+    // property can replace an inherited method (and vice versa).
+    for member in &iface.members {
+        budget.charge(1)?;
+        if let TypedInterfaceMember::Property { ty, .. } = member {
+            budget.charge_copy(ty, 2)?;
+        }
+        let (name, field) = match member {
+            TypedInterfaceMember::Method { name, .. } => (name, inherited_method()),
             TypedInterfaceMember::Property {
                 name,
                 ty,
                 optional,
                 readonly,
                 ..
-            } => {
-                fields.insert(
-                    name.name.clone(),
-                    ObjectField {
-                        ty: ty.clone(),
-                        optional: *optional,
-                        readonly: *readonly,
-                        method: false,
-                    },
-                );
+            } => (
+                name,
+                ObjectField {
+                    ty: ty.clone(),
+                    optional: *optional,
+                    readonly: *readonly,
+                    method: false,
+                },
+            ),
+        };
+        fields.insert(name.name.clone(), field);
+    }
+    crate::type_size::check(&Type::Object {
+        fields: fields.clone(),
+        index: None,
+    })?;
+    Ok(Some(fields))
+}
+
+/// Local references use cached contracts; recursion here follows only the
+/// finite type structure of an intersection, never the inheritance graph.
+#[allow(clippy::too_many_arguments)]
+fn base_fields(
+    ty: &Type,
+    local: &BTreeMap<String, (Vec<String>, BTreeMap<String, ObjectField>)>,
+    imported: &BTreeMap<MangledName, (Vec<String>, BTreeMap<String, ObjectField>)>,
+    package: &str,
+    limits: &TypeLimits,
+    budget: &mut crate::type_size::TypeBudget<'_>,
+    depth: u32,
+) -> Result<Option<BTreeMap<String, ObjectField>>, TypeTooLarge> {
+    budget.charge_copy(ty, depth)?;
+    match ty.peel() {
+        Type::Object { fields, .. } => Ok(Some(fields.clone())),
+        Type::InterfaceRef {
+            package: owner,
+            mangled,
+            name,
+            args,
+        } => {
+            let contract = imported.get(mangled).or_else(|| {
+                (owner.as_str() == package)
+                    .then(|| local.get(name))
+                    .flatten()
+            });
+            let Some((generics, fields)) = contract else {
+                return Ok(None);
+            };
+            let body = TypeParamSubstitution::instantiation(generics, args).apply(
+                &Type::Object {
+                    fields: fields.clone(),
+                    index: None,
+                },
+                limits,
+            )?;
+            base_fields(&body, local, imported, package, limits, budget, depth + 1)
+        }
+        Type::Intersection(bases) => {
+            let mut fields = BTreeMap::new();
+            for base in bases {
+                let Some(other) =
+                    base_fields(base, local, imported, package, limits, budget, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                intersect_fields(&mut fields, other, budget, depth + 1)?;
             }
+            Ok(Some(fields))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn intersect_fields(
+    fields: &mut BTreeMap<String, ObjectField>,
+    other: BTreeMap<String, ObjectField>,
+    budget: &mut crate::type_size::TypeBudget<'_>,
+    depth: u32,
+) -> Result<(), TypeTooLarge> {
+    for (name, field) in other {
+        if let Some(existing) = fields.get_mut(&name) {
+            existing.ty = intersect_field_types(&existing.ty, &field.ty, budget, depth)?;
+            existing.optional &= field.optional;
+            existing.readonly &= field.readonly;
+            existing.method |= field.method;
+        } else {
+            fields.insert(name, field);
         }
     }
-    Some(fields)
+    Ok(())
+}
+
+/// Meet the concrete data shapes carried by raw external heritage metadata.
+/// Named recursive properties stay finite references; equal ones deduplicate.
+fn intersect_field_types(
+    left: &Type,
+    right: &Type,
+    budget: &mut crate::type_size::TypeBudget<'_>,
+    depth: u32,
+) -> Result<Type, TypeTooLarge> {
+    budget.charge_copy(left, depth)?;
+    budget.charge_copy(right, depth)?;
+    if let Type::Union(members) = left.peel() {
+        return members
+            .iter()
+            .map(|member| intersect_field_types(member, right, budget, depth + 1))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Type::union);
+    }
+    if let Type::Union(members) = right.peel() {
+        return members
+            .iter()
+            .map(|member| intersect_field_types(left, member, budget, depth + 1))
+            .collect::<Result<Vec<_>, _>>()
+            .map(Type::union);
+    }
+    if let (
+        Type::Object {
+            fields: left,
+            index: None,
+        },
+        Type::Object {
+            fields: right,
+            index: None,
+        },
+    ) = (left.peel(), right.peel())
+    {
+        let mut fields = left.clone();
+        intersect_fields(&mut fields, right.clone(), budget, depth + 1)?;
+        return Ok(Type::Object {
+            fields,
+            index: None,
+        });
+    }
+    Ok(Type::intersection(vec![left.clone(), right.clone()]))
+}
+
+/// Method types are irrelevant to data validation; the marker keeps override
+/// precedence without copying signatures that cannot be checked as plain data.
+fn inherited_method() -> ObjectField {
+    ObjectField {
+        ty: Type::Unknown,
+        optional: false,
+        readonly: false,
+        method: true,
+    }
 }
 
 /// One generated validator: the back-edge it keys on and the expanded body its
@@ -621,7 +808,9 @@ impl<'a, 'b> Traversal<'a, 'b> {
                 references
             }
             Type::Array(element) => self.walk(element)?,
-            Type::Tuple(crate::types::TupleType { elements, .. }) | Type::Union(elements) => {
+            Type::Tuple(crate::types::TupleType { elements, .. })
+            | Type::Union(elements)
+            | Type::Intersection(elements) => {
                 let mut references = false;
                 for element in elements {
                     references |= self.walk(element)?;
@@ -733,6 +922,7 @@ fn collect_descriptor_arguments(ty: &Type, out: &mut BTreeSet<Type>) {
         }
         Type::Array(ty) => collect_descriptor_arguments(ty, out),
         Type::Union(types)
+        | Type::Intersection(types)
         | Type::Tuple(crate::types::TupleType {
             elements: types, ..
         }) => {
@@ -762,4 +952,326 @@ fn is_generic_interface_key(ty: &Type) -> bool {
     let mut seen = BTreeSet::new();
     args.iter()
         .all(|arg| matches!(arg, Type::TypeVar(name) if seen.insert(name.as_str())))
+}
+
+#[cfg(test)]
+mod inheritance_tests {
+    use super::*;
+
+    fn reference(name: &str, args: Vec<Type>) -> Type {
+        Type::interface_ref(
+            crate::Package("main".into()),
+            name,
+            crate::mangle::package_symbol("main", name),
+            args,
+        )
+    }
+
+    fn declaration(name: &str, extends: Vec<Type>, ty: Type) -> crate::TypedInterfaceDecl {
+        crate::TypedInterfaceDecl {
+            name: crate::Ident {
+                name: name.into(),
+                span: crate::Span::at(crate::FileId(0)),
+            },
+            generics: crate::GenericParameters::unconstrained(vec!["T".into()]),
+            extends,
+            members: vec![TypedInterfaceMember::Property {
+                name: crate::Ident {
+                    name: "value".into(),
+                    span: crate::Span::at(crate::FileId(0)),
+                },
+                ty,
+                optional: false,
+                readonly: false,
+                doc: None,
+            }],
+            property_names: BTreeSet::from(["value".into()]),
+            index: None,
+            doc: None,
+        }
+    }
+
+    #[test]
+    fn inherited_validator_fields_substitute_generics_and_keep_own_overrides() {
+        let mut base = declaration("Base", vec![], Type::TypeVar("T".into()));
+        if let TypedInterfaceMember::Property {
+            name,
+            optional,
+            readonly,
+            ..
+        } = &mut base.members[0]
+        {
+            name.name = "inherited".into();
+            *optional = true;
+            *readonly = true;
+        }
+        let intermediate = declaration(
+            "Intermediate",
+            vec![reference("Base", vec![Type::TypeVar("T".into())])],
+            Type::String,
+        );
+        let derived = declaration(
+            "Derived",
+            vec![reference("Intermediate", vec![Type::TypeVar("T".into())])],
+            Type::Number,
+        );
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types = vec![
+            TypedTypeDecl::Interface(derived),
+            TypedTypeDecl::Interface(base),
+            TypedTypeDecl::Interface(intermediate),
+        ];
+        let bodies = ValidatorBodies::collect(&ast, []).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("Derived", vec![Type::Boolean]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(fields["value"].ty, Type::Number);
+        assert_eq!(fields["inherited"].ty, Type::Boolean);
+        assert!(fields["inherited"].optional && fields["inherited"].readonly);
+    }
+
+    #[test]
+    fn inherited_validator_fields_preserve_recursive_property_edges() {
+        let base = declaration(
+            "Base",
+            vec![],
+            Type::union(vec![
+                Type::Null,
+                reference("Derived", vec![Type::TypeVar("T".into())]),
+            ]),
+        );
+        let mut derived = declaration(
+            "Derived",
+            vec![reference("Base", vec![Type::TypeVar("T".into())])],
+            Type::Number,
+        );
+        derived.members.clear();
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types = vec![
+            TypedTypeDecl::Interface(base),
+            TypedTypeDecl::Interface(derived),
+        ];
+        let bodies = ValidatorBodies::collect(&ast, []).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("Derived", vec![Type::String]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(
+            fields["value"].ty,
+            Type::union(vec![Type::Null, reference("Derived", vec![Type::String])])
+        );
+    }
+
+    #[test]
+    fn diamond_heritage_reuses_flattened_contracts() {
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        for i in 0usize..30 {
+            let bases = (i.saturating_sub(2)..i)
+                .map(|base| reference(&format!("I{base}"), vec![Type::Number]))
+                .collect();
+            let mut decl = declaration(&format!("I{i}"), bases, Type::Number);
+            if i > 0 {
+                decl.members.clear();
+            }
+            ast.types.push(TypedTypeDecl::Interface(decl));
+        }
+        let bodies = ValidatorBodies::collect(&ast, []).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("I29", vec![Type::Number]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(fields["value"].ty, Type::Number);
+    }
+
+    #[test]
+    fn property_override_removes_inherited_method_marker() {
+        let mut base = declaration("Base", vec![], Type::Number);
+        base.members = vec![TypedInterfaceMember::Method {
+            name: crate::Ident {
+                name: "value".into(),
+                span: crate::Span::at(crate::FileId(0)),
+            },
+            generics: Default::default(),
+            params: vec![],
+            return_type: Type::Number,
+            doc: None,
+        }];
+        let function = Type::Function {
+            params: vec![],
+            ret: Box::new(Type::Number),
+            has_rest: false,
+            optional: 0,
+            predicate: None,
+        };
+        let derived = declaration(
+            "Derived",
+            vec![reference("Base", vec![Type::Number])],
+            function.clone(),
+        );
+        let mut method_child = declaration(
+            "Methods",
+            vec![reference("Base", vec![Type::Number])],
+            Type::Number,
+        );
+        method_child.members.clear();
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types = vec![
+            TypedTypeDecl::Interface(base),
+            TypedTypeDecl::Interface(derived),
+            TypedTypeDecl::Interface(method_child),
+        ];
+        let bodies = ValidatorBodies::collect(&ast, []).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("Derived", vec![Type::Number]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(fields["value"].ty, function);
+        assert!(matches!(
+            bodies
+                .expand_one(&reference("Methods", vec![Type::Number]))
+                .unwrap(),
+            Type::InterfaceRef { .. }
+        ));
+    }
+
+    #[test]
+    fn heritage_only_dependency_is_selected_for_local_validator() {
+        let mut dependency = crate::PackageDeclaration::with_package("@test/base");
+        let mangled = crate::mangle::package_symbol("@test/base", "Base");
+        dependency.types.insert(
+            "Base".into(),
+            crate::TypeSymbol {
+                name: "Base".into(),
+                mangled_name: mangled.clone(),
+                declaration_span: crate::Span::at(crate::FileId(0)),
+                kind: TypeKind::Interface {
+                    extends: vec![],
+                    generics: Default::default(),
+                    methods: BTreeMap::new(),
+                    properties: BTreeMap::from([(
+                        "inherited".into(),
+                        crate::PropertySig {
+                            ty: Type::String,
+                            optional: false,
+                            readonly: false,
+                            intrinsic: false,
+                            doc: None,
+                        },
+                    )]),
+                    index: None,
+                    dispatch: crate::Dispatch::VTable,
+                    doc: None,
+                },
+            },
+        );
+        let imported =
+            Type::interface_ref(crate::Package("@test/base".into()), "Base", mangled, vec![]);
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types.push(TypedTypeDecl::Interface(declaration(
+            "Derived",
+            vec![imported],
+            Type::Number,
+        )));
+        let analysis =
+            crate::codegen::analysis::CodegenAnalysis::collect(&ast, &[&dependency]).unwrap();
+        let usage = analysis.dependency_usage.finish(&[&dependency]);
+        let dependencies = [&dependency];
+        let selected = usage.dependency_types(&dependencies);
+        let bodies = ValidatorBodies::collect(&ast, &selected).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("Derived", vec![Type::Number]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(fields["inherited"].ty, Type::String);
+    }
+
+    #[test]
+    fn inherited_generic_arguments_with_crossing_names_are_simultaneous() {
+        let mut base = declaration("Base", vec![], Type::TypeVar("T".into()));
+        base.generics = crate::GenericParameters::unconstrained(vec!["T".into(), "U".into()]);
+        let mut derived = declaration(
+            "Derived",
+            vec![reference(
+                "Base",
+                vec![Type::TypeVar("U".into()), Type::Number],
+            )],
+            Type::Boolean,
+        );
+        derived.generics = crate::GenericParameters::unconstrained(vec!["U".into()]);
+        derived.members.clear();
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types = vec![
+            TypedTypeDecl::Interface(base),
+            TypedTypeDecl::Interface(derived),
+        ];
+        let bodies = ValidatorBodies::collect(&ast, []).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("Derived", vec![Type::String]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(fields["value"].ty, Type::String);
+    }
+
+    #[test]
+    fn raw_intersection_heritage_meets_overlapping_property_types() {
+        let mut derived = declaration(
+            "Derived",
+            vec![Type::intersection(
+                [Type::Number, Type::union(vec![Type::Number, Type::String])]
+                    .into_iter()
+                    .map(|ty| Type::Object {
+                        fields: BTreeMap::from([("x".into(), ObjectField::required(ty))]),
+                        index: None,
+                    })
+                    .collect(),
+            )],
+            Type::Boolean,
+        );
+        derived.members.clear();
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types.push(TypedTypeDecl::Interface(derived));
+        let bodies = ValidatorBodies::collect(&ast, []).unwrap();
+        let Type::Object { fields, .. } = bodies
+            .expand_one(&reference("Derived", vec![Type::Number]))
+            .unwrap()
+        else {
+            panic!("data object");
+        };
+        assert_eq!(fields["x"].ty, Type::Number);
+    }
+
+    #[test]
+    fn cyclic_heritage_metadata_returns_a_limit_error() {
+        let mut ast = TypedAst::new();
+        ast.package_name = "main".into();
+        ast.types.push(TypedTypeDecl::Interface(declaration(
+            "Cycle",
+            vec![reference("Cycle", vec![Type::TypeVar("T".into())])],
+            Type::Number,
+        )));
+        assert!(matches!(
+            ValidatorBodies::collect(&ast, []),
+            Err(TypeTooLarge::Depth)
+        ));
+    }
 }

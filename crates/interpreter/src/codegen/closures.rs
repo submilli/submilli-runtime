@@ -141,12 +141,14 @@ pub fn collect_from_dependencies<'a>(
         {
             if *dispatch == Dispatch::VTable {
                 for (name, sig) in methods {
-                    if usage.is_interface_member_used(ty_sym, name) {
-                        dispatched_member_sigs(
-                            sig.params.iter().map(|p| &p.ty),
-                            &sig.ret,
-                            &mut out,
-                        )?;
+                    for sig in sig.signatures() {
+                        if usage.is_interface_member_used(ty_sym, name) {
+                            dispatched_member_sigs(
+                                sig.params.iter().map(|p| &p.ty),
+                                &sig.ret,
+                                &mut out,
+                            )?;
+                        }
                     }
                 }
                 for (name, prop) in properties {
@@ -156,8 +158,14 @@ pub fn collect_from_dependencies<'a>(
                 }
             } else {
                 for (name, sig) in methods {
-                    if usage.is_interface_member_used(ty_sym, name) {
-                        walk_signature_types(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out)?;
+                    for sig in sig.signatures() {
+                        if usage.is_interface_member_used(ty_sym, name) {
+                            walk_signature_types(
+                                sig.params.iter().map(|p| &p.ty),
+                                &sig.ret,
+                                &mut out,
+                            )?;
+                        }
                     }
                 }
                 for (name, prop) in properties {
@@ -182,8 +190,14 @@ pub fn collect_from_dependencies<'a>(
             // type to exist here even though the closure itself is built in
             // the producing package.
             for sig in methods.values() {
-                if sig.generics.is_empty() {
-                    dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, &mut out)?;
+                for sig in sig.signatures() {
+                    if sig.generics.is_empty() {
+                        dispatched_member_sigs(
+                            sig.params.iter().map(|p| &p.ty),
+                            &sig.ret,
+                            &mut out,
+                        )?;
+                    }
                 }
             }
             for p in constructor {
@@ -336,8 +350,10 @@ fn inherited_dependency_sigs(
             return Ok(());
         };
         for sig in methods.values() {
-            if sig.generics.is_empty() {
-                dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, out)?;
+            for sig in sig.signatures() {
+                if sig.generics.is_empty() {
+                    dispatched_member_sigs(sig.params.iter().map(|p| &p.ty), &sig.ret, out)?;
+                }
             }
         }
         accessor_sigs(accessors, out)?;
@@ -393,7 +409,7 @@ pub(crate) fn walk_type(
                 walk_type(a, out)?;
             }
         }
-        Type::Union(members) => {
+        Type::Union(members) | Type::Intersection(members) => {
             for m in members {
                 walk_type(m, out)?;
             }
@@ -419,7 +435,6 @@ pub(crate) fn walk_type(
         | Type::IndexedAccess { .. }
         | Type::Mapped { .. }
         | Type::Conditional { .. }
-        | Type::Intersection(_)
         | Type::Unknown
         | Type::NonPrimitive
         | Type::NumberEnum { .. }

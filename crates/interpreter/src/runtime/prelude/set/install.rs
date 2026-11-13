@@ -342,12 +342,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Set".to_string(),
             mangled_name: crate::mangle::prelude("Set"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                 methods: BTreeMap::from([
                     (
                         "add".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::TypeVar("T".to_string()))],
@@ -360,7 +360,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "has".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::TypeVar("T".to_string()))],
@@ -373,7 +373,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "delete".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("value", Type::TypeVar("T".to_string()))],
@@ -386,7 +386,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "values".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -401,7 +401,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         // A live cursor over `T`; makes `Set<T>`
                         // structurally satisfy `Iterable<T>`.
                         "iterator".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -414,7 +414,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "clear".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -425,7 +425,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "keys".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -438,7 +438,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "entries".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -454,7 +454,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "forEach".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new(
@@ -483,7 +483,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "union".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -508,7 +508,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "intersection".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -530,7 +530,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "difference".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -552,7 +552,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "symmetricDifference".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -577,7 +577,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isSubsetOf".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -596,7 +596,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isSupersetOf".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -615,7 +615,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "isDisjointFrom".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
@@ -657,11 +657,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "SetConstructor".to_string(),
             mangled_name: crate::mangle::prelude("SetConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "new".to_string(),
-                    MethodSig {
+                    MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                         params: vec![Param::with_default(

@@ -421,6 +421,7 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
     }
     match &symbol.kind {
         TypeKind::Interface {
+            extends,
             generics: _,
             methods,
             properties,
@@ -428,6 +429,7 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
             dispatch: _,
             doc: _,
         } => {
+            extends.iter().for_each(&mut *visit);
             methods
                 .values()
                 .for_each(|method| method_types(method, visit));
@@ -560,9 +562,23 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
     }
 }
 
-fn method_types(method: &MethodSig, visit: &mut dyn FnMut(&Type)) {
+pub(crate) fn method_types(method: &MethodSig, visit: &mut dyn FnMut(&Type)) {
+    for signature in &method.overloads {
+        signature
+            .generics
+            .constraints
+            .values()
+            .for_each(&mut *visit);
+        signature.params.iter().for_each(|param| visit(&param.ty));
+        visit(&signature.ret);
+        if let Some(predicate) = &signature.predicate {
+            visit(&predicate.asserted_type);
+        }
+    }
+
     method.generics.constraints.values().for_each(&mut *visit);
     let MethodSig {
+        overloads: _,
         optional: _,
         generics: _,
         params,
@@ -607,21 +623,27 @@ impl PackageShapeCollector {
     fn collect_type_symbol(&mut self, ty: &TypeSymbol) {
         match &ty.kind {
             TypeKind::Interface {
+                extends,
                 methods,
                 properties,
                 index,
                 ..
             } => {
+                for base in extends {
+                    self.collect_type(base);
+                }
                 if let Some(index) = index {
                     self.collect_type(&index.value);
                 }
                 for method in methods.values() {
-                    for param in &method.params {
-                        self.collect_type(&param.ty);
-                    }
-                    self.collect_type(&method.ret);
-                    if let Some(predicate) = &method.predicate {
-                        self.collect_type(&predicate.asserted_type);
+                    for method in method.signatures() {
+                        for param in &method.params {
+                            self.collect_type(&param.ty);
+                        }
+                        self.collect_type(&method.ret);
+                        if let Some(predicate) = &method.predicate {
+                            self.collect_type(&predicate.asserted_type);
+                        }
                     }
                 }
                 for property in properties.values() {
@@ -639,10 +661,12 @@ impl PackageShapeCollector {
                     self.collect_type(&field.ty);
                 }
                 for method in methods.values() {
-                    for param in &method.params {
-                        self.collect_type(&param.ty);
+                    for method in method.signatures() {
+                        for param in &method.params {
+                            self.collect_type(&param.ty);
+                        }
+                        self.collect_type(&method.ret);
                     }
-                    self.collect_type(&method.ret);
                 }
                 for acc in accessors {
                     match acc {
@@ -1009,13 +1033,18 @@ pub struct TypeSymbol {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypeKind {
-    /// Single declaration site per name — no reopening, no `extends` in v1.
+    /// Single declaration site per name; resolved bases accompany flattened members.
     /// Codegen has no Wasm representation for the interface itself; it only drives method dispatch.
     Interface {
+        /// Declared bases in source order, expressed in this interface's type parameters.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        extends: Vec<Type>,
         generics: GenericParameters,
         methods: BTreeMap<String, MethodSig>,
         /// Read via `expr.name` (not `expr.name()`). Writable unless the
         /// declaration carries a `readonly` modifier (`PropertySig.readonly`).
+        /// A name also present in `methods` has both the callable contract and
+        /// these additional constraints on the callable value.
         properties: BTreeMap<String, PropertySig>,
         index: Option<crate::IndexSignature>,
         dispatch: Dispatch,
@@ -1126,6 +1155,10 @@ pub enum Dispatch {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MethodSig {
+    /// Additional callable signatures, in overload-resolution order after the
+    /// primary signature on this method. Kept flat so metadata cannot nest overload sets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overloads: Vec<MethodOverload>,
     /// Declared `m?(…)`: the member may be absent, so a call goes through `?.`.
     #[serde(default)]
     pub optional: bool,
@@ -1136,6 +1169,119 @@ pub struct MethodSig {
     /// `None` for ordinary methods.
     pub predicate: Option<crate::TypePredicate>,
     pub doc: Option<crate::DocComment>,
+}
+
+/// One additional signature of an overloaded method. Optionality and member
+/// documentation belong to the method, not to an individual signature.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MethodOverload {
+    pub generics: GenericParameters,
+    pub params: Vec<Param>,
+    pub ret: Type,
+    pub predicate: Option<crate::TypePredicate>,
+}
+
+impl MethodSig {
+    pub fn signatures(&self) -> impl Iterator<Item = MethodSig> + '_ {
+        std::iter::once(MethodOverload {
+            generics: self.generics.clone(),
+            params: self.params.clone(),
+            ret: self.ret.clone(),
+            predicate: self.predicate.clone(),
+        })
+        .chain(self.overloads.iter().cloned())
+        .map(|signature| MethodSig {
+            overloads: Vec::new(),
+            optional: self.optional,
+            generics: signature.generics,
+            params: signature.params,
+            ret: signature.ret,
+            predicate: signature.predicate,
+            doc: self.doc.clone(),
+        })
+    }
+
+    pub(crate) fn from_function_type(ty: &Type, optional_member: bool) -> Option<Self> {
+        if let Type::Intersection(members) = ty.peel() {
+            let mut members = members.iter();
+            let mut result = Self::from_function_type(members.next()?, optional_member)?;
+            for member in members {
+                result.append_signatures(Self::from_function_type(member, optional_member)?);
+            }
+            return Some(result);
+        }
+        let Type::Function {
+            params,
+            ret,
+            predicate,
+            has_rest,
+            optional,
+        } = ty.peel()
+        else {
+            return None;
+        };
+        let fixed = params.len().saturating_sub(usize::from(*has_rest));
+        Some(Self {
+            overloads: Vec::new(),
+            optional: optional_member,
+            generics: Default::default(),
+            params: params
+                .iter()
+                .enumerate()
+                .map(|(position, ty)| Param {
+                    name: format!("arg{position}"),
+                    ty: ty.clone(),
+                    default: None,
+                    optional: position < fixed && position >= fixed.saturating_sub(*optional),
+                    rest: *has_rest && position == fixed,
+                })
+                .collect(),
+            ret: (**ret).clone(),
+            predicate: predicate.as_deref().cloned(),
+            doc: None,
+        })
+    }
+
+    pub(crate) fn try_map_types<E>(
+        &mut self,
+        mut map: impl FnMut(&Type) -> Result<Type, E>,
+    ) -> Result<(), E> {
+        for bound in self.generics.constraints.values_mut() {
+            *bound = map(bound)?;
+        }
+        for param in &mut self.params {
+            param.ty = map(&param.ty)?;
+        }
+        self.ret = map(&self.ret)?;
+        if let Some(predicate) = &mut self.predicate {
+            predicate.asserted_type = map(&predicate.asserted_type)?;
+        }
+        for signature in &mut self.overloads {
+            for bound in signature.generics.constraints.values_mut() {
+                *bound = map(bound)?;
+            }
+            for param in &mut signature.params {
+                param.ty = map(&param.ty)?;
+            }
+            signature.ret = map(&signature.ret)?;
+            if let Some(predicate) = &mut signature.predicate {
+                predicate.asserted_type = map(&predicate.asserted_type)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn append_signatures(&mut self, other: MethodSig) {
+        for signature in other.signatures() {
+            self.overloads.push(MethodOverload {
+                generics: signature.generics,
+                params: signature.params,
+                ret: signature.ret,
+                predicate: signature.predicate,
+            });
+        }
+        self.optional &= other.optional;
+    }
 }
 
 /// One accessor function on a class property. Getter and setter are independent
@@ -1513,6 +1659,25 @@ mod type_limit_checks {
             let mut declaration = PackageDeclaration::with_package("dep");
             assert_eq!(declaration.check_type_limits(), Ok(()));
             declaration.namespaces.insert("Outer".into(), outer);
+            assert_eq!(declaration.check_type_limits(), Err(TypeTooLarge::Depth));
+        });
+    }
+
+    #[test]
+    fn interface_base_metadata_is_checked_even_without_members() {
+        crate::type_size::tests::on_compiler_stack(|| {
+            let mut declaration = PackageDeclaration::with_package("dep");
+            let mut symbol = alias(Type::Unknown);
+            symbol.kind = TypeKind::Interface {
+                extends: vec![nested(MAX_TYPE_DEPTH + 1)],
+                generics: Default::default(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::new(),
+                index: None,
+                dispatch: Dispatch::VTable,
+                doc: None,
+            };
+            declaration.types.insert("Deep".into(), symbol);
             assert_eq!(declaration.check_type_limits(), Err(TypeTooLarge::Depth));
         });
     }

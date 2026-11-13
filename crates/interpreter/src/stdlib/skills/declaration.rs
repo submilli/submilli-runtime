@@ -54,6 +54,7 @@ fn skill_methods() -> BTreeMap<String, MethodSig> {
     BTreeMap::from([(
         "readFile".to_string(),
         MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("path", Type::String)],
@@ -122,6 +123,7 @@ fn insert_interface(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::SKILLS),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 dispatch: if methods.is_empty() {

@@ -126,25 +126,31 @@ fn run_symbols<'a>(
         let mut used = BTreeMap::new();
         match &ty.kind {
             TypeKind::Interface {
+                extends,
                 methods,
                 properties,
                 index,
                 ..
             } => {
+                for base in extends {
+                    collect_signature_named_types(package_name, base, &mut used);
+                }
                 if let Some(index) = index {
                     collect_signature_named_types(package_name, &index.value, &mut used);
                 }
                 for method in methods.values() {
-                    for param in &method.params {
-                        collect_signature_named_types(package_name, &param.ty, &mut used);
-                    }
-                    collect_signature_named_types(package_name, &method.ret, &mut used);
-                    if let Some(predicate) = &method.predicate {
-                        collect_signature_named_types(
-                            package_name,
-                            &predicate.asserted_type,
-                            &mut used,
-                        );
+                    for method in method.signatures() {
+                        for param in &method.params {
+                            collect_signature_named_types(package_name, &param.ty, &mut used);
+                        }
+                        collect_signature_named_types(package_name, &method.ret, &mut used);
+                        if let Some(predicate) = &method.predicate {
+                            collect_signature_named_types(
+                                package_name,
+                                &predicate.asserted_type,
+                                &mut used,
+                            );
+                        }
                     }
                 }
                 for property in properties.values() {
@@ -163,10 +169,12 @@ fn run_symbols<'a>(
                     collect_signature_named_types(package_name, &field.ty, &mut used);
                 }
                 for method in methods.values().chain(statics.values()) {
-                    for param in &method.params {
-                        collect_signature_named_types(package_name, &param.ty, &mut used);
+                    for method in method.signatures() {
+                        for param in &method.params {
+                            collect_signature_named_types(package_name, &param.ty, &mut used);
+                        }
+                        collect_signature_named_types(package_name, &method.ret, &mut used);
                     }
-                    collect_signature_named_types(package_name, &method.ret, &mut used);
                 }
                 for param in constructor {
                     collect_signature_named_types(package_name, &param.ty, &mut used);

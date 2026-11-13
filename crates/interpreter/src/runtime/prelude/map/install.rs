@@ -330,12 +330,12 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "Map".to_string(),
             mangled_name: crate::mangle::prelude("Map"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                 methods: BTreeMap::from([
                     (
                         "get".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
@@ -351,7 +351,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "set".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![
@@ -370,7 +370,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "has".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
@@ -383,7 +383,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "delete".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new("key", Type::TypeVar("K".to_string()))],
@@ -396,7 +396,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "keys".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -409,7 +409,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "values".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -422,7 +422,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "entries".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -438,7 +438,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "forEach".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: vec![Param::new(
@@ -473,7 +473,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         // makes `Map<K, V>` structurally satisfy
                         // `Iterable<[K, V]>`.
                         "iterator".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -489,7 +489,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                     (
                         "clear".to_string(),
-                        MethodSig {
+                        MethodSig { overloads: Vec::new(),
                             optional: false,
                             generics: Default::default(),
                             params: Vec::new(),
@@ -523,11 +523,11 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "MapConstructor".to_string(),
             mangled_name: crate::mangle::prelude("MapConstructor"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::from([(
                     "groupBy".to_string(),
-                    MethodSig {
+                    MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "T".to_string()]),
                         params: group_by_params(),
@@ -542,7 +542,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     },
                 ), (
                     "new".to_string(),
-                    MethodSig {
+                    MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                         params: vec![Param::with_default(

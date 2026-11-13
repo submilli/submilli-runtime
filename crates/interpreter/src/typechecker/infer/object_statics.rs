@@ -121,8 +121,9 @@ impl Inferer<'_> {
     }
 
     /// Intersect property types under the compiler's normal size/work budget.
-    /// A disjoint property is never, rather than making the native call diverge.
-    fn assign_intersection(
+    /// Primitive disjoint properties become never; other incomparable values
+    /// retain both constraints, including empty arrays and callable overloads.
+    pub(super) fn assign_intersection(
         &self,
         left: &Type,
         right: &Type,
@@ -162,7 +163,9 @@ impl Inferer<'_> {
                 budget.charge_copy(right, depth)?;
                 return Ok(right.clone());
             }
-            return Ok(Type::Never);
+            budget.charge_copy(left, depth + 1)?;
+            budget.charge_copy(right, depth + 1)?;
+            return Ok(Type::intersection(vec![left.clone(), right.clone()]));
         };
         for (name, field) in other {
             if let Some(existing) = fields.get_mut(&name) {

@@ -531,7 +531,7 @@ pub enum Type {
     },
     /// `A & B` that normalizes to neither an object type nor a refinement:
     /// `T & U`, `string & { brand: true }`. At least two members, flat,
-    /// sorted and deduplicated, as a union's are; build it with
+    /// deduplicated in operand order; build it with
     /// [`Type::intersection`]. One with a primitive member is used as that
     /// primitive: [`Type::peel`] reads it as the primitive, so a cast to
     /// `string & { brand: true }` checks for a string. Any other lowers like
@@ -923,10 +923,13 @@ impl Type {
     /// Whether this is `keyof T`, `T[K]`, a mapped, conditional or
     /// intersection type, or a utility application over a type parameter: a
     /// type computed from type parameters, known only once a call
-    /// instantiates them. Every intersection counts, including one with a
-    /// primitive member, which [`Type::peel`] reads as that primitive, so a
+    /// instantiates them. Concrete callable overload intersections are excluded.
+    /// An intersection with a primitive member counts, which [`Type::peel`] reads as that primitive, so a
     /// caller asking of a peeled type never sees it.
     pub fn is_type_operator(&self) -> bool {
+        if self.is_callable_intersection() {
+            return false;
+        }
         matches!(
             self,
             Type::KeyOf(_)
@@ -1471,9 +1474,15 @@ impl Type {
         }
     }
 
+    /// The concrete function intersection used for an overload set, whose
+    /// values are callable and cannot be nullish despite the erased ABI.
+    pub(crate) fn is_callable_intersection(&self) -> bool {
+        matches!(self.peel(), Type::Intersection(members) if members.len() >= 2 && members.iter().all(|member| matches!(member.peel(), Type::Function { .. })))
+    }
+
     /// The canonical [`Type::Intersection`] of `members`: nested
-    /// intersections flattened, members sorted and deduplicated through
-    /// aliases as [`Type::union`]'s are. `unknown` members add nothing, nor
+    /// intersections flattened and members deduplicated through aliases,
+    /// preserving operand order for overload resolution. `unknown` members add nothing, nor
     /// does a primitive another member narrows (`"a" & string` is `"a"`). A
     /// `never` member makes it `never`, as do two different primitives
     /// (`number & string`, `string & null`) or literals (`"a" & "b"`). One
@@ -1509,7 +1518,10 @@ impl Type {
             .filter_map(|member| narrowed_base(member.peel()))
             .collect();
         flat.retain(|member| !narrowed.contains(member.without_aliases()));
-        sort_and_dedup_members(&mut flat);
+        // Callable intersections resolve overloads from left to right. Keep
+        // the first occurrence of a member instead of sorting away that order.
+        let mut seen = BTreeSet::new();
+        flat.retain(|member| seen.insert(member.without_aliases().clone()));
         if flat.len() > 1 {
             return Type::Intersection(flat);
         }
@@ -1873,7 +1885,7 @@ pub fn union_display_order(members: &[Type]) -> Vec<&Type> {
     ordered
 }
 
-/// Sorts union or intersection members by their peeled key, which groups
+/// Sorts union members by their peeled key, which groups
 /// alias-labelled duplicates next to their body, and drops the duplicates.
 /// Aliases rank first within a group, so `dedup_by` keeps the earlier
 /// element: the name the user wrote.

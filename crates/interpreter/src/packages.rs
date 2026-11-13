@@ -680,22 +680,32 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
         let prop = &properties[&name];
         push_doc(&mut body, &prop.doc, "  ");
         let ro = if prop.readonly { "readonly " } else { "" };
-        let opt = if prop.optional { "?" } else { "" };
+        let opt = if prop.optional && methods.get(&name).is_none_or(|method| method.optional) {
+            "?"
+        } else {
+            ""
+        };
+        let ty = methods.get(&name).map_or_else(
+            || prop.ty.to_string(),
+            |method| ts_callable_property_type(method, &prop.ty),
+        );
         let name = member_name(&name);
-        let _ = writeln!(body, "  {ro}{name}{opt}: {};", prop.ty);
+        let _ = writeln!(body, "  {ro}{name}{opt}: {ty};");
     } else {
         let name = resolve_ignore_case(methods.keys(), member)?;
         let m = &methods[&name];
-        push_doc(&mut body, &m.doc, "  ");
-        let optional = if m.optional { "?" } else { "" };
-        let name = method_prefix(&name);
-        let _ = writeln!(
-            body,
-            "  {name}{optional}{}({}): {};",
-            generics_str(&m.generics),
-            params_str(&m.params, m.doc.as_ref()),
-            m.ret
-        );
+        for m in m.signatures() {
+            push_doc(&mut body, &m.doc, "  ");
+            let optional = if m.optional { "?" } else { "" };
+            let name = method_prefix(&name);
+            let _ = writeln!(
+                body,
+                "  {name}{optional}{}({}): {};",
+                generics_str(&m.generics),
+                params_str(&m.params, m.doc.as_ref()),
+                m.ret
+            );
+        }
     }
     Some(format!(
         "interface {owner}{} {{\n{body}}}\n",
@@ -1725,6 +1735,17 @@ fn render_ts_declarations(
     export_prefix: &str,
     class_parent: &dyn Fn(&ClassExtends) -> Option<String>,
 ) {
+    let occupied: std::collections::BTreeSet<_> = defs
+        .types
+        .keys()
+        .cloned()
+        .chain(defs.namespaces.keys().cloned())
+        .chain(
+            rendered_type_references(defs)
+                .into_iter()
+                .map(|reference| reference.name),
+        )
+        .collect();
     for (name, sym) in &defs.values {
         if is_hidden_prelude_value(&defs.package_name, name) {
             continue;
@@ -1752,7 +1773,9 @@ fn render_ts_declarations(
                 !defs.values.contains_key(name),
             );
         } else {
-            push_doc(out, type_doc(&sym.kind), indent);
+            if !matches!(sym.kind, TypeKind::Interface { .. }) {
+                push_doc(out, type_doc(&sym.kind), indent);
+            }
             let parent = match &sym.kind {
                 TypeKind::Class {
                     extends: Some(extends),
@@ -1767,6 +1790,7 @@ fn render_ts_declarations(
                 indent,
                 export_prefix,
                 parent.as_deref().or_else(|| intrinsic_array_parent(sym)),
+                &occupied,
             );
         }
     }
@@ -1844,6 +1868,27 @@ fn render_ts_value(
     out.push('\n');
 }
 
+/// Parsed heritage clauses retain named interface or alias types, even when an
+/// alias resolves to an object or intersection. Built-ins may supply a synthetic
+/// parent instead of declaring one in their package metadata.
+fn interface_parents(
+    bases: &[Type],
+    synthetic: Option<&str>,
+    render: impl Fn(&Type) -> String,
+) -> String {
+    let mut parents: Vec<_> = bases.iter().map(render).collect();
+    if let Some(parent) = synthetic
+        && !parents.iter().any(|base| base == parent)
+    {
+        parents.push(parent.to_string());
+    }
+    if parents.is_empty() {
+        String::new()
+    } else {
+        format!(" extends {}", parents.join(", "))
+    }
+}
+
 fn intrinsic_array_parent(sym: &TypeSymbol) -> Option<&'static str> {
     (sym.mangled_name == crate::mangle::prelude("RegExpMatchArray")
         || sym.mangled_name == crate::mangle::prelude("RegExpExecArray"))
@@ -1863,6 +1908,63 @@ fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
     }
 }
 
+/// TypeScript heritage accepts names with arguments. External declarations may
+/// instead carry resolved object or intersection types, so give those a local
+/// alias without changing their generic arguments or inherited member contract.
+#[allow(clippy::too_many_arguments)]
+fn render_ts_interface_parents(
+    out: &mut String,
+    name: &str,
+    generics: &crate::GenericParameters,
+    bases: &[Type],
+    synthetic: Option<&str>,
+    indent: &str,
+    export_prefix: &str,
+    occupied: &std::collections::BTreeSet<String>,
+) -> String {
+    let mut used = occupied.clone();
+    used.extend(generics.names.iter().cloned());
+    let mut parents = Vec::new();
+    for (position, base) in bases.iter().enumerate() {
+        if matches!(
+            base,
+            Type::InterfaceRef { .. } | Type::Alias { .. } | Type::AliasRef { .. }
+        ) {
+            parents.push(ts_type(base));
+            continue;
+        }
+        let prefix = format!("__submilli_{name}_base{position}");
+        let mut alias = prefix.clone();
+        let mut suffix = 0usize;
+        while !used.insert(alias.clone()) {
+            suffix += 1;
+            alias = format!("{prefix}_{suffix}");
+        }
+        let _ = writeln!(
+            out,
+            "{indent}{export_prefix}type {alias}{} = {};",
+            generics_str(generics),
+            ts_type(base)
+        );
+        let args = if generics.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", generics.names.join(", "))
+        };
+        parents.push(format!("{alias}{args}"));
+    }
+    if let Some(parent) = synthetic
+        && !parents.iter().any(|base| base == parent)
+    {
+        parents.push(parent.to_string());
+    }
+    if parents.is_empty() {
+        String::new()
+    } else {
+        format!(" extends {}", parents.join(", "))
+    }
+}
+
 /// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
@@ -1871,23 +1973,34 @@ fn render_ts_type(
     indent: &str,
     export_prefix: &str,
     parent: Option<&str>,
+    occupied: &std::collections::BTreeSet<String>,
 ) {
     let inner = format!("{indent}  ");
     match kind {
         TypeKind::Interface {
+            extends,
             generics,
             methods,
             properties,
             index,
             ..
         } => {
+            let parents = render_ts_interface_parents(
+                out,
+                name,
+                generics,
+                extends,
+                parent,
+                indent,
+                export_prefix,
+                occupied,
+            );
+            push_doc(out, type_doc(kind), indent);
             let _ = writeln!(
                 out,
                 "{indent}{export_prefix}interface {name}{}{} {{",
                 ts_interface_generics(name, generics, export_prefix),
-                parent
-                    .map(|parent| format!(" extends {parent}"))
-                    .unwrap_or_default()
+                parents
             );
             if let Some(index) = index {
                 let ro = if index.readonly { "readonly " } else { "" };
@@ -1901,21 +2014,36 @@ fn render_ts_type(
             for (pname, prop) in properties {
                 push_doc(out, &prop.doc, &inner);
                 let ro = if prop.readonly { "readonly " } else { "" };
-                let opt = if prop.optional { "?" } else { "" };
+                let opt =
+                    if prop.optional && methods.get(pname).is_none_or(|method| method.optional) {
+                        "?"
+                    } else {
+                        ""
+                    };
+                let ty = methods.get(pname).map_or_else(
+                    || ts_type(&prop.ty),
+                    |method| ts_callable_property_type(method, &prop.ty),
+                );
                 let pname = member_name(pname);
-                let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", ts_type(&prop.ty));
+                let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {ty};");
             }
             for (mname, m) in methods {
-                push_doc(out, &m.doc, &inner);
-                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
-                let optional = if m.optional { "?" } else { "" };
-                let mname = method_prefix(mname);
-                let _ = writeln!(
-                    out,
-                    "{inner}{mname}{optional}{}({}): {ret};",
-                    generics_str(&m.generics),
-                    ts_params_str(&m.params, m.doc.as_ref())
-                );
+                if properties.contains_key(mname) {
+                    continue;
+                }
+                for m in m.signatures() {
+                    push_doc(out, &m.doc, &inner);
+                    let ret =
+                        ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                    let optional = if m.optional { "?" } else { "" };
+                    let mname = method_prefix(mname);
+                    let _ = writeln!(
+                        out,
+                        "{inner}{mname}{optional}{}({}): {ret};",
+                        generics_str(&m.generics),
+                        ts_params_str(&m.params, m.doc.as_ref())
+                    );
+                }
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -1978,18 +2106,21 @@ fn render_ts_type(
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", ts_type(&field.ty));
             }
             for (mname, m) in statics {
-                if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                    continue;
+                for m in m.signatures() {
+                    if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
+                        continue;
+                    }
+                    push_doc(out, &m.doc, &inner);
+                    let ret =
+                        ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                    let mname = member_name(mname);
+                    let _ = writeln!(
+                        out,
+                        "{inner}static {mname}{}({}): {ret};",
+                        generics_str(&m.generics),
+                        ts_params_str(&m.params, m.doc.as_ref())
+                    );
                 }
-                push_doc(out, &m.doc, &inner);
-                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
-                let mname = member_name(mname);
-                let _ = writeln!(
-                    out,
-                    "{inner}static {mname}{}({}): {ret};",
-                    generics_str(&m.generics),
-                    ts_params_str(&m.params, m.doc.as_ref())
-                );
             }
             for (fname, field) in fields {
                 if field.visibility == crate::Visibility::Private
@@ -2019,19 +2150,22 @@ fn render_ts_type(
                 );
             }
             for (mname, m) in methods {
-                if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                    continue;
+                for m in m.signatures() {
+                    if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
+                        continue;
+                    }
+                    push_doc(out, &m.doc, &inner);
+                    let ret =
+                        ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                    let optional = if m.optional { "?" } else { "" };
+                    let mname = member_name(mname);
+                    let _ = writeln!(
+                        out,
+                        "{inner}{mname}{optional}{}({}): {ret};",
+                        generics_str(&m.generics),
+                        ts_params_str(&m.params, m.doc.as_ref())
+                    );
                 }
-                push_doc(out, &m.doc, &inner);
-                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
-                let optional = if m.optional { "?" } else { "" };
-                let mname = member_name(mname);
-                let _ = writeln!(
-                    out,
-                    "{inner}{mname}{optional}{}({}): {ret};",
-                    generics_str(&m.generics),
-                    ts_params_str(&m.params, m.doc.as_ref())
-                );
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -2092,13 +2226,33 @@ fn render_ts_type_with_ctor(
     synthesize_binding: bool,
 ) {
     if let Some(sym) = types.get(name) {
-        push_doc(out, type_doc(&sym.kind), indent);
-        render_ts_type(out, name, &sym.kind, indent, export_prefix, None);
+        if !matches!(sym.kind, TypeKind::Interface { .. }) {
+            push_doc(out, type_doc(&sym.kind), indent);
+        }
+        render_ts_type(
+            out,
+            name,
+            &sym.kind,
+            indent,
+            export_prefix,
+            None,
+            &types.keys().cloned().collect(),
+        );
     }
     let ctor = format!("{name}Constructor");
     if let Some(sym) = types.get(&ctor) {
-        push_doc(out, type_doc(&sym.kind), indent);
-        render_ts_type(out, &ctor, &sym.kind, indent, export_prefix, None);
+        if !matches!(sym.kind, TypeKind::Interface { .. }) {
+            push_doc(out, type_doc(&sym.kind), indent);
+        }
+        render_ts_type(
+            out,
+            &ctor,
+            &sym.kind,
+            indent,
+            export_prefix,
+            None,
+            &types.keys().cloned().collect(),
+        );
         if synthesize_binding {
             let _ = writeln!(out, "{indent}{export_prefix}const {name}: {ctor};\n");
         }
@@ -2119,14 +2273,59 @@ fn render_ts_namespace(
         push_doc(out, value_doc(&sym.kind), &inner);
         render_ts_value(out, vname, &sym.kind, &inner, "");
     }
+    let occupied: std::collections::BTreeSet<_> = ns
+        .types
+        .keys()
+        .cloned()
+        .chain(
+            collect_type_references(&[serde_json::to_value(ns)])
+                .into_iter()
+                .map(|reference| reference.name),
+        )
+        .collect();
     for (tname, sym) in &ns.types {
-        push_doc(out, type_doc(&sym.kind), &inner);
-        render_ts_type(out, tname, &sym.kind, &inner, "", None);
+        if !matches!(sym.kind, TypeKind::Interface { .. }) {
+            push_doc(out, type_doc(&sym.kind), &inner);
+        }
+        render_ts_type(out, tname, &sym.kind, &inner, "", None, &occupied);
     }
     for (nname, sub) in &ns.namespaces {
         render_ts_namespace(out, nname, sub, &inner, "");
     }
     let _ = writeln!(out, "{indent}}}\n");
+}
+
+fn ts_callable_property_type(method: &crate::MethodSig, value: &Type) -> String {
+    let signatures = method
+        .signatures()
+        .map(|signature| {
+            format!(
+                "{}({}): {};",
+                generics_str(&signature.generics),
+                ts_params_str(&signature.params, signature.doc.as_ref()),
+                ts_return_type(
+                    &signature.params,
+                    &signature.ret,
+                    signature.predicate.as_ref(),
+                    signature.doc.as_ref()
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{{ {signatures} }} & {}", ts_intersection_member(value))
+}
+
+fn ts_intersection_member(ty: &Type) -> String {
+    let rendered = ts_type(ty);
+    if matches!(
+        ty,
+        Type::Function { .. } | Type::Union(_) | Type::Conditional { .. }
+    ) {
+        format!("({rendered})")
+    } else {
+        rendered
+    }
 }
 
 fn ts_params_str(params: &[Param], doc: Option<&DocComment>) -> String {
@@ -2279,8 +2478,12 @@ fn ts_type(ty: &Type) -> String {
         Type::KeyOf(_)
         | Type::IndexedAccess { .. }
         | Type::Mapped { .. }
-        | Type::Conditional { .. }
-        | Type::Intersection(_) => ty.to_string(),
+        | Type::Conditional { .. } => ty.to_string(),
+        Type::Intersection(members) => members
+            .iter()
+            .map(ts_intersection_member)
+            .collect::<Vec<_>>()
+            .join(" & "),
         Type::InterfaceRef { name, args, .. }
         | Type::ClassRef { name, args, .. }
         | Type::Alias { name, args, .. } => ts_named_type(name, args),
@@ -2478,16 +2681,16 @@ fn render_type_for(
     audience: DocAudience,
 ) {
     let inner = format!("{indent}  ");
-    let parent = intrinsic_array_parent(sym)
-        .map(|parent| format!(" extends {parent}"))
-        .unwrap_or_default();
     match &sym.kind {
         TypeKind::Interface {
+            extends,
             generics,
             methods,
             properties,
             ..
         } => {
+            let parent =
+                interface_parents(extends, intrinsic_array_parent(sym), ToString::to_string);
             let _ = writeln!(
                 out,
                 "{indent}interface {name}{}{parent} {{",
@@ -2496,21 +2699,35 @@ fn render_type_for(
             for (pname, prop) in properties {
                 push_doc_for(out, &prop.doc, &inner, audience);
                 let ro = if prop.readonly { "readonly " } else { "" };
-                let opt = if prop.optional { "?" } else { "" };
+                let opt =
+                    if prop.optional && methods.get(pname).is_none_or(|method| method.optional) {
+                        "?"
+                    } else {
+                        ""
+                    };
+                let ty = methods.get(pname).map_or_else(
+                    || prop.ty.to_string(),
+                    |method| ts_callable_property_type(method, &prop.ty),
+                );
                 let pname = member_name(pname);
-                let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {};", prop.ty);
+                let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {ty};");
             }
             for (mname, m) in methods {
-                push_doc_for(out, &m.doc, &inner, audience);
-                let mname = method_prefix(mname);
-                let _ = writeln!(
-                    out,
-                    "{inner}{mname}{}{}({}): {};",
-                    if m.optional { "?" } else { "" },
-                    generics_str(&m.generics),
-                    params_str(&m.params, m.doc.as_ref()),
-                    m.ret
-                );
+                if properties.contains_key(mname) {
+                    continue;
+                }
+                for m in m.signatures() {
+                    push_doc_for(out, &m.doc, &inner, audience);
+                    let mname = method_prefix(mname);
+                    let _ = writeln!(
+                        out,
+                        "{inner}{mname}{}{}({}): {};",
+                        if m.optional { "?" } else { "" },
+                        generics_str(&m.generics),
+                        params_str(&m.params, m.doc.as_ref()),
+                        m.ret
+                    );
+                }
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -2566,18 +2783,20 @@ fn render_type_for(
                 let _ = writeln!(out, "{inner}static {ro}{fname}: {};", field.ty);
             }
             for (mname, m) in statics {
-                if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                    continue;
+                for m in m.signatures() {
+                    if static_visibility.get(mname) == Some(&crate::Visibility::Private) {
+                        continue;
+                    }
+                    push_doc_for(out, &m.doc, &inner, audience);
+                    let mname = member_name(mname);
+                    let _ = writeln!(
+                        out,
+                        "{inner}static {mname}{}({}): {};",
+                        generics_str(&m.generics),
+                        params_str(&m.params, m.doc.as_ref()),
+                        m.ret
+                    );
                 }
-                push_doc_for(out, &m.doc, &inner, audience);
-                let mname = member_name(mname);
-                let _ = writeln!(
-                    out,
-                    "{inner}static {mname}{}({}): {};",
-                    generics_str(&m.generics),
-                    params_str(&m.params, m.doc.as_ref()),
-                    m.ret
-                );
             }
             for (fname, field) in fields {
                 if field.visibility == crate::Visibility::Private
@@ -2600,19 +2819,21 @@ fn render_type_for(
                 );
             }
             for (mname, m) in methods {
-                if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
-                    continue;
+                for m in m.signatures() {
+                    if method_visibility.get(mname) == Some(&crate::Visibility::Private) {
+                        continue;
+                    }
+                    push_doc_for(out, &m.doc, &inner, audience);
+                    let mname = member_name(mname);
+                    let _ = writeln!(
+                        out,
+                        "{inner}{mname}{}{}({}): {};",
+                        if m.optional { "?" } else { "" },
+                        generics_str(&m.generics),
+                        params_str(&m.params, m.doc.as_ref()),
+                        m.ret
+                    );
                 }
-                push_doc_for(out, &m.doc, &inner, audience);
-                let mname = member_name(mname);
-                let _ = writeln!(
-                    out,
-                    "{inner}{mname}{}{}({}): {};",
-                    if m.optional { "?" } else { "" },
-                    generics_str(&m.generics),
-                    params_str(&m.params, m.doc.as_ref()),
-                    m.ret
-                );
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
@@ -3821,6 +4042,768 @@ mod tests {
         }
     }
 
+    fn inheritance_package(
+        name: &str,
+        source: &str,
+        dependencies: &[&PackageDeclaration],
+    ) -> PackageDeclaration {
+        crate::compile_package(
+            name,
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source,
+            }],
+            dependencies,
+        )
+        .unwrap_or_else(|errors| panic!("{errors:#?}"))
+        .declaration
+    }
+
+    #[test]
+    fn interface_bases_survive_serialization_and_rendering() {
+        let defs = inheritance_package(
+            "@test/bases",
+            r#"
+            export interface Named { name: string; }
+            export interface Age { age: number; }
+            export interface Pet extends Named, Age { species: string; }
+            export interface Generic<T> { value: T; }
+            export interface Box<T> extends Generic<T>, Partial<Named> { other: T; }
+            export type Both = { name: string; age: number; };
+            export interface Aliased extends Both { active: boolean; }
+            export interface Picked extends Pick<Named, "name"> { age: number; }
+            export interface OptionalBox<T> extends Partial<Generic<T>> { other: T; }
+        "#,
+            &[],
+        );
+        let TypeKind::Interface {
+            extends,
+            properties,
+            ..
+        } = &defs.types["Pet"].kind
+        else {
+            panic!("interface");
+        };
+        assert_eq!(
+            extends.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["Named", "Age"]
+        );
+        assert!(properties.contains_key("name") && properties.contains_key("age"));
+        let TypeKind::Interface { extends, .. } = &defs.types["Box"].kind else {
+            panic!("interface");
+        };
+        assert_eq!(extends[0].to_string(), "Generic<T>");
+        assert!(
+            matches!(&extends[0], Type::InterfaceRef { args, .. } if args == &[Type::TypeVar("T".into())])
+        );
+        let json = serde_json::to_value(&defs).unwrap();
+        assert!(
+            json["types"]["Named"]["kind"]["Interface"]
+                .get("extends")
+                .is_none(),
+            "{json}"
+        );
+        let restored: PackageDeclaration = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored, defs);
+        for rendered in [
+            render_declarations(&restored),
+            render_packages_d_ts(&[&restored], &[]),
+        ] {
+            for header in [
+                "interface Pet extends Named, Age",
+                "interface Box<T> extends Generic<T>, Partial<Named>",
+                "interface OptionalBox<T> extends Partial<Generic<T>>",
+                "interface Aliased extends Both",
+                "interface Picked extends Pick<Named, \"name\">",
+            ] {
+                assert!(rendered.contains(header), "missing {header}: {rendered}");
+            }
+        }
+        let mut legacy = json;
+        legacy["types"]["Pet"]["kind"]["Interface"]
+            .as_object_mut()
+            .unwrap()
+            .remove("extends");
+        let legacy: PackageDeclaration = serde_json::from_value(legacy).unwrap();
+        assert!(
+            matches!(&legacy.types["Pet"].kind, TypeKind::Interface { extends, .. } if extends.is_empty())
+        );
+    }
+
+    #[test]
+    fn interface_bases_accept_imported_object_intersections() {
+        let mut base = PackageDeclaration::with_package("@test/intersection");
+        let mut alias = alias_symbol("@test/intersection", "Both");
+        if let TypeKind::Alias { ty, .. } = &mut alias.kind {
+            *ty = Type::intersection(vec![
+                Type::Object {
+                    fields: BTreeMap::from([(
+                        "name".into(),
+                        crate::ObjectField::required(Type::String),
+                    )]),
+                    index: None,
+                },
+                Type::Object {
+                    fields: BTreeMap::from([(
+                        "age".into(),
+                        crate::ObjectField::required(Type::Number),
+                    )]),
+                    index: None,
+                },
+            ]);
+        }
+        base.types.insert("Both".into(), alias);
+        let derived = inheritance_package(
+            "@test/derived",
+            r#"
+            import { Both } from "@test/intersection";
+            export interface Child extends Both { active: boolean; }
+        "#,
+            &[&base],
+        );
+        let TypeKind::Interface {
+            extends,
+            properties,
+            ..
+        } = &derived.types["Child"].kind
+        else {
+            panic!("interface");
+        };
+        assert_eq!(extends[0].to_string(), "Both");
+        assert_eq!(properties["name"].ty, Type::String);
+        assert_eq!(properties["age"].ty, Type::Number);
+        assert!(
+            render_packages_d_ts(&[&derived], &[&base]).contains("interface Child extends Both")
+        );
+    }
+
+    #[test]
+    fn interface_intersection_bases_keep_generic_methods() {
+        let mut base = inheritance_package(
+            "@test/methods",
+            "export interface Methods { identity<T>(value: T): T; }",
+            &[],
+        );
+        let method_ref = Type::interface_ref(
+            crate::Package("@test/methods".into()),
+            "Methods",
+            base.types["Methods"].mangled_name.clone(),
+            vec![],
+        );
+        let mut alias = alias_symbol("@test/methods", "Both");
+        if let TypeKind::Alias { ty, .. } = &mut alias.kind {
+            *ty = Type::intersection(vec![
+                method_ref,
+                Type::Object {
+                    fields: BTreeMap::from([(
+                        "tag".into(),
+                        crate::ObjectField::required(Type::String),
+                    )]),
+                    index: None,
+                },
+            ]);
+        }
+        base.types.insert("Both".into(), alias);
+        let derived = inheritance_package(
+            "@test/derived",
+            r#"
+            import { Both } from "@test/methods";
+            export interface Child extends Both {}
+            export function use(value: Child): number { return value.identity(3); }
+        "#,
+            &[&base],
+        );
+        let TypeKind::Interface {
+            methods,
+            properties,
+            ..
+        } = &derived.types["Child"].kind
+        else {
+            panic!("interface");
+        };
+        assert_eq!(methods["identity"].generics.len(), 1);
+        assert!(!properties.contains_key("identity"));
+    }
+
+    #[test]
+    fn interface_intersection_bases_keep_narrowed_properties_in_retained_shape() {
+        let mut base = PackageDeclaration::with_package("@test/intersection");
+        let mut alias = alias_symbol("@test/intersection", "Both");
+        if let TypeKind::Alias { ty, .. } = &mut alias.kind {
+            *ty = Type::intersection(
+                [Type::Number, Type::union(vec![Type::Number, Type::String])]
+                    .into_iter()
+                    .map(|ty| Type::Object {
+                        fields: BTreeMap::from([("x".into(), crate::ObjectField::required(ty))]),
+                        index: None,
+                    })
+                    .collect(),
+            );
+        }
+        base.types.insert("Both".into(), alias);
+        let derived = inheritance_package(
+            "@test/derived",
+            r#"
+            import { Both } from "@test/intersection";
+            export interface Child extends Both {}
+        "#,
+            &[&base],
+        );
+        let TypeKind::Interface {
+            extends,
+            properties,
+            ..
+        } = &derived.types["Child"].kind
+        else {
+            panic!("interface");
+        };
+        assert_eq!(properties["x"].ty, Type::Number);
+        let Type::Object { fields, .. } = extends[0].peel() else {
+            panic!("resolved data intersection");
+        };
+        assert_eq!(fields["x"].ty, Type::Number);
+    }
+
+    #[test]
+    fn raw_interface_bases_render_as_fresh_generic_aliases() {
+        let mut defs = inheritance_package(
+            "@test/raw",
+            "export type __submilli_Raw_base0 = number; export interface Raw<T> { own: T; }",
+            &[],
+        );
+        let TypeKind::Interface { extends, .. } = &mut defs.types.get_mut("Raw").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        extends.push(Type::Object {
+            fields: BTreeMap::from([(
+                "value".into(),
+                crate::ObjectField::required(Type::TypeVar("T".into())),
+            )]),
+            index: None,
+        });
+        extends.push(Type::intersection(vec![
+            Type::Object {
+                fields: BTreeMap::from([("x".into(), crate::ObjectField::required(Type::Number))]),
+                index: None,
+            },
+            Type::Object {
+                fields: BTreeMap::from([("y".into(), crate::ObjectField::required(Type::String))]),
+                index: None,
+            },
+        ]));
+        let rendered = render_packages_d_ts(&[&defs], &[]);
+        assert!(
+            rendered.contains("type __submilli_Raw_base0_1<T> = { value: T }"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "interface Raw<T> extends __submilli_Raw_base0_1<T>, __submilli_Raw_base1<T>"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("extends {"), "{rendered}");
+    }
+
+    #[test]
+    fn intersection_method_overloads_keep_order_literals_and_property_signatures() {
+        let mut base = inheritance_package(
+            "@test/overloads",
+            r#"
+            export interface First { read(value: number): "first"; }
+            export interface Second { read(value: number): "second"; }
+            export interface Broad { pick(value: string): "broad"; }
+            export interface Literal { pick(value: "special"): "literal"; }
+            export interface Property { read: (value: string) => string; }
+        "#,
+            &[],
+        );
+        for (name, operands) in [
+            ("AB", vec!["First", "Second"]),
+            ("BA", vec!["Second", "First"]),
+            ("Special", vec!["Broad", "Literal"]),
+            ("Mixed", vec!["First", "Property"]),
+        ] {
+            let ty = Type::intersection(
+                operands
+                    .into_iter()
+                    .map(|name| {
+                        Type::interface_ref(
+                            crate::Package("@test/overloads".into()),
+                            name,
+                            base.types[name].mangled_name.clone(),
+                            vec![],
+                        )
+                    })
+                    .collect(),
+            );
+            let mut alias = alias_symbol("@test/overloads", name);
+            if let TypeKind::Alias { ty: body, .. } = &mut alias.kind {
+                *body = ty;
+            }
+            base.types.insert(name.into(), alias);
+        }
+        let derived = inheritance_package(
+            "@test/derived",
+            r#"
+            import { AB, BA, Special, Mixed } from "@test/overloads";
+            export interface Forward extends AB {}
+            export interface Backward extends BA {}
+            export interface Specialized extends Special {}
+            export interface CallableProperty extends Mixed {}
+            export function first(value: Forward): "first" { return value.read(1); }
+            export function second(value: Backward): "second" { return value.read(1); }
+            export function literal(value: Specialized): "literal" { return value.pick("special"); }
+            export function number(value: CallableProperty): "first" { return value.read(1); }
+            export function string(value: CallableProperty): string { return value.read("ok"); }
+        "#,
+            &[&base],
+        );
+        let restored: PackageDeclaration =
+            serde_json::from_str(&serde_json::to_string(&derived).unwrap()).unwrap();
+        let TypeKind::Interface { methods, .. } = &restored.types["Forward"].kind else {
+            panic!("interface");
+        };
+        assert_eq!(methods["read"].overloads.len(), 1);
+        let rendered = render_packages_d_ts(&[&restored], &[&base]);
+        assert!(
+            rendered.contains("read(value: number): \"first\";"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("read(value: number): \"second\";"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn interface_instance_unions_combine_every_overload_return() {
+        let mut base = inheritance_package(
+            "@test/union-overloads",
+            r#"export interface Box<T> { value: T; read(): boolean; }"#,
+            &[],
+        );
+        let TypeKind::Interface {
+            methods,
+            properties,
+            ..
+        } = &mut base.types.get_mut("Box").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        methods
+            .get_mut("read")
+            .unwrap()
+            .overloads
+            .push(crate::MethodOverload {
+                generics: Default::default(),
+                params: vec![crate::Param::new(
+                    "value",
+                    Type::StringLiteral("value".into()),
+                )],
+                ret: properties["value"].ty.clone(),
+                predicate: None,
+            });
+        inheritance_package(
+            "@test/valid",
+            r#"
+            import { Box } from "@test/union-overloads";
+            export function read(value: Box<number> | Box<string>): number | string { return value.read("value"); }
+            export function chained(value: Box<number> | Box<string>): number | string { return value?.read("value"); }
+        "#,
+            &[&base],
+        );
+        let errors = crate::compile_package(
+            "@test/invalid",
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source: r#"
+                    import { Box } from "@test/union-overloads";
+                    export function wrong(value: Box<number> | Box<string>): number { return value.read("value"); }
+                "#,
+            }],
+            &[&base],
+        ).expect_err("every union arm contributes its overload result");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.severity == crate::Severity::Error),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn overloaded_recursive_method_relations_are_coinductive() {
+        let mut base = inheritance_package(
+            "@test/recursive",
+            r#"
+            export interface A { next(value: A): A; }
+            export interface B { next(value: B): B; }
+        "#,
+            &[],
+        );
+        for name in ["A", "B"] {
+            let TypeKind::Interface { methods, .. } = &mut base.types.get_mut(name).unwrap().kind
+            else {
+                panic!("interface");
+            };
+            methods
+                .get_mut("next")
+                .unwrap()
+                .overloads
+                .push(crate::MethodOverload {
+                    generics: Default::default(),
+                    params: vec![crate::Param::new("value", Type::Number)],
+                    ret: Type::Number,
+                    predicate: None,
+                });
+        }
+        inheritance_package(
+            "@test/use",
+            r#"
+            import { A, B } from "@test/recursive";
+            export function convert(value: A): B { return value; }
+        "#,
+            &[&base],
+        );
+    }
+
+    #[test]
+    fn method_local_generics_shadow_receiver_parameters_in_overloads() {
+        let mut base = inheritance_package(
+            "@test/shadow",
+            "export interface Box<T> { read<U>(value: U): U; }",
+            &[],
+        );
+        let TypeKind::Interface { methods, .. } = &mut base.types.get_mut("Box").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        let method = methods.get_mut("read").unwrap();
+        method.generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
+        method.params[0].ty = Type::TypeVar("T".into());
+        method.ret = Type::TypeVar("T".into());
+        method.overloads.push(crate::MethodOverload {
+            generics: Default::default(),
+            params: vec![crate::Param::new("value", Type::Boolean)],
+            ret: Type::Boolean,
+            predicate: None,
+        });
+        inheritance_package(
+            "@test/use",
+            r#"
+            import { Box } from "@test/shadow";
+            export function string(value: Box<number>): string { return value.read("ok"); }
+        "#,
+            &[&base],
+        );
+    }
+
+    #[test]
+    fn generic_method_bounds_do_not_reuse_an_outer_parameter_identity() {
+        let source = r#"
+            export interface Source<T> { read<V extends number>(value: V): V; }
+            export interface Target<T> { read<U extends T>(value: U): U; }
+            export function invalid<T>(value: Source<T>): Target<T> { return value; }
+        "#;
+        let errors = crate::compile_package(
+            "@test/bounds",
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source,
+            }],
+            &[],
+        )
+        .expect_err("number-constrained method cannot promise every outer parameter");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.severity == crate::Severity::Error)
+        );
+    }
+
+    #[test]
+    fn callable_property_cannot_satisfy_a_universal_generic_overload() {
+        let mut base = inheritance_package(
+            "@test/obligations",
+            r#"
+            export interface Wide { read(value: unknown): unknown; }
+            export interface Generic { read<T>(value: T): T; }
+            export interface Property { read: (value: unknown) => unknown; }
+        "#,
+            &[],
+        );
+        let body = Type::intersection(
+            ["Wide", "Generic"]
+                .into_iter()
+                .map(|name| {
+                    Type::interface_ref(
+                        crate::Package("@test/obligations".into()),
+                        name,
+                        base.types[name].mangled_name.clone(),
+                        vec![],
+                    )
+                })
+                .collect(),
+        );
+        let mut alias = alias_symbol("@test/obligations", "Both");
+        if let TypeKind::Alias { ty, .. } = &mut alias.kind {
+            *ty = body;
+        }
+        base.types.insert("Both".into(), alias);
+        let source = r#"
+            import { Both, Property } from "@test/obligations";
+            interface Target extends Both {}
+            export function invalid(value: Property): Target { return value; }
+        "#;
+        let errors = crate::compile_package(
+            "@test/use",
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source,
+            }],
+            &[&base],
+        )
+        .expect_err("unknown-returning property cannot preserve every T");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.severity == crate::Severity::Error)
+        );
+    }
+
+    #[test]
+    fn unused_constrained_source_method_generics_do_not_restrict_assignability() {
+        inheritance_package(
+            "@test/unused",
+            r#"
+            export interface Source { read<T extends string>(value: number): number; }
+            export interface Target { read(value: number): number; }
+            export function convert(value: Source): Target { return value; }
+        "#,
+            &[],
+        );
+    }
+
+    #[test]
+    fn callable_interface_properties_satisfy_generic_method_obligations() {
+        let mut base = inheritance_package(
+            "@test/callable",
+            r#"
+            export interface FunctionValue { (value: unknown): unknown; }
+            export interface Source { read: FunctionValue; }
+            export interface Target { read<T>(value: T): T; }
+        "#,
+            &[],
+        );
+        // Generic call signatures are supplied by the external front end;
+        // Submilli's source parser still rejects that spelling.
+        let TypeKind::Interface { methods, .. } =
+            &mut base.types.get_mut("FunctionValue").unwrap().kind
+        else {
+            panic!("callable interface");
+        };
+        let call = methods.get_mut("@call").unwrap();
+        call.generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
+        call.params[0].ty = Type::TypeVar("T".into());
+        call.ret = Type::TypeVar("T".into());
+        inheritance_package(
+            "@test/use",
+            r#"
+            import { Source, Target } from "@test/callable";
+            export function convert(value: Source): Target { return value; }
+        "#,
+            &[&base],
+        );
+    }
+
+    #[test]
+    fn shadowed_method_parameters_do_not_determine_receiver_variance() {
+        let mut base = inheritance_package(
+            "@test/variance",
+            "export interface Box<T> { read<U>(value: U): U; }",
+            &[],
+        );
+        let TypeKind::Interface { methods, .. } = &mut base.types.get_mut("Box").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        let read = methods.get_mut("read").unwrap();
+        read.generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
+        read.params[0].ty = Type::TypeVar("T".into());
+        read.ret = Type::TypeVar("T".into());
+        read.overloads.push(crate::MethodOverload {
+            generics: Default::default(),
+            params: vec![crate::Param::new("value", Type::Boolean)],
+            ret: Type::Boolean,
+            predicate: None,
+        });
+        inheritance_package(
+            "@test/use",
+            r#"
+            import { Box } from "@test/variance";
+            export function convert(value: Box<string>): Box<number> { return value; }
+        "#,
+            &[&base],
+        );
+    }
+
+    #[test]
+    fn overloaded_callable_value_constraints_are_enforced_in_assignments_and_bases() {
+        let mut base = inheritance_package(
+            "@test/tagged",
+            r#"
+            export interface Strings { read(value: string): string; }
+            export interface Numbers { read(value: number): number; }
+            export interface Tag { read: { tag: string }; }
+            export interface OptionalTag { read?: { tag: string }; }
+        "#,
+            &[],
+        );
+        for (name, operands) in [
+            ("Plain", vec!["Strings", "Numbers"]),
+            ("Required", vec!["Strings", "OptionalTag"]),
+            ("Tagged", vec!["Strings", "Numbers", "Tag"]),
+        ] {
+            let body = Type::intersection(
+                operands
+                    .into_iter()
+                    .map(|name| {
+                        Type::interface_ref(
+                            crate::Package("@test/tagged".into()),
+                            name,
+                            base.types[name].mangled_name.clone(),
+                            vec![],
+                        )
+                    })
+                    .collect(),
+            );
+            let mut alias = alias_symbol("@test/tagged", name);
+            if let TypeKind::Alias { ty, .. } = &mut alias.kind {
+                *ty = body;
+            }
+            base.types.insert(name.into(), alias);
+        }
+        for source in [
+            r#"
+            import { Required } from "@test/tagged";
+            interface Target extends Required {}
+            class Empty {}
+            export function invalid(value: Empty): Target { return value; }
+        "#,
+            r#"
+            import { Plain, Tagged } from "@test/tagged";
+            interface Source extends Plain {} interface Target extends Tagged {}
+            export function invalid(value: Source): Target { return value; }
+        "#,
+            r#"
+            import { Plain, Tagged } from "@test/tagged";
+            export interface Conflicted extends Tagged, Plain {}
+        "#,
+        ] {
+            let errors = crate::compile_package(
+                "@test/use",
+                crate::ModulePath::from("lib"),
+                &[crate::PackageSourceModule {
+                    path: crate::ModulePath::from("lib"),
+                    source,
+                }],
+                &[&base],
+            )
+            .expect_err("missing callable-value tag must fail");
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.severity == crate::Severity::Error),
+                "{errors:?}"
+            );
+        }
+        let derived = inheritance_package(
+            "@test/valid",
+            r#"
+            import { Tagged, Required } from "@test/tagged";
+            export interface RequiredTarget extends Required {}
+            export interface Target extends Tagged {}
+            export function direct(value: Target): string { return value.read("ok"); }
+            export function optional(value: Target): string { return value.read?.("ok"); }
+        "#,
+            &[&base],
+        );
+        let rendered = render_packages_d_ts(&[&derived], &[&base]);
+        assert!(!rendered.contains("read?:"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "read: { (value: string): string; (value: number): number; } & { tag: string }"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn recursive_callable_value_constraints_preserve_nominal_back_edges() {
+        let mut base = inheritance_package(
+            "@test/recursive-callable",
+            "export interface F { (): number; f(): number; }",
+            &[],
+        );
+        let recursive = Type::interface_ref(
+            crate::Package("@test/recursive-callable".into()),
+            "F",
+            base.types["F"].mangled_name.clone(),
+            vec![],
+        );
+        let TypeKind::Interface { properties, .. } = &mut base.types.get_mut("F").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        properties.insert(
+            "f".into(),
+            crate::PropertySig {
+                ty: recursive,
+                intrinsic: false,
+                optional: false,
+                readonly: false,
+                doc: None,
+            },
+        );
+        inheritance_package(
+            "@test/use",
+            r#"
+            import { F } from "@test/recursive-callable";
+            export interface Derived extends F {}
+            export function call(value: Derived): number { return value.f(); }
+        "#,
+            &[&base],
+        );
+    }
+
+    #[test]
+    fn interface_bases_bring_imports_even_without_inherited_members() {
+        let base = inheritance_package("@test/base", "export interface Empty<T> {}", &[]);
+        let derived = inheritance_package(
+            "@test/derived",
+            r#"
+            import { Empty } from "@test/base";
+            export interface Child<T> extends Empty<T> { value: T; }
+        "#,
+            &[&base],
+        );
+        let rendered = render_packages_d_ts(&[&derived], &[&base]);
+        assert!(
+            rendered.contains("import type { Empty } from \"@test/base\";"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("interface Child<T> extends Empty<T>"),
+            "{rendered}"
+        );
+    }
+
     #[test]
     fn a_class_renders_and_imports_its_parent() {
         let mut leaf = PackageDeclaration::with_package("@pied-piper/leaf");
@@ -4323,6 +5306,7 @@ mod tests {
             doc: None,
         };
         let method = |ret| MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: Vec::new(),
@@ -4451,7 +5435,15 @@ mod tests {
         let docs = render_declarations(&defs);
         let shape = &defs.types.get("Shape").unwrap().kind;
         let mut dts = String::new();
-        render_ts_type(&mut dts, "Shape", shape, "", "export ", None);
+        render_ts_type(
+            &mut dts,
+            "Shape",
+            shape,
+            "",
+            "export ",
+            None,
+            &Default::default(),
+        );
         for rendered in [&docs, &dts] {
             assert!(rendered.contains("readonly area: number;"), "{rendered}"); // get-only
             assert!(rendered.contains("size: number;"), "{rendered}"); // get+set same type
@@ -4469,6 +5461,7 @@ mod tests {
         use crate::{FieldSig, MethodSig, Param, Visibility};
 
         let method = |ret: Type| MethodSig {
+            overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("x", Type::Number)],
@@ -4557,7 +5550,15 @@ mod tests {
         let docs = render_declarations(&defs);
         let calc = &defs.types.get("Calc").unwrap().kind;
         let mut dts = String::new();
-        render_ts_type(&mut dts, "Calc", calc, "", "export ", None);
+        render_ts_type(
+            &mut dts,
+            "Calc",
+            calc,
+            "",
+            "export ",
+            None,
+            &Default::default(),
+        );
         for rendered in [&docs, &dts] {
             assert!(
                 rendered.contains("static make(x: number): number;"),

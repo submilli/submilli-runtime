@@ -273,7 +273,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
     let mut methods = BTreeMap::new();
     methods.insert(
         "throwForStatus".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: Vec::new(),
@@ -286,7 +286,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
     );
     methods.insert(
         "toString".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: Vec::new(),
@@ -301,7 +301,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
     // parses the body and checks it with the descriptor's predicate.
     methods.insert(
         RESPONSE_JSON.to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
             params: Vec::new(),
@@ -319,7 +319,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
             name: "Response".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "Response"),
             declaration_span: Span::at(crate::FileId::HTTP),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods,
                 properties,
@@ -371,7 +371,7 @@ fn insert_download_options_interface(defs: &mut PackageDeclaration) {
             name: "DownloadOptions".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DownloadOptions"),
             declaration_span: Span::at(crate::FileId::HTTP),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
@@ -448,7 +448,7 @@ fn insert_download_result_interface(defs: &mut PackageDeclaration) {
             name: "DownloadResult".to_string(),
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "DownloadResult"),
             declaration_span: Span::at(crate::FileId::HTTP),
-            kind: TypeKind::Interface { index: None,
+            kind: TypeKind::Interface { extends: Vec::new(), index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,

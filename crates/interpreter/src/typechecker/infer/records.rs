@@ -957,7 +957,7 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
-        let mut fields = interface_member_contracts(&properties, &methods, &self.type_limits)
+        let mut fields = interface_member_contracts(&properties, &methods, self.resolver())
             .map_err(type_limit_at(name.span))?;
         let declared: std::collections::BTreeSet<_> = members
             .iter()
@@ -976,7 +976,7 @@ impl Inferer<'_> {
                 continue;
             };
             let contracts =
-                interface_member_contracts(&base.properties, &base.methods, &self.type_limits)
+                interface_member_contracts(&base.properties, &base.methods, self.resolver())
                     .map_err(type_limit_at(annotation.span))?;
             for (member, field) in contracts {
                 if declared.contains(&member) {
@@ -1039,6 +1039,8 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(), CompilerFailure> {
         let target = InterfaceMemberContract {
+            value_constraint: None,
+            additional: Vec::new(),
             field: ObjectField::required((*index.value).clone()),
             generics: Default::default(),
         };
@@ -1061,12 +1063,40 @@ impl Inferer<'_> {
     ) -> Result<bool, CompilerFailure> {
         Ok(left.field.optional == right.field.optional
             && left.field.readonly == right.field.readonly
+            && left.additional.len() == right.additional.len()
             && left.generics.len() == right.generics.len()
             && self.interface_member_assignable(left, right, opaque)?
             && self.interface_member_assignable(right, left, opaque)?)
     }
 
     fn interface_member_assignable(
+        &mut self,
+        actual: &InterfaceMemberContract,
+        expected: &InterfaceMemberContract,
+        opaque: &BTreeMap<String, Type>,
+    ) -> Result<bool, CompilerFailure> {
+        if let Some(constraint) = &expected.value_constraint {
+            let actual = actual.value_constraint.as_ref().unwrap_or(&actual.field.ty);
+            if !self.interface_type_assignable(actual, constraint, opaque) {
+                return Ok(false);
+            }
+        }
+        for target in std::iter::once(expected).chain(expected.additional.iter()) {
+            let mut covered = false;
+            for source in std::iter::once(actual).chain(actual.additional.iter()) {
+                if self.interface_single_member_assignable(source, target, opaque)? {
+                    covered = true;
+                    break;
+                }
+            }
+            if !covered {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn interface_single_member_assignable(
         &mut self,
         actual: &InterfaceMemberContract,
         expected: &InterfaceMemberContract,
@@ -1143,6 +1173,45 @@ impl Inferer<'_> {
         // and calling conventions survive inheritance.
         let ty = self.resolve_type_inner(base)?;
         self.check_named_type_constraints(&ty, base.span)?;
+        let ty = self
+            .resolve_interface_base_shape(&ty, base.span)
+            .map_err(type_limit_at(base.span))?;
+        self.interface_contract_for_type(ty, base.span, 1)
+    }
+
+    /// Mapped heritage needs a known member set, not concrete field values:
+    /// `Partial<Base<T>>` has known keys even though its properties mention T.
+    fn resolve_interface_base_shape(
+        &mut self,
+        ty: &Type,
+        span: Span,
+    ) -> Result<Type, TypeTooLarge> {
+        let mapped = crate::type_size::map_children(ty, |child| {
+            self.resolve_interface_base_shape(child, span)
+        })?;
+        if let Type::AliasRef { mangled, args, .. } = &mapped
+            && let Some(utility) = super::utility_types::utility(mangled)
+        {
+            match super::utility_types::evaluate(utility, args, self.resolver()) {
+                super::utility_types::Evaluated::Resolved(body) => {
+                    return Ok(super::utility_types::label(utility, args.clone(), body));
+                }
+                super::utility_types::Evaluated::Invalid(Some(reason)) => self.error(span, reason),
+                _ => {}
+            }
+        }
+        Ok(mapped)
+    }
+
+    fn interface_contract_for_type(
+        &mut self,
+        ty: Type,
+        span: Span,
+        depth: u32,
+    ) -> Result<Option<InterfaceContract>, CompilerFailure> {
+        if depth > crate::compiler_limits::MAX_TYPE_DEPTH {
+            return Err(type_limit_at(span)(TypeTooLarge::Depth));
+        }
         let (methods, properties, index) = match ty.peel() {
             Type::InterfaceRef {
                 mangled,
@@ -1170,18 +1239,17 @@ impl Inferer<'_> {
                     .collect();
                 let substitute = |ty: &Type| {
                     substitute_typevars(ty, &bindings, &self.type_limits)
-                        .map_err(type_limit_at(base.span))
+                        .map_err(type_limit_at(span))
                 };
                 let methods = methods
                     .into_iter()
                     .map(|(name, mut method)| {
-                        for bound in method.generics.constraints.values_mut() {
-                            *bound = substitute(bound)?;
-                        }
-                        for param in &mut method.params {
-                            param.ty = substitute(&param.ty)?;
-                        }
-                        method.ret = substitute(&method.ret)?;
+                        method = super::generic::instantiate_method_signature(
+                            &method,
+                            &bindings,
+                            &self.type_limits,
+                        )
+                        .map_err(type_limit_at(span))?;
                         Ok((name, method))
                     })
                     .collect::<Result<_, CompilerFailure>>()?;
@@ -1196,6 +1264,118 @@ impl Inferer<'_> {
                     .map(|index| index.try_map_types(substitute))
                     .transpose()?;
                 (methods, properties, index)
+            }
+            Type::Intersection(bases) => {
+                let mut combined = Type::Object {
+                    fields: BTreeMap::new(),
+                    index: None,
+                };
+                let mut callable: BTreeMap<String, crate::MethodSig> = BTreeMap::new();
+                let mut method_names = std::collections::BTreeSet::new();
+                for base in bases {
+                    let Some(contract) =
+                        self.interface_contract_for_type(base.clone(), span, depth + 1)?
+                    else {
+                        return Ok(None);
+                    };
+                    // A callable property participates in the same overload
+                    // set as a method; preserve each operand's source order.
+                    for (name, property) in &contract.properties {
+                        if let Some(mut signature) =
+                            self.resolver().callable_method_signature(&property.ty)
+                        {
+                            signature.optional |= property.optional;
+                            if let Some(existing) = callable.get_mut(name) {
+                                existing.append_signatures(signature);
+                            } else {
+                                callable.insert(name.clone(), signature);
+                            }
+                        }
+                    }
+                    for (name, signature) in contract.methods {
+                        method_names.insert(name.clone());
+                        if let Some(existing) = callable.get_mut(&name) {
+                            existing.append_signatures(signature);
+                        } else {
+                            callable.insert(name, signature);
+                        }
+                    }
+                    let fields = contract
+                        .properties
+                        .into_iter()
+                        .map(|(name, property)| {
+                            (
+                                name,
+                                ObjectField {
+                                    ty: property.ty,
+                                    optional: property.optional,
+                                    readonly: property.readonly,
+                                    method: false,
+                                },
+                            )
+                        })
+                        .collect();
+                    let body = Type::Object {
+                        fields,
+                        index: contract.index,
+                    };
+                    combined = self
+                        .assign_intersection(&combined, &body, 1, &mut self.type_limits.budget())
+                        .map_err(type_limit_at(span))?;
+                }
+                let Some(mut contract) =
+                    self.interface_contract_for_type(combined.clone(), span, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                for (name, signature) in callable {
+                    if method_names.contains(&name) {
+                        // Plain function properties contribute only call
+                        // signatures. Other property types can also constrain
+                        // the callable value itself (for example its fields).
+                        if contract.properties.get(&name).is_some_and(|property| {
+                            self.resolver().callable_value_constraint(&property.ty) == Type::Unknown
+                        }) {
+                            contract.properties.remove(&name);
+                        }
+                        contract.methods.insert(name, signature);
+                    }
+                }
+                // Concrete data intersections resolve to one shape. Keep their
+                // alias label while sharing that resolved shape with validators.
+                contract.ty = if contract.methods.is_empty() {
+                    let combined = Type::Object {
+                        fields: contract
+                            .properties
+                            .iter()
+                            .map(|(name, property)| {
+                                (
+                                    name.clone(),
+                                    ObjectField {
+                                        ty: property.ty.clone(),
+                                        optional: property.optional,
+                                        readonly: property.readonly,
+                                        method: false,
+                                    },
+                                )
+                            })
+                            .collect(),
+                        index: contract.index.clone(),
+                    };
+                    match ty {
+                        Type::Alias {
+                            package,
+                            name,
+                            mangled,
+                            args,
+                            ..
+                        } => Type::alias_ty(package, name, mangled, args, Box::new(combined)),
+                        _ => combined,
+                    }
+                } else {
+                    ty
+                };
+                return Ok(Some(contract));
             }
             Type::Object { fields, index } => {
                 let properties = fields
@@ -1217,7 +1397,7 @@ impl Inferer<'_> {
             }
             _ => {
                 self.error(
-                    base.span,
+                    span,
                     "interface base must be an interface or structural object type".into(),
                 );
                 return Ok(None);
@@ -1237,78 +1417,114 @@ impl Inferer<'_> {
 fn interface_member_contracts(
     properties: &BTreeMap<String, crate::PropertySig>,
     methods: &BTreeMap<String, crate::MethodSig>,
-    limits: &TypeLimits,
+    resolver: TypeResolver<'_>,
 ) -> Result<BTreeMap<String, InterfaceMemberContract>, TypeTooLarge> {
-    let mut fields: BTreeMap<String, InterfaceMemberContract> = properties
-        .iter()
-        .map(|(name, property)| {
-            (
-                name.clone(),
-                InterfaceMemberContract {
-                    field: ObjectField {
-                        ty: property.ty.clone(),
-                        optional: property.optional,
-                        readonly: property.readonly,
-                        method: false,
-                    },
-                    generics: Default::default(),
-                },
-            )
-        })
-        .collect();
-    for (name, method) in methods {
-        let bindings = method
-            .generics
-            .iter()
-            .enumerate()
-            .map(|(i, name)| (name.clone(), Type::TypeVar(format!("$method{i}"))))
-            .collect();
-        let generics = crate::GenericParameters {
-            names: (0..method.generics.len())
-                .map(|i| format!("$method{i}"))
-                .collect(),
-            constraints: Box::new(
-                method
-                    .generics
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, name)| {
-                        method.generics.constraints.get(name).map(|bound| {
-                            substitute_typevars(bound, &bindings, limits)
-                                .map(|bound| (format!("$method{i}"), bound))
-                        })
-                    })
-                    .collect::<Result<_, _>>()?,
-            ),
-        };
-        let ty = Type::Function {
-            params: method
-                .params
-                .iter()
-                .map(|p| {
-                    substitute_typevars(&p.ty, &bindings, limits)
-                        .map(|ty| crate::ObjectField::widen_optional(p.is_omittable(), ty))
-                })
-                .collect::<Result<_, _>>()?,
-            ret: Box::new(substitute_typevars(&method.ret, &bindings, limits)?),
-            predicate: None,
-            has_rest: method.params.last().is_some_and(|p| p.rest),
-            optional: crate::package_declaration::optional_parameter_count(&method.params),
-        };
-        fields.insert(
-            name.clone(),
+    let limits = resolver.limits;
+    let mut fields = BTreeMap::new();
+    for (name, property) in properties {
+        let mut contract = if let Some(signature) = resolver.callable_method_signature(&property.ty)
+        {
+            let mut contract = interface_method_contract(&signature, limits)?;
+            contract.additional = signature
+                .signatures()
+                .skip(1)
+                .map(|signature| interface_method_contract(&signature, limits))
+                .collect::<Result<_, _>>()?;
+            contract.field.method = false;
+            contract
+        } else {
             InterfaceMemberContract {
+                value_constraint: None,
+                additional: Vec::new(),
                 field: ObjectField {
-                    ty,
-                    optional: method.optional,
-                    readonly: false,
-                    method: true,
+                    ty: property.ty.clone(),
+                    optional: property.optional,
+                    readonly: property.readonly,
+                    method: false,
                 },
-                generics,
-            },
-        );
+                generics: Default::default(),
+            }
+        };
+        let constraint = resolver.callable_value_constraint(&property.ty);
+        if constraint != Type::Unknown && resolver.callable_method_signature(&property.ty).is_some()
+        {
+            contract.value_constraint = Some(constraint);
+        }
+        contract.field.optional = property.optional;
+        contract.field.readonly = property.readonly;
+        fields.insert(name.clone(), contract);
+    }
+    for (name, method) in methods {
+        let mut contract = interface_method_contract(method, limits)?;
+        contract.additional = method
+            .signatures()
+            .skip(1)
+            .map(|signature| interface_method_contract(&signature, limits))
+            .collect::<Result<_, _>>()?;
+        if let Some(property) = properties.get(name) {
+            let constraint = resolver.callable_value_constraint(&property.ty);
+            if constraint != Type::Unknown {
+                contract.value_constraint = Some(constraint);
+            }
+        }
+        fields.insert(name.clone(), contract);
     }
     Ok(fields)
+}
+
+fn interface_method_contract(
+    method: &crate::MethodSig,
+    limits: &TypeLimits,
+) -> Result<InterfaceMemberContract, TypeTooLarge> {
+    let bindings = method
+        .generics
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.clone(), Type::TypeVar(format!("$method{i}"))))
+        .collect();
+    let generics = crate::GenericParameters {
+        names: (0..method.generics.len())
+            .map(|i| format!("$method{i}"))
+            .collect(),
+        constraints: Box::new(
+            method
+                .generics
+                .iter()
+                .enumerate()
+                .filter_map(|(i, name)| {
+                    method.generics.constraints.get(name).map(|bound| {
+                        substitute_typevars(bound, &bindings, limits)
+                            .map(|bound| (format!("$method{i}"), bound))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+    };
+    let ty = Type::Function {
+        params: method
+            .params
+            .iter()
+            .map(|p| {
+                substitute_typevars(&p.ty, &bindings, limits)
+                    .map(|ty| crate::ObjectField::widen_optional(p.is_omittable(), ty))
+            })
+            .collect::<Result<_, _>>()?,
+        ret: Box::new(substitute_typevars(&method.ret, &bindings, limits)?),
+        predicate: None,
+        has_rest: method.params.last().is_some_and(|p| p.rest),
+        optional: crate::package_declaration::optional_parameter_count(&method.params),
+    };
+    Ok(InterfaceMemberContract {
+        value_constraint: None,
+        field: ObjectField {
+            ty,
+            optional: method.optional,
+            readonly: false,
+            method: true,
+        },
+        generics,
+        additional: Vec::new(),
+    })
 }
 
 struct InterfaceContract {
@@ -1320,6 +1536,8 @@ struct InterfaceContract {
 }
 
 struct InterfaceMemberContract {
+    value_constraint: Option<Type>,
+    additional: Vec<InterfaceMemberContract>,
     field: ObjectField,
     generics: crate::GenericParameters,
 }

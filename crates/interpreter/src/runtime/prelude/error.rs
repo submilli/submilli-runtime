@@ -1058,7 +1058,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 constructor_visibility: crate::Visibility::Public,
                 statics: BTreeMap::from([(
                     "isError".to_string(),
-                    MethodSig {
+                    MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: vec![Param::with_default(
@@ -1092,7 +1092,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             name: "ErrorOptions".to_string(),
             mangled_name: crate::mangle::prelude("ErrorOptions"),
             declaration_span: Span::at(crate::FileId::PRELUDE),
-            kind: TypeKind::Interface {
+            kind: TypeKind::Interface { extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),

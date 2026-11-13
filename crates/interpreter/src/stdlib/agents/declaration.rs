@@ -133,6 +133,7 @@ fn insert_agent_info_interface(defs: &mut PackageDeclaration) {
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, "AgentInfo"),
             declaration_span: Span::at(crate::FileId::AGENTS),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 methods: BTreeMap::new(),

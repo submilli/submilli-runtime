@@ -205,7 +205,7 @@ fn package_declaration_with_type_operators_links_from_a_consumer() {
 /// How the placeholders over `T` and `K` are spelled once replaced.
 const MAPPED: &str = "{ [K in keyof T as K]?: T[K] }";
 const CONDITIONAL: &str = "T extends (infer E)[] ? E : boolean";
-const INTERSECTION: &str = "K & T";
+const INTERSECTION: &str = "T & K";
 
 /// Function parameter and return types, and alias bodies, as tsc spells
 /// them.

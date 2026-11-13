@@ -354,7 +354,14 @@ impl VarianceWalk<'_, '_> {
                     .zip(markers.iter().cloned())
                     .collect();
                 for sig in methods.values() {
-                    self.method(&sig.params, &sig.ret, &bindings);
+                    for sig in sig.signatures() {
+                        let bindings = bindings
+                            .iter()
+                            .filter(|(name, _)| !sig.generics.names.contains(name))
+                            .map(|(name, ty)| (name.clone(), ty.clone()))
+                            .collect();
+                        self.method(&sig.params, &sig.ret, &bindings);
+                    }
                 }
                 for sig in properties.values() {
                     self.substituted(&sig.ty, &bindings, Polarity::Covariant);
@@ -393,7 +400,9 @@ impl VarianceWalk<'_, '_> {
             self.substituted(&field.ty, bindings, Polarity::Covariant);
         }
         for sig in methods.values() {
-            self.method(&sig.params, &sig.ret, bindings);
+            for sig in sig.signatures() {
+                self.method(&sig.params, &sig.ret, bindings);
+            }
         }
         // An accessor is a property: its setter's parameter is the property's
         // type, not a method parameter.

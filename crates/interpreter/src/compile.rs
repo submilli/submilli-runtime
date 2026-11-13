@@ -1518,6 +1518,7 @@ mod importless_library_tests {
         methods.insert(
             "size".to_string(),
             MethodSig {
+                overloads: Vec::new(),
                 optional: false,
                 generics: Default::default(),
                 params: Vec::new(),
@@ -1533,6 +1534,7 @@ mod importless_library_tests {
                 mangled_name: package_symbol(SYNTH, "Widget"),
                 declaration_span: Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
+                    extends: Vec::new(),
                     index: None,
                     generics: Default::default(),
                     methods,

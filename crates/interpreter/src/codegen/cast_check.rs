@@ -282,6 +282,23 @@ fn emit_structural_test_inner(
             }
             diagnostic::union_end(emitter, ctx, union)?;
         }
+        // Resolved intersection bases can retain compound property meets
+        // (arrays, recursive interfaces, or indexed objects). Every operand
+        // must accept the same value; don't erase these validator constraints.
+        Type::Intersection(members) => {
+            emitter.instruction(Instruction::I32Const(1));
+            for member in members {
+                emit_structural_test_inner(
+                    emitter,
+                    ctx,
+                    value_local,
+                    member,
+                    interface_stack,
+                    validator_state,
+                )?;
+                emitter.instruction(Instruction::I32And);
+            }
+        }
         Type::Null => {
             emitter.instruction(Instruction::LocalGet(value_local));
             emitter.instruction(Instruction::RefIsNull);
@@ -589,7 +606,7 @@ fn emit_structural_test_inner(
             emitter.emit_end();
         }
         // Type operators (`keyof T`, `T[K]`, mapped, conditional and
-        // intersection types) and a utility over `T` are erased like `T`, with
+        // types) and a utility over `T` are erased like `T`, with
         // no descriptor of their own to test against (casts to them are
         // rejected at typecheck, SUB-2152), so a read guard over one admits the
         // value. So does one codegen instantiated (`Partial<{ a: number }>` for

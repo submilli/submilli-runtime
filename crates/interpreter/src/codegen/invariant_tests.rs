@@ -22,7 +22,8 @@ pub(super) fn with_context_and_strings<T>(
 ) -> T {
     let bigints = super::BigIntPool::default();
     let line_index = LineIndex::new("").unwrap();
-    let validator_bodies = super::recursive_validators::ValidatorBodies::collect(ta, []);
+    let validator_bodies =
+        super::recursive_validators::ValidatorBodies::collect(ta, []).expect("validator bodies");
     let type_info = crate::TypeInfoTable::default();
     action(&CodegenCtx {
         ta,

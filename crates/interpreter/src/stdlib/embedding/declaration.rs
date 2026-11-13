@@ -131,7 +131,7 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
     let mut methods = BTreeMap::new();
     methods.insert(
         "vector".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("index", Type::Number)],
@@ -145,7 +145,7 @@ fn insert_embeddings_interface(defs: &mut PackageDeclaration) {
     );
     methods.insert(
         "bytes".to_string(),
-        MethodSig {
+        MethodSig { overloads: Vec::new(),
             optional: false,
             generics: Default::default(),
             params: vec![Param::new("index", Type::Number)],
@@ -227,6 +227,7 @@ fn insert_interface(
             mangled_name: crate::mangle::package_symbol(MODULE_NAME, name),
             declaration_span: Span::at(crate::FileId::EMBEDDING),
             kind: TypeKind::Interface {
+                extends: Vec::new(),
                 index: None,
                 generics: Default::default(),
                 dispatch: if methods.is_empty() {

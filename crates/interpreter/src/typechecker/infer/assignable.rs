@@ -95,7 +95,10 @@ impl<'a> TypeResolver<'a> {
             generics.iter().cloned().zip(args.iter().cloned()).collect();
         let mut out: BTreeMap<String, ObjectField> = BTreeMap::new();
         for (member, sig) in methods {
-            if !sig.generics.is_empty() {
+            if sig
+                .signatures()
+                .any(|signature| !signature.generics.is_empty())
+            {
                 continue;
             }
             out.insert(
@@ -109,11 +112,20 @@ impl<'a> TypeResolver<'a> {
             );
         }
         for (member, sig) in properties {
+            let ty = if methods.contains_key(member) {
+                self.callable_value_constraint(&sig.ty)
+            } else {
+                sig.ty.clone()
+            };
+            if methods.contains_key(member) && ty == Type::Unknown {
+                continue;
+            }
             out.insert(
                 member.clone(),
                 ObjectField {
-                    ty: substitute_or_record(&sig.ty, &bindings, self.limits),
-                    optional: sig.optional,
+                    ty: substitute_or_record(&ty, &bindings, self.limits),
+                    optional: sig.optional
+                        && methods.get(member).is_none_or(|method| method.optional),
                     readonly: sig.readonly,
                     method: false,
                 },
@@ -213,7 +225,9 @@ impl<'a> TypeResolver<'a> {
                     return;
                 };
                 for (name, sig) in methods {
-                    if !sig.generics.is_empty()
+                    if sig
+                        .signatures()
+                        .any(|signature| !signature.generics.is_empty())
                         || method_visibility.get(name).copied() == Some(crate::Visibility::Private)
                     {
                         continue;
@@ -244,6 +258,13 @@ impl<'a> TypeResolver<'a> {
     /// A method's signature as a function type, with the class's arguments
     /// substituted.
     pub(super) fn method_type(&self, sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> Type {
+        if !sig.overloads.is_empty() {
+            return Type::intersection(
+                sig.signatures()
+                    .map(|signature| self.method_type(&signature, bindings))
+                    .collect(),
+            );
+        }
         Type::Function {
             params: sig
                 .params
@@ -326,7 +347,56 @@ impl<'a> TypeResolver<'a> {
         else {
             return Vec::new();
         };
-        self.implements_form_failures(class_mangled, class_args, &iface_form)
+        let mut failures = self.implements_form_failures(class_mangled, class_args, &iface_form);
+        let actual = Type::class_ref(
+            crate::Package("".into()),
+            "",
+            class_mangled.clone(),
+            class_args.to_vec(),
+        );
+        let expected = Type::interface_ref(
+            crate::Package("".into()),
+            iface_name,
+            iface_mangled.clone(),
+            iface_args.to_vec(),
+        );
+        failures.retain(|failure| match failure {
+            ImplementsFailure::Missing(member) | ImplementsFailure::Incompatible { member, .. } => {
+                !iface_form.get(member).is_none_or(|field| field.method)
+                    || self.method_relation(&actual, &expected, member, &mut Vec::new())
+                        != Some(true)
+            }
+            _ => true,
+        });
+        if let Some(symbol) = self.lookup(iface_mangled, iface_name)
+            && let TypeKind::Interface { methods, .. } = &symbol.kind
+        {
+            for (member, signature) in methods {
+                if signature.generics.is_empty() && signature.overloads.is_empty() {
+                    continue;
+                }
+                let compatible = self.method_relation(&actual, &expected, member, &mut Vec::new());
+                if compatible != Some(true)
+                    && !(compatible.is_none() && signature.optional)
+                    && !failures.iter().any(|failure| match failure {
+                        ImplementsFailure::Missing(name)
+                        | ImplementsFailure::Incompatible { member: name, .. }
+                        | ImplementsFailure::NotReadable { member: name, .. }
+                        | ImplementsFailure::NotWritable { member: name, .. }
+                        | ImplementsFailure::OptionalityMismatch { member: name, .. } => {
+                            name == member
+                        }
+                    })
+                {
+                    failures.push(ImplementsFailure::Incompatible {
+                        member: member.clone(),
+                        expected: self.method_type(signature, &BTreeMap::new()).to_string(),
+                        actual: "method signature".into(),
+                    });
+                }
+            }
+        }
+        failures
     }
 
     /// The members of `class_mangled` at `class_args` that fail an `implements`
@@ -737,7 +807,7 @@ pub(crate) fn strict_subtype_union(types: Vec<Type>, resolver: TypeResolver) -> 
     Type::union(members)
 }
 
-fn assignable_rec(
+pub(super) fn assignable_rec(
     actual: &Type,
     expected: &Type,
     types: TypeResolver,
@@ -754,6 +824,16 @@ fn assignable_rec(
     }
     if let Some(expected) = super::utility_types::evaluate_concrete_operator(expected, types) {
         return assignable_rec(actual, &expected, types, seen);
+    }
+    if let Type::Intersection(members) = expected.without_aliases() {
+        return members
+            .iter()
+            .all(|member| assignable_rec(actual, member, types, seen));
+    }
+    if let Type::Intersection(members) = actual.without_aliases() {
+        return members
+            .iter()
+            .any(|member| assignable_rec(member, expected, types, seen));
     }
     // `NoInfer<X>` is `X` and `NonNullable<X>` is `X & {}`, before the
     // refinement rules below compare `X & {}` piecewise.
@@ -1189,17 +1269,38 @@ fn assignable_rec(
                     Some(act) => {
                         !types.class_property_is_write_only(ma, aa, member)
                             && (exp.optional || !act.optional)
-                            && types.class_member_assignable(
-                                ma,
-                                aa,
-                                member,
-                                &act.read_ty(),
-                                &exp.read_ty(),
-                                seen,
-                            )
+                            && (if exp.method {
+                                types
+                                    .method_relation(actual, expected, member, seen)
+                                    .unwrap_or_else(|| {
+                                        types.class_member_assignable(
+                                            ma,
+                                            aa,
+                                            member,
+                                            &act.read_ty(),
+                                            &exp.read_ty(),
+                                            seen,
+                                        )
+                                    })
+                            } else {
+                                types.class_member_assignable(
+                                    ma,
+                                    aa,
+                                    member,
+                                    &act.read_ty(),
+                                    &exp.read_ty(),
+                                    seen,
+                                )
+                            })
                     }
-                    None => exp.optional,
+                    None => {
+                        exp.optional
+                            || exp.method
+                                && types.method_relation(actual, expected, member, seen)
+                                    == Some(true)
+                    }
                 })
+                && types.required_methods_satisfied(actual, expected, seen)
         }
         (Type::ClassRef { mangled, args, .. }, Type::Object { fields, index }) => {
             let Some(class_form) = types.class_full_form(mangled, args) else {
@@ -1392,7 +1493,7 @@ fn assignable_rec(
             seen.push(key);
             let result = assignable_rec(&a, &e, types, seen);
             seen.pop();
-            result
+            result && types.required_methods_satisfied(actual, expected, seen)
         }
         _ => actual == expected,
     }
@@ -1706,12 +1807,24 @@ fn satisfies_structurally(
         .all(|(member, exp)| match actual_form.get(member) {
             Some(act) => {
                 (exp.optional || !act.optional)
-                    && assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
+                    && (if exp.method {
+                        types
+                            .method_relation(actual, expected, member, seen)
+                            .unwrap_or_else(|| {
+                                assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
+                            })
+                    } else {
+                        assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
+                    })
             }
-            None => exp.optional,
+            None => {
+                exp.optional
+                    || exp.method
+                        && types.method_relation(actual, expected, member, seen) == Some(true)
+            }
         });
     seen.pop();
-    ok
+    ok && types.required_methods_satisfied(actual, expected, seen)
 }
 
 /// Expansive recursion produces fresh instantiations forever, so exact-pair
@@ -1825,9 +1938,12 @@ pub(super) fn has_required_generic_method(
     else {
         return false;
     };
-    methods
-        .values()
-        .any(|sig| !sig.generics.is_empty() && !sig.optional)
+    methods.values().any(|sig| {
+        !sig.optional
+            && sig
+                .signatures()
+                .any(|signature| !signature.generics.is_empty())
+    })
 }
 
 /// The full member form of `ty` when it is a non-host-backed `InterfaceRef`
@@ -3198,6 +3314,7 @@ mod tests {
             methods.insert(
                 "m".to_string(),
                 MethodSig {
+                    overloads: Vec::new(),
                     optional: false,
                     generics: Default::default(),
                     params: Vec::new(),
@@ -3216,6 +3333,7 @@ mod tests {
                 mangled_name: crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, name),
                 declaration_span: crate::Span::at(crate::FileId(0)),
                 kind: TypeKind::Interface {
+                    extends: Vec::new(),
                     index: None,
                     generics: Default::default(),
                     methods,
