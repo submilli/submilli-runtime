@@ -40,7 +40,8 @@ pub struct PhaseTimings {
     /// Lexing, parsing and pattern lowering: [`FrontEnd::parse_script`]. Zero
     /// unless the caller that parsed records it.
     pub parse: Duration,
-    /// Type inference plus the rule pass: [`ParsedScript::check`].
+    /// [`ParsedScript::check`] (inference and the front end's rules) plus
+    /// Submilli's rules.
     pub typecheck: Duration,
     pub capture: Duration,
     pub desugar: Duration,
@@ -245,35 +246,6 @@ fn test_codegen_owner(
     declaration
 }
 
-/// What a package's rules resolve its types against, in the order package
-/// inference saw them: everything it may import by name, a declared
-/// dependency winning over a runtime package of the same name, then the
-/// transitive declarations it may not import. Keep in step with how
-/// `infer_package_with_rules` builds `packages_by_name` and
-/// `type_only_packages`.
-fn package_rule_dependencies<'a>(request: &PackageRequest<'a>) -> Vec<&'a PackageDeclaration> {
-    let mut importable: BTreeMap<&str, &PackageDeclaration> = BTreeMap::new();
-    for declaration in request
-        .stdlib
-        .iter()
-        .chain(request.prelude)
-        .chain(request.host)
-        .chain(request.dependencies)
-    {
-        importable.insert(&declaration.package_name, declaration);
-    }
-    let type_only: BTreeMap<&str, &PackageDeclaration> = request
-        .transitive
-        .iter()
-        .filter(|declaration| !importable.contains_key(declaration.package_name.as_str()))
-        .map(|declaration| (declaration.package_name.as_str(), *declaration))
-        .collect();
-    importable
-        .into_values()
-        .chain(type_only.into_values())
-        .collect()
-}
-
 /// Register `modules` in a new [`Sources`], in order, for a [`PackageRequest`].
 pub fn package_sources(modules: &[PackageSourceModule<'_>]) -> Result<Sources, CompileError> {
     let mut sources = Sources::new();
@@ -364,7 +336,7 @@ fn compile_checked_package(
         crate::typechecker::rules::check_package_submilli(
             &ta,
             &declaration,
-            &package_rule_dependencies(request),
+            &crate::front_end::PackageDeclarations::of(request).rule_dependencies(),
         )
         .map_err(|error| error.with_prior_diagnostics(&diagnostics))?,
     );

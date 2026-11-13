@@ -533,8 +533,6 @@ fn infer_package_with_rules<'a>(
             CompileError::from(inference_failure("module source is missing"))
                 .with_prior_diagnostics(&diagnostics)
         })?;
-    // `compile::package_rule_dependencies` rebuilds this order for the
-    // engine's rule pass; keep the two in step.
     let packages_by_name: BTreeMap<&str, &PackageDeclaration> = external_packages
         .values()
         .map(|d| (d.package_name.as_str(), d))

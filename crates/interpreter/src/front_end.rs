@@ -66,22 +66,81 @@ pub fn script_request<'a>(stdlib: &'a [&'a PackageDeclaration]) -> ScriptRequest
     }
 }
 
-/// What a script's rules resolve its types against, in the order inference
-/// saw them: the runtime's, the stdlib's, what it imports, then the
-/// transitive declarations.
-pub(crate) fn script_rule_dependencies<'a>(
-    request: &ScriptRequest<'a>,
-) -> Vec<&'a PackageDeclaration> {
-    let mut dependencies: Vec<&PackageDeclaration> = request
+/// What a script may import, in the order inference reads it: the runtime's,
+/// the stdlib's, then its own declarations ([`script_declarations`]).
+fn script_importable<'a>(request: &ScriptRequest<'a>) -> Vec<&'a PackageDeclaration> {
+    let mut importable: Vec<&PackageDeclaration> = request
         .prelude
         .iter()
         .chain(request.host)
         .chain(request.stdlib)
         .copied()
         .collect();
-    dependencies.extend(script_declarations(request));
+    importable.extend(script_declarations(request));
+    importable
+}
+
+/// What a script's rules resolve its types against: what inference resolved
+/// against ([`script_importable`]), then the transitive declarations.
+pub(crate) fn script_rule_dependencies<'a>(
+    request: &ScriptRequest<'a>,
+) -> Vec<&'a PackageDeclaration> {
+    let mut dependencies = script_importable(request);
     dependencies.extend_from_slice(request.transitive);
     dependencies
+}
+
+/// The declarations a package is inferred and checked against. Package
+/// inference takes the two maps, and the rules take
+/// [`PackageDeclarations::rule_dependencies`], so both see the same packages.
+pub(crate) struct PackageDeclarations<'a> {
+    /// What the package may import, by name: the stdlib's, the prelude's and
+    /// the host's, a declared dependency winning over a runtime package of the
+    /// same name.
+    importable: BTreeMap<&'a str, &'a PackageDeclaration>,
+    /// What the dependencies depend on that the package may not import.
+    type_only: BTreeMap<&'a str, &'a PackageDeclaration>,
+}
+
+impl<'a> PackageDeclarations<'a> {
+    pub(crate) fn of(request: &PackageRequest<'a>) -> Self {
+        let mut importable: BTreeMap<&str, &PackageDeclaration> = BTreeMap::new();
+        for declaration in request
+            .stdlib
+            .iter()
+            .chain(request.prelude)
+            .chain(request.host)
+            .chain(request.dependencies)
+        {
+            importable.insert(&declaration.package_name, declaration);
+        }
+        let type_only = request
+            .transitive
+            .iter()
+            .filter(|declaration| !importable.contains_key(declaration.package_name.as_str()))
+            .map(|declaration| (declaration.package_name.as_str(), *declaration))
+            .collect();
+        Self {
+            importable,
+            type_only,
+        }
+    }
+
+    /// Every declaration, in the order package inference reads its maps: the
+    /// importable ones by name, then the type-only ones by name.
+    pub(crate) fn rule_dependencies(&self) -> Vec<&'a PackageDeclaration> {
+        self.importable
+            .values()
+            .chain(self.type_only.values())
+            .copied()
+            .collect()
+    }
+
+    fn owned(map: &BTreeMap<&str, &PackageDeclaration>) -> BTreeMap<String, PackageDeclaration> {
+        map.iter()
+            .map(|(name, declaration)| ((*name).to_string(), (*declaration).clone()))
+            .collect()
+    }
 }
 
 /// The declarations a script imports from besides the runtime's: its
@@ -124,7 +183,6 @@ impl EngineParsedScript {
             return Err(error.clone());
         }
         let mut diags = self.diagnostics.clone();
-        let declarations = script_declarations(request);
         let test = request.owner.test();
         let modules: BTreeMap<ModulePath, TestModule> = test
             .map(|test| {
@@ -149,16 +207,7 @@ impl EngineParsedScript {
                 modules: &modules,
             },
         );
-        let mut infer_refs: Vec<&PackageDeclaration> = request
-            .prelude
-            .iter()
-            .chain(request.host)
-            .chain(request.stdlib)
-            .copied()
-            .collect();
-        infer_refs.extend(declarations);
-        // `infer_refs` is the script's importable set; `transitive` only
-        // resolves types.
+        let infer_refs = script_importable(request);
         let (ta, infer_diags) = crate::typechecker::infer::infer_with_transitive_for_owner_checked(
             request.owner.package(),
             &self.source,
@@ -381,16 +430,9 @@ fn check_package(request: &PackageRequest<'_>) -> Result<CheckedPackage, Compile
         .iter()
         .map(|(path, file, ast)| (path.clone(), *file, ast))
         .collect();
-    let mut external_packages = external_packages(request.prelude, request.host, request.stdlib);
-    for defs in request.dependencies {
-        external_packages.insert(defs.package_name.clone(), (*defs).clone());
-    }
-    let transitive_packages: BTreeMap<String, PackageDeclaration> = request
-        .transitive
-        .iter()
-        .filter(|defs| !external_packages.contains_key(&defs.package_name))
-        .map(|defs| (defs.package_name.clone(), (*defs).clone()))
-        .collect();
+    let declarations = PackageDeclarations::of(request);
+    let external_packages = PackageDeclarations::owned(&declarations.importable);
+    let transitive_packages = PackageDeclarations::owned(&declarations.type_only);
     let (typed_ast, declaration, mut package_diags, inferred) =
         crate::typechecker::infer::infer_package_typescript(
             request.name,

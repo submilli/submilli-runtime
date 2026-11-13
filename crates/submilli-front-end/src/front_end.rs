@@ -14,10 +14,12 @@
 //!   declaration and diagnostics.
 //! * It runs on a thread with the stack it needs, so callers don't size
 //!   stacks.
-//! * Its diagnostics are complete for the checks it owns. A program with
-//!   errors still yields its tree, with the errors among the diagnostics, so
-//!   the engine's rules report alongside them. `Err` means there is no tree:
-//!   a syntax error, or a limit or failure that stopped checking.
+//! * Its diagnostics are complete for the checks it owns.
+//! * When it can build a tree for a program with errors, it returns the tree
+//!   with those errors among its diagnostics, and the engine's rules report
+//!   alongside them. When it can't, it returns `Err` with the errors, and the
+//!   engine's rules don't run. A parse that recovered from syntax errors may
+//!   still yield a tree, with the syntax errors among the diagnostics.
 
 use std::collections::BTreeMap;
 
@@ -32,11 +34,15 @@ use crate::{
 /// `&dyn FrontEnd`.
 pub trait FrontEnd: Send + Sync {
     /// Parse a script. Parsing never fails outright: a syntax error, or a
-    /// limit the parse hit, is in [`ParsedScript::diagnostics`] and fails
-    /// [`ParsedScript::check`].
+    /// limit the parse hit, is in [`ParsedScript::diagnostics`]. A parse that
+    /// recovered may still be checked into a tree, with those errors among
+    /// the diagnostics; one that could not recover makes
+    /// [`ParsedScript::check`] an `Err`.
     fn parse_script(&self, source: String, file: FileId) -> Box<dyn ParsedScript>;
 
-    /// Parse and check a package's modules against its dependencies.
+    /// Parse and check a package's modules against its dependencies. Returns
+    /// the tree and declaration with every diagnostic, errors included, when
+    /// it can build them, and `Err` with the errors when it can't.
     fn check_package(&self, request: &PackageRequest<'_>) -> Result<CheckedPackage, CompileError>;
 }
 
@@ -64,9 +70,10 @@ pub trait ParsedScript: Send {
     /// to decide.
     fn imports(&self) -> Result<Vec<String>, CompileError>;
 
-    /// Check against the loaded packages. Consumes the parse. A parse that
-    /// recovered from syntax errors may still yield a tree, with those errors
-    /// among its diagnostics.
+    /// Check against the loaded packages. Consumes the parse. Returns the tree
+    /// with every diagnostic, errors included, when it can build one, and
+    /// `Err` with the errors when it can't. A parse that recovered from syntax
+    /// errors may still yield a tree, with those errors among the diagnostics.
     fn check(self: Box<Self>, request: &ScriptRequest<'_>) -> Result<CheckedScript, CompileError>;
 }
 
