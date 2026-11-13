@@ -401,6 +401,7 @@ fn refused(session_id: &str, kind: ErrorKind, message: String) -> ExecuteRespons
         result: None,
         console: Vec::new(),
         error: Some(ExecuteError::new(kind, message)),
+        cost: None,
         discovery_warnings: Vec::new(),
     }
 }

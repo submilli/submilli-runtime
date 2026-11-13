@@ -152,6 +152,10 @@ pub(crate) struct ExecuteResponse {
     /// `@mcp/<server>` discovery notices (dropped or degraded tools).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) discovery_warnings: Vec<String>,
+    /// What the run cost. Omitted when it made no model call and no package
+    /// reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cost: Option<submilli_shared::cost::RunCost>,
 }
 
 /// A run's `{result, console, error}` with the full console: what its session
@@ -184,6 +188,8 @@ pub(crate) struct RunOutcome {
     pub(crate) console_raw: String,
     pub(crate) error: Option<ExecuteError>,
     pub(crate) discovery_warnings: Vec<String>,
+    /// What the run cost; `None` when it made no model call and no package reported.
+    pub(crate) cost: Option<submilli_shared::cost::RunCost>,
 }
 
 impl RunOutcome {
@@ -277,6 +283,8 @@ pub(crate) struct FinishedRun {
     /// Console output, in full.
     pub(crate) console: String,
     pub(crate) usage: ExecutionUsage,
+    /// What the run cost; `None` for a run that never dispatched or cost nothing.
+    pub(crate) cost: Option<submilli_shared::cost::RunCost>,
     /// Decisions and calls. Empty for a run that never dispatched.
     pub(crate) log: DecisionLogOutput,
     /// The `@mcp/<server>` packages the program was compiled against; `None` when
@@ -378,6 +386,7 @@ fn without_log(dispatched: bool, error: ExecuteError, started: Instant) -> Finis
         result: None,
         console: String::new(),
         usage: ExecutionUsage::default(),
+        cost: None,
         log: DecisionLogOutput::default(),
         mcp_catalog: None,
         wall: started.elapsed(),
@@ -1015,6 +1024,7 @@ impl RunHost {
                     self.embedding_limits,
                     embedding_budget,
                 )),
+                cost_blueprint: world.is_none().then(|| Arc::clone(&blueprint)),
                 cancel_requested,
             },
             recording,
@@ -1346,6 +1356,7 @@ fn failure_response(
         console: Vec::new(),
         error: Some(ExecuteError::new(kind, message)),
         discovery_warnings: Vec::new(),
+        cost: None,
     }
 }
 
@@ -1367,6 +1378,7 @@ fn into_response(execution_id: &str, session_id: &str, outcome: &RunOutcome) -> 
         console,
         error,
         discovery_warnings: outcome.discovery_warnings.clone(),
+        cost: outcome.cost.clone(),
     }
 }
 
@@ -1525,6 +1537,7 @@ async fn dispatch(
                 result: outcome.value.clone(),
                 console: outcome.console_raw.clone(),
                 usage: outcome.usage,
+                cost: outcome.cost.clone(),
                 log: log.finish(),
                 mcp_catalog: Some(Arc::clone(&owner_mcps)),
                 wall: owner_recording.started().elapsed(),
@@ -1563,6 +1576,10 @@ struct Inputs {
     llm_budget: Arc<ExecutionTokenBudget>,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     embedding_budget: Arc<EmbeddingTokenBudget>,
+    /// The blueprint the run's model calls are priced against. `None` for a
+    /// test run (a stand-in world): its answers come mostly from a recording,
+    /// so test runs are never priced, even in live mode.
+    cost_blueprint: Option<Arc<submilli_blueprint::Blueprint>>,
     cancel_requested: tokio::sync::oneshot::Receiver<()>,
 }
 
@@ -1729,6 +1746,7 @@ async fn run_inner(
     };
     // Only a sent cancel counts: the canceller is dropped, unsent, when the run ends.
     let cancel_requested = inputs.cancel_requested;
+    let cost_blueprint = inputs.cost_blueprint;
     let cancel_sent = async {
         if cancel_requested.await.is_ok() {
             return;
@@ -1745,12 +1763,18 @@ async fn run_inner(
     if let Err(error) = store.data_mut().blocking_work.finish().await {
         record_worker_cleanup_failure(&mut outcome, &error);
     }
+    let cost = cost_blueprint
+        .and_then(|blueprint| submilli_shared::cost::price_run(&blueprint, store.data()));
     match ExecutionUsage::capture(&store, runtime.config.fuel) {
         Ok(usage) => outcome.usage = usage,
         Err(error) => {
-            return RunOutcome::internal_failure(&format!("usage capture failed: {error}"));
+            let mut failure =
+                RunOutcome::internal_failure(&format!("usage capture failed: {error}"));
+            failure.cost = cost;
+            return failure;
         }
     }
+    outcome.cost = cost;
     outcome
 }
 

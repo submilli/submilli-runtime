@@ -662,6 +662,7 @@ fn a_run_that_was_not_saved_keeps_the_servers_message_in_run_data() {
             diagnostics: Vec::new(),
             denial: None,
         }),
+        cost: None,
         discovery_warnings: Vec::new(),
     };
     let refused = unsaved_run(&response, &KnownSecrets::default(), |message| {

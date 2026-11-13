@@ -488,6 +488,16 @@ const SECRETS: &[Capability] = &[Capability {
     example_filter: "name == \"STRIPE_API_KEY\"",
 }];
 
+const COST: &[Capability] = &[Capability {
+    name: "cost.report",
+    main_denial: Some(
+        "cost reports are available only to packages; no policy can grant main-module access",
+    ),
+    summary: "Report what a package's own call cost, so the run's cost includes it",
+    filter_fields: &[],
+    example_filter: "",
+}];
+
 const VARIABLES: &[Capability] = &[Capability {
     name: "variables.get",
     main_denial: Some(
@@ -540,6 +550,10 @@ const SESSION: &[Capability] = &[
 
 /// The capabilities of the core packages, which every embedder has.
 const CORE_CATALOG: &[CapabilityGroup] = &[
+    CapabilityGroup {
+        module: "submilli:cost",
+        capabilities: COST,
+    },
     CapabilityGroup {
         module: "submilli:embedding",
         capabilities: EMBEDDING,
@@ -706,7 +720,12 @@ mod tests {
             .collect();
         assert_eq!(
             refused,
-            ["secrets.get", "session.finalize", "variables.get"]
+            [
+                "cost.report",
+                "secrets.get",
+                "session.finalize",
+                "variables.get"
+            ]
         );
     }
 
@@ -754,9 +773,9 @@ mod tests {
                 assert!(seen.insert(cap.name), "duplicate capability '{}'", cap.name);
                 assert!(!cap.summary.is_empty(), "{}: empty summary", cap.name);
                 // `filter_fields` may be empty for a capability gated by name alone
-                // (e.g. the `@mcp` family, whose name already pins server + tool).
+                // (e.g. `cost.report`). Only such a capability has no example filter.
                 assert!(
-                    !cap.example_filter.is_empty(),
+                    !cap.example_filter.is_empty() || cap.filter_fields.is_empty(),
                     "{}: empty example_filter",
                     cap.name
                 );

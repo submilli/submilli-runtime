@@ -168,6 +168,8 @@ means the call is forbidden, not mis-called.
 The default model is `jev-latest`. Set `model` to a versioned ID when reproducible
 threshold evaluation matters; batch responses report the model that answered.
 `usage.input_tokens` and `usage.output_tokens` preserve provider usage counts.
+Every call reports its cost to the run's cost, priced by the model version that
+answered; this needs the `cost.report` capability, which adding the Package grants.
 This package exposes evaluation, not model discovery or automatic execution.
 
 `TypeSafeError` carries `code`, HTTP `status` (0 for local errors), and nullable raw

@@ -29,6 +29,7 @@ pub mod mcp;
 pub mod metrics;
 pub mod model_calls;
 pub mod number;
+pub mod package_costs;
 pub mod prelude;
 pub mod secrets;
 pub mod security;
@@ -89,6 +90,9 @@ pub use mcp::{
 };
 pub use metrics::{HttpMetric, MetricsSink, NoopMetricsSink};
 pub use model_calls::{AttributedUsage, ModelCallUsage};
+pub use package_costs::{
+    MAX_PACKAGE_COST_ENTRIES, MAX_PACKAGE_COST_UNITS, PackageCost, PackageCosts, PackageReport,
+};
 pub use prelude::bigint::ops::BIGINT_MODULE_NAME;
 pub use prelude::temporal::shared::TEMPORAL_MODULE_NAME;
 pub use secrets::{EncryptedSecret, NoopSecretProvider, SecretKeyId, SecretProvider};
@@ -200,9 +204,12 @@ pub struct StoreData {
     /// This execution's embedding budget (tokens and outbound requests). `None`
     /// in the pure-interpreter path; dropping it returns unspent reservation.
     pub embedding_budget: Option<Arc<EmbeddingTokenBudget>>,
-    /// Live `submilli:llm` and `submilli:embedding` dispatches in this attempt.
-    /// The embedder reads [`Self::model_calls`] after guest code finishes.
+    /// The run's `submilli:llm` and `submilli:embedding` calls. The embedder
+    /// reads [`Self::model_calls`] after guest code finishes.
     model_calls: Vec<ModelCallUsage>,
+    /// Costs packages reported through `submilli:cost`, summed by package and
+    /// label. Read through [`Self::package_costs`].
+    package_costs: PackageCosts,
     /// Session-scoped key-value storage, present only when the embedder wires a
     /// provider. Left `None` the store stays absent rather than silently
     /// becoming per-execution scratch state that no later `execute` can read —
@@ -352,6 +359,7 @@ impl StoreData {
             embedding_provider: None,
             embedding_budget: None,
             model_calls: Vec::new(),
+            package_costs: PackageCosts::default(),
             session_kv: None,
             session_finalizers: None,
             finalizing: false,
@@ -393,7 +401,8 @@ impl StoreData {
         self.type_info.insert(table.package_name.clone(), table);
     }
 
-    /// Live model dispatches in this attempt, in call order.
+    /// The run's model calls, in call order: live ones and ones a durable
+    /// attempt restored from history.
     ///
     /// Empty when none ran. A guest trap does not clear it: a call that already
     /// returned was billed. Read this after `dispatch_main_async`, before
@@ -402,12 +411,23 @@ impl StoreData {
         &self.model_calls
     }
 
-    /// Append one live dispatch. Only the provider action may call this.
+    /// Append one model call, once `effects::execute` has returned its outcome.
     ///
-    /// Replay restores the recorded outcome without running that action.
-    /// Recording after `effects::execute` returns would bill the call again.
+    /// Called on replay too, from the recorded outcome, so each attempt lists the
+    /// whole run. Never from inside the provider action, which replay skips.
     pub(crate) fn note_model_call(&mut self, call: ModelCallUsage) {
         self.model_calls.push(call);
+    }
+
+    /// The costs packages reported. Read with [`Self::model_calls`], before
+    /// dropping the store.
+    pub fn package_costs(&self) -> &PackageCosts {
+        &self.package_costs
+    }
+
+    /// Add one package report. Only `submilli:cost` calls this.
+    pub(crate) fn note_package_cost(&mut self, package: &str, report: PackageReport) {
+        self.package_costs.add(package, report);
     }
 
     pub fn with_tempdir() -> std::io::Result<Self> {

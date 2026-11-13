@@ -11,6 +11,7 @@ mod llm;
 mod locate;
 mod maps;
 mod mcp;
+mod pricing;
 mod secrets;
 mod variables;
 mod vfs_paths;
@@ -38,6 +39,7 @@ pub use git::{GitConfig, GitIdentity};
 pub use llm::{LlmConfig, LlmModelDecl, LlmProviderDecl};
 pub use locate::{Citation, RuleLocation, locate_key, locate_rule};
 pub use mcp::{McpAuth, McpServer};
+pub use pricing::{EmbeddingPricing, LlmPricing, Usd};
 pub use secrets::{
     HarnessSecret, HarnessSecretBindings, HarnessSecretError, SecretSource,
     required_harness_secrets, resolve_harness_secrets,

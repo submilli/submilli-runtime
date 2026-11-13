@@ -638,10 +638,10 @@ async fn completion_failure_rolls_back_result_and_expiry_keeps_run_identity() {
         sqlx::query("CREATE TRIGGER reject_completion BEFORE UPDATE ON runs WHEN NEW.state='completed' BEGIN SELECT RAISE(FAIL,'injected'); END").execute(connection).await?;
         Ok(())
     })).await.unwrap();
-    let resolution = RunResolution::Completed(RunOutput {
+    let resolution = RunResolution::Completed(Box::new(RunOutput {
         result: Some("exact result\n".into()),
         ..Default::default()
-    });
+    }));
     let resolve = ResolveRun::new(state.units());
     assert!(
         resolve

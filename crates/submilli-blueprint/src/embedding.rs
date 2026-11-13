@@ -131,6 +131,11 @@ pub struct EmbeddingModelDecl {
     /// Hugging Face only: the prompt name applied to documents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_prompt_name: Option<String>,
+    /// What the alias costs. Absent falls back to the built-in price list, which
+    /// covers only first-party providers on their default endpoint; an alias
+    /// neither prices is reported unpriced, never free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<crate::EmbeddingPricing>,
 }
 
 /// The provider kinds the block accepts.

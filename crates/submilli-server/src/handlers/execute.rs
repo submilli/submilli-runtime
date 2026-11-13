@@ -52,6 +52,10 @@ pub struct ExecuteResponse {
     /// `@mcp/<server>` discovery notices (dropped/degraded tools). Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discovery_warnings: Vec<String>,
+    /// What the run cost. Omitted when it made no model call and no package
+    /// reported. The HTTP API returns it; MCP does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<submilli_shared::cost::RunCost>,
 }
 
 impl ExecuteResponse {
@@ -61,6 +65,7 @@ impl ExecuteResponse {
             console: self.console.clone(),
             error: self.error.clone(),
             discovery_warnings: self.discovery_warnings.clone(),
+            cost: self.cost.clone(),
         }
     }
 }
@@ -660,6 +665,7 @@ pub(crate) async fn prepare_execution(
         },
         resource_use: Some(resource_use),
         cursor_keys: manager.cursor_keys(),
+        cost_blueprint: Some(Arc::clone(&blueprint)),
         llm_provider,
         llm_budget: Some(llm_budget),
         embedding_provider,
@@ -893,6 +899,7 @@ fn response_for_error(
             denial: None,
         }),
         discovery_warnings: Vec::new(),
+        cost: None,
     }
 }
 
@@ -915,6 +922,7 @@ pub(crate) fn internal_failure(
             denial: None,
         }),
         discovery_warnings: Vec::new(),
+        cost: None,
     }
 }
 
@@ -936,6 +944,7 @@ pub(crate) fn into_response(
         console,
         error,
         discovery_warnings: outcome.discovery_warnings.clone(),
+        cost: outcome.cost.clone(),
     }
 }
 

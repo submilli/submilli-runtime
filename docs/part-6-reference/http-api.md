@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "4c750ee9637c92eb48aaa51d7b9b09fef8be2515571eae79ed192f301d4a83c0"
+  contentHash: "5e86adac2daaeb2c4774f5584713b61c059f836dfcdfbbd7db2b46b1881c448e"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -262,9 +262,40 @@ object.
 | `error.caller`, `error.capability`, `error.source` | strings | Present on `permission_denied` only: the Package that was refused, the capability it asked for, and who refused: `policy` (the Blueprint), `invariant` (the runtime, ahead of any policy), `read_only` (a write to a read-only volume), `harness` (the application refused a `@tools` call), `human` (the person asked for an `ask-human` approval refused it or did not decide in time), or `admin` (the same, for `ask-admin`) |
 | `error.diagnostics` | object[] | Present on compile errors only: `severity`, `line`, `column`, `message`, and `notes` (each `line`, `column`, `message`) when there are any |
 | `discovery_warnings` | string[] | Present only when non-empty. Tools of an imported `@mcp/<server>` or `@tools` Package that were dropped or degraded at discovery |
+| `cost` | object | Present only when the run made a model call or a Package reported a cost. See [Run cost](#run-cost) |
 
 `GET /v1/sessions/{session_id}/last-run` returns the console of a
 successful session run. `POST /v1/execute` returns it in `console`.
+
+### Run cost
+
+`cost` is what the run spent: its LLM and embedding calls, priced from the
+Blueprint's [`pricing:`](/docs/reference/blueprint-file#model-pricing) or the
+built-in price list, and what Packages reported through `submilli:cost`. Dollar
+amounts are decimal strings. The MCP tools do not return it. Harness sub-agents
+(`submilli:agents`) run on the harness and are not in it.
+
+| Field | Type | Value |
+| --- | --- | --- |
+| `total_usd` | string | The sum of every priced part |
+| `complete` | boolean | `false` when some part has no price or a Package report was dropped, so the run cost more than `total_usd` |
+| `entries` | object[] | One per source, name and label, in the order first used |
+| `entries[].source` | string | `llm`, `embedding`, or `package` |
+| `entries[].name` | string | The model name the program called, or the Package that reported |
+| `entries[].label` | string | Present for a Package report that gave one, such as the model it called |
+| `entries[].usd` | string or null | The entry's amount. `null` when nothing in it has a price |
+| `entries[].complete` | boolean | Present, as `false`, only when part of the entry has no price |
+| `entries[].pricing` | string | For a model: `blueprint` or `builtin`, where its price came from |
+| `entries[].usage` | object | The counts behind the amount, keyed by unit, such as `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens` |
+| `dropped_reports` | number | Present only when Package reports passed a limit: 256 entries per run, 32 usage units per entry. Those reports are not counted |
+
+```json
+"cost":{"total_usd":"0.018","complete":true,"entries":[{"source":"llm","name":"claude-sonnet-4-6","usd":"0.018","pricing":"builtin","usage":{"input_tokens":1000,"output_tokens":1000}}]}
+```
+
+A durable run's cost covers the whole run, across attempts. A call is missing only
+when its attempt stopped before the call's outcome was recorded; the call ran
+again, and that run is counted.
 
 | `error.kind` | Cause |
 | --- | --- |

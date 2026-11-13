@@ -779,6 +779,75 @@ fn a_truncated_answer_keeps_its_partial_text() {
 
 // --- usage (KTD3) ----------------------------------------------------------
 
+/// Pricing reads the cache counts apart from the input total. Each kind keeps
+/// them as parts of `input_tokens`: Anthropic's are added into it, and OpenAI's
+/// and Google's are already inside the prompt count.
+#[test]
+fn cache_counts_are_kept_as_parts_of_the_input() {
+    let anthropic = parse_response(
+        ProviderKind::Anthropic,
+        &json!({
+            "stop_reason": "end_turn",
+            "content": [{ "type": "text", "text": "x" }],
+            "usage": {
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 300,
+                "cache_read_input_tokens": 700,
+                "output_tokens": 5,
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(anthropic.usage.input_tokens, Some(1010.0));
+    assert_eq!(anthropic.usage.cache_read_tokens, Some(700.0));
+    assert_eq!(anthropic.usage.cache_write_tokens, Some(300.0));
+
+    let openai = parse_response(
+        ProviderKind::OpenAi,
+        &json!({
+            "choices": [{ "message": { "content": "x" }, "finish_reason": "stop" }],
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 5,
+                "prompt_tokens_details": { "cached_tokens": 800 },
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(openai.usage.input_tokens, Some(1000.0));
+    assert_eq!(openai.usage.cache_read_tokens, Some(800.0));
+    assert_eq!(openai.usage.cache_write_tokens, None);
+
+    let google = parse_response(
+        ProviderKind::Google,
+        &json!({
+            "candidates": [{ "content": { "parts": [{ "text": "x" }] }, "finishReason": "STOP" }],
+            "usageMetadata": {
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 5,
+                "cachedContentTokenCount": 600,
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(google.usage.input_tokens, Some(1000.0));
+    assert_eq!(google.usage.cache_read_tokens, Some(600.0));
+    assert_eq!(google.usage.cache_write_tokens, None);
+}
+
+/// A response without cache fields reports no cache counts, not zero.
+#[test]
+fn absent_cache_counts_are_none() {
+    for kind in ProviderKind::ALL {
+        let response = parse_response(kind, &ok_body(kind)).unwrap();
+        assert_eq!(response.usage.cache_read_tokens, None, "{}", kind.label());
+        assert_eq!(response.usage.cache_write_tokens, None, "{}", kind.label());
+    }
+}
+
 /// Absent usage is `None`, on every kind. Never `Some(0)`: indeterminate is not
 /// free, and a zero would tell the reconciler a call cost nothing.
 #[test]
@@ -991,6 +1060,7 @@ fn a_non_finite_usage_count_resolves_to_none() {
     let usage = ProviderUsage {
         input_tokens: Some(f64::NAN),
         output_tokens: Some(f64::INFINITY),
+        ..ProviderUsage::default()
     };
     assert_eq!(resolved(&usage), (None, None));
 }

@@ -480,6 +480,14 @@ pub(crate) fn show_text(result: &ShowResult) -> String {
         "outcome: {}",
         result.outcome.text_with_denials(&result.denied)
     );
+    // Labels and usage units come from package code: cleaned like any name.
+    for line in result
+        .cost
+        .iter()
+        .flat_map(submilli_shared::cost::RunCost::lines)
+    {
+        let _ = writeln!(out, "{}", clean(&line));
+    }
     if let Some(error) = &result.untrusted.error {
         fence.text("error", error, 6);
     }

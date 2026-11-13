@@ -49,6 +49,9 @@ pub struct RunOutcome {
     /// degraded because their schema wasn't representable. Empty when there's
     /// nothing to report.
     pub discovery_warnings: Vec<String>,
+    /// What the run's model calls and package reports cost. `None` when it made
+    /// none, or when it ended before the store could be read.
+    pub cost: Option<submilli_shared::cost::RunCost>,
 }
 
 const FILENAME: &str = "<execute>";
@@ -130,6 +133,9 @@ pub struct HostServices {
     pub embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     /// This execution's embedding budget, released on drop like `llm_budget`.
     pub embedding_budget: Option<Arc<EmbeddingTokenBudget>>,
+    /// The blueprint the run's model calls are priced against. `None` leaves
+    /// the run without a cost.
+    pub cost_blueprint: Option<Arc<submilli_blueprint::Blueprint>>,
     /// Fires when someone other than the caller asks to cancel the run.
     pub(crate) cancel_requested: Option<tokio::sync::oneshot::Receiver<()>>,
 }
@@ -273,6 +279,7 @@ async fn run_inner(
     mut caller_gone: tokio::sync::oneshot::Receiver<()>,
 ) -> RunOutcome {
     let cancel_receiver = services.cancel_requested.take();
+    let cost_blueprint = services.cost_blueprint.take();
     let git = match services.git {
         Ok(git) => git,
         Err(error) => return internal_failure(&error),
@@ -449,6 +456,7 @@ async fn run_inner(
                 console_raw,
                 error: None,
                 discovery_warnings,
+                cost: None,
             },
             Err(err) => RunOutcome {
                 durable_completion: !err.is::<interpreter::runtime::host::FatalHostError>()
@@ -459,6 +467,7 @@ async fn run_inner(
                 error: Some(classify_runtime_error(&err, &parsed.sources, parsed.file)),
                 console_raw,
                 discovery_warnings,
+                cost: None,
             },
         }
     };
@@ -495,6 +504,8 @@ async fn run_inner(
         Ok(usage) => outcome.usage = usage,
         Err(error) => return internal_failure(&format!("usage capture failed: {error}")),
     }
+    outcome.cost = cost_blueprint
+        .and_then(|blueprint| submilli_shared::cost::price_run(&blueprint, store.data()));
     outcome
 }
 
@@ -584,6 +595,7 @@ fn compile_failure(
             denial: None,
         }),
         discovery_warnings,
+        cost: None,
     }
 }
 
@@ -863,6 +875,7 @@ fn internal_failure(msg: &str) -> RunOutcome {
             denial: None,
         }),
         discovery_warnings: Vec::new(),
+        cost: None,
     }
 }
 
@@ -1110,6 +1123,7 @@ mod tests {
             llm_budget: None,
             embedding_provider: None,
             embedding_budget: None,
+            cost_blueprint: None,
             cancel_requested: None,
         };
         let config = RuntimeConfig::default();
@@ -1234,6 +1248,7 @@ mod worker_cleanup_tests {
             console_raw: "before\n".into(),
             error: None,
             discovery_warnings: vec!["discovery warning".into()],
+            cost: None,
         };
         record_worker_cleanup_failure(&mut outcome, &cleanup);
         assert!(!outcome.durable_completion);

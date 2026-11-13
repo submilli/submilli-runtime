@@ -162,6 +162,11 @@ pub struct LlmModelDecl {
     /// `submilli blueprint lint` instead of reaching a guest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// What the model costs. Absent falls back to the built-in price list, which
+    /// covers only first-party providers on their default endpoint; a model
+    /// neither prices is reported unpriced, never free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<crate::LlmPricing>,
 }
 
 /// Validate every `llm:` entry, plus the `llm.call` permission rules whose

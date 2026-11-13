@@ -84,10 +84,17 @@ pub struct PayloadRecord {
 /// Token counts a model provider reported for one call. Absent when not reported.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelUsage {
+    /// Every prompt token, cache included.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    /// The part of `input_tokens` read from the provider's prompt cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    /// The part of `input_tokens` written to the provider's prompt cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
 }
 
 /// One host call. Times are microseconds measured from the recorder's start.
@@ -544,6 +551,7 @@ mod tests {
         "tools.call",
         "agent.run",
         "skill.load",
+        "cost.report",
     ];
     /// The request is the decision's context; the response is kept for whole reads and
     /// session reads.
@@ -641,6 +649,7 @@ mod tests {
             "src/stdlib/code/update.rs",
             Some(crate::stdlib::code::MODULE_NAME),
         ),
+        ("src/stdlib/cost.rs", Some(crate::stdlib::cost::MODULE_NAME)),
         (
             "src/stdlib/embedding/mod.rs",
             Some(crate::stdlib::embedding::MODULE_NAME),

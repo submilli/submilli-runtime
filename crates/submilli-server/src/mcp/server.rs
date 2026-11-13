@@ -379,9 +379,13 @@ impl SubmilliMcp {
             let response = crate::handlers::durable_runs::wait(&self.state, &id)
                 .await
                 .map_err(|message| ErrorData::internal_error(message, None))?;
-            let response = response
+            let mut response = response
                 .into_json()
                 .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+            // The stored body is the HTTP response; MCP answers without its cost.
+            if let Some(body) = response.as_object_mut() {
+                body.remove("cost");
+            }
             return Ok(CallToolResult::structured(response));
         }
 

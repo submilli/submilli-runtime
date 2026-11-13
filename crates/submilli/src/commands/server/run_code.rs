@@ -48,6 +48,10 @@ struct ExecuteResponse {
     error: Option<ExecuteError>,
     #[serde(default)]
     discovery_warnings: Vec<String>,
+    /// What the run cost, when it made model calls or a package reported. Read
+    /// loosely: a cost from a newer server must not fail the whole response.
+    #[serde(default)]
+    cost: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +97,12 @@ pub fn execute(args: Args) -> Result<ExitCode> {
 
     for warning in &response.discovery_warnings {
         eprintln!("warning: {warning}");
+    }
+    let cost = response
+        .cost
+        .and_then(|cost| serde_json::from_value::<submilli_shared::cost::RunCost>(cost).ok());
+    for line in cost.iter().flat_map(submilli_shared::cost::RunCost::lines) {
+        eprintln!("{line}");
     }
 
     if let Some(error) = response.error {

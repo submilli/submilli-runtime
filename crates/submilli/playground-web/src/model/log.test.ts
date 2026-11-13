@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duration, tone } from "./format";
+import { costText, duration, tone } from "./format";
 import { expandAll, logPane, uncut, type RunRow } from "./log";
 import { frame } from "./steps";
 import { chatSession, withStoppedTests } from "./testdata";
@@ -84,6 +84,13 @@ describe("the log's run rows", () => {
     const data = chatSession();
     data.runs[2] = { ...data.runs[2], outcome: { kind: "cancelled" } };
     expect(row(allOpen(data), 2).meta).toBe("Oct 13, 13:26 UTC · 46 ms · blueprint v1");
+  });
+
+  it("shows a run's cost after its length, marking a total with an unpriced part", () => {
+    const data = chatSession();
+    data.runs[2] = { ...data.runs[2], outcome: { kind: "cancelled" }, cost: { total_usd: "0.00421", complete: true, entries: [] } };
+    expect(row(allOpen(data), 2).meta).toBe("Oct 13, 13:26 UTC · 46 ms · $0.00421 · blueprint v1");
+    expect(costText({ total_usd: "0.003", complete: false })).toBe("$0.003+");
   });
 
   it("offers nothing for a program that never compiled", () => {

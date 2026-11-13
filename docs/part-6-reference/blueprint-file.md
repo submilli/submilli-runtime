@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "046c47b425b3f1e3b41ab9ab51ce9e3eb1dafaaf25c14dbd15d5fd86e12658b1"
+  contentHash: "0535e6b18dca68653b821e5d4be24b13f7a672023757bde24e857760a90609af"
   confirmedAt: "2026-10-05T17:36:35.000Z"
 ---
 
@@ -745,6 +745,7 @@ name `llm.models()` returns.
 | `context_window` | non-negative integer | no | unknown | Returned by `models()` as `contextWindow` |
 | `output_reserve` | non-negative integer | no | 64,000 reserved, no output cap sent | Output tokens per prompt |
 | `description` | string | no | none | One line of at most 512 characters, with no control or invisible formatting characters. Returned by `models()` |
+| `pricing` | [pricing](#model-pricing) | no | the built-in price, if any | Dollars per million tokens: `input` and `output`, and optionally `cache_read` and `cache_write` |
 
 `output_reserve` is counted against the run's and the server's token budgets
 for each prompt, with the prompt's estimated size, before the prompt is
@@ -771,6 +772,29 @@ model:
 ```text
 error: case.yaml: invalid llm config: caller 'main': permission filter names undeclared llm model 'gpt-9'; declare it under 'llm.models:' or filter on one of: m
 ```
+
+### Model pricing
+
+`pricing` sets what a model costs, in US dollars per million tokens, for the
+[run cost](/docs/reference/http-api#run-cost). An LLM model takes `input` and
+`output`, and optionally `cache_read` and `cache_write`, which default to
+`input`. An embedding model takes `input`. Amounts are decimals with at most 12
+places.
+
+```yaml title="blueprint.yaml (fragment)"
+llm:
+  models:
+    claude-sonnet-4-6:
+      provider: anthropic
+      pricing: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 }
+```
+
+A model without `pricing` takes its price from the built-in list, which holds
+list prices for exact model ids of the `anthropic`, `openai` and `google` LLM
+providers and the `openai`, `google` and `voyage` embedding providers. The list applies only to a
+provider with no `base_url`: behind a gateway or a compatible server, the same
+model id can cost something else. A model neither prices is reported with its
+usage and no amount.
 
 ## embedding
 
@@ -845,6 +869,7 @@ returns. Every field except `provider`, `model`, and `dimensions` is optional.
 | `description` | string | no | none | One line; at most 512 characters; no control or invisible formatting characters. Returned by `models()` |
 | `query_prompt_name` | string | no | none | `huggingface` with a `base_url` only; 1 to 128 printable characters. The prompt applied to queries |
 | `document_prompt_name` | string | no | none | `huggingface` with a `base_url` only; same limits. The prompt applied to documents |
+| `pricing` | [pricing](#model-pricing) | no | the built-in price, if any | `input`: dollars per million input tokens |
 
 Prompt names are refused on Hugging Face shared hosting (a provider without
 a `base_url`), because the shared router might truncate the text it prefixes

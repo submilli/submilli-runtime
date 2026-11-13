@@ -226,6 +226,7 @@ fn record_outcome(
         ModelUsage {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+            ..ModelUsage::default()
         },
     );
 }

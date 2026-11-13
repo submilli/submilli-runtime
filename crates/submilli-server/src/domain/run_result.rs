@@ -10,6 +10,10 @@ pub struct RunOutput {
     pub error: Option<ExecuteError>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub discovery_warnings: Vec<String>,
+    /// Last, in the same place as on `ExecuteResponse`: a stored body replays
+    /// byte for byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<submilli_shared::cost::RunCost>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

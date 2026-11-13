@@ -95,11 +95,38 @@ fn blueprint(name: &str) -> Blueprint {
                     context_window: None,
                     output_reserve: Some(1_000),
                     description: None,
+                    pricing: None,
                 },
             )]),
         },
         ..Default::default()
     }
+}
+
+/// A blueprint whose model declares its own price.
+const PRICED: &str = "llm-priced";
+/// A blueprint whose model id is on the built-in price list.
+const BUILTIN: &str = "llm-builtin";
+/// A model id the built-in list prices at the first-party default endpoint.
+const BUILTIN_MODEL: &str = "claude-sonnet-4-6";
+
+fn priced_blueprint(name: &str) -> Blueprint {
+    let mut blueprint = blueprint(name);
+    let model = blueprint.llm.models.get_mut(MODEL).expect("declared model");
+    model.pricing = Some(submilli_blueprint::LlmPricing {
+        input: submilli_blueprint::Usd::parse("3").unwrap(),
+        output: submilli_blueprint::Usd::parse("15").unwrap(),
+        cache_read: None,
+        cache_write: None,
+    });
+    blueprint
+}
+
+fn builtin_blueprint(name: &str) -> Blueprint {
+    let mut blueprint = blueprint(name);
+    let model = blueprint.llm.models.remove(MODEL).expect("declared model");
+    blueprint.llm.models.insert(BUILTIN_MODEL.into(), model);
+    blueprint
 }
 
 /// A dispatch that always answers, counting how many times it was reached.
@@ -244,7 +271,12 @@ impl Harness {
         let vfs_root = tempfile::tempdir().expect("vfs root");
         let config = ServerConfig {
             blueprints: Some(Arc::new(
-                InMemoryBlueprintStore::seed(vec![blueprint(BLUEPRINT)]).expect("seed blueprints"),
+                InMemoryBlueprintStore::seed(vec![
+                    blueprint(BLUEPRINT),
+                    priced_blueprint(PRICED),
+                    builtin_blueprint(BUILTIN),
+                ])
+                .expect("seed blueprints"),
             )),
             volume_root: Some(vfs_root.path().to_path_buf()),
             llm_dispatch: dispatch,
@@ -808,4 +840,135 @@ async fn each_execute_gets_a_fresh_per_execution_budget() {
         );
     }
     assert_eq!(calls.load(Ordering::SeqCst), 4);
+}
+
+// --- run cost ----------------------------------------------------------------
+
+fn call_model(model: &str) -> String {
+    format!(
+        r#"import llm from "submilli:llm";
+function main(): string {{
+    const c = llm.text("{model}", "hi");
+    return c.ok ? c.value : "NULL";
+}}"#
+    )
+}
+
+impl Harness {
+    async fn one_shot_on(&self, blueprint: &str, code: &str) -> Value {
+        let (status, body) = self
+            .post(
+                "/v1/execute",
+                json!({ "code": code, "blueprint": blueprint }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "one-shot execute: {body}");
+        body
+    }
+}
+
+/// The fake reports 1,000 input and 1,000 output tokens per prompt.
+fn thousand_tokens() -> Harness {
+    Harness::with_config(|c| c, dispatch(1_000.0).0)
+}
+
+#[tokio::test]
+async fn a_model_the_blueprint_prices_is_charged_at_that_price() {
+    let h = thousand_tokens();
+    let body = h.one_shot_on(PRICED, &call_model(MODEL)).await;
+    assert_eq!(body["result"], "answer", "{body}");
+    assert_eq!(
+        body["cost"],
+        json!({
+            "total_usd": "0.018",
+            "complete": true,
+            "entries": [{
+                "source": "llm",
+                "name": MODEL,
+                "usd": "0.018",
+                "pricing": "blueprint",
+                "usage": { "input_tokens": 1_000, "output_tokens": 1_000 },
+            }],
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_listed_model_on_the_default_endpoint_takes_the_builtin_price() {
+    let h = thousand_tokens();
+    let body = h.one_shot_on(BUILTIN, &call_model(BUILTIN_MODEL)).await;
+    assert_eq!(body["cost"]["entries"][0]["pricing"], "builtin", "{body}");
+    // claude-sonnet-4-6: $3 in, $15 out per million.
+    assert_eq!(body["cost"]["total_usd"], "0.018", "{body}");
+}
+
+#[tokio::test]
+async fn an_unpriced_model_reports_usage_and_an_incomplete_total() {
+    let h = thousand_tokens();
+    let body = h.one_shot(CALL).await;
+    assert_eq!(
+        body["cost"],
+        json!({
+            "total_usd": "0",
+            "complete": false,
+            "entries": [{
+                "source": "llm",
+                "name": MODEL,
+                "usd": null,
+                "complete": false,
+                "usage": { "input_tokens": 1_000, "output_tokens": 1_000 },
+            }],
+        }),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_run_without_model_calls_has_no_cost() {
+    let h = Harness::new();
+    let body = h
+        .one_shot("function main(): string { return \"plain\"; }")
+        .await;
+    assert_eq!(body["result"], "plain", "{body}");
+    assert!(body.get("cost").is_none(), "{body}");
+}
+
+#[tokio::test]
+async fn a_session_run_reports_its_cost_too() {
+    let h = thousand_tokens();
+    let session = h.create_session(PRICED).await;
+    let body = h.rest(&session, &call_model(MODEL)).await;
+    assert_eq!(body["cost"]["total_usd"], "0.018", "{body}");
+}
+
+impl Harness {
+    /// A keyed session execute, as the raw response bytes.
+    async fn keyed_bytes(&self, session: &str, key: &str, code: &str) -> axum::body::Bytes {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/sessions/{session}/execute"))
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .header("Idempotency-Key", key)
+            .body(Body::from(json!({ "code": code }).to_string()))
+            .unwrap();
+        let resp = app(self.state.clone()).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        resp.into_body().collect().await.unwrap().to_bytes()
+    }
+}
+
+/// A keyed retry replays the stored body, cost included, byte for byte.
+#[tokio::test]
+async fn a_keyed_retry_replays_the_cost_byte_for_byte() {
+    let (dispatch, calls) = dispatch(1_000.0);
+    let h = Harness::with_config(|c| c, dispatch);
+    let session = h.create_session(PRICED).await;
+    let code = call_model(MODEL);
+    let first = h.keyed_bytes(&session, "cost-1", &code).await;
+    let second = h.keyed_bytes(&session, "cost-1", &code).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the program must run once");
+    assert_eq!(second, first, "a replay must be byte-identical");
+    let body: Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(body["cost"]["total_usd"], "0.018", "{body}");
 }

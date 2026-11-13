@@ -219,6 +219,7 @@ mod tests {
                     execution_id: "execution".into(), session_id: "session".into(),
                     result: output.result.clone(), console: output.console.clone(), error: output.error.clone(),
                     discovery_warnings: output.discovery_warnings.clone(),
+                    cost: output.cost.clone(),
                 });
                 assert!(original.recordable);
                 let result = RunResult::new("run".into(), output);

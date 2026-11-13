@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-generated
   confirmed: true
-  contentHash: "2021d22a0e6ada4bd0ebedc37ff0bcaf063787d1179431ad7db5acca10524698"
+  contentHash: "c94b218ee6786af2cad82faf058627e791d7a0ba25273788478166983c735171"
   confirmedAt: "2026-10-21T15:20:00Z"
 ---
 
@@ -76,6 +76,7 @@ work. Session closure preserves its record in run history.
 | Engine stack and memory settings | Incompatible current settings leave the run stuck |
 | Completed native outcomes | Replayed without repeating completed native work |
 | Native call without a committed outcome | May execute again |
+| Run cost | Covers every attempt's recorded model calls once; a call without a committed outcome counts when it runs again |
 | Result | Retained for keyed and unkeyed runs under response-retention settings |
 | Expired result | Tombstone retained; no re-execution |
 

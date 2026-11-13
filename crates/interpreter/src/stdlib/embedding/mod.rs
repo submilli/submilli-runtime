@@ -265,6 +265,12 @@ async fn embed(
     } else {
         budget.restore_spend(response.used, response.held, response.requests);
     }
+    // Live or restored, a billed call is the run's: a resumed attempt lists it too.
+    if let Some(billed) = response.billed {
+        caller
+            .data_mut()
+            .note_model_call(ModelCallUsage::embedding(model, billed.input_tokens));
+    }
     let batch = response.result.map_err(NativeError::into_error)?;
     build_embeddings(caller, batch)
 }
@@ -275,8 +281,19 @@ struct EmbeddingResponse {
     used: u64,
     held: u64,
     requests: u64,
+    /// Present when the provider billed the call, which an error can also be.
+    /// Defaulted so a history recorded before the field existed still decodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    billed: Option<Billed>,
     #[serde(skip)]
     settlement: Option<EmbeddingSettlement>,
+}
+
+/// The usage of a call the provider billed. `None` input means it billed an
+/// unreported count.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Billed {
+    input_tokens: Option<u64>,
 }
 
 /// Retain live reservation cleanup if storing the outcome fails. Replay has no
@@ -339,12 +356,13 @@ async fn call_provider(
         reserved: estimate,
         settlements: settlements.to_vec(),
     };
+    let mut billed = None;
     let result = match dispatched {
         // The provider returned a batch, so the dispatch ran. A short or long
         // row count is a guest error, not an absent call: the budget still
         // settles the batch's tokens.
         Ok(batch) if batch.count() != texts.len() => {
-            note_embedding_usage(caller, ticket, model, batch.input_tokens());
+            billed = Some(record_embedding_usage(caller, ticket, batch.input_tokens()));
             Err(throw(EmbeddingError::Malformed {
                 alias: model.to_string(),
                 reason: EmbeddingMalformedReason::CountMismatch,
@@ -363,8 +381,11 @@ async fn call_provider(
                 }))
                 .with_size(received)
             });
-            note_embedding_usage(caller, ticket, model, batch.input_tokens());
-            fuel::settle(&mut *caller, fuel::IO, received)?;
+            billed = Some(record_embedding_usage(caller, ticket, batch.input_tokens()));
+            if let Err(error) = fuel::settle(&mut *caller, fuel::IO, received) {
+                note_unrecorded(caller, model, billed.as_ref());
+                return Err(error);
+            }
             Ok(batch)
         }
         Err(error) => {
@@ -374,13 +395,16 @@ async fn call_provider(
                 .iter()
                 .fold(0u64, |sum, part| sum.saturating_add(part.reported));
             if reported > 0 {
-                note_embedding_usage(caller, ticket, model, Some(reported));
+                billed = Some(record_embedding_usage(caller, ticket, Some(reported)));
             }
             Err(quota_throw(caller, ticket, model, error))
         }
     };
     let result = match result {
-        Err(error) if crate::runtime::host::ends_the_run(&error) => return Err(error),
+        Err(error) if crate::runtime::host::ends_the_run(&error) => {
+            note_unrecorded(caller, model, billed.as_ref());
+            return Err(error);
+        }
         result => result.map_err(|error| NativeError::capture(&error)),
     };
     Ok(EmbeddingResponse {
@@ -388,31 +412,42 @@ async fn call_provider(
         used,
         held,
         requests,
+        billed,
         settlement: Some(settlement),
     })
 }
 
-/// Record the usage the call log keeps, and the same counts for the embedder.
+/// Record the usage the call log keeps, and return it for the recorded outcome.
 ///
-/// Only `call_provider` may call this. Replay restores the recorded outcome
-/// without entering that action.
-fn note_embedding_usage(
+/// The run's model-call list is appended by `embed`, after the effect returns,
+/// so a replayed attempt lists the call too.
+fn record_embedding_usage(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     ticket: Option<CallTicket>,
-    model: &str,
     input_tokens: Option<u64>,
-) {
+) -> Billed {
     record_usage(
         &*caller,
         ticket,
         ModelUsage {
             input_tokens,
-            output_tokens: None,
+            ..ModelUsage::default()
         },
     );
-    caller
-        .data_mut()
-        .note_model_call(ModelCallUsage::embedding(model, input_tokens));
+    Billed { input_tokens }
+}
+
+/// List a billed call whose action fails, so no outcome reaches `embed`.
+fn note_unrecorded(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: &str,
+    billed: Option<&Billed>,
+) {
+    if let Some(billed) = billed {
+        caller
+            .data_mut()
+            .note_model_call(ModelCallUsage::embedding(model, billed.input_tokens));
+    }
 }
 
 /// The capability check, run before any bytes leave the process. The context is

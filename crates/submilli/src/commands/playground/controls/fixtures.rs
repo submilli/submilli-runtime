@@ -86,6 +86,7 @@ impl Fixture {
             error: run.error,
             result: run.result,
             console: run.console,
+            cost: None,
             usage: ExecutionUsage::default(),
             decisions_dropped: 0,
             calls_dropped: 0,

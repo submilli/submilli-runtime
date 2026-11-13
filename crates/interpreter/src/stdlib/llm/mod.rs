@@ -45,6 +45,7 @@ use crate::runtime::llm::{
     ExecutionTokenBudget, FailureReason, LlmCallError, LlmFailure, LlmLimits, LlmModel, LlmOutcome,
     LlmProvider, PromptBoundKind,
 };
+use crate::runtime::model_calls::add_part;
 use crate::stdlib::abi;
 use crate::stdlib::json_schema;
 use crate::stdlib::shared::{
@@ -277,6 +278,8 @@ async fn dispatch(
     } else if let Some(budget) = budget(caller) {
         budget.restore_spend(response.used, response.held);
     }
+    // Live or restored, the outcome is the run's: a resumed attempt lists it too.
+    note_outcomes(caller, model, &response.outcomes);
     Ok(response.outcomes)
 }
 
@@ -380,24 +383,32 @@ async fn call_provider(
                 let usage: Vec<_> = outcomes
                     .iter()
                     .map(|outcome| {
-                        serde_json::json!({
+                        let mut usage = serde_json::json!({
                             "input_tokens": outcome.input_tokens,
                             "output_tokens": outcome.output_tokens,
-                        })
+                        });
+                        // Only a provider that caches reports these.
+                        for (name, count) in [
+                            ("cache_read_tokens", outcome.cache_read_tokens),
+                            ("cache_write_tokens", outcome.cache_write_tokens),
+                        ] {
+                            if let Some(count) = count {
+                                usage[name] = count.into();
+                            }
+                        }
+                        usage
                     })
                     .collect();
                 Payload::meta(serde_json::json!({ "ok": ok, "failures": failures, "usage": usage }))
                     .with_owned_body(serde_json::to_vec(&texts).unwrap_or_default())
                     .with_size(received as u64)
             });
-            let usage = reported_usage(&outcomes);
-            record_usage(&*caller, ticket, usage);
-            // The provider action is the live dispatch. Replay returns the
-            // recorded outcome without entering here.
-            caller
-                .data_mut()
-                .note_model_call(ModelCallUsage::llm(model, usage));
-            fuel::settle(&mut *caller, fuel::IO, received as u64)?;
+            record_usage(&*caller, ticket, reported_usage(&outcomes));
+            if let Err(error) = fuel::settle(&mut *caller, fuel::IO, received as u64) {
+                // Billed, but no outcome reaches `dispatch` to be listed there.
+                note_outcomes(caller, model, &outcomes);
+                return Err(error);
+            }
             Ok(LlmResponse {
                 outcomes,
                 used: reservation.min(reported.saturating_add(held)),
@@ -503,6 +514,26 @@ fn sent_bytes(prompts: &[String], schema: Option<&str>) -> u64 {
     })
 }
 
+/// List each prompt of a dispatch as one model call. Prompts stay apart because
+/// a price can depend on one prompt's size.
+fn note_outcomes(
+    caller: &mut wasmtime::Caller<'_, StoreData>,
+    model: &str,
+    outcomes: &[LlmOutcome],
+) {
+    for outcome in outcomes {
+        caller.data_mut().note_model_call(ModelCallUsage::llm(
+            model,
+            ModelUsage {
+                input_tokens: outcome.input_tokens,
+                output_tokens: outcome.output_tokens,
+                cache_read_tokens: outcome.cache_read_tokens,
+                cache_write_tokens: outcome.cache_write_tokens,
+            },
+        ));
+    }
+}
+
 /// The token counts the provider reported, summed over the dispatch's prompts. A count
 /// any prompt left unreported is absent, not zero.
 fn reported_usage(outcomes: &[LlmOutcome]) -> ModelUsage {
@@ -511,9 +542,16 @@ fn reported_usage(outcomes: &[LlmOutcome]) -> ModelUsage {
             Some(total.saturating_add(field(outcome)?))
         })
     };
+    let part = |field: fn(&LlmOutcome) -> Option<u64>| {
+        outcomes
+            .iter()
+            .fold(None, |total, outcome| add_part(total, field(outcome)))
+    };
     ModelUsage {
         input_tokens: sum(|outcome| outcome.input_tokens),
         output_tokens: sum(|outcome| outcome.output_tokens),
+        cache_read_tokens: part(|outcome| outcome.cache_read_tokens),
+        cache_write_tokens: part(|outcome| outcome.cache_write_tokens),
     }
 }
 
@@ -2709,7 +2747,10 @@ mod tests {
             .observe(source)
             .await;
         assert_eq!(replay.result.expect("replay with sufficient fuel"), "20000");
-        assert!(replay.model_calls.is_empty());
+        assert_eq!(
+            replay.model_calls, first.model_calls,
+            "the resumed attempt lists the restored call"
+        );
         assert_eq!(
             provider.invoked(),
             1,
@@ -2717,8 +2758,8 @@ mod tests {
         );
     }
 
-    /// A `batch` of three prompts is one dispatch. The embedder sees their usage
-    /// summed, and a second model stays a second record.
+    /// A `batch` of three prompts is one dispatch but three records, since a
+    /// price can depend on one prompt's size. Summed, a model is one entry.
     #[tokio::test]
     async fn batch_usage_is_summed_per_model_for_the_embedder() {
         let provider = QueuedProvider::new(vec![
@@ -2741,7 +2782,7 @@ mod tests {
             .await;
         observed.result.expect("program completes");
         let calls = observed.model_calls;
-        assert_eq!(calls.len(), 2, "one record per host call");
+        assert_eq!(calls.len(), 4, "one record per prompt");
         assert_eq!(
             crate::runtime::ModelCallUsage::summed_by_model(&calls),
             vec![
@@ -2751,8 +2792,8 @@ mod tests {
         );
     }
 
-    /// One omitted count makes that field absent for the whole batch. The other
-    /// field still sums. A partial sum would bill an unknown half as zero.
+    /// One omitted count stays absent on its prompt's record, and makes the
+    /// model's summed field absent. A partial sum would bill an unknown half as zero.
     #[tokio::test]
     async fn an_omitted_batch_count_stays_absent() {
         let provider = QueuedProvider::new(vec![vec![
@@ -2770,8 +2811,9 @@ mod tests {
             )
             .await;
         observed.result.expect("program completes");
+        assert_eq!(observed.model_calls[1], llm_call("haiku", None, Some(4)));
         assert_eq!(
-            observed.model_calls,
+            crate::runtime::ModelCallUsage::summed_by_model(&observed.model_calls),
             vec![llm_call("haiku", None, Some(12))]
         );
     }
@@ -2850,9 +2892,10 @@ mod tests {
     }
 
     /// Replay restores the outcome without calling the provider. The new store
-    /// must not grow a second bill for the same call.
+    /// lists the call once, from the recorded outcome, so a resumed attempt
+    /// reports the whole run.
     #[tokio::test]
-    async fn a_replayed_batch_is_not_recorded_again() {
+    async fn a_replayed_batch_is_listed_from_its_recorded_outcome() {
         let provider = QueuedProvider::new(vec![vec![
             LlmOutcome::success("a").with_usage(Some(1), Some(2)),
             LlmOutcome::success("b").with_usage(Some(3), Some(4)),
@@ -2871,7 +2914,11 @@ mod tests {
         assert_eq!(first.result.expect("live run"), "3");
         assert_eq!(
             first.model_calls,
-            vec![llm_call("haiku", Some(9), Some(12))]
+            vec![
+                llm_call("haiku", Some(1), Some(2)),
+                llm_call("haiku", Some(3), Some(4)),
+                llm_call("haiku", Some(5), Some(6)),
+            ]
         );
         history.replay();
         let second = Harness::new()
@@ -2880,11 +2927,7 @@ mod tests {
             .observe(source)
             .await;
         assert_eq!(second.result.expect("replayed run"), "3");
-        assert!(
-            second.model_calls.is_empty(),
-            "replay must not bill the call again: {:?}",
-            second.model_calls
-        );
+        assert_eq!(second.model_calls, first.model_calls);
         assert_eq!(provider.invoked(), 1, "replay must not call the provider");
     }
 
@@ -2898,6 +2941,7 @@ mod tests {
             crate::runtime::ModelUsage {
                 input_tokens: input,
                 output_tokens: output,
+                ..crate::runtime::ModelUsage::default()
             },
         )
     }

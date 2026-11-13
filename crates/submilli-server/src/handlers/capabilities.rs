@@ -48,7 +48,7 @@ fn capabilities_json(store: &PackageStore) -> Value {
                         "summary": cap.summary,
                         "filter_fields": cap.field_names().collect::<Vec<_>>(),
                         "fields": fields,
-                        "example_filter": cap.example_filter,
+                        "example_filter": (!cap.example_filter.is_empty()).then_some(cap.example_filter),
                         "main_denial": cap.main_denial,
                     })
                 })
