@@ -808,6 +808,7 @@ mod tests {
                     type_predicate: Some(TypePredicate {
                         parameter_index: 0,
                         asserted_type: Type::String,
+                        kind: interpreter::PredicateKind::Guard,
                     }),
                     doc: doc(file, "/** Greet someone. @param name who */"),
                 },

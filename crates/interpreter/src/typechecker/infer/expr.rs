@@ -3616,7 +3616,8 @@ impl Inferer<'_> {
         else {
             return Ok((kind, ty));
         };
-        if predicate.parameter_index != 0 {
+        // An assertion is not a guard: tsc picks the plain overload for it.
+        if !predicate.kind.is_guard() || predicate.parameter_index != 0 {
             return Ok((kind, ty));
         }
         let guarded = predicate.asserted_type.clone();
@@ -11093,11 +11094,7 @@ impl Inferer<'_> {
             .unwrap_or(Type::Unknown);
         Ok(Type::Function {
             params: param_types,
-            ret: Box::new(if type_predicate.is_some() {
-                Type::Boolean
-            } else {
-                ret
-            }),
+            ret: Box::new(type_predicate.map_or(ret, |pred| pred.kind().return_type())),
             predicate: predicate.map(Box::new),
             has_rest,
             optional: params
@@ -11356,9 +11353,9 @@ impl Inferer<'_> {
             .flatten();
         let mut annotated_ret: Option<Type> = None;
         let ret_hint: Option<Type> = match (&return_ty_ann, hint_owned.as_ref()) {
-            _ if type_predicate.is_some() => {
-                annotated_ret = Some(Type::Boolean);
-                Some(Type::Boolean)
+            _ if let Some(pred) = &type_predicate => {
+                annotated_ret = Some(pred.kind().return_type());
+                Some(pred.kind().return_type())
             }
             (Some(ann), Some((_, hr))) => {
                 let t = self.resolve_type(ann)?;

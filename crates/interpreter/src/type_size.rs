@@ -474,6 +474,7 @@ pub fn map_children<E>(
                     Some(predicate) => Some(Box::new(crate::TypePredicate {
                         parameter_index: predicate.parameter_index,
                         asserted_type: map(&predicate.asserted_type)?,
+                        kind: predicate.kind,
                     })),
                     None => None,
                 },
@@ -980,6 +981,7 @@ pub(crate) mod tests {
             predicate: Some(Box::new(crate::TypePredicate {
                 parameter_index: 0,
                 asserted_type: Type::Number,
+                kind: crate::PredicateKind::Guard,
             })),
             has_rest: true,
             optional: 0,

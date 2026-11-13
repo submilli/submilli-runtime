@@ -1917,6 +1917,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         predicate: Some(crate::TypePredicate {
                             parameter_index: 0,
                             asserted_type: Type::Array(Box::new(Type::Unknown)),
+                        kind: crate::PredicateKind::Guard,
                         }),
                         doc: doc(
                             "/**\n * Returns `true` when `value` is an array. Element type is erased at runtime; the static-typed true-branch sees `value` narrowed to the call site's array variant.\n * @param value The value to test.\n */",

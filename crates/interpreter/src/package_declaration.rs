@@ -1132,7 +1132,8 @@ pub struct MethodSig {
     pub generics: GenericParameters,
     pub params: Vec<Param>,
     pub ret: Type,
-    /// Type-guard predicate (`x is T`); `None` for ordinary methods.
+    /// Guard or assertion predicate (`x is T`, `asserts x is T`, `asserts x`);
+    /// `None` for ordinary methods.
     pub predicate: Option<crate::TypePredicate>,
     pub doc: Option<crate::DocComment>,
 }

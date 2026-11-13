@@ -267,8 +267,20 @@ fn write_return(
                 .ok_or(RenderError::InvalidMetadata(
                     "predicate parameter is absent",
                 ))?;
-        out.format(format_args!("{} is ", param.name))?;
-        return write_type(out, &substituted(&predicate.asserted_type, sub, limits)?);
+        let asserted = match predicate.kind {
+            crate::PredicateKind::Guard => {
+                out.format(format_args!("{} is ", param.name))?;
+                &predicate.asserted_type
+            }
+            crate::PredicateKind::Asserts => {
+                out.format(format_args!("asserts {} is ", param.name))?;
+                &predicate.asserted_type
+            }
+            crate::PredicateKind::AssertsTruthy => {
+                return out.format(format_args!("asserts {}", param.name));
+            }
+        };
+        return write_type(out, &substituted(asserted, sub, limits)?);
     }
     write_type(out, &substituted(ret, sub, limits)?)
 }
@@ -362,6 +374,7 @@ mod tests {
         let predicate = crate::TypePredicate {
             parameter_index: 9,
             asserted_type: Type::String,
+            kind: crate::PredicateKind::Guard,
         };
         let name = "f".repeat(100_000);
         let result = super::format_signature(

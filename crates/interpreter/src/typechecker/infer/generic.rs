@@ -189,6 +189,7 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
                 Box::new(crate::TypePredicate {
                     parameter_index: p.parameter_index,
                     asserted_type: erase_generic_params(&p.asserted_type),
+                    kind: p.kind,
                 })
             }),
             has_rest: *has_rest,
@@ -936,6 +937,7 @@ impl Inferer<'_> {
             Some(p) => Some(Box::new(crate::TypePredicate {
                 parameter_index: p.parameter_index,
                 asserted_type: self.instantiate(&sub, &p.asserted_type, span)?,
+                kind: p.kind,
             })),
             None => None,
         };
@@ -3272,6 +3274,7 @@ impl Inferer<'_> {
             Some(p) => Some(Box::new(crate::TypePredicate {
                 parameter_index: p.parameter_index,
                 asserted_type: self.instantiate(&sub, &p.asserted_type, span)?,
+                kind: p.kind,
             })),
             None => None,
         };

@@ -1280,9 +1280,13 @@ fn assignable_rec(
                 return false;
             }
             // Predicate→non-predicate: ok (info dropped). Non-predicate→predicate: rejected (can't manufacture narrowing metadata).
+            // A guard and an assertion never stand for each other; an
+            // assertion returns `void`, so the return check below lets it
+            // stand for a `void` function, as in tsc.
             let predicate_ok = match (predicate_a, predicate_e) {
                 (Some(a), Some(e)) => {
-                    a.parameter_index == e.parameter_index
+                    a.kind == e.kind
+                        && a.parameter_index == e.parameter_index
                         && assignable_rec(&a.asserted_type, &e.asserted_type, types, seen)
                 }
                 (Some(_), None) => true,
@@ -2803,6 +2807,42 @@ mod tests {
             has_rest: false,
             optional: 0,
         }
+    }
+
+    fn predicate_fn_ty(kind: crate::PredicateKind) -> Type {
+        Type::Function {
+            params: vec![Type::Unknown],
+            ret: Box::new(kind.return_type()),
+            predicate: Some(Box::new(crate::TypePredicate {
+                parameter_index: 0,
+                asserted_type: Type::String,
+                kind,
+            })),
+            has_rest: false,
+            optional: 0,
+        }
+    }
+
+    #[test]
+    fn assertion_functions_relate_like_tsc() {
+        use crate::PredicateKind::{Asserts, Guard};
+        let asserts = predicate_fn_ty(Asserts);
+        let guard = predicate_fn_ty(Guard);
+        assert!(assignable(&asserts, &asserts));
+        assert!(!assignable(&asserts, &guard));
+        assert!(!assignable(&guard, &asserts));
+        assert!(assignable(
+            &asserts,
+            &fn_ty(vec![Type::Unknown], Type::Void)
+        ));
+        assert!(!assignable(
+            &asserts,
+            &fn_ty(vec![Type::Unknown], Type::Boolean)
+        ));
+        assert!(!assignable(
+            &fn_ty(vec![Type::Unknown], Type::Void),
+            &asserts
+        ));
     }
 
     #[test]

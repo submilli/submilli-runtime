@@ -1,0 +1,5 @@
+# An assertion function exported from a package narrows its argument in the
+# consumer after the call, through a named import and a namespace import.
+# name          dir     deps            root
+@test/checks    checks  -
+main            app     @test/checks    root

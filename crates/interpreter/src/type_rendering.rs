@@ -696,26 +696,49 @@ pub(crate) fn check_for_copy(root: &Type) -> Result<(), RenderError> {
 }
 
 fn validate_function_metadata(ty: &Type) -> Result<(), RenderError> {
-    if let Type::Function {
+    let Type::Function {
         params,
+        ret,
         predicate,
         has_rest,
         ..
     } = ty
+    else {
+        return Ok(());
+    };
+    if *has_rest && params.is_empty() {
+        return Err(RenderError::InvalidMetadata("rest parameter is absent"));
+    }
+    match predicate {
+        Some(predicate) => validate_predicate(predicate, params, ret),
+        None => Ok(()),
+    }
+}
+
+fn validate_predicate(
+    predicate: &crate::TypePredicate,
+    params: &[Type],
+    ret: &Type,
+) -> Result<(), RenderError> {
+    let parameter_present = usize::try_from(predicate.parameter_index)
+        .ok()
+        .is_some_and(|index| index < params.len());
+    if !parameter_present {
+        return Err(RenderError::InvalidMetadata(
+            "predicate parameter is absent",
+        ));
+    }
+    if predicate.kind.is_assertion() && !ret.is_void() {
+        return Err(RenderError::InvalidMetadata(
+            "assertion does not return void",
+        ));
+    }
+    if predicate.kind == crate::PredicateKind::AssertsTruthy
+        && !matches!(predicate.asserted_type, Type::Unknown)
     {
-        if *has_rest && params.is_empty() {
-            return Err(RenderError::InvalidMetadata("rest parameter is absent"));
-        }
-        if predicate.as_ref().is_some_and(|predicate| {
-            usize::try_from(predicate.parameter_index)
-                .ok()
-                .and_then(|index| params.get(index))
-                .is_none()
-        }) {
-            return Err(RenderError::InvalidMetadata(
-                "predicate parameter is absent",
-            ));
-        }
+        return Err(RenderError::InvalidMetadata(
+            "truthy assertion asserts a type",
+        ));
     }
     Ok(())
 }
