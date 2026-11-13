@@ -900,10 +900,10 @@ mod tests {
                 conditional(function.clone(), function, &[], Type::Number),
                 "(() => void) extends (() => void) ? number : boolean",
             ),
-            (Type::intersection(vec![var("U"), var("T")]), "T & U"),
+            (Type::intersection(vec![var("U"), var("T")]), "U & T"),
             (
                 Type::intersection(vec![brand.clone(), Type::String]),
-                "string & { brand: true }",
+                "{ brand: true } & string",
             ),
             (
                 Type::intersection(vec![
@@ -931,12 +931,13 @@ mod tests {
     }
 
     #[test]
-    fn intersection_is_canonical() {
+    fn intersection_flattens_and_deduplicates_without_reordering() {
         let var = |name: &str| Type::TypeVar(name.into());
         let nested = Type::intersection(vec![var("U"), var("T")]);
+        assert_ne!(nested, Type::intersection(vec![var("T"), var("U")]));
         assert_eq!(
             Type::intersection(vec![var("V"), nested.clone(), Type::Unknown, var("T")]),
-            Type::Intersection(vec![var("T"), var("U"), var("V")])
+            Type::Intersection(vec![var("V"), var("U"), var("T")])
         );
         assert_eq!(Type::intersection(vec![var("T"), Type::Unknown]), var("T"));
         assert_eq!(Type::intersection(vec![var("T"), Type::Never]), Type::Never);
@@ -973,7 +974,7 @@ mod tests {
         };
         assert_eq!(
             Type::intersection(vec![refined.clone(), a()]),
-            Type::Intersection(vec![a(), refined])
+            Type::Intersection(vec![refined, a()])
         );
         // Built by hand, unreduced: the literal is the narrower primitive.
         let unreduced = Type::Intersection(vec![Type::String, a(), brand.clone()]);
