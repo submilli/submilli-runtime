@@ -135,6 +135,7 @@ fn own_keys(caller: &mut Caller<'_, StoreData>, source: &Val) -> wasmtime::Resul
         if hidden.as_ref().is_some_and(|hidden| hidden.hides(slot))
             || super::field_is_private(caller, &name)?
             || super::is_accessor_slot(caller, &name)?
+            || super::is_protocol_slot(caller, &name)?
             || !super::field_is_present(caller, &name, &value)?
         {
             continue;

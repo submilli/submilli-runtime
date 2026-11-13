@@ -194,6 +194,7 @@ fn enumerate(
             if !field_is_present(caller, &name, &value)?
                 || is_accessor_slot(caller, &name)?
                 || is_method_slot(caller, &name)?
+                || is_protocol_slot(caller, &name)?
             {
                 continue;
             }
@@ -318,6 +319,14 @@ pub(crate) fn is_method_slot(
     name_has_marker(caller, name, crate::codegen::field_names::METHOD_MARKER)
 }
 
+/// A built-in iterator's `next` or `close`: not an own enumerable property.
+pub(crate) fn is_protocol_slot(
+    caller: &mut Caller<'_, StoreData>,
+    name: &Val,
+) -> wasmtime::Result<bool> {
+    name_has_marker(caller, name, crate::codegen::field_names::PROTOCOL_MARKER)
+}
+
 fn name_has_marker(
     caller: &mut Caller<'_, StoreData>,
     name: &Val,
@@ -381,11 +390,16 @@ fn spread(
             // earlier present field. It is copied otherwise, keeping its marked
             // name so the copy doesn't list it, because the result's static
             // type may name it; a later method replaces an earlier one.
+            // A protocol slot is copied the same way: the iterator type names
+            // `next`, so the copy must still answer `next()`, but the marker
+            // keeps it out of `Object.keys`. It does replace an earlier data
+            // field, because that is what the spread type says the name becomes.
             let is_method = is_method_slot(caller, &name)?;
+            let is_protocol = is_protocol_slot(caller, &name)?;
             if is_method && !method_may_replace(caller, entries.get(&units))? {
                 continue;
             }
-            let name = if is_method {
+            let name = if is_method || is_protocol {
                 name
             } else {
                 copy_field_name(caller, name, true)?
@@ -789,7 +803,9 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
     };
     let name = names.get(&mut *caller, slot)?;
     let value = values.get(&mut *caller, slot)?;
-    Ok(field_is_present(caller, &name, &value)? && !is_method_slot(caller, &name)?)
+    Ok(field_is_present(caller, &name, &value)?
+        && !is_method_slot(caller, &name)?
+        && !is_protocol_slot(caller, &name)?)
 }
 
 /// SameValue on two `f64` bit patterns: any NaN equals any NaN (Wasm arithmetic

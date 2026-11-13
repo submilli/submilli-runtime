@@ -6,6 +6,10 @@
 //! *host* `Func`, so the whole protocol — iterator object, `next` step, and the
 //! `{ done, value }` results — is produced in Rust.
 //!
+//! `next` and `close` are protocol slots, not own enumerable properties, so
+//! `Object.keys` and `for…in` see nothing. A write replaces the marker with an
+//! ordinary name.
+//!
 //! [`iter_yield`] / [`iter_done`] build the `IteratorYieldResult` /
 //! `IteratorReturnResult` objects directly, carrying the generic host
 //! `object_vtable` (identity slots: `toString` → "[object Object]", `toJson`
@@ -377,8 +381,35 @@ fn iterator_name(caller: &mut Caller<'_, StoreData>, name: &str) -> wasmtime::Re
     {
         return Ok(root.get(&mut *caller));
     }
-    let name = write_submilli_string_struct(caller, name)?;
-    retain_constant(caller, index, Val::AnyRef(Some(name.to_anyref())))
+    // `next` and `close` are protocol slots, not own enumerable properties.
+    // `done` and `value` on a result object stay ordinary fields.
+    let name = if matches!(name, "next" | "close") {
+        protocol_field_name(caller, name)?
+    } else {
+        Val::AnyRef(Some(
+            write_submilli_string_struct(caller, name)?.to_anyref(),
+        ))
+    };
+    retain_constant(caller, index, name)
+}
+
+/// A marked field name whose flag says the slot is not an own enumerable
+/// property. The text is still the lookup key for `next()` and `in`.
+fn protocol_field_name(caller: &mut Caller<'_, StoreData>, text: &str) -> wasmtime::Result<Val> {
+    let plain = write_submilli_string_struct(caller, text)?;
+    let intr = intrinsic_types(&mut *caller)?;
+    let ty = super::object::optional_field_name_type(caller.engine(), &intr)?;
+    let values = [
+        plain.field(&mut *caller, 0)?,
+        plain.field(&mut *caller, 1)?,
+        plain.field(&mut *caller, 2)?,
+        Val::I32(crate::codegen::field_names::PROTOCOL_MARKER),
+        Val::I32(0),
+    ];
+    let pre = StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &values)?.to_anyref(),
+    )))
 }
 
 fn retain_constant(

@@ -3,7 +3,7 @@ use wasmtime::{Caller, FuncType, HeapType, Linker, RefType, Val, ValType};
 
 use super::{
     ctor_key, field_array, field_is_present, field_is_private, is_accessor_slot, is_method_slot,
-    shape_arrays,
+    is_protocol_slot, shape_arrays,
 };
 use crate::runtime::StoreData;
 use crate::runtime::fuel;
@@ -145,6 +145,13 @@ pub(super) async fn set(
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
         values.set(&mut *caller, property.slot, *value)?;
+        // A write onto `next` or `close` makes it an own property, as
+        // assigning through the iterator does in JavaScript. The protocol
+        // marker would keep hiding it from `Object.keys` and a later spread.
+        if super::is_protocol_slot(caller, &property.name)? {
+            let plain = super::copy_field_name(caller, property.name, true)?;
+            field_array(caller, &object, 1)?.set(&mut *caller, property.slot, plain)?;
+        }
         return super::mark_field_present(caller, &property.name);
     }
     if let Some(property) = find(caller, object, &accessor_key("set ", &key)?, true)? {
@@ -332,7 +339,10 @@ fn record_entry(
     name: &Val,
     value: &Val,
 ) -> wasmtime::Result<Option<RecordEntry>> {
-    if field_is_private(caller, name)? || is_method_slot(caller, name)? {
+    if field_is_private(caller, name)?
+        || is_method_slot(caller, name)?
+        || is_protocol_slot(caller, name)?
+    {
         return Ok(None);
     }
     if is_accessor_slot(caller, name)? {

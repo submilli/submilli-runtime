@@ -35,6 +35,12 @@ pub const ACCESSOR_MARKER: i32 = -1;
 /// A class method's slot: an own property neither for `Object.keys` nor for
 /// `hasOwn`, as in JavaScript.
 pub const METHOD_MARKER: i32 = -2;
+/// A built-in iterator's `next` or `close`. JavaScript keeps them on the
+/// prototype, so they are not own enumerable properties: enumeration, `hasOwn`,
+/// and `Object.assign` omit them. A spread copies the slot and keeps this
+/// marker, so the copy is not listed either. `in` and a `next()` call still
+/// find them. A write replaces the marker with an ordinary name.
+pub const PROTOCOL_MARKER: i32 = -3;
 
 pub fn declare_optional_name_type(
     types: &mut wasm_encoder::TypeSection,
