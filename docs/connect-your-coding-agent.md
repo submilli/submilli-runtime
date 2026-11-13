@@ -6,7 +6,7 @@ docType: how-to
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "3d83edcffcfe550027b15c3c2e6e7070dce9fc598dba7430b8d67ed22c8ba581"
+  contentHash: "d48d59eb558fcd051495249c6031aecd3b8be7234c6bed67e107e4fef5df43ca"
   confirmedAt: "2026-11-13T23:05:53.386+02:00"
 ---
 A Submilli workspace can run an MCP server. MCP (Model Context
@@ -39,10 +39,9 @@ For another workspace, use its agent server address followed by `/mcp`.
 - Access is by signing in once, interactively, in the client. This server has
   no service-account token, static bearer token, or environment-secret path.
 - Sign-in works after an OAuth consent fix is deployed to the workspace. That
-  fix is tracked in the private repository as
-  [submilli-agents#55](https://github.com/submilli/submilli-agents/pull/55).
-  Until it is live, the Allow button can look dead, or the browser may not
-  return to your client.
+  fix is tracked as submilli-agents pull request 55, in the private agent
+  server repository. Until it is live, the Allow button can look dead, or the
+  browser may not return to your client.
 - If the address returns 404, check it for typos. If it is right, MCP is
   turned off on that workspace. Ask the person who runs it to enable MCP.
 
