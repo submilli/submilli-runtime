@@ -946,7 +946,9 @@ fn json_property_slots(
             continue;
         }
         let name = names.get(&mut *caller, slot)?;
-        if super::object::field_is_private(caller, &name)? {
+        if super::object::field_is_private(caller, &name)?
+            || super::object::is_protocol_slot(caller, &name)?
+        {
             continue;
         }
         let getter = super::object::is_accessor_slot(caller, &name)?;
