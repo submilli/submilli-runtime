@@ -57,10 +57,11 @@ for editor use. To run it directly from this directory:
       DurableExecution.tla
 
 The [CI workflow](../../.github/workflows/verification.yml) runs the bounded
-matrix for pull requests, main and merge-queue checks, independently of the Rust
-suites. It retains model-checking evidence as a workflow artifact. A failed
-check stops the runner. Timeout, parse errors, incomplete exploration, and the
-wrong counterexample all fail the gate.
+matrix on every push to main, and for pull requests and merge-queue checks that
+change `verification/` or the workflow, independently of the Rust suites. It
+retains model-checking evidence as a workflow artifact. A failed check stops the
+runner. Timeout, parse errors, incomplete exploration, and the wrong
+counterexample all fail the gate.
 
 ## What is modeled
 
