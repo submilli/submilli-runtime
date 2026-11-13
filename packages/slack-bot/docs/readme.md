@@ -91,13 +91,26 @@ automatically.
 
 ## Example
 
+`sendMessage` accepts optional `blocks: Record<string, unknown>[]` for Block Kit
+content. Keep `text` as fallback text for notifications and accessibility.
+Blocks pass through unchanged; Slack validates their contents. Absent or empty
+arrays omit the field. More than 50 blocks throws `SlackError` with code
+`invalid_blocks` before sending.
+
 Post a status update and reply in its thread.
 
 ```ts
 import slack from "@submilli/slack-bot";
 
 function main(): string {
-    const root = slack.sendMessage({ channelId: "C0123456789", text: "Deploy finished." });
+    const root = slack.sendMessage({
+        channelId: "C0123456789",
+        text: "Deploy finished.",
+        blocks: [
+            { type: "header", text: { type: "plain_text", text: "Deploy finished" } },
+            { type: "section", text: { type: "mrkdwn", text: "All 214 checks green." } },
+        ],
+    });
     slack.sendMessage({
         channelId: "C0123456789",
         text: "All 214 checks green.",

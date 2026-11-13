@@ -32,6 +32,27 @@ Typical scopes include conversation read/history scopes, `users:read`,
 member of private conversations and generally must join channels it reads or
 writes.
 
+## Message blocks
+
+`sendMessage` accepts optional `blocks: Record<string, unknown>[]` for Slack
+Block Kit messages. `text` remains required as fallback text for notifications
+and accessibility. Blocks pass through unchanged; Slack validates their contents.
+Absent or empty arrays omit the `blocks` field. More than 50 blocks throws
+`SlackError` with code `invalid_blocks` before a request is sent.
+
+```ts
+import slack from "@submilli/slack-bot";
+
+slack.sendMessage({
+    channelId: "C0123456789",
+    text: "Deploy finished.",
+    blocks: [
+        { type: "header", text: { type: "plain_text", text: "Deploy finished" } },
+        { type: "section", text: { type: "mrkdwn", text: "All 214 checks green." } },
+    ],
+});
+```
+
 ## Message metadata
 
 New posts can carry Slack message metadata from the session variable

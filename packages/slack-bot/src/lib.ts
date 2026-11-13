@@ -3,6 +3,7 @@ import { encodeQuery } from "submilli:url";
 import secrets from "submilli:secrets";
 import { check } from "submilli:security";
 import { SlackError } from "./error";
+import { attachMessageBlocks } from "./blocks";
 import { attachMessageMetadata, configuredMessageMetadata, MessageMetadata } from "./metadata";
 
 export { SlackError } from "./error";
@@ -194,8 +195,10 @@ export interface UserPage {
 export interface SendMessageInput {
     /** Target conversation ID. */
     channelId: string;
-    /** Message text. */
+    /** Message text, required as a fallback when blocks are supplied. */
     text: string;
+    /** Optional Block Kit blocks, passed through unchanged; at most 50. */
+    blocks?: Record<string, unknown>[];
     /** Thread-root timestamp when replying. */
     threadTs?: string;
     /** Whether Slack should unfurl links. */
@@ -236,18 +239,19 @@ export function getIdentity(): SlackIdentity {
  * Post a message as the bot and return Slack's stored message.
  * Set `threadTs` to reply in a thread. The bot must be allowed to post in the
  * target conversation, which normally means it must already be a member.
- * @param input Message text, destination, and optional thread/unfurl settings.
+ * @param input Message text, destination, and optional blocks/thread/unfurl settings.
   * @returns The message as stored by Slack, including its `ts` for later updates or threading.
  * @capability slack.com/bot/sendMessage { channelId: string }
  */
 export function sendMessage(input: SendMessageInput): SlackMessage {
-    const { channelId, text, threadTs, unfurlLinks, unfurlMedia } = input;
+    const { channelId, text, blocks, threadTs, unfurlLinks, unfurlMedia } = input;
     check("slack.com/bot/sendMessage", { channelId: channelId });
-    const metadata = configuredMessageMetadata();
     const body: MessageWriteRequest = { channel: channelId, text: text };
     if (threadTs !== undefined) body.thread_ts = threadTs;
     if (unfurlLinks !== undefined) body.unfurl_links = unfurlLinks;
     if (unfurlMedia !== undefined) body.unfurl_media = unfurlMedia;
+    attachMessageBlocks(body, blocks);
+    const metadata = configuredMessageMetadata();
     return postMessage(body, metadata);
 }
 
@@ -324,6 +328,7 @@ export function deleteMessage(ref: MessageRef): void {
 interface MessageWriteRequest {
     channel: string;
     text: string;
+    blocks?: Record<string, unknown>[];
     thread_ts?: string;
     unfurl_links?: boolean;
     unfurl_media?: boolean;
