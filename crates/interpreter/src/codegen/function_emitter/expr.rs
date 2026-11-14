@@ -6948,30 +6948,26 @@ fn emit_shape_method_with_arguments(
         emitter.instruction(Instruction::LocalSet(slot));
         evaluated_args.push(slot);
     }
-    // A hybrid passes as the closure it holds; `emit_erased_cast` unwraps it.
+    // A hybrid calls as the closure it holds.
+    emit_unwrap_hybrid(emitter, intrinsics, method_value);
     emitter.instruction(Instruction::LocalGet(method_value));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         intrinsics.closure,
     )));
-    emitter.instruction(Instruction::LocalGet(method_value));
-    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-        intrinsics.callable_shape,
-    )));
-    emitter.instruction(Instruction::I32Or);
     emitter.instruction(Instruction::I32Eqz);
     emitter.emit_if(BlockType::Empty);
     crate::codegen::throw::emit_type_error_throw(emitter, ctx, "Value is not callable");
     emitter.emit_end();
-    emitter.instruction(Instruction::LocalGet(method_value));
 
     // 3. Cast to the matching closure struct type. closure
     // ABI: every Function-typed value stored in an `$Object` slot is
     // a `(ref $closure_<sig>)`.
-    crate::codegen::closure_coercions::emit_erased_cast(
+    crate::codegen::closure_coercions::emit_erased_cast_of(
         emitter,
         ctx,
         crate::codegen::closures::ClosureSig::of(args.len(), call_ret_ty)?,
         false,
+        method_value,
     )?;
     emitter.instruction(Instruction::LocalTee(closure_local));
 
