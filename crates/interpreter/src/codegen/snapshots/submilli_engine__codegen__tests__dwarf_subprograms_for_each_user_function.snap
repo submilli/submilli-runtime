@@ -1,6 +1,5 @@
 ---
 source: crates/interpreter/src/codegen/mod.rs
-assertion_line: 5490
 expression: dump
 ---
 <0xb> DW_TAG_compile_unit
@@ -8,7 +7,7 @@ expression: dump
   DW_AT_comp_dir = Str("")
   DW_AT_language = Language(DW_LANG_C99)
   DW_AT_low_pc = Addr(0x0)
-  DW_AT_high_pc = Udata(637)
+  DW_AT_high_pc = Udata(688)
   DW_AT_stmt_list = DebugLineRef(DebugLineOffset(0))
 <0x1f> DW_TAG_subprogram
   DW_AT_name = Str("<top level>")

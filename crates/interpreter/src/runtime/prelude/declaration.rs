@@ -819,7 +819,10 @@ mod tests {
             let index = index.as_ref().unwrap_or_else(|| panic!("{name} index"));
             assert_eq!(index.key.as_ref(), &Type::Number);
             assert_eq!(index.value.as_ref(), &Type::String);
-            assert!(index.readonly);
+            assert!(
+                !index.readonly,
+                "{name} elements are writable, as in lib.d.ts"
+            );
         }
 
         let (merged, _, _) = super::cached_runtime_package_declarations();
