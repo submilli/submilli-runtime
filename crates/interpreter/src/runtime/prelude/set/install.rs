@@ -21,11 +21,6 @@ fn method_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("Set"), method)
 }
 
-/// The dispatch key for a `SetConstructor` static (`new`).
-fn ctor_key(method: &str) -> MangledName {
-    crate::mangle::extend(&crate::mangle::prelude("SetConstructor"), method)
-}
-
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -179,12 +174,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         )?;
     }
 
-    // `SetConstructor#new(init?)` — static dispatch (the constructor receiver is
+    // `new Set(init?)`, the `SetConstructor` construct signature — static dispatch (the constructor receiver is
     // dropped at the call site), so the host fn sees only the `values` arg.
     register_host_fn_async(
         linker,
         MODULE_NAME,
-        ctor_key("new"),
+        crate::mangle::construct_signature(&crate::mangle::prelude("SetConstructor")),
         ft(vec![obj.clone()], vec![obj.clone()]),
         |caller, params, results| {
             Box::pin(async move {
@@ -293,8 +288,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     // site, so the host fn sees only `values`.
     declare_method(
         defs,
-        "new",
-        ctor_key("new"),
+        "Set",
+        crate::mangle::construct_signature(&crate::mangle::prelude("SetConstructor")),
         vec![Param::new(
             "values",
             Type::union(vec![
@@ -643,6 +638,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc("/** The number of elements currently in the set. */"),
                     },
                 )]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** A hash-backed unique-value collection. Elements are compared by structural equality through each element's `equals` method; lookup buckets via `hash`. Iteration follows insertion order. */",
@@ -659,9 +656,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
-                methods: BTreeMap::from([(
-                    "new".to_string(),
-                    MethodSig { overloads: Vec::new(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::new(),
+                call: None,
+                construct: Some(MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: crate::GenericParameters::unconstrained(vec!["T".to_string()]),
                         params: vec![Param::with_default(
@@ -686,9 +684,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc(
                             "/** Construct a `Set<T>`, optionally from an iterable of values: `new Set([1, 2, 2])` dedups to size 2. */",
                         ),
-                    },
-                )]),
-                properties: BTreeMap::new(),
+                    }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Set`. Accessed via the global `Set` binding — call `new Set<T>()`. */",

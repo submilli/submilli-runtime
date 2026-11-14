@@ -7,7 +7,7 @@ function main(): void {
         assert(bytes[1] === 0 && bytes[size-1] === (size-2) % 128);
         bytes.copyWithin(0, 1, size);
         assert(bytes[0] === 0 && bytes[size-2] === (size-2) % 128);
-        const one = Uint8Array.new([7]);
+        const one = new Uint8Array([7]);
         for (let i=0; i<size; i++) { bytes.set(one, i); }
         assert(bytes.every((value: number): boolean => value === 7));
         bytes.set(bytes, 0);

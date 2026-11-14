@@ -769,7 +769,21 @@ impl SyntaxChildren {
                             self.annotation(&signature.key);
                             self.annotation(&signature.value);
                         }
+                        InterfaceMember::CallSignature {
+                            params,
+                            return_type,
+                            ..
+                        } => {
+                            self.params(params);
+                            self.annotation(return_type);
+                        }
                         InterfaceMember::Method {
+                            generics,
+                            params,
+                            return_type,
+                            ..
+                        }
+                        | InterfaceMember::ConstructSignature {
                             generics,
                             params,
                             return_type,

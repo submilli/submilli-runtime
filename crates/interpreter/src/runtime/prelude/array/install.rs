@@ -1838,6 +1838,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc("/** The number of elements in the array. Writing a smaller length removes the elements past it, as in JavaScript; writing a larger one throws a `RangeError`, since arrays have no holes. */"),
                     },
                 )]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc("/** A homogeneous array of `T`. */"),
             },
@@ -1926,6 +1928,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     },
                 )]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Array`. Accessed via the global `Array` binding. */",

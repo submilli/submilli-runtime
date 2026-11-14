@@ -1,7 +1,6 @@
 // A quoted method named "@call" is an ordinary method: a call through an
 // interface reaches it, as in TypeScript, while a value of a call-signature
-// interface is called as the function it is. SUB-1524 tracks the two sharing
-// one spelling.
+// interface is called as the function it is.
 interface X {
   "@call"(v: number): number;
 }

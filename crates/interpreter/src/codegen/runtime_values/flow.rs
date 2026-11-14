@@ -629,45 +629,42 @@ fn connect_expression(
                 flow.value(*receiver, target);
             }
         }
-        TypedExprKind::MethodCall { name, args, .. }
-        | TypedExprKind::SuperMethodCall { name, args, .. } => {
-            if let TypedExprKind::MethodCall { receiver, .. } = &ast
-                .try_expr(id)
-                .map_err(crate::codegen::arena_failure)?
-                .kind
-            {
-                flow.value(*receiver, target.clone());
-                if name.name == "@call" && !flow.is_static_value_binding(ast, *receiver)? {
-                    flow.widened.insert(target.clone());
-                    flow.edge(Place::CallbackReturn, target.clone());
-                }
-            }
-            flow.edge(Place::Method(name.name.clone()), target);
-            for declaration in &ast.types {
-                if let crate::TypedTypeDecl::Class(class) = declaration {
-                    for method in class
-                        .methods
-                        .iter()
-                        .filter(|method| method.name.name == name.name)
-                    {
-                        for (arg, param) in args.iter().zip(&method.params) {
-                            flow.value(*arg, Place::Local(param.name.clone()));
-                        }
+        TypedExprKind::MethodCall {
+            receiver,
+            member,
+            args,
+            ..
+        } => {
+            flow.value(*receiver, target.clone());
+            match member {
+                crate::Member::Named(name) => method_call_flow(ast, flow, name, args, target),
+                crate::Member::CallSignature(_) => {
+                    if !flow.is_static_value_binding(ast, *receiver)? {
+                        flow.widened.insert(target.clone());
+                        flow.edge(Place::CallbackReturn, target);
                     }
                 }
+                crate::Member::ConstructSignature(_) => {}
             }
+        }
+        TypedExprKind::SuperMethodCall { name, args, .. } => {
+            method_call_flow(ast, flow, name, args, target);
         }
         TypedExprKind::GenericMethodCall {
             receiver,
-            name,
+            member,
             args,
             return_cast,
             ..
         } => {
             flow.value(*receiver, target.clone());
             flow.value(*receiver, Place::Element);
-            flow.edge(Place::Method(name.name.clone()), target.clone());
-            if name.name == "@call" && !flow.is_static_value_binding(ast, *receiver)? {
+            if let Some(name) = member.as_named() {
+                flow.edge(Place::Method(name.name.clone()), target.clone());
+            }
+            if matches!(member, crate::Member::CallSignature(_))
+                && !flow.is_static_value_binding(ast, *receiver)?
+            {
                 flow.widened.insert(target.clone());
                 flow.edge(Place::CallbackReturn, target.clone());
             }
@@ -728,6 +725,32 @@ fn connect_expression(
         _ => {}
     };
     Ok(())
+}
+
+/// A call of the method `name`: its result is what a method of that name
+/// returns, and its arguments reach the parameters of each class method so
+/// named.
+fn method_call_flow(
+    ast: &TypedAst,
+    flow: &mut Flow,
+    name: &crate::Ident,
+    args: &[ExprId],
+    target: Place,
+) {
+    flow.edge(Place::Method(name.name.clone()), target);
+    for declaration in &ast.types {
+        if let crate::TypedTypeDecl::Class(class) = declaration {
+            for method in class
+                .methods
+                .iter()
+                .filter(|method| method.name.name == name.name)
+            {
+                for (arg, param) in args.iter().zip(&method.params) {
+                    flow.value(*arg, Place::Local(param.name.clone()));
+                }
+            }
+        }
+    }
 }
 
 fn connect_returns(
@@ -828,12 +851,17 @@ fn connect_optional_chain(
                     flow.edge(receiver.clone(), step.clone());
                 }
             }
-            crate::TypedChainPart::MethodCall { name, .. } => {
+            crate::TypedChainPart::MethodCall { member, .. } => {
                 flow.edge(receiver.clone(), step.clone());
-                flow.edge(Place::Method(name.name.clone()), step.clone());
-                if name.name == "@call" {
-                    flow.widened.insert(step.clone());
-                    flow.edge(Place::CallbackReturn, step.clone());
+                match member {
+                    crate::Member::Named(name) => {
+                        flow.edge(Place::Method(name.name.clone()), step.clone());
+                    }
+                    crate::Member::CallSignature(_) => {
+                        flow.widened.insert(step.clone());
+                        flow.edge(Place::CallbackReturn, step.clone());
+                    }
+                    crate::Member::ConstructSignature(_) => {}
                 }
             }
             crate::TypedChainPart::Call { .. } => {

@@ -492,6 +492,22 @@ pub struct ImportSpecifier {
 #[derive(Clone, Debug, PartialEq)]
 pub enum InterfaceMember {
     IndexSignature(IndexSignatureAnnotation),
+    /// `(params): ret;`. `span` covers the whole member.
+    CallSignature {
+        params: Vec<ParamDecl>,
+        return_type: TypeAnnotation,
+        span: Span,
+        doc: Option<DocComment>,
+    },
+    /// `new (params): ret;` or `new <T>(params): ret;`. A quoted `"new"()` is a
+    /// method named `new`, as in TypeScript.
+    ConstructSignature {
+        generics: Vec<TypeParameterAnnotation>,
+        params: Vec<ParamDecl>,
+        return_type: TypeAnnotation,
+        span: Span,
+        doc: Option<DocComment>,
+    },
     Method {
         name: Ident,
         optional: bool,

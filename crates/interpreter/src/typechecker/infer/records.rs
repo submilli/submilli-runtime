@@ -1529,12 +1529,21 @@ impl Inferer<'_> {
         &mut self,
         base: &TypeAnnotation,
         methods: &mut BTreeMap<String, crate::MethodSig>,
+        signatures: &mut InheritedSignatures,
         properties: &mut BTreeMap<String, crate::PropertySig>,
         indexes: &mut Vec<IndexSignature>,
     ) -> Result<Option<Type>, CompilerFailure> {
         let Some(base) = self.interface_base_contract(base)? else {
             return Ok(None);
         };
+        // Of bases with a call or construct signature, the first gives it; an
+        // own signature replaces it once the interface is bound.
+        if signatures.call.is_none() {
+            signatures.call = base.call;
+        }
+        if signatures.construct.is_none() {
+            signatures.construct = base.construct;
+        }
         for name in base.methods.keys() {
             properties.remove(name);
         }
@@ -1568,6 +1577,8 @@ impl Inferer<'_> {
         };
         let crate::TypeKind::Interface {
             methods,
+            call,
+            construct,
             properties,
             index,
             more_indexes,
@@ -1576,23 +1587,32 @@ impl Inferer<'_> {
         else {
             return Ok(());
         };
+        let declares_call = members
+            .iter()
+            .any(|member| matches!(member, crate::InterfaceMember::CallSignature { .. }));
+        let declares_construct = members
+            .iter()
+            .any(|member| matches!(member, crate::InterfaceMember::ConstructSignature { .. }));
         let indexes: Vec<IndexSignature> = crate::stored_index_signatures(&index, &more_indexes)
             .cloned()
             .collect();
-        let mut fields = interface_member_contracts(&properties, &methods, self.resolver())
+        let fields = interface_member_contracts(&properties, &methods, self.resolver())
             .map_err(type_limit_at(name.span))?;
         let declared: std::collections::BTreeSet<_> = members
             .iter()
             .filter_map(|member| match member {
                 crate::InterfaceMember::Method { name, .. }
                 | crate::InterfaceMember::Property { name, .. } => Some(name.name.clone()),
-                crate::InterfaceMember::IndexSignature(_) => None,
+                crate::InterfaceMember::IndexSignature(_)
+                | crate::InterfaceMember::CallSignature { .. }
+                | crate::InterfaceMember::ConstructSignature { .. } => None,
             })
             .collect();
         let parameters = self.push_declared_generics(generics)?;
         let opaque = self.push_body_generics(parameters)?;
         self.pop_body_generics();
         let mut inherited = BTreeMap::new();
+        let (mut inherited_call, mut inherited_construct) = (None, None);
         for annotation in bases {
             let Some(base) = self.interface_base_contract(annotation)? else {
                 continue;
@@ -1629,6 +1649,56 @@ impl Inferer<'_> {
                 }
                 inherited.entry(member).or_insert(field);
             }
+            // An own call or construct signature must fit the one it replaces;
+            // without one, the bases' signatures must agree, as their members
+            // must.
+            for (inherited_signature, declared, own, base_signature, what) in [
+                (
+                    &mut inherited_call,
+                    declares_call,
+                    &call,
+                    &base.call,
+                    "call",
+                ),
+                (
+                    &mut inherited_construct,
+                    declares_construct,
+                    &construct,
+                    &base.construct,
+                    "construct",
+                ),
+            ] {
+                let Some(base_signature) = base_signature else {
+                    continue;
+                };
+                let bindings = BTreeMap::new();
+                let base_signature = self.resolver().method_type(base_signature, &bindings);
+                if declared {
+                    if let Some(own) = own {
+                        let own = self.resolver().method_type(own, &bindings);
+                        if !self.interface_type_assignable(&own, &base_signature, &opaque) {
+                            self.error(
+                                name.span,
+                                format!("incompatible inherited {what} signature"),
+                            );
+                        }
+                    }
+                    continue;
+                }
+                match inherited_signature {
+                    Some(previous) => {
+                        if !self.interface_type_assignable(previous, &base_signature, &opaque)
+                            || !self.interface_type_assignable(&base_signature, previous, &opaque)
+                        {
+                            self.error(
+                                annotation.span,
+                                format!("incompatible inherited {what} signature"),
+                            );
+                        }
+                    }
+                    None => *inherited_signature = Some(base_signature),
+                }
+            }
             // The interface's signature of a base signature's key, its own
             // or another base's, must fit it.
             let incompatible = base.indexes.iter().find(|base| {
@@ -1647,7 +1717,6 @@ impl Inferer<'_> {
                 );
             }
         }
-        fields.remove("@call");
         for index in &indexes {
             self.check_generic_method_indexes(&fields, index, &opaque, name.span)?;
         }
@@ -1849,7 +1918,7 @@ impl Inferer<'_> {
         if depth > crate::compiler_limits::MAX_TYPE_DEPTH {
             return Err(type_limit_at(span)(TypeTooLarge::Depth));
         }
-        let (methods, properties, indexes) = match ty.peel() {
+        let (methods, signatures, properties, indexes) = match ty.peel() {
             Type::InterfaceRef {
                 mangled,
                 name,
@@ -1861,6 +1930,8 @@ impl Inferer<'_> {
                 };
                 let crate::TypeKind::Interface {
                     methods,
+                    call,
+                    construct,
                     properties,
                     generics,
                     index,
@@ -1891,6 +1962,22 @@ impl Inferer<'_> {
                         Ok((name, method))
                     })
                     .collect::<Result<_, CompilerFailure>>()?;
+                let instantiate = |method: Option<crate::MethodSig>| {
+                    method
+                        .map(|method| {
+                            super::generic::instantiate_method_signature(
+                                &method,
+                                &bindings,
+                                &self.type_limits,
+                            )
+                            .map_err(type_limit_at(span))
+                        })
+                        .transpose()
+                };
+                let signatures = InheritedSignatures {
+                    call: instantiate(call)?,
+                    construct: instantiate(construct)?,
+                };
                 let properties = properties
                     .into_iter()
                     .map(|(name, mut property)| {
@@ -1901,7 +1988,7 @@ impl Inferer<'_> {
                 let indexes = crate::stored_index_signatures(&index, &more_indexes)
                     .map(|index| index.try_map_types(substitute))
                     .collect::<Result<_, CompilerFailure>>()?;
-                (methods, properties, indexes)
+                (methods, signatures, properties, indexes)
             }
             Type::Intersection(bases) => {
                 let mut combined = Type::Object {
@@ -1911,12 +1998,14 @@ impl Inferer<'_> {
                 };
                 let mut callable: BTreeMap<String, crate::MethodSig> = BTreeMap::new();
                 let mut method_names = std::collections::BTreeSet::new();
+                let mut signatures = InheritedSignatures::default();
                 for base in bases {
                     let Some(contract) =
                         self.interface_contract_for_type(base.clone(), span, depth + 1)?
                     else {
                         return Ok(None);
                     };
+                    signatures.append(contract.call, contract.construct);
                     // A callable property participates in the same overload
                     // set as a method; preserve each operand's source order.
                     for (name, property) in &contract.properties {
@@ -1969,6 +2058,8 @@ impl Inferer<'_> {
                 else {
                     return Ok(None);
                 };
+                contract.call = signatures.call;
+                contract.construct = signatures.construct;
                 for (name, signature) in callable {
                     if method_names.contains(&name) {
                         // Plain function properties contribute only call
@@ -1984,7 +2075,10 @@ impl Inferer<'_> {
                 }
                 // Concrete data intersections resolve to one shape. Keep their
                 // alias label while sharing that resolved shape with validators.
-                contract.ty = if contract.methods.is_empty() {
+                contract.ty = if contract.methods.is_empty()
+                    && contract.call.is_none()
+                    && contract.construct.is_none()
+                {
                     let (index, more_indexes) =
                         crate::split_index_signatures(contract.indexes.clone());
                     let combined = Type::Object {
@@ -2043,6 +2137,7 @@ impl Inferer<'_> {
                     .collect();
                 (
                     BTreeMap::new(),
+                    InheritedSignatures::default(),
                     properties,
                     crate::stored_index_signatures(index, more_indexes)
                         .cloned()
@@ -2060,9 +2155,34 @@ impl Inferer<'_> {
         Ok(Some(InterfaceContract {
             ty,
             methods,
+            call: signatures.call,
+            construct: signatures.construct,
             properties,
             indexes,
         }))
+    }
+}
+
+/// The call and construct signatures an interface takes from its bases.
+#[derive(Default)]
+pub(super) struct InheritedSignatures {
+    pub(super) call: Option<crate::MethodSig>,
+    pub(super) construct: Option<crate::MethodSig>,
+}
+
+impl InheritedSignatures {
+    /// Adds an intersection operand's signatures after the earlier operands',
+    /// in overload-resolution order.
+    fn append(&mut self, call: Option<crate::MethodSig>, construct: Option<crate::MethodSig>) {
+        fn join(into: &mut Option<crate::MethodSig>, more: Option<crate::MethodSig>) {
+            match (into.as_mut(), more) {
+                (Some(existing), Some(more)) => existing.append_signatures(more),
+                (None, more) => *into = more,
+                (Some(_), None) => {}
+            }
+        }
+        join(&mut self.call, call);
+        join(&mut self.construct, construct);
     }
 }
 
@@ -2185,6 +2305,8 @@ struct InterfaceContract {
     /// The base as written, with its type arguments.
     ty: Type,
     methods: BTreeMap<String, crate::MethodSig>,
+    call: Option<crate::MethodSig>,
+    construct: Option<crate::MethodSig>,
     properties: BTreeMap<String, crate::PropertySig>,
     indexes: Vec<IndexSignature>,
 }

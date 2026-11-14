@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([256, 257, 511, 0]);
+  let bytes: Uint8Array = new Uint8Array([256, 257, 511, 0]);
   assert(bytes.length === 4, "length preserved");
   assert(bytes[0] === 0, "256 → 0 (low 8 bits)");
   assert(bytes[1] === 1, "257 → 1");

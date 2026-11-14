@@ -716,13 +716,13 @@ impl CodegenAnalysis {
             TypedExprKind::MethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 ..
             } => {
                 self.walk_expr(ta, *receiver)?;
                 if (args.is_empty()
-                    || (crate::codegen::function_emitter::expr::is_call_signature_call(&name.name)
+                    || (member.is_call_signature()
                         && !self.is_static_value_binding(ta, *receiver)?)
                     || method_dispatches_live(ta, *receiver, iface)?)
                     && let Some(authored) = ta.authored_call_arguments(expr.span)
@@ -739,13 +739,13 @@ impl CodegenAnalysis {
             TypedExprKind::GenericMethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 ..
             } => {
                 self.walk_expr(ta, *receiver)?;
                 if (args.is_empty()
-                    || (crate::codegen::function_emitter::expr::is_call_signature_call(&name.name)
+                    || (member.is_call_signature()
                         && !self.is_static_value_binding(ta, *receiver)?)
                     || method_dispatches_live(ta, *receiver, iface)?)
                     && let Some(authored) = ta.authored_call_arguments(expr.span)
@@ -817,7 +817,7 @@ impl CodegenAnalysis {
                         }
                         TypedChainPart::MethodCall {
                             iface,
-                            name,
+                            member,
                             args,
                             span,
                             ..
@@ -828,9 +828,7 @@ impl CodegenAnalysis {
                                     && crate::codegen::runtime_values::dynamic_member_interface(
                                         iface,
                                     ))
-                                || crate::codegen::function_emitter::expr::is_call_signature_call(
-                                    &name.name,
-                                );
+                                || member.is_call_signature();
                             if walk_authored
                                 && let Some(authored) = ta.authored_call_arguments(*span)
                             {
@@ -1210,20 +1208,20 @@ impl CodegenAnalysis {
             TypedExprKind::MethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 ..
             } => {
-                self.note_method_call(ta, *receiver, iface, name, args.len(), &expr.ty)?;
+                self.note_method_call(ta, *receiver, iface, member, args.len(), &expr.ty)?;
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 ..
             } => {
-                self.note_method_call(ta, *receiver, iface, name, args.len(), &expr.ty)?;
+                self.note_method_call(ta, *receiver, iface, member, args.len(), &expr.ty)?;
             }
             TypedExprKind::InterfacePropertyAccess {
                 receiver,
@@ -1430,7 +1428,7 @@ impl CodegenAnalysis {
         ta: &TypedAst,
         receiver: ExprId,
         iface: &crate::MangledName,
-        name: &crate::Ident,
+        member: &crate::Member,
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -1438,40 +1436,46 @@ impl CodegenAnalysis {
             .source_type(receiver)
             .map_err(crate::codegen::arena_failure)?;
         self.string_pool.intern_text(iface.as_str());
-        self.string_pool.intern_text(&name.name);
-        self.dependency_usage
-            .note_member(crate::mangle::extend(iface, &name.name));
+        self.dependency_usage.note_member(member.symbol(iface));
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
             .intern_text("Unbound function has no this receiver");
-        self.extra_field_names.push(name.name.clone());
-        if crate::codegen::function_emitter::expr::is_call_signature_call(&name.name)
-            && !self.is_static_value_binding(ta, receiver)?
-        {
-            self.note_live_member_call();
-            self.note_cast(receiver_ty, Some(receiver_ty))?;
-            if !ret.is_void() && !matches!(ret.lowered(), Type::Unknown) {
-                self.note_cast(ret, Some(ret))?;
+        if let Some(name) = member.as_named() {
+            self.string_pool.intern_text(&name.name);
+            self.extra_field_names.push(name.name.clone());
+        }
+        // A signature of anything but a prelude binding goes through the live
+        // value; a call signature casts the callee and its result.
+        if member.as_named().is_none() && !self.is_static_value_binding(ta, receiver)? {
+            self.note_live_member_call(crate::codegen::function_emitter::expr::live_member_helper(
+                member.key(),
+            ));
+            if member.is_call_signature() {
+                self.note_cast(receiver_ty, Some(receiver_ty))?;
+                if !ret.is_void() && !matches!(ret.lowered(), Type::Unknown) {
+                    self.note_cast(ret, Some(ret))?;
+                }
             }
         }
         if crate::codegen::runtime_values::is_wrapper_interface_receiver(receiver_ty, iface) {
-            self.note_live_member_call();
+            self.note_live_member_call("__value_member");
         }
         self.note_shape_dispatch(receiver_ty, arity, ret)?;
 
         Ok(())
     }
 
-    /// The prelude helpers a method call through `emit_live_member_on_stack`
-    /// calls: the member lookup, then the invocation.
-    fn note_live_member_call(&mut self) {
-        for helper in ["__value_member", "__value_invoke"] {
+    /// The prelude helpers a call through `emit_live_member_call` calls:
+    /// the member `lookup` (see `live_member_helper`), then the
+    /// invocation.
+    fn note_live_member_call(&mut self, lookup: &'static str) {
+        for helper in [lookup, "__value_invoke"] {
             self.dependency_usage
                 .note_value(crate::mangle::prelude(helper));
         }
     }
 
-    /// The prelude helper a property read through `emit_live_member_on_stack`
+    /// The prelude helper a property read through `emit_live_property`
     /// calls.
     fn note_live_property_access(&mut self) {
         self.dependency_usage
@@ -1498,7 +1502,7 @@ impl CodegenAnalysis {
             .primitive_union_members()
             .is_some()
         {
-            self.note_live_member_call();
+            self.note_live_member_call("__value_member");
         }
         self.string_pool.intern_text("Value is not callable");
         self.string_pool
@@ -1537,9 +1541,13 @@ impl CodegenAnalysis {
             .map_err(crate::codegen::arena_failure)?;
         let mut actual_receiver_ty = &ta.try_expr(base).map_err(crate::codegen::arena_failure)?.ty;
         for (index, part) in parts.iter().enumerate() {
-            if let TypedChainPart::MethodCall { iface, name, .. }
-            | TypedChainPart::InterfaceProperty { iface, name, .. } = part
-            {
+            if let TypedChainPart::MethodCall { iface, member, .. } = part {
+                self.string_pool.intern_text(iface.as_str());
+                if let Some(name) = member.as_named() {
+                    self.string_pool.intern_text(&name.name);
+                }
+            }
+            if let TypedChainPart::InterfaceProperty { iface, name, .. } = part {
                 self.string_pool.intern_text(iface.as_str());
                 self.string_pool.intern_text(&name.name);
             }
@@ -1608,7 +1616,7 @@ impl CodegenAnalysis {
                 }
                 TypedChainPart::MethodCall {
                     iface,
-                    name,
+                    member,
                     args,
                     result_ty,
                     span,
@@ -1618,24 +1626,31 @@ impl CodegenAnalysis {
                         && !crate::codegen::is_host_package(iface.as_str()))
                         || (actual_receiver_ty == &Type::Unknown
                             && crate::codegen::runtime_values::dynamic_member_interface(iface))
-                        || crate::codegen::function_emitter::expr::is_call_signature_call(
-                            &name.name,
-                        )
+                        || member.is_call_signature()
                     {
-                        self.note_live_member_call();
+                        self.note_live_member_call(
+                            crate::codegen::function_emitter::expr::live_member_helper(
+                                member.key(),
+                            ),
+                        );
                         if !result_ty.is_void() && !matches!(result_ty.lowered(), Type::Unknown) {
                             self.note_cast(result_ty, Some(result_ty))?;
                         }
                     }
-                    self.extra_field_names.push(name.name.clone());
-                    self.dependency_usage
-                        .note_member(crate::mangle::extend(iface, &name.name));
+                    if let Some(name) = member.as_named() {
+                        self.extra_field_names.push(name.name.clone());
+                    }
+                    self.dependency_usage.note_member(member.symbol(iface));
                     self.visit_type(result_ty)?;
                     if crate::codegen::runtime_values::is_wrapper_interface_receiver(
                         receiver_ty,
                         iface,
                     ) {
-                        self.note_live_member_call();
+                        self.note_live_member_call(
+                            crate::codegen::function_emitter::expr::live_member_helper(
+                                member.key(),
+                            ),
+                        );
                     }
                     self.note_shape_dispatch(receiver_ty, args.len(), result_ty)?;
                 }
@@ -1798,12 +1813,18 @@ fn method_dispatches_live(
 /// admits a union of object shapes as well as a single one.
 fn is_shaped_receiver(ty: &Type) -> bool {
     let ty = crate::typechecker::infer::narrowing::strip_nullish(ty);
+    // An intersection may be a hybrid (`F & { label: string }`), a callable
+    // object shape; noting the shaped paths for any other costs only a few
+    // interned names.
+    let shaped = |ty: &Type| {
+        matches!(
+            ty.peel(),
+            Type::InterfaceRef { .. } | Type::Object { .. } | Type::Intersection(_)
+        )
+    };
     match ty.peel() {
-        Type::InterfaceRef { .. } | Type::Object { .. } => true,
-        Type::Union(members) => members
-            .iter()
-            .any(|m| matches!(m.peel(), Type::InterfaceRef { .. } | Type::Object { .. })),
-        _ => false,
+        Type::Union(members) => members.iter().any(shaped),
+        other => shaped(other),
     }
 }
 

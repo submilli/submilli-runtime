@@ -22,17 +22,23 @@ pub(crate) fn is_nullish<'a>(
     )
 }
 
-/// `[] -> [i32]`: whether `load` pushes `undefined` or a closure, the values
-/// `JSON.stringify` omits.
+/// `[] -> [i32]`: whether `load` pushes `undefined` or a function (a closure,
+/// or a hybrid that holds one), the values `JSON.stringify` omits.
 pub(crate) fn is_undefined_or_closure<'a>(
     load: &[Instruction<'a>],
     intrinsics: IntrinsicTypeIndices,
 ) -> Vec<Instruction<'a>> {
-    either(
+    let mut sequence = either(
         load,
         Instruction::RefTestNonNull(HeapType::Concrete(intrinsics.undefined)),
         Instruction::RefTestNonNull(HeapType::Concrete(intrinsics.closure)),
-    )
+    );
+    sequence.extend_from_slice(load);
+    sequence.push(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.callable_shape,
+    )));
+    sequence.push(Instruction::I32Or);
+    sequence
 }
 
 fn either<'a>(

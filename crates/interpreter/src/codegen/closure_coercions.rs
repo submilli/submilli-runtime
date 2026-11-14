@@ -410,13 +410,17 @@ pub fn emit_erased_cast(
         .closure_struct_type_idx(source)
         .ok_or_else(|| crate::codegen::internal_failure("source closure"))?;
     let original = emitter.add_anonymous_local(ctx.symbols.value_type(&crate::Type::Unknown)?)?;
+    emitter.instruction(Instruction::LocalSet(original));
+    // A hybrid calls as the closure it holds.
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    crate::codegen::function_emitter::expr::emit_unwrap_hybrid(emitter, intrinsics, original);
     if unwrap_adapters {
-        emitter.instruction(Instruction::LocalSet(original));
         emit_unwrap_adapters(emitter, ctx, original)?;
-        emitter.instruction(Instruction::LocalGet(original));
-    } else {
-        emitter.instruction(Instruction::LocalTee(original));
     }
+    emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         target_struct,
     )));

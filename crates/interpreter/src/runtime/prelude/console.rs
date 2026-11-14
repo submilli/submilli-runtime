@@ -145,6 +145,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     },
                 )]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc("/** Diagnostic console — `console.log` writes to stdout. */"),
             },

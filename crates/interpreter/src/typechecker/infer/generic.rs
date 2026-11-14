@@ -431,16 +431,26 @@ impl Inferer<'_> {
             let Some(expected_form) = self.structural_form(&me, ne, &ae) else {
                 continue;
             };
-            if expected_form.is_empty() {
+            let resolver = self.resolver();
+            let expected_call =
+                resolver.interface_signature(&me, ne, &ae, super::assignable::Signature::Call);
+            if expected_form.is_empty() && expected_call.is_none() {
                 continue;
             }
+            let actual_call =
+                resolver.interface_signature(&ma, na, &aa, super::assignable::Signature::Call);
             let snapshot = sub.clone();
-            let resolver = self.resolver();
-            let all = expected_form.iter().all(|(name, exp)| {
-                actual_form
-                    .get(name)
-                    .is_some_and(|act| sub.unify(&exp.ty, &act.ty, resolver).is_ok())
-            });
+            let call_fits = match (&expected_call, &actual_call) {
+                (None, _) => true,
+                (Some(expected), Some(actual)) => sub.unify(expected, actual, resolver).is_ok(),
+                (Some(_), None) => false,
+            };
+            let all = call_fits
+                && expected_form.iter().all(|(name, exp)| {
+                    actual_form
+                        .get(name)
+                        .is_some_and(|act| sub.unify(&exp.ty, &act.ty, resolver).is_ok())
+                });
             if all {
                 return true;
             }
@@ -610,7 +620,7 @@ impl Inferer<'_> {
         &mut self,
         typed_receiver: ExprId,
         iface_mangled: crate::MangledName,
-        name: Ident,
+        member: crate::Member,
         sig: MethodSig,
         interface_bindings: BTreeMap<String, Type>,
         type_args: Option<Vec<TypeAnnotation>>,
@@ -622,7 +632,7 @@ impl Inferer<'_> {
             return self.infer_overloaded_method_call(
                 typed_receiver,
                 iface_mangled,
-                name,
+                member,
                 sig,
                 interface_bindings,
                 type_args,
@@ -631,11 +641,12 @@ impl Inferer<'_> {
                 span,
             );
         }
+        let key = member.key();
         // The no-mapper form preserves the source type; the mapped form has
         // an independent result parameter, like TypeScript's two overloads.
         let mut sig = sig;
         if iface_mangled == crate::mangle::prelude("ArrayConstructor")
-            && name.name == "from"
+            && key.is_named("from")
             && args.len() == 1
         {
             sig.generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
@@ -656,10 +667,12 @@ impl Inferer<'_> {
         let errors_at_call = self.error_count();
         // A checked host method (`Response#json<T>`) is gated and defaulted
         // like a checked host function; see `infer_generic_call`.
-        let checked = crate::stdlib::checked_call::checked_call(&crate::mangle::extend(
-            &iface_mangled,
-            &name.name,
-        ));
+        let checked = member.as_named().and_then(|name| {
+            crate::stdlib::checked_call::checked_call(&crate::mangle::extend(
+                &iface_mangled,
+                &name.name,
+            ))
+        });
 
         for (k, v) in interface_bindings {
             if sig.generics.names.contains(&k) {
@@ -683,21 +696,21 @@ impl Inferer<'_> {
             if targs.len() != sig.generics.len() {
                 let help = self.format_signature(SignatureKind::Method {
                     receiver_ty: &receiver_ty,
-                    name: &name.name,
+                    member: key,
                     sig: &sig,
                 });
                 self.error_with_help(
                     span,
                     format!(
-                        "method `{}` expects {} type argument(s), got {}",
-                        name.name,
+                        "{} expects {} type argument(s), got {}",
+                        key.describe(),
                         sig.generics.len(),
                         targs.len(),
                     ),
                     vec![help],
                 );
             }
-            let subject = format!("method `{}`", name.name);
+            let subject = key.describe();
             for (gname, annot) in sig.generics.iter().zip(targs.iter()) {
                 let resolved = self.resolve_call_type_argument(annot, &subject)?;
                 sub.insert(gname.clone(), resolved);
@@ -724,27 +737,27 @@ impl Inferer<'_> {
         {
             let help = self.format_signature(SignatureKind::Method {
                 receiver_ty: &receiver_ty,
-                name: &name.name,
+                member: key,
                 sig: &sig,
             });
             let msg = if has_rest {
                 format!(
-                    "method `{}` expects {}+ argument(s), got {}",
-                    name.name,
+                    "{} expects {}+ argument(s), got {}",
+                    key.describe(),
                     min_args,
                     args.len(),
                 )
             } else if min_args == max_args {
                 format!(
-                    "method `{}` expects {} argument(s), got {}",
-                    name.name,
+                    "{} expects {} argument(s), got {}",
+                    key.describe(),
                     max_args,
                     args.len(),
                 )
             } else {
                 format!(
-                    "method `{}` expects {}-{} argument(s), got {}",
-                    name.name,
+                    "{} expects {}-{} argument(s), got {}",
+                    key.describe(),
                     min_args,
                     max_args,
                     args.len(),
@@ -771,7 +784,7 @@ impl Inferer<'_> {
         let signature_help = |this: &mut Self| {
             this.format_signature(SignatureKind::Method {
                 receiver_ty: &receiver_ty,
-                name: &name.name,
+                member: key,
                 sig: &sig,
             })
         };
@@ -815,7 +828,7 @@ impl Inferer<'_> {
         self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
 
         let object_assign =
-            iface_mangled == crate::mangle::prelude("ObjectConstructor") && name.name == "assign";
+            iface_mangled == crate::mangle::prelude("ObjectConstructor") && key.is_named("assign");
         let assign_result = if object_assign {
             Some(self.object_assign_result(&typed_args)?)
         } else {
@@ -831,7 +844,7 @@ impl Inferer<'_> {
         }
 
         let array_from =
-            iface_mangled == crate::mangle::prelude("ArrayConstructor") && name.name == "from";
+            iface_mangled == crate::mangle::prelude("ArrayConstructor") && key.is_named("from");
         let array_from_mapper = array_from && sig.generics.len() == 2;
         let mapper_type = typed_args
             .get(1)
@@ -903,18 +916,20 @@ impl Inferer<'_> {
             self.error_with_help(
                 span,
                 format!(
-                    "cannot infer type parameter(s) {} for method `{}`; consider adding an explicit type argument",
+                    "cannot infer type parameter(s) {} for {}; consider adding an explicit type argument",
                     unbound
                         .iter()
                         .map(|n| format!("`{n}`"))
                         .collect::<Vec<_>>()
                         .join(", "),
-                    name.name,
+                    key.describe(),
                 ),
-                vec![format!(
-                    "add an explicit type argument: `receiver.{}<T>(…)`",
-                    name.name
-                )],
+                vec![match key {
+                    crate::MemberKey::Named(name) => {
+                        format!("add an explicit type argument: `receiver.{name}<T>(…)`")
+                    }
+                    _ => "add an explicit type argument: `callee<T>(…)`".to_string(),
+                }],
             );
         }
 
@@ -1024,7 +1039,7 @@ impl Inferer<'_> {
                 TypedExprKind::GenericMethodCall {
                     receiver: typed_receiver,
                     iface: iface_mangled,
-                    name,
+                    member,
                     type_args: runtime_type_args,
                     args: generic_args,
                     return_cast,
@@ -1044,7 +1059,7 @@ impl Inferer<'_> {
             TypedExprKind::MethodCall {
                 receiver: typed_receiver,
                 iface: iface_mangled,
-                name,
+                member,
                 args: typed_args,
                 type_predicate,
             },

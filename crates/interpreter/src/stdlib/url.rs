@@ -163,6 +163,8 @@ pub fn package_declaration() -> PackageDeclaration {
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: url_doc("/** Parsed URL parts — the return type of `parse`. Constructed only by `parse`; user code reads fields via property access. */"),
             },

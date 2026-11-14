@@ -49,7 +49,7 @@ function main(): void {
     assert(count === 2000, "indexOf from each match finds every fox");
 
     // In-place Uint8Array mutators write bytes back into the same backing.
-    const bytes = Uint8Array.new([0x00, 0x7f, 0x80, 0xfe, 0xff]);
+    const bytes = new Uint8Array([0x00, 0x7f, 0x80, 0xfe, 0xff]);
     const alias = bytes;
     bytes.reverse();
     assert(alias[0] === 0xff && alias[1] === 0xfe && alias[2] === 0x80 && alias[4] === 0x00, "reverse");
@@ -57,7 +57,7 @@ function main(): void {
     assert(bytes[0] === 0xff && bytes[1] === 0x80 && bytes[2] === 0x80 && bytes[3] === 0x7f, "fill a range");
     bytes.copyWithin(0, 3);
     assert(bytes[0] === 0x7f && bytes[1] === 0x00 && bytes[2] === 0x80, "copyWithin");
-    bytes.set(Uint8Array.new([0xaa, 0xbb]), 3);
+    bytes.set(new Uint8Array([0xaa, 0xbb]), 3);
     assert(bytes[3] === 0xaa && bytes[4] === 0xbb && bytes[0] === 0x7f, "set at an offset");
     bytes.sort();
     assert(bytes[0] === 0x00 && bytes[1] === 0x7f && bytes[2] === 0x80 && bytes[4] === 0xbb, "sort");

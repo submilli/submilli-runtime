@@ -115,12 +115,13 @@ pub enum TypedExprKind {
         kind: Intrinsic,
         args: Vec<ExprId>,
     },
-    /// Interface method dispatch. Codegen composes `<iface>#<name>` to find the
-    /// direct-dispatch thunk, falling back to vtable dispatch.
+    /// Interface member dispatch. For a named method codegen composes
+    /// `<iface>#<name>` to find the direct-dispatch thunk, falling back to
+    /// vtable dispatch; a call or construct signature has its own symbol.
     MethodCall {
         receiver: ExprId,
         iface: MangledName,
-        name: Ident,
+        member: Member,
         args: Vec<ExprId>,
         type_predicate: Option<Box<crate::TypePredicate>>,
     },
@@ -145,7 +146,7 @@ pub enum TypedExprKind {
     GenericMethodCall {
         receiver: ExprId,
         iface: MangledName,
-        name: Ident,
+        member: Member,
         /// The method's own type arguments, for a runtime-generic host method
         /// (`Response#json<T>`) whose call passes their descriptors in a
         /// trailing `$types` environment; empty for every other method.
@@ -335,7 +336,7 @@ pub enum TypedChainPart {
     },
     MethodCall {
         iface: MangledName,
-        name: Ident,
+        member: Member,
         args: Vec<ExprId>,
         optional: bool,
         result_ty: Type,
@@ -345,6 +346,92 @@ pub enum TypedChainPart {
     /// `TypeError` on null, matching the non-chain `NonNullAssert` — not TS's
     /// unchecked assertion.
     NonNull { result_ty: Type, span: Span },
+}
+
+/// The member an interface call goes through: a named method, or the
+/// interface's call or construct signature. Signatures have no name — any
+/// string can name a method, so no name can stand for one.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Member {
+    Named(Ident),
+    /// `f(args)` through the interface's call signature; `span` is the callee's.
+    CallSignature(Span),
+    /// `new f(args)` through the interface's construct signature.
+    ConstructSignature(Span),
+}
+
+impl Member {
+    /// The member without its span, as declarations name it.
+    pub fn key(&self) -> MemberKey<'_> {
+        match self {
+            Member::Named(name) => MemberKey::Named(&name.name),
+            Member::CallSignature(_) => MemberKey::Call,
+            Member::ConstructSignature(_) => MemberKey::Construct,
+        }
+    }
+
+    /// The method name, for a named member.
+    pub fn as_named(&self) -> Option<&Ident> {
+        match self {
+            Member::Named(name) => Some(name),
+            Member::CallSignature(_) | Member::ConstructSignature(_) => None,
+        }
+    }
+
+    pub fn is_named(&self, name: &str) -> bool {
+        self.key().is_named(name)
+    }
+
+    pub fn is_call_signature(&self) -> bool {
+        matches!(self, Member::CallSignature(_))
+    }
+
+    /// The symbol of the member's host function on `interface`.
+    pub fn symbol(&self, interface: &MangledName) -> MangledName {
+        self.key().symbol(interface)
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Member::Named(name) => name.span,
+            Member::CallSignature(span) | Member::ConstructSignature(span) => *span,
+        }
+    }
+}
+
+/// A [`Member`] without its span: what an interface declaration holds under a
+/// name, or its call or construct signature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemberKey<'a> {
+    Named(&'a str),
+    Call,
+    Construct,
+}
+
+impl MemberKey<'_> {
+    pub fn is_named(self, name: &str) -> bool {
+        self == MemberKey::Named(name)
+    }
+
+    /// The symbol of the member's host function on `interface`:
+    /// `<iface>#<name>` for a method, and the signature symbols of
+    /// [`crate::mangle::call_signature`] and [`crate::mangle::construct_signature`].
+    pub fn symbol(self, interface: &MangledName) -> MangledName {
+        match self {
+            MemberKey::Named(name) => crate::mangle::extend(interface, name),
+            MemberKey::Call => crate::mangle::call_signature(interface),
+            MemberKey::Construct => crate::mangle::construct_signature(interface),
+        }
+    }
+
+    /// The member as diagnostics name it: "method `get`", "call signature".
+    pub fn describe(self) -> String {
+        match self {
+            MemberKey::Named(name) => format!("method `{name}`"),
+            MemberKey::Call => "call signature".to_string(),
+            MemberKey::Construct => "construct signature".to_string(),
+        }
+    }
 }
 
 impl TypedChainPart {
@@ -1381,6 +1468,11 @@ pub struct InterfaceNarrowingTest {
     pub more_indexes: Vec<crate::IndexSignature>,
     pub members: std::collections::BTreeMap<String, crate::ObjectField>,
     pub methods: std::collections::BTreeSet<String>,
+    /// The interface's call signature as a function type. A value satisfies
+    /// it only by being callable: a closure, or an object shape that carries
+    /// one (a hybrid built by `Object.assign(fn, props)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<Type>,
     pub non_shape_carriers: std::collections::BTreeSet<InterfaceCarrier>,
     /// Whether an ordinary `$ObjectShape` may satisfy the interface. Direct
     /// host dispatch requires its canonical carrier; vtable interfaces remain
@@ -1550,6 +1642,22 @@ pub struct TypedInterfaceDecl {
 pub enum TypedInterfaceMember {
     Method {
         name: Ident,
+        generics: crate::GenericParameters,
+        params: Vec<TypedParam>,
+        return_type: Type,
+        doc: Option<crate::DocComment>,
+    },
+    /// `(params): ret;`. `span` covers the opening parenthesis.
+    CallSignature {
+        span: Span,
+        generics: crate::GenericParameters,
+        params: Vec<TypedParam>,
+        return_type: Type,
+        doc: Option<crate::DocComment>,
+    },
+    /// `new (params): ret;`. `span` covers the `new` keyword.
+    ConstructSignature {
+        span: Span,
         generics: crate::GenericParameters,
         params: Vec<TypedParam>,
         return_type: Type,

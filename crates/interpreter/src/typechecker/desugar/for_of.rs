@@ -359,10 +359,10 @@ fn lower_iterator_like(
                     kind: TypedExprKind::MethodCall {
                         receiver: iter,
                         iface: receiver_iface,
-                        name: Ident {
+                        member: crate::Member::Named(Ident {
                             name: "iterator".to_string(),
                             span,
-                        },
+                        }),
                         args: Vec::new(),
                         type_predicate: None,
                     },
@@ -394,10 +394,10 @@ fn lower_iterator_like(
             kind: TypedExprKind::MethodCall {
                 receiver: it_ref,
                 iface: crate::mangle::prelude("Iterator"),
-                name: Ident {
+                member: crate::Member::Named(Ident {
                     name: "next".to_string(),
                     span,
-                },
+                }),
                 args: Vec::new(),
                 type_predicate: None,
             },
@@ -636,10 +636,10 @@ fn narrowed_method_call(
         TypedExprKind::MethodCall {
             receiver,
             iface,
-            name: Ident {
+            member: crate::Member::Named(Ident {
                 name: name.to_string(),
                 span,
-            },
+            }),
             args: Vec::new(),
             type_predicate: None,
         },

@@ -10,14 +10,14 @@ function main(): void {
     "RFC 4231 case 1"
   );
 
-  const msg1: Uint8Array = Uint8Array.new([72, 105, 32, 84, 104, 101, 114, 101]);
+  const msg1: Uint8Array = new Uint8Array([72, 105, 32, 84, 104, 101, 114, 101]);
   assert(
     hmacSha256(key1, msg1).toHex() ===
       "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
     "RFC 4231 case 1 (bytes message)"
   );
 
-  const key2: Uint8Array = Uint8Array.new([74, 101, 102, 101]);
+  const key2: Uint8Array = new Uint8Array([74, 101, 102, 101]);
   assert(
     hmacSha256(key2, "what do ya want for nothing?").toHex() ===
       "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",

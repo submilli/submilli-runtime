@@ -536,7 +536,10 @@ fn object_member(
 fn listed_property<'a>(members: &'a [TypedInterfaceMember], member: &str) -> Option<&'a Type> {
     members.iter().find_map(|candidate| match candidate {
         TypedInterfaceMember::Property { name, ty, .. } if name.name == member => Some(ty),
-        TypedInterfaceMember::Property { .. } | TypedInterfaceMember::Method { .. } => None,
+        TypedInterfaceMember::Property { .. }
+        | TypedInterfaceMember::Method { .. }
+        | TypedInterfaceMember::CallSignature { .. }
+        | TypedInterfaceMember::ConstructSignature { .. } => None,
     })
 }
 

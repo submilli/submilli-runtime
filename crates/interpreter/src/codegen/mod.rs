@@ -16,6 +16,7 @@ mod cast_diagnostics;
 pub mod classes;
 mod closure_coercions;
 pub(crate) use closure_coercions::ADAPTER_ORIGINAL_FIELD;
+pub(crate) use intrinsics::CALLABLE_SHAPE_CLOSURE;
 pub mod closures;
 pub mod dependency_usage;
 pub(crate) mod descriptor_schema;
@@ -1289,7 +1290,6 @@ fn codegen_inner(
         let ty_sym = dependency_type.symbol;
         let TypeKind::Interface {
             dispatch,
-            methods,
             properties,
             ..
         } = &ty_sym.kind
@@ -1320,11 +1320,12 @@ fn codegen_inner(
                 ));
             }
         };
-        for (method_name, sig) in methods {
-            if !dependency_usage.is_interface_member_used(ty_sym, method_name) {
+        for (member, sig) in ty_sym.kind.interface_members() {
+            let used = dependency_usage.is_interface_key_used(ty_sym, member);
+            if !used {
                 continue;
             }
-            let mangled = crate::mangle::extend(&ty_sym.mangled_name, method_name);
+            let mangled = member.symbol(&ty_sym.mangled_name);
             // Recorded above the host-implemented `continue` below, not after it:
             // the methods that take that branch are precisely the ones whose call
             // sites have no other record of the erased slots.
@@ -1366,8 +1367,8 @@ fn codegen_inner(
             check_function_parameters(
                 || {
                     format!(
-                        "the host method `{}#{method_name}` of package `{}`",
-                        ty_sym.name, defs.package_name
+                        "the host method `{mangled}` of package `{}`",
+                        defs.package_name
                     )
                 },
                 &params,
@@ -2422,7 +2423,9 @@ pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledNa
 /// payload: a built-in seen through a structural view or `unknown`.
 pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {
     match receiver_ty.lowered() {
-        Type::InterfaceRef { .. } | Type::Unknown => true,
+        // A hybrid (`F & { label: string }`) is a callable object shape,
+        // erased to `$Object`.
+        Type::InterfaceRef { .. } | Type::Unknown | Type::Intersection(_) => true,
         Type::Union(members) => members
             .iter()
             .any(|member| !matches!(member.lowered(), Type::Object { .. })),
@@ -2675,6 +2678,7 @@ function main(): string {
             object: 2,
             undefined: 51,
             type_descriptor: 52,
+            callable_shape: 53,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,
@@ -4643,7 +4647,6 @@ function main(): number { return counter + max_iterations; }"#,
         for (iface, method) in [
             ("String", "repeat"),
             ("Array", "forEach"),
-            ("SetConstructor", "new"),
             ("Set", "add"),
             ("Set", "has"),
             ("Set", "delete"),
@@ -4659,13 +4662,10 @@ function main(): number { return counter + max_iterations; }"#,
             ("Uint8Array", "length"),
             ("Uint8Array", "toHex"),
             ("Uint8ArrayConstructor", "fromHex"),
-            // TextEncoder/TextDecoder: stateless instance methods + their `new` ctors.
+            // TextEncoder/TextDecoder: stateless instance methods.
             ("TextEncoder", "encode"),
             ("TextDecoder", "decode"),
-            ("TextEncoderConstructor", "new"),
-            ("TextDecoderConstructor", "new"),
-            // RegExp: construction, instance methods, property getters.
-            ("RegExpConstructor", "new"),
+            // RegExp: instance methods, property getters.
             ("RegExp", "test"),
             ("RegExp", "exec"),
             ("RegExp", "source"),
@@ -4695,6 +4695,20 @@ function main(): number { return counter + max_iterations; }"#,
                     .any(|(m, n, _, _)| m == crate::runtime::prelude::MODULE_NAME
                         && n == key.as_str()),
                 "{iface}#{method} should import from the prelude host module"
+            );
+        }
+        for iface in [
+            "SetConstructor",
+            "TextEncoderConstructor",
+            "TextDecoderConstructor",
+            "RegExpConstructor",
+        ] {
+            let key = crate::mangle::construct_signature(&crate::mangle::prelude(iface));
+            assert!(
+                imp.iter()
+                    .any(|(m, n, _, _)| m == crate::runtime::prelude::MODULE_NAME
+                        && n == key.as_str()),
+                "{iface}'s construct signature should import from the prelude host module"
             );
         }
 
@@ -4729,7 +4743,6 @@ function main(): number { return counter + max_iterations; }"#,
             ("Now", "instant"),
             ("Now", "timeZoneId"),
             ("Now", "zonedDateTimeISO"),
-            ("DurationConstructor", "new"),
             ("DurationConstructor", "from"),
             ("DurationConstructor", "compare"),
             ("Duration", "years"),
@@ -4833,6 +4846,16 @@ function main(): number { return counter + max_iterations; }"#,
                 "Temporal#{iface}#{method} should import from the prelude host module"
             );
         }
+        let duration = crate::mangle::construct_signature(&crate::mangle::extend(
+            &crate::mangle::prelude("Temporal"),
+            "DurationConstructor",
+        ));
+        assert!(
+            imp.iter()
+                .any(|(m, n, _, _)| m == crate::runtime::prelude::MODULE_NAME
+                    && n == duration.as_str()),
+            "the Duration construct signature should import from the prelude host module"
+        );
 
         // The boxed-primitive vtables are host-owned now, imported from prelude-host.
         for name in ["boxed_number_vtable", "boxed_boolean_vtable"] {
@@ -6764,6 +6787,7 @@ function main(): void {
             object: 2,
             undefined: 51,
             type_descriptor: 52,
+            callable_shape: 53,
             string: 3,
             boxed_number: 4,
             boxed_boolean: 5,

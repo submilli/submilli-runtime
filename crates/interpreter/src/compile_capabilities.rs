@@ -79,15 +79,21 @@ pub fn derive_package_requirements(
                 derive(lookup.callees.get(mangled).copied(), &args)?;
             }
             TypedExprKind::MethodCall {
-                iface, name, args, ..
+                iface,
+                member,
+                args,
+                ..
             } => {
-                derive(lookup.method(iface, &name.name), args)?;
+                derive(lookup.member(iface, member), args)?;
             }
             TypedExprKind::GenericMethodCall {
-                iface, name, args, ..
+                iface,
+                member,
+                args,
+                ..
             } => {
                 let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-                derive(lookup.method(iface, &name.name), &args)?;
+                derive(lookup.member(iface, member), &args)?;
             }
             TypedExprKind::SuperMethodCall { owner, name, args } => {
                 derive(lookup.method(owner, &name.name), args)?;
@@ -95,10 +101,13 @@ pub fn derive_package_requirements(
             TypedExprKind::OptionalChain { parts, .. } => {
                 for part in parts {
                     if let TypedChainPart::MethodCall {
-                        iface, name, args, ..
+                        iface,
+                        member,
+                        args,
+                        ..
                     } = part
                     {
-                        derive(lookup.method(iface, &name.name), args)?;
+                        derive(lookup.member(iface, member), args)?;
                     }
                 }
             }
@@ -192,6 +201,12 @@ impl<'a> CapabilityLookup<'a> {
     /// The tags of the method a call on a `class` receiver runs: the nearest
     /// declaration up its inheritance chain. An override declared in the
     /// calling package hides an inherited tag, since its own body is checked.
+    /// The capability-declaring method a member call reaches. Only class
+    /// methods declare capabilities here; signatures have no class.
+    fn member(&self, class: &MangledName, member: &crate::Member) -> Option<CapabilityCallee<'a>> {
+        self.method(class, &member.as_named()?.name)
+    }
+
     fn method(&self, class: &MangledName, name: &str) -> Option<CapabilityCallee<'a>> {
         let mut current = class;
         // Each step visits another class, so a longer walk has met a cycle.

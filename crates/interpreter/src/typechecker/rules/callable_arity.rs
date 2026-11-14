@@ -68,14 +68,26 @@ impl Rule<'_> {
             match declaration {
                 TypedTypeDecl::Interface(interface) => {
                     for member in &interface.members {
-                        if let TypedInterfaceMember::Method {
-                            name,
-                            params,
-                            return_type,
-                            ..
-                        } = member
-                        {
-                            self.check_callable(params, return_type, name.span);
+                        match member {
+                            TypedInterfaceMember::Method {
+                                name,
+                                params,
+                                return_type,
+                                ..
+                            } => self.check_callable(params, return_type, name.span),
+                            TypedInterfaceMember::CallSignature {
+                                span,
+                                params,
+                                return_type,
+                                ..
+                            }
+                            | TypedInterfaceMember::ConstructSignature {
+                                span,
+                                params,
+                                return_type,
+                                ..
+                            } => self.check_callable(params, return_type, *span),
+                            TypedInterfaceMember::Property { .. } => {}
                         }
                     }
                 }
@@ -146,6 +158,24 @@ impl Rule<'_> {
                     self.check_generics(generics, name.span);
                     self.check_parameter_types(params);
                     self.check_type(return_type, name.span);
+                }
+                TypedInterfaceMember::CallSignature {
+                    span,
+                    generics,
+                    params,
+                    return_type,
+                    ..
+                }
+                | TypedInterfaceMember::ConstructSignature {
+                    span,
+                    generics,
+                    params,
+                    return_type,
+                    ..
+                } => {
+                    self.check_generics(generics, *span);
+                    self.check_parameter_types(params);
+                    self.check_type(return_type, *span);
                 }
                 TypedInterfaceMember::Property { name, ty, .. } => {
                     self.check_type(ty, name.span);

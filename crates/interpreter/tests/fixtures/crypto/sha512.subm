@@ -13,7 +13,7 @@ function main(): void {
     "sha512 of \"abc\""
   );
 
-  const abc_bytes: Uint8Array = Uint8Array.new([97, 98, 99]);
+  const abc_bytes: Uint8Array = new Uint8Array([97, 98, 99]);
   assert(
     sha512(abc_bytes).equals(sha512("abc")),
     "sha512 of abc bytes === sha512 of \"abc\""

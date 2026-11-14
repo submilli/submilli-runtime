@@ -501,12 +501,16 @@ fn intersection_method_package() -> CompiledPackage {
     // An external front end supplies the overloaded public callable contract;
     // runtime_globals retains the compiled closure's erased physical signature.
     let mut call = match &package.declaration.types["NumberCall"].kind {
-        submilli_engine::TypeKind::Interface { methods, .. } => methods["@call"].clone(),
+        submilli_engine::TypeKind::Interface {
+            call: Some(call), ..
+        } => call.clone(),
         _ => panic!("callable interface"),
     };
-    let string = match &package.declaration.types["StringCall"].kind {
-        submilli_engine::TypeKind::Interface { methods, .. } => &methods["@call"],
-        _ => panic!("callable interface"),
+    let submilli_engine::TypeKind::Interface {
+        call: Some(string), ..
+    } = &package.declaration.types["StringCall"].kind
+    else {
+        panic!("callable interface");
     };
     call.overloads.push(submilli_engine::MethodOverload {
         generics: string.generics.clone(),
@@ -524,10 +528,12 @@ fn intersection_method_package() -> CompiledPackage {
             kind: submilli_engine::TypeKind::Interface {
                 extends: vec![],
                 generics: Default::default(),
-                methods: BTreeMap::from([("@call".into(), call)]),
+                methods: BTreeMap::new(),
                 properties: BTreeMap::new(),
                 index: None,
                 more_indexes: Vec::new(),
+                call: Some(call),
+                construct: None,
                 dispatch: submilli_engine::Dispatch::VTable,
                 doc: None,
             },

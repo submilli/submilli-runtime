@@ -67,7 +67,7 @@ pub(super) enum CallLift<'a> {
     /// generics render substituted.
     Method {
         receiver_ty: &'a Type,
-        name: &'a str,
+        member: crate::MemberKey<'a>,
         sig: &'a MethodSig,
     },
 }
@@ -379,6 +379,8 @@ fn stringify_arg_may_omit_json_text(ty: &Type, types: TypeResolver<'_>) -> bool 
     any_resolved_member(ty, types, &|member| {
         Type::stringifies_to_undefined(member)
             || is_constructor_binding(member, types)
+            || super::assignable::interface_has_signature(member, types)
+            || assignable::hybrid_parts(member).is_some()
             || super::assignable::interface_may_hold_function(member, types)
     })
 }
@@ -3009,7 +3011,7 @@ impl Inferer<'_> {
                     *receiver,
                     binding,
                     MethodCallSite {
-                        name: name.clone(),
+                        member: crate::Member::Named(name.clone()),
                         type_args,
                         args,
                         expected,
@@ -3065,7 +3067,7 @@ impl Inferer<'_> {
             }
             if let Some(methods) = self.string_or_array_methods(&recv_ty, &name.name) {
                 let call = MethodCallSite {
-                    name: name.clone(),
+                    member: crate::Member::Named(name.clone()),
                     type_args,
                     args,
                     expected,
@@ -3075,7 +3077,7 @@ impl Inferer<'_> {
             }
             if let Some(method) = self.find_method(&recv_ty, &name.name) {
                 let call = MethodCallSite {
-                    name: name.clone(),
+                    member: crate::Member::Named(name.clone()),
                     type_args,
                     args,
                     expected,
@@ -3088,7 +3090,21 @@ impl Inferer<'_> {
                     .lookup_interface_property(&recv_ty, &name.name)
                     .is_none()
             {
-                let help = self.interface_member_miss_help(&recv_ty, &name.name);
+                let mut help = self.interface_member_miss_help(&recv_ty, &name.name);
+                // A construct signature is no member: `Map.new()` is not
+                // `new Map()`, as in TypeScript.
+                if name.name == "new" && self.find_construct_signature(&recv_ty).is_some() {
+                    let callee_span = self
+                        .typed_ast
+                        .try_expr(typed_receiver)
+                        .map_err(crate::typechecker::arena_failure)?
+                        .span;
+                    let callee = self.rewritable_snippet(callee_span);
+                    help.insert(
+                        0,
+                        format!("`{callee}.new` is not a member; construct with `new {callee}(…)`"),
+                    );
+                }
                 self.error_with_help(
                     name.span,
                     format!("no method `{}` on `{}`", name.name, recv_ty),
@@ -3123,7 +3139,7 @@ impl Inferer<'_> {
                     TypedExprKind::MethodCall {
                         receiver: typed_receiver,
                         iface: crate::mangle::prelude("Null"),
-                        name: name.clone(),
+                        member: crate::Member::Named(name.clone()),
                         args: Vec::new(),
                         type_predicate: None,
                     },
@@ -3211,26 +3227,22 @@ impl Inferer<'_> {
                 TypedExprKind::MethodCall {
                     receiver: typed_callee,
                     iface: crate::mangle::prelude("Object"),
-                    name: Ident {
-                        name: "@call".to_string(),
-                        span,
-                    },
+                    member: crate::Member::CallSignature(span),
                     args: typed_args,
                     type_predicate: None,
                 },
                 ret_ty,
             ));
         }
+        // An overload set, or a hybrid (`F & { label: string }`): its function
+        // members give the signatures.
         if matches!(callee_ty.peel(), Type::Intersection(_))
-            && let Some(signature) = MethodSig::from_function_type(&callee_ty, false)
+            && let Some(signature) = self.resolver().callable_method_signature(&callee_ty)
         {
             return self.infer_overloaded_method_call(
                 typed_callee,
                 crate::mangle::prelude("Object"),
-                Ident {
-                    name: "@call".into(),
-                    span,
-                },
+                crate::Member::CallSignature(span),
                 signature,
                 BTreeMap::new(),
                 type_args,
@@ -3241,28 +3253,20 @@ impl Inferer<'_> {
         }
         let (typed_callee, callee_ty) =
             self.cast_up_to_union_signature(typed_callee, callee_ty, args.len())?;
-        // call-signature dispatch — when the callee types
-        // as an `InterfaceRef` declaring `@call`, route through the
-        // same method-call pipeline as `find_method(_, "new")` for
-        // `new` Receiver is `typed_callee` (the
-        // already-evaluated callee expression); the sentinel name
-        // `@call` resolves against the interface's `methods` map.
-        // On a miss we fall through to the existing "cannot call
-        // value of type X" diagnostic below.
+        // A callee typed by an interface with a call signature goes through
+        // the method-call pipeline, as `new` does through the construct
+        // signature; the receiver is the evaluated callee. Without one, the
+        // "cannot call value of type X" diagnostic below reports it.
         if matches!(callee_ty.peel(), Type::InterfaceRef { .. })
             && let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
-                self.find_method(&callee_ty, "@call")
+                self.find_call_signature(&callee_ty)
         {
-            let call_name = Ident {
-                name: "@call".to_string(),
-                span,
-            };
             return self.infer_found_method_call(
                 typed_callee,
                 &callee_ty,
                 (sig, interface_bindings, iface_mangled, _dispatch),
                 MethodCallSite {
-                    name: call_name,
+                    member: crate::Member::CallSignature(span),
                     type_args,
                     args,
                     expected,
@@ -3303,7 +3307,7 @@ impl Inferer<'_> {
             _ => {
                 let culprit = self.nullish_culprit(&[(typed_callee, &callee_ty)], |t| {
                     matches!(t.peel(), Type::Function { .. })
-                        || self.find_method(t, "@call").is_some()
+                        || self.find_call_signature(t).is_some()
                 });
                 let help = if culprit.is_some() {
                     let callee_span = self
@@ -3723,7 +3727,7 @@ impl Inferer<'_> {
         &mut self,
         typed_receiver: ExprId,
         iface_mangled: crate::MangledName,
-        name: Ident,
+        member: crate::Member,
         sig: MethodSig,
         type_args: Option<Vec<TypeAnnotation>>,
         args: Vec<ExprId>,
@@ -3733,7 +3737,7 @@ impl Inferer<'_> {
             return self.infer_overloaded_method_call(
                 typed_receiver,
                 iface_mangled,
-                name,
+                member,
                 sig,
                 BTreeMap::new(),
                 type_args,
@@ -3754,17 +3758,18 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)?
             .ty
             .clone();
+        let key = member.key();
         if let Some(targs) = &type_args {
             let help = self.format_signature(SignatureKind::Method {
                 receiver_ty: &receiver_ty,
-                name: &name.name,
+                member: key,
                 sig: &sig,
             });
             self.error_with_help(
                 span,
                 format!(
-                    "method `{}` is not generic; got {} type argument(s)",
-                    name.name,
+                    "{} is not generic; got {} type argument(s)",
+                    key.describe(),
                     targs.len(),
                 ),
                 vec![help],
@@ -3778,7 +3783,7 @@ impl Inferer<'_> {
             &sig.ret,
             CallLift::Method {
                 receiver_ty: &receiver_ty,
-                name: &name.name,
+                member: key,
                 sig: &sig,
             },
             &args,
@@ -3822,12 +3827,12 @@ impl Inferer<'_> {
                 None
             };
             let object_enumeration = iface_mangled == crate::mangle::prelude("ObjectConstructor")
-                && matches!(name.name.as_str(), "values" | "entries");
-            let lists_entries = name.name == "entries";
+                && (key.is_named("values") || key.is_named("entries"));
+            let lists_entries = key.is_named("entries");
             let call = TypedExprKind::GenericMethodCall {
                 receiver: typed_receiver,
                 iface: iface_mangled,
-                name,
+                member,
                 type_args: Vec::new(),
                 args: generic_args,
                 return_cast,
@@ -3844,7 +3849,7 @@ impl Inferer<'_> {
             TypedExprKind::MethodCall {
                 receiver: typed_receiver,
                 iface: iface_mangled,
-                name,
+                member,
                 args: typed_args,
                 type_predicate,
             },
@@ -4029,17 +4034,11 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    /// `new Foo(args)` typechecks as `Foo.new(args)`. The
-    /// callee must be a value typed `InterfaceRef("FooConstructor")`
-    /// whose interface declares a `new` method under `Dispatch::Static`.
-    /// We synthesize the equivalent of a method-call lookup via
-    /// `find_method(callee_ty, "new")` and reuse the existing
-    /// `infer_method_call` / `infer_generic_method_call` pipelines so
-    /// `new` lowers to a `TypedExprKind::MethodCall` — codegen never
-    /// sees a separate `New` node.
-    ///
-    /// The bare `Foo.new(args)` form keeps working through the
-    /// FieldAccess-callee path in `infer_call` (forgiveness rule).
+    /// `new Foo(args)` on a class constructs an instance. On any other value
+    /// the callee's type must declare a construct signature `new (…)`, such as
+    /// the prelude's `MapConstructor`; the call goes through the method-call
+    /// pipeline and lowers to a `TypedExprKind::MethodCall` on
+    /// `Member::ConstructSignature`, so codegen sees no separate `New` node.
     fn infer_new(
         &mut self,
         callee: ExprId,
@@ -4171,12 +4170,8 @@ impl Inferer<'_> {
         if matches!(callee_ty, Type::Error) {
             return Ok((TypedExprKind::Null, Type::Error));
         }
-        let new_name = Ident {
-            name: "new".to_string(),
-            span,
-        };
         let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
-            self.find_method(&callee_ty, "new")
+            self.find_construct_signature(&callee_ty)
         else {
             // Probe for a constructor by convention: if `<Type>` is
             // also bound as a top-level value (the prelude registers
@@ -4193,41 +4188,39 @@ impl Inferer<'_> {
                         },
                     ..
                 } = &entry.kind
-                && self
-                    .lookup_named_type(ctor_iface)
-                    .and_then(|s| match &s.kind {
-                        crate::TypeKind::Interface { methods, .. } => Some(methods),
-                        _ => None,
-                    })
-                    .is_some_and(|methods| methods.contains_key("new"))
+                && self.lookup_named_type(ctor_iface).is_some_and(|s| {
+                    matches!(
+                        &s.kind,
+                        crate::TypeKind::Interface {
+                            construct: Some(_),
+                            ..
+                        }
+                    )
+                })
             {
                 help.push(format!(
-                    "did you mean `new {iface_name}(...)`? `{iface_name}` (the constructor) declares a `new` method, but `{iface_name}` instances don't.",
+                    "did you mean `new {iface_name}(...)`? `{iface_name}` (the constructor) declares a construct signature, but `{iface_name}` instances don't.",
                 ));
             }
             help.push(self.format_definition(&callee_ty));
             self.error_with_help(
                 span,
-                format!("`new` expects a constructor; `{callee_ty}` declares no `new` method",),
+                format!(
+                    "`new` expects a constructor; `{callee_ty}` declares no construct signature",
+                ),
                 help,
             );
             return Ok((TypedExprKind::Null, Type::Error));
         };
-        // `new foo(args)` lowers to the same MethodCall as
-        // `foo.new(args)` — the dispatch mode (Static vs Direct)
-        // only changes whether the receiver is pushed or dropped at
-        // the call site, and that decision lives in
-        // `emit_method_call`. No reason to gate `new` on Static
-        // dispatch: a Direct `new` method on an instance interface
-        // is just an instance method whose name happens to be `new`,
-        // and the prefix form is a perfectly valid alias for the
-        // dotted form.
+        // The dispatch mode (Static vs Direct) only changes whether the
+        // receiver is pushed or dropped at the call site, a decision that
+        // lives in `emit_method_call`.
         self.infer_found_method_call(
             typed_callee,
             &callee_ty,
             (sig, interface_bindings, iface_mangled, _dispatch),
             MethodCallSite {
-                name: new_name,
+                member: crate::Member::ConstructSignature(span),
                 type_args,
                 args,
                 expected,
@@ -5113,6 +5106,9 @@ impl Inferer<'_> {
             did_you_mean::closest_match(&member.name, statics.iter().map(String::as_str))
                 .map(|s| vec![format!("did you mean `{class_name}.{s}`?")])
                 .unwrap_or_default();
+        if member.name == "new" {
+            help.insert(0, format!("construct with `new {class_name}(…)`"));
+        }
         let package = self.type_package(class_name);
         help.push(self.format_definition(&Type::class_ref(
             package,
@@ -5183,11 +5179,11 @@ impl Inferer<'_> {
                 }
                 CallLift::Method {
                     receiver_ty,
-                    name,
+                    member,
                     sig,
                 } => self.format_signature(SignatureKind::Method {
                     receiver_ty,
-                    name,
+                    member,
                     sig,
                 }),
             };
@@ -5196,7 +5192,7 @@ impl Inferer<'_> {
                     format!("constructor of `{class_ty}` expects")
                 }
                 CallLift::Function { .. } | CallLift::Anon { .. } => "expected".to_string(),
-                CallLift::Method { name, .. } => format!("method `{name}` expects"),
+                CallLift::Method { member, .. } => format!("{} expects", member.describe()),
             };
             let msg = if has_rest {
                 format!("{subject} {}+ argument(s), got {}", min_args, args.len())
@@ -5486,10 +5482,10 @@ impl Inferer<'_> {
                 TypedExprKind::MethodCall {
                     receiver: collected,
                     iface: crate::mangle::prelude("Array"),
-                    name: Ident {
+                    member: crate::Member::Named(Ident {
                         name: "slice".into(),
                         span,
-                    },
+                    }),
                     args: vec![start, end],
                     type_predicate: None,
                 },
@@ -6340,7 +6336,7 @@ impl Inferer<'_> {
                     kind: TypedExprKind::MethodCall {
                         receiver: expr_id,
                         iface: crate::mangle::prelude("Null"),
-                        name: method_name,
+                        member: crate::Member::Named(method_name),
                         args: Vec::new(),
                         type_predicate: None,
                     },
@@ -6375,7 +6371,7 @@ impl Inferer<'_> {
                 kind: TypedExprKind::MethodCall {
                     receiver: expr_id,
                     iface: iface_mangled,
-                    name: method_name,
+                    member: crate::Member::Named(method_name),
                     args,
                     type_predicate: None,
                 },
@@ -6889,8 +6885,9 @@ impl Inferer<'_> {
             unknown_fields = self.report_unknown_union_fields(union_members, &members)?;
         }
         // A literal can't become a host-backed interface, whose reads need the
-        // host's backing struct, so it keeps its own type and the assignment
-        // fails.
+        // host's backing struct, nor one with a call or construct signature,
+        // which an object has none of, so it keeps its own type and the
+        // assignment fails.
         let interface_target: Option<(crate::Package, String, crate::MangledName, Vec<Type>)> =
             match peeled {
                 Some(
@@ -6900,7 +6897,9 @@ impl Inferer<'_> {
                         name,
                         args,
                     },
-                ) if !assignable::is_host_backed_interface(interface) => {
+                ) if !assignable::is_host_backed_interface(interface)
+                    && !assignable::interface_has_signature(interface, self.resolver()) =>
+                {
                     Some((package.clone(), name.clone(), mangled.clone(), args.clone()))
                 }
                 _ => None,
@@ -7728,6 +7727,12 @@ impl Inferer<'_> {
             let indexes = self.resolver().index_signatures(&alternative);
             let fields = match alternative {
                 Type::Object { fields, .. } => fields,
+                // A hybrid copies its properties; its function has none.
+                ref hybrid @ Type::Intersection(_) if assignable::is_hybrid(hybrid) => {
+                    assignable::hybrid_parts(hybrid)
+                        .map(|(_, fields)| fields)
+                        .unwrap_or_default()
+                }
                 // Like `{}`, `object` names no field to copy.
                 Type::NonPrimitive => ObjectFields::new(),
                 // A spread copies nothing from a value that is always falsy, as
@@ -7774,11 +7779,10 @@ impl Inferer<'_> {
                     ref args,
                     ..
                 } => {
-                    let Some(mut fields) = self.resolver().interface_full_form(mangled, name, args)
+                    let Some(fields) = self.resolver().interface_full_form(mangled, name, args)
                     else {
                         return Ok(None);
                     };
-                    fields.remove("@call");
                     fields
                 }
                 // Inner inference already reported it.
@@ -8420,10 +8424,10 @@ impl Inferer<'_> {
                 kind: TypedExprKind::MethodCall {
                     receiver,
                     iface: crate::mangle::prelude("ArrayConstructor"),
-                    name: Ident {
+                    member: crate::Member::Named(Ident {
                         name: "from".into(),
                         span,
-                    },
+                    }),
                     args: vec![source, mapper],
                     type_predicate: None,
                 },
@@ -9637,7 +9641,11 @@ impl Inferer<'_> {
         // A function's `length`. The prelude declares it on `Function` for
         // front ends; this checker still types the read itself and does not
         // bind that name.
-        if name.name == "length" && matches!(receiver_ty.peel(), Type::Function { .. }) {
+        if name.name == "length"
+            && (matches!(receiver_ty.peel(), Type::Function { .. })
+                || assignable::hybrid_parts(&receiver_ty)
+                    .is_some_and(|(_, fields)| !fields.contains_key("length")))
+        {
             return Ok((
                 TypedExprKind::InterfacePropertyAccess {
                     receiver: typed_receiver,
@@ -9761,6 +9769,18 @@ impl Inferer<'_> {
         // Union form. Error messages still use the un-peeled
         // `receiver_ty` so the alias name surfaces in diagnostics.
         let field_ty = match receiver_ty.peel() {
+            // A hybrid (`F & { label: string }`) reads its properties from its
+            // object members.
+            Type::Intersection(_) if assignable::is_hybrid(&receiver_ty) => {
+                if let Some(field) = assignable::hybrid_parts(&receiver_ty)
+                    .and_then(|(_, mut fields)| fields.remove(&name.name))
+                {
+                    field.read_ty()
+                } else {
+                    self.report_missing_object_field(name.span, &receiver_ty, &name.name);
+                    Type::Error
+                }
+            }
             Type::Object { fields, .. } => {
                 if let Some(field) = fields.get(&name.name) {
                     field.read_ty()
@@ -9883,7 +9903,7 @@ impl Inferer<'_> {
         call: MethodCallSite<'_>,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         let MethodCallSite {
-            name,
+            member,
             type_args,
             args,
             expected,
@@ -9891,13 +9911,11 @@ impl Inferer<'_> {
         } = call;
         let (mut sig, interface_bindings, iface_mangled, _dispatch) = method;
         if sig.optional {
+            let name = member.as_named().map_or("", |name| name.name.as_str());
             self.error_with_help(
-                name.span,
-                format!("method `{}` may be undefined", name.name),
-                vec![format!(
-                    "call it with `?.()`: `receiver.{}?.(…)`",
-                    name.name
-                )],
+                member.span(),
+                format!("method `{name}` may be undefined"),
+                vec![format!("call it with `?.()`: `receiver.{name}?.(…)`")],
             );
             self.walk_rejected_call_args(&args)?;
             return Ok((TypedExprKind::Undefined, Type::Error));
@@ -9906,7 +9924,7 @@ impl Inferer<'_> {
             return self.infer_overloaded_method_call(
                 typed_receiver,
                 iface_mangled,
-                name,
+                member,
                 sig,
                 interface_bindings,
                 type_args,
@@ -9918,7 +9936,7 @@ impl Inferer<'_> {
         // `flat` un-nests `depth` array levels — a return type the
         // generic machinery can't express. Validate the literal depth
         // and override the resolved return type before dispatch.
-        if name.name == "flat" && matches!(recv_ty.peel(), Type::Array(_)) {
+        if member.is_named("flat") && matches!(recv_ty.peel(), Type::Array(_)) {
             sig.ret = self.array_flat_return_type(recv_ty, &args)?;
         }
         // Anything with substitution work — interface generics
@@ -9930,7 +9948,7 @@ impl Inferer<'_> {
             return self.infer_method_call(
                 typed_receiver,
                 iface_mangled,
-                name,
+                member,
                 sig,
                 type_args,
                 args,
@@ -9938,13 +9956,16 @@ impl Inferer<'_> {
             );
         }
         let is_array = matches!(recv_ty.peel(), Type::Array(_));
-        let method = name.name.clone();
+        let method = member
+            .as_named()
+            .map(|name| name.name.clone())
+            .unwrap_or_default();
         let is_set = iface_mangled == crate::mangle::prelude("Set");
         let is_array_iface = iface_mangled == crate::mangle::prelude("Array");
         let call = self.infer_generic_method_call(
             typed_receiver,
             iface_mangled,
-            name,
+            member,
             sig,
             interface_bindings,
             type_args,
@@ -13443,7 +13464,7 @@ impl Inferer<'_> {
                             &ret_ty,
                             CallLift::Method {
                                 receiver_ty: &m.receiver_ty,
-                                name: &name.name,
+                                member: crate::MemberKey::Named(&name.name),
                                 sig: &m.sig,
                             },
                             &args,
@@ -13488,7 +13509,7 @@ impl Inferer<'_> {
                     return Ok((
                         TypedChainPart::MethodCall {
                             iface,
-                            name,
+                            member: crate::Member::Named(name),
                             args: typed_args,
                             optional: prop_optional,
                             result_ty: ret_ty.clone(),
@@ -13555,10 +13576,7 @@ impl Inferer<'_> {
                     return Ok((
                         TypedChainPart::MethodCall {
                             iface: crate::mangle::prelude("Object"),
-                            name: Ident {
-                                name: "@call".to_string(),
-                                span,
-                            },
+                            member: crate::Member::CallSignature(span),
                             args: typed_args,
                             optional,
                             result_ty: ret_ty.clone(),
@@ -13605,10 +13623,10 @@ impl Inferer<'_> {
         let (call, ret_ty) = self.infer_overloaded_method_call(
             receiver,
             iface.clone(),
-            Ident {
+            crate::Member::Named(Ident {
                 name: method.name.clone(),
                 span: method.span,
-            },
+            }),
             sig,
             bindings,
             type_args,
@@ -13685,7 +13703,7 @@ impl Inferer<'_> {
         Ok((
             TypedChainPart::MethodCall {
                 iface,
-                name,
+                member: crate::Member::Named(name),
                 args,
                 optional: field_optional,
                 result_ty: ret_ty.clone(),
@@ -13713,14 +13731,11 @@ impl Inferer<'_> {
     ) -> Result<(TypedChainPart, Type), CompilerFailure> {
         let receiver =
             self.push_synthetic_expr(TypedExprKind::Undefined, receiver_ty.clone(), span)?;
-        let name = Ident {
-            name: "@call".into(),
-            span,
-        };
+        let member = crate::Member::CallSignature(span);
         let (call, ret_ty) = self.infer_overloaded_method_call(
             receiver,
             iface.clone(),
-            name.clone(),
+            member.clone(),
             signature,
             bindings,
             type_args,
@@ -13744,7 +13759,7 @@ impl Inferer<'_> {
         Ok((
             TypedChainPart::MethodCall {
                 iface,
-                name,
+                member,
                 args,
                 optional,
                 result_ty: ret_ty.clone(),
@@ -13762,8 +13777,8 @@ impl Inferer<'_> {
         optional: bool,
         span: Span,
     ) -> Result<Option<(TypedChainPart, Type)>, CompilerFailure> {
-        if receiver_ty.is_callable_intersection()
-            && let Some(signature) = MethodSig::from_function_type(receiver_ty, false)
+        if matches!(receiver_ty.peel(), Type::Intersection(_))
+            && let Some(signature) = self.resolver().callable_method_signature(receiver_ty)
         {
             return self
                 .infer_overloaded_chain_call(
@@ -13782,7 +13797,7 @@ impl Inferer<'_> {
             return Ok(None);
         }
         let Some((sig, interface_bindings, iface_mangled, _dispatch)) =
-            self.find_method(receiver_ty, "@call")
+            self.find_call_signature(receiver_ty)
         else {
             return Ok(None);
         };
@@ -13836,16 +13851,12 @@ impl Inferer<'_> {
             .collect();
         let ret_ty =
             super::generic::substitute_or_record(&sig.ret, &interface_bindings, &self.type_limits);
-        let call_name = Ident {
-            name: "@call".to_string(),
-            span,
-        };
         let typed_args = self.bind_param_call_args(
             &params,
             &ret_ty,
             CallLift::Method {
                 receiver_ty,
-                name: &call_name.name,
+                member: crate::MemberKey::Call,
                 sig: &sig,
             },
             args,
@@ -13854,7 +13865,7 @@ impl Inferer<'_> {
         Ok(Some((
             TypedChainPart::MethodCall {
                 iface: iface_mangled,
-                name: call_name,
+                member: crate::Member::CallSignature(span),
                 args: typed_args,
                 optional,
                 result_ty: ret_ty.clone(),
@@ -14281,6 +14292,16 @@ impl Inferer<'_> {
                 }
                 self.report_missing_object_field(span, receiver_ty, &name.name);
                 ChainField::plain(Type::Error)
+            }
+            // A hybrid reads its properties from its object members.
+            Type::Intersection(_) if assignable::is_hybrid(receiver_ty) => {
+                let field = assignable::hybrid_parts(receiver_ty)
+                    .and_then(|(_, mut fields)| fields.remove(&name.name));
+                let Some(f) = field else {
+                    self.report_missing_object_field(span, receiver_ty, &name.name);
+                    return ChainField::plain(Type::Error);
+                };
+                ChainField::plain(f.read_ty())
             }
             Type::Error => ChainField::plain(Type::Error),
             Type::Unknown => ChainField::plain(Type::Unknown),
@@ -16051,7 +16072,7 @@ struct ElementJoin {
 
 /// A method `find_method` found: its signature, the receiver's type arguments,
 /// its interface and its dispatch.
-type FoundMethod = (
+pub(super) type FoundMethod = (
     MethodSig,
     BTreeMap<String, Type>,
     crate::MangledName,
@@ -16070,7 +16091,7 @@ struct StringOrArrayMethods {
 /// receiver is typed.
 #[derive(Clone)]
 pub(super) struct MethodCallSite<'a> {
-    pub(super) name: Ident,
+    pub(super) member: crate::Member,
     pub(super) type_args: Option<Vec<TypeAnnotation>>,
     pub(super) args: Vec<ExprId>,
     pub(super) expected: Option<&'a Type>,
@@ -17664,11 +17685,11 @@ mod tests {
         let mut type_args = Vec::new();
         for i in 0..ta.exprs_len() {
             if let TypedExprKind::GenericMethodCall {
-                name,
+                member,
                 type_args: args,
                 ..
             } = &ta.try_expr(crate::ExprId(i as u32)).unwrap().kind
-                && name.name == "json"
+                && member.is_named("json")
             {
                 type_args.push(args.iter().map(ToString::to_string).collect::<Vec<_>>());
             }
@@ -18375,14 +18396,14 @@ function main(): void { if (result < 10) { } }
         let TypedStmtKind::Expr(call_id) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected expression statement");
         };
-        let TypedExprKind::MethodCall { name, args, .. } = &ta.try_expr(*call_id).unwrap().kind
+        let TypedExprKind::MethodCall { member, args, .. } = &ta.try_expr(*call_id).unwrap().kind
         else {
             panic!(
                 "expected MethodCall, got {:?}",
                 ta.try_expr(*call_id).unwrap().kind,
             );
         };
-        assert_eq!(name.name, "log");
+        assert!(member.is_named("log"));
         assert_eq!(args.len(), 1);
         let rest = args[0];
         let TypedExprKind::ArrayLiteral { elements, .. } = &ta.try_expr(rest).unwrap().kind else {
@@ -18405,14 +18426,14 @@ function main(): void { if (result < 10) { } }
         let TypedStmtKind::Expr(call_id) = &ta.try_stmt(stmts[0]).unwrap().kind else {
             panic!("expected expression statement");
         };
-        let TypedExprKind::MethodCall { name, args, .. } = &ta.try_expr(*call_id).unwrap().kind
+        let TypedExprKind::MethodCall { member, args, .. } = &ta.try_expr(*call_id).unwrap().kind
         else {
             panic!(
                 "expected MethodCall, got {:?}",
                 ta.try_expr(*call_id).unwrap().kind,
             );
         };
-        assert_eq!(name.name, "log");
+        assert!(member.is_named("log"));
         assert_eq!(args.len(), 1);
         let rest = args[0];
         let TypedExprKind::ArrayLiteral {
@@ -18824,8 +18845,8 @@ function main(): void { if (result < 10) { } }
     fn collect_to_string_calls(ta: &TypedAst, id: crate::ExprId) -> Vec<crate::ExprId> {
         fn walk(ta: &TypedAst, id: crate::ExprId, out: &mut Vec<crate::ExprId>) {
             let e = ta.try_expr(id).unwrap();
-            if let TypedExprKind::MethodCall { name, .. } = &e.kind
-                && name.name == "toString"
+            if let TypedExprKind::MethodCall { member, .. } = &e.kind
+                && member.is_named("toString")
             {
                 out.push(id);
             }
@@ -18967,8 +18988,8 @@ function main(): void { if (result < 10) { } }
         // The top expression is the toString MethodCall itself
         // (no Binary wrapping with empty-string operands).
         match &ta.try_expr(*value).unwrap().kind {
-            TypedExprKind::MethodCall { name, .. } => {
-                assert_eq!(name.name, "toString");
+            TypedExprKind::MethodCall { member, .. } => {
+                assert!(member.is_named("toString"));
             }
             other => panic!("expected lone MethodCall, got {other:?}"),
         }

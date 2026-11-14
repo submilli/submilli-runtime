@@ -20,7 +20,10 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
     register_host_fn(
         linker,
         MODULE_NAME,
-        shared::prelude_key("DurationConstructor", "new"),
+        crate::mangle::construct_signature(&crate::mangle::extend(
+            &crate::mangle::prelude("Temporal"),
+            "DurationConstructor",
+        )),
         FuncType::new(engine, [types.object_shape.clone()], object_result.clone()),
         move |caller, params, results| {
             let span = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration")?;
@@ -440,8 +443,11 @@ pub(crate) fn declare(defs: &mut PackageDeclaration) {
 
     shared::declare_direct_fn(
         defs,
-        "new",
-        shared::prelude_key("DurationConstructor", "new"),
+        "Duration",
+        crate::mangle::construct_signature(&crate::mangle::extend(
+            &crate::mangle::prelude("Temporal"),
+            "DurationConstructor",
+        )),
         vec![Param::new(
             "fields",
             shared::object_shape_type(&shared::DURATION_FIELD_NAMES),

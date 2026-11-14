@@ -1035,6 +1035,8 @@ mod importless_library_tests {
                     generics: Default::default(),
                     methods,
                     properties,
+                    call: None,
+                    construct: None,
                     dispatch: Dispatch::Direct,
                     doc: None,
                 },

@@ -231,6 +231,8 @@ fn insert_interface(
                 index: None,
                 more_indexes: Vec::new(),
                 generics: Default::default(),
+                call: None,
+                construct: None,
                 dispatch: if methods.is_empty() {
                     Dispatch::VTable
                 } else {

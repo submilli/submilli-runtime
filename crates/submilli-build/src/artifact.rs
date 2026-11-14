@@ -854,6 +854,8 @@ mod tests {
                     generics: Default::default(),
                     methods,
                     properties,
+                    call: None,
+                    construct: None,
                     dispatch: Dispatch::Direct,
                     doc: doc(file, "/** Thing docs. */"),
                 },

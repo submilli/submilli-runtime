@@ -1,5 +1,5 @@
 function main(): void {
-  let hello: Uint8Array = Uint8Array.new([104, 101, 108, 108, 111]);
+  let hello: Uint8Array = new Uint8Array([104, 101, 108, 108, 111]);
   assert(hello.toBase64() === "aGVsbG8=", "hello → base64 (no options)");
 
   let back: Uint8Array = Uint8Array.fromBase64("aGVsbG8=");

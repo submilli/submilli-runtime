@@ -670,12 +670,18 @@ fn for_each_member_type_mut(kind: &mut TypeKind, settle: &mut dyn FnMut(&mut Typ
     match kind {
         TypeKind::Interface {
             methods,
+            call,
+            construct,
             properties,
             index,
             more_indexes,
             ..
         } => {
-            methods.values_mut().for_each(|sig| method(sig, settle));
+            methods
+                .values_mut()
+                .chain(call.as_mut())
+                .chain(construct.as_mut())
+                .for_each(|sig| method(sig, settle));
             properties
                 .values_mut()
                 .for_each(|property| settle(&mut property.ty));

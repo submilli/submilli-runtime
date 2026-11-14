@@ -15,7 +15,7 @@ fn method_key(method: &str) -> MangledName {
 }
 
 fn call_key() -> MangledName {
-    crate::mangle::extend(&crate::mangle::prelude("BooleanConstructor"), "@call")
+    crate::mangle::call_signature(&crate::mangle::prelude("BooleanConstructor"))
 }
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -85,7 +85,13 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![recv()],
         Type::String,
     );
-    declare_method(defs, "@call", call_key(), vec![call_value()], Type::Boolean);
+    declare_method(
+        defs,
+        "Boolean",
+        call_key(),
+        vec![call_value()],
+        Type::Boolean,
+    );
 }
 
 fn call_value() -> Param {
@@ -135,6 +141,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc("/** The boolean type — `true` or `false`. */"),
             },
@@ -150,9 +158,9 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 index: None,
                 more_indexes: Vec::new(),
                 generics: Default::default(),
-                methods: BTreeMap::from([(
-                    "@call".to_string(),
-                    MethodSig { overloads: Vec::new(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::new(),
+                call: Some(MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: vec![call_value()],
@@ -161,9 +169,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc(
                             "/**\n * Convert any value to a boolean by its truthiness: `false`, `0`, `NaN`, `\"\"`, `0n`, `null` and `undefined` are `false`; everything else is `true`.\n */",
                         ),
-                    },
-                )]),
-                properties: BTreeMap::new(),
+                    }),
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `boolean`. Accessed via the global `Boolean` binding. */",

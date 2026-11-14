@@ -696,7 +696,7 @@ fn render_type_member(owner: &str, kind: &TypeKind, member: &str) -> Option<Stri
         for m in m.signatures() {
             push_doc(&mut body, &m.doc, "  ");
             let optional = if m.optional { "?" } else { "" };
-            let name = method_prefix(&name);
+            let name = method_name(&name);
             let _ = writeln!(
                 body,
                 "  {name}{optional}{}({}): {};",
@@ -1969,6 +1969,8 @@ fn render_ts_type(
             extends,
             generics,
             methods,
+            call,
+            construct,
             properties,
             index,
             more_indexes,
@@ -2016,6 +2018,17 @@ fn render_ts_type(
                 let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {ty};");
             }
+            for (prefix, m) in interface_signatures(call, construct) {
+                push_doc(out, &m.doc, &inner);
+                let ret = ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
+                let _ = writeln!(
+                    out,
+                    "{inner}{}{}({}): {ret};",
+                    prefix,
+                    generics_str(&m.generics),
+                    ts_params_str(&m.params, m.doc.as_ref())
+                );
+            }
             for (mname, m) in methods {
                 if properties.contains_key(mname) {
                     continue;
@@ -2025,7 +2038,7 @@ fn render_ts_type(
                     let ret =
                         ts_return_type(&m.params, &m.ret, m.predicate.as_ref(), m.doc.as_ref());
                     let optional = if m.optional { "?" } else { "" };
-                    let mname = method_prefix(mname);
+                    let mname = method_name(mname);
                     let _ = writeln!(
                         out,
                         "{inner}{mname}{optional}{}({}): {ret};",
@@ -2614,6 +2627,8 @@ fn render_type_for(
             extends,
             generics,
             methods,
+            call,
+            construct,
             properties,
             ..
         } => {
@@ -2639,13 +2654,24 @@ fn render_type_for(
                 let pname = member_name(pname);
                 let _ = writeln!(out, "{inner}{ro}{pname}{opt}: {ty};");
             }
+            for (prefix, m) in interface_signatures(call, construct) {
+                push_doc_for(out, &m.doc, &inner, audience);
+                let _ = writeln!(
+                    out,
+                    "{inner}{}{}({}): {};",
+                    prefix,
+                    generics_str(&m.generics),
+                    params_str(&m.params, m.doc.as_ref()),
+                    m.ret
+                );
+            }
             for (mname, m) in methods {
                 if properties.contains_key(mname) {
                     continue;
                 }
                 for m in m.signatures() {
                     push_doc_for(out, &m.doc, &inner, audience);
-                    let mname = method_prefix(mname);
+                    let mname = method_name(mname);
                     let _ = writeln!(
                         out,
                         "{inner}{mname}{}{}({}): {};",
@@ -3029,15 +3055,27 @@ fn type_doc(kind: &TypeKind) -> &Option<DocComment> {
     }
 }
 
-/// What a method's declaration line starts with: nothing for a call signature
-/// (stored as the method `@call`), `new ` for a construct signature, else its
-/// member name.
-fn method_prefix(name: &str) -> Cow<'_, str> {
-    match name {
-        "@call" => Cow::Borrowed(""),
-        "new" => Cow::Borrowed("new "),
-        _ => member_name(name),
+/// A method name as declaration source. `new(…)` would declare a construct
+/// signature, so a method named `new` is quoted, as any non-identifier is.
+pub(crate) fn method_name(name: &str) -> Cow<'_, str> {
+    if name == "new" {
+        return Cow::Borrowed("\"new\"");
     }
+    member_name(name)
+}
+
+/// An interface's call signatures, then its construct signatures, each with
+/// what its declaration line starts with.
+fn interface_signatures<'a>(
+    call: &'a Option<crate::MethodSig>,
+    construct: &'a Option<crate::MethodSig>,
+) -> impl Iterator<Item = (&'static str, crate::MethodSig)> + 'a {
+    [("", call), ("new ", construct)]
+        .into_iter()
+        .flat_map(|(prefix, sig)| {
+            sig.iter()
+                .flat_map(move |sig| sig.signatures().map(move |sig| (prefix, sig)))
+        })
 }
 
 /// A member name as declaration source: bare when it is an ASCII identifier,
@@ -3664,11 +3702,10 @@ mod tests {
 
     #[test]
     fn builtin_docs_print_a_call_signature_without_a_name() {
-        for name in ["Number", "Number.@call"] {
-            let docs = builtin_docs(name).expect("Number built-in");
-            assert!(docs.contains("  (value?: "), "{docs}");
-            assert!(!docs.contains("@call"), "{docs}");
-        }
+        let docs = builtin_docs("Number").expect("Number built-in");
+        assert!(docs.contains("  (value?: "), "{docs}");
+        let docs = builtin_docs("Map").expect("Map built-in");
+        assert!(docs.contains("  new <K, V>("), "{docs}");
     }
 
     #[test]
@@ -3986,6 +4023,31 @@ mod tests {
         )
         .unwrap_or_else(|errors| panic!("{errors:#?}"))
         .declaration
+    }
+
+    #[test]
+    fn signatures_and_quoted_method_names_render_as_typescript_reads_them() {
+        let defs = inheritance_package(
+            "@test/signatures",
+            r#"
+            export interface Made { id: number; }
+            export interface Factory {
+              (id: number): Made;
+              new (id: number): Made;
+              "new"(id: number): string;
+              "@call"(): number;
+            }
+        "#,
+            &[],
+        );
+        let d_ts = render_packages_d_ts(&[&defs], &[]);
+        let declarations = render_declarations_for(&defs, DocAudience::Author);
+        for docs in [&d_ts, &declarations] {
+            assert!(docs.contains("  (id: number): Made;\n"), "{docs}");
+            assert!(docs.contains("  new (id: number): Made;\n"), "{docs}");
+            assert!(docs.contains("  \"new\"(id: number): string;\n"), "{docs}");
+            assert!(docs.contains("  \"@call\"(): number;\n"), "{docs}");
+        }
     }
 
     #[test]
@@ -4538,12 +4600,12 @@ mod tests {
         );
         // Generic call signatures are supplied by the external front end;
         // Submilli's source parser still rejects that spelling.
-        let TypeKind::Interface { methods, .. } =
-            &mut base.types.get_mut("FunctionValue").unwrap().kind
+        let TypeKind::Interface {
+            call: Some(call), ..
+        } = &mut base.types.get_mut("FunctionValue").unwrap().kind
         else {
             panic!("callable interface");
         };
-        let call = methods.get_mut("@call").unwrap();
         call.generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
         call.params[0].ty = Type::TypeVar("T".into());
         call.ret = Type::TypeVar("T".into());
@@ -5101,7 +5163,6 @@ mod tests {
         let docs = render_lib_submilli_d_ts();
         assert!(docs.contains("(value?: number | bigint | string | boolean): number;"));
         assert!(docs.contains("isArray<T>(value: T): value is T & unknown[];"));
-        assert!(!docs.contains("@call"));
     }
 
     #[test]

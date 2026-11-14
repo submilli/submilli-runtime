@@ -405,8 +405,11 @@ pub(super) fn is_callable(
     let Some(object) = reference.as_struct(&mut *caller)? else {
         return Ok(false);
     };
-    let closure = intrinsic_types(&mut *caller)?.closure.clone();
-    object.matches_ty(&*caller, &closure)
+    let intr = intrinsic_types(&mut *caller)?;
+    // A hybrid, the `$CallableShape` `Object.assign(fn, props)` makes, is
+    // callable too.
+    Ok(object.matches_ty(&*caller, &intr.closure)?
+        || object.matches_ty(&*caller, &intr.callable_shape)?)
 }
 
 pub(super) async fn to_number(

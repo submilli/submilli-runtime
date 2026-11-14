@@ -123,11 +123,15 @@ impl Inferer<'_> {
         if let Some(signature) = Signature::of(ty) {
             return Some(signature);
         }
+        // A hybrid calls as its function.
+        if let Some((function, _)) = super::assignable::hybrid_parts(ty) {
+            return Signature::of(&function);
+        }
         let peeled = ty.peel();
         if !matches!(peeled, Type::InterfaceRef { .. }) {
             return None;
         }
-        let (sig, bindings, _, _) = self.find_method(peeled, "@call")?;
+        let (sig, bindings, _, _) = self.find_call_signature(peeled)?;
         if sig.optional || !sig.generics.is_empty() {
             return None;
         }

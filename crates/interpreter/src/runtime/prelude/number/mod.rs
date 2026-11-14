@@ -245,7 +245,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         MODULE_NAME,
-        ctor_key("@call"),
+        crate::mangle::call_signature(&crate::mangle::prelude("NumberConstructor")),
         FuncType::new(&engine, [obj_param], [ValType::F64]),
         |caller, params, results| {
             *abi_result(results, 0)? =
@@ -273,8 +273,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
 
     declare_method(
         defs,
-        "@call",
-        ctor_key("@call"),
+        "Number",
+        crate::mangle::call_signature(&crate::mangle::prelude("NumberConstructor")),
         vec![call_value()],
         Type::Number,
     );
@@ -598,6 +598,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc("/** The IEEE-754 double-precision number type. */"),
             },
@@ -612,19 +614,6 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
-                    (
-                        "@call".to_string(),
-                        MethodSig { overloads: Vec::new(),
-                            optional: false,
-                            generics: Default::default(),
-                            params: vec![call_value()],
-                            ret: Type::Number,
-                            predicate: None,
-                            doc: doc(
-                                "/**\n * Convert a `number`, `boolean`, `string`, `bigint`, or `undefined` to a `number`.\n * - A number is returned as it is; called with no argument, the result is 0.\n * - A boolean becomes 1 for true or 0 for false.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
-                            ),
-                        },
-                    ),
                     (
                         "isNaN".to_string(),
                         MethodSig { overloads: Vec::new(),
@@ -791,6 +780,17 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                call: Some(MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![call_value()],
+                            ret: Type::Number,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Convert a `number`, `boolean`, `string`, `bigint`, or `undefined` to a `number`.\n * - A number is returned as it is; called with no argument, the result is 0.\n * - A boolean becomes 1 for true or 0 for false.\n * - String input is parsed (empty / whitespace → 0, malformed → NaN); undefined becomes NaN.\n * - BigInt input is converted lossily to the nearest representable f64.\n */",
+                            ),
+                        }),
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `number`. Accessed via the global `Number` binding. */",

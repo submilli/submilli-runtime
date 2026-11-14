@@ -344,6 +344,8 @@ impl VarianceWalk<'_, '_> {
             TypeKind::Interface {
                 generics,
                 methods,
+                call,
+                construct,
                 properties,
                 index,
                 more_indexes,
@@ -354,7 +356,7 @@ impl VarianceWalk<'_, '_> {
                     .cloned()
                     .zip(markers.iter().cloned())
                     .collect();
-                for sig in methods.values() {
+                for sig in methods.values().chain(call).chain(construct) {
                     for sig in sig.signatures() {
                         let bindings = bindings
                             .iter()

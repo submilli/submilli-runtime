@@ -66,6 +66,11 @@ impl Inferer<'_> {
         if matches!(target.peel(), Type::Array(_) | Type::Tuple(_)) {
             return Ok(target);
         }
+        // Properties assigned onto a function make a hybrid: the function and
+        // its properties, `F & P`, as TypeScript types `assign<T, U>`.
+        if let Some(function) = self.callable_part(&target) {
+            return Ok(Type::intersection(vec![function, result]));
+        }
         if matches!(
             target.peel(),
             Type::ClassRef { .. } | Type::GenericParam { .. }
@@ -102,7 +107,36 @@ impl Inferer<'_> {
         })
     }
 
+    /// The function a callable `ty` holds: a function type, the function
+    /// members of an intersection, or an interface's call signature.
+    pub(super) fn callable_part(&self, ty: &Type) -> Option<Type> {
+        match ty.peel() {
+            Type::Function { .. } => Some(ty.clone()),
+            Type::Intersection(_) => {
+                super::assignable::hybrid_parts(ty).map(|(function, _)| function)
+            }
+            Type::InterfaceRef { .. } => self
+                .resolver()
+                .signature_of(ty, super::assignable::Signature::Call),
+            _ => None,
+        }
+    }
+
+    /// One value is callable and the other isn't, so a property written with
+    /// both holds one or the other, never both.
+    fn function_object_conflict(&self, left: &Type, right: &Type) -> bool {
+        self.callable_part(left).is_some() != self.callable_part(right).is_some()
+    }
+
     fn assignment_input_shape(&self, ty: &Type) -> Type {
+        // A hybrid's properties are those of its object members.
+        if let Some((_, fields)) = super::assignable::hybrid_parts(ty) {
+            return Type::Object {
+                fields,
+                index: None,
+                more_indexes: Vec::new(),
+            };
+        }
         match ty.peel() {
             Type::Union(members) => Type::union(
                 members
@@ -111,6 +145,34 @@ impl Inferer<'_> {
                     .collect(),
             ),
             Type::Unknown => Type::Unknown,
+            // A callable user interface's properties are its named members;
+            // its call signature is the function `callable_part` keeps. A
+            // prelude constructor's members are no properties of its value.
+            Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } if super::assignable::interface_has_signature(ty, self.resolver())
+                && self.resolver().lookup(mangled, name).is_some_and(|symbol| {
+                    matches!(
+                        symbol.kind,
+                        crate::TypeKind::Interface {
+                            dispatch: crate::Dispatch::VTable,
+                            ..
+                        }
+                    )
+                }) =>
+            {
+                Type::Object {
+                    fields: self
+                        .resolver()
+                        .interface_full_form(mangled, name, args)
+                        .unwrap_or_default(),
+                    index: None,
+                    more_indexes: Vec::new(),
+                }
+            }
             Type::String | Type::StringLiteral(_) => Type::Object {
                 more_indexes: Vec::new(),
                 fields: BTreeMap::new(),
@@ -141,8 +203,10 @@ impl Inferer<'_> {
     }
 
     /// Intersect property types under the compiler's normal size/work budget.
-    /// Primitive disjoint properties become never; other incomparable values
-    /// retain both constraints, including empty arrays and callable overloads.
+    /// Primitive disjoint properties become never; a function and an object
+    /// take the later source's type, as `Object.assign` copies values; other
+    /// incomparable values retain both constraints, including empty arrays and
+    /// callable overloads.
     pub(super) fn assign_intersection(
         &self,
         left: &Type,
@@ -183,6 +247,13 @@ impl Inferer<'_> {
                 budget.charge_copy(right, depth)?;
                 return Ok(right.clone());
             }
+            // A function and an object can't be one value: a property both
+            // sources write holds the later one's, as `Object.assign` copies
+            // values rather than merging them.
+            if self.function_object_conflict(left, right) {
+                budget.charge_copy(right, depth)?;
+                return Ok(right.clone());
+            }
             budget.charge_copy(left, depth + 1)?;
             budget.charge_copy(right, depth + 1)?;
             return Ok(Type::intersection(vec![left.clone(), right.clone()]));
@@ -190,7 +261,14 @@ impl Inferer<'_> {
         for (name, field) in other {
             if let Some(existing) = fields.get_mut(&name) {
                 existing.ty =
-                    self.assign_intersection(&existing.ty, &field.ty, depth + 1, budget)?;
+                    if field.optional && self.function_object_conflict(&existing.ty, &field.ty) {
+                        // The later source may leave the earlier value in place.
+                        budget.charge_copy(&existing.ty, depth + 1)?;
+                        budget.charge_copy(&field.ty, depth + 1)?;
+                        Type::union(vec![existing.ty.clone(), field.ty.clone()])
+                    } else {
+                        self.assign_intersection(&existing.ty, &field.ty, depth + 1, budget)?
+                    };
                 existing.optional &= field.optional;
                 existing.readonly &= field.readonly;
             } else {

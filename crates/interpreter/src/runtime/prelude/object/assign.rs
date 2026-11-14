@@ -20,6 +20,17 @@ pub(super) async fn assign(
 ) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let target_array = is_a(caller, target, &intr.array)?;
+    let hybrid;
+    let target = if is_a(caller, target, &intr.closure)? {
+        // Properties assigned onto a function make a hybrid: an object shape
+        // that holds the function. Unlike JavaScript, which adds them to the
+        // function itself, the result is a new value and the function is left
+        // as it was: a closure has no room for properties.
+        hybrid = new_hybrid(caller, target)?;
+        &hybrid
+    } else {
+        target
+    };
     if !target_array && super::shape_arrays(caller, target)?.is_none() {
         return Err(type_error(
             "Object.assign target must be an object; primitive wrappers are unsupported",
@@ -52,6 +63,30 @@ pub(super) async fn assign(
         }
     }
     Ok(*target)
+}
+
+/// An empty `$CallableShape` holding `function`.
+fn new_hybrid(caller: &mut Caller<'_, StoreData>, function: &Val) -> wasmtime::Result<Val> {
+    use wasmtime::{ArrayRef, ArrayRefPre, StructRef, StructRefPre};
+    let intr = intrinsic_types(&mut *caller)?;
+    let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
+    let values_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
+    let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[])?;
+    let values = ArrayRef::new_fixed(&mut *caller, &values_pre, &[])?;
+    let vtable = crate::runtime::host::host_closure_vtable(caller)?;
+    let pre = StructRefPre::new(&mut *caller, intr.callable_shape.clone());
+    let hybrid = StructRef::new(
+        &mut *caller,
+        &pre,
+        &[
+            vtable,
+            Val::AnyRef(Some(names.to_anyref())),
+            Val::AnyRef(Some(values.to_anyref())),
+            Val::AnyRef(None),
+            *function,
+        ],
+    )?;
+    Ok(Val::AnyRef(Some(hybrid.to_anyref())))
 }
 
 /// Whether to leave the source's `key` uncopied: it is a method, and the

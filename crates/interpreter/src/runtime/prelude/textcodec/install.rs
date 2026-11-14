@@ -29,14 +29,6 @@ fn dec_key(method: &str) -> MangledName {
     crate::mangle::extend(&crate::mangle::prelude("TextDecoder"), method)
 }
 
-fn enc_ctor_key(method: &str) -> MangledName {
-    crate::mangle::extend(&crate::mangle::prelude("TextEncoderConstructor"), method)
-}
-
-fn dec_ctor_key(method: &str) -> MangledName {
-    crate::mangle::extend(&crate::mangle::prelude("TextDecoderConstructor"), method)
-}
-
 fn ref_to(struct_ty: wasmtime::StructType) -> ValType {
     ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(struct_ty)))
 }
@@ -107,7 +99,10 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             Ok(())
         },
     )?;
-    for key in [enc_ctor_key("new"), dec_ctor_key("new")] {
+    for key in [
+        crate::mangle::construct_signature(&crate::mangle::prelude("TextEncoderConstructor")),
+        crate::mangle::construct_signature(&crate::mangle::prelude("TextDecoderConstructor")),
+    ] {
         register_host_fn(
             linker,
             MODULE_NAME,
@@ -142,8 +137,20 @@ pub fn declare(defs: &mut PackageDeclaration) {
         ],
         Type::String,
     );
-    declare_method(defs, "new", enc_ctor_key("new"), Vec::new(), encoder());
-    declare_method(defs, "new", dec_ctor_key("new"), Vec::new(), decoder());
+    declare_method(
+        defs,
+        "TextEncoder",
+        crate::mangle::construct_signature(&crate::mangle::prelude("TextEncoderConstructor")),
+        Vec::new(),
+        encoder(),
+    );
+    declare_method(
+        defs,
+        "TextDecoder",
+        crate::mangle::construct_signature(&crate::mangle::prelude("TextDecoderConstructor")),
+        Vec::new(),
+        decoder(),
+    );
 }
 
 /// The type/interface surface this module implements — its slice of the
@@ -177,6 +184,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     },
                 )]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** Encodes UTF-16 strings to UTF-8 byte arrays. Mirrors the WHATWG Encoding Standard `TextEncoder`. */",
@@ -207,6 +216,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     },
                 )]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** Decodes UTF-8 byte arrays into UTF-16 strings. Mirrors the WHATWG Encoding Standard `TextDecoder`. UTF-8 only in v1 (no `encoding` / `fatal` / `stream` options). */",
@@ -223,9 +234,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
-                methods: BTreeMap::from([(
-                    "new".to_string(),
-                    MethodSig { overloads: Vec::new(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::new(),
+                call: None,
+                construct: Some(MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: Vec::new(),
@@ -234,9 +246,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc(
                             "/** Construct a new `TextEncoder` instance. v1 takes no options (UTF-8 only). */",
                         ),
-                    },
-                )]),
-                properties: BTreeMap::new(),
+                    }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `TextEncoder`. Accessed via the global `TextEncoder` binding — call `new TextEncoder()`. */",
@@ -253,9 +263,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             declaration_span: Span::at(crate::FileId::PRELUDE),
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
-                methods: BTreeMap::from([(
-                    "new".to_string(),
-                    MethodSig { overloads: Vec::new(),
+                methods: BTreeMap::new(),
+                properties: BTreeMap::new(),
+                call: None,
+                construct: Some(MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: Vec::new(),
@@ -264,9 +275,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc(
                             "/** Construct a new `TextDecoder` instance. v1 takes no options (UTF-8 only; throws on invalid bytes). */",
                         ),
-                    },
-                )]),
-                properties: BTreeMap::new(),
+                    }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `TextDecoder`. Accessed via the global `TextDecoder` binding — call `new TextDecoder()`. */",

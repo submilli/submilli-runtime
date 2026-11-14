@@ -1,5 +1,5 @@
 function main(): void {
-  let src: Uint8Array = Uint8Array.new([10, 20, 30]);
+  let src: Uint8Array = new Uint8Array([10, 20, 30]);
   let copy: Uint8Array = Uint8Array.fromBytes(src);
 
   assert(copy.length === 3, "copy length");

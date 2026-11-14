@@ -61,7 +61,7 @@ fn build_static_value_object(
 }
 
 /// The host function behind the call signature of the constructor bound to
-/// `name` (`NumberConstructor#@call` for `Number`), found through the type
+/// `name` (`NumberConstructor#<call>` for `Number`), found through the type
 /// the prelude declares for the binding. `None` for a constructor without one.
 fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option<(String, Func)> {
     let (prelude, _, _) = crate::runtime::prelude::cached_runtime_package_declarations();
@@ -73,7 +73,7 @@ fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option
     else {
         return None;
     };
-    let key = crate::mangle::extend(mangled, "@call").as_str().to_owned();
+    let key = crate::mangle::call_signature(mangled).as_str().to_owned();
     let function = caller
         .data()
         .host_abi

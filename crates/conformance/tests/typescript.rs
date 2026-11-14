@@ -652,7 +652,7 @@ fn implicit_string_conversion_nodes(typed: &TypedAst) -> std::collections::BTree
             }
             TypedExprKind::MethodCall {
                 receiver,
-                name,
+                member: interpreter::Member::Named(name),
                 args,
                 ..
             } if name.name == "toString"

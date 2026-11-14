@@ -300,6 +300,9 @@ fn inherited_fields(
             budget.charge_copy(ty, 2)?;
         }
         let (name, field) = match member {
+            // A signature is no field of the shape.
+            TypedInterfaceMember::CallSignature { .. }
+            | TypedInterfaceMember::ConstructSignature { .. } => continue,
             TypedInterfaceMember::Method { name, .. } => (name, inherited_method()),
             TypedInterfaceMember::Property {
                 name,
@@ -1204,6 +1207,8 @@ mod inheritance_tests {
                     )]),
                     index: None,
                     more_indexes: Vec::new(),
+                    call: None,
+                    construct: None,
                     dispatch: crate::Dispatch::VTable,
                     doc: None,
                 },

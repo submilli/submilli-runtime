@@ -22,7 +22,7 @@ pub(super) enum SignatureKind<'a> {
     },
     Method {
         receiver_ty: &'a Type,
-        name: &'a str,
+        member: crate::MemberKey<'a>,
         sig: &'a MethodSig,
     },
     Anon {
@@ -77,12 +77,16 @@ pub(super) fn format_signature(
         }
         SignatureKind::Method {
             receiver_ty,
-            name,
+            member,
             sig,
         } => {
+            use crate::MemberKey;
             validate_predicate(&sig.params, sig.predicate.as_ref())?;
             if let Some(doc) = &sig.doc {
                 super::format_definition::write_doc_block(out, "", doc)?;
+            }
+            if member == MemberKey::Construct {
+                out.push("new ")?;
             }
             // A union receiver reads as one type only in parentheses.
             if matches!(receiver_ty, Type::Union(_)) {
@@ -92,7 +96,9 @@ pub(super) fn format_signature(
             } else {
                 write_type(out, receiver_ty)?;
             }
-            out.format(format_args!(".{name}"))?;
+            if let MemberKey::Named(name) = member {
+                out.format(format_args!(".{name}"))?;
+            }
             if sig.optional {
                 out.push("?")?;
             }
@@ -506,7 +512,7 @@ mod tests {
         let out = format_signature(
             SignatureKind::Method {
                 receiver_ty: &Type::Number,
-                name: "toString",
+                member: crate::MemberKey::Named("toString"),
                 sig: &sig,
             },
             &sub,
@@ -533,7 +539,7 @@ mod tests {
         let out = format_signature(
             SignatureKind::Method {
                 receiver_ty: &receiver,
-                name: "join",
+                member: crate::MemberKey::Named("join"),
                 sig: &sig,
             },
             &sub,
@@ -565,7 +571,7 @@ mod tests {
         let out = format_signature(
             SignatureKind::Method {
                 receiver_ty: &Type::Array(Box::new(Type::Number)),
-                name: "map",
+                member: crate::MemberKey::Named("map"),
                 sig: &sig,
             },
             &sub,
@@ -597,7 +603,7 @@ mod tests {
         let out = format_signature(
             SignatureKind::Method {
                 receiver_ty: &receiver,
-                name: "get",
+                member: crate::MemberKey::Named("get"),
                 sig: &sig,
             },
             &sub,
@@ -629,7 +635,7 @@ mod tests {
         let out = format_signature(
             SignatureKind::Method {
                 receiver_ty: &receiver,
-                name: "get",
+                member: crate::MemberKey::Named("get"),
                 sig: &sig,
             },
             &sub,

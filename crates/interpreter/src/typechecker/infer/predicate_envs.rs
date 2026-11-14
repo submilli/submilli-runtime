@@ -459,10 +459,10 @@ impl<'a> Inferer<'a> {
             TypedExprKind::MethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 type_predicate: None,
-            } if name.name == "every" && iface == crate::mangle::prelude("Array") => {
+            } if member.is_named("every") && iface == crate::mangle::prelude("Array") => {
                 self.every_guard_envs(receiver, &args, cond_expr_id)?
             }
             TypedExprKind::LocalRef { .. }

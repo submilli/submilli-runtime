@@ -33,13 +33,7 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
     let object = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
-    for (name, arity) in [
-        ("member", 4),
-        ("invoke", 2),
-        ("property", 3),
-        ("invoke_defaults", 3),
-        ("defaults_fit", 4),
-    ] {
+    for (name, arity) in HELPERS {
         host::register_host_fn_async(
             linker,
             MODULE_NAME,
@@ -49,6 +43,8 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 Box::pin(async move {
                     *abi_result(results, 0)? = match name {
                         "member" => lookup(caller, params).await?,
+                        "call" => call_token(caller, params)?,
+                        "construct" => construct_token(caller, params)?,
                         "invoke" => {
                             invoke(caller, abi_arg(params, 0)?, abi_arg(params, 1)?).await?
                         }
@@ -64,14 +60,21 @@ pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// The live-member helpers and their arities. `call` and `construct`
+/// resolve a signature, which has no name: `(value, interface, receiver)` and
+/// `(value, interface)`.
+const HELPERS: [(&str, usize); 7] = [
+    ("member", 3),
+    ("call", 3),
+    ("construct", 2),
+    ("invoke", 2),
+    ("property", 3),
+    ("invoke_defaults", 3),
+    ("defaults_fit", 4),
+];
+
 pub(super) fn declare(defs: &mut PackageDeclaration) {
-    for (name, arity) in [
-        ("member", 4),
-        ("invoke", 2),
-        ("property", 3),
-        ("invoke_defaults", 3),
-        ("defaults_fit", 4),
-    ] {
+    for (name, arity) in HELPERS {
         declare_method(
             defs,
             name,
@@ -84,26 +87,14 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
     }
 }
 
+/// The call token for the member `params[1]` of `params[0]`, read as a
+/// member of the interface `params[2]` when the value names none of its own.
 async fn lookup(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
-    lookup_with_receiver(caller, params, *abi_arg(params, 3)?).await
-}
-
-async fn lookup_with_receiver(
-    caller: &mut Caller<'_, StoreData>,
-    params: &[Val],
-    call_receiver: Val,
-) -> wasmtime::Result<Val> {
     require_receiver(caller, abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "member")?;
-    // A call signature (`@call`) names no member: the value itself is the
-    // function. An optional conversion field left out has no method; the call
-    // then takes the inherited conversion, as `String(value)` does.
-    let direct_call = name == "@call" && value::is_callable(caller, abi_arg(params, 0)?)?;
-    let method = if direct_call {
-        Some(*abi_arg(params, 0)?)
-    } else {
-        value::conversion_method(caller, abi_arg(params, 0)?, &name).await?
-    };
+    // An optional conversion field left out has no method; the call then
+    // takes the inherited conversion, as `String(value)` does.
+    let method = value::conversion_method(caller, abi_arg(params, 0)?, &name).await?;
     let key = if method.is_some() {
         String::new()
     } else {
@@ -120,16 +111,55 @@ async fn lookup_with_receiver(
         host::write_submilli_array_struct(
             caller,
             &[
-                if direct_call {
-                    call_receiver
-                } else {
-                    *abi_arg(params, 0)?
-                },
+                *abi_arg(params, 0)?,
                 key,
                 method.unwrap_or(Val::null_any_ref()),
             ],
         )?
         .to_anyref(),
+    )))
+}
+
+/// The call token for a value called through its interface's call signature
+/// (`__value_call(value, interface, receiver)`): a callable value is called
+/// itself, with `receiver` as its `this`; any other value runs the interface's
+/// host function for the signature, which a prelude constructor declares.
+fn call_token(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    let value = *abi_arg(params, 0)?;
+    require_receiver(caller, &value)?;
+    if value::is_callable(caller, &value)? {
+        return write_token(caller, *abi_arg(params, 2)?, "", value);
+    }
+    let interface = host::read_string_arg(caller, abi_arg(params, 1)?, "interface")?;
+    let key = crate::mangle::call_signature(&interface);
+    write_token(caller, value, key.as_str(), Val::null_any_ref())
+}
+
+/// The call token for `new value(…)` through its interface's construct
+/// signature (`__value_construct(value, interface)`): the interface's host
+/// function for the signature, which a prelude constructor declares.
+/// `__value_invoke` throws a `TypeError` when there is none.
+fn construct_token(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
+    let value = *abi_arg(params, 0)?;
+    require_receiver(caller, &value)?;
+    let interface = host::read_string_arg(caller, abi_arg(params, 1)?, "interface")?;
+    let key = crate::mangle::construct_signature(&interface);
+    write_token(caller, value, key.as_str(), Val::null_any_ref())
+}
+
+/// A call token, `[receiver, key, method]`: an empty `key` calls `method`,
+/// any other names a host member function.
+fn write_token(
+    caller: &mut Caller<'_, StoreData>,
+    receiver: Val,
+    key: &str,
+    method: Val,
+) -> wasmtime::Result<Val> {
+    let key = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, key)?.to_anyref(),
+    ));
+    Ok(Val::AnyRef(Some(
+        host::write_submilli_array_struct(caller, &[receiver, key, method])?.to_anyref(),
     )))
 }
 
@@ -284,16 +314,32 @@ async fn coerce(
     }
 }
 
-/// Builtin method parameters keyed `Interface#method`. Deriving them builds the
-/// whole prelude declaration, so they are collected once rather than per call.
+/// Builtin method parameters keyed by the method's symbol, `Interface#method`,
+/// or by a signature's. Deriving them builds the whole prelude declaration, so
+/// they are collected once rather than per call.
 static BUILTIN_PARAMETERS: LazyLock<HashMap<String, Parameters>> = LazyLock::new(|| {
     let mut parameters = HashMap::new();
     for symbol in super::prelude_package_declaration().types.into_values() {
-        let crate::TypeKind::Interface { methods, .. } = symbol.kind else {
+        let crate::TypeKind::Interface {
+            methods,
+            call,
+            construct,
+            ..
+        } = symbol.kind
+        else {
             continue;
         };
-        for (method, signature) in methods {
-            let key = format!("{}#{method}", symbol.mangled_name.as_str());
+        let interface = &symbol.mangled_name;
+        let members = methods
+            .into_iter()
+            .map(|(method, signature)| (crate::mangle::extend(interface, &method), signature))
+            .chain(call.map(|signature| (crate::mangle::call_signature(interface), signature)))
+            .chain(
+                construct
+                    .map(|signature| (crate::mangle::construct_signature(interface), signature)),
+            );
+        for (key, signature) in members {
+            let key = key.as_str().to_owned();
             parameters.entry(key).or_insert_with(|| {
                 signature
                     .params
@@ -360,7 +406,7 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
         };
         return box_result(caller, Val::F64((len as f64).to_bits()));
     }
-    let token = lookup_with_receiver(caller, params, Val::null_any_ref()).await?;
+    let token = lookup(caller, params).await?;
     let args = Val::AnyRef(Some(
         host::write_submilli_array_struct(caller, &[])?.to_anyref(),
     ));
@@ -415,7 +461,7 @@ async fn read_builtin_element(
     index: u32,
 ) -> wasmtime::Result<Val> {
     let params = member_params(caller, object, interface, "at")?;
-    let token = lookup_with_receiver(caller, &params, Val::null_any_ref()).await?;
+    let token = lookup(caller, &params).await?;
     let argument = box_result(caller, Val::F64(f64::from(index).to_bits()))?;
     let args = Val::AnyRef(Some(
         host::write_submilli_array_struct(caller, &[argument])?.to_anyref(),

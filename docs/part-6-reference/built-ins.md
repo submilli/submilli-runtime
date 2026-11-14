@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "9141b1e6803b1d4bc2520d6e9df6aa032c73ab84d5ac1edcc54aaf5d9ba82733"
+  contentHash: "47b21a1d955c5b73ef662c7008969f1d3a4ca417d52f5c186eadb0adfe233115"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -856,7 +856,7 @@ Packed byte array.
 | `toJson(): string` | Returns this array's bytes as a standard (padded) base64 string wrapped in `"…"` (the JSON string form). |
 | `toReversed(): Uint8Array` | Returns a fresh copy with bytes reversed. |
 | `toSorted(compareFn?: (arg0: number, arg1: number) => number): Uint8Array` | Returns a fresh copy sorted via `compareFn`. |
-| `toString(): string` | Returns this array's bytes joined as a comma-separated decimal string — e.g. `Uint8Array.new([1, 2, 3]).toString() === "1,2,3"`. |
+| `toString(): string` | Returns this array's bytes joined as a comma-separated decimal string — e.g. `new Uint8Array([1, 2, 3]).toString() === "1,2,3"`. |
 | `values(): Iterator<number>` | Returns a live `Iterator<number>` of the bytes; writes during iteration are seen. |
 | `with(index: number, value: number): Uint8Array` | Returns a clone of this array with `value` converted to a byte and written at `index`. |
 
@@ -872,7 +872,7 @@ Constructor object for `Uint8Array`.
 | --- | --- |
 | `readonly BYTES_PER_ELEMENT: number` | The size in bytes of each element: always `1`. |
 | `alloc(n: number): Uint8Array` | Allocate a zero-filled `Uint8Array` of length `n`. |
-| `fromArray(values: number[]): Uint8Array` | Build a new `Uint8Array` from `values` — canonical name for `Uint8Array.new(values)`. |
+| `fromArray(values: number[]): Uint8Array` | Build a new `Uint8Array` from `values` — canonical name for `new Uint8Array(values)`. |
 | `fromBase64(s: string, options?: Base64Options): Uint8Array` | Decode `s` as base64; `options.alphabet` picks standard vs URL-safe. |
 | `fromBytes(other: Uint8Array): Uint8Array` | Returns a deep copy of `other`. |
 | `fromHex(s: string): Uint8Array` | Decode `s` as a hex string. |

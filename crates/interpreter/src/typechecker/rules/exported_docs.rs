@@ -95,7 +95,28 @@ fn validate_interface_members(
                     symbol.name, name.name,
                 ),
             )),
-            TypedInterfaceMember::Method { .. } | TypedInterfaceMember::Property { .. } => {}
+            TypedInterfaceMember::CallSignature {
+                span, doc: None, ..
+            } => diagnostics.push(warning(
+                *span,
+                format!(
+                    "exported interface `{}` call signature has no doc comment",
+                    symbol.name,
+                ),
+            )),
+            TypedInterfaceMember::ConstructSignature {
+                span, doc: None, ..
+            } => diagnostics.push(warning(
+                *span,
+                format!(
+                    "exported interface `{}` construct signature has no doc comment",
+                    symbol.name,
+                ),
+            )),
+            TypedInterfaceMember::Method { .. }
+            | TypedInterfaceMember::Property { .. }
+            | TypedInterfaceMember::CallSignature { .. }
+            | TypedInterfaceMember::ConstructSignature { .. } => {}
         }
     }
 }

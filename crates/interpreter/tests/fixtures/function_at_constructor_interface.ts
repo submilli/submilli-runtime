@@ -135,19 +135,18 @@ function makeFn<R>(r: R): () => R {
   return () => r;
 }
 
+// A value of a call-signature interface is always a function, as in
+// TypeScript: `typeof` answers "function" for it, never "object".
 function narrowBoolOrString(x: BooleanConstructor | string): string {
   if (typeof x === "function") {
     return x(1) ? "fn-true" : "fn-false";
   }
-  if (typeof x === "string") {
-    return x.toUpperCase();
-  }
-  return x(1) ? "obj-true" : "obj-false";
+  return x.toUpperCase();
 }
 
 function narrowPredOrNull(x: Predicate<number> | null): string {
   if (typeof x === "object") {
-    return x === null ? "null" : x(5) ? "obj-pos" : "obj-neg";
+    return "null";
   }
   return x(5) ? "fn-pos" : "fn-neg";
 }
@@ -156,8 +155,6 @@ function classifyBySwitch(x: BooleanConstructor | string | number): string {
   switch (typeof x) {
     case "function":
       return x(1) ? "fn:t" : "fn:f";
-    case "object":
-      return x(1) ? "obj:t" : "obj:f";
     case "string":
       return `str:${x}`;
     case "number":
@@ -438,7 +435,7 @@ function main(): void {
   const adaptedB: BooleanConstructor = zeroArity;
   assert(adaptedB(1) === true && adaptedB(2) === false && adaptedB() === false);
 
-  // Spread arguments through direct and optional `@call`, including 0-param empty tuple and capture.
+  // Spread arguments through direct and optional call signatures, including 0-param empty tuple and capture.
   const sum: VariadicSum = (...xs: number[]) => xs.reduce((acc, x) => acc + x, 0);
   const maybeSum = (present: boolean): VariadicSum | undefined => (present ? sum : undefined);
   const nums = [10, 20, 12];
@@ -478,19 +475,17 @@ function main(): void {
   const callCapturedSpread = (): boolean => BBuiltin(...capturedEmpty);
   assert(callCapturedSpread() === false);
 
-  // Object spread omits synthetic `@call` from the static type; spreading a closure yields `{}` at runtime.
+  // Object spread copies no call signature; spreading a closure yields `{}` at runtime, and
+  // spreading a hybrid yields only its properties.
   const spreadPred = { ...(B as Predicate<unknown>) };
   assert(Object.keys(spreadPred).length === 0 && !("@call" in spreadPred));
-  const labeledObj: LabeledCallable = {
+  const labeledObj: LabeledCallable = Object.assign((n: number): number => n + 1, {
     label: "kept",
-    "@call"(n: number): number {
-      return n + 1;
-    },
-  };
+  });
   const spreadLabeled: { label: string } = { ...labeledObj };
-  assert(spreadLabeled.label === "kept");
+  assert(spreadLabeled.label === "kept" && labeledObj(1) === 2);
 
-  // Receiver (`this`) binding across member, optional-chain, element, detached, and `@call`-object calls.
+  // Receiver (`this`) binding across member, optional-chain, element, detached, and hybrid calls.
   const inspectThis: NumUnary = function (this: unknown, x: number): number {
     const self = this;
     if (self instanceof CounterHolder) {
@@ -517,11 +512,7 @@ function main(): void {
   }
   assert(detachedThrew);
 
-  const objectWithCall: NumUnary = {
-    "@call"(n: number): number {
-      return n + 7;
-    },
-  };
+  const objectWithCall: NumUnary = Object.assign((n: number): number => n + 7, { tag: "hybrid" });
   const holderForObject = new CounterHolder(objectWithCall);
   assert(
     objectWithCall(5) === 12 &&
@@ -541,37 +532,33 @@ function main(): void {
   }
   assert(unboundThisThrew);
 
-  // `typeof` narrowing and `switch (typeof x)` with both closure and `@call`-object inhabitants.
-  const objBool: BooleanConstructor = {
-    "@call"(v?: unknown): boolean {
-      return v === 1;
-    },
-  };
+  // `typeof` narrowing and `switch (typeof x)` with closure and hybrid inhabitants.
+  const objBool: BooleanConstructor = Object.assign((v?: unknown): boolean => v === 1, {
+    tag: "hybrid",
+  });
   assert(
     narrowBoolOrString(never) === "fn-false" &&
       narrowBoolOrString(Boolean) === "fn-true" &&
       narrowBoolOrString("hi") === "HI" &&
-      narrowBoolOrString(objBool) === "obj-true",
+      narrowBoolOrString(objBool) === "fn-true",
   );
-  const objPred: Predicate<number> = {
-    "@call"(v: number): boolean {
-      return v > 0;
-    },
-  };
+  const objPred: Predicate<number> = Object.assign((v: number): boolean => v > 0, {
+    tag: "hybrid",
+  });
   assert(
     narrowPredOrNull(null) === "null" &&
-      narrowPredOrNull(objPred) === "obj-pos" &&
+      narrowPredOrNull(objPred) === "fn-pos" &&
       narrowPredOrNull((v) => v < 0) === "fn-neg",
   );
   assert(
     classifyBySwitch(Boolean) === "fn:t" &&
       classifyBySwitch(never) === "fn:f" &&
-      classifyBySwitch(objBool) === "obj:t" &&
+      classifyBySwitch(objBool) === "fn:t" &&
       classifyBySwitch("ab") === "str:ab" &&
       classifyBySwitch(7) === "num:7",
   );
 
-  // Union call dispatch across function types and call-signature interfaces (closure + `@call` object).
+  // Union call dispatch across function types and call-signature interfaces (closure + hybrid).
   const callUnion = (u: Predicate<number> | ((n: number) => boolean), v: number): boolean => u(v);
   const callOptUnion = (
     u: Predicate<number> | ((n: number) => boolean) | undefined,
@@ -646,7 +633,7 @@ function main(): void {
   assert(badOptReturnThrew);
 
   // Widened optional-chain step returning stale `null` into a host `InterfaceRef` (`TextEncoder`)
-  // or into a non-optional `@call` step throws catchable `TypeError` instead of Wasm trapping.
+  // or into a non-optional call-signature step throws catchable `TypeError` instead of Wasm trapping.
   const encBox = new CallableBox<TextEncoder>(() => new TextEncoder());
   assert(encBox.optFn?.().encode("ok").length === 2);
   const erasedEncBox: CallableBox<unknown> = encBox;
@@ -894,27 +881,18 @@ function main(): void {
 
   // Repeated type-parameter instantiation inside a polymorphic recursive alias coexists
   // with distinct concrete instantiations of the same multi-parameter callable interface.
-  const pairObj0: PairTaggedCallable<number, number> = {
-    "@call"(a: number, _b: number): number {
-      return a;
-    },
+  const pairObj0: PairTaggedCallable<number, number> = Object.assign((a: number, _b: number): number => a, {
     first: 10,
     second: 20,
-  };
-  const pairObj1: PairTaggedCallable<number[], number[]> = {
-    "@call"(a: number[], _b: number[]): number[] {
-      return a;
-    },
+  });
+  const pairObj1: PairTaggedCallable<number[], number[]> = Object.assign((a: number[], _b: number[]): number[] => a, {
     first: [1],
     second: [2],
-  };
-  const pairObj2: PairTaggedCallable<number[][], number[][]> = {
-    "@call"(a: number[][], _b: number[][]): number[][] {
-      return a;
-    },
+  });
+  const pairObj2: PairTaggedCallable<number[][], number[][]> = Object.assign((a: number[][], _b: number[][]): number[][] => a, {
     first: [[3]],
     second: [[4]],
-  };
+  });
   const pairChild = new GrowingPairChild();
   pairChild.reset({
     pair: pairObj0,
@@ -927,21 +905,14 @@ function main(): void {
       pairChild.chain.next.next.pair([[9]], [[8]])[0]![0] === 9,
   );
   const heteroChild = new HeteroPairChild();
-  heteroChild.reset({
-    "@call"(a: string, _b: number): string {
-      return a;
-    },
-    first: "ok",
-    second: 42,
-  });
+  heteroChild.reset(Object.assign((a: string, _b: number): string => a, { first: "ok", second: 42 }));
   assert(heteroChild.chain !== null && heteroChild.chain("hi", 1) === "hi");
-  heteroChild.reset({
-    "@call"(a: string, _b: number): string {
-      return a;
-    },
-    first: "ok",
-    second: "wrong-not-number",
-  });
+  heteroChild.reset(
+    Object.assign((a: string, _b: number): string => a, {
+      first: "ok",
+      second: "wrong-not-number",
+    }),
+  );
   let heteroPairCaught = false;
   try {
     const invalidPair = heteroChild.chain;

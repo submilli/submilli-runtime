@@ -828,6 +828,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         ),
                     },
                 )]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: doc(
                     "/** A consumed-once cursor producing values of type `T`. `for-of` walks it via `next()` until the result is `{ done: true }`. `T` may include `null` or `undefined` — the `done` field is the discriminator, not the element value. */",
@@ -857,6 +859,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     },
                 )]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: doc(
                     "/** A re-iterable collection. `for-of` calls `iterator()` once at the loop head; each loop gets its own cursor. */",

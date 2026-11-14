@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  let bytes: Uint8Array = new Uint8Array([1, 2, 3, 4]);
 
   let sum: number = bytes.reduce<number>((acc: number, v: number) => acc + v, 0);
   assert(sum === 10, "reduce sums");

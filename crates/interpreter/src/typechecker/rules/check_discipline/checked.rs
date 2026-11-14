@@ -160,15 +160,7 @@ const COLLECTION_MUTATORS: &[&str] = &["set", "add", "delete", "clear"];
 const BYTES_MUTATORS: &[&str] = &["set", "fill", "copyWithin", "sort", "reverse"];
 
 /// The static methods of a builtin constructor that return a new value.
-const CONSTRUCTORS: &[&str] = &[
-    "new",
-    "from",
-    "of",
-    "keys",
-    "values",
-    "entries",
-    "fromEntries",
-];
+const CONSTRUCTORS: &[&str] = &["from", "of", "keys", "values", "entries", "fromEntries"];
 
 /// The array methods that return a new array.
 const ARRAY_COPIES: &[&str] = &[
@@ -1454,22 +1446,22 @@ impl<'a> Walker<'a, '_> {
             }
             TypedExprKind::MethodCall {
                 receiver,
-                name,
+                member,
                 args,
                 ..
             } => {
                 let args = self.package.authored(span, args);
-                self.method_call_on(*receiver, &args, &name.name, span)?
+                self.method_call_on(*receiver, &args, member, span)?
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
-                name,
+                member,
                 args,
                 ..
             } => {
                 let args: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
                 let args = self.package.authored(span, &args);
-                self.method_call_on(*receiver, &args, &name.name, span)?
+                self.method_call_on(*receiver, &args, member, span)?
             }
             TypedExprKind::Binary { op, lhs, rhs } => self.binary(*op, *lhs, *rhs, span)?,
             TypedExprKind::NullishCoalesce { lhs, rhs } => self.either(*lhs, *rhs, span)?,
@@ -1687,7 +1679,8 @@ impl<'a> Walker<'a, '_> {
             let receiver_fresh = fresh;
             fresh = matches!(
                 part,
-                TypedChainPart::MethodCall { name, .. } if copies(receiver_ty, &name.name)
+                TypedChainPart::MethodCall { member, .. }
+                    if member.as_named().is_some_and(|name| copies(receiver_ty, &name.name))
             );
             flow = match part {
                 TypedChainPart::Field { name, .. }
@@ -1709,10 +1702,16 @@ impl<'a> Walker<'a, '_> {
                     self.call_function_value(flow, name, calls_itself, &args, *span)?
                 }
                 TypedChainPart::MethodCall {
-                    name, args, span, ..
+                    member, args, span, ..
                 } => {
                     let args = self.package.authored(*span, args);
-                    if name.name == "@call"
+                    let label = match member {
+                        crate::Member::Named(name) => name.name.clone(),
+                        crate::Member::CallSignature(_) | crate::Member::ConstructSignature(_) => {
+                            "a function value".to_string()
+                        }
+                    };
+                    if matches!(member, crate::Member::CallSignature(_))
                         && !(position == 0 && is_runtime_global(self.package.expr_at(base)?))
                     {
                         let (callee_name, calls_itself) = match position {
@@ -1722,14 +1721,7 @@ impl<'a> Walker<'a, '_> {
                         self.call_function_value(flow, callee_name, calls_itself, &args, *span)?
                     } else {
                         let changeable = (!is_primitive(receiver_ty)).then_some(receiver_ty);
-                        self.method_call(
-                            flow,
-                            changeable,
-                            receiver_fresh,
-                            &args,
-                            &name.name,
-                            *span,
-                        )?
+                        self.method_call(flow, changeable, receiver_fresh, &args, &label, *span)?
                     }
                 }
                 TypedChainPart::NonNull { .. } | TypedChainPart::Constraint { .. } => flow,
@@ -1842,17 +1834,27 @@ impl Walker<'_, '_> {
         &mut self,
         receiver: ExprId,
         args: &[ExprId],
-        method: &str,
+        member: &crate::Member,
         span: Span,
     ) -> Result<Flow, CompilerFailure> {
         let receiver_expr = self.package.expr_at(receiver)?;
         let flow = self.eval(receiver)?;
-        if method == "@call" && !is_runtime_global(receiver_expr) {
-            let (callee_name, calls_itself) = self.function_value_name(receiver)?;
-            return self.call_function_value(flow, callee_name, calls_itself, args, span);
-        }
+        let method = match member {
+            crate::Member::Named(name) => name.name.clone(),
+            crate::Member::CallSignature(_) => {
+                let (callee_name, calls_itself) = self.function_value_name(receiver)?;
+                if !is_runtime_global(receiver_expr) {
+                    return self.call_function_value(flow, callee_name, calls_itself, args, span);
+                }
+                callee_name
+            }
+            crate::Member::ConstructSignature(_) => {
+                format!("new {}", self.function_value_name(receiver)?.0)
+            }
+        };
+        let method = method.as_str();
         let on_this = matches!(receiver_expr.kind, TypedExprKind::This);
-        if on_this && self.member_name.as_deref() == Some(method) {
+        if on_this && member.as_named().is_some() && self.member_name.as_deref() == Some(method) {
             self.events.push(Event::Recursion { span });
         }
         let holds_nothing = is_primitive(&receiver_expr.ty) || is_runtime_global(receiver_expr);
@@ -2091,18 +2093,23 @@ fn is_fresh(ta: &crate::TypedAst, expr: &TypedExpr) -> Result<bool, CompilerFail
         TypedExprKind::MethodCall {
             receiver,
             iface,
-            name,
+            member,
             ..
         }
         | TypedExprKind::GenericMethodCall {
             receiver,
             iface,
-            name,
+            member,
             ..
         } => {
             let receiver = ta
                 .try_expr(*receiver)
                 .map_err(crate::typechecker::arena_failure)?;
+            let Some(name) = member.as_named() else {
+                // A construct signature builds a new value; a call signature
+                // returns whatever the function does.
+                return Ok(matches!(member, crate::Member::ConstructSignature(_)));
+            };
             let constructs = iface.as_str().ends_with("Constructor")
                 && CONSTRUCTORS.contains(&name.name.as_str());
             // `r.json()` parses the body into a new value, as `JSON.parse` does.

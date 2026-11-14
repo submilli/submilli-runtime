@@ -173,22 +173,23 @@ impl TypeResolver<'_> {
                 let TypeKind::Interface {
                     generics,
                     methods,
+                    call,
                     properties,
                     ..
                 } = &symbol.kind
                 else {
                     return ty.clone();
                 };
-                if !methods.contains_key("@call")
-                    || methods.iter().any(|(name, sig)| {
-                        name != "@call" && sig.signatures().any(|sig| !sig.generics.is_empty())
-                    })
+                if call.is_none()
+                    || methods
+                        .values()
+                        .any(|sig| sig.signatures().any(|sig| !sig.generics.is_empty()))
                 {
                     return ty.clone();
                 }
                 let bindings = generics.iter().cloned().zip(args.iter().cloned()).collect();
                 let mut fields = BTreeMap::new();
-                for (name, sig) in methods.iter().filter(|(name, _)| *name != "@call") {
+                for (name, sig) in methods {
                     if !self.limits.spend_work(1) {
                         return Type::Error;
                     }
@@ -242,6 +243,21 @@ impl TypeResolver<'_> {
         }
     }
 
+    /// The call signature of the interface `receiver` names, its generic
+    /// arguments substituted.
+    fn bound_call_signature(self, receiver: &Type) -> Option<MethodSig> {
+        let (mangled, _, name, args) = receiver.interface_routing()?;
+        let TypeKind::Interface { call, generics, .. } = &self.lookup(&mangled, name)?.kind else {
+            return None;
+        };
+        let bindings = generics.iter().cloned().zip(args).collect();
+        self.limits.ok_or_record(instantiate_method_signature(
+            call.as_ref()?,
+            &bindings,
+            self.limits,
+        ))
+    }
+
     pub(super) fn callable_method_signature(self, ty: &Type) -> Option<MethodSig> {
         self.callable_signature(ty, false, 0)
     }
@@ -252,7 +268,7 @@ impl TypeResolver<'_> {
             return None;
         }
         if let Type::InterfaceRef { .. } = ty.peel() {
-            let mut signature = self.bound_method_at(ty, "@call", depth + 1)?;
+            let mut signature = self.bound_call_signature(ty)?;
             signature.optional |= optional;
             return Some(signature);
         }

@@ -810,7 +810,7 @@ pub(super) async fn is_disjoint_from(
 // Constructor (`new Set(init)`)
 // ---------------------------------------------------------------------------
 
-/// `SetConstructor#new(init?) -> Set`. Builds an empty set, then populates it
+/// `new Set(init?)`, the `SetConstructor` construct signature. Builds an empty set, then populates it
 /// from the initializer: `null` → empty; an `$Array` → add each element; a
 /// `$string` → add each code point (surrogate-pair-aware); a `$Set` → its
 /// `values()` cursor; any other value → drive the iterator protocol (an

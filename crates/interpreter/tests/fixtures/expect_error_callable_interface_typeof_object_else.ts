@@ -1,6 +1,6 @@
-// A call-signature interface can hold both a `$Closure` (`typeof === "function"`)
-// and an `{"@call": ...}` object (`typeof === "object"`), so `typeof x === "object"`
-// does not eliminate `BooleanConstructor` from the `else` branch.
+// A value of a call-signature interface is a function, so `typeof x === "object"`
+// rules `BooleanConstructor` out of the `then` branch, and the `else` branch
+// keeps it, as in TypeScript.
 // expect-error: cannot read field `toUpperCase` on non-object type `string | BooleanConstructor`
 // expect-error-count: 1
 function badNarrow(x: BooleanConstructor | string): string {

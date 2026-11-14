@@ -18,7 +18,7 @@ function main(): void {
     "sha256 of \"hello\""
   );
 
-  const abc_bytes: Uint8Array = Uint8Array.new([97, 98, 99]);
+  const abc_bytes: Uint8Array = new Uint8Array([97, 98, 99]);
   assert(
     sha256(abc_bytes).toHex() === "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     "sha256 of abc bytes matches string form"
