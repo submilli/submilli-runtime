@@ -1194,6 +1194,9 @@ pub fn emit_closure_function(
     if crate::codegen::call_arguments::typed_metadata(&meta.params).is_some() {
         crate::codegen::call_arguments::unwrap(&mut emitter, ctx)?;
     }
+    if !meta.generics.is_empty() {
+        crate::codegen::generic_binding::emit_prologue_unwrap(&mut emitter, ctx, &meta.generics)?;
+    }
     emitter.instructions.push(Instruction::RefCastNonNull(
         wasm_encoder::HeapType::Concrete(env_type_idx),
     ));

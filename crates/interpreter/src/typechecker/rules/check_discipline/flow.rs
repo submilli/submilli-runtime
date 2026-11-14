@@ -497,7 +497,11 @@ impl<'a> Walker<'a, '_, '_> {
                 self.consume_all(&args, || Usage::PassedTo(kind.name().to_string()))?;
                 stable()
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.consume(*callee, Use::Escape(Usage::Called))?;
                 let args = self.package.authored(span, args);
                 self.consume_all(&args, || Usage::PassedToFunctionValue)?;
@@ -555,6 +559,7 @@ impl<'a> Walker<'a, '_, '_> {
             // `source` is not walked: see `NarrowRegion`.
             TypedExprKind::Narrowed { inner: value, .. }
             | TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
             | TypedExprKind::Cast { value, .. } => self.eval(*value)?,
             TypedExprKind::FieldAccess { receiver, name }
             | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => {

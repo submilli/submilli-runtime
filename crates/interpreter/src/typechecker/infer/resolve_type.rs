@@ -752,38 +752,20 @@ impl<'a> Inferer<'a> {
                 }
             }
             TypeAnnotationKind::Function {
+                generics,
                 params,
                 return_type,
             } => {
-                self.report_duplicate_params(params.iter().map(|f| &f.name));
-                // A function type is a signature, whose type queries take no
-                // narrowing, as tsc gives each signature its own flow.
-                let in_flow = std::mem::replace(&mut self.type_queries_see_narrowing, false);
-                let resolved = params
-                    .iter()
-                    .map(|f| {
-                        self.resolve_type(&f.ty)
-                            .map(|ty| crate::ObjectField::widen_optional(f.optional, ty))
-                    })
-                    .collect::<Result<Vec<Type>, _>>()
-                    // The return position is the one place `void` belongs.
-                    .and_then(|params| Ok((params, self.resolve_type(return_type)?)));
-                self.type_queries_see_narrowing = in_flow;
-                let (resolved_params, resolved_ret) = resolved?;
-                let has_rest = params.last().is_some_and(|f| f.rest);
-                Type::Function {
-                    params: resolved_params,
-                    ret: Box::new(resolved_ret),
-                    // Predicate types not supported in function-type annotations (only in function/arrow bodies).
-                    predicate: None,
-                    has_rest,
-                    optional: params
-                        .iter()
-                        .rev()
-                        .skip_while(|p| p.rest)
-                        .take_while(|p| p.optional)
-                        .count(),
+                let own = self.push_function_type_generics(generics)?;
+                let resolved = self.resolve_function_annotation(params, return_type);
+                if own.is_some() {
+                    self.pop_body_generics();
                 }
+                let mut resolved = resolved?;
+                if let (Some(own), Type::Function { generics: slot, .. }) = (own, &mut resolved) {
+                    *slot = own;
+                }
+                resolved
             }
             TypeAnnotationKind::Union(members) => {
                 let resolved: Vec<Type> = members
@@ -825,6 +807,87 @@ impl<'a> Inferer<'a> {
             }
             TypeAnnotationKind::TypeOf { path } => self.resolve_typeof(path)?,
         })
+    }
+
+    /// A function type annotation's parameters and return type.
+    fn resolve_function_annotation(
+        &mut self,
+        params: &[crate::TypeAnnotationField],
+        return_type: &TypeAnnotation,
+    ) -> Result<Type, CompilerFailure> {
+        self.report_duplicate_params(params.iter().map(|f| &f.name));
+        // A function type is a signature, whose type queries take no
+        // narrowing, as tsc gives each signature its own flow.
+        let in_flow = std::mem::replace(&mut self.type_queries_see_narrowing, false);
+        let resolved = params
+            .iter()
+            .map(|f| {
+                self.resolve_type(&f.ty)
+                    .map(|ty| crate::ObjectField::widen_optional(f.optional, ty))
+            })
+            .collect::<Result<Vec<Type>, _>>()
+            // The return position is the one place `void` belongs.
+            .and_then(|params| Ok((params, self.resolve_type(return_type)?)));
+        self.type_queries_see_narrowing = in_flow;
+        let (resolved_params, resolved_ret) = resolved?;
+        let has_rest = params.last().is_some_and(|f| f.rest);
+        let resolved_function = Type::Function {
+            generics: Default::default(),
+            params: resolved_params,
+            ret: Box::new(resolved_ret),
+            // Predicate types not supported in function-type annotations (only in function/arrow bodies).
+            predicate: None,
+            has_rest,
+            optional: params
+                .iter()
+                .rev()
+                .skip_while(|p| p.rest)
+                .take_while(|p| p.optional)
+                .count(),
+        };
+        Ok(resolved_function)
+    }
+
+    /// Brings a function type's own type parameters into scope for its
+    /// parameters, return type and bounds, and returns them resolved; `None`
+    /// when it has none. A name that shadows a type parameter already in
+    /// scope is renamed, so the function type's `TypeVar`s differ from every
+    /// type parameter around it (the `Type::Function` bound-name contract).
+    /// Pop with [`Self::pop_body_generics`] when this returns `Some`.
+    pub(super) fn push_function_type_generics(
+        &mut self,
+        annotations: &[crate::TypeParameterAnnotation],
+    ) -> Result<Option<crate::GenericParameters>, CompilerFailure> {
+        if annotations.is_empty() {
+            return Ok(None);
+        }
+        let mut names = Vec::with_capacity(annotations.len());
+        let mut frame = std::collections::BTreeMap::new();
+        for annotation in annotations {
+            let name = self.fresh_function_type_parameter(&annotation.name, &names);
+            frame.insert(annotation.name.clone(), Type::TypeVar(name.clone()));
+            names.push(name);
+        }
+        let mut parameters = crate::GenericParameters::unconstrained(names);
+        self.generics_in_scope.push(parameters.clone());
+        self.body_instantiations.push(frame);
+        for (annotation, name) in annotations.iter().zip(parameters.names.clone()) {
+            if let Some(constraint) = &annotation.constraint {
+                match self.resolve_type(constraint) {
+                    Ok(bound) => {
+                        parameters.constraints.insert(name, bound);
+                    }
+                    Err(failure) => {
+                        self.pop_body_generics();
+                        return Err(failure);
+                    }
+                }
+            }
+        }
+        if let Some(frame) = self.generics_in_scope.last_mut() {
+            *frame = parameters.clone();
+        }
+        Ok(Some(parameters))
     }
 
     /// `typeof x` — the type of the value `x`, read from the value namespace.
@@ -976,11 +1039,13 @@ impl<'a> Inferer<'a> {
         Some(match &symbol.kind {
             crate::ValueKind::Let { ty, .. } | crate::ValueKind::Const { ty, .. } => ty.clone(),
             crate::ValueKind::Function {
+                generics,
                 params,
                 ret,
                 type_predicate,
                 ..
             } => Type::Function {
+                generics: generics.clone(),
                 params: params
                     .iter()
                     .map(super::expr::callable_parameter_type)

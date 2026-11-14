@@ -29,6 +29,7 @@ mod finalizer_argument;
 pub mod function_adapters;
 pub mod function_emitter;
 mod function_invoke;
+pub(crate) mod generic_binding;
 pub mod imported_classes;
 pub mod init_guard;
 pub mod intrinsics;
@@ -321,6 +322,7 @@ fn declared_wrapper_abi(
         && sig.params.len().checked_add(receiver_offset) == Some(imported.params.len())
     {
         return Ok(symbol_table::MethodSlotAbi {
+            types: false,
             params: imported
                 .params
                 .iter()
@@ -335,6 +337,7 @@ fn declared_wrapper_abi(
         });
     }
     Ok(symbol_table::MethodSlotAbi {
+        types: false,
         params: sig
             .params
             .iter()
@@ -1023,7 +1026,13 @@ fn codegen_inner(
     );
 
     // Env structs must come after box_types::emit.
-    closures::emit_env_types(&closure_metas, &mut types, &mut symbols, &mut next_type_idx)?;
+    closures::emit_env_types(
+        generic_binding::needed(ta, &symbols)?,
+        &closure_metas,
+        &mut types,
+        &mut symbols,
+        &mut next_type_idx,
+    )?;
 
     // Wasm uses separate index spaces for functions and globals.
     let mut next_global_idx: u32 = 0;
@@ -1625,6 +1634,17 @@ fn codegen_inner(
         })
         .transpose()?;
 
+    let generic_rebind = if symbols.generic_environment_type.is_some() {
+        Some(generic_binding::allocate_rebind(
+            &mut types,
+            &mut symbols,
+            &mut next_type_idx,
+            &mut next_func_idx,
+        )?)
+    } else {
+        None
+    };
+
     let function_invoke = ta
         .function_invoke
         .as_ref()
@@ -1742,6 +1762,9 @@ fn codegen_inner(
     }
     if let Some(argument) = &finalizer_argument {
         functions.function(argument.type_idx);
+    }
+    if let Some(helper) = generic_rebind {
+        functions.function(helper.type_idx);
     }
     if let Some(invoke) = &function_invoke {
         for argument in &invoke.arguments {
@@ -2178,6 +2201,9 @@ fn codegen_inner(
     }
     if let Some(argument) = &finalizer_argument {
         code.function(&finalizer_argument::body(&ctx, argument)?);
+    }
+    if let Some(helper) = generic_rebind {
+        code.function(&generic_binding::rebind_body(&symbols, helper)?);
     }
     if let Some(invoke) = &function_invoke {
         for argument in &invoke.arguments {
@@ -6503,7 +6529,11 @@ function main(): void {
                     box_walk_expr(ta, a, names);
                 }
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 box_walk_expr(ta, callee, names);
                 for a in args {
                     box_walk_expr(ta, a, names);
@@ -6609,7 +6639,9 @@ function main(): void {
                     box_walk_expr(ta, index, names);
                 }
             },
-            TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
+            TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
+            | TypedExprKind::Cast { value, .. } => {
                 box_walk_expr(ta, value, names);
             }
             TypedExprKind::EffectThen { effect, result } => {

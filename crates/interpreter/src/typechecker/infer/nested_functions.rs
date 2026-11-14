@@ -377,6 +377,7 @@ impl Inferer<'_> {
             .typed_ast
             .try_push_expr(TypedExpr {
                 kind: TypedExprKind::Closure {
+                    generics: Default::default(),
                     runtime_generics: Vec::new(),
                     params,
                     return_type: (**ret).clone(),

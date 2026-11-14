@@ -121,6 +121,7 @@ impl LowerCtx {
             .kind
             .clone();
         let ExprKind::Arrow {
+            generics: _,
             mut params,
             return_type,
             type_predicate,
@@ -137,6 +138,7 @@ impl LowerCtx {
         ast.try_expr_mut(id)
             .map_err(|error| error.into_compiler_failure(CompilerStage::Infer))?
             .kind = ExprKind::Arrow {
+            generics: Default::default(),
             params,
             return_type,
             type_predicate,

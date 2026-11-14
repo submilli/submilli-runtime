@@ -87,6 +87,10 @@ pub enum TypedExprKind {
     CallClosure {
         callee: ExprId,
         args: Vec<ExprId>,
+        /// The call's type arguments for the callee's static type when that
+        /// is a generic function type, one per type parameter, in order;
+        /// empty otherwise. A generic closure binds them by position.
+        type_args: Vec<Type>,
     },
     /// `@mcp/<server>.<tool>(args)` or `@tools.<tool>(args)`: dispatched through
     /// the package's single host fn (`submilli:mcp.call`, `submilli:tools.call`)
@@ -99,8 +103,9 @@ pub enum TypedExprKind {
         args: Vec<ExprId>,
     },
     /// Callee signature has bare `Type::TypeVar` slots. Per-position `is_generic` flags
-    /// and `return_cast` drive box/cast at the call boundary. Always statically dispatched
-    /// (no generic closures).
+    /// and `return_cast` drive box/cast at the call boundary. Always statically
+    /// dispatched; a call through a generic function value is a `CallClosure`
+    /// with `type_args`.
     GenericCall {
         mangled: MangledName,
         type_args: Vec<Type>,
@@ -147,9 +152,10 @@ pub enum TypedExprKind {
         receiver: ExprId,
         iface: MangledName,
         member: Member,
-        /// The method's own type arguments, for a runtime-generic host method
-        /// (`Response#json<T>`) whose call passes their descriptors in a
-        /// trailing `$types` environment; empty for every other method.
+        /// The method's own type arguments, empty for a method without type
+        /// parameters. A runtime-generic host method (`Response#json<T>`)
+        /// and a program's generic method (a class method, a closure held in
+        /// a field) take their descriptors by position.
         type_args: Vec<Type>,
         args: Vec<GenericArgument>,
         return_cast: Option<crate::Type>,
@@ -207,11 +213,29 @@ pub enum TypedExprKind {
     },
     /// `captured` is empty until the capture pass runs; codegen reads entries in order as env struct slots.
     Closure {
+        /// The closure's own type parameters (`<T>(x: T) => x`, a generic
+        /// object-literal method), bound by position from each call's type
+        /// arguments or an `InstantiateFunction`. Empty for an ordinary
+        /// closure.
+        generics: crate::GenericParameters,
+        /// Type parameters of the enclosing generic bodies the closure uses,
+        /// whose descriptors it captures when it is created.
         runtime_generics: Vec<String>,
         params: Vec<TypedParam>,
         return_type: Type,
         body: ClosureBody,
         captured: Vec<CapturedVar>,
+    },
+    /// A value of a generic function type converted, at a value flow, to a
+    /// non-generic function type (`const f: (x: number) => number = id`, a
+    /// callback argument, a cast). The expression's type is that target type.
+    /// `type_args` instantiates the value's own type parameters, in order;
+    /// they may name type parameters in scope. Codegen binds their
+    /// descriptors into a copy of the closure (`codegen::generic_binding`). A
+    /// function is instantiated once: a later binding doesn't replace this one.
+    InstantiateFunction {
+        value: ExprId,
+        type_args: Vec<Type>,
     },
     /// `typeof x === "<tag>"` check. Distinct from `Is` so primitive type-test codegen
     /// stays free of vtable/shape-disjunction logic (`Object` and `Function` need both).

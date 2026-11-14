@@ -669,6 +669,7 @@ fn synthesize_close_finally(
     let close_narrow_ident = ctx.fresh_name("close_narrow")?;
 
     let close_fn_ty = Type::Function {
+        generics: Default::default(),
         params: Vec::new(),
         ret: Box::new(Type::Void),
         predicate: None,
@@ -745,6 +746,7 @@ fn synthesize_close_finally(
         .ta
         .try_push_expr(TypedExpr {
             kind: TypedExprKind::CallClosure {
+                type_args: Vec::new(),
                 callee: close_narrow_ref,
                 args: Vec::new(),
             },

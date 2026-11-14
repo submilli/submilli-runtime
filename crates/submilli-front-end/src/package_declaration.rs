@@ -990,7 +990,7 @@ pub enum ValueKind {
 
 /// Ordered type parameter names and their optional upper bounds. Keeping the
 /// bounds beside the names preserves unused parameters in exported signatures.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GenericParameters {
     pub names: Vec<String>,
     pub constraints: Box<BTreeMap<String, Type>>,
@@ -1005,6 +1005,11 @@ impl std::ops::Deref for GenericParameters {
 }
 
 impl GenericParameters {
+    /// Whether there are no type parameters.
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
     /// Construct parameters known to have no bounds, such as built-in
     /// declarations. Parsed declarations must resolve and retain their bounds.
     pub fn unconstrained(names: Vec<String>) -> Self {
@@ -1296,6 +1301,7 @@ impl MethodSig {
             return Some(result);
         }
         let Type::Function {
+            generics,
             params,
             ret,
             predicate,
@@ -1309,7 +1315,7 @@ impl MethodSig {
         Some(Self {
             overloads: Vec::new(),
             optional: optional_member,
-            generics: Default::default(),
+            generics: generics.clone(),
             params: params
                 .iter()
                 .enumerate()
@@ -1325,6 +1331,20 @@ impl MethodSig {
             predicate: predicate.as_deref().cloned(),
             doc: None,
         })
+    }
+
+    /// This signature as a function type, keeping its own type parameters
+    /// (the primary signature; overloads are not included).
+    #[doc(hidden)]
+    pub fn function_type(&self) -> Type {
+        Type::Function {
+            generics: self.generics.clone(),
+            optional: optional_parameter_count(&self.params),
+            has_rest: self.params.last().is_some_and(|param| param.rest),
+            params: self.params.iter().map(|param| param.ty.clone()).collect(),
+            ret: Box::new(self.ret.clone()),
+            predicate: self.predicate.clone().map(Box::new),
+        }
     }
 
     #[doc(hidden)]

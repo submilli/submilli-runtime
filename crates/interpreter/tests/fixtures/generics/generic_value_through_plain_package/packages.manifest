@@ -1,0 +1,8 @@
+# A generic value created in one package, passed through a package with no
+# generics of its own, and called there through plain types: the app
+# instantiates it where it converts to a plain function type, so the callee
+# still has its type arguments.
+# name          dir     deps                       root
+@test/gen       gen     -
+@test/plain     plain   -
+main            app     @test/gen,@test/plain      root

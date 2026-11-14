@@ -78,6 +78,8 @@ pub fn classify(sig: &Type) -> Result<ClosureSig, crate::compiler_error::Compile
 #[derive(Clone, Debug)]
 pub struct ClosureMeta {
     pub this_type: Option<Type>,
+    /// The closure's own type parameters, bound per call (`generic_binding`).
+    pub generics: crate::GenericParameters,
     pub self_name: Option<crate::Ident>,
     pub runtime_generics: Vec<String>,
     pub expr_id: ExprId,
@@ -568,12 +570,13 @@ where
 
 /// Must run after `box_types::emit` so env-field lookups for boxed captures resolve.
 pub fn emit_env_types(
+    generic: bool,
     metas: &[ClosureMeta],
     types: &mut TypeSection,
     symbols: &mut SymbolTable,
     next_type_idx: &mut u32,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    ensure_index_capacity(*next_type_idx, Some(metas.len()), 2)?;
+    ensure_index_capacity(*next_type_idx, Some(metas.len()), 4)?;
     let string = symbols
         .string_type_idx()
         .ok_or_else(|| crate::codegen::internal_failure("string intrinsic"))?;
@@ -621,6 +624,9 @@ pub fn emit_env_types(
     ]);
     symbols.this_environment_type = Some(*next_type_idx);
     *next_type_idx += 1;
+    if generic {
+        super::generic_binding::declare_environment_type(types, symbols, next_type_idx)?;
+    }
     for meta in metas {
         let mut fields: Vec<FieldType> = meta
             .captured
@@ -877,6 +883,7 @@ mod tests {
     #[test]
     fn dependency_collection_checks_nested_callable_types() {
         let signature = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number; 256],
             ret: Box::new(Type::Void),
             predicate: None,

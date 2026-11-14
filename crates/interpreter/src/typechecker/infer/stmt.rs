@@ -4308,8 +4308,15 @@ impl Inferer<'_> {
             } => self
                 .structural_form(mangled, name, args)
                 .and_then(|fields| fields.get("iterator").cloned())
+                // A generic `iterator` would be called without type
+                // arguments, so it doesn't make the value iterable.
                 .and_then(|field| match field.ty {
-                    Type::Function { params, ret, .. } if params.is_empty() => match *ret {
+                    Type::Function {
+                        generics,
+                        params,
+                        ret,
+                        ..
+                    } if params.is_empty() && generics.is_empty() => match *ret {
                         Type::InterfaceRef {
                             name: rn, args: ra, ..
                         } if rn == "Iterator" && ra.len() == 1 => ra.into_iter().next(),

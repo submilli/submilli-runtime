@@ -26,13 +26,16 @@ use crate::typechecker::type_param_substitution::{CloseMatch, TypeParamSubstitut
 pub(super) enum GenericCallee {
     Function,
     Constructor,
+    /// A value of a generic function type, already inferred: the call is a
+    /// `CallClosure` that binds its type arguments for the call.
+    Value(ExprId),
 }
 
 impl GenericCallee {
     /// How the diagnostic names the thing being called.
     fn subject(self, name: &str, generics: &[String]) -> String {
         match self {
-            Self::Function => format!("`{name}`"),
+            Self::Function | Self::Value(_) => format!("`{name}`"),
             Self::Constructor if generics.is_empty() => format!("constructor of `{name}`"),
             Self::Constructor => {
                 format!("constructor of `{name}<{}>`", generics.join(", "))
@@ -68,7 +71,7 @@ impl GenericCallee {
             .collect::<Vec<_>>()
             .join(", ");
         match self {
-            Self::Function => {
+            Self::Function | Self::Value(_) => {
                 format!("add an explicit type argument: `{name}<{args}>(…)`")
             }
             Self::Constructor => {
@@ -129,10 +132,94 @@ fn substitute_at(
         budget.charge_copy(bound, depth)?;
         return Ok(bound.clone());
     }
+    // A generic function type's own type parameter that a substituted value
+    // names is renamed first, so the value isn't captured.
+    if let Type::Function { generics, .. } = ty
+        && !generics.is_empty()
+    {
+        let avoid: std::collections::BTreeSet<String> = crate::type_size::free_type_vars(ty)
+            .iter()
+            .filter_map(|name| bindings.get(name))
+            .flat_map(crate::type_size::free_type_vars)
+            .collect();
+        if generics.names.iter().any(|name| avoid.contains(name)) {
+            let renamed = crate::type_size::rename_capturing_binders(ty, &avoid);
+            return substitute_at(&renamed, bindings, depth, budget);
+        }
+    }
+    // A generic function type's own type parameters shadow outer bindings.
+    if let Type::Function { generics, .. } = ty
+        && generics
+            .names
+            .iter()
+            .any(|name| bindings.contains_key(name))
+    {
+        let mut inner = bindings.clone();
+        for name in &generics.names {
+            inner.remove(name);
+        }
+        budget.charge(depth)?;
+        let child = depth.saturating_add(1);
+        return map_children(ty, |child_ty| {
+            substitute_at(child_ty, &inner, child, budget)
+        });
+    }
     budget.charge(depth)?;
     let child = depth.saturating_add(1);
     let result = map_children(ty, |inner| substitute_at(inner, bindings, child, budget))?;
     crate::property_keys::normalize_template(result, budget)
+}
+
+/// `ty` with the `GenericParam`s whose ids `listed` names turned back into
+/// the signature-form `TypeVar`s it gives them; every other type is kept.
+pub(super) fn erase_listed_generic_params(ty: &Type, listed: &BTreeMap<u32, String>) -> Type {
+    match ty {
+        Type::GenericParam { id, .. } => match listed.get(id) {
+            Some(name) => Type::TypeVar(name.clone()),
+            None => ty.clone(),
+        },
+        _ => crate::type_size::map_children_infallible(ty, |child| {
+            erase_listed_generic_params(child, listed)
+        }),
+    }
+}
+
+/// The function type `expected` asks for: itself, or the one function
+/// member of a union (`F | undefined`).
+fn sole_function_type(expected: &Type) -> Option<Type> {
+    match expected.peel() {
+        function @ Type::Function { .. } => Some(function.clone()),
+        Type::Union(members) => {
+            let mut functions = members
+                .iter()
+                .filter(|member| matches!(member.peel(), Type::Function { .. }));
+            let only = functions.next()?;
+            functions.next().is_none().then(|| only.peel().clone())
+        }
+        _ => None,
+    }
+}
+
+/// Whether `ty` mentions a `TypeVar` that no function type inside it binds:
+/// an inference variable of an enclosing generic call.
+pub(super) fn has_free_type_vars(ty: &Type) -> bool {
+    let mut pending = vec![(ty, Vec::<&str>::new())];
+    while let Some((ty, bound)) = pending.pop() {
+        match ty {
+            Type::TypeVar(name) if !bound.contains(&name.as_str()) => return true,
+            Type::Function { generics, .. } if !generics.is_empty() => {
+                let mut inner = bound.clone();
+                inner.extend(generics.iter().map(String::as_str));
+                crate::type_size::for_each_child(ty, |child| {
+                    pending.push((child, inner.clone()));
+                });
+            }
+            _ => crate::type_size::for_each_child(ty, |child| {
+                pending.push((child, bound.clone()));
+            }),
+        }
+    }
+    false
 }
 
 pub(super) fn erase_generic_params(ty: &Type) -> Type {
@@ -185,12 +272,23 @@ pub(super) fn erase_generic_params(ty: &Type) -> Type {
         Type::Readonly(inner) => Type::Readonly(Box::new(erase_generic_params(inner))),
         Type::Tuple(elements) => Type::Tuple(elements.map(erase_generic_params)),
         Type::Function {
+            generics,
             params,
             ret,
             predicate,
             has_rest,
             optional,
         } => Type::Function {
+            generics: crate::GenericParameters {
+                names: generics.names.clone(),
+                constraints: Box::new(
+                    generics
+                        .constraints
+                        .iter()
+                        .map(|(name, bound)| (name.clone(), erase_generic_params(bound)))
+                        .collect(),
+                ),
+            },
             params: params.iter().map(erase_generic_params).collect(),
             ret: Box::new(erase_generic_params(ret)),
             predicate: predicate.as_ref().map(|p| {
@@ -674,11 +772,12 @@ impl Inferer<'_> {
             ))
         });
 
-        for (k, v) in interface_bindings {
-            if sig.generics.names.contains(&k) {
-                continue;
-            }
-            sub.insert(k, v);
+        let receiver_bindings: BTreeMap<String, Type> = interface_bindings
+            .into_iter()
+            .filter(|(name, _)| !sig.generics.names.contains(name))
+            .collect();
+        for (k, v) in &receiver_bindings {
+            sub.insert(k.clone(), v.clone());
         }
         // The receiver instantiates the signature before the call is checked,
         // so a parameter it makes `void` may go unpassed (`Box<void>.put()`), as
@@ -980,6 +1079,11 @@ impl Inferer<'_> {
             })),
             None => None,
         };
+        // A program's own generic method is a closure of a generic function
+        // type (or a class method), which takes its type arguments by
+        // position from each call.
+        let program_generic_method =
+            !sig.generics.is_empty() && !crate::mangle::is_builtin(&iface_mangled);
         // A checked host method passes its type arguments' descriptors, so
         // they are gated and recorded like a checked function's.
         let runtime_type_args = match &checked {
@@ -1006,12 +1110,24 @@ impl Inferer<'_> {
                 }
                 runtime_type_args
             }
+            None if program_generic_method => {
+                let own: Vec<Type> = sig
+                    .generics
+                    .iter()
+                    .map(|name| self.instantiate(&sub, &Type::TypeVar(name.clone()), span))
+                    .collect::<Result<_, _>>()?;
+                for arg in &own {
+                    self.record_runtime_type_test(arg)?;
+                }
+                own
+            }
             None => Vec::new(),
         };
         self.record_generic_call_arguments(&typed_args, &sig.params, &sig.ret, type_args.is_some());
 
         // TypeVar params/return need box/cast at the Wasm boundary; composite types use plain MethodCall.
-        let any_generic_arg = sig.params.iter().any(|p| p.ty.lowers_to_erased_slot());
+        let any_generic_arg = sig.params.iter().any(|p| p.ty.lowers_to_erased_slot())
+            || !runtime_type_args.is_empty();
         // The wrapper erases any TypeVar-mentioning return to `$Object`, so the
         // substituted result needs a cast back to its static shape — not only a
         // bare `V`, but also `V | null` and other erased unions (their object
@@ -1048,7 +1164,7 @@ impl Inferer<'_> {
                 result_ty,
             ));
         }
-        if !runtime_type_args.is_empty() {
+        if checked.is_some() && !runtime_type_args.is_empty() {
             return Err(super::inference_failure(
                 "a checked host method returns its type parameter",
             )
@@ -1078,6 +1194,14 @@ impl Inferer<'_> {
         ret: &Type,
     ) -> String {
         match callee {
+            GenericCallee::Value(_) => self.format_signature(SignatureKind::Function {
+                name: &callee_ident.name,
+                predicate: None,
+                generics,
+                params,
+                ret,
+                doc: None,
+            }),
             GenericCallee::Function => {
                 let doc = self.lookup_function_doc(&callee_ident.name);
                 self.format_signature(SignatureKind::Function {
@@ -2779,6 +2903,7 @@ impl Inferer<'_> {
             return Ok(hint);
         }
         let Type::Function {
+            generics,
             params,
             optional,
             ret,
@@ -2789,6 +2914,7 @@ impl Inferer<'_> {
             return Ok(hint);
         };
         Ok(Type::Function {
+            generics: generics.clone(),
             params: params.clone(),
             optional: *optional,
             ret: Box::new(expand_hint_interfaces(
@@ -3325,6 +3451,16 @@ impl Inferer<'_> {
         for arg in &runtime_args {
             self.record_runtime_type_test(arg)?;
         }
+        if let GenericCallee::Value(callee) = callee {
+            return Ok((
+                TypedExprKind::CallClosure {
+                    callee,
+                    args: generic_args.into_iter().map(|arg| arg.expr).collect(),
+                    type_args: runtime_args,
+                },
+                result_ty,
+            ));
+        }
         let call = TypedExprKind::GenericCall {
             mangled,
             type_args: runtime_args,
@@ -3333,6 +3469,221 @@ impl Inferer<'_> {
             type_predicate,
         };
         Ok((call, result_ty))
+    }
+
+    /// A value of a generic function type where a non-generic function type
+    /// is expected becomes an `InstantiateFunction`: its type arguments are
+    /// inferred against the target ([`Self::instantiation`]) and bound once,
+    /// at this conversion, as tsc instantiates a generic signature in context.
+    pub(super) fn instantiate_generic_value(
+        &mut self,
+        (value, ty): (ExprId, Type),
+        expected: Option<&Type>,
+    ) -> Result<(ExprId, Type), CompilerFailure> {
+        let Some(expected) = expected else {
+            return Ok((value, ty));
+        };
+        let span = self
+            .typed_ast
+            .try_expr(value)
+            .map_err(crate::typechecker::arena_failure)?
+            .span;
+        let Some((type_args, target_ty)) = self.instantiation(&ty, expected, span)? else {
+            return Ok((value, ty));
+        };
+        for argument in &type_args {
+            self.record_runtime_type_test(argument)?;
+        }
+        let id = self
+            .typed_ast
+            .try_push_expr(crate::TypedExpr {
+                kind: TypedExprKind::InstantiateFunction { value, type_args },
+                span,
+                ty: target_ty.clone(),
+            })
+            .map_err(crate::typechecker::arena_failure)?;
+        Ok((id, target_ty))
+    }
+
+    /// The type arguments that instantiate `ty`, a generic function type, to
+    /// the non-generic function type `expected` asks for, with that target;
+    /// `None` when `ty` isn't generic, the target is generic itself or still
+    /// has inference variables of a call around it, or no instantiation
+    /// fits. Unresolved type parameters take their bound, or `unknown`.
+    pub(super) fn instantiation(
+        &self,
+        ty: &Type,
+        expected: &Type,
+        span: Span,
+    ) -> Result<Option<(Vec<Type>, Type)>, CompilerFailure> {
+        let Type::Function { generics: own, .. } = ty.peel() else {
+            return Ok(None);
+        };
+        if own.is_empty() {
+            return Ok(None);
+        }
+        let Some(target_ty) = sole_function_type(expected) else {
+            return Ok(None);
+        };
+        let Type::Function {
+            generics,
+            params: target_params,
+            ret: target_ret,
+            ..
+        } = target_ty.peel()
+        else {
+            return Ok(None);
+        };
+        if !generics.is_empty() || has_free_type_vars(&target_ty) {
+            return Ok(None);
+        }
+        let erased = ty.peel().clone().with_type_parameters(Default::default());
+        let Type::Function {
+            params: own_params,
+            ret: own_ret,
+            ..
+        } = &erased
+        else {
+            return Ok(None);
+        };
+        // tsc's candidate order: parameters as far as both go, then the
+        // result, then parameters that hold a function type, whose own
+        // parameters only bound a type parameter from above. When that
+        // instantiation doesn't fit, those come first instead (tsc falls back
+        // to such a candidate). A `void` result is one the caller drops, so it
+        // says nothing about the type parameters.
+        let pairs: Vec<(&Type, &Type)> = own_params.iter().zip(target_params).collect();
+        let holds_callback = |ty: &Type| {
+            crate::type_size::any_node(ty, &|node| matches!(node.peel(), Type::Function { .. }))
+        };
+        for callbacks_first in [false, true] {
+            let mut inferred = TypeParamSubstitution::new();
+            let unify_params = |inferred: &mut TypeParamSubstitution, callbacks: bool| {
+                for (own_param, target_param) in pairs
+                    .iter()
+                    .filter(|(own, _)| holds_callback(own) == callbacks)
+                {
+                    let _ = inferred.unify(own_param, target_param, self.resolver());
+                }
+            };
+            if callbacks_first {
+                unify_params(&mut inferred, true);
+            }
+            unify_params(&mut inferred, false);
+            if !target_ret.is_void() {
+                let _ = inferred.unify(own_ret, target_ret, self.resolver());
+            }
+            if !callbacks_first {
+                unify_params(&mut inferred, true);
+            }
+            if let Some(type_args) =
+                self.fitting_instantiation(own, &erased, &inferred, &target_ty, span)?
+            {
+                return Ok(Some((type_args, target_ty)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The type arguments `inferred` gives `own`'s type parameters (their
+    /// bound, or `unknown`, where it gives none), when `erased` instantiated
+    /// with them fits `target` and the inferred ones meet their bounds.
+    fn fitting_instantiation(
+        &self,
+        own: &crate::GenericParameters,
+        erased: &Type,
+        inferred: &TypeParamSubstitution,
+        target: &Type,
+        span: Span,
+    ) -> Result<Option<Vec<Type>>, CompilerFailure> {
+        let mut bindings = BTreeMap::new();
+        for name in &own.names {
+            if inferred.get(name).is_some() {
+                let argument = inferred
+                    .apply(&Type::TypeVar(name.clone()), &self.type_limits)
+                    .map_err(type_limit_at(span))?;
+                bindings.insert(name.clone(), argument);
+            }
+        }
+        let names_own = |ty: &Type| {
+            crate::type_size::any_node(
+                ty,
+                &|node| matches!(node, Type::TypeVar(name) if own.names.contains(name)),
+            )
+        };
+        // An uninferred parameter takes its bound, with the others
+        // substituted in, or `unknown`; repeated while that settles a bound
+        // naming a later uninferred parameter.
+        let bound_of = |name: &String, bindings: &BTreeMap<String, Type>| {
+            own.constraints
+                .get(name)
+                .map_or(Ok(Type::Unknown), |bound| {
+                    substitute_typevars(bound, bindings, &self.type_limits)
+                })
+        };
+        for _ in 0..own.names.len() {
+            let mut settled = false;
+            for name in &own.names {
+                if bindings.contains_key(name) {
+                    continue;
+                }
+                let argument = bound_of(name, &bindings).map_err(type_limit_at(span))?;
+                if !names_own(&argument) {
+                    bindings.insert(name.clone(), argument);
+                    settled = true;
+                }
+            }
+            if !settled {
+                break;
+            }
+        }
+        // What still names an own parameter (an F-bound, a cycle) takes
+        // `unknown` for it.
+        let unknowns: BTreeMap<String, Type> = own
+            .names
+            .iter()
+            .map(|name| (name.clone(), Type::Unknown))
+            .collect();
+        for name in &own.names {
+            if !bindings.contains_key(name) {
+                let argument = bound_of(name, &bindings).map_err(type_limit_at(span))?;
+                let argument = substitute_typevars(&argument, &unknowns, &self.type_limits)
+                    .map_err(type_limit_at(span))?;
+                bindings.insert(name.clone(), argument);
+            }
+        }
+        // An inferred argument naming an own parameter has no descriptor to
+        // bind.
+        if bindings.values().any(names_own) {
+            return Ok(None);
+        }
+        let instantiated = substitute_typevars(erased, &bindings, &self.type_limits)
+            .map_err(type_limit_at(span))?;
+        // Only inferred arguments are checked against their bounds; an
+        // uninferred one took its bound, or `unknown` for a self-reference.
+        let bounds_hold = own.constraints.iter().all(|(name, bound)| {
+            if inferred.get(name).is_none() {
+                return true;
+            }
+            match (
+                bindings.get(name),
+                substitute_typevars(bound, &bindings, &self.type_limits),
+            ) {
+                (Some(argument), Ok(bound)) => {
+                    super::assignable::assignable(argument, &bound, self.resolver())
+                }
+                _ => false,
+            }
+        });
+        if !bounds_hold || !super::assignable::assignable(&instantiated, target, self.resolver()) {
+            return Ok(None);
+        }
+        Ok(Some(
+            own.names
+                .iter()
+                .filter_map(|name| bindings.get(name).cloned())
+                .collect(),
+        ))
     }
 
     fn record_generic_authored_arguments(
@@ -4072,6 +4423,7 @@ mod tests {
             substitute_typevars(&arr, &bindings, &crate::type_size::TypeLimits::default()).unwrap();
         assert_eq!(out, Type::Array(Box::new(Type::String)));
         let func = Type::Function {
+            generics: Default::default(),
             params: vec![Type::TypeVar("T".into())],
             ret: Box::new(Type::TypeVar("T".into())),
             predicate: None,
@@ -4083,6 +4435,7 @@ mod tests {
         assert_eq!(
             out,
             Type::Function {
+                generics: Default::default(),
                 params: vec![Type::String],
                 ret: Box::new(Type::String),
                 predicate: None,
@@ -4396,7 +4749,11 @@ mod tests {
                     collect_expr_types(ta, *a, out);
                 }
             }
-            crate::TypedExprKind::CallClosure { callee, args } => {
+            crate::TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 collect_expr_types(ta, *callee, out);
                 for a in args {
                     collect_expr_types(ta, *a, out);

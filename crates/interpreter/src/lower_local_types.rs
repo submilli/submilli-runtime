@@ -1285,6 +1285,7 @@ impl Lifter {
                 }
             }
             TypeAnnotationKind::Function {
+                generics: _,
                 params,
                 return_type,
             } => {
@@ -1408,6 +1409,7 @@ impl Lifter {
                 self.pop();
             }
             ExprKind::Arrow {
+                generics: _,
                 params,
                 return_type,
                 type_predicate,

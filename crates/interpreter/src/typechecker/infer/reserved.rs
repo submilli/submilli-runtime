@@ -9,6 +9,7 @@ pub(super) fn reserved_field_message(name: &str) -> String {
 pub(super) fn override_field_signature(name: &str) -> Option<crate::Type> {
     match name {
         "toString" | "toJson" => Some(crate::Type::Function {
+            generics: Default::default(),
             params: Vec::new(),
             ret: Box::new(crate::Type::String),
             predicate: None,

@@ -2275,6 +2275,7 @@ fn interface_method_contract(
         ),
     };
     let ty = Type::Function {
+        generics: Default::default(),
         params: method
             .params
             .iter()

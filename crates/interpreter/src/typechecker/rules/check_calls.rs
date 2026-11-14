@@ -202,7 +202,11 @@ impl Collector<'_> {
                 self.exprs(args)?;
                 self.authored_call_arguments(expr.span)?;
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.expr(*callee)?;
                 self.exprs(args)?;
                 self.authored_call_arguments(expr.span)?;
@@ -244,6 +248,7 @@ impl Collector<'_> {
             | TypedExprKind::TypeofTag { value: operand, .. }
             | TypedExprKind::InstanceOf { value: operand, .. }
             | TypedExprKind::NonNullAssert { value: operand }
+            | TypedExprKind::InstantiateFunction { value: operand, .. }
             | TypedExprKind::Cast { value: operand, .. } => self.expr(*operand)?,
             TypedExprKind::IndexAccess { receiver, index } => {
                 self.expr(*receiver)?;

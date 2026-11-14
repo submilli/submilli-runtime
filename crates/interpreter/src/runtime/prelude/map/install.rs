@@ -287,6 +287,7 @@ fn group_by_params() -> Vec<Param> {
         Param::new(
             "keySelector",
             Type::Function {
+                generics: Default::default(),
                 params: vec![element, Type::Number],
                 optional: 0,
                 ret: Box::new(Type::TypeVar("K".into())),
@@ -443,7 +444,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: vec![
                                         Type::TypeVar("V".to_string()),

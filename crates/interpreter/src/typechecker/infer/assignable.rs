@@ -98,16 +98,10 @@ impl<'a> TypeResolver<'a> {
             generics.iter().cloned().zip(args.iter().cloned()).collect();
         let mut out: BTreeMap<String, ObjectField> = BTreeMap::new();
         for (member, sig) in methods {
-            if sig
-                .signatures()
-                .any(|signature| !signature.generics.is_empty())
-            {
-                continue;
-            }
             out.insert(
                 member.clone(),
                 ObjectField {
-                    ty: self.method_type(sig, &bindings),
+                    ty: self.method_value_type(sig, &bindings),
                     optional: sig.optional,
                     readonly: true,
                     method: true,
@@ -262,15 +256,11 @@ impl<'a> TypeResolver<'a> {
                     return;
                 };
                 for (name, sig) in methods {
-                    if sig
-                        .signatures()
-                        .any(|signature| !signature.generics.is_empty())
-                        || method_visibility.get(name).copied() == Some(crate::Visibility::Private)
-                    {
+                    if method_visibility.get(name).copied() == Some(crate::Visibility::Private) {
                         continue;
                     }
                     out.entry(name.clone()).or_insert(ObjectField {
-                        ty: self.method_type(sig, bindings),
+                        ty: self.method_value_type(sig, bindings),
                         optional: sig.optional,
                         readonly: true,
                         method: true,
@@ -292,6 +282,35 @@ impl<'a> TypeResolver<'a> {
         Some(out)
     }
 
+    /// The function type a read of a method gives: [`method_type`] keeping
+    /// each signature's own type parameters, which shadow the enclosing
+    /// interface's or class's in `bindings`.
+    pub(super) fn method_value_type(
+        &self,
+        sig: &MethodSig,
+        bindings: &BTreeMap<String, Type>,
+    ) -> Type {
+        if !sig.overloads.is_empty() {
+            return Type::intersection(
+                sig.signatures()
+                    .map(|signature| self.method_value_type(&signature, bindings))
+                    .collect(),
+            );
+        }
+        if sig.generics.is_empty() {
+            return self.method_type(sig, bindings);
+        }
+        let mut outer = bindings.clone();
+        for name in &sig.generics.names {
+            outer.remove(name);
+        }
+        let mut generics = sig.generics.clone();
+        for bound in generics.constraints.values_mut() {
+            *bound = substitute_or_record(bound, &outer, self.limits);
+        }
+        self.method_type(sig, &outer).with_type_parameters(generics)
+    }
+
     /// A method's signature as a function type, with the class's arguments
     /// substituted.
     pub(super) fn method_type(&self, sig: &MethodSig, bindings: &BTreeMap<String, Type>) -> Type {
@@ -303,6 +322,7 @@ impl<'a> TypeResolver<'a> {
             );
         }
         Type::Function {
+            generics: Default::default(),
             params: sig
                 .params
                 .iter()
@@ -392,9 +412,15 @@ impl<'a> TypeResolver<'a> {
                 failures.push(ImplementsFailure::Signature(format!("{prefix}{signature}")));
             }
         }
+        // The method lookup resolves a class by its mangled name and its own
+        // name, so the reference names the class.
+        let class_name = self
+            .sym_by_mangled(class_mangled)
+            .map(|symbol| symbol.name.clone())
+            .unwrap_or_default();
         let actual = Type::class_ref(
             crate::Package("".into()),
-            "",
+            class_name,
             class_mangled.clone(),
             class_args.to_vec(),
         );
@@ -530,6 +556,7 @@ impl<'a> TypeResolver<'a> {
         }
         let (
             Type::Function {
+                generics,
                 params,
                 ret,
                 predicate,
@@ -579,6 +606,7 @@ impl<'a> TypeResolver<'a> {
         omittable
             && assignable_rec(
                 &Type::Function {
+                    generics: generics.clone(),
                     params: params.iter().take(expected_params.len()).cloned().collect(),
                     ret: ret.clone(),
                     predicate: predicate.clone(),
@@ -1423,8 +1451,26 @@ pub(super) fn assignable_rec(
         (_, Type::InterfaceRef { .. }) if satisfies_structurally(actual, expected, types, seen) => {
             true
         }
+        // A generic function type on either side: the target's type
+        // parameters are opaque, and a generic source fits only a target with
+        // the same type parameters, which it takes by position
+        // (`method_relations::same_type_parameters`). A conversion to
+        // anything else happens only at a value flow, as an
+        // `InstantiateFunction`.
+        (Type::Function { generics: ga, .. }, Type::Function { generics: ge, .. })
+            if !ga.is_empty() || !ge.is_empty() =>
+        {
+            match (
+                MethodSig::from_function_type(actual, false),
+                MethodSig::from_function_type(expected, false),
+            ) {
+                (Some(source), Some(target)) => types.signature_assignable(&source, &target, seen),
+                _ => false,
+            }
+        }
         (
             Type::Function {
+                generics: _,
                 params: pa,
                 ret: ra,
                 predicate: predicate_a,
@@ -1432,6 +1478,7 @@ pub(super) fn assignable_rec(
                 optional: optional_a,
             },
             Type::Function {
+                generics: _,
                 params: pe,
                 ret: re,
                 predicate: predicate_e,
@@ -2685,18 +2732,11 @@ fn homomorphic_wrapping(ty: &Type) -> Option<(&Type, Optionality)> {
     super::utility_types::holds_type_parameter(base).then_some((base, optionality))
 }
 
-/// Whether a signature `TypeVar` occurs anywhere in `ty`, refinements and
-/// template holes included, which [`super::expr::type_contains_type_var`]
-/// does not look into.
+/// Whether a signature `TypeVar` occurs free in `ty` (not one a generic
+/// function type inside it binds), refinements and template holes included,
+/// which [`super::expr::type_contains_type_var`] does not look into.
 fn mentions_signature_var(ty: &Type) -> bool {
-    let mut pending = vec![ty];
-    while let Some(ty) = pending.pop() {
-        if matches!(ty, Type::TypeVar(_)) {
-            return true;
-        }
-        crate::type_size::for_each_child(ty, |child| pending.push(child));
-    }
-    false
+    !crate::type_size::free_type_vars(ty).is_empty()
 }
 
 /// What every instantiation of the form `ty` is assignable to, tsc's base
@@ -3135,6 +3175,7 @@ mod tests {
 
     fn fn_ty(params: Vec<Type>, ret: Type) -> Type {
         Type::Function {
+            generics: Default::default(),
             params,
             ret: Box::new(ret),
             predicate: None,
@@ -3145,6 +3186,7 @@ mod tests {
 
     fn predicate_fn_ty(kind: crate::PredicateKind) -> Type {
         Type::Function {
+            generics: Default::default(),
             params: vec![Type::Unknown],
             ret: Box::new(kind.return_type()),
             predicate: Some(Box::new(crate::TypePredicate {
@@ -3208,6 +3250,7 @@ mod tests {
     #[test]
     fn optional_function_parameter_can_be_omitted_by_target_callers() {
         let optional = Type::Function {
+            generics: Default::default(),
             params: vec![Type::union(vec![Type::String, Type::Undefined])],
             ret: Box::new(Type::Void),
             predicate: None,

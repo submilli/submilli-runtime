@@ -1317,6 +1317,7 @@ impl Walker<'_, '_> {
         match &expr.kind {
             TypedExprKind::Cast { value, .. }
             | TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
             | TypedExprKind::Narrowed { inner: value, .. } => {
                 return self.made_from_foreign_object(*value);
             }
@@ -1333,7 +1334,11 @@ impl Walker<'_, '_> {
                     self.parts_of(*arg, &mut parts)?;
                 }
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.parts_of(*callee, &mut parts)?;
                 for arg in self.package.authored(expr.span, args).iter() {
                     self.parts_of(*arg, &mut parts)?;
@@ -1438,7 +1443,11 @@ impl<'a> Walker<'a, '_> {
                 let args = self.package.authored(span, args);
                 self.method_call(self.this(), None, false, &args, &name.name, span)?
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 let (name, calls_itself) = self.function_value_name(*callee)?;
                 let callee = self.eval(*callee)?;
                 let args = self.package.authored(span, args);
@@ -1502,6 +1511,7 @@ impl<'a> Walker<'a, '_> {
             // `source` is not walked: see `NarrowRegion`.
             TypedExprKind::Narrowed { inner: value, .. }
             | TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
             | TypedExprKind::Cast { value, .. } => self.eval(*value)?,
             TypedExprKind::FieldAccess { receiver, name }
             | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => {

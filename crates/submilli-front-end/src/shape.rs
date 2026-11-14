@@ -209,6 +209,7 @@ mod tests {
         );
         assert!(
             Shape::from_type(&Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number],
                 ret: Box::new(Type::Number),
                 predicate: None,

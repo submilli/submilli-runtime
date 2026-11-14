@@ -338,35 +338,6 @@ impl<'a> Inferer<'a> {
                     if self.reject_duplicate_member(&fields, &methods, m_name, &name) {
                         continue;
                     }
-                    // Method-level generics on class methods have no codegen
-                    // (the vtable slot would get a stub body that traps) —
-                    // reject at bind time instead of at runtime. Class-level
-                    // generics (`class Box<T>`) are fine.
-                    if let Some(g) = m_generics.first() {
-                        self.error_with_help(
-                            g.span,
-                            format!(
-                                "type parameters on class instance methods are not \
-                                 supported yet (`{}<{}>`)",
-                                m_name.name, g.name
-                            ),
-                            vec![format!(
-                                "move it to a top-level generic function \
-                                 (`function {}<{}>(self: {}, …)`), or make it \
-                                 `static {}<{}>(…)` — statics may declare their own \
-                                 type parameters",
-                                m_name.name,
-                                g.name,
-                                if generic_names.is_empty() {
-                                    name.name.clone()
-                                } else {
-                                    format!("{}<{}>", name.name, generic_names.join(", "))
-                                },
-                                m_name.name,
-                                g.name
-                            )],
-                        );
-                    }
                     let (m_generic_names, resolved_params, resolved_ret) =
                         self.resolve_method_signature(m_generics, params, Some(return_type))?;
                     self.check_conversion_method(
@@ -1492,6 +1463,25 @@ impl<'a> Inferer<'a> {
         // TypeScript lets an override declare fewer parameters, as any function
         // may. Here the override fills the inherited method's vtable slot, whose
         // Wasm signature is fixed, so it must declare them all.
+        // A generic method's slot takes its type arguments; one inherited
+        // from a method without type parameters doesn't, so its override
+        // would run without them.
+        if !child_sig.generics.is_empty() && parent_sig.generics.is_empty() {
+            self.error_with_help(
+                member.span,
+                format!(
+                    "method `{}` declares type parameters, but the method it overrides does not",
+                    member.name
+                ),
+                vec![
+                    format!("inherited: {parent_fn}"),
+                    "declare the type parameters on the inherited method too, or give the \
+                     override a different name"
+                        .to_string(),
+                ],
+            );
+            return Ok(());
+        }
         if child_sig.params.len() < parent_sig.params.len() {
             self.error_with_help(
                 member.span,
@@ -5022,6 +5012,7 @@ fn field_read_ty(field: &FieldSig) -> Type {
 /// [`super::assignable`]).
 fn method_fn_type(sig: &MethodSig) -> Type {
     Type::Function {
+        generics: sig.generics.clone(),
         params: sig.params.iter().map(|p| p.ty.clone()).collect(),
         ret: Box::new(sig.ret.clone()),
         predicate: None,

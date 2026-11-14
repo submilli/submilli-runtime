@@ -454,7 +454,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: vec![
                                         Type::TypeVar("T".to_string()),

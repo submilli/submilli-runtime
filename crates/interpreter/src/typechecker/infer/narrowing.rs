@@ -2350,6 +2350,7 @@ mod tests {
             mangled: crate::mangle::package_symbol(crate::mangle::USER_PACKAGE, "FnAlias"),
             args: Vec::new(),
             ty: Box::new(Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number],
                 ret: Box::new(Type::Boolean),
                 optional: 0,

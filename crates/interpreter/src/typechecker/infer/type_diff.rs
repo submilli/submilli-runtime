@@ -563,6 +563,7 @@ mod tests {
     fn function_arity_diff() {
         let out = format_type_diff(
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
@@ -570,6 +571,7 @@ mod tests {
                 optional: 0,
             },
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,
@@ -584,6 +586,7 @@ mod tests {
     fn function_param_type_diff() {
         let out = format_type_diff(
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number, Type::String],
                 ret: Box::new(Type::Boolean),
                 predicate: None,
@@ -591,6 +594,7 @@ mod tests {
                 optional: 0,
             },
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number, Type::Number],
                 ret: Box::new(Type::Boolean),
                 predicate: None,
@@ -605,6 +609,7 @@ mod tests {
     fn function_return_type_diff() {
         let out = format_type_diff(
             &Type::Function {
+                generics: Default::default(),
                 params: vec![],
                 ret: Box::new(Type::Number),
                 predicate: None,
@@ -612,6 +617,7 @@ mod tests {
                 optional: 0,
             },
             &Type::Function {
+                generics: Default::default(),
                 params: vec![],
                 ret: Box::new(Type::String),
                 predicate: None,
@@ -626,6 +632,7 @@ mod tests {
     fn function_combined_arity_param_return() {
         let out = format_type_diff(
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number, Type::String],
                 ret: Box::new(Type::Boolean),
                 predicate: None,
@@ -633,6 +640,7 @@ mod tests {
                 optional: 0,
             },
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::String, Type::String, Type::Number],
                 ret: Box::new(Type::Void),
                 predicate: None,

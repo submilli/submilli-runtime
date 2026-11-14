@@ -1141,6 +1141,7 @@ mod inheritance_tests {
             doc: None,
         }];
         let function = Type::Function {
+            generics: Default::default(),
             params: vec![],
             ret: Box::new(Type::Number),
             has_rest: false,

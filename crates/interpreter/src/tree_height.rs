@@ -588,6 +588,7 @@ impl SyntaxChildren {
                 self.expr(*function);
             }
             ExprKind::Arrow {
+                generics: _,
                 params,
                 return_type,
                 type_predicate,
@@ -935,6 +936,7 @@ impl<'a> AnnotationChildren<'a> {
                 children.indexes = indexes.iter();
             }
             TypeAnnotationKind::Function {
+                generics: _,
                 params,
                 return_type,
             } => {
@@ -1117,7 +1119,11 @@ impl TypedChildren {
                 self.exprs(args);
                 self.authored_call_arguments(ta, span);
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.expr(*callee);
                 self.exprs(args);
                 self.authored_call_arguments(ta, span);
@@ -1160,6 +1166,7 @@ impl TypedChildren {
             },
             TypedExprKind::TypeofTag { value, .. }
             | TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
             | TypedExprKind::Cast { value, .. }
             | TypedExprKind::InstanceOf { value, .. } => self.expr(*value),
             TypedExprKind::Narrowed { source, inner, .. } => self.exprs(&[*source, *inner]),
@@ -1404,6 +1411,7 @@ mod tests {
             ),
             (
                 TypeAnnotationKind::Function {
+                    generics: Default::default(),
                     params: vec![annotation_field(first.clone())],
                     return_type: Box::new(second.clone()),
                 },

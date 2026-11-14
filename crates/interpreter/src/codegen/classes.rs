@@ -5,7 +5,7 @@
 //! with subclasses subtyping their parent's pair. Alongside those: the
 //! per-class singleton globals (vtable instance, field-names array), the
 //! allocating constructor and its self-first init counterpart, real method
-//! bodies, one closure-ABI adapter per non-generic vtable *slot* for
+//! bodies, one closure-ABI adapter per vtable *slot* for
 //! interface-typed dispatch (inherited slots included — a subclass reuses its
 //! ancestor's adapter where one exists locally),
 //! and the four universal vtable bodies (`toString`/`toJson`/`equals`/`hash`).
@@ -57,7 +57,9 @@ struct MethodSlot {
     param_tys: Vec<crate::Type>,
     argument_metadata: Option<String>,
     ret_ty: crate::Type,
-    /// A generic method has no adapter and never enters the instance payload.
+    /// Whether the slot was first declared by a generic method, so it takes a
+    /// trailing `$types` and its payload closure binds type arguments per call
+    /// (`generic_binding`). Overrides keep the originating declaration's.
     generic: bool,
 }
 
@@ -119,13 +121,13 @@ struct ClassLayout {
 }
 
 impl ClassLayout {
-    /// The non-generic vtable slots that enter the instance payload, in slot
+    /// The vtable slots that enter the instance payload, in slot
     /// order — every method in the inheritance chain, not just the declared
     /// ones. An interface-typed receiver resolves a method by scanning this
     /// payload, and `implements` conformance may be satisfied by an inherited
     /// member, so a subclass instance has to carry the whole chain.
     fn payload_slots(&self) -> impl Iterator<Item = &MethodSlot> {
-        self.methods.iter().filter(|s| !s.generic)
+        self.methods.iter()
     }
 
     /// Instance payload names: the full data fields (inherited prefix then own,
@@ -177,9 +179,8 @@ struct OwnMethod {
     params: Vec<crate::TypedParam>,
     body: crate::StmtId,
     return_type: crate::Type,
-    /// A method declaring its own type parameters is rejected at bind time; the
-    /// flag only exists so codegen can emit an unreachable stub for its slot.
-    generic: bool,
+    /// The method's own type parameters, bound from the slot's `$types`.
+    generics: crate::GenericParameters,
 }
 
 /// The class-emission plan, computed once and threaded through the codegen phases.
@@ -310,7 +311,6 @@ impl ClassPlan {
                     slot.param_tys = param_tys;
                     slot.argument_metadata = argument_metadata;
                     slot.ret_ty = m.return_type.clone();
-                    slot.generic = !m.generics.is_empty();
                 } else {
                     methods.push(SlotDraft {
                         name: m.name.name.clone(),
@@ -331,7 +331,7 @@ impl ClassPlan {
                     params: m.params.clone(),
                     body: m.body,
                     return_type: m.return_type.clone(),
-                    generic: !m.generics.is_empty(),
+                    generics: m.generics.clone(),
                 })
                 .collect();
             layouts.insert(mangled.clone(), (fields, methods, own_methods));
@@ -511,7 +511,11 @@ impl ClassPlan {
                 let abi = MethodSlotAbi {
                     params: params.iter().skip(1).copied().collect(),
                     ret: results.first().copied(),
+                    types: !method.generics.is_empty(),
                 };
+                if abi.types {
+                    params.push(super::generic_binding::types_value_type(symbols)?);
+                }
                 super::check_function_parameters(
                     || format!("the method `{}#{}`", class.name, slot.name),
                     &params,
@@ -599,8 +603,7 @@ impl ClassPlan {
             // methods) + its sig, for every slot in the chain so a parent-typed
             // receiver resolves too.
             for (i, slot) in class.methods.iter().enumerate() {
-                if !slot.generic && !slot.name.starts_with("get ") && !slot.name.starts_with("set ")
-                {
+                if !slot.name.starts_with("get ") && !slot.name.starts_with("set ") {
                     symbols.record_class_payload_method(class.mangled.clone(), slot.name.clone());
                 }
                 symbols.record_class_method_slot(
@@ -771,7 +774,7 @@ impl ClassPlan {
                 let idx = next_index(next_func_idx)?;
                 symbols.record_class_method_func(class.mangled.clone(), method.name.clone(), idx);
             }
-            // One closure-ABI adapter per non-generic *slot* — inherited ones
+            // One closure-ABI adapter per *slot* — inherited ones
             // included, since an interface-typed receiver scans the instance
             // payload, which carries the whole chain. An override rewrites the
             // slot's owner to this class, so a declared method still allocates
@@ -780,9 +783,6 @@ impl ClassPlan {
             // receiver as `(ref $Object)` and casts.
             let mut adapter_slots: Vec<usize> = Vec::new();
             for (i, slot) in class.methods.iter().enumerate() {
-                if slot.generic {
-                    continue;
-                }
                 let reused = (slot.owner != class.mangled)
                     .then(|| symbols.class_method_adapter_func_idx(&slot.owner, &slot.name))
                     .flatten();
@@ -990,10 +990,6 @@ impl ClassPlan {
                 class.name_span,
             )?;
             for method in &class.own_methods {
-                if method.generic {
-                    code.function(&stub_body());
-                    continue;
-                }
                 debug.write(
                     code,
                     self.emit_method_body(class, method, ctx)?,
@@ -1195,6 +1191,13 @@ impl ClassPlan {
         if slot.argument_metadata.is_some() {
             super::call_arguments::unwrap(&mut emitter, ctx)?;
         }
+        // A generic slot's closure carries the call's type arguments around
+        // its receiver; the slot takes them as its trailing `$types`.
+        let types = if abi.types {
+            Some(super::generic_binding::emit_split(&mut emitter, ctx)?)
+        } else {
+            None
+        };
         emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
             intrinsics.object,
         )));
@@ -1208,6 +1211,9 @@ impl ClassPlan {
                     ty,
                 )?;
             }
+        }
+        if let Some(types) = types {
+            emitter.instruction(Instruction::LocalGet(types));
         }
         emitter.instruction(Instruction::Call(method_func));
         match abi.ret {
@@ -1264,7 +1270,28 @@ impl ClassPlan {
             ref_to(object_idx),
         )];
         wasm_params.extend(slot_params(ctx, &method.params, &abi.params)?);
+        if abi.types {
+            wasm_params.push((
+                crate::Ident {
+                    name: "$types".to_string(),
+                    span: crate::Span::at(ctx.file),
+                },
+                super::generic_binding::types_value_type(ctx.symbols)?,
+            ));
+        }
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
+        if abi.types && !method.generics.is_empty() {
+            let bound = wasm_u32(method.params.len())?
+                .checked_add(1)
+                .ok_or_else(|| internal_failure("method parameter index overflow"))?;
+            let types = super::generic_binding::emit_known_types(
+                &mut emitter,
+                ctx,
+                &method.generics.names,
+                bound,
+            )?;
+            super::runtime_descriptors::bind(&mut emitter, &method.generics.names, types)?;
+        }
         let param_slots = rebind_erased_params(&mut emitter, ctx, &method.params, &abi.params)?;
         emitter.prepare_parameter_initialization(Some(method.body))?;
         // Param prologue boxes captured-mutated method params.
@@ -1331,7 +1358,7 @@ impl ClassPlan {
 
         // struct.new $Foo: vtable + field-names + object-fields payload. The
         // payload holds the data fields (slots `0..N_fields`, written by the init
-        // fn) then one closure per non-generic method (slots `N_fields..`,
+        // fn) then one closure per method (slots `N_fields..`,
         // populated by the prologue below). The field-names list must match
         // `class_field_names` so the dynamic field-name scan resolves both.
         let dynamic_methods: Vec<&MethodSlot> = class.payload_slots().collect();
@@ -1429,6 +1456,9 @@ impl ClassPlan {
                 emitter.instruction(Instruction::GlobalGet(closure_vtable));
                 emitter.instruction(Instruction::RefFunc(adapter));
                 emitter.instruction(Instruction::LocalGet(this_slot));
+                if method.generic {
+                    super::generic_binding::emit_creation_wrapper(&mut emitter, ctx)?;
+                }
                 if let Some(metadata) = &method.argument_metadata {
                     super::call_arguments::wrap(&mut emitter, ctx, metadata)?;
                 }
@@ -1623,9 +1653,6 @@ impl ClassPlan {
                 class.ctor_init_func_idx,
             ));
             for method in &class.own_methods {
-                if method.generic {
-                    continue;
-                }
                 let idx = symbols
                     .class_method_func_idx(&class.mangled, &method.name)
                     .ok_or_else(|| internal_failure("a class method body was not allocated"))?;
@@ -1909,6 +1936,7 @@ fn slot_closure_sig(
     slot: &MethodSlot,
 ) -> Result<crate::codegen::closures::ClosureSig, crate::compiler_error::CompilerFailure> {
     let sig = crate::Type::Function {
+        generics: Default::default(),
         params: slot.param_tys.clone(),
         ret: Box::new(slot.ret_ty.clone()),
         predicate: None,
@@ -2772,6 +2800,7 @@ mod closure_adapter_invariant_tests {
             class.mangled.clone(),
             slot.name.clone(),
             MethodSlotAbi {
+                types: false,
                 params: vec![],
                 ret: Some(ValType::F64),
             },

@@ -113,7 +113,10 @@ impl Inferer<'_> {
             }
             return Ok(());
         }
-        if early.ty == *bound || matches!(early.ty, Type::Error) || matches!(bound, Type::Error) {
+        if same_up_to_binder_names(&early.ty, bound)
+            || matches!(early.ty, Type::Error)
+            || matches!(bound, Type::Error)
+        {
             return Ok(());
         }
         self.error_with_help(
@@ -282,11 +285,31 @@ impl Inferer<'_> {
             params,
             return_type: Some(return_type),
             type_predicate: None,
+            generics,
             ..
         } = &self.ast.try_expr(arrow).map_err(super::arena_failure)?.kind
         else {
             return Ok(None);
         };
+        // A generic arrow's annotations name its own type parameters.
+        let own = self.push_function_type_generics(generics)?;
+        let signature = self.written_signature(params, return_type);
+        if own.is_some() {
+            self.pop_body_generics();
+        }
+        Ok(signature?.map(|signature| match own {
+            Some(own) => signature.with_type_parameters(own),
+            None => signature,
+        }))
+    }
+
+    /// The function type `params` and `return_type` write, when every
+    /// parameter is written and none can be omitted.
+    fn written_signature(
+        &mut self,
+        params: &[crate::ast::ParamDecl],
+        return_type: &crate::TypeAnnotation,
+    ) -> Result<Option<Type>, CompilerFailure> {
         let mut param_types = Vec::with_capacity(params.len());
         for param in params {
             // An optional or defaulted parameter makes the signature depend on
@@ -300,6 +323,7 @@ impl Inferer<'_> {
             param_types.push(self.resolve_type(annotation)?);
         }
         Ok(Some(Type::Function {
+            generics: Default::default(),
             params: param_types,
             optional: 0,
             ret: Box::new(self.resolve_type(return_type)?),
@@ -307,6 +331,13 @@ impl Inferer<'_> {
             has_rest: params.last().is_some_and(|p| p.rest),
         }))
     }
+}
+
+/// Whether `a` and `b` are equal once a generic function type's own type
+/// parameters are named by position: the early and final types of a generic
+/// arrow each get fresh names for them.
+fn same_up_to_binder_names(a: &Type, b: &Type) -> bool {
+    a.peel().with_positional_type_parameters() == b.peel().with_positional_type_parameters()
 }
 
 /// The literal type an initializer states without being inferred: a literal

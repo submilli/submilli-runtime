@@ -416,7 +416,11 @@ pub(super) fn collect_from_expr(
             }
             collect_from_authored_arguments(ast, expr.span, c)?;
         }
-        TypedExprKind::CallClosure { callee, args } => {
+        TypedExprKind::CallClosure {
+            type_args: _,
+            callee,
+            args,
+        } => {
             collect_from_expr(ast, *callee, c)?;
             for a in args {
                 collect_from_expr(ast, *a, c)?;
@@ -590,7 +594,8 @@ pub(super) fn collect_from_expr(
                 c.collect(elem_ty);
             }
         },
-        TypedExprKind::NonNullAssert { value } => {
+        TypedExprKind::NonNullAssert { value }
+        | TypedExprKind::InstantiateFunction { value, .. } => {
             collect_from_expr(ast, *value, c)?;
             c.collect(&expr.ty);
         }

@@ -670,6 +670,7 @@ pub(crate) fn replacement_type() -> Type {
     Type::union(vec![
         Type::String,
         Type::Function {
+            generics: Default::default(),
             params,
             optional: REPLACER_ARITY - 1,
             ret: Box::new(Type::String),

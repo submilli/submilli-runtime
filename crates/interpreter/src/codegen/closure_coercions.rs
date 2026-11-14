@@ -77,7 +77,14 @@ fn emit_body(
     let original = u32::from(target.arity) + 1;
     let receiver = original + 1;
     let env = original + 2;
-    let mut body = Function::new([
+    // In a module that binds type arguments, `emit_wrap` puts the original
+    // inside a generic wrapper, whose descriptors a call through a generic
+    // function type fills; the adapter forwards them to a generic original.
+    let generic = ctx
+        .symbols
+        .generic_environment_type
+        .map(|generic| (original + 3, generic));
+    let mut locals = vec![
         (
             1,
             ValType::Ref(RefType {
@@ -99,7 +106,11 @@ fn emit_body(
                 heap_type: HeapType::ANY,
             }),
         ),
-    ]);
+    ];
+    if generic.is_some() {
+        locals.push((1, super::generic_binding::types_value_type(ctx.symbols)?));
+    }
+    let mut body = Function::new(locals);
     body.instruction(&Instruction::LocalGet(0));
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(wrapper)));
     body.instruction(&Instruction::StructGet {
@@ -113,6 +124,21 @@ fn emit_body(
         struct_type_index: wrapper,
         field_index: 0,
     });
+    if let Some((types, generic)) = generic {
+        body.instruction(&Instruction::LocalTee(env));
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(generic)));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: generic,
+            field_index: 1,
+        });
+        body.instruction(&Instruction::LocalSet(types));
+        body.instruction(&Instruction::LocalGet(env));
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(generic)));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: generic,
+            field_index: 0,
+        });
+    }
     body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(object)));
     body.instruction(&Instruction::LocalSet(original));
     // Call what an adapter of an adapter ultimately wraps, which takes every
@@ -128,8 +154,20 @@ fn emit_body(
             .ok_or_else(|| crate::codegen::internal_failure("source closure type"))?;
         emit_is_directly_callable(&mut body, ctx, structure, original, env)?;
         body.instruction(&Instruction::If(result));
-        emit_direct_call(&mut body, ctx, source, target, original, receiver, env)?;
+        emit_direct_call(
+            &mut body,
+            ctx,
+            source,
+            target,
+            original,
+            receiver,
+            env,
+            generic.map(|(types, _)| types),
+        )?;
         body.instruction(&Instruction::Else);
+    }
+    if let Some((types, _)) = generic {
+        emit_rebound_original(&mut body, ctx, original, types)?;
     }
     emit_default_adapter_call(&mut body, ctx, target, original, receiver)?;
     for _ in &sources {
@@ -225,6 +263,7 @@ fn emit_unwrap_receiver_bindings(
 
 /// Call the original closure with its own environment and the leading
 /// `source.arity` arguments, then convert its result to `target`'s convention.
+#[allow(clippy::too_many_arguments)]
 fn emit_direct_call(
     body: &mut Function,
     ctx: &CodegenCtx<'_>,
@@ -233,6 +272,7 @@ fn emit_direct_call(
     original: u32,
     receiver: u32,
     env: u32,
+    types: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let wrapper = ctx
         .symbols
@@ -255,6 +295,9 @@ fn emit_direct_call(
     for instruction in super::this_binding::binding_instructions(wrapper, env, receiver) {
         body.instruction(&instruction);
     }
+    if let Some(types) = types {
+        emit_forward_types(body, ctx, types)?;
+    }
     for i in 1..=u32::from(source.arity) {
         body.instruction(&Instruction::LocalGet(i));
     }
@@ -265,6 +308,69 @@ fn emit_direct_call(
         field_index: 1,
     });
     body.instruction(&Instruction::CallRef(signature));
+    Ok(())
+}
+
+/// With the original's environment on the stack, fills its empty generic
+/// wrapper with the adapter's descriptors (a no-op when they're null, or for
+/// an original that isn't generic).
+fn emit_forward_types(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    types: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let helper = ctx
+        .symbols
+        .generic_rebind
+        .ok_or_else(|| crate::codegen::internal_failure("generic rebind helper"))?;
+    body.instruction(&Instruction::LocalGet(types));
+    body.instruction(&Instruction::Call(helper.func_idx));
+    Ok(())
+}
+
+/// Before the host invokes the original, replaces it in `original` with a
+/// copy whose environment holds the adapter's descriptors, so a generic
+/// original the host calls still has its type arguments. The copy needs the
+/// original's closure type; one of a shape this module doesn't know keeps
+/// the original.
+fn emit_rebound_original(
+    body: &mut Function,
+    ctx: &CodegenCtx<'_>,
+    original: u32,
+    types: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    body.instruction(&Instruction::LocalGet(types));
+    body.instruction(&Instruction::RefIsNull);
+    body.instruction(&Instruction::I32Eqz);
+    body.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    for signature in ctx.symbols.closure_signatures() {
+        let Some(structure) = ctx.symbols.closure_struct_type_idx(signature) else {
+            continue;
+        };
+        body.instruction(&Instruction::LocalGet(original));
+        body.instruction(&Instruction::RefTestNonNull(HeapType::Concrete(structure)));
+        body.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        for field_index in 0..2 {
+            body.instruction(&Instruction::LocalGet(original));
+            body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+            body.instruction(&Instruction::StructGet {
+                struct_type_index: structure,
+                field_index,
+            });
+        }
+        body.instruction(&Instruction::LocalGet(original));
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: structure,
+            field_index: 2,
+        });
+        emit_forward_types(body, ctx, types)?;
+        body.instruction(&Instruction::I64Const(0));
+        body.instruction(&Instruction::StructNew(structure));
+        body.instruction(&Instruction::LocalSet(original));
+        body.instruction(&Instruction::End);
+    }
+    body.instruction(&Instruction::End);
     Ok(())
 }
 
@@ -484,6 +590,10 @@ fn emit_wrap(
     ));
     emitter.instruction(Instruction::LocalGet(original));
     emitter.instruction(Instruction::RefAsNonNull);
+    // A generic original takes a call's type arguments through its adapter.
+    if ctx.symbols.generic_environment_type.is_some() {
+        super::generic_binding::emit_creation_wrapper(emitter, ctx)?;
+    }
     super::this_binding::wrap(emitter, ctx)?;
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(

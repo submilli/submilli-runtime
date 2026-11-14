@@ -197,6 +197,36 @@ pub fn emit_bodies(
             ));
         }
         let mut emitter = FunctionEmitter::new(ctx, &wasm_params)?;
+        // A generic function's closure binds its type arguments per call;
+        // the function takes them as its trailing `$types`.
+        let types = if ctx
+            .symbols
+            .runtime_generic_functions
+            .contains(&meta.mangled)
+        {
+            emitter.instruction(Instruction::LocalGet(0));
+            if ctx
+                .symbols
+                .function_argument_metadata
+                .contains_key(&meta.mangled)
+            {
+                crate::codegen::call_arguments::unwrap(&mut emitter, ctx)?;
+            }
+            let bound = crate::codegen::generic_binding::emit_split(&mut emitter, ctx)?;
+            emitter.instruction(Instruction::Drop);
+            let names = match meta.signature.peel() {
+                Type::Function { generics, .. } => generics.names.clone(),
+                _ => Vec::new(),
+            };
+            Some(crate::codegen::generic_binding::emit_known_types(
+                &mut emitter,
+                ctx,
+                &names,
+                bound,
+            )?)
+        } else {
+            None
+        };
 
         let target = ctx
             .symbols
@@ -227,6 +257,9 @@ pub fn emit_bodies(
                 &crate::Type::Unknown,
                 p_ty,
             )?;
+        }
+        if let Some(types) = types {
+            emitter.instruction(Instruction::LocalGet(types));
         }
         emitter.instruction(Instruction::Call(target_idx));
         if ctx.symbols.resultless_functions.contains(&target_idx) {

@@ -66,7 +66,7 @@ pub fn package_declaration() -> PackageDeclaration {
                 params: vec![
                     Param::new(
                         "fn",
-                        Type::Function {
+                        Type::Function { generics: Default::default(),
                             optional: 0,
                             params: Vec::new(),
                             ret: Box::new(Type::Void),

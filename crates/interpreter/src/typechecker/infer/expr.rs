@@ -623,13 +623,29 @@ pub(super) fn generic_receiver(receiver: &Type) -> &Type {
 
 /// Does `ty` mention a `TypeVar` whose name `wanted` accepts?
 pub(crate) fn mentions_type_var(ty: &Type, wanted: &impl Fn(&str) -> bool) -> bool {
-    let recurse = |ty: &Type| mentions_type_var(ty, wanted);
+    mentions_type_var_where(ty, wanted)
+}
+
+fn mentions_type_var_where(ty: &Type, wanted: &dyn Fn(&str) -> bool) -> bool {
+    let recurse = |ty: &Type| mentions_type_var_where(ty, wanted);
     match ty {
         Type::TypeVar(name) => wanted(name),
         Type::Array(elem) | Type::Readonly(elem) | Type::KeyOf(elem) => recurse(elem),
         Type::IndexedAccess { object, index } => recurse(object) || recurse(index),
         Type::Tuple(elems) => elems.iter().any(recurse),
-        Type::Function { params, ret, .. } => params.iter().any(recurse) || recurse(ret),
+        // A generic function type's own type parameters are bound inside it.
+        Type::Function {
+            generics,
+            params,
+            ret,
+            ..
+        } => {
+            let free = |name: &str| !generics.names.iter().any(|own| own == name) && wanted(name);
+            params
+                .iter()
+                .any(|param| mentions_type_var_where(param, &free))
+                || mentions_type_var_where(ret, &free)
+        }
         Type::Object {
             fields,
             index,
@@ -748,13 +764,16 @@ impl Inferer<'_> {
         expr_id: ExprId,
         expected: Option<&Type>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
-        let Some(context) = self.deferred_constraint_literals(expr_id)? else {
-            return self.infer_expr_inner(expr_id, expected);
+        let inferred = match self.deferred_constraint_literals(expr_id)? {
+            None => self.infer_expr_inner(expr_id, expected)?,
+            Some(context) => {
+                self.constraint_literal_scopes.push(context);
+                let result = self.infer_expr_inner(expr_id, expected);
+                self.constraint_literal_scopes.pop();
+                result?
+            }
         };
-        self.constraint_literal_scopes.push(context);
-        let result = self.infer_expr_inner(expr_id, expected);
-        self.constraint_literal_scopes.pop();
-        result
+        self.instantiate_generic_value(inferred, expected)
     }
 
     fn infer_expr_inner(
@@ -923,6 +942,22 @@ impl Inferer<'_> {
                 ));
             }
             ExprKind::Arrow {
+                generics,
+                params,
+                return_type,
+                type_predicate,
+                body,
+            } if !generics.is_empty() => self.infer_generic_arrow(
+                &generics,
+                params,
+                return_type,
+                type_predicate,
+                body,
+                keeps_returned_literals,
+                span,
+            ),
+            ExprKind::Arrow {
+                generics: _,
                 params,
                 return_type,
                 type_predicate,
@@ -1037,6 +1072,9 @@ impl Inferer<'_> {
             && !self.arguments_with_replaceable_hints.contains(&expr_id)
             && !assignable(&ty, want, self.resolver())
             && !self.widens_candidate(expr_id, want, &ty)
+            // A generic function value instantiated to `want` at this
+            // conversion (`infer_expr` wraps it in `InstantiateFunction`).
+            && self.instantiation(&ty, want, span)?.is_none()
         {
             let has_structural_diff = self
                 .render_optional_help(super::type_diff::format_type_diff(want, &ty))
@@ -1269,14 +1307,12 @@ impl Inferer<'_> {
             if let Some(read) = self.narrowed_read(global_path) {
                 return Ok(read);
             }
-            // Reject generic functions used as first-class values —
-            // `let f = identity` and friends. Rationale: a generic
-            // function's "type as a value" needs `Type::Function` to
-            // carry its own generics list, which is out of scope for
-            // v1. The call form `identity(42)` is recognised
-            // separately in `infer_call`, before this branch.
+            // A generic function read as a value has a generic function
+            // type. A checked host call is the exception: its type gate runs
+            // at the call, which a value would skip.
             if let ValueKind::Function { generics, .. } = &entry.kind
                 && !generics.is_empty()
+                && crate::stdlib::checked_call::checked_call(&mangled).is_some()
             {
                 self.error(
                     span,
@@ -1311,17 +1347,23 @@ impl Inferer<'_> {
             }
             let (kind, ty) = match &entry.kind {
                 ValueKind::Function {
+                    generics,
                     params,
                     ret,
                     type_predicate,
                     ..
-                } => (
-                    TypedExprKind::FunctionRef {
-                        mangled,
-                        name: ident,
-                    },
-                    function_value_type(params, ret, type_predicate.as_ref()),
-                ),
+                } => {
+                    let ty = function_value_type(params, ret, type_predicate.as_ref());
+                    let generics = generics.clone();
+                    let ty = self.with_function_generics(ty, &generics);
+                    (
+                        TypedExprKind::FunctionRef {
+                            mangled,
+                            name: ident,
+                        },
+                        ty,
+                    )
+                }
                 ValueKind::Let { ty, .. } | ValueKind::Const { ty, .. } => (
                     TypedExprKind::GlobalRef {
                         mangled,
@@ -3193,16 +3235,6 @@ impl Inferer<'_> {
             );
         }
 
-        if let Some(targs) = &type_args {
-            self.error(
-                span,
-                format!(
-                    "type arguments are only valid on generic functions; got {} argument(s)",
-                    targs.len(),
-                ),
-            );
-        }
-
         let (typed_callee, callee_ty) = self.infer_expr(callee, None)?;
         let (typed_callee, callee_ty) = self.constraint_receiver(typed_callee, callee_ty, span)?;
         if super::union_call::union_has_interface_member(&callee_ty)
@@ -3274,6 +3306,39 @@ impl Inferer<'_> {
                 },
             );
         }
+        // A value of a generic function type: infer its type arguments as a
+        // generic function's, then bind them for the call.
+        if let Some(signature) = generic_value_signature(&callee_ty) {
+            let callee_span = self
+                .typed_ast
+                .try_expr(typed_callee)
+                .map_err(super::arena_failure)?
+                .span;
+            let name = Ident {
+                name: self.rewritable_snippet(callee_span),
+                span: callee_span,
+            };
+            return self.infer_generic_value_call(
+                name,
+                typed_callee,
+                signature,
+                CallSiteArgs {
+                    type_args,
+                    args,
+                    expected,
+                    span,
+                },
+            );
+        }
+        if let Some(targs) = &type_args {
+            self.error(
+                span,
+                format!(
+                    "type arguments are only valid on generic functions; got {} argument(s)",
+                    targs.len(),
+                ),
+            );
+        }
         // also lift `has_rest` from the function type so a
         // call through a function-typed value (arrow stored in a
         // `const`, callback param) honors the variadic signature
@@ -3319,6 +3384,15 @@ impl Inferer<'_> {
                     vec![format!(
                         "call it only when present with `{callee}?.(…)`, or assert it with `{callee}!(…)`"
                     )]
+                } else if matches!(callee_ty.peel(), Type::Union(members)
+                    if members.iter().any(Type::is_generic_function))
+                {
+                    vec![
+                        "a union with a generic function member has no signature to call: its \
+                         type arguments would go unbound; annotate the value with one function \
+                         type, or narrow it first"
+                            .into(),
+                    ]
                 } else {
                     self.definition_help(&callee_ty)
                 };
@@ -3602,6 +3676,7 @@ impl Inferer<'_> {
             return self.static_call_expr(target, typed_args, type_predicate, &ret_ty, span);
         } else {
             TypedExprKind::CallClosure {
+                type_args: Vec::new(),
                 callee: typed_callee,
                 args: typed_args,
             }
@@ -4890,6 +4965,22 @@ impl Inferer<'_> {
                             ty: field.ty.clone(),
                         })
                         .map_err(crate::typechecker::arena_failure)?;
+                    // A static field of a generic function type: its type
+                    // arguments are inferred and passed as for any generic
+                    // function value.
+                    if let Some(signature) = generic_value_signature(&field.ty) {
+                        return self.infer_generic_value_call(
+                            member.clone(),
+                            callee,
+                            signature,
+                            CallSiteArgs {
+                                type_args,
+                                args,
+                                expected,
+                                span,
+                            },
+                        );
+                    }
                     let typed_args = self.bind_fn_type_call_args(
                         &params,
                         &ret,
@@ -4900,6 +4991,7 @@ impl Inferer<'_> {
                     )?;
                     (
                         TypedExprKind::CallClosure {
+                            type_args: Vec::new(),
                             callee,
                             args: typed_args,
                         },
@@ -4927,37 +5019,28 @@ impl Inferer<'_> {
     }
 
     /// `ClassName.member` in non-call position: a static field reads the backing
-    /// module global; a non-generic static method becomes a `FunctionRef` value.
+    /// module global; a static method becomes a `FunctionRef` value, of a
+    /// generic function type when the method is generic.
     fn infer_class_static_access(
         &mut self,
         class_name: String,
         class_mangled: crate::MangledName,
         member: Ident,
-        span: Span,
     ) -> (TypedExprKind, Type) {
         use super::classes::StaticResolution;
         match self.class_static_in_chain(&class_mangled, &member.name) {
             Some((StaticResolution::Method(sig, vis), owner)) => {
                 self.check_static_privacy(vis, &owner, &class_name, &member);
-                if !sig.generics.is_empty() {
-                    self.error(
-                        span,
-                        format!(
-                            "cannot bind generic function `{class_name}.{}` to a value; \
-                             call it directly instead",
-                            member.name,
-                        ),
-                    );
-                    return (TypedExprKind::Null, Type::Error);
-                }
                 let mangled = crate::mangle::static_member(&owner, &member.name);
                 let ty = Type::Function {
+                    generics: Default::default(),
                     params: sig.params.iter().map(callable_parameter_type).collect(),
                     ret: Box::new(sig.ret.clone()),
                     predicate: None,
                     has_rest: sig.params.last().is_some_and(|p| p.rest),
                     optional: crate::package_declaration::optional_parameter_count(&sig.params),
                 };
+                let ty = self.with_function_generics(ty, &sig.generics);
                 (
                     TypedExprKind::FunctionRef {
                         mangled,
@@ -9561,12 +9644,8 @@ impl Inferer<'_> {
                         // static method → function value. A value binding of the
                         // same name shadows the class (checked above).
                         let member = name.name.clone();
-                        let access = self.infer_class_static_access(
-                            recv_name,
-                            enum_mangled.clone(),
-                            name,
-                            span,
-                        );
+                        let access =
+                            self.infer_class_static_access(recv_name, enum_mangled.clone(), name);
                         self.note_inherited_static_receiver(&enum_mangled, &member);
                         return Ok(access);
                     }
@@ -11086,6 +11165,7 @@ impl Inferer<'_> {
         expected: Option<&Type>,
     ) -> Result<Type, CompilerFailure> {
         let ExprKind::Arrow {
+            generics,
             params,
             return_type,
             type_predicate,
@@ -11101,12 +11181,23 @@ impl Inferer<'_> {
                 "function expression wraps its function body",
             ));
         };
-        self.declared_function_type(
+        // A generic function expression's annotations name its own type
+        // parameters, which its signature binds.
+        let own = self.push_function_type_generics(&generics)?;
+        let declared = self.declared_function_type(
             &params,
             return_type.as_ref(),
             type_predicate.as_ref(),
-            expected,
-        )
+            if own.is_some() { None } else { expected },
+        );
+        if own.is_some() {
+            self.pop_body_generics();
+        }
+        let declared = declared?;
+        Ok(match own {
+            Some(own) => self.with_function_generics(declared, &own),
+            None => declared,
+        })
     }
 
     /// The type a function's own declaration gives it: its annotated parameter
@@ -11158,6 +11249,7 @@ impl Inferer<'_> {
             .or_else(|| hint.map(|(_, ret)| ret))
             .unwrap_or(Type::Unknown);
         Ok(Type::Function {
+            generics: Default::default(),
             params: param_types,
             ret: Box::new(type_predicate.map_or(ret, |pred| pred.kind().return_type())),
             predicate: predicate.map(Box::new),
@@ -11222,14 +11314,114 @@ impl Inferer<'_> {
         }
     }
 
+    /// The function type a function literal is typed against under `ty`. A
+    /// generic one gives none: its parameters name its own type parameters,
+    /// which a literal without them can't share, so the literal's parameters
+    /// need their own annotations.
     fn contextual_call_signature(&self, ty: &Type) -> Option<Type> {
         match ty.peel() {
+            Type::Function { generics, .. } if !generics.is_empty() => None,
             function @ Type::Function { .. } => Some(function.clone()),
             interface @ Type::InterfaceRef { .. } => {
                 super::assignable::expand_interface_call_signature(interface, self.resolver())
             }
             _ => None,
         }
+    }
+
+    /// A function literal with its own type parameters (`<T>(x: T) => x`, a
+    /// generic object-literal method, `function<T>() {}`). Its body is checked
+    /// under fresh `GenericParam`s, as a generic function's is, and its type
+    /// is a generic function type over them. It takes no contextual type: a
+    /// generic literal's parameters are annotated, as in tsc.
+    #[allow(clippy::too_many_arguments)]
+    fn infer_generic_arrow(
+        &mut self,
+        generics: &[crate::TypeParameterAnnotation],
+        params: Vec<ParamDecl>,
+        return_ty_ann: Option<TypeAnnotation>,
+        type_predicate: Option<crate::TypePredicateAnnotation>,
+        body: ArrowBody,
+        keeps_returned_literals: bool,
+        span: Span,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        let Some(parameters) = self.push_function_type_generics(generics)? else {
+            return Err(super::inference_failure(
+                "a generic arrow has type parameters",
+            ));
+        };
+        self.pop_body_generics();
+        // The body sees each parameter, under its source name, as a fresh
+        // `GenericParam` named by its (possibly renamed) contract name.
+        let own = self.push_body_generics(parameters.clone())?;
+        if let Some(frame) = self.body_instantiations.last_mut() {
+            for (annotation, name) in generics.iter().zip(&parameters.names) {
+                if let Some(param) = own.get(name) {
+                    frame.insert(annotation.name.clone(), param.clone());
+                }
+            }
+        }
+        let exprs_before = self.typed_ast.exprs_len();
+        let stmts_before = self.typed_ast.stmts_len();
+        let inferred = self.infer_arrow(
+            params,
+            return_ty_ann,
+            type_predicate,
+            body,
+            None,
+            keeps_returned_literals,
+            span,
+        );
+        self.pop_body_generics();
+        let (mut kind, ty, _) = inferred?;
+        let own_ids: BTreeMap<u32, String> = own
+            .values()
+            .filter_map(|param| match param {
+                Type::GenericParam { id, name } => Some((*id, name.clone())),
+                _ => None,
+            })
+            .collect();
+        for id in self
+            .typed_ast
+            .expr_ids()
+            .map_err(crate::typechecker::arena_failure)?
+            .skip(exprs_before)
+        {
+            super::generic::erase_generic_params_in_expr(
+                self.typed_ast
+                    .try_expr_mut(id)
+                    .map_err(crate::typechecker::arena_failure)?,
+            );
+        }
+        for id in self
+            .typed_ast
+            .stmt_ids()
+            .map_err(crate::typechecker::arena_failure)?
+            .skip(stmts_before)
+        {
+            super::generic::erase_generic_params_in_stmt(
+                self.typed_ast
+                    .try_stmt_mut(id)
+                    .map_err(crate::typechecker::arena_failure)?,
+            );
+        }
+        let erase_own = |ty: &Type| super::generic::erase_listed_generic_params(ty, &own_ids);
+        if let TypedExprKind::Closure {
+            generics: slot,
+            runtime_generics,
+            params,
+            return_type,
+            ..
+        } = &mut kind
+        {
+            *slot = parameters.clone();
+            runtime_generics.retain(|name| !parameters.names.contains(name));
+            for param in params.iter_mut() {
+                param.ty = erase_own(&param.ty);
+            }
+            *return_type = erase_own(return_type);
+        }
+        Ok((kind, erase_own(&ty).with_type_parameters(parameters)))
     }
 
     /// arrow function inference. Two-mode:
@@ -11364,10 +11556,22 @@ impl Inferer<'_> {
                     self.parameter_default_type(default)?
                 }
                 (None, None) => {
+                    // A generic expected type gives no parameter types: the
+                    // literal needs type parameters of its own.
+                    let generic_target = expected
+                        .map(super::narrowing::strip_nullish)
+                        .filter(Type::is_generic_function);
+                    let help = match &generic_target {
+                        Some(target) => format!(
+                            "the expected type `{target}` is generic, so the function needs its \
+                             own type parameters, written out: `<T,>(x: T): T => …`"
+                        ),
+                        None => "(x: T, y: U) => …".to_string(),
+                    };
                     self.error_with_help(
                         p.name.span,
                         format!("parameter `{}` requires a type annotation", p.name.name),
-                        vec!["(x: T, y: U) => …".to_string()],
+                        vec![help],
                     );
                     Type::Error
                 }
@@ -11652,6 +11856,7 @@ impl Inferer<'_> {
         // call's result must not be reported against that context again.
         let call_result_reported = returns_into_call && self.error_count() > errors_before;
         let arrow_ty = Type::Function {
+            generics: Default::default(),
             params: typed_params.iter().map(|p| p.ty.clone()).collect(),
             ret: Box::new(if call_result_reported {
                 Type::Error
@@ -11672,6 +11877,7 @@ impl Inferer<'_> {
         };
         Ok((
             TypedExprKind::Closure {
+                generics: Default::default(),
                 runtime_generics: self
                     .body_instantiations
                     .iter()
@@ -11790,6 +11996,7 @@ impl Inferer<'_> {
         // tsc gives such a function no contextual signature, so the literals
         // it returns widen.
         let invoked_context = invoked_ret.map(|ret| Type::Function {
+            generics: Default::default(),
             params: Vec::new(),
             optional: 0,
             ret: Box::new(ret.peel().widen_literal()),
@@ -13436,6 +13643,12 @@ impl Inferer<'_> {
                             "matched on InterfaceProperty above",
                         ));
                     };
+                    if resolved_method.is_none()
+                        && let Some(rejected) =
+                            self.reject_generic_chain_call(&fn_ty, &args, optional, span)?
+                    {
+                        return Ok(rejected);
+                    }
                     let Type::Function {
                         params,
                         ret,
@@ -13532,6 +13745,11 @@ impl Inferer<'_> {
                 // Closure-typed receiver: ordinary `Call` part.
                 let union_signature = self.union_signature_of(receiver_ty, Some(args.len()));
                 let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
+                if let Some(rejected) =
+                    self.reject_generic_chain_call(callee_ty, &args, optional, span)?
+                {
+                    return Ok(rejected);
+                }
                 let (ret_ty, typed_args) = match callee_ty.peel() {
                     Type::Function {
                         params,
@@ -13677,6 +13895,7 @@ impl Inferer<'_> {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let function = Type::Function {
+                generics: Default::default(),
                 params,
                 ret: Box::new(ret_ty.clone()),
                 predicate: None,
@@ -13822,20 +14041,7 @@ impl Inferer<'_> {
                  supported in chain position"
                     .to_string(),
             );
-            let typed_args = args
-                .iter()
-                .map(|&a| Ok::<_, CompilerFailure>(self.infer_expr(a, None)?.0))
-                .collect::<Result<_, _>>()?;
-            return Ok(Some((
-                TypedChainPart::Call {
-                    args: typed_args,
-                    optional,
-                    result_ty: Type::Error,
-                    union_signature: None,
-                    span,
-                },
-                Type::Error,
-            )));
+            return self.rejected_chain_call(args, optional, span).map(Some);
         }
         let params: Vec<crate::Param> = sig
             .params
@@ -14529,6 +14735,7 @@ impl Inferer<'_> {
                 super::generic::substitute_or_record(&method_sig.ret, bindings, &self.type_limits);
             let has_rest = params.last().is_some_and(|p| p.rest);
             let fn_ty = Type::Function {
+                generics: Default::default(),
                 params: params.iter().map(callable_parameter_type).collect(),
                 ret: Box::new(ret),
                 predicate: None,
@@ -14571,6 +14778,83 @@ impl Inferer<'_> {
         unsupported_cast_target_reason(&shape, self.resolver(), &mut Vec::new()).is_none()
     }
 
+    /// A call of `callee`, a value of a generic function type: its type
+    /// arguments are inferred as a generic function's, then bound for the
+    /// call.
+    fn infer_generic_value_call(
+        &mut self,
+        name: Ident,
+        callee: ExprId,
+        signature: MethodSig,
+        call: CallSiteArgs<'_>,
+    ) -> Result<(TypedExprKind, Type), CompilerFailure> {
+        self.infer_generic_call(
+            name,
+            signature.generics,
+            signature.params,
+            signature.ret,
+            crate::mangle::prelude("@value"),
+            signature.predicate,
+            call.type_args,
+            call.args,
+            call.expected,
+            call.span,
+            super::generic::GenericCallee::Value(callee),
+        )
+    }
+
+    /// Reports a call of a value of a generic function type in an optional
+    /// chain, and returns the part to continue with: the chain doesn't infer
+    /// the call's type arguments, so the closure would run without them. The
+    /// arguments are still inferred, as for other rejected chain calls.
+    fn reject_generic_chain_call(
+        &mut self,
+        callee_ty: &Type,
+        args: &[ExprId],
+        optional: bool,
+        span: Span,
+    ) -> Result<Option<(TypedChainPart, Type)>, CompilerFailure> {
+        if !super::narrowing::strip_nullish(callee_ty).is_generic_function() {
+            return Ok(None);
+        }
+        self.error_with_help(
+            span,
+            format!(
+                "a call of the generic function `{callee_ty}` in an optional chain is not \
+                 supported yet"
+            ),
+            vec![
+                "narrow first and call it outside the chain: `if (o !== undefined) { o.f(x); }`"
+                    .into(),
+            ],
+        );
+        self.rejected_chain_call(args, optional, span).map(Some)
+    }
+
+    /// The part a rejected call in an optional chain continues with: its
+    /// arguments inferred, its result an error.
+    fn rejected_chain_call(
+        &mut self,
+        args: &[ExprId],
+        optional: bool,
+        span: Span,
+    ) -> Result<(TypedChainPart, Type), CompilerFailure> {
+        let args = args
+            .iter()
+            .map(|arg| self.infer_expr(*arg, None).map(|(id, _)| id))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((
+            TypedChainPart::Call {
+                args,
+                optional,
+                result_ty: Type::Error,
+                union_signature: None,
+                span,
+            },
+            Type::Error,
+        ))
+    }
+
     /// typecheck `x as T`. Resolves the target, infers the operand, validates the static
     /// relationship, and decides the runtime check:
     ///
@@ -14611,6 +14895,20 @@ impl Inferer<'_> {
             None
         };
         let (inner_id, inner_ty) = self.infer_expr(inner, operand_hint)?;
+        // A generic function value cast to a non-generic function type it
+        // fits is instantiated there, as at any other conversion.
+        if let Some((type_args, target)) = self.instantiation(&inner_ty, &target_ty, span)? {
+            for argument in &type_args {
+                self.record_runtime_type_test(argument)?;
+            }
+            return Ok((
+                TypedExprKind::InstantiateFunction {
+                    value: inner_id,
+                    type_args,
+                },
+                target,
+            ));
+        }
         // Error escape — already in error state; produce a Cast so
         // downstream passes see a sensible node, but don't emit more
         // diagnostics on top.
@@ -16435,6 +16733,61 @@ fn append_tuple_literal_types(
     })
 }
 
+impl Inferer<'_> {
+    /// `ty`, a declaration's signature as a function type, with the
+    /// declaration's own type parameters. A name that shadows a type
+    /// parameter in scope is renamed, so the type keeps the bound-name
+    /// contract of `Type::Function`.
+    pub(super) fn with_function_generics(
+        &mut self,
+        ty: Type,
+        generics: &crate::GenericParameters,
+    ) -> Type {
+        if generics.is_empty() {
+            return ty;
+        }
+        let mut renames = BTreeMap::new();
+        let mut names = Vec::with_capacity(generics.len());
+        for name in &generics.names {
+            let fresh = self.fresh_function_type_parameter(name, &names);
+            if &fresh != name {
+                renames.insert(name.clone(), Type::TypeVar(fresh.clone()));
+            }
+            names.push(fresh);
+        }
+        let rename =
+            |ty: &Type| super::generic::substitute_or_record(ty, &renames, &self.type_limits);
+        let mut constraints = BTreeMap::new();
+        for (name, fresh) in generics.names.iter().zip(&names) {
+            if let Some(bound) = generics.constraints.get(name) {
+                constraints.insert(fresh.clone(), rename(bound));
+            }
+        }
+        rename(&ty).with_type_parameters(crate::GenericParameters {
+            names,
+            constraints: Box::new(constraints),
+        })
+    }
+
+    /// The name a function type's own type parameter `name` takes: itself,
+    /// unless it shadows a type parameter in scope or one of `taken`, then
+    /// `name_1`, `name_2`, …. This keeps the `Type::Function` bound-name
+    /// contract: a function type's type parameters differ from every type
+    /// parameter around it.
+    pub(super) fn fresh_function_type_parameter(&self, name: &str, taken: &[String]) -> String {
+        let mut fresh = name.to_string();
+        let mut suffix = 0u32;
+        while self.is_generic_in_scope(&fresh)
+            || self.lookup_body_gp(&fresh).is_some()
+            || taken.iter().any(|taken| taken == &fresh)
+        {
+            suffix = suffix.saturating_add(1);
+            fresh = format!("{name}_{suffix}");
+        }
+        fresh
+    }
+}
+
 /// The type of a top-level function read as a value. The rest flag comes from
 /// the signature, so a reference (`const f = sum;`) keeps its variadic shape
 /// for its callers.
@@ -16444,6 +16797,7 @@ fn function_value_type(
     predicate: Option<&crate::TypePredicate>,
 ) -> Type {
     Type::Function {
+        generics: Default::default(),
         params: params.iter().map(callable_parameter_type).collect(),
         ret: Box::new(ret.clone()),
         predicate: predicate.cloned().map(Box::new),
@@ -16953,6 +17307,22 @@ fn unresolved_ref(ident: Ident) -> (TypedExprKind, Type) {
         },
         Type::Error,
     )
+}
+
+/// The arguments of a call site, passed on together.
+struct CallSiteArgs<'e> {
+    type_args: Option<Vec<crate::TypeAnnotation>>,
+    args: Vec<ExprId>,
+    expected: Option<&'e Type>,
+    span: Span,
+}
+
+/// The signature of `ty` when it is a generic function type.
+fn generic_value_signature(ty: &Type) -> Option<MethodSig> {
+    if !ty.is_generic_function() {
+        return None;
+    }
+    MethodSig::from_function_type(ty, false)
 }
 
 #[cfg(test)]

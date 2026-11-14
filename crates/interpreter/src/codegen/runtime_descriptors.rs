@@ -72,11 +72,22 @@ fn collect_parameters(ty: &Type, names: &mut BTreeSet<String>) {
                 collect_parameters(&field.ty, names);
             }
         }
-        Type::Function { params, ret, .. } => {
+        Type::Function {
+            generics,
+            params,
+            ret,
+            ..
+        } => {
+            let mut inner = BTreeSet::new();
             for ty in params {
-                collect_parameters(ty, names);
+                collect_parameters(ty, &mut inner);
             }
-            collect_parameters(ret, names);
+            collect_parameters(ret, &mut inner);
+            names.extend(
+                inner
+                    .into_iter()
+                    .filter(|name| !generics.names.contains(name)),
+            );
         }
         _ => {}
     }
@@ -104,6 +115,12 @@ pub fn allocate(
     let mut targets = BTreeSet::from([Type::Unknown]);
     targets.extend(extra.iter().cloned());
     let mut passes_type_arguments = false;
+    // A generic closure reached without type arguments binds poisoned
+    // descriptors, which test as `never` (`generic_binding`).
+    if symbols.generic_environment_type.is_some() {
+        targets.insert(Type::Never);
+        passes_type_arguments = true;
+    }
     for index in ta.expr_ids().map_err(crate::codegen::arena_failure)? {
         match &ta
             .try_expr(index)
@@ -114,9 +131,11 @@ pub fn allocate(
                 passes_type_arguments = true;
                 targets.extend(type_args.iter().cloned());
             }
-            // A runtime-generic host method (`Response#json<T>`); every
-            // other generic method call carries no type arguments.
-            TypedExprKind::GenericMethodCall { type_args, .. } if !type_args.is_empty() => {
+            TypedExprKind::GenericMethodCall { type_args, .. }
+            | TypedExprKind::CallClosure { type_args, .. }
+            | TypedExprKind::InstantiateFunction { type_args, .. }
+                if !type_args.is_empty() =>
+            {
                 passes_type_arguments = true;
                 targets.extend(type_args.iter().cloned());
             }
@@ -322,7 +341,7 @@ pub fn validator_environment(
     Ok(())
 }
 
-fn emit(
+pub(super) fn emit(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     ty: &Type,
@@ -420,6 +439,9 @@ pub fn prepare_descriptor_data(
     symbols: &mut SymbolTable,
 ) {
     let types: Vec<Type> = symbols.type_descriptor_functions.keys().cloned().collect();
+    if symbols.generic_environment_type.is_some() {
+        pool.intern_text(super::generic_binding::POISONED_NAME);
+    }
     for ty in types {
         pool.intern_text(&ty.to_string());
         if let Some(schema) = super::descriptor_schema::schema_of(ta, &ty) {

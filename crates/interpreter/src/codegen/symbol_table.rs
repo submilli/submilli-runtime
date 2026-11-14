@@ -62,6 +62,10 @@ pub struct SymbolTable {
     intrinsic_type_indices: Option<IntrinsicTypeIndices>,
     pub(crate) this_environment_type: Option<u32>,
     pub(crate) call_metadata_type: Option<u32>,
+    /// `$generic_environment`, the wrapper a generic closure's environment
+    /// carries its per-call descriptors in (`generic_binding`).
+    pub(crate) generic_environment_type: Option<u32>,
+    pub(crate) generic_rebind: Option<crate::codegen::generic_binding::RebindHelper>,
     pub(crate) function_argument_metadata: BTreeMap<MangledName, String>,
     // Per-class WasmGC artifacts, keyed by the class's mangled name. Classes are
     // nominal (one struct type each), unlike arity-shared object subtypes.
@@ -174,6 +178,10 @@ pub struct MethodSlotAbi {
     pub params: Vec<ValType>,
     /// `None` for a void slot.
     pub ret: Option<ValType>,
+    /// Whether the slot takes a trailing `$types` environment after its
+    /// parameters: a class method slot first declared by a generic method,
+    /// whose overrides all share it.
+    pub types: bool,
 }
 
 /// Whether a type occupies the erased (boxed) object slot rather than its own
@@ -678,6 +686,11 @@ impl SymbolTable {
 
     pub fn record_class_method_sig(&mut self, class: MangledName, method: String, sig: u32) {
         self.class_method_sig.insert((class, method), sig);
+    }
+
+    /// Whether any class method slot recorded so far takes type arguments.
+    pub fn has_generic_class_slot(&self) -> bool {
+        self.class_method_abi.values().any(|abi| abi.types)
     }
 
     pub fn record_class_method_abi(

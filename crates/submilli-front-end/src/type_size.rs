@@ -395,11 +395,15 @@ impl TypeLimits {
 pub fn child_count(ty: &Type) -> usize {
     match ty {
         Type::Function {
-            params, predicate, ..
+            params,
+            predicate,
+            generics,
+            ..
         } => params
             .len()
             .saturating_add(1)
-            .saturating_add(usize::from(predicate.is_some())),
+            .saturating_add(usize::from(predicate.is_some()))
+            .saturating_add(generics.constraints.len()),
         Type::Object {
             fields,
             index,
@@ -446,6 +450,98 @@ pub fn child_count(ty: &Type) -> usize {
     }
 }
 
+/// The type variables free in `ty`: those no function type's own type
+/// parameters, conditional `infer` or mapped key inside it binds.
+pub fn free_type_vars(ty: &Type) -> std::collections::BTreeSet<String> {
+    fn collect(ty: &Type, bound: &mut Vec<String>, out: &mut std::collections::BTreeSet<String>) {
+        let binders: &[String] = match ty {
+            Type::TypeVar(name) => {
+                if !bound.contains(name) {
+                    out.insert(name.clone());
+                }
+                return;
+            }
+            Type::Function { generics, .. } => &generics.names,
+            Type::Conditional { infers, .. } => infers,
+            Type::Mapped { key, .. } => std::slice::from_ref(key),
+            _ => &[],
+        };
+        let depth = bound.len();
+        bound.extend(binders.iter().cloned());
+        for_each_child(ty, |child| collect(child, bound, out));
+        bound.truncate(depth);
+    }
+    let mut out = std::collections::BTreeSet::new();
+    collect(ty, &mut Vec::new(), &mut out);
+    out
+}
+
+/// `ty`, a generic function type, with each of its own type parameters that
+/// `avoid` names renamed to a fresh name (`T_1`, …), so substituting values
+/// that name them doesn't capture them. Any other type is returned as it is.
+pub fn rename_capturing_binders(ty: &Type, avoid: &std::collections::BTreeSet<String>) -> Type {
+    let Type::Function { generics, .. } = ty else {
+        return ty.clone();
+    };
+    let mut taken: std::collections::BTreeSet<String> = avoid.clone();
+    taken.extend(generics.names.iter().cloned());
+    let mut used = std::collections::BTreeSet::new();
+    let mut pending = vec![ty];
+    while let Some(node) = pending.pop() {
+        if let Type::TypeVar(name) = node {
+            used.insert(name.clone());
+        }
+        for_each_child(node, |child| pending.push(child));
+    }
+    taken.extend(used);
+    let mut renames: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for name in generics.names.iter().filter(|name| avoid.contains(*name)) {
+        let fresh = (1u32..)
+            .map(|index| format!("{name}_{index}"))
+            .find(|candidate| !taken.contains(candidate))
+            .unwrap_or_else(|| format!("{name}_"));
+        taken.insert(fresh.clone());
+        renames.insert(name.clone(), fresh);
+    }
+    let rename = |name: &str| renames.get(name).cloned().map(Type::TypeVar);
+    let body = substitute_type_vars(
+        &ty.clone().with_type_parameters(Default::default()),
+        &rename,
+    );
+    let renamed_generics = crate::GenericParameters {
+        names: generics
+            .names
+            .iter()
+            .map(|name| renames.get(name).cloned().unwrap_or_else(|| name.clone()))
+            .collect(),
+        constraints: Box::new(
+            generics
+                .constraints
+                .iter()
+                .map(|(name, bound)| {
+                    (
+                        renames.get(name).cloned().unwrap_or_else(|| name.clone()),
+                        substitute_type_vars(bound, &rename),
+                    )
+                })
+                .collect(),
+        ),
+    };
+    body.with_type_parameters(renamed_generics)
+}
+
+/// Whether `ty` or any type inside it satisfies `test`.
+pub fn any_node(ty: &Type, test: &dyn Fn(&Type) -> bool) -> bool {
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if test(ty) {
+            return true;
+        }
+        for_each_child(ty, |child| pending.push(child));
+    }
+    false
+}
+
 /// Calls `visit` on each type directly inside `ty`.
 pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
     match ty {
@@ -453,6 +549,7 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
             params,
             ret,
             predicate,
+            generics,
             ..
         } => {
             params.iter().for_each(&mut visit);
@@ -460,6 +557,7 @@ pub fn for_each_child<'t>(ty: &'t Type, mut visit: impl FnMut(&'t Type)) {
             if let Some(predicate) = predicate {
                 visit(&predicate.asserted_type);
             }
+            generics.constraints.values().for_each(&mut visit);
         }
         Type::Object {
             fields,
@@ -562,6 +660,7 @@ pub fn map_children<E>(
     let mut map_all = |types: &[Type]| types.iter().map(&mut map).collect::<Result<Vec<_>, E>>();
     Ok(match ty {
         Type::Function {
+            generics,
             params,
             ret,
             predicate,
@@ -569,17 +668,28 @@ pub fn map_children<E>(
             optional,
         } => {
             let params = map_all(params)?;
+            let ret = Box::new(map(ret)?);
+            let predicate = match predicate {
+                Some(predicate) => Some(Box::new(crate::TypePredicate {
+                    parameter_index: predicate.parameter_index,
+                    asserted_type: map(&predicate.asserted_type)?,
+                    kind: predicate.kind,
+                })),
+                None => None,
+            };
+            let constraints = generics
+                .constraints
+                .iter()
+                .map(|(name, bound)| Ok((name.clone(), map(bound)?)))
+                .collect::<Result<_, E>>()?;
             Type::Function {
-                params,
-                ret: Box::new(map(ret)?),
-                predicate: match predicate {
-                    Some(predicate) => Some(Box::new(crate::TypePredicate {
-                        parameter_index: predicate.parameter_index,
-                        asserted_type: map(&predicate.asserted_type)?,
-                        kind: predicate.kind,
-                    })),
-                    None => None,
+                generics: crate::GenericParameters {
+                    names: generics.names.clone(),
+                    constraints: Box::new(constraints),
                 },
+                params,
+                ret,
+                predicate,
                 has_rest: *has_rest,
                 optional: *optional,
             }
@@ -739,11 +849,56 @@ pub fn map_children<E>(
     })
 }
 
+/// `ty` with each free `Type::TypeVar` that `lookup` knows replaced. Names a
+/// generic function type, a mapped type or a conditional type binds inside
+/// `ty` are not free there, so they are left alone (the bound-name contract
+/// keeps them distinct from the names a caller substitutes, but this does not
+/// rely on it).
+pub fn substitute_type_vars(ty: &Type, lookup: &dyn Fn(&str) -> Option<Type>) -> Type {
+    // A generic function type's own type parameter that a substituted value
+    // names is renamed first, so the value isn't captured.
+    if let Type::Function { generics, .. } = ty
+        && !generics.is_empty()
+    {
+        let avoid: std::collections::BTreeSet<String> = free_type_vars(ty)
+            .iter()
+            .filter_map(|name| lookup(name))
+            .flat_map(|value| free_type_vars(&value))
+            .collect();
+        if generics.names.iter().any(|name| avoid.contains(name)) {
+            return substitute_type_vars(&rename_capturing_binders(ty, &avoid), lookup);
+        }
+    }
+    let bound: &[String] = match ty {
+        Type::TypeVar(name) => return lookup(name).unwrap_or_else(|| ty.clone()),
+        Type::Function { generics, .. } => &generics.names,
+        Type::Conditional { infers, .. } => infers,
+        Type::Mapped { key, .. } => std::slice::from_ref(key),
+        _ => &[],
+    };
+    let inner = |name: &str| {
+        if bound.iter().any(|bound| bound == name) {
+            None
+        } else {
+            lookup(name)
+        }
+    };
+    match map_children(ty, |child| {
+        Ok::<_, std::convert::Infallible>(substitute_type_vars(child, &inner))
+    }) {
+        Ok(ty) => ty,
+        Err(never) => match never {},
+    }
+}
+
 /// Borrowed child sources in reverse declaration order. Fixed trailing children
 /// (return types, predicates and index values) precede the collection iterator.
 struct TypeChildren<'a> {
     members: std::slice::Iter<'a, Type>,
     fields: Option<std::collections::btree_map::Values<'a, String, crate::ObjectField>>,
+    /// A generic function type's bounds, which come after its trailing
+    /// children.
+    bounds: Option<std::collections::btree_map::Values<'a, String, Type>>,
     trailing: [Option<&'a Type>; 4],
     /// An object's signatures beyond the first, whose keys and values come
     /// before the trailing children (`index`'s), last first.
@@ -757,6 +912,7 @@ impl<'a> TypeChildren<'a> {
         let mut children = Self {
             members: [].iter(),
             fields: None,
+            bounds: None,
             trailing: [None; 4],
             more_indexes: [].iter(),
             index_value: None,
@@ -766,8 +922,10 @@ impl<'a> TypeChildren<'a> {
                 params,
                 ret,
                 predicate,
+                generics,
                 ..
             } => {
+                children.bounds = Some(generics.constraints.values());
                 children.members = params.iter();
                 children.trailing[0] = Some(ret);
                 children.trailing[1] = predicate.as_ref().map(|p| &p.asserted_type);
@@ -860,6 +1018,7 @@ impl<'a> Iterator for TypeChildren<'a> {
                 self.index_value = Some(&index.key);
                 Some(&index.value)
             })
+            .or_else(|| self.bounds.as_mut()?.next_back())
             .or_else(|| self.trailing.iter_mut().rev().find_map(Option::take))
             .or_else(|| self.fields.as_mut()?.next_back().map(|field| &field.ty))
             .or_else(|| self.members.next_back())
@@ -1087,6 +1246,7 @@ pub mod tests {
             }),
         };
         let function = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number, object.clone()],
             ret: Box::new(Type::Void),
             predicate: Some(Box::new(crate::TypePredicate {
