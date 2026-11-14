@@ -1728,7 +1728,8 @@ fn operations_charge_for_the_input_they_process() {
     }
 
     // A structural visit budget does not change the cost of accepted walks:
-    // two array snapshots, one hook per element, and the outer call + hook.
+    // two array snapshots, one hook per element, and the outer hook. `===`
+    // calls the hook directly, with no host call around it.
     for n in [128_u64, 256] {
         let input = format!(
             "const a: number[] = []; const b: number[] = [];
@@ -1740,9 +1741,11 @@ fn operations_charge_for_the_input_they_process() {
         );
         let actual = host_fuel(
             &format!("usage-structural-{n}"),
-            &format!("function main(): number {{ {input} Object.is(a, b); return 0; }}"),
+            &format!(
+                "function main(): number {{ {input} const x: unknown = a; const y: unknown = b; const same = x === y; return 0; }}"
+            ),
         ) - baseline;
-        assert_eq!(actual, 2 * CALL + ELEM.cost(2 * n) + n * CALL);
+        assert_eq!(actual, CALL + ELEM.cost(2 * n) + n * CALL);
     }
 
     let mut empty_json_cost = 0;

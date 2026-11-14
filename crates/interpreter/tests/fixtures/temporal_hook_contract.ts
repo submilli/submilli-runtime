@@ -9,5 +9,5 @@ function main(): void {
   const left: unknown = eastern;
   const right: unknown = primary;
   assert(eastern.equals(primary), "direct equality canonicalizes aliases");
-  assert(Object.is(left, right), "hook equality canonicalizes the same aliases");
+  assert(left === right, "hook equality canonicalizes the same aliases");
 }

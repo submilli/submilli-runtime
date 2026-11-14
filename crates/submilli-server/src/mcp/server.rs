@@ -453,17 +453,10 @@ impl SubmilliMcp {
                     .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
                 Ok(CallToolResult::structured(value))
             }
-            Ok(Some(StoredLastRun::TooLarge { bytes, limit })) => Err(ErrorData::invalid_request(
-                format!(
-                    "the last run's output ({bytes} bytes) is over the retained limit \
-                     ({limit} bytes)"
-                ),
-                None,
-            )),
-            Ok(None) => Err(ErrorData::invalid_request(
-                "no previous run in this session",
-                None,
-            )),
+            Ok(Some(StoredLastRun::TooLarge { bytes, limit })) => {
+                tool_failure(ToolError::last_run_too_large(bytes, limit))
+            }
+            Ok(None) => tool_failure(ToolError::no_previous_run()),
             Err(error) => {
                 tracing::warn!(operation = "get", session = %session_id, %error, "last-run storage failed");
                 Err(ErrorData::internal_error(
@@ -625,7 +618,7 @@ impl SubmilliMcp {
             &args.path,
             None,
         ) {
-            return file_tool_failure(refused);
+            return tool_failure(refused);
         }
         let (vfs, _info) = self
             .acquire_vfs(
@@ -645,7 +638,7 @@ impl SubmilliMcp {
             .and_then(|resolved| read_window(&args.path, &resolved, offset, limit));
         match read {
             Ok(output) => structured_result(output),
-            Err(error) => file_tool_failure(FileToolError::file(&args.path, error)),
+            Err(error) => tool_failure(ToolError::file(&args.path, error)),
         }
     }
 
@@ -686,7 +679,7 @@ impl SubmilliMcp {
             dir,
             Some(recursive),
         ) {
-            return file_tool_failure(refused);
+            return tool_failure(refused);
         }
         let (vfs, _info) = self
             .acquire_vfs(
@@ -706,7 +699,7 @@ impl SubmilliMcp {
         });
         let (mut entries, truncated) = match listed {
             Ok(listed) => listed,
-            Err(error) => return file_tool_failure(FileToolError::file(dir, error)),
+            Err(error) => return tool_failure(ToolError::file(dir, error)),
         };
         entries.sort_by(|a, b| a.path.cmp(&b.path));
 
@@ -734,7 +727,7 @@ impl SubmilliMcp {
         capability: &str,
         path: &str,
         recursive: Option<bool>,
-    ) -> Result<(), FileToolError> {
+    ) -> Result<(), ToolError> {
         let mut context = serde_json::Map::new();
         context.insert("path".into(), path.into());
         if let Some(recursive) = recursive {
@@ -744,9 +737,8 @@ impl SubmilliMcp {
         let config = blueprint
             .vfs
             .resolve(&variables)
-            .map_err(|error| FileToolError::denied(capability, &error.to_string()))?;
-        guest_normalize(config.cwd(), path)
-            .map_err(|error| FileToolError::file(path, error.into()))?;
+            .map_err(|error| ToolError::denied(capability, &error.to_string()))?;
+        guest_normalize(config.cwd(), path).map_err(|error| ToolError::file(path, error.into()))?;
         let policy = PolicyCheck::with_variables(blueprint.clone(), variables);
         let audit_context = policy.audit_context(capability, &context, config.cwd());
         let outcome = match policy.check_with_cwd("main", capability, &context, config.cwd()) {
@@ -776,59 +768,75 @@ impl SubmilliMcp {
         );
         match outcome {
             CheckOutcome::Allow { .. } => Ok(()),
-            CheckOutcome::Deny { reason, .. } => Err(FileToolError::denied(capability, &reason)),
-            _ => Err(FileToolError::denied(
-                capability,
-                "unrecognized policy outcome",
-            )),
+            CheckOutcome::Deny { reason, .. } => Err(ToolError::denied(capability, &reason)),
+            _ => Err(ToolError::denied(capability, "unrecognized policy outcome")),
         }
     }
 }
 
-/// A file tool call that failed for this call alone: a denial, a missing file, a
-/// path outside the VFS. It is answered as an `isError` result the model reads,
-/// carrying a `{ kind, message }` error like the one `execute` reports, because
-/// clients such as `langchain-mcp-adapters` raise on a JSON-RPC error and end the
-/// agent run. JSON-RPC errors stay for protocol problems: no session, unknown tool,
-/// malformed request envelopes.
+/// A tool call that failed for this call alone: a denial, a missing file, a path
+/// outside the VFS, no last run to return. It is answered as an `isError` result
+/// the model reads, carrying a `{ kind, message }` error like the one `execute`
+/// reports, because clients such as `langchain-mcp-adapters` raise on a JSON-RPC
+/// error and end the agent run. JSON-RPC errors stay for protocol problems: no
+/// session, unknown tool, malformed request envelopes.
 #[derive(Serialize)]
-struct FileToolError {
-    kind: FileToolErrorKind,
+struct ToolError {
+    kind: ToolErrorKind,
     message: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "snake_case")]
-enum FileToolErrorKind {
+enum ToolErrorKind {
     PermissionDenied,
     FileError,
+    NoPreviousRun,
+    LastRunTooLarge,
 }
 
-impl FileToolError {
+impl ToolError {
     fn denied(capability: &str, reason: &str) -> Self {
         Self {
-            kind: FileToolErrorKind::PermissionDenied,
+            kind: ToolErrorKind::PermissionDenied,
             message: format!("permission denied: caller=main capability={capability}: {reason}"),
         }
     }
 
     fn file(path: &str, error: ContainError) -> Self {
         Self {
-            kind: FileToolErrorKind::FileError,
+            kind: ToolErrorKind::FileError,
             message: format!("{path}: {error}"),
+        }
+    }
+
+    fn no_previous_run() -> Self {
+        Self {
+            kind: ToolErrorKind::NoPreviousRun,
+            message: "no previous run in this session".to_string(),
+        }
+    }
+
+    fn last_run_too_large(bytes: u64, limit: u64) -> Self {
+        Self {
+            kind: ToolErrorKind::LastRunTooLarge,
+            message: format!(
+                "the last run's output ({bytes} bytes) is over the retained limit \
+                 ({limit} bytes)"
+            ),
         }
     }
 }
 
-/// The `{ error }` result a failed file tool call answers with.
+/// The `{ error }` result a failed tool call answers with.
 #[derive(Serialize)]
-struct FileToolErrorOutput {
-    error: FileToolError,
+struct ToolErrorOutput {
+    error: ToolError,
 }
 
-fn file_tool_failure(error: FileToolError) -> Result<CallToolResult, ErrorData> {
+fn tool_failure(error: ToolError) -> Result<CallToolResult, ErrorData> {
     Ok(CallToolResult::structured_error(tool_value(
-        FileToolErrorOutput { error },
+        ToolErrorOutput { error },
     )?))
 }
 

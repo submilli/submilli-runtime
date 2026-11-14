@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "5e86adac2daaeb2c4774f5584713b61c059f836dfcdfbbd7db2b46b1881c448e"
+  contentHash: "6a70d8ac374c084f3899cdc0cb53f5eaf9d5a3c9686edb399cc18df27f9c81dc"
   confirmedAt: "2026-10-15T18:31:05.000Z"
 ---
 
@@ -254,7 +254,7 @@ object.
 | `status` | string | Always `finished`. A run that waits on [application tools](#application-tools) or an [approval](#approvals) can also be `suspended` or `running`, see [Run states](#run-states) |
 | `execution_id` | string | The run, as named in the [audit trail](/docs/reference/audit-trail#execution) |
 | `session_id` | string | The session the program ran in |
-| `result` | string or null | What `main` returned: a string as is, other concrete values as JSON text (including `"null"` for a null return), `null` for an undefined return, no value, or failure |
+| `result` | string or null | What `main` returned: a string as is, a number or boolean as its text, other concrete values as JSON text (including `"null"` for a null return), `null` for an undefined return, no value, or failure |
 | `console` | string[] | Lines the program logged. Empty after a successful session run. On failure, what it logged before it stopped |
 | `error` | object or null | `null` on success |
 | `error.kind` | string | One of the kinds below |

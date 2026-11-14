@@ -830,11 +830,19 @@ async fn same_value(
     a: &Val,
     b: &Val,
 ) -> wasmtime::Result<bool> {
-    match (a, b) {
+    let (a_ref, b_ref) = match (a, b) {
         (Val::AnyRef(None), Val::AnyRef(None)) => return Ok(true),
-        (Val::AnyRef(None), _) | (_, Val::AnyRef(None)) => return Ok(false),
-        _ => {}
-    }
+        (Val::AnyRef(Some(_)), Val::AnyRef(None)) | (Val::AnyRef(None), Val::AnyRef(Some(_))) => {
+            return Ok(false);
+        }
+        (Val::AnyRef(Some(a_ref)), Val::AnyRef(Some(b_ref))) => (a_ref, b_ref),
+        // The host signature takes two `(ref null $Object)` operands.
+        _ => {
+            return Err(crate::runtime::host::fatal_host_error(
+                "Object.is: operand is not a reference",
+            ));
+        }
+    };
     // The number arm must run before vtable dispatch: the boxed-number `equals`
     // slot is `===` (`0 === -0`, `NaN !== NaN`), while SameValue distinguishes
     // both.
@@ -843,12 +851,39 @@ async fn same_value(
         let (a_bits, b_bits) = (boxed_number_bits(caller, a)?, boxed_number_bits(caller, b)?);
         return Ok(same_value_bits(a_bits, b_bits));
     }
+    if Rooted::ref_eq(&*caller, a_ref, b_ref)? {
+        return Ok(true);
+    }
+    // Objects and arrays are the same value only as one reference.
+    if !compares_by_equals(caller, a)? {
+        return Ok(false);
+    }
     match dispatch_vtable_slot(caller, a, 2, std::slice::from_ref(b)).await? {
         Val::I32(v) => Ok(v != 0),
         other => Err(wasmtime::Error::msg(format!(
             "Object.is: equals returned {other:?}, expected i32"
         ))),
     }
+}
+
+/// Whether two distinct references to values like `value` can still be the same
+/// value, which their `equals` slot decides: a string, boolean or bigint is a
+/// primitive held behind a reference, and a function coerced to another
+/// signature is wrapped in an adapter that `equals` sees through.
+fn compares_by_equals(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
+    let intrinsics = intrinsic_types(&mut *caller)?;
+    let kinds = [
+        &intrinsics.string,
+        &intrinsics.boxed_boolean,
+        &intrinsics.bigint,
+        &intrinsics.closure,
+    ];
+    for ty in kinds {
+        if is_a(caller, value, ty)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
@@ -1415,7 +1450,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Boolean,
                             predicate: None,
                             doc: doc(
-                                "/**\n * SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`.\n * Object comparison follows the language's structural `===`, not JS reference identity.\n */",
+                                "/**\n * SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`.\n * Two objects or arrays are the same value only when they are one object, while `===` compares them by structure.\n */",
                             ),
                         },
                     ),

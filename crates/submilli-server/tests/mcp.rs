@@ -1740,7 +1740,7 @@ async fn last_run_description_comes_from_the_shared_table() {
 }
 
 #[tokio::test]
-async fn last_run_without_prior_execute_errors() {
+async fn last_run_without_prior_execute_is_a_tool_error() {
     let h = Harness::new();
     let session = h.handshake(EPH).await;
     let (status, _, rpc) = h
@@ -1751,10 +1751,12 @@ async fn last_run_without_prior_execute_errors() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        rpc.to_string().contains("no previous run"),
-        "expected a tool error: {rpc}"
+    assert_eq!(
+        tool_error_message(&rpc),
+        Some("no previous run in this session"),
+        "{rpc}"
     );
+    assert_eq!(output(&rpc)["error"]["kind"], "no_previous_run", "{rpc}");
 }
 
 #[tokio::test]
@@ -1793,11 +1795,12 @@ async fn last_run_over_the_limit_is_a_tool_error_naming_both_sizes() {
             Some(&session),
         )
         .await;
-    assert_eq!(rpc["error"]["code"], -32600, "{rpc}");
     assert_eq!(
-        rpc["error"]["message"],
-        "the last run's output (139 bytes) is over the retained limit (64 bytes)"
+        tool_error_message(&rpc),
+        Some("the last run's output (139 bytes) is over the retained limit (64 bytes)"),
+        "{rpc}"
     );
+    assert_eq!(output(&rpc)["error"]["kind"], "last_run_too_large", "{rpc}");
 }
 
 #[tokio::test]

@@ -109,9 +109,10 @@ value and can't be passed to the shim. When the distinction is the point of
 the test, write the `try` with a typed `catch (e: RangeError)` clause in the
 case itself. Otherwise, note in the case that the distinction was erased.
 
-Caveat: `Object.is` on objects follows the language's structural `===`,
-not JS reference identity — SameValue assertions over *object identity*
-don't port; rewrite them against a discriminating field, or reject.
+`Object.is` compares objects by reference identity, as SameValue does, but
+`===` compares them by structure. A case that compares objects with
+`assertSameValue` or `assertCompareArray` therefore needs the very object
+it expects, not a structurally equal copy.
 
 ## Adaptation rules
 

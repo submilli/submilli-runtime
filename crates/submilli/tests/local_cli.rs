@@ -453,6 +453,75 @@ fn lint_keeps_a_narrowed_requires_rule() {
 }
 
 #[test]
+fn lint_warns_when_a_package_is_denied_its_own_requirement() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    let rule = |filter: &str, action: &str| {
+        format!("    - capability: pied-piper.example/charge\n{filter}      action: {action}\n")
+    };
+    let same_filter = "      filter: customer == \"cus_123\"\n";
+    for (case, rules) in [
+        ("deny", rule("", "deny")),
+        ("ask-human", rule("", "ask-human")),
+        ("ask-admin", rule("", "ask-admin")),
+        (
+            "a covering deny before an allow",
+            rule(same_filter, "deny") + &rule("", "allow"),
+        ),
+    ] {
+        let blueprint = format!(
+            "name: x\npackages:\n  - \"@pied-piper/app\"\npermissions:\n  \"@pied-piper/app\":\n{rules}"
+        );
+        write_file(&file, &blueprint);
+        let before = submilli_blueprint::parse(&blueprint).expect("blueprint parses");
+
+        let out = run_with_home(
+            &[os("blueprint"), os("lint"), os("--fix"), file.as_os_str()],
+            home.path(),
+        );
+
+        assert!(out.status.success(), "{case}: stderr: {}", stderr(&out));
+        let err = stderr(&out);
+        assert!(
+            err.contains("requires `pied-piper.example/charge`")
+                && err.contains("grants it differently or doesn't allow it"),
+            "{case}: got: {err}"
+        );
+        let updated = fs::read_to_string(&file).expect("read blueprint");
+        let parsed = submilli_blueprint::parse(&updated).expect("blueprint parses");
+        assert_eq!(
+            parsed.permissions["@pied-piper/app"].len(),
+            before.permissions["@pied-piper/app"].len(),
+            "{case}: --fix must not append behind the rules: {updated}"
+        );
+    }
+}
+
+#[test]
+fn lint_accepts_an_allow_behind_a_deny_that_does_not_cover_the_requirement() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_capability_packages(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\npackages:\n  - \"@pied-piper/app\"\npermissions:\n  \"@pied-piper/app\":\n    - capability: pied-piper.example/charge\n      filter: customer == \"cus_999\"\n      action: deny\n    - capability: pied-piper.example/charge\n      action: allow\n",
+    );
+
+    let out = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        !stderr(&out).contains("pied-piper.example/charge"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn lint_fix_adds_missing_requires_rules_only() {
     let home = tempfile::tempdir().expect("home tempdir");
     let _project = publish_capability_packages(home.path());
@@ -1288,7 +1357,7 @@ fn add_package_keeps_a_dependencys_existing_caller_rules() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains(
-            "✓ kept the existing caller rules for @pied-piper/billing, a dependency of @pied-piper/support\n  they don't cover 1 capabilities it requires; `submilli blueprint lint` reports them:\n    secrets.get"
+            "✓ kept the existing caller rules for @pied-piper/billing, a dependency of @pied-piper/support\n  they don't cover 2 capabilities it requires; `submilli blueprint lint` reports them:\n    http.get\n    secrets.get"
         ),
         "got: {}",
         stdout(&out)

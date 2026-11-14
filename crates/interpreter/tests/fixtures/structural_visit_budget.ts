@@ -11,7 +11,10 @@ function main(): void {
 
   let comparisonLimited = false;
   try {
-    Object.is(left, right);
+    const erasedLeft: unknown = left;
+    const erasedRight: unknown = right;
+    const equal = erasedLeft === erasedRight;
+    assert(!equal, "the comparison is refused before it finishes");
   } catch (e: RangeError) {
     comparisonLimited = e.message.includes("structural visits");
   }
@@ -50,8 +53,10 @@ function main(): void {
   dynamic["values"] = [7];
   assert(JSON.stringify({ dynamic: dynamic }) === "{\"dynamic\":{\"values\":[7]}}",
     "dynamic serialization succeeds after a caught limit");
-  assert(Object.is([1, 2], [1, 2]), "a caught limit restores the walk budget");
-  assert(Object.is([3, 4], [3, 4]), "independent walks receive independent budgets");
+  const small = [1, 2];
+  const other = [3, 4];
+  assert(small === [1, 2].slice(), "a caught limit restores the walk budget");
+  assert(other === [3, 4].slice(), "independent walks receive independent budgets");
 
   session.set("kept", 7);
   let sessionLimited = false;
@@ -63,5 +68,5 @@ function main(): void {
   assert(sessionLimited, "session validation bounds the number of visits");
   assert(session.get("kept") === 7, "rejection preserves the previous value");
   session.set("kept", [1, 2]);
-  assert(Object.is(session.get("kept"), [1, 2]), "a later small value can be stored");
+  assert(session.get("kept") === small, "a later small value can be stored");
 }

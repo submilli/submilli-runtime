@@ -1,5 +1,4 @@
 // test262: test/built-ins/Math/round/S15.8.2.15_A7.js
-// expect-fail: Math.round compiles to floor(x + 0.5), which rounds 0.5 - 2**-54 up to 1 and bumps odd integers in [2**52 + 1, 2**53 - 1] (and their negatives) to the next even integer
 // Checks 1-3 of the original (round keeps -0 for -0.5 <= x <= -0) are the
 // documented sign-of-zero divergence and live in rejected/Math/round/.
 

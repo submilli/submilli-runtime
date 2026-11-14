@@ -946,17 +946,15 @@ fn emit_interface_property(
     // up the getter under `<iface>#<name>` directly. The exception is
     // a wrapper interface (`Number`, `String`, …) read through a value
     // that may hold a structural object, which resolves the member live.
-    let key = crate::mangle::extend(iface, &name.name);
     // Static-interface properties (`Number.EPSILON`) import as
-    // constant globals — no receiver, no getter call.
+    // constant globals, with no getter call. A computed receiver
+    // (`nums().EPSILON`) still runs, for its effects, and is dropped.
     if ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static) {
-        let global_idx = ctx.symbols.global_idx(&key).ok_or_else(|| {
-            crate::codegen::internal_failure(
-                "static interface property recorded as a global import",
-            )
-        })?;
-        emitter.instruction(Instruction::GlobalGet(global_idx));
-        return Ok(());
+        if !is_static_binding_read(ctx, *receiver)? {
+            emit_receiver(emitter, ctx, *receiver)?;
+            emitter.instruction(Instruction::Drop);
+        }
+        return emit_static_property_global(emitter, ctx, iface, &name.name);
     }
     let recv_ty = ctx
         .ta
@@ -973,6 +971,7 @@ fn emit_interface_property(
         emit_inline_length(emitter, ctx, struct_idx);
         return Ok(());
     }
+    let key = crate::mangle::extend(iface, &name.name);
     let func_idx = ctx.symbols.func_idx(&key).ok_or_else(|| {
         crate::codegen::internal_failure(
             "interface property getter recorded during the dependency-import pass",
@@ -987,6 +986,38 @@ fn emit_interface_property(
     emitter.instruction(Instruction::Call(func_idx));
 
     Ok(())
+}
+
+/// A static-interface property (`Number.EPSILON`), which imports as a constant
+/// global.
+fn emit_static_property_global(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    iface: &crate::MangledName,
+    name: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let key = crate::mangle::extend(iface, name);
+    let global_idx = ctx.symbols.global_idx(&key).ok_or_else(|| {
+        crate::codegen::internal_failure("static interface property recorded as a global import")
+    })?;
+    emitter.instruction(Instruction::GlobalGet(global_idx));
+    Ok(())
+}
+
+/// Whether `receiver` reads a built-in static binding (`Number`, `console`),
+/// which has no effect to evaluate.
+fn is_static_binding_read(
+    ctx: &CodegenCtx,
+    receiver: ExprId,
+) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    let expr = ctx
+        .ta
+        .try_expr(receiver)
+        .map_err(crate::codegen::arena_failure)?;
+    Ok(
+        matches!(&expr.kind, TypedExprKind::GlobalRef { mangled, .. }
+        if ctx.symbols.static_binding_tag(mangled).is_some()),
+    )
 }
 
 /// Whether a receiver lowers to `(ref null $Object)` — an interface, or an
@@ -4024,6 +4055,12 @@ fn emit_chain_access(
             result_ty,
             ..
         } => {
+            // A static property (`Number.EPSILON`) ignores the receiver the
+            // chain already evaluated.
+            if ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static) {
+                emitter.instruction(Instruction::Drop);
+                return emit_static_property_global(emitter, ctx, iface, &name.name);
+            }
             // same lookup the non-chain
             // `InterfacePropertyAccess` arm uses. The chain has the
             // receiver on stack already; the wrapper takes
@@ -6460,16 +6497,13 @@ fn emit_dropped_static_receiver(
     ctx: &CodegenCtx,
     receiver: ExprId,
 ) -> Result<bool, crate::compiler_error::CompilerFailure> {
+    if !is_static_binding_read(ctx, receiver)? {
+        return Ok(false);
+    }
     let expr = ctx
         .ta
         .try_expr(receiver)
         .map_err(crate::codegen::arena_failure)?;
-    let TypedExprKind::GlobalRef { mangled, .. } = &expr.kind else {
-        return Ok(false);
-    };
-    if ctx.symbols.static_binding_tag(mangled).is_none() {
-        return Ok(false);
-    }
     match ctx.symbols.value_type(&expr.ty)? {
         ValType::Ref(RefType { heap_type, .. }) => {
             emitter.instruction(Instruction::RefNull(heap_type));

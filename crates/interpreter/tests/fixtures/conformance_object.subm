@@ -1,6 +1,5 @@
 // ECMA-262 §20.1 conformance vectors for the `Object` statics we expose,
-// with the documented divergences pinned: canonical sorted key order and
-// structural (not identity) object comparison in `Object.is`.
+// with the documented divergence pinned: canonical sorted key order.
 
 function main(): void {
   const o = { gamma: 1, alpha: 2, beta: 3 };

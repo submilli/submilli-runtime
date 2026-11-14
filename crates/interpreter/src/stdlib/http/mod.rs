@@ -3604,12 +3604,8 @@ function main(): void {
                 assert(show(r.json()) === "v", "argument position");
                 const n = get("https://example.test/n").json<number>();
                 assert(n === 7, "a primitive T");
-                try {
-                    get("https://example.test/big").json<number>();
-                    assert(false, "an out-of-range number must throw");
-                } catch (e: RangeError) {
-                    assert(e.message.startsWith("r.json(): cannot parse the body: "), e.message);
-                }
+                const big = get("https://example.test/big").json<number>();
+                assert(big === Infinity, "an out-of-range number reads as Infinity");
             }
         "#;
         run_with_mock(

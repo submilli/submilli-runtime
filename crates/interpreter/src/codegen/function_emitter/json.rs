@@ -554,7 +554,6 @@ pub(crate) fn emit_main_output_shim(
     main_func_idx: u32,
     type_args: &[Type],
     return_ty: &Type,
-    source_return_ty: &Type,
 ) -> Result<Function, crate::compiler_error::CompilerFailure> {
     let mut emitter = FunctionEmitter::new(ctx, &[])?;
     if !type_args.is_empty() {
@@ -588,21 +587,7 @@ pub(crate) fn emit_main_output_shim(
         emitter.emit_else();
         emitter.instruction(Instruction::LocalGet(value));
     }
-    let scalar_output = match source_return_ty.lowered() {
-        Type::String
-        | Type::StringLiteral(_)
-        | Type::Number
-        | Type::NumberLiteral(_)
-        | Type::Boolean
-        | Type::BooleanLiteral(_) => true,
-        Type::Union(members) => is_primitive_union(members),
-        _ => false,
-    };
-    if return_ty == &Type::Unknown && scalar_output {
-        emit_nullable_primitive_to_string(&mut emitter, ctx);
-    } else {
-        emit_main_output_value(&mut emitter, ctx, return_ty.lowered());
-    }
+    emit_main_output_value(&mut emitter, ctx, return_ty.lowered());
     if optional_output {
         emitter.emit_end();
     }
@@ -668,10 +653,11 @@ pub(crate) fn emit_function_json_return(
 }
 
 /// Encodes `main`'s on-stack return value (`arg_ty`, already peeled) into the output
-/// `(ref $string)`. Scalars render via `toString` — a `string` is its own output, so
-/// it passes through verbatim and a large string return never pays a JSON-escape pass.
-/// Everything else (objects, arrays, tuples, interfaces, unions, `null`) routes through
-/// the shared JSON encoder, so structured returns match `JSON.stringify`.
+/// `(ref $string)`. An unboxed scalar renders via `toString`; a `string` is its own
+/// output, so a large string return never pays a JSON-escape pass. Any other type
+/// may hold a string, number or boolean at run time (`unknown`, a primitive union,
+/// a template literal type, a string enum, an interface a string satisfies), so
+/// its value decides how it is written.
 fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_ty: &Type) {
     let peeled = arg_ty
         .unboxed_union_primitive()
@@ -680,75 +666,69 @@ fn emit_main_output_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx, arg_t
         Type::String | Type::StringLiteral(_) => {}
         Type::Number | Type::NumberLiteral(_) => emit_number_to_string_radix10(emitter, ctx),
         Type::Boolean | Type::BooleanLiteral(_) => emit_to_string_direct(emitter, ctx, "Boolean"),
-        // A union of primitives (`string | number`, `string | undefined`, …)
-        // follows the primitive rule, not JSON: whichever value it holds at run
-        // time prints as that primitive would, so a string flows through verbatim.
-        Type::Union(members) if is_primitive_union(members) => {
-            emit_nullable_primitive_to_string(emitter, ctx);
-        }
-        Type::Undefined
-        | Type::Void
-        | Type::Unknown
-        | Type::TypeVar(_)
-        | Type::GenericParam { .. } => emit_stringify_nullable(emitter, ctx),
-        _ => emit_defined_stringify_value(emitter, ctx, peeled),
+        _ => emit_output_by_value(emitter, ctx),
     }
 }
 
-/// `true` for a union of bare primitives (`string`/`number`/`boolean` or their
-/// literals), optionally with `null` or `undefined`. Objects and arrays fall
-/// through to JSON.
-fn is_primitive_union(members: &[Type]) -> bool {
-    let mut has_primitive = false;
-    for member in members {
-        match member.lowered() {
-            Type::Null | Type::Undefined => {}
-            Type::String
-            | Type::StringLiteral(_)
-            | Type::Number
-            | Type::NumberLiteral(_)
-            | Type::Boolean
-            | Type::BooleanLiteral(_) => has_primitive = true,
-            Type::Union(inner) => {
-                if !is_primitive_union(inner) {
-                    return false;
-                }
-                has_primitive = true;
-            }
-            _ => return false,
-        }
-    }
-    has_primitive
-}
-
-/// Renders a `(ref null $Object)`-lowered nullable primitive: the literal `null`
-/// when null, else the boxed value's vtable `toString` (slot 0) — identity for a
-/// string (verbatim), canonical `toString` for a boxed number/boolean.
-fn emit_nullable_primitive_to_string(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
+/// Writes the `(ref null $Object)` on the stack as program output: `null` as
+/// the text `null`, a string verbatim, a number or boolean by its `toString`,
+/// and anything else as JSON.
+fn emit_output_by_value(emitter: &mut FunctionEmitter, ctx: &CodegenCtx) {
     let Some(intrinsics) = ctx.require(
         ctx.symbols.intrinsic_type_indices(),
         "intrinsics declared by codegen entry",
     ) else {
         return;
     };
-    let Some(obj_tmp) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
+    let Some(value) = ctx.latch(emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: true,
         heap_type: HeapType::Concrete(intrinsics.object),
     }))) else {
         return;
     };
-    emitter.instruction(Instruction::LocalTee(obj_tmp));
-    emitter.instruction(Instruction::RefIsNull);
-    emitter.emit_if(BlockType::Result(ValType::Ref(RefType {
+    let string_result = BlockType::Result(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(intrinsics.string),
-    })));
+    }));
+    emitter.instruction(Instruction::LocalTee(value));
+    emitter.instruction(Instruction::RefIsNull);
+    emitter.emit_if(string_result);
     ctx.latch(super::emit_inline_string_literal(emitter, ctx, "null"));
     emitter.emit_else();
-    emitter.instruction(Instruction::LocalGet(obj_tmp));
+    emit_is_boxed_primitive(emitter, &intrinsics, value);
+    emitter.emit_if(string_result);
+    emitter.instruction(Instruction::LocalGet(value));
     emitter.instruction(Instruction::RefAsNonNull);
     emit_vtable_dispatch_on_object_stack(emitter, ctx, 0);
+    emitter.emit_else();
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefAsNonNull);
+    emit_vtable_dispatch_on_object_stack(emitter, ctx, 1);
     emitter.emit_end();
+    emitter.emit_end();
+}
+
+/// Pushes whether the reference in `value` is a string, boxed number or boxed
+/// boolean.
+fn emit_is_boxed_primitive(
+    emitter: &mut FunctionEmitter,
+    intrinsics: &IntrinsicTypeIndices,
+    value: u32,
+) {
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.string,
+    )));
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.boxed_number,
+    )));
+    emitter.instruction(Instruction::I32Or);
+    emitter.instruction(Instruction::LocalGet(value));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.boxed_boolean,
+    )));
+    emitter.instruction(Instruction::I32Or);
 }
 
 /// Calls `Number#toString` with the default radix 10 — the same import a no-arg
@@ -922,7 +902,7 @@ mod tests {
             emit_pretty_number_host,
             emit_pretty_string_host,
             emit_wrap_raw_string,
-            emit_nullable_primitive_to_string,
+            emit_output_by_value,
             |emitter, ctx| emit_to_json_direct(emitter, ctx, "Number"),
             |emitter, ctx| emit_to_string_direct(emitter, ctx, "Boolean"),
             |emitter, ctx| {

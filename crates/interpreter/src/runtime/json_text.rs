@@ -5,7 +5,8 @@
 //! parsed string, as they do in JavaScript, so this reader never decodes to
 //! Rust's UTF-8 `String`. Its grammar, recursion limit and error texts follow
 //! `serde_json`, which the MCP and other host paths use for text that is always
-//! well-formed UTF-8, so both readers accept and reject the same documents.
+//! well-formed UTF-8. One difference: a number past the `f64` range reads as an
+//! infinity, as in JavaScript, where `serde_json` refuses it.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -67,19 +68,13 @@ impl From<&serde_json::Value> for JsonValue {
     }
 }
 
-/// Why a document was refused. A number literal past the `f64` range is a
-/// `RangeError` in the language; everything else is a `SyntaxError`.
+/// Why a document was refused: a `SyntaxError` in the language.
 #[derive(Debug, PartialEq)]
-pub(crate) enum JsonError {
-    Syntax(String),
-    Range(String),
-}
+pub(crate) struct JsonError(String);
 
 impl JsonError {
     pub(crate) fn message(&self) -> &str {
-        match self {
-            Self::Syntax(message) | Self::Range(message) => message,
-        }
+        &self.0
     }
 }
 
@@ -128,7 +123,7 @@ impl Reader<'_> {
     /// `message` at the line and column of the last unit read, as `serde_json`
     /// reports them.
     fn syntax(&self, message: &str) -> JsonError {
-        JsonError::Syntax(self.positioned(message))
+        JsonError(self.positioned(message))
     }
 
     fn positioned(&self, message: &str) -> String {
@@ -366,10 +361,8 @@ impl Reader<'_> {
             .iter()
             .filter_map(|&u| ascii(u).map(char::from))
             .collect();
+        // A literal past the `f64` range rounds to an infinity, as in JavaScript.
         let value: f64 = literal.parse().map_err(|_| self.syntax("invalid number"))?;
-        if value.is_infinite() {
-            return Err(JsonError::Range(self.positioned("number out of range")));
-        }
         Ok(JsonValue::Number(value))
     }
 
@@ -439,12 +432,20 @@ mod tests {
             "01", "1.", ".5", "+1", "-", "1e", "1e+", "0x10", "Infinity", "NaN",
         ] {
             assert!(
-                matches!(parse_str(bad), Err(JsonError::Syntax(_))),
+                matches!(parse_str(bad), Err(JsonError(_))),
                 "{bad} must be refused"
             );
         }
         assert_eq!(parse_str("1.5e2"), Ok(JsonValue::Number(150.0)));
-        assert!(matches!(parse_str("1e400"), Err(JsonError::Range(_))));
+        assert_eq!(parse_str("1e400"), Ok(JsonValue::Number(f64::INFINITY)));
+        assert_eq!(
+            parse_str("-1e400"),
+            Ok(JsonValue::Number(f64::NEG_INFINITY))
+        );
+        assert_eq!(
+            parse_str("1.7976931348623157e308"),
+            Ok(JsonValue::Number(f64::MAX))
+        );
     }
 
     #[test]
@@ -473,7 +474,7 @@ mod tests {
             (r#""\x""#, "invalid escape"),
             ("\"a\nb\"", "control character"),
         ] {
-            let Err(JsonError::Syntax(got)) = parse_str(text) else {
+            let Err(JsonError(got)) = parse_str(text) else {
                 panic!("{text:?} must be refused");
             };
             assert!(got.starts_with(message), "{text:?}: {got}");
@@ -484,7 +485,7 @@ mod tests {
     fn the_recursion_limit_matches_serde_json() {
         let nested = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
         assert!(parse_str(&nested(127)).is_ok());
-        let Err(JsonError::Syntax(message)) = parse_str(&nested(128)) else {
+        let Err(JsonError(message)) = parse_str(&nested(128)) else {
             panic!("128 levels must be refused");
         };
         assert!(message.starts_with("recursion limit exceeded"));

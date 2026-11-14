@@ -2,7 +2,7 @@ function main(): void {
   const eastern = Temporal.ZonedDateTime.from("2024-03-09T12:00:00-05:00[US/Eastern]");
   const newYork = eastern.withTimeZone("America/New_York");
   assert(eastern.equals(newYork), "named aliases compare equal");
-  assert(Object.is(eastern, newYork), "structural equality uses the same aliases");
+  assert(!Object.is(eastern, newYork), "two Temporal objects are distinct values");
   assert(eastern === newYork, "direct equality uses the same aliases");
   assert(!eastern.equals(newYork.add({seconds: 1})), "instant still matters");
 

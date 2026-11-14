@@ -27,7 +27,7 @@ use submilli_build::{Artifact, CapabilitySchema, PackageStore, ProvidedCapabilit
 
 use super::capability::{action_label, unruled_call_outcome};
 use super::declared_packages;
-use super::file::{has_capability_rule, has_matching_rule, has_unfiltered_capability_rule};
+use super::file::{has_capability_rule, has_unfiltered_capability_rule, rules_allow_requirement};
 use super::package_configuration::missing_package_configuration_warnings;
 
 const DEFAULT_FILE: &str = "blueprint.yaml";
@@ -319,7 +319,7 @@ fn uncovered_requirements(
         .requires
         .iter()
         .filter(|required| {
-            !has_matching_rule(
+            !rules_allow_requirement(
                 blueprint,
                 package,
                 &required.capability,

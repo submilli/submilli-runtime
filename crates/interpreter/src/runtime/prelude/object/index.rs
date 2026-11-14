@@ -186,7 +186,7 @@ mod work_tests {
             // JSON-created values use the host structural hook. Construct both
             // before comparison so only the lookup index contributes probes.
             let source = format!(
-                "function main(): number {{ let text=\"{{\"; for(let i=0;i<{n};i++) {{ if(i>0) {{ text+=\",\"; }} text+=\"\\\"k\"+i.toString()+\"\\\":1\"; }} text+=\"}}\"; const a=JSON.parse(text); const b=JSON.parse(text); assert(Object.is(a,b)); return 0; }}"
+                "function main(): number {{ let text=\"{{\"; for(let i=0;i<{n};i++) {{ if(i>0) {{ text+=\",\"; }} text+=\"\\\"k\"+i.toString()+\"\\\":1\"; }} text+=\"}}\"; const a=JSON.parse(text); const b=JSON.parse(text); assert(a===b); return 0; }}"
             );
             let work = index_probes(&source).await;
             // The old rhs linear search inspected n*(n+1)/2 names. It was
