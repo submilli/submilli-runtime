@@ -32,7 +32,7 @@ use submilli_build::{CapabilitySchema, PackageStore};
 use super::capability::action_label;
 use super::capability_names::{UnlistedName, did_you_mean, unlisted_name};
 use super::declared_packages::{self, DeclaredPackages};
-use super::file::{has_capability_rule, has_matching_rule};
+use super::file::{has_capability_rule, rules_allow_requirement};
 use super::package_configuration::missing_package_configuration_warnings;
 use submilli_shared::blueprint_validation::unreported_field_errors;
 
@@ -204,7 +204,7 @@ fn collect_requires_findings(
     fixes: &mut Vec<MissingRequiresRule>,
 ) {
     for required in &capabilities.requires {
-        if has_matching_rule(
+        if rules_allow_requirement(
             blueprint,
             package,
             &required.capability,
@@ -216,12 +216,13 @@ fn collect_requires_findings(
             .filter
             .as_deref()
             .map_or(String::new(), |filter| format!(" with filter `{filter}`"));
-        // A different rule for the same capability is the operator narrowing or
-        // denying the package on purpose; `--fix` must not append the broad rule
-        // behind it, which would match whatever the narrowed rule leaves out.
+        // A different rule for the same capability, or one that denies or asks,
+        // is the operator narrowing or refusing the package on purpose; `--fix`
+        // must not append the broad rule behind it, which would match whatever
+        // the earlier rule leaves out.
         if has_capability_rule(blueprint, package, &required.capability) {
             warnings.push(format!(
-                "package `{package}` requires `{}`{filter}; `permissions.{package}` grants it differently, so the package's calls outside those rules are denied",
+                "package `{package}` requires `{}`{filter}; `permissions.{package}` grants it differently or doesn't allow it, so some of those calls are denied or wait for approval",
                 required.capability
             ));
             continue;
@@ -241,7 +242,7 @@ fn collect_requires_findings(
 
 fn apply_fixes(blueprint: &mut Blueprint, fixes: Vec<MissingRequiresRule>) -> anyhow::Result<()> {
     for fix in fixes {
-        if has_matching_rule(
+        if rules_allow_requirement(
             blueprint,
             &fix.caller,
             &fix.capability,

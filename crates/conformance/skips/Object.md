@@ -1,7 +1,7 @@
 # Object statics — keys / values / entries / hasOwn / is
 
 Triage of `test/built-ins/Object/{keys,values,entries,hasOwn,is}` (185 files).
-29 ported (+3 divergence pins under `cases/Object/divergence/`), 5 rejected
+30 ported (+2 divergence pins under `cases/Object/divergence/`), 4 rejected
 originals copied under `rejected/Object/`. Blanket rules (SKIPS.md) cover
 `length.js`, `name.js`, `not-a-constructor.js`, `prop-desc`-style descriptor
 verification (`object-is.js`, `function-property-descriptor.js`,
@@ -13,7 +13,6 @@ coercion-trap cases (`toobject_before_topropertykey.js`) without further note.
 | Pattern | Reason |
 |:--|:--|
 | `keys/return-order.js`, `values/return-order.js`, `entries/return-order.js`, `keys/order-after-define-property*.js`, `entries/order-after-define-property*.js`, `keys/15.2.3.14-6-*.js` | Expect integer-keys-then-insertion enumeration order; our objects have no insertion order — enumeration is canonical sorted key order (divergence pinned in `cases/Object/divergence/keys-canonical-sorted-order.ts`). Copied: `rejected/Object/keys/return-order.js`. |
-| `is/not-same-value-x-y-object.js` | Expects JS reference identity; our `Object.is` follows the structural `===` (divergence pinned in `cases/Object/divergence/is-structural-objects.ts`). Copied. |
 | Descriptor-driven cases (`keys/15.2.3.14-2-7.js`, `-2-8`, `-3-7`, `-4-1`, `-5-1..5-16`, `values|entries/getter-*.js`, `observable-operations.js`, `exception-during-enumeration.js`, `hasOwn/hasown_{own,inherited}_{getter,setter,writable,nonwritable}*.js`, `hasOwn/descriptor.js`) | `Object.defineProperty`, enumerability attributes, getters/setters — no property-descriptor model. Copied: `rejected/Object/keys/15.2.3.14-2-7.js`. |
 | Prototype-chain cases (`hasOwn/hasown_inherited_exists.js` + the inherited-descriptor family, `values|entries/inherited-properties-omitted.js`) | `Object.create` / constructor-function prototypes — no prototypes; objects have only declared own fields. Copied: `rejected/Object/hasOwn/hasown_inherited_exists.js`. |
 | String-object receivers (`keys/15.2.3.14-5-15.js`, `-5-16`, `-6-3`) | `new String(…)` wrappers, `defineProperty` and `for-in`; a primitive string's index keys are ported as `values|entries/primitive-strings.ts`. |
@@ -38,9 +37,8 @@ coercion-trap cases (`toobject_before_topropertykey.js`) without further note.
   erased (noted in each case).
 - `is/same-value-x-y-string.js`: the `String('foo')` wrapper became a
   computed string concatenation (same code-unit-sequence intent).
-- `is/same-value-x-y-object.js`: self-comparison still holds, but under
-  structural equality rather than identity; the identity-negative
-  counterpart is rejected (see above).
+- `is/same-value-x-y-object.js` and `is/not-same-value-x-y-object.js`: plain
+  literals and arrays stand in for the `Object()` wrapper variants.
 
 Undefined equality is covered by `is/same-value-x-y-undefined.ts`, including
 an explicit `undefined` second argument for the upstream omitted-argument

@@ -332,10 +332,13 @@ fn math_round(x: f64) -> f64 {
     if x.is_nan() || x == 0.0 || x.is_infinite() {
         return x;
     }
-    if (-0.5..0.0).contains(&x) || x == -0.5 {
+    if (-0.5..0.0).contains(&x) {
         return -0.0;
     }
-    (x + 0.5).floor()
+    // `floor(x + 0.5)` would round the sum first. `x - floor(x)` is exact: below
+    // 2^52 it is the fraction, and at or past it `x` is an integer.
+    let floor = x.floor();
+    if x - floor >= 0.5 { floor + 1.0 } else { floor }
 }
 
 fn math_sign(x: f64) -> f64 {

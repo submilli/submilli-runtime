@@ -888,11 +888,6 @@ fn codegen_inner(
             .map_err(|error| error.into_compiler_failure(CompilerStage::Codegen))?;
         debug_sources.location(stmt.span)?;
     }
-    let source_main_return_ty = ta
-        .functions
-        .iter()
-        .find(|function| function.name.name == "main")
-        .map(|function| function.return_type.clone());
     let lowered = runtime_values::lower(ta, dependencies)?;
     let ta = &lowered;
     let lowered_dependencies: Vec<_> = dependencies
@@ -2198,7 +2193,6 @@ fn codegen_inner(
             main_func_idx,
             &main_type_args,
             main_return_ty,
-            source_main_return_ty.as_ref().unwrap_or(main_return_ty),
         )?);
     }
 

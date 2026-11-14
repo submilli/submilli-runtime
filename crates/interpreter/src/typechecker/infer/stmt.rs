@@ -2099,6 +2099,11 @@ impl Inferer<'_> {
             );
             return Type::Error;
         }
+        // `RegExpMatchArray` extends `Array<string>` in tsc. Its elements live in
+        // an ordinary array, so the write is an array store.
+        if receiver_ty.is_regexp_match_array() {
+            return Type::String;
+        }
         // Peel to match the read path: an alias of an array or `Uint8Array` is
         // assignable on the same terms as the type it names.
         match receiver_ty.peel() {

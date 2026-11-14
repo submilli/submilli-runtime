@@ -11,5 +11,7 @@ function main(): void {
   }
   assert(limited, "flat limits its explicit traversal stack");
   assert(nested.flat(2).length === 1, "requested shallow traversal still works");
-  assert(Object.is([[1, 2], [3]].flat(), [1, 2, 3]), "sibling order is preserved");
+  const flattened = [[1, 2], [3]].flat();
+  const expected = [1, 2, 3];
+  assert(flattened === expected, "sibling order is preserved");
 }

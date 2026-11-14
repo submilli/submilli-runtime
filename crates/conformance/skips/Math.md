@@ -2,7 +2,7 @@
 
 Source: `test/built-ins/Math/**` (327 files). The area is a good fit — every
 spec.md §1.10 member exists — so the port covers each implemented function and
-constant with at least one behavioral case. 60 ported (57 passing, 3
+constant with at least one behavioral case. 60 ported (58 passing, 2
 `expect-fail`), plus 4 divergence pins under `cases/Math/divergence/`.
 Representative rejected originals under `rejected/Math/`.
 
@@ -22,7 +22,6 @@ note. Representatives copied: `rejected/Math/prop-desc.js`,
 |:--|:--|
 | `pow/applying-the-exp-operator_A1` | `Math.pow(1, NaN)` returns `1` (IEEE 754 pow via the host's `powf`); the standard returns `NaN` for any NaN exponent. Undocumented — spec.md's pow has no divergence note. |
 | `hypot/Math.hypot_InfinityNaN` | `Math.hypot(NaN, Infinity)` returns `NaN` (naive sum of squares: `NaN + Infinity` is `NaN`); the standard checks for an infinite argument first. Undocumented — spec.md documents only the overflow divergence. |
-| `round/S15.8.2.15_A7` (checks 4–10) | `Math.round` is `floor(x + 0.5)`, which rounds `0.5 - 2**-54` up to `1` and bumps odd integers in `[2**52 + 1, 2**53 - 1]` (and negatives) to the next even integer. Undocumented — spec.md documents only the sign-of-zero divergence. Checks 1–3 (the `-0` results) are that documented divergence; they live in `rejected/`, not in the port. |
 
 ## Rejected (design decisions)
 

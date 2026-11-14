@@ -950,19 +950,11 @@ async fn envelope(
         Err(failure) => return Ok(failure),
     };
     // The parser's own message can quote the offending input, so it is
-    // discarded for a fixed one; only its error class is read, which tells
-    // syntax from range.
+    // discarded for a fixed one; only its error class is read.
     let parsed = match crate::runtime::json::parse_json_as_unknown(caller, text, "llm") {
         Ok(parsed) => parsed,
         Err(err) if err.is::<crate::runtime::host::SyntaxError>() => {
             return invalid_output(caller, "the model's response is not JSON", usage);
-        }
-        Err(err) if err.is::<crate::runtime::host::RangeError>() => {
-            return invalid_output(
-                caller,
-                "a number in the model's response is out of range",
-                usage,
-            );
         }
         Err(err) => return Err(err),
     };
@@ -2556,10 +2548,10 @@ mod tests {
         assert_eq!(out, "true:true|false|message,ok,reason,retryable");
     }
 
-    /// A number the parser refuses is an `invalid-output` entry with a fixed
-    /// message, not a `RangeError` escaping the batch.
+    /// A number past the double range reads as an infinity, as `JSON.parse`
+    /// reads it, so the response still checks as `T`.
     #[tokio::test]
-    async fn an_out_of_range_number_is_an_invalid_output_entry() {
+    async fn an_out_of_range_number_reads_as_an_infinity() {
         let (provider, _) = MockProvider::new(
             vec![LlmOutcome::success(
                 r#"{"level":"high","score":1e999}"#.to_string(),
@@ -2568,13 +2560,17 @@ mod tests {
         );
         let out = Harness::new()
             .provider(provider)
-            .run(TYPED_PROGRAM)
+            .run(
+                r#"import llm from "submilli:llm";
+                   interface Severity { level: string; score: number; }
+                   function main(): string {
+                     const s = llm.call<Severity>("m", "p");
+                     return s.ok ? String(s.value.score === Infinity) : "failed:" + s.message;
+                   }"#,
+            )
             .await
             .expect("program completes");
-        assert_eq!(
-            out,
-            "failed:invalid-output:a number in the model's response is out of range"
-        );
+        assert_eq!(out, "true");
     }
 
     /// A truncated completion has no complete JSON value, so the typed form

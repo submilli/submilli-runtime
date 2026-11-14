@@ -55,19 +55,23 @@ pub(super) fn has_unfiltered_capability_rule(
     })
 }
 
-/// Whether `caller` has a rule for `capability` that covers every call a
-/// requirement with `filter` makes: one with no filter, or the same filter.
-pub(super) fn has_matching_rule(
+/// Whether `caller`'s rules allow every call a requirement for `capability`
+/// with `filter` makes: the first rule that covers those calls (one with no
+/// filter, or the same filter) is an `allow`.
+pub(super) fn rules_allow_requirement(
     blueprint: &submilli_blueprint::Blueprint,
     caller: &str,
     capability: &str,
     filter: Option<&str>,
 ) -> bool {
     blueprint.permissions.get(caller).is_some_and(|rules| {
-        rules.iter().any(|rule| {
-            rule.capability == capability
-                && (rule.filter.is_none()
-                    || rule.filter.as_ref().map(ToString::to_string).as_deref() == filter)
-        })
+        rules
+            .iter()
+            .find(|rule| {
+                rule.capability == capability
+                    && (rule.filter.is_none()
+                        || rule.filter.as_ref().map(ToString::to_string).as_deref() == filter)
+            })
+            .is_some_and(|rule| rule.action == submilli_blueprint::Action::Allow)
     })
 }

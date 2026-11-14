@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "943de3f4ba6b091ecb80ecbee6a7239014cdce721ea4081176c5fa4c55f52037"
+  contentHash: "9141b1e6803b1d4bc2520d6e9df6aa032c73ab84d5ac1edcc54aaf5d9ba82733"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -476,7 +476,7 @@ Constructor object for `Object` — the enumeration statics (`keys`/`values`/`en
 | `fromEntries<T>(entries: readonly (readonly [number \| string, T])[] \| Iterable<readonly [number \| string, T]> \| Iterator<readonly [number \| string, T]>): { [key: string]: T }` | Creates a string-keyed object from entry pairs. |
 | `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): { [key: string]: T[] }` | Groups iterable elements by the callback's property key. |
 | `hasOwn(obj: unknown, key: string): boolean` | Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. |
-| `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
+| `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. Two objects or arrays are the same value only when they are one object, while `===` compares them by structure. |
 | `keys(obj: unknown): string[]` | Returns the object's field names in canonical sorted order (the same order JSON output uses). |
 | `values(obj: unknown): unknown[]` | Returns the object's field values, aligned with `Object.keys` order. |
 

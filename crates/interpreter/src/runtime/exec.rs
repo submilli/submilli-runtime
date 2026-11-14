@@ -351,6 +351,44 @@ mod tests {
         assert_eq!(result.value.as_deref(), Some("hello"));
     }
 
+    // A primitive result is written by its value, whatever type `main`
+    // declares: a string as is, a number or boolean by its `toString`.
+    #[tokio::test]
+    async fn primitive_results_are_written_by_value() {
+        for (source, expected) in [
+            (
+                "function main(): `id-${number}` { return \"id-1\"; }",
+                "id-1",
+            ),
+            (
+                "function main(): Iterable<string> { return \"abc\"; }",
+                "abc",
+            ),
+            (
+                "interface Sized { length: number } function main(): Sized { return \"xy\"; }",
+                "xy",
+            ),
+            (
+                "enum Dir { Up = \"U\", Down = \"D\" } function main(): Dir { return Dir.Down; }",
+                "D",
+            ),
+            ("function main(): unknown { return \"a\"; }", "a"),
+            ("function main(): unknown { return 0 / 0; }", "NaN"),
+            ("function main(): unknown { return true; }", "true"),
+            ("function main(): unknown { return null; }", "null"),
+            (
+                "function main(): unknown { return [1, \"a\"]; }",
+                "[1,\"a\"]",
+            ),
+        ] {
+            let result = RuntimeConfig::default()
+                .run(&compile(source))
+                .await
+                .expect("runs");
+            assert_eq!(result.value.as_deref(), Some(expected), "{source}");
+        }
+    }
+
     #[tokio::test]
     async fn number_main_returns_json_number() {
         let bytes = compile("function main(): number { return 42; }");

@@ -60,8 +60,9 @@ pub(super) fn install_json_module(
             // position/expectation detail, rather than trapping uncatchably.
             // Returning an `Err` is enough: the `register_host_fn` wrapper turns
             // it into a catchable exception (via `throw_error`).
-            let value = super::json_text::parse(&text)
-                .map_err(|e| json_parse_error(&format!("JSON.parse: {}", e.message()), &e))?;
+            let value = super::json_text::parse(&text).map_err(|e| {
+                crate::runtime::host::syntax_error(format!("JSON.parse: {}", e.message()))
+            })?;
             let allocator = JsonUnknownAllocator::new(&mut *caller)?;
             *abi_result(results, 0)? = allocator.allocate(&mut *caller, &value)?;
             Ok(())
@@ -884,18 +885,9 @@ pub(crate) fn parse_json_as_unknown(
     fuel::charge(&mut *caller, fuel::PARSE, text.len() as u64)?;
     let units: Vec<u16> = text.encode_utf16().collect();
     let value = super::json_text::parse(&units)
-        .map_err(|e| json_parse_error(&format!("{context}: {}", e.message()), &e))?;
+        .map_err(|e| crate::runtime::host::syntax_error(format!("{context}: {}", e.message())))?;
     let allocator = JsonUnknownAllocator::new(&mut *caller)?;
     allocator.allocate(&mut *caller, &value)
-}
-
-/// The language error for a refused document: a number literal past the `f64`
-/// range is a `RangeError`, anything else a `SyntaxError`.
-fn json_parse_error(message: &str, error: &super::json_text::JsonError) -> wasmtime::Error {
-    match error {
-        super::json_text::JsonError::Range(_) => crate::runtime::host::range_error(message),
-        super::json_text::JsonError::Syntax(_) => crate::runtime::host::syntax_error(message),
-    }
 }
 
 pub(crate) fn boxed_struct(
