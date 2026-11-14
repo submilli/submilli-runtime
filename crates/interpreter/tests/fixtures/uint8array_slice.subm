@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([0, 1, 2, 3, 4]);
+  let bytes: Uint8Array = new Uint8Array([0, 1, 2, 3, 4]);
 
   let mid: Uint8Array = bytes.slice(1, 4);
   assert(mid.length === 3, "mid length");

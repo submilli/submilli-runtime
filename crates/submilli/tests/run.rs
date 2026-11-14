@@ -1366,7 +1366,7 @@ fn operations_charge_for_the_input_they_process() {
     ] {
         for (index, count) in [128_u64, 256].into_iter().enumerate() {
             let input =
-                format!("const bytes=Uint8Array.alloc({count}); const source=Uint8Array.new([1]);");
+                format!("const bytes=Uint8Array.alloc({count}); const source=new Uint8Array([1]);");
             let baseline = host_fuel(
                 "usage-byte-range-base",
                 &format!("function main():number{{{input} return 0;}}"),

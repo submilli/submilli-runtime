@@ -10,6 +10,7 @@ use wasm_encoder::{
 pub struct IntrinsicTypeIndices {
     pub undefined: u32,
     pub type_descriptor: u32,
+    pub callable_shape: u32,
     pub raw_string: u32,
     pub vtable: u32,
     pub object: u32,
@@ -66,11 +67,16 @@ pub struct IntrinsicTypeIndices {
 
 /// Number of types [`declare_intrinsic_types`] emits — the first free type index
 /// in every module.
-pub const INTRINSIC_TYPE_COUNT: u32 = 53;
+pub const INTRINSIC_TYPE_COUNT: u32 = 54;
+
+/// The field of a `$CallableShape` that holds its closure, after the four
+/// `$ObjectShape` fields. The host reads it too (`closure::hybrid_closure`).
+pub const CALLABLE_SHAPE_CLOSURE: u32 = 4;
 
 pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices {
     let undefined = 51u32;
     let type_descriptor = 52u32;
+    let callable_shape = 53u32;
     let raw_string = 0u32;
     let vtable = 1u32;
     let object = 2u32;
@@ -1034,9 +1040,37 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
         )
     });
 
+    // `$CallableShape` — a hybrid, an object shape that is also callable, as
+    // `Object.assign(fn, props)` makes: `$ObjectShape`'s fields, then the
+    // closure a call runs. Property reads see an ordinary shape; `typeof`
+    // answers "function". The host mirrors this in `runtime::intrinsic_types`.
+    types.ty().subtype(&SubType {
+        is_final: true,
+        ..substruct(
+            vec![
+                fieldtype_ref(vtable),
+                FieldType {
+                    mutable: true,
+                    ..fieldtype_ref(field_names)
+                },
+                FieldType {
+                    mutable: true,
+                    ..fieldtype_ref(object_fields)
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: true,
+                },
+                fieldtype_ref(closure),
+            ],
+            Some(object_shape),
+        )
+    });
+
     IntrinsicTypeIndices {
         undefined,
         type_descriptor,
+        callable_shape,
         raw_string,
         vtable,
         object,
@@ -1105,6 +1139,7 @@ pub(crate) fn intrinsic_supertypes(
     [
         (indices.undefined, indices.object),
         (indices.type_descriptor, indices.object),
+        (indices.callable_shape, indices.object_shape),
         (indices.string, indices.object),
         (indices.boxed_number, indices.object),
         (indices.boxed_boolean, indices.object),
@@ -1313,6 +1348,7 @@ mod tests {
         assert_eq!(indices.fs_mount_info, 50);
         assert_eq!(indices.undefined, 51);
         assert_eq!(indices.type_descriptor, 52);
-        assert_eq!(super::INTRINSIC_TYPE_COUNT, 53);
+        assert_eq!(indices.callable_shape, 53);
+        assert_eq!(super::INTRINSIC_TYPE_COUNT, 54);
     }
 }

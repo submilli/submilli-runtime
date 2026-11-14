@@ -429,6 +429,8 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
             extends,
             generics: _,
             methods,
+            call,
+            construct,
             properties,
             index,
             more_indexes,
@@ -438,6 +440,8 @@ fn type_symbol_types(symbol: &TypeSymbol, visit: &mut dyn FnMut(&Type)) {
             extends.iter().for_each(&mut *visit);
             methods
                 .values()
+                .chain(call)
+                .chain(construct)
                 .for_each(|method| method_types(method, visit));
             properties.values().for_each(|property| visit(&property.ty));
             for index in crate::stored_index_signatures(index, more_indexes) {
@@ -509,6 +513,7 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                 more_indexes,
                 members,
                 methods: _,
+                call,
                 non_shape_carriers,
                 shape_allowed: _,
                 nullable: _,
@@ -518,6 +523,9 @@ fn narrowing_check_types(check: &crate::FieldNarrowingCheck, visit: &mut dyn FnM
                 visit(&index.value);
             }
             members.values().for_each(|member| visit(&member.ty));
+            if let Some(call) = call {
+                visit(call);
+            }
             for carrier in non_shape_carriers {
                 match carrier {
                     crate::InterfaceCarrier::Array(element)
@@ -633,6 +641,8 @@ impl PackageShapeCollector {
             TypeKind::Interface {
                 extends,
                 methods,
+                call,
+                construct,
                 properties,
                 index,
                 more_indexes,
@@ -644,7 +654,7 @@ impl PackageShapeCollector {
                 for index in crate::stored_index_signatures(index, more_indexes) {
                     self.collect_type(&index.value);
                 }
-                for method in methods.values() {
+                for method in methods.values().chain(call).chain(construct) {
                     for method in method.signatures() {
                         for param in &method.params {
                             self.collect_type(&param.ty);
@@ -1053,6 +1063,14 @@ pub enum TypeKind {
         extends: Vec<Type>,
         generics: GenericParameters,
         methods: BTreeMap<String, MethodSig>,
+        /// The call signature `(params): ret;`, with its overloads. Kept apart
+        /// from `methods`: any string can name a method, so no member name can
+        /// stand for a signature.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        call: Option<MethodSig>,
+        /// The construct signature `new (params): ret;`, with its overloads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        construct: Option<MethodSig>,
         /// Read via `expr.name` (not `expr.name()`). Writable unless the
         /// declaration carries a `readonly` modifier (`PropertySig.readonly`).
         /// A name also present in `methods` has both the callable contract and
@@ -1135,6 +1153,57 @@ pub enum TypeKind {
         doc: Option<crate::DocComment>,
     },
     // `String` is absent — it's an intrinsic declared per-consumer via `declare_intrinsic_types`.
+}
+
+impl TypeKind {
+    /// Whether an interface declares a call or construct signature.
+    pub fn has_signature(&self) -> bool {
+        matches!(
+            self,
+            TypeKind::Interface { call: Some(_), .. }
+                | TypeKind::Interface {
+                    construct: Some(_),
+                    ..
+                }
+        )
+    }
+
+    /// The method or signature `key` names on an interface.
+    pub fn interface_member(&self, key: crate::MemberKey<'_>) -> Option<&MethodSig> {
+        let TypeKind::Interface {
+            methods,
+            call,
+            construct,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        match key {
+            crate::MemberKey::Named(name) => methods.get(name),
+            crate::MemberKey::Call => call.as_ref(),
+            crate::MemberKey::Construct => construct.as_ref(),
+        }
+    }
+
+    /// An interface's methods, then its call and construct signatures.
+    pub fn interface_members(&self) -> impl Iterator<Item = (crate::MemberKey<'_>, &MethodSig)> {
+        let (methods, call, construct) = match self {
+            TypeKind::Interface {
+                methods,
+                call,
+                construct,
+                ..
+            } => (Some(methods), call.as_ref(), construct.as_ref()),
+            _ => (None, None, None),
+        };
+        methods
+            .into_iter()
+            .flatten()
+            .map(|(name, sig)| (crate::MemberKey::Named(name), sig))
+            .chain(call.map(|sig| (crate::MemberKey::Call, sig)))
+            .chain(construct.map(|sig| (crate::MemberKey::Construct, sig)))
+    }
 }
 
 /// A class's resolved `extends` clause. Parent and type args are one fact:
@@ -1499,6 +1568,8 @@ mod type_limit_checks {
                 properties: BTreeMap::new(),
                 index: None,
                 more_indexes: Vec::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: None,
             };

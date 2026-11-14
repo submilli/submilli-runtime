@@ -449,6 +449,8 @@ fn insert_interface(
                 generics: crate::GenericParameters::unconstrained(generics),
                 methods: BTreeMap::new(),
                 properties,
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: crate::doc(crate::FileId::LLM, doc),
             },

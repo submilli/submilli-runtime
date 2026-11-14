@@ -695,7 +695,7 @@ pub(super) fn entries(caller: &mut Caller<'_, StoreData>, recv: &Val) -> wasmtim
 // Constructor (`new Map(init)`)
 // ---------------------------------------------------------------------------
 
-/// `MapConstructor#new(init?) -> Map`. Builds an empty map, then populates it
+/// `new Map(init?)`, the `MapConstructor` construct signature. Builds an empty map, then populates it
 /// from the initializer (mirroring the Wasm `collect_into`): `null` → empty; an
 /// `$Array` of `[k, v]` tuples → read directly; a `$Map` → its `entries()`
 /// cursor; any other value → drive the iterator protocol (an `iterator()` method

@@ -1566,15 +1566,19 @@ fn build_closure_vtable(
         intr.hash_fn.clone(),
         |caller, params, results| {
             Box::new(async move {
-                let object = as_struct(caller, &params[0], "Closure#hash")?;
+                // A hybrid shares this vtable but has no hash field of its
+                // own: it hashes as the closure it holds.
+                let function =
+                    super::closure::hybrid_closure(caller, &params[0])?.unwrap_or(params[0]);
+                let object = as_struct(caller, &function, "Closure#hash")?;
                 if matches!(object.field(&mut *caller, 3)?, Val::I64(0)) {
-                    let original = super::closure::original(caller, params[0])?;
+                    let original = super::closure::original(caller, function)?;
                     identity_hash(caller, &original)?;
                     let original = as_struct(caller, &original, "Closure#hash original")?;
                     let id = original.field(&mut *caller, 3)?;
                     object.set_field(&mut *caller, 3, id)?;
                 }
-                results[0] = Val::I32(identity_hash(caller, &params[0])? as i32);
+                results[0] = Val::I32(identity_hash(caller, &function)? as i32);
                 Ok(())
             })
         },
@@ -2140,9 +2144,9 @@ pub(crate) fn declare_walk_guards(defs: &mut crate::PackageDeclaration) {
     }
 }
 
+/// Whether `value` is a function: a closure, or a hybrid that holds one.
 fn is_function(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmtime::Result<bool> {
-    let closure = intrinsic_types(&mut *caller)?.closure.clone();
-    super::collection::is_a(caller, value, &closure)
+    super::value::is_callable(caller, value)
 }
 
 #[cfg(test)]

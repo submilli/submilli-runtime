@@ -1012,6 +1012,10 @@ pub(super) fn type_matches_facts_with_types(
     // aliased primitive/union (e.g. `type NS = number | string`) classifies the
     // same as its inline spelling.
     let ty = ty.peel();
+    // A hybrid (`F & { label: string }`) answers every test as its function.
+    if let Some((function, _)) = super::assignable::hybrid_parts(ty) {
+        return type_matches_facts_with_types(&function, facts, types);
+    }
     // TRUTHY/FALSY subsume the null tests (truthy ⇒ non-null), so they are
     // checked first: `TRUTHY | NE_NULL` filters by truthiness, bare `NE_NULL`
     // stays a pure null test.
@@ -1067,12 +1071,32 @@ pub(super) fn type_matches_facts_with_types(
         return is_typeof_function(ty, types);
     }
     if facts.contains(TypeFacts::IS_OBJECT) {
+        if always_typeof_function(ty, types) {
+            return false;
+        }
         return is_typeof_object(ty);
     }
     false
 }
 
+/// Whether every value of `ty` is a function: an interface with a call or
+/// construct signature, or an intersection with a function member (a hybrid,
+/// `F & { label: string }`). `typeof` answers "function" for it, as in
+/// TypeScript.
+fn always_typeof_function(ty: &Type, types: Option<super::assignable::TypeResolver<'_>>) -> bool {
+    match ty.peel() {
+        Type::Intersection(_) => super::assignable::is_hybrid(ty),
+        interface @ Type::InterfaceRef { .. } => {
+            types.is_some_and(|types| super::assignable::interface_has_signature(interface, types))
+        }
+        _ => false,
+    }
+}
+
 fn is_typeof_function(ty: &Type, types: Option<super::assignable::TypeResolver<'_>>) -> bool {
+    if always_typeof_function(ty, types) {
+        return true;
+    }
     match ty.peel() {
         Type::Union(members) => members.iter().all(|m| is_typeof_function(m, types)),
         Type::Function { .. } | Type::NonPrimitive => true,
@@ -1252,7 +1276,7 @@ fn typeof_object_narrowing(ty: &Type, peeled: &Type) -> Option<Type> {
 fn holds_any_value_of_a_parameter(peeled: &Type) -> bool {
     peeled.lowers_to_erased_slot()
         && !matches!(peeled, Type::TypeVar(_))
-        && !peeled.is_callable_intersection()
+        && !super::assignable::is_hybrid(peeled)
 }
 
 pub fn subtract(ty: &Type, facts: TypeFacts) -> Type {
@@ -1302,9 +1326,10 @@ pub(super) fn subtract_types(
 }
 
 /// Whether a `typeof` tag in `facts` leaves `member` in place: `{}` holds a
-/// value of every tag, `object` holds functions too, and an interface that can
-/// hold both functions and objects (`BooleanConstructor`, call-signature
-/// interfaces) is ruled out by neither `"object"` nor `"function"`.
+/// value of every tag, `object` holds functions too, an interface with a call
+/// or construct signature holds only functions, as in TypeScript, and an
+/// interface whose members are all optional can hold both functions and
+/// objects, so neither `"object"` nor `"function"` rules it out.
 fn typeof_tag_keeps(
     member: &Type,
     facts: TypeFacts,
@@ -1313,6 +1338,9 @@ fn typeof_tag_keeps(
     let peeled = member.peel();
     let tags_object = facts.contains(TypeFacts::IS_OBJECT);
     let tags_function = facts.contains(TypeFacts::IS_FUNCTION);
+    if always_typeof_function(peeled, types) {
+        return tags_object;
+    }
     if peeled.is_empty_object() || interface_may_be_typeof_function(peeled, types) {
         return tags_object || tags_function;
     }
@@ -2201,7 +2229,7 @@ mod tests {
         let insert_iface =
             |ns: &mut TypeNamespace,
              name: &str,
-             methods: BTreeMap<String, crate::MethodSig>,
+             call: Option<crate::MethodSig>,
              properties: BTreeMap<String, crate::PropertySig>| {
                 ns.insert(
                     name.to_string(),
@@ -2218,8 +2246,10 @@ mod tests {
                             more_indexes: Vec::new(),
                             index: None,
                             generics: Default::default(),
-                            methods,
+                            methods: BTreeMap::new(),
                             properties,
+                            call,
+                            construct: None,
                             dispatch: crate::Dispatch::VTable,
                             doc: None,
                         },
@@ -2229,25 +2259,22 @@ mod tests {
         insert_iface(
             &mut ns,
             "Pred",
-            BTreeMap::from([(
-                "@call".to_string(),
-                crate::MethodSig {
-                    overloads: Vec::new(),
-                    optional: false,
-                    generics: Default::default(),
-                    params: Vec::new(),
-                    ret: Type::Boolean,
-                    predicate: None,
-                    doc: None,
-                },
-            )]),
+            Some(crate::MethodSig {
+                overloads: Vec::new(),
+                optional: false,
+                generics: Default::default(),
+                params: Vec::new(),
+                ret: Type::Boolean,
+                predicate: None,
+                doc: None,
+            }),
             BTreeMap::new(),
         );
-        insert_iface(&mut ns, "EmptyIface", BTreeMap::new(), BTreeMap::new());
+        insert_iface(&mut ns, "EmptyIface", None, BTreeMap::new());
         insert_iface(
             &mut ns,
             "PlainIface",
-            BTreeMap::new(),
+            None,
             BTreeMap::from([(
                 "id".to_string(),
                 crate::PropertySig {
@@ -2283,11 +2310,12 @@ mod tests {
             intersect_with_types(&pred_or_str, TypeFacts::IS_FUNCTION, resolver),
             iref("Pred")
         );
-        // `typeof x === "object"` keeps `Pred` (it can hold `{"@call": ...}`),
-        // AND subtracting `IS_OBJECT` also keeps `Pred` (it can hold `$Closure`).
+        // A call signature makes every `Pred` a function, as in TypeScript:
+        // `typeof x === "object"` rules it out, and subtracting `IS_OBJECT`
+        // keeps it.
         assert_eq!(
             intersect_with_types(&pred_or_str, TypeFacts::IS_OBJECT, resolver),
-            iref("Pred")
+            Type::Never
         );
         assert_eq!(
             subtract_types(&pred_or_str, TypeFacts::IS_OBJECT, resolver),
@@ -2295,7 +2323,7 @@ mod tests {
         );
         assert_eq!(
             subtract_types(&pred_or_str, TypeFacts::IS_FUNCTION, resolver),
-            pred_or_str
+            Type::String
         );
 
         // `EmptyIface` can hold functions too; `PlainIface` has a required property and cannot.

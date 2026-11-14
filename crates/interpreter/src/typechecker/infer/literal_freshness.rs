@@ -513,9 +513,11 @@ impl Inferer<'_> {
                         regular.extend(declared_literals(&expr.ty));
                     }
                 }
-                TypedExprKind::MethodCall { receiver, name, .. } => {
+                TypedExprKind::MethodCall {
+                    receiver, member, ..
+                } => {
                     let declared = self.are_nested_literals_regular(*receiver)?
-                        && self.method_result_is_declared(*receiver, &name.name, &expr.ty)?;
+                        && self.method_result_is_declared(*receiver, member, &expr.ty)?;
                     if declared {
                         regular.extend(declared_literals(&expr.ty));
                     }
@@ -751,9 +753,11 @@ impl Inferer<'_> {
                     pending.push(*receiver);
                     true
                 }
-                TypedExprKind::MethodCall { receiver, name, .. } => {
+                TypedExprKind::MethodCall {
+                    receiver, member, ..
+                } => {
                     pending.push(*receiver);
-                    self.method_result_is_declared(*receiver, &name.name, &expr.ty)?
+                    self.method_result_is_declared(*receiver, member, &expr.ty)?
                 }
                 // A generic call's literal types are declared but for those
                 // it may have inferred from a fresh literal (`create(phase)`
@@ -1146,7 +1150,7 @@ impl Inferer<'_> {
     fn method_result_is_declared(
         &self,
         receiver: ExprId,
-        method: &str,
+        method: &crate::Member,
         result_ty: &Type,
     ) -> Result<bool, CompilerFailure> {
         let receiver_ty = &self
@@ -1155,7 +1159,7 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)?
             .ty;
         if self
-            .find_method(receiver_ty, method)
+            .find_member(receiver_ty, method.key())
             .is_some_and(|(signature, ..)| signature.generics.is_empty())
         {
             return Ok(true);

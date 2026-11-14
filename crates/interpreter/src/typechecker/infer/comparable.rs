@@ -149,17 +149,17 @@ impl Proof<'_> {
                         source
                     };
                     let Some(form) =
-                        super::assignable::function_satisfiable_interface_form(iface, proof.types)
+                        super::assignable::function_inhabitable_call_signature(iface, proof.types)
                     else {
                         return false;
                     };
-                    let Some(call) = form.get("@call").filter(|call| !call.optional) else {
+                    let Some(call) = &form else {
                         return true;
                     };
                     let (source_fn, target_fn) = if matches!(target, Type::InterfaceRef { .. }) {
-                        (source, call.ty.peel())
+                        (source, call.peel())
                     } else {
-                        (call.ty.peel(), target)
+                        (call.peel(), target)
                     };
                     proof.comparable_functions(
                         source_fn,

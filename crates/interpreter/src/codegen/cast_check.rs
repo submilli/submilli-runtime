@@ -1377,6 +1377,18 @@ fn emit_interface_test_inner(
     emitter.instruction(Instruction::LocalSet(object_local));
     let field_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
     emitter.instruction(Instruction::I32Const(1));
+    // A shape satisfies a call signature only as a hybrid, which holds the
+    // function it runs.
+    if test.call.is_some() {
+        let hybrid_idx = ctx
+            .symbols
+            .intrinsic_type_indices()
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsic types registered"))?
+            .callable_shape;
+        emitter.instruction(Instruction::LocalGet(value_local));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(hybrid_idx)));
+        emitter.instruction(Instruction::I32And);
+    }
     for ordered in diagnostic::check_order(emitter, &test.members) {
         let (name, field) = (ordered.name, ordered.field);
         if test.methods.contains(name) {
@@ -2301,8 +2313,16 @@ fn emit_runtime_type_string_checked(
         .symbols
         .closure_type_idx()
         .ok_or_else(|| crate::codegen::internal_failure("$Closure intrinsic registered"))?;
+    let hybrid_idx = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsic types registered"))?
+        .callable_shape;
     emitter.instruction(Instruction::LocalGet(scratch));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(closure_idx)));
+    emitter.instruction(Instruction::LocalGet(scratch));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(hybrid_idx)));
+    emitter.instruction(Instruction::I32Or);
     emitter.emit_if(block);
     emit_type_tag(emitter, ctx, "function")?;
     emitter.emit_else();

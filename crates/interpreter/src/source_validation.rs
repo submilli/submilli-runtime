@@ -342,6 +342,11 @@ impl<'a> Validator<'a> {
                 self.type_parameters(generics)?;
                 self.doc(doc)?;
             }
+            InterfaceMember::CallSignature { doc, .. } => self.doc(doc)?,
+            InterfaceMember::ConstructSignature { generics, doc, .. } => {
+                self.type_parameters(generics)?;
+                self.doc(doc)?;
+            }
             InterfaceMember::Property { name, doc, .. } => {
                 self.span(name.span)?;
                 self.doc(doc)?;
@@ -494,6 +499,18 @@ impl<'a> Validator<'a> {
                 self.annotation(&index.value)?;
             }
             InterfaceMember::Method {
+                params,
+                return_type,
+                span,
+                ..
+            }
+            | InterfaceMember::CallSignature {
+                params,
+                return_type,
+                span,
+                ..
+            }
+            | InterfaceMember::ConstructSignature {
                 params,
                 return_type,
                 span,

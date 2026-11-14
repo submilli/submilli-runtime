@@ -197,7 +197,7 @@ function main(): void {
     for (let i = 1; i < bytes.length; i++) {
         assert(bytes[i - 1] >= bytes[i], "Uint8Array comparator sort descends");
     }
-    const unsorted = Uint8Array.new([3, 1, 2, 255, 0]);
+    const unsorted = new Uint8Array([3, 1, 2, 255, 0]);
     unsorted.sort((a: number, b: number) => 0);
     unsorted.sort((a: number, b: number) => NaN);
     assert(

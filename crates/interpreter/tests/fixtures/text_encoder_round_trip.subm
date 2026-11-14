@@ -19,6 +19,6 @@ function main(): void {
 
   // Captured constructor pattern (proves InterfaceRef value flow).
   const c = TextEncoder;
-  const more = c.new().encode("hi");
+  const more = new c().encode("hi");
   assert(more.length === 2, "namespace value captured");
 }

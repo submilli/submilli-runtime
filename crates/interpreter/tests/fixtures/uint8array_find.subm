@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4, 5]);
+  let bytes: Uint8Array = new Uint8Array([1, 2, 3, 4, 5]);
 
   let first_even: number | undefined = bytes.find((v: number) => v % 2 === 0);
   assert(first_even === 2, "find first even");

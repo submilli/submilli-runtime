@@ -947,10 +947,10 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Constructor.
-        if self.peek_identifier_text_is("constructor")
-            && matches!(self.peek_at(1).kind, TokenKind::LeftParen)
-        {
+        // Constructor. A quoted `"constructor"` is the constructor too, as in
+        // JavaScript; a computed `["constructor"]` would be a method, but
+        // computed member names are not supported.
+        if self.peek_names_constructor() && matches!(self.peek_at(1).kind, TokenKind::LeftParen) {
             if let Some(span) = modifiers.static_span {
                 self.error_at_with_help(
                     span,
@@ -1369,33 +1369,38 @@ impl<'a> Parser<'a> {
         while !matches!(self.peek().kind, TokenKind::RightBrace | TokenKind::Eof)
             && !self.peek_starts_top_level_item()
         {
-            // Call signatures `(params): ret;` are stored under the sentinel name `@call`.
-            // The `@` prefix is not a valid identifier start, so collisions with user methods
-            // are impossible.
             let member_doc = self.take_leading_doc();
             if matches!(self.peek().kind, TokenKind::LeftParen) {
                 let open = self.advance();
-                let params = self.parse_param_list(false)?;
-                self.advance();
-                if !matches!(self.peek().kind, TokenKind::Colon) {
-                    self.error_at_peek("expected `:` and return type");
+                let (params, return_type) = self.parse_interface_signature_tail()?;
+                let end = self.finish_interface_member(return_type.span.end)?;
+                members.push(crate::InterfaceMember::CallSignature {
+                    params,
+                    return_type,
+                    span: self.span(open.span.start, end),
+                    doc: member_doc,
+                });
+                continue;
+            }
+            if self.peek_is_construct_signature() {
+                let keyword = self.advance();
+                let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
+                    self.parse_generic_param_list()?
+                } else {
+                    Vec::new()
+                };
+                if !matches!(self.peek().kind, TokenKind::LeftParen) {
+                    self.error_at_peek("expected `(` after construct signature type parameters");
                     return None;
                 }
                 self.advance();
-                let return_type = self.parse_type_annotation()?;
+                let (params, return_type) = self.parse_interface_signature_tail()?;
                 let end = self.finish_interface_member(return_type.span.end)?;
-                let span = self.span(open.span.start, end);
-                let sentinel = Ident {
-                    name: "@call".to_string(),
-                    span: open.span,
-                };
-                members.push(crate::InterfaceMember::Method {
-                    name: sentinel,
-                    optional: false,
-                    generics: Vec::new(),
+                members.push(crate::InterfaceMember::ConstructSignature {
+                    generics,
                     params,
                     return_type,
-                    span,
+                    span: self.span(keyword.span.start, end),
                     doc: member_doc,
                 });
                 continue;
@@ -4530,6 +4535,22 @@ impl<'a> Parser<'a> {
             )
     }
 
+    /// The rest of a call or construct signature after its `(`: the parameters
+    /// and `: ret`.
+    fn parse_interface_signature_tail(
+        &mut self,
+    ) -> Option<(Vec<crate::ParamDecl>, crate::TypeAnnotation)> {
+        let params = self.parse_param_list(false)?;
+        self.advance();
+        if !matches!(self.peek().kind, TokenKind::Colon) {
+            self.error_at_peek("expected `:` and return type");
+            return None;
+        }
+        self.advance();
+        let return_type = self.parse_type_annotation()?;
+        Some((params, return_type))
+    }
+
     /// Only interfaces declare construct signatures, so one in a type literal (see
     /// `peek_is_construct_signature`) is diagnosed, then skipped rather than misread
     /// as a method named `new`.
@@ -4777,6 +4798,15 @@ impl<'a> Parser<'a> {
     /// `as` and `satisfies`, which lex as identifiers but continue an expression.
     fn peek_at_is_binary_word(&self, offset: usize) -> bool {
         self.peek_at_is_word(offset, "as") || self.peek_at_is_word(offset, "satisfies")
+    }
+
+    /// Whether the next token names `constructor`, bare or quoted.
+    fn peek_names_constructor(&self) -> bool {
+        if self.peek_identifier_text_is("constructor") {
+            return true;
+        }
+        matches!(self.peek().kind, TokenKind::StringLiteral(_))
+            && self.property_ident_from_token(self.peek()).name == "constructor"
     }
 
     fn peek_identifier_text_is(&self, expected: &str) -> bool {
@@ -6008,7 +6038,7 @@ impl<'a> Parser<'a> {
 
     fn parse_field_access_tail(&mut self, receiver: ExprId) -> Option<ExprId> {
         self.advance();
-        // Keywords are valid field names — `Foo.new(args)` is the canonical constructor call.
+        // Keywords are valid field names, as `ok.default` and `x.new` are.
         let name_tok = if is_property_name(&self.peek().kind) {
             self.advance()
         } else {
@@ -12050,7 +12080,7 @@ mod tests {
             .map(|m| match m {
                 crate::InterfaceMember::Method { name, .. }
                 | crate::InterfaceMember::Property { name, .. } => name.name.as_str(),
-                crate::InterfaceMember::IndexSignature(_) => panic!("unexpected index signature"),
+                other => panic!("unexpected member {other:?}"),
             })
             .collect();
         assert_eq!(names, vec!["type", "default", "null"]);
@@ -12116,12 +12146,11 @@ mod tests {
         };
         assert_eq!(members.len(), 1);
         match &members[0] {
-            crate::InterfaceMember::Method { name, params, .. } => {
-                assert_eq!(name.name, "@call");
+            crate::InterfaceMember::CallSignature { params, .. } => {
                 assert_eq!(params.len(), 1);
                 assert_eq!(params[0].name.name, "s");
             }
-            other => panic!("expected method (call signature), got {other:?}"),
+            other => panic!("expected a call signature, got {other:?}"),
         }
     }
 
@@ -12133,14 +12162,34 @@ mod tests {
         let crate::StmtKind::InterfaceDecl { ref members, .. } = stmt.kind else {
             panic!("expected interface decl");
         };
-        let names: Vec<&str> = members
-            .iter()
-            .map(|m| match m {
-                crate::InterfaceMember::Method { name, .. } => name.name.as_str(),
-                _ => "<property>",
-            })
-            .collect();
-        assert_eq!(names, vec!["greet", "@call"]);
+        assert!(
+            matches!(&members[0], crate::InterfaceMember::Method { name, .. } if name.name == "greet")
+        );
+        assert!(matches!(
+            &members[1],
+            crate::InterfaceMember::CallSignature { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_interface_quoted_signature_names_are_methods() {
+        let (ast, diags) = parse_str(
+            r#"interface F { "@call"(): number; "new"(x: number): string; new (x: number): F; }"#,
+        );
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+        let crate::StmtKind::InterfaceDecl { ref members, .. } = single_stmt(&ast).kind else {
+            panic!("expected interface decl");
+        };
+        assert!(
+            matches!(&members[0], crate::InterfaceMember::Method { name, .. } if name.name == "@call")
+        );
+        assert!(
+            matches!(&members[1], crate::InterfaceMember::Method { name, .. } if name.name == "new")
+        );
+        assert!(matches!(
+            &members[2],
+            crate::InterfaceMember::ConstructSignature { .. }
+        ));
     }
 
     #[test]

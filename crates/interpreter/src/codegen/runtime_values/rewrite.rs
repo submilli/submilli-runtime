@@ -268,11 +268,10 @@ fn rewrite_operation(
         TypedExprKind::MethodCall {
             receiver,
             iface,
-            name,
+            member: crate::Member::Named(name),
             args,
             ..
-        } if name.name != "@call"
-            && super::dynamic_member_interface(&iface)
+        } if super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
                 || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
@@ -288,11 +287,10 @@ fn rewrite_operation(
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
-            name,
+            member: crate::Member::Named(name),
             args,
             ..
-        } if name.name != "@call"
-            && super::dynamic_member_interface(&iface)
+        } if super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
                 || (!crate::codegen::is_host_package(iface.as_str())
                     && ast
@@ -486,15 +484,7 @@ fn rewrite_member_call(
         },
         <[crate::TypedArrayElement]>::to_vec,
     );
-    let mut lookup_args = member_arguments(ast, id, receiver, iface, name)?;
-    let null_receiver = ast
-        .try_push_expr(crate::TypedExpr {
-            kind: TypedExprKind::Null,
-            ty: Type::Unknown,
-            span,
-        })
-        .map_err(crate::codegen::arena_failure)?;
-    lookup_args.push(null_receiver);
+    let lookup_args = member_arguments(ast, id, receiver, iface, name)?;
     let member = ast
         .try_push_expr(crate::TypedExpr {
             kind: member_helper("member", lookup_args),

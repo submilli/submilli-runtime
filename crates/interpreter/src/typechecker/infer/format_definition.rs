@@ -220,6 +220,8 @@ fn write_interface(
         extends,
         generics,
         methods,
+        call,
+        construct,
         properties,
         index,
         more_indexes,
@@ -240,7 +242,12 @@ fn write_interface(
         out.push(if position == 0 { " extends " } else { ", " })?;
         write_type(out, &substituted(base, &sub, limits)?)?;
     }
-    if methods.is_empty() && properties.is_empty() && index.is_none() {
+    if methods.is_empty()
+        && call.is_none()
+        && construct.is_none()
+        && properties.is_empty()
+        && index.is_none()
+    {
         return out.push(" {}");
     }
     out.push(" {\n")?;
@@ -266,13 +273,25 @@ fn write_interface(
         write_type(out, &substituted(&prop.ty, &sub, limits)?)?;
         out.push(";\n")?;
     }
+    for (prefix, sig) in [("", call), ("new ", construct)] {
+        let Some(sig) = sig else {
+            continue;
+        };
+        out.step()?;
+        if let Some(doc) = &sig.doc {
+            write_doc_block(out, "  ", doc)?;
+        }
+        out.push("  ")?;
+        write_method(out, prefix, sig, &sub, limits)?;
+        out.push("\n")?;
+    }
     for (name, sig) in methods {
         out.step()?;
         if let Some(doc) = &sig.doc {
             write_doc_block(out, "  ", doc)?;
         }
         out.push("  ")?;
-        write_method(out, name, sig, &sub, limits)?;
+        write_method(out, &crate::packages::method_name(name), sig, &sub, limits)?;
         out.push("\n")?;
     }
     out.push("}")
@@ -282,7 +301,7 @@ pub(super) fn method_bindings(
     types: &TypeNamespace,
     registry: &TypeRegistry,
     receiver: &Type,
-    name: &str,
+    member: crate::MemberKey<'_>,
 ) -> Result<TypeParamSubstitution, RenderError> {
     let limits = CopyBudget::default();
     limits.check(receiver)?;
@@ -295,6 +314,9 @@ pub(super) fn method_bindings(
     match &symbol.kind {
         TypeKind::Interface { generics, .. } => bindings(generics, &args, &limits),
         TypeKind::Class { .. } => {
+            let crate::MemberKey::Named(name) = member else {
+                return Err(RenderError::InvalidMetadata("class has no signatures"));
+            };
             let mut found = None;
             let rendered = Writer::render(RenderLimits::default(), |out| {
                 let chain = class_chain(out, types, registry, &mangled, &args, &limits)?;
@@ -791,6 +813,8 @@ mod tests {
                     generics: crate::GenericParameters::unconstrained(generics),
                     methods: m,
                     properties: p,
+                    call: None,
+                    construct: None,
                     dispatch: crate::Dispatch::VTable,
                     doc: None,
                 },
@@ -1082,6 +1106,8 @@ mod tests {
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties: m,
+                call: None,
+                construct: None,
                 dispatch: crate::Dispatch::Direct,
                 doc: None,
             },

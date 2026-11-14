@@ -91,7 +91,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         MODULE_NAME,
-        crate::mangle::extend(&crate::mangle::prelude("BigIntConstructor"), "@call"),
+        crate::mangle::call_signature(&crate::mangle::prelude("BigIntConstructor")),
         FuncType::new(&engine, [obj_param], [bigint_ref]),
         |caller, params, results| {
             *abi_result(results, 0)? = bigint_ctor_call(caller, abi_arg(params, 0)?)?;
@@ -157,8 +157,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     );
     declare_method(
         defs,
-        "@call",
-        crate::mangle::extend(&crate::mangle::prelude("BigIntConstructor"), "@call"),
+        "BigInt",
+        crate::mangle::call_signature(&crate::mangle::prelude("BigIntConstructor")),
         vec![Param::new(
             "value",
             Type::Union(vec![Type::String, Type::Number]),
@@ -223,6 +223,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** Arbitrary-precision integer. Literals use the `n` suffix: `42n`. */",
@@ -240,22 +242,6 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 generics: Default::default(),
                 methods: BTreeMap::from([
                     (
-                        "@call".to_string(),
-                        MethodSig { overloads: Vec::new(),
-                            optional: false,
-                            generics: Default::default(),
-                            params: vec![Param::new(
-                                "value",
-                                Type::Union(vec![Type::String, Type::Number]),
-                            )],
-                            ret: Type::BigInt,
-                            predicate: None,
-                            doc: doc(
-                                "/**\n * Convert a `string` or `number` to a `bigint`.\n * - String input is parsed as a decimal of arbitrary length. Throws `Error` on a malformed string.\n * - Number input must be a finite integer. Throws on NaN, ±Inf, or non-integer values.\n */",
-                            ),
-                        },
-                    ),
-                    (
                         "fromString".to_string(),
                         MethodSig { overloads: Vec::new(),
                             optional: false,
@@ -270,6 +256,20 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: Some(MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![Param::new(
+                                "value",
+                                Type::Union(vec![Type::String, Type::Number]),
+                            )],
+                            ret: Type::BigInt,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Convert a `string` or `number` to a `bigint`.\n * - String input is parsed as a decimal of arbitrary length. Throws `Error` on a malformed string.\n * - Number input must be a finite integer. Throws on NaN, ±Inf, or non-integer values.\n */",
+                            ),
+                        }),
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `bigint`. Accessed via the global `BigInt` binding. */",

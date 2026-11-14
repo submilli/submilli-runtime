@@ -351,7 +351,7 @@ fn emit_expr_value(
         TypedExprKind::MethodCall {
             receiver,
             iface,
-            name,
+            member,
             args,
             type_predicate: _,
         } => {
@@ -360,7 +360,7 @@ fn emit_expr_value(
                 ctx,
                 *receiver,
                 iface,
-                &name.name,
+                member.key(),
                 args,
                 None,
                 &[],
@@ -372,7 +372,7 @@ fn emit_expr_value(
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
-            name,
+            member,
             type_args,
             args,
             return_cast,
@@ -384,7 +384,7 @@ fn emit_expr_value(
                 ctx,
                 *receiver,
                 iface,
-                &name.name,
+                member.key(),
                 &plain_args,
                 Some(args),
                 type_args,
@@ -606,8 +606,8 @@ fn emit_expr_value(
                 .clone();
             let receiver = match parts.first() {
                 Some(crate::TypedChainPart::Call { .. }) => emit_callee(emitter, ctx, *base)?,
-                Some(crate::TypedChainPart::MethodCall { name, .. })
-                    if is_call_signature_call(&name.name) =>
+                Some(crate::TypedChainPart::MethodCall { member, .. })
+                    if member.is_call_signature() =>
                 {
                     emit_callee(emitter, ctx, *base)?
                 }
@@ -963,7 +963,7 @@ fn emit_interface_property(
     if crate::codegen::runtime_values::is_wrapper_interface_receiver(recv_ty, iface) {
         emit_receiver(emitter, ctx, *receiver)?;
         cast::emit_box(emitter, ctx, recv_ty)?;
-        emit_live_member_on_stack(emitter, ctx, iface, &name.name, None)?;
+        emit_live_property(emitter, ctx, iface, &name.name)?;
         return cast::emit_cast_to(emitter, ctx, result_ty);
     }
     if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
@@ -3218,22 +3218,21 @@ fn emit_chain_operation(
     }
     if let crate::TypedChainPart::MethodCall {
         iface,
-        name,
+        member: crate::Member::Named(name),
         result_ty,
         span,
         ..
     } = part
         && !crate::codegen::is_host_package(iface.as_str())
-        && !is_call_signature_call(&name.name)
         && let Some(args) = ctx.ta.authored_call_arguments(*span)
     {
         cast::emit_box(emitter, ctx, receiver_ty)?;
-        emit_live_member_on_stack(
+        emit_live_method_call(
             emitter,
             ctx,
             iface,
             &name.name,
-            Some((CallArguments::Authored(args), None)),
+            CallArguments::Authored(args),
         )?;
         emit_live_member_return_cast(emitter, ctx, result_ty)?;
         return Ok(());
@@ -3242,19 +3241,17 @@ fn emit_chain_operation(
         match part {
             crate::TypedChainPart::MethodCall {
                 iface,
-                name,
+                member: crate::Member::Named(name),
                 args,
                 result_ty,
                 span,
                 ..
-            } if crate::codegen::runtime_values::dynamic_member_interface(iface)
-                && !is_call_signature_call(&name.name) =>
-            {
+            } if crate::codegen::runtime_values::dynamic_member_interface(iface) => {
                 let args = ctx
                     .ta
                     .authored_call_arguments(*span)
                     .map_or(CallArguments::Typed(args), CallArguments::Authored);
-                emit_live_member_on_stack(emitter, ctx, iface, &name.name, Some((args, None)))?;
+                emit_live_method_call(emitter, ctx, iface, &name.name, args)?;
                 emit_live_member_return_cast(emitter, ctx, result_ty)?;
                 return Ok(());
             }
@@ -3264,7 +3261,7 @@ fn emit_chain_operation(
                 result_ty,
                 ..
             } if crate::codegen::runtime_values::dynamic_member_interface(iface) => {
-                emit_live_member_on_stack(emitter, ctx, iface, &name.name, None)?;
+                emit_live_property(emitter, ctx, iface, &name.name)?;
                 return cast::emit_cast_to(emitter, ctx, result_ty);
             }
             _ => {}
@@ -3342,7 +3339,7 @@ fn emit_call_signature_on_stack(
     result_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     cast::emit_box(emitter, ctx, receiver_ty)?;
-    emit_live_member_on_stack(emitter, ctx, iface, "@call", Some((args, call_receiver)))?;
+    emit_live_call_signature(emitter, ctx, iface, args, call_receiver)?;
     emit_live_member_return_cast(emitter, ctx, result_ty)
 }
 
@@ -3357,47 +3354,119 @@ fn emit_live_member_return_cast(
     crate::codegen::cast_check::emit_checked_cast_on_stack(emitter, ctx, &Type::Unknown, result_ty)
 }
 
-fn emit_live_member_on_stack(
+/// Reads the property `name` of the live value on the stack, as the host
+/// resolves it on the value (`__value_property`).
+fn emit_live_property(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     iface: &crate::MangledName,
     name: &str,
-    call: Option<(CallArguments<'_>, Option<u32>)>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let intr = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     super::emit_const_string_by_text(emitter, ctx, name)?;
     super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
-    let helper = if let Some((_, call_receiver)) = call {
-        if let Some(slot) = call_receiver {
-            emitter.instruction(Instruction::LocalGet(slot));
-            match emitter.local_type(slot)? {
-                ValType::F64 => cast::emit_box(emitter, ctx, &Type::Number)?,
-                ValType::I32 => cast::emit_box(emitter, ctx, &Type::Boolean)?,
-                ValType::Ref(_) => {}
-                other => {
-                    return Err(crate::codegen::internal_failure(format!(
-                        "unexpected call receiver local type {other:?}"
-                    )));
-                }
+    emit_live_helper_call(emitter, ctx, "__value_property")
+}
+
+/// Calls the live value on the stack through `member`: a named method or a
+/// signature.
+fn emit_live_member_call(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    iface: &crate::MangledName,
+    member: crate::MemberKey<'_>,
+    args: CallArguments<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    match member {
+        crate::MemberKey::Named(name) => emit_live_method_call(emitter, ctx, iface, name, args),
+        crate::MemberKey::Call => emit_live_call_signature(emitter, ctx, iface, args, None),
+        crate::MemberKey::Construct => emit_live_construct_signature(emitter, ctx, iface, args),
+    }
+}
+
+/// Calls the method `name` of the live value on the stack, as the host
+/// resolves it on the value (`__value_member`).
+fn emit_live_method_call(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    iface: &crate::MangledName,
+    name: &str,
+    args: CallArguments<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    super::emit_const_string_by_text(emitter, ctx, name)?;
+    super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
+    emit_live_helper_call(emitter, ctx, "__value_member")?;
+    emit_live_invoke(emitter, ctx, args)
+}
+
+/// Calls the live value on the stack through its call signature
+/// (`__value_call`), passing `call_receiver`, the `this` a closure runs with.
+fn emit_live_call_signature(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    iface: &crate::MangledName,
+    args: CallArguments<'_>,
+    call_receiver: Option<u32>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
+    if let Some(slot) = call_receiver {
+        emitter.instruction(Instruction::LocalGet(slot));
+        match emitter.local_type(slot)? {
+            ValType::F64 => cast::emit_box(emitter, ctx, &Type::Number)?,
+            ValType::I32 => cast::emit_box(emitter, ctx, &Type::Boolean)?,
+            ValType::Ref(_) => {}
+            other => {
+                return Err(crate::codegen::internal_failure(format!(
+                    "unexpected call receiver local type {other:?}"
+                )));
             }
-        } else {
-            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));
         }
-        "__value_member"
     } else {
-        "__value_property"
-    };
+        let intr = ctx
+            .symbols
+            .intrinsic_type_indices()
+            .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+        emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));
+    }
+    emit_live_helper_call(emitter, ctx, "__value_call")?;
+    emit_live_invoke(emitter, ctx, args)
+}
+
+/// Constructs through the construct signature of the live value on the stack
+/// (`__value_construct`).
+fn emit_live_construct_signature(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    iface: &crate::MangledName,
+    args: CallArguments<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    super::emit_const_string_by_text(emitter, ctx, iface.as_str())?;
+    emit_live_helper_call(emitter, ctx, "__value_construct")?;
+    emit_live_invoke(emitter, ctx, args)
+}
+
+fn emit_live_helper_call(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    helper: &str,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     emitter.instruction(Instruction::Call(
         ctx.symbols
             .prelude_func_idx(helper)
             .ok_or_else(|| crate::codegen::internal_failure("live member helper collected"))?,
     ));
-    let Some((args, _)) = call else {
-        return Ok(());
-    };
+    Ok(())
+}
+
+/// Invokes the call token on the stack with `args`, packed into an array.
+fn emit_live_invoke(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    args: CallArguments<'_>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
     if let CallArguments::Authored(elements) = args
         && elements
             .iter()
@@ -3431,12 +3500,7 @@ fn emit_live_member_on_stack(
         })?));
         emitter.instruction(Instruction::StructNew(intr.array));
     }
-    emitter.instruction(Instruction::Call(
-        ctx.symbols
-            .prelude_func_idx("__value_invoke")
-            .ok_or_else(|| crate::codegen::internal_failure("live invocation collected"))?,
-    ));
-    Ok(())
+    emit_live_helper_call(emitter, ctx, "__value_invoke")
 }
 
 /// Intrinsic length properties have no host getter. Arrays store their logical
@@ -4073,7 +4137,7 @@ fn emit_chain_access(
             // value already sits in the slot the next step expects.
             if crate::codegen::runtime_values::is_wrapper_interface_receiver(receiver_ty, iface) {
                 cast::emit_box(emitter, ctx, receiver_ty)?;
-                emit_live_member_on_stack(emitter, ctx, iface, &name.name, None)?;
+                emit_live_property(emitter, ctx, iface, &name.name)?;
                 return cast::emit_cast_to(emitter, ctx, result_ty);
             }
             if let Some(struct_idx) = inline_length_struct_idx(ctx, iface, &name.name)? {
@@ -4119,13 +4183,13 @@ fn emit_chain_access(
         }
         crate::TypedChainPart::MethodCall {
             iface,
-            name,
+            member,
             args,
             result_ty,
             span,
             ..
         } => {
-            if is_call_signature_call(&name.name) {
+            if member.is_call_signature() {
                 let call_receiver = emitter.call_receiver.take();
                 let args = ctx
                     .ta
@@ -4155,7 +4219,7 @@ fn emit_chain_access(
                 ctx,
                 receiver_ty,
                 iface,
-                &name.name,
+                member.key(),
                 args,
                 None,
                 &[],
@@ -6060,9 +6124,10 @@ fn emit_typeof_tag(
             emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(boxed)));
         }
         crate::TypeofTagKind::Function => {
-            let closure_idx = ctx.symbols.closure_type_idx().ok_or_else(|| {
-                crate::codegen::internal_failure("$Closure intrinsic type registered")
+            let intrinsics = ctx.symbols.intrinsic_type_indices().ok_or_else(|| {
+                crate::codegen::internal_failure("intrinsics declared by codegen entry")
             })?;
+            let scratch = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
             emit_expr(emitter, ctx, value)?;
             cast::emit_box(
                 emitter,
@@ -6072,7 +6137,16 @@ fn emit_typeof_tag(
                     .map_err(crate::codegen::arena_failure)?
                     .ty,
             )?;
-            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(closure_idx)));
+            // A closure, or a hybrid that holds one.
+            emitter.instruction(Instruction::LocalTee(scratch));
+            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+                intrinsics.closure,
+            )));
+            emitter.instruction(Instruction::LocalGet(scratch));
+            emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+                intrinsics.callable_shape,
+            )));
+            emitter.instruction(Instruction::I32Or);
         }
         crate::TypeofTagKind::Object => {
             let scratch_ty = ctx.symbols.value_type(&Type::Unknown)?;
@@ -6142,6 +6216,7 @@ pub(crate) fn emit_is_non_primitive(
     ];
     if closures == Closures::AreNotObjects {
         excluded.push(intrinsics.closure);
+        excluded.push(intrinsics.callable_shape);
     }
     for primitive in excluded {
         emitter.instruction(Instruction::LocalGet(local));
@@ -6408,7 +6483,7 @@ pub(crate) fn emit_method_call(
         ctx,
         receiver,
         iface,
-        method,
+        crate::MemberKey::Named(method),
         args,
         generic_args,
         type_args,
@@ -6424,7 +6499,7 @@ fn emit_method_call_at(
     ctx: &CodegenCtx,
     receiver: ExprId,
     iface: &crate::MangledName,
-    method: &str,
+    member: crate::MemberKey<'_>,
     args: &[ExprId],
     generic_args: Option<&[crate::GenericArgument]>,
     type_args: &[Type],
@@ -6440,7 +6515,7 @@ fn emit_method_call_at(
     let static_receiver = ctx.symbols.iface_dispatch(iface) == Some(crate::Dispatch::Static)
         && emit_dropped_static_receiver(emitter, ctx, receiver)?;
     if !static_receiver {
-        if is_call_signature_call(method) {
+        if member == crate::MemberKey::Call {
             let call_receiver = emit_callee(emitter, ctx, receiver)?;
             let actual_recv_ty = &ctx
                 .ta
@@ -6478,7 +6553,7 @@ fn emit_method_call_at(
         ctx,
         &recv_ty,
         iface,
-        method,
+        member,
         args,
         generic_args,
         type_args,
@@ -6529,7 +6604,7 @@ fn emit_method_call_with_receiver_on_stack(
     ctx: &CodegenCtx,
     recv_ty: &Type,
     iface: &crate::MangledName,
-    method: &str,
+    member: crate::MemberKey<'_>,
     args: &[ExprId],
     generic_args: Option<&[crate::GenericArgument]>,
     type_args: &[Type],
@@ -6545,7 +6620,7 @@ fn emit_method_call_with_receiver_on_stack(
             .and_then(|span| ctx.ta.authored_call_arguments(span))
             .map_or(CallArguments::Typed(args), CallArguments::Authored);
         cast::emit_box(emitter, ctx, recv_ty)?;
-        emit_live_member_on_stack(emitter, ctx, iface, method, Some((live_args, None)))?;
+        emit_live_member_call(emitter, ctx, iface, member, live_args)?;
         return cast::emit_cast_to(emitter, ctx, call_ret_ty);
     }
     if args.is_empty()
@@ -6557,7 +6632,7 @@ fn emit_method_call_with_receiver_on_stack(
     if recv_ty.is_regexp_match_array() && *iface == crate::mangle::prelude("Array") {
         cast::emit_cast_to(emitter, ctx, &Type::Array(Box::new(Type::regexp_element())))?;
     }
-    let direct_key = crate::mangle::extend(iface, method);
+    let direct_key = member.symbol(iface);
     if let Some(func_idx) = ctx.symbols.func_idx(&direct_key) {
         if matches!(recv_ty.primitive_behavior(), Type::Number)
             && ctx.symbols.value_type(recv_ty)? != ValType::F64
@@ -6627,6 +6702,17 @@ fn emit_method_call_with_receiver_on_stack(
         emit_slot_return_cast(emitter, ctx, call_ret_ty, Some(&abi))?;
         return Ok(());
     }
+    let crate::MemberKey::Named(method) = member else {
+        // A signature without a host function of its own runs whatever the
+        // live value holds: a construct signature of a prelude constructor
+        // held in a user interface, for one.
+        let live_args = call_span
+            .and_then(|span| ctx.ta.authored_call_arguments(span))
+            .map_or(CallArguments::Typed(args), CallArguments::Authored);
+        cast::emit_box(emitter, ctx, recv_ty)?;
+        emit_live_member_call(emitter, ctx, iface, member, live_args)?;
+        return emit_live_member_return_cast(emitter, ctx, call_ret_ty);
+    };
     // Interface aliases write the same method payload a class-typed call reads.
     // Generic methods and synthetic accessors retain their dedicated vtable ABI.
     if ctx.symbols.is_rewritable_class_method(iface, method) {
@@ -6679,12 +6765,13 @@ fn emit_method_call_with_receiver_on_stack(
     )))
 }
 
-/// Whether a call on an interface goes through its call signature
-/// (`interface F { (v: number): number }`, `BooleanConstructor`, etc.).
-/// Codegen analysis notes the runtime member helpers such a call needs by the
-/// same test.
-pub(in crate::codegen) fn is_call_signature_call(method: &str) -> bool {
-    method == "@call"
+/// The prelude helper that resolves a call of `member` on a live value.
+pub(in crate::codegen) fn live_member_helper(member: crate::MemberKey<'_>) -> &'static str {
+    match member {
+        crate::MemberKey::Named(_) => "__value_member",
+        crate::MemberKey::Call => "__value_call",
+        crate::MemberKey::Construct => "__value_construct",
+    }
 }
 
 fn emit_class_method_value(
@@ -6861,6 +6948,8 @@ fn emit_shape_method_with_arguments(
         emitter.instruction(Instruction::LocalSet(slot));
         evaluated_args.push(slot);
     }
+    // A hybrid calls as the closure it holds.
+    emit_unwrap_hybrid(emitter, intrinsics, method_value);
     emitter.instruction(Instruction::LocalGet(method_value));
     emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
         intrinsics.closure,
@@ -6869,16 +6958,16 @@ fn emit_shape_method_with_arguments(
     emitter.emit_if(BlockType::Empty);
     crate::codegen::throw::emit_type_error_throw(emitter, ctx, "Value is not callable");
     emitter.emit_end();
-    emitter.instruction(Instruction::LocalGet(method_value));
 
     // 3. Cast to the matching closure struct type. closure
     // ABI: every Function-typed value stored in an `$Object` slot is
     // a `(ref $closure_<sig>)`.
-    crate::codegen::closure_coercions::emit_erased_cast(
+    crate::codegen::closure_coercions::emit_erased_cast_of(
         emitter,
         ctx,
         crate::codegen::closures::ClosureSig::of(args.len(), call_ret_ty)?,
         false,
+        method_value,
     )?;
     emitter.instruction(Instruction::LocalTee(closure_local));
 
@@ -6914,6 +7003,30 @@ fn emit_shape_method_with_arguments(
         )?;
     };
     Ok(())
+}
+
+/// Replace a hybrid in `local`, a `(ref null $Object)`, with the closure it
+/// holds, so the closure call ABI applies to it as to any function.
+pub(in crate::codegen) fn emit_unwrap_hybrid(
+    emitter: &mut FunctionEmitter,
+    intrinsics: crate::codegen::intrinsics::IntrinsicTypeIndices,
+    local: u32,
+) {
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.callable_shape,
+    )));
+    emitter.emit_if(BlockType::Empty);
+    emitter.instruction(Instruction::LocalGet(local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intrinsics.callable_shape,
+    )));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intrinsics.callable_shape,
+        field_index: crate::codegen::CALLABLE_SHAPE_CLOSURE,
+    });
+    emitter.instruction(Instruction::LocalSet(local));
+    emitter.emit_end();
 }
 
 /// Map a built-in method name to its slot index in the universal
@@ -7618,7 +7731,7 @@ fn emit_bigint_literal(
 /// regex-literal lowering. Each literal site allocates a
 /// fresh `$regex` (JS-faithful per-site `lastIndex` semantics; see
 /// `docs/regex.md`). Emit the source and flags as constant `$string`
-/// values, then call the prelude's `RegExpConstructor#new` wrapper —
+/// values, then call the prelude's `RegExp` construct signature —
 /// which invokes the `submilli:regex.compile` host fn and assembles
 /// the receiver struct.
 ///
@@ -7636,8 +7749,12 @@ fn emit_regex_literal(
     super::emit_const_string_by_text(emitter, ctx, flags)?;
     let ctor_idx = ctx
         .symbols
-        .func_idx(&crate::mangle::prelude("RegExpConstructor#new"))
-        .ok_or_else(|| crate::codegen::internal_failure("RegExpConstructor#new is not imported"))?;
+        .func_idx(&crate::mangle::construct_signature(
+            &crate::mangle::prelude("RegExpConstructor"),
+        ))
+        .ok_or_else(|| {
+            crate::codegen::internal_failure("the `RegExp` construct signature is not imported")
+        })?;
     emitter.instruction(Instruction::Call(ctor_idx));
     Ok(())
 }
@@ -8199,7 +8316,7 @@ mod tests {
                     ctx,
                     &Type::Number,
                     &crate::mangle::prelude("MissingInterface"),
-                    "missingMethod",
+                    crate::MemberKey::Named("missingMethod"),
                     &[],
                     None,
                     &[],

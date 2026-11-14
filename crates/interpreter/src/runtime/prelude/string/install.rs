@@ -203,7 +203,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn_async(
         linker,
         MODULE_NAME,
-        crate::mangle::extend(&crate::mangle::prelude("StringConstructor"), "@call"),
+        crate::mangle::call_signature(&crate::mangle::prelude("StringConstructor")),
         FuncType::new(&engine, [obj_param], [abi.value_type()]),
         |caller, params, results| {
             Box::pin(async move {
@@ -495,8 +495,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     );
     declare_method(
         defs,
-        "@call",
-        crate::mangle::extend(&crate::mangle::prelude("StringConstructor"), "@call"),
+        "String",
+        crate::mangle::call_signature(&crate::mangle::prelude("StringConstructor")),
         vec![call_value()],
         Type::String,
     );
@@ -2123,6 +2123,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc("/** The number of UTF-16 code units in the string. */"),
                     },
                 )]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc("/** The UTF-16 string type. */"),
             },
@@ -2137,19 +2139,6 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
-                    (
-                        "@call".to_string(),
-                        MethodSig { overloads: Vec::new(),
-                            optional: false,
-                            generics: Default::default(),
-                            params: vec![call_value()],
-                            ret: Type::String,
-                            predicate: None,
-                            doc: doc(
-                                "/**\n * Convert any value to its string representation: `\"null\"` and `\"undefined\"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `\"\"`.\n */",
-                            ),
-                        },
-                    ),
                     (
                         "fromCharCode".to_string(),
                         MethodSig { overloads: Vec::new(),
@@ -2181,6 +2170,17 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: Some(MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![call_value()],
+                            ret: Type::String,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Convert any value to its string representation: `\"null\"` and `\"undefined\"` for those values, otherwise the value's `toString()` method. Called with no argument, the result is `\"\"`.\n */",
+                            ),
+                        }),
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `string`. Accessed via the global `String` binding. */",

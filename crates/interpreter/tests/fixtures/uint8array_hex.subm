@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([0, 15, 255, 171, 205]);
+  let bytes: Uint8Array = new Uint8Array([0, 15, 255, 171, 205]);
   assert(bytes.toHex() === "000fffabcd", "toHex lowercase");
 
   let back: Uint8Array = Uint8Array.fromHex("000fffabcd");
@@ -15,6 +15,6 @@ function main(): void {
   assert(empty.toHex() === "", "empty → empty");
   assert(Uint8Array.fromHex("").length === 0, "empty decode");
 
-  let one: Uint8Array = Uint8Array.new([42]);
+  let one: Uint8Array = new Uint8Array([42]);
   assert(one.toHex() === "2a", "42 → 2a");
 }

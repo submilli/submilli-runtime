@@ -1107,6 +1107,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc("/** The error that led to the new one, stored as its `cause`. */"),
                     },
                 )]),
+                call: None,
+                construct: None,
                 dispatch: crate::Dispatch::VTable,
                 doc: doc(
                     "/** Options for an error constructor, as in `new Error(message, { cause })`. */",

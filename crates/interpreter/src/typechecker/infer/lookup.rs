@@ -120,20 +120,36 @@ impl<'a> Inferer<'a> {
         &self,
         recv_ty: &Type,
         name: &str,
-    ) -> Option<(
-        MethodSig,
-        BTreeMap<String, Type>,
-        crate::MangledName,
-        crate::Dispatch,
-    )> {
+    ) -> Option<super::expr::FoundMethod> {
+        self.find_member(recv_ty, crate::MemberKey::Named(name))
+    }
+
+    /// The call signature of an interface-typed callee.
+    pub(super) fn find_call_signature(&self, recv_ty: &Type) -> Option<super::expr::FoundMethod> {
+        self.find_member(recv_ty, crate::MemberKey::Call)
+    }
+
+    /// The construct signature `new (…)` of an interface-typed callee.
+    pub(super) fn find_construct_signature(
+        &self,
+        recv_ty: &Type,
+    ) -> Option<super::expr::FoundMethod> {
+        self.find_member(recv_ty, crate::MemberKey::Construct)
+    }
+
+    pub(super) fn find_member(
+        &self,
+        recv_ty: &Type,
+        key: crate::MemberKey<'_>,
+    ) -> Option<super::expr::FoundMethod> {
         if let Some(members) = recv_ty.primitive_union_members() {
-            return self.find_primitive_union_method(&members, name);
+            return self.find_primitive_union_method(&members, key);
         }
         if let Some(members) = recv_ty.interface_instance_union_members() {
-            return self.find_interface_instances_method(members, name);
+            return self.find_interface_instances_method(members, key);
         }
         if recv_ty.is_regexp_match_array() {
-            return self.find_method(&Type::Array(Box::new(Type::regexp_element())), name);
+            return self.find_member(&Type::Array(Box::new(Type::regexp_element())), key);
         }
         let array_view = recv_ty.array_like_union_view();
         let recv_ty = array_view.as_ref().unwrap_or(recv_ty);
@@ -141,12 +157,12 @@ impl<'a> Inferer<'a> {
         let sym = self.lookup_structural_type(&mangled, interface_name)?;
         match &sym.kind {
             TypeKind::Interface {
-                generics,
-                methods,
-                dispatch,
-                ..
+                generics, dispatch, ..
             } => {
-                let Some(sig) = methods.get(name) else {
+                let Some(sig) = sym.kind.interface_member(key) else {
+                    let crate::MemberKey::Named(name) = key else {
+                        return None;
+                    };
                     return self.undeclared_interface_to_string(sym, name, *dispatch);
                 };
                 let mut sig = sig.clone();
@@ -162,6 +178,9 @@ impl<'a> Inferer<'a> {
                 Some((sig, bindings, sym.mangled_name.clone(), *dispatch))
             }
             TypeKind::Class { .. } => {
+                let crate::MemberKey::Named(name) = key else {
+                    return None;
+                };
                 let Some(resolved) = self.class_method_in_chain(&sym.mangled_name, &args, name)
                 else {
                     // Universal vtable methods: every class instance answers
@@ -210,7 +229,7 @@ impl<'a> Inferer<'a> {
     fn find_primitive_union_method(
         &self,
         members: &[Type],
-        name: &str,
+        key: crate::MemberKey<'_>,
     ) -> Option<(
         MethodSig,
         BTreeMap<String, Type>,
@@ -219,7 +238,7 @@ impl<'a> Inferer<'a> {
     )> {
         let methods = members
             .iter()
-            .map(|member| self.find_method(member, name))
+            .map(|member| self.find_member(member, key))
             .collect::<Option<Vec<_>>>()?;
         let mut combined = methods
             .iter()
@@ -250,7 +269,7 @@ impl<'a> Inferer<'a> {
     fn find_interface_instances_method(
         &self,
         members: &[Type],
-        name: &str,
+        key: crate::MemberKey<'_>,
     ) -> Option<(
         MethodSig,
         BTreeMap<String, Type>,
@@ -260,7 +279,7 @@ impl<'a> Inferer<'a> {
         let mut sigs = Vec::new();
         let mut interface: Option<crate::MangledName> = None;
         for member in members {
-            let (sig, bindings, mangled, dispatch) = self.find_method(member, name)?;
+            let (sig, bindings, mangled, dispatch) = self.find_member(member, key)?;
             if dispatch != crate::Dispatch::VTable
                 || sig
                     .signatures()
@@ -416,6 +435,12 @@ impl<'a> Inferer<'a> {
     ) -> Result<Type, MemberFieldMiss> {
         if self.find_method(member, field).is_some() {
             return Err(MemberFieldMiss::Method);
+        }
+        if let Some((_, fields)) = super::assignable::hybrid_parts(member) {
+            return fields
+                .get(field)
+                .map(ObjectField::read_ty)
+                .ok_or(MemberFieldMiss::Absent);
         }
         match member.peel() {
             Type::Object { fields, .. } => fields
@@ -702,7 +727,7 @@ impl<'a> Inferer<'a> {
         matches!(
             member.peel(),
             Type::Object { .. } | Type::InterfaceRef { .. } | Type::ClassRef { .. }
-        )
+        ) || super::assignable::is_hybrid(member)
     }
 
     pub(super) fn find_property(
@@ -742,6 +767,10 @@ impl<'a> Inferer<'a> {
                 args,
                 ..
             } => self.structural_form(mangled, name, args),
+            // A hybrid's properties are those of its object members.
+            Type::Intersection(_) => {
+                super::assignable::hybrid_parts(recv_ty).map(|(_, fields)| fields)
+            }
             _ => None,
         }
     }

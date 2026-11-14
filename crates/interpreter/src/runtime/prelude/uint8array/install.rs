@@ -647,7 +647,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         MODULE_NAME,
-        ctor_key("new"),
+        crate::mangle::construct_signature(&crate::mangle::prelude("Uint8ArrayConstructor")),
         ft(vec![object_nonnull], vec![uint8.clone()]),
         |caller, params, results| {
             let intr = intrinsic_types(&mut *caller)?;
@@ -656,12 +656,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 abi_arg(params, 0)?,
                 &intr.array,
             )? {
-                super::read_number_array(caller, abi_arg(params, 0)?, "Uint8Array.new")?
+                super::read_number_array(caller, abi_arg(params, 0)?, "new Uint8Array")?
             } else {
                 let n = crate::runtime::host::read_boxed_number(
                     caller,
                     abi_arg(params, 0)?,
-                    "Uint8Array.new",
+                    "new Uint8Array",
                 )?;
                 *abi_result(results, 0)? = super::allocate(caller, super::alloc_len(n)?)?;
                 return Ok(());
@@ -927,8 +927,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     // one slot (the `number[] | number` union lowering) and the host picks.
     declare_method(
         defs,
-        "new",
-        ctor_key("new"),
+        "Uint8Array",
+        crate::mangle::construct_signature(&crate::mangle::prelude("Uint8ArrayConstructor")),
         vec![Param::with_default(
             "values",
             Type::Union(vec![Type::Array(Box::new(Type::Number)), Type::Number]),
@@ -997,7 +997,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::String,
                             predicate: None,
                             doc: doc(
-                                "/** Returns this array's bytes joined as a comma-separated decimal string — e.g. `Uint8Array.new([1, 2, 3]).toString() === \"1,2,3\"`. Matches the JS `Uint8Array.prototype.toString` shape. */",
+                                "/** Returns this array's bytes joined as a comma-separated decimal string — e.g. `new Uint8Array([1, 2, 3]).toString() === \"1,2,3\"`. Matches the JS `Uint8Array.prototype.toString` shape. */",
                             ),
                         },
                     ),
@@ -1554,6 +1554,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** Packed byte array. Constructed via `new Uint8Array([...])` / `Uint8Array.alloc(n)` / `Uint8Array.fromArray(...)` / etc. */",
@@ -1571,26 +1573,6 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
-                    (
-                        "new".to_string(),
-                        MethodSig { overloads: Vec::new(),
-                            optional: false,
-                            generics: Default::default(),
-                            params: vec![Param::with_default(
-                                "values",
-                                Type::Union(vec![
-                                    Type::Array(Box::new(Type::Number)),
-                                    Type::Number,
-                                ]),
-                                crate::DefaultValue::Number(0.0),
-                            )],
-                            ret: Type::Uint8Array,
-                            predicate: None,
-                            doc: doc(
-                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length). With no argument, the array is empty.\n * @param values Numeric values to copy into the new array, or the length to allocate. Defaults to `0`.\n */",
-                            ),
-                        },
-                    ),
                     (
                         "alloc".to_string(),
                         MethodSig { overloads: Vec::new(),
@@ -1616,7 +1598,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ret: Type::Uint8Array,
                             predicate: None,
                             doc: doc(
-                                "/** Build a new `Uint8Array` from `values` — canonical name for `Uint8Array.new(values)`. */",
+                                "/** Build a new `Uint8Array` from `values` — canonical name for `new Uint8Array(values)`. */",
                             ),
                         },
                     ),
@@ -1696,6 +1678,24 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc("/** The size in bytes of each element: always `1`. */"),
                     },
                 )]),
+                call: None,
+                construct: Some(MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![Param::with_default(
+                                "values",
+                                Type::Union(vec![
+                                    Type::Array(Box::new(Type::Number)),
+                                    Type::Number,
+                                ]),
+                                crate::DefaultValue::Number(0.0),
+                            )],
+                            ret: Type::Uint8Array,
+                            predicate: None,
+                            doc: doc(
+                                "/**\n * Build a new `Uint8Array`. Given an array, truncates each element and reduces it modulo 256, as JavaScript does, so `-1` is 255. Given a number, allocates that many zero bytes (the same as `Uint8Array.alloc`, including its `RangeError` on a negative or too-large length). With no argument, the array is empty.\n * @param values Numeric values to copy into the new array, or the length to allocate. Defaults to `0`.\n */",
+                            ),
+                        }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Uint8Array`. Accessed via the global `Uint8Array` binding. */",
@@ -1742,6 +1742,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: doc(
                     "/** Options bag for `Uint8Array#toBase64` / `Uint8Array.fromBase64`. All fields optional. */",
@@ -1759,7 +1761,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: ValueKind::Const {
                 ty: Type::prelude_interface("Uint8ArrayConstructor".to_string(), Vec::new()),
                 doc: doc(
-                    "/** The `Uint8Array` constructor — call `Uint8Array.new([...])` or `Uint8Array.alloc(n)` to make instances. */",
+                    "/** The `Uint8Array` constructor — call `new Uint8Array([...])` or `Uint8Array.alloc(n)` to make instances. */",
                 ),
             },
         },

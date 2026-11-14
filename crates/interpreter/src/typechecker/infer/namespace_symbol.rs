@@ -14,11 +14,11 @@ pub(super) enum ChainResolution {
         mangled_prefix: MangledName,
     },
     Value {
-        value: ValueSymbol,
+        value: Box<ValueSymbol>,
         index: usize,
     },
     Type {
-        type_sym: TypeSymbol,
+        type_sym: Box<TypeSymbol>,
         index: usize,
     },
     NotFound {
@@ -82,13 +82,13 @@ impl<'a> Inferer<'a> {
             }
             if let Some(value) = current.value(&seg.name) {
                 return ChainResolution::Value {
-                    value: value.clone(),
+                    value: Box::new(value.clone()),
                     index: idx,
                 };
             }
             if let Some(type_sym) = current.type_symbol(&seg.name) {
                 return ChainResolution::Type {
-                    type_sym: type_sym.clone(),
+                    type_sym: Box::new(type_sym.clone()),
                     index: idx,
                 };
             }
@@ -121,11 +121,11 @@ impl<'a> Inferer<'a> {
                 let remaining = segments.len() - index - 1;
                 if remaining == 0 {
                     self.dispatch_namespace_value_call(
-                        &root, &segments, value, type_args, args, expected, span,
+                        &root, &segments, *value, type_args, args, expected, span,
                     )?
                 } else if remaining == 1 {
                     self.dispatch_constructor_static_call(
-                        &root, &segments, index, value, method, type_args, args, expected, span,
+                        &root, &segments, index, *value, method, type_args, args, expected, span,
                     )?
                 } else {
                     let prefix = path_string(&root, &segments[..=index]);
@@ -469,9 +469,17 @@ impl<'a> Inferer<'a> {
             self.find_method(&recv_ty, &method.name)
         else {
             let prefix = path_string(root, &segments[..=ctor_index]);
-            self.error(
+            let help = if method.name == "new" {
+                vec![format!(
+                    "`{prefix}.new` is not a member; construct with `new {prefix}(…)`"
+                )]
+            } else {
+                Vec::new()
+            };
+            self.error_with_help(
                 method.span,
                 format!("no static method `{}` on `{}`", method.name, prefix),
+                help,
             );
             return Ok(error_call(ctor_value.mangled_name));
         };
@@ -481,7 +489,7 @@ impl<'a> Inferer<'a> {
                 self.infer_method_call(
                     receiver_expr,
                     iface_mangled,
-                    method,
+                    crate::Member::Named(method),
                     sig,
                     type_args,
                     args,
@@ -491,7 +499,7 @@ impl<'a> Inferer<'a> {
                 self.infer_generic_method_call(
                     receiver_expr,
                     iface_mangled,
-                    method,
+                    crate::Member::Named(method),
                     sig,
                     interface_bindings,
                     type_args,

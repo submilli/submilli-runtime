@@ -36,6 +36,7 @@ use crate::runtime::gc_singleton::{singleton_array, singleton_struct};
 pub(crate) struct IntrinsicTypes {
     pub undefined: StructType,
     pub type_descriptor: StructType,
+    pub callable_shape: StructType,
     pub raw_string: ArrayType,
     pub vtable: StructType,
     pub object: StructType,
@@ -660,9 +661,44 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         ],
     )?;
 
+    // `$CallableShape`: `$ObjectShape`'s fields, then the `$Closure` a call
+    // runs — a hybrid that `Object.assign(fn, props)` makes. Mirrors codegen
+    // index 53.
+    let callable_shape = singleton_struct(
+        engine,
+        Final,
+        Some(object_shape.clone()),
+        vec![
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, vtable.clone().into()))),
+            ),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    field_names.clone().into(),
+                ))),
+            ),
+            FieldType::new(
+                mutv,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    object_fields.clone().into(),
+                ))),
+            ),
+            FieldType::new(mutv, StorageType::ValType(ValType::Ref(RefType::ANYREF))),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(false, closure.clone().into()))),
+            ),
+        ],
+    )?;
+
     Ok(IntrinsicTypes {
         undefined,
         type_descriptor,
+        callable_shape,
         raw_string,
         vtable,
         object,
@@ -791,6 +827,7 @@ mod tests {
         assert!(StructType::eq(&intr.boxed_boolean, &recovered_struct(5)));
         assert!(StructType::eq(&intr.undefined, &recovered_struct(51)));
         assert!(StructType::eq(&intr.type_descriptor, &recovered_struct(52)));
+        assert!(StructType::eq(&intr.callable_shape, &recovered_struct(53)));
         assert!(!StructType::eq(&intr.undefined, &intr.object));
         assert!(!StructType::eq(&intr.undefined, &intr.boxed_boolean));
         assert!(ArrayType::eq(&intr.field_names, &recovered_array(6)));

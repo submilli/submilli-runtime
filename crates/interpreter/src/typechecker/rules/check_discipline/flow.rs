@@ -505,23 +505,23 @@ impl<'a> Walker<'a, '_, '_> {
             }
             TypedExprKind::MethodCall {
                 receiver,
-                name,
+                member,
                 args,
                 ..
             } => {
                 let args = self.package.authored(span, args);
-                self.method_call(*receiver, name, &args)?;
+                self.method_call(*receiver, member, &args)?;
                 stable()
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
-                name,
+                member,
                 args,
                 ..
             } => {
                 let args: Vec<ExprId> = args.iter().map(|arg| arg.expr).collect();
                 let args = self.package.authored(span, &args);
-                self.method_call(*receiver, name, &args)?;
+                self.method_call(*receiver, member, &args)?;
                 stable()
             }
             TypedExprKind::Binary { op, lhs, rhs } => self.binary(*op, *lhs, *rhs)?,
@@ -768,29 +768,33 @@ impl<'a> Walker<'a, '_, '_> {
     fn method_call(
         &mut self,
         receiver: ExprId,
-        name: &Ident,
+        member: &crate::Member,
         args: &[ExprId],
     ) -> Result<(), CompilerFailure> {
-        // A call signature (`String(x)`, which interpolation of a generic or
-        // `unknown` lowers to) on a host binding is named by that binding; any
-        // other `@call` invokes a function value held in a callable interface.
-        if name.name == "@call" {
-            if let TypedExprKind::GlobalRef {
-                mangled,
-                name: global,
-            } = &self.expr_at(receiver)?.kind
-                && super::package::is_runtime_symbol(mangled)
-            {
-                self.consume(
-                    receiver,
-                    Use::Escape(Usage::MethodCalled(name.name.clone())),
-                )?;
-                let callee = global.name.clone();
-                return self.consume_all(args, || Usage::PassedTo(callee.clone()));
+        let name = match member {
+            crate::Member::Named(name) => name,
+            // A signature (`String(x)`, which interpolation of a generic or
+            // `unknown` lowers to, or `new Map(x)`) on a host binding is named
+            // by that binding; any other invokes a function value held in a
+            // callable interface.
+            crate::Member::CallSignature(_) | crate::Member::ConstructSignature(_) => {
+                if let TypedExprKind::GlobalRef {
+                    mangled,
+                    name: global,
+                } = &self.expr_at(receiver)?.kind
+                    && super::package::is_runtime_symbol(mangled)
+                {
+                    let callee = match member {
+                        crate::Member::ConstructSignature(_) => format!("new {}", global.name),
+                        _ => global.name.clone(),
+                    };
+                    self.consume(receiver, Use::Escape(Usage::Called))?;
+                    return self.consume_all(args, || Usage::PassedTo(callee.clone()));
+                }
+                self.consume(receiver, Use::Escape(Usage::Called))?;
+                return self.consume_all(args, || Usage::PassedToFunctionValue);
             }
-            self.consume(receiver, Use::Escape(Usage::Called))?;
-            return self.consume_all(args, || Usage::PassedToFunctionValue);
-        }
+        };
         self.consume(
             receiver,
             Use::Escape(Usage::MethodCalled(name.name.clone())),
@@ -902,19 +906,19 @@ impl<'a> Walker<'a, '_, '_> {
                 None
             }
             TypedChainPart::MethodCall {
-                name, args, span, ..
+                member, args, span, ..
             } => {
                 let args = self.package.authored(*span, args);
-                if name.name == "@call" {
-                    if let Some(receiver) = &receiver {
-                        self.escape(receiver, Usage::Called, chain);
-                    }
-                    self.consume_all(&args, || Usage::PassedToFunctionValue)?;
-                } else {
+                if let Some(name) = member.as_named() {
                     if let Some(receiver) = &receiver {
                         self.escape(receiver, Usage::MethodCalled(name.name.clone()), chain);
                     }
                     self.consume_all(&args, || Usage::PassedTo(name.name.clone()))?;
+                } else {
+                    if let Some(receiver) = &receiver {
+                        self.escape(receiver, Usage::Called, chain);
+                    }
+                    self.consume_all(&args, || Usage::PassedToFunctionValue)?;
                 }
                 None
             }

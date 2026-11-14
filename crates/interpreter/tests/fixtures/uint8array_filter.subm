@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4, 5, 6]);
+  let bytes: Uint8Array = new Uint8Array([1, 2, 3, 4, 5, 6]);
 
   let evens: Uint8Array = bytes.filter((v: number) => v % 2 === 0);
   assert(evens.length === 3, "filter keeps 3 evens");

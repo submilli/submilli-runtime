@@ -3082,7 +3082,7 @@ fn callable_interface_calls_are_treated_as_function_values_without_leaking_at_ca
     );
 
     // A `check()` nested inside an empty-tuple spread into a 0-parameter
-    // `@call` interface is still discovered by `check_calls` and enforces
+    // call-signature interface is still discovered by `check_calls` and enforces
     // check discipline on earlier caller-supplied function calls.
     let nested_in_empty_spread = findings(&[(
         "lib",

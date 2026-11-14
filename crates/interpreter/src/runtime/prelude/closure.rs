@@ -254,11 +254,41 @@ fn reserve_arguments(
 /// original accepts, so arity checks and dynamic calls look through it.
 pub(crate) fn original(caller: &mut Caller<'_, StoreData>, val: Val) -> wasmtime::Result<Val> {
     let mut current = val;
-    while let Some(inner) = adapter_target(caller, &current)? {
+    loop {
+        // An adapter may wrap a hybrid, which holds the function it runs.
+        if let Some(function) = hybrid_closure(caller, &current)? {
+            current = function;
+        }
+        let Some(inner) = adapter_target(caller, &current)? else {
+            return Ok(current);
+        };
         fuel::charge(&mut *caller, fuel::ELEM, 1)?;
         current = inner;
     }
-    Ok(current)
+}
+
+/// The closure a hybrid carries, if `val` is one: `Object.assign(fn, props)`
+/// makes a `$CallableShape`, an object shape that holds the function.
+pub(crate) fn hybrid_closure(
+    caller: &mut Caller<'_, StoreData>,
+    val: &Val,
+) -> wasmtime::Result<Option<Val>> {
+    let Val::AnyRef(Some(any)) = val else {
+        return Ok(None);
+    };
+    let Some(st) = any.as_struct(&mut *caller)? else {
+        return Ok(None);
+    };
+    let hybrid = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
+        .callable_shape
+        .clone();
+    if !st.matches_ty(&*caller, &hybrid)? {
+        return Ok(None);
+    }
+    Ok(Some(st.field(
+        &mut *caller,
+        crate::codegen::CALLABLE_SHAPE_CLOSURE as usize,
+    )?))
 }
 
 /// The function `val` wraps, if it is an adapter.
@@ -303,6 +333,9 @@ pub(crate) fn read(
     val: &Val,
     name: &str,
 ) -> wasmtime::Result<Closure> {
+    // A hybrid calls as the closure it holds.
+    let hybrid = hybrid_closure(caller, val)?;
+    let val = hybrid.as_ref().unwrap_or(val);
     let Val::AnyRef(Some(any)) = val else {
         return Err(wasmtime::Error::msg(format!(
             "{name} expects a closure, got {val:?}"

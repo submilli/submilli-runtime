@@ -10,7 +10,7 @@ function main(): void {
   assert(bytes[0] === 0, "alloc still zero-fills");
 
   const ctor2 = Uint8Array;
-  const made = ctor2.new([7, 8, 9]);
+  const made = new ctor2([7, 8, 9]);
   assert(made.length === 3, "new through captured constructor");
   assert(made[1] === 8, "new round-trips bytes");
 }

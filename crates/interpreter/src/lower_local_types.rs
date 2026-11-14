@@ -960,7 +960,25 @@ impl Lifter {
                             self.walk_type(&mut index.key)?;
                             self.walk_type(&mut index.value)?;
                         }
+                        InterfaceMember::CallSignature {
+                            params,
+                            return_type,
+                            ..
+                        } => {
+                            self.push_values(params.iter().map(|p| p.name.name.clone()).collect());
+                            for param in params.iter_mut() {
+                                self.walk_opt_type(&mut param.ty)?;
+                            }
+                            self.walk_type(return_type)?;
+                            self.pop();
+                        }
                         InterfaceMember::Method {
+                            generics,
+                            params,
+                            return_type,
+                            ..
+                        }
+                        | InterfaceMember::ConstructSignature {
                             generics,
                             params,
                             return_type,

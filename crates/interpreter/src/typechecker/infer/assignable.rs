@@ -60,6 +60,9 @@ pub(super) enum ImplementsFailure {
         member: String,
         ty: String,
     },
+    /// The interface declares a call or construct signature (the rendered
+    /// signature), which no class instance has.
+    Signature(String),
 }
 
 impl<'a> TypeResolver<'a> {
@@ -132,6 +135,40 @@ impl<'a> TypeResolver<'a> {
             );
         }
         Some(out)
+    }
+
+    /// An interface's call or construct signature as a function type, its
+    /// generic arguments substituted. A signature that declares type
+    /// parameters keeps them as type variables.
+    pub(super) fn interface_signature(
+        &self,
+        mangled: &MangledName,
+        name: &str,
+        args: &[Type],
+        which: Signature,
+    ) -> Option<Type> {
+        let TypeKind::Interface {
+            generics,
+            call,
+            construct,
+            ..
+        } = &self.lookup(mangled, name)?.kind
+        else {
+            return None;
+        };
+        let sig = match which {
+            Signature::Call => call.as_ref()?,
+            Signature::Construct => construct.as_ref()?,
+        };
+        let bindings: BTreeMap<String, Type> =
+            generics.iter().cloned().zip(args.iter().cloned()).collect();
+        Some(self.method_type(sig, &bindings))
+    }
+
+    /// `interface_signature` of the interface `ty` names.
+    pub(super) fn signature_of(&self, ty: &Type, which: Signature) -> Option<Type> {
+        let (mangled, _, name, args) = ty.interface_routing()?;
+        self.interface_signature(&mangled, name, &args, which)
     }
 
     pub(super) fn sym_by_mangled(&self, mangled: &MangledName) -> Option<&'a crate::TypeSymbol> {
@@ -348,6 +385,13 @@ impl<'a> TypeResolver<'a> {
             return Vec::new();
         };
         let mut failures = self.implements_form_failures(class_mangled, class_args, &iface_form);
+        for (which, prefix) in [(Signature::Call, ""), (Signature::Construct, "new ")] {
+            if let Some(signature) =
+                self.interface_signature(iface_mangled, iface_name, iface_args, which)
+            {
+                failures.push(ImplementsFailure::Signature(format!("{prefix}{signature}")));
+            }
+        }
         let actual = Type::class_ref(
             crate::Package("".into()),
             "",
@@ -386,6 +430,7 @@ impl<'a> TypeResolver<'a> {
                         | ImplementsFailure::OptionalityMismatch { member: name, .. } => {
                             name == member
                         }
+                        ImplementsFailure::Signature(_) => false,
                     })
                 {
                     failures.push(ImplementsFailure::Incompatible {
@@ -614,16 +659,17 @@ impl<'a> TypeResolver<'a> {
         name: &str,
         args: &[Type],
     ) -> Option<BTreeMap<String, ObjectField>> {
+        let kind = &self.lookup(mangled, name)?.kind;
         let TypeKind::Interface {
             generics,
             properties,
             methods,
             ..
-        } = &self.lookup(mangled, name)?.kind
+        } = kind
         else {
             return None;
         };
-        if !methods.is_empty() {
+        if !methods.is_empty() || kind.has_signature() {
             return None;
         }
         let bindings: BTreeMap<String, Type> =
@@ -671,11 +717,14 @@ impl<'a> TypeResolver<'a> {
         names
     }
 
-    /// True when `name` resolves to an interface that declares methods — the
-    /// nominal-only interfaces `interface_data_shape` refuses to expand.
+    /// True when `name` resolves to an interface that declares methods or
+    /// signatures — the nominal-only interfaces `interface_data_shape` refuses
+    /// to expand.
     pub(super) fn interface_has_methods(&self, mangled: &MangledName, name: &str) -> bool {
         match self.lookup(mangled, name).map(|symbol| &symbol.kind) {
-            Some(TypeKind::Interface { methods, .. }) => !methods.is_empty(),
+            Some(kind @ TypeKind::Interface { methods, .. }) => {
+                !methods.is_empty() || kind.has_signature()
+            }
             _ => false,
         }
     }
@@ -831,9 +880,19 @@ pub(super) fn assignable_rec(
             .all(|member| assignable_rec(actual, member, types, seen));
     }
     if let Type::Intersection(members) = actual.without_aliases() {
+        // A union takes the intersection when one of its alternatives does,
+        // the intersection itself included.
+        if let Type::Union(alternatives) = expected.peel()
+            && alternatives
+                .iter()
+                .any(|alternative| assignable_rec(actual, alternative, types, seen))
+        {
+            return true;
+        }
         return members
             .iter()
-            .any(|member| assignable_rec(member, expected, types, seen));
+            .any(|member| assignable_rec(member, expected, types, seen))
+            || hybrid_satisfies_interface(actual, expected, types, seen);
     }
     // `NoInfer<X>` is `X` and `NonNullable<X>` is `X & {}`, before the
     // refinement rules below compare `X & {}` piecewise.
@@ -1251,7 +1310,9 @@ pub(super) fn assignable_rec(
                 ..
             },
         ) => {
-            if is_host_backed_interface(expected) {
+            // A class instance is no function: it has no call or construct
+            // signature, as in TypeScript.
+            if is_host_backed_interface(expected) || interface_has_signature(expected, types) {
                 return false;
             }
             let (Some(class_form), Some(iface_form)) = (
@@ -1345,6 +1406,17 @@ pub(super) fn assignable_rec(
         }
         // An interface value is not nominally a class.
         (Type::InterfaceRef { .. }, Type::ClassRef { .. }) => false,
+        // A value of an interface with a call signature is a function, a
+        // hybrid's included: it stands for a function type its call signature
+        // fits, as in TypeScript.
+        (Type::InterfaceRef { .. }, Type::Function { .. })
+            if !is_host_backed_interface(actual)
+                && types
+                    .signature_of(actual, Signature::Call)
+                    .is_some_and(|call| assignable_rec(&call, expected, types, seen)) =>
+        {
+            true
+        }
         // Non-interface values (strings, arrays, …) satisfy an interface
         // through their own interface form — `string` is `Iterable<string>`
         // because `String` declares `iterator()`.
@@ -1771,19 +1843,15 @@ fn satisfies_structurally(
     let Some(expected_form) = types.interface_full_form(&me, ne, &ae) else {
         return false;
     };
+    let actual_signature = |which: Signature| match actual {
+        Type::Function { .. } => (which == Signature::Call).then(|| actual.clone()),
+        _ => types.signature_of(actual, which),
+    };
     let actual_form = if matches!(actual, Type::Function { .. }) {
         if has_required_generic_method(&me, ne, types) {
             return false;
         }
-        BTreeMap::from([(
-            "@call".to_string(),
-            ObjectField {
-                ty: actual.clone(),
-                optional: false,
-                readonly: true,
-                method: true,
-            },
-        )])
+        BTreeMap::new()
     } else {
         let Some((ma, _pa, na, aa)) = actual.interface_routing() else {
             return false;
@@ -1793,7 +1861,14 @@ fn satisfies_structurally(
         };
         actual_form
     };
-    if weak_type_rejects(&actual_form, &expected_form) {
+    let expected_call = types.interface_signature(&me, ne, &ae, Signature::Call);
+    let expected_construct = types.interface_signature(&me, ne, &ae, Signature::Construct);
+    // A signature is a member TypeScript's weak-type check counts.
+    if expected_call.is_none()
+        && expected_construct.is_none()
+        && actual_signature(Signature::Call).is_none()
+        && weak_type_rejects(&actual_form, &expected_form)
+    {
         return false;
     }
     let expected_indexes = types.index_signatures(expected);
@@ -1823,27 +1898,38 @@ fn satisfies_structurally(
         }
     }
     seen.push(key);
-    let ok = expected_form
-        .iter()
-        .all(|(member, exp)| match actual_form.get(member) {
-            Some(act) => {
-                (exp.optional || !act.optional)
-                    && (if exp.method {
-                        types
-                            .method_relation(actual, expected, member, seen)
-                            .unwrap_or_else(|| {
-                                assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
-                            })
-                    } else {
-                        assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
-                    })
-            }
-            None => {
-                exp.optional
-                    || exp.method
-                        && types.method_relation(actual, expected, member, seen) == Some(true)
-            }
-        });
+    let signatures_fit = [
+        (Signature::Call, &expected_call),
+        (Signature::Construct, &expected_construct),
+    ]
+    .into_iter()
+    .all(|(which, expected)| match expected {
+        None => true,
+        Some(expected) => actual_signature(which)
+            .is_some_and(|actual| assignable_rec(&actual, expected, types, seen)),
+    });
+    let ok = signatures_fit
+        && expected_form
+            .iter()
+            .all(|(member, exp)| match actual_form.get(member) {
+                Some(act) => {
+                    (exp.optional || !act.optional)
+                        && (if exp.method {
+                            types
+                                .method_relation(actual, expected, member, seen)
+                                .unwrap_or_else(|| {
+                                    assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
+                                })
+                        } else {
+                            assignable_rec(&act.read_ty(), &exp.read_ty(), types, seen)
+                        })
+                }
+                None => {
+                    exp.optional
+                        || exp.method
+                            && types.method_relation(actual, expected, member, seen) == Some(true)
+                }
+            });
     seen.pop();
     ok && types.required_methods_satisfied(actual, expected, seen)
 }
@@ -1989,14 +2075,15 @@ fn class_members_fit(
     })
 }
 
-/// The full member form of `ty` when it is a non-host-backed `InterfaceRef`
-/// with no index signature, no required generic methods, and only optional
-/// non-`@call` members — i.e., an interface whose shape a function or a
-/// callable sub-interface can inhabit.
-pub(super) fn function_satisfiable_interface_form(
+/// `Some` when a function can inhabit `ty`, holding its call signature if it
+/// declares one: `ty` is a non-host-backed
+/// `InterfaceRef` with no index signature, no construct signature, no required
+/// generic methods, and only optional named members — i.e., an interface whose
+/// shape a function or a callable sub-interface can inhabit.
+pub(super) fn function_inhabitable_call_signature(
     ty: &Type,
     types: TypeResolver,
-) -> Option<BTreeMap<String, ObjectField>> {
+) -> Option<Option<Type>> {
     let ty = ty.peel();
     if is_host_backed_interface(ty) || types.has_index_signature(ty) {
         return None;
@@ -2010,29 +2097,48 @@ pub(super) fn function_satisfiable_interface_form(
     else {
         return None;
     };
-    if has_required_generic_method(mangled, name, types) {
+    if has_required_generic_method(mangled, name, types)
+        || types
+            .interface_signature(mangled, name, args, Signature::Construct)
+            .is_some()
+    {
         return None;
     }
-    let form = types.interface_full_form(mangled, name, args)?;
-    form.iter()
-        .all(|(member, field)| member == "@call" || field.optional)
-        .then_some(form)
+    let members = types.interface_full_form(mangled, name, args)?;
+    members
+        .values()
+        .all(|field| field.optional)
+        .then(|| types.interface_signature(mangled, name, args, Signature::Call))
 }
 
-/// Expand a call-signature `InterfaceRef` to its `@call` `Type::Function` when
-/// functions structurally satisfy the interface (no host backing, index
-/// signature, or required non-call members).
+/// Which of an interface's signatures [`TypeResolver::interface_signature`]
+/// reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Signature {
+    Call,
+    Construct,
+}
+
+/// Whether `ty` is an interface with a call or construct signature: every
+/// value of it is callable, so `typeof` answers `"function"` for it.
+pub(super) fn interface_has_signature(ty: &Type, types: TypeResolver) -> bool {
+    matches!(ty.peel(), Type::InterfaceRef { .. })
+        && (types.signature_of(ty, Signature::Call).is_some()
+            || types.signature_of(ty, Signature::Construct).is_some())
+}
+
+/// Expand a call-signature `InterfaceRef` to its call signature's
+/// `Type::Function` when functions structurally satisfy the interface (no
+/// host backing, index signature, or required non-call members).
 pub(crate) fn expand_interface_call_signature(ty: &Type, types: TypeResolver) -> Option<Type> {
-    let form = function_satisfiable_interface_form(ty, types)?;
-    let call = form.get("@call")?;
-    (!call.optional).then(|| call.ty.clone())
+    function_inhabitable_call_signature(ty, types).flatten()
 }
 
 /// Whether a value typed as `ty` may hold a function at run time through
 /// structural interface assignability (including via a callable sub-interface),
 /// so `JSON.stringify` may omit it and `typeof` may observe `"function"`.
 pub(super) fn interface_may_hold_function(ty: &Type, types: TypeResolver) -> bool {
-    function_satisfiable_interface_form(ty, types).is_some()
+    function_inhabitable_call_signature(ty, types).is_some()
 }
 
 /// Expand a **data-only** (method-free) `InterfaceRef` to the structural
@@ -2931,6 +3037,78 @@ fn refinement_fits_union(
         .all(|piece| assignable_rec(piece, expected, types, seen))
 }
 
+/// A hybrid's parts: an intersection with a function member (as
+/// `Object.assign(fn, props)` makes) is that function, the intersection of its
+/// function members, and the properties of its object members, an earlier
+/// member's winning.
+pub(super) fn hybrid_parts(ty: &Type) -> Option<(Type, BTreeMap<String, ObjectField>)> {
+    let Type::Intersection(members) = ty.peel() else {
+        return None;
+    };
+    let (functions, rest): (Vec<&Type>, Vec<&Type>) = members
+        .iter()
+        .partition(|member| matches!(member.peel(), Type::Function { .. }));
+    if functions.is_empty() {
+        return None;
+    }
+    let mut fields = BTreeMap::new();
+    for member in rest {
+        if let Type::Object { fields: own, .. } = member.peel() {
+            for (name, field) in own {
+                fields.entry(name.clone()).or_insert_with(|| field.clone());
+            }
+        }
+    }
+    Some((
+        Type::intersection(functions.into_iter().cloned().collect()),
+        fields,
+    ))
+}
+
+/// Whether `ty` is a hybrid; see [`hybrid_parts`].
+pub(super) fn is_hybrid(ty: &Type) -> bool {
+    hybrid_parts(ty).is_some()
+}
+
+/// Whether a hybrid satisfies an interface with a call signature: its function
+/// fits the call signature, and its properties the interface's named members.
+/// Neither alone does.
+fn hybrid_satisfies_interface(
+    actual: &Type,
+    expected: &Type,
+    types: TypeResolver,
+    seen: &mut Vec<(Type, Type)>,
+) -> bool {
+    if is_host_backed_interface(expected)
+        || types.has_index_signature(expected)
+        || types.signature_of(expected, Signature::Construct).is_some()
+    {
+        return false;
+    }
+    let Some(call) = types.signature_of(expected, Signature::Call) else {
+        return false;
+    };
+    let Some((mangled, _, name, args)) = expected.interface_routing() else {
+        return false;
+    };
+    let Some(form) = types.interface_full_form(&mangled, name, &args) else {
+        return false;
+    };
+    let Some((function, fields)) = hybrid_parts(actual) else {
+        return false;
+    };
+    assignable_rec(&function, &call, types, seen)
+        && form
+            .iter()
+            .all(|(member, expected)| match fields.get(member) {
+                Some(actual) => {
+                    (expected.optional || !actual.optional)
+                        && assignable_rec(&actual.read_ty(), &expected.read_ty(), types, seen)
+                }
+                None => expected.optional,
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3382,6 +3560,8 @@ mod tests {
                     generics: Default::default(),
                     methods,
                     properties,
+                    call: None,
+                    construct: None,
                     dispatch: Dispatch::VTable,
                     doc: None,
                 },

@@ -1,5 +1,5 @@
-// Object spread on a call-signature interface omits the synthetic `@call` slot,
-// so the resulting object type is neither callable nor exposes `@call`.
+// Object spread on a call-signature interface copies no call signature, so the
+// resulting object type is not callable, as in TypeScript.
 // expect-error: cannot call value of type `{}`
 // expect-error-count: 1
 interface UserPred {

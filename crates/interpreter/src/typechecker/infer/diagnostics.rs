@@ -355,9 +355,9 @@ impl<'a> Inferer<'a> {
                 .try_expr(id)
                 .map_err(crate::typechecker::arena_failure)?;
             let source = self.rewritable_snippet(expr.span);
-            if matches!(&expr.kind, crate::TypedExprKind::MethodCall { iface, name, .. }
-                | crate::TypedExprKind::GenericMethodCall { iface, name, .. }
-                if *iface == crate::mangle::prelude("Map") && name.name == "get")
+            if matches!(&expr.kind, crate::TypedExprKind::MethodCall { iface, member, .. }
+                | crate::TypedExprKind::GenericMethodCall { iface, member, .. }
+                if *iface == crate::mangle::prelude("Map") && member.is_named("get"))
             {
                 help.push("`Map.get` returns undefined for a missing key".to_string());
             }
@@ -730,12 +730,14 @@ impl<'a> Inferer<'a> {
         }
         let substitution = match &kind {
             SignatureKind::Method {
-                receiver_ty, name, ..
+                receiver_ty,
+                member,
+                ..
             } => match format_definition::method_bindings(
                 &self.types,
                 &self.type_registry,
                 receiver_ty,
-                name,
+                *member,
             ) {
                 Ok(bindings) => bindings,
                 Err(error) => return self.render_help(Err(error)),
@@ -970,7 +972,7 @@ impl<'a> Inferer<'a> {
         // parameters shown are the ones the caller actually has to pass.
         let help = self.format_signature(SignatureKind::Method {
             receiver_ty,
-            name,
+            member: crate::MemberKey::Named(name),
             sig,
         });
         self.error_with_help(
@@ -1010,7 +1012,7 @@ impl<'a> Inferer<'a> {
         };
         let help = self.format_signature(SignatureKind::Method {
             receiver_ty,
-            name,
+            member: crate::MemberKey::Named(name),
             sig: &sig,
         });
         self.error_with_help(

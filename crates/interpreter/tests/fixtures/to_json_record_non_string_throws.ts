@@ -15,7 +15,7 @@ function main(): void {
     // A Uint8Array is not a string either, even though its bytes could be read
     // as text.
     const bytes: Record<string, () => Uint8Array> = {};
-    bytes["toJson"] = () => Uint8Array.new([65, 66, 67]);
+    bytes["toJson"] = () => new Uint8Array([65, 66, 67]);
     let bytesMessage = "";
     try {
         JSON.stringify([bytes]);

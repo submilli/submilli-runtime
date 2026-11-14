@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  let bytes: Uint8Array = new Uint8Array([1, 2, 3, 4]);
 
   assert(bytes.some((v: number) => v === 3) === true, "some: 3 is present");
   assert(bytes.some((v: number) => v === 99) === false, "some: 99 is absent");

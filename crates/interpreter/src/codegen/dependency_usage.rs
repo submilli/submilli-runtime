@@ -186,20 +186,26 @@ impl DependencyUsage {
     }
 
     pub fn is_interface_member_used(&self, ty: &TypeSymbol, member: &str) -> bool {
+        self.is_interface_key_used(ty, crate::MemberKey::Named(member))
+    }
+
+    /// Whether a method, property or signature of `ty` is used.
+    pub fn is_interface_key_used(&self, ty: &TypeSymbol, member: crate::MemberKey<'_>) -> bool {
         // `BigInt.fromString` is declared for front ends only: it is a compiler
         // intrinsic with no host function under this member's name to import.
-        if member == "fromString" && ty.mangled_name == crate::mangle::prelude("BigIntConstructor")
+        if member.is_named("fromString")
+            && ty.mangled_name == crate::mangle::prelude("BigIntConstructor")
         {
             return false;
         }
-        self.is_type_used(&ty.mangled_name)
-            || self.is_member_used(&crate::mangle::extend(&ty.mangled_name, member))
+        self.is_type_used(&ty.mangled_name) || self.is_member_used(&member.symbol(&ty.mangled_name))
     }
 
     fn resolve_dependency_shapes(&mut self, dependencies: &[&PackageDeclaration]) {
         let mut values: BTreeMap<MangledName, &crate::ValueSymbol> = BTreeMap::new();
         let mut types: BTreeMap<MangledName, &crate::TypeSymbol> = BTreeMap::new();
-        let mut members: BTreeMap<MangledName, (&crate::TypeSymbol, &str)> = BTreeMap::new();
+        let mut members: BTreeMap<MangledName, (&crate::TypeSymbol, crate::MemberKey<'_>)> =
+            BTreeMap::new();
         // Class statics keyed `Class#static#name`. Their call sites lower to
         // plain `Call`/`GlobalRef`, so they surface in `self.values` — resolved
         // in the values loop below to mark the owning class reachable.
@@ -210,23 +216,14 @@ impl DependencyUsage {
             collect_namespace_values(&defs.namespaces, &mut values);
             for ty_sym in defs.runtime_types.values().chain(defs.types.values()) {
                 types.insert(ty_sym.mangled_name.clone(), ty_sym);
-                if let TypeKind::Interface {
-                    methods,
-                    properties,
-                    ..
-                } = &ty_sym.kind
-                {
-                    for name in methods.keys() {
-                        members.insert(
-                            crate::mangle::extend(&ty_sym.mangled_name, name),
-                            (ty_sym, name),
-                        );
-                    }
-                    for name in properties.keys() {
-                        members.insert(
-                            crate::mangle::extend(&ty_sym.mangled_name, name),
-                            (ty_sym, name),
-                        );
+                if let TypeKind::Interface { properties, .. } = &ty_sym.kind {
+                    let keys = ty_sym
+                        .kind
+                        .interface_members()
+                        .map(|(member, _)| member)
+                        .chain(properties.keys().map(|name| crate::MemberKey::Named(name)));
+                    for member in keys {
+                        members.insert(member.symbol(&ty_sym.mangled_name), (ty_sym, member));
                     }
                 }
                 if let TypeKind::Class {
@@ -291,25 +288,21 @@ impl DependencyUsage {
                     self.values.insert(mangled.clone());
                     self.collect_value_symbol(sym);
                 }
-                if let Some((ty_sym, member_name)) = members.get(&mangled) {
+                if let Some((ty_sym, member)) = members.get(&mangled) {
                     changed = true;
                     self.member_types.insert(ty_sym.mangled_name.clone());
                     self.collect_type_symbol(ty_sym);
-                    if let TypeKind::Interface {
-                        methods,
-                        properties,
-                        ..
-                    } = &ty_sym.kind
+                    if let Some(sig) = ty_sym.kind.interface_member(*member) {
+                        for p in &sig.params {
+                            self.collect_type(&p.ty);
+                        }
+                        self.collect_type(&sig.ret);
+                    }
+                    if let (TypeKind::Interface { properties, .. }, crate::MemberKey::Named(name)) =
+                        (&ty_sym.kind, member)
+                        && let Some(sig) = properties.get(*name)
                     {
-                        if let Some(sig) = methods.get(*member_name) {
-                            for p in &sig.params {
-                                self.collect_type(&p.ty);
-                            }
-                            self.collect_type(&sig.ret);
-                        }
-                        if let Some(sig) = properties.get(*member_name) {
-                            self.collect_type(&sig.ty);
-                        }
+                        self.collect_type(&sig.ty);
                     }
                 }
             }
@@ -325,15 +318,14 @@ impl DependencyUsage {
                     // `is_interface_member_used`), so promote each member key too:
                     // members ported to a prelude-host value symbol must resolve to
                     // the Rust impl, not the deleted Wasm wrapper.
-                    if let TypeKind::Interface {
-                        methods,
-                        properties,
-                        ..
-                    } = &sym.kind
-                    {
-                        for name in methods.keys().chain(properties.keys()) {
-                            self.members
-                                .insert(crate::mangle::extend(&sym.mangled_name, name));
+                    if let TypeKind::Interface { properties, .. } = &sym.kind {
+                        let keys = sym
+                            .kind
+                            .interface_members()
+                            .map(|(member, _)| member)
+                            .chain(properties.keys().map(|name| crate::MemberKey::Named(name)));
+                        for member in keys {
+                            self.members.insert(member.symbol(&sym.mangled_name));
                         }
                     }
                 }
@@ -366,6 +358,8 @@ impl DependencyUsage {
                 extends,
                 properties,
                 methods,
+                call,
+                construct,
                 ..
             } => {
                 // A match array's `Array` heritage is declared for front ends;
@@ -381,7 +375,7 @@ impl DependencyUsage {
                 for sig in properties.values() {
                     self.collect_type(&sig.ty);
                 }
-                for sig in methods.values() {
+                for sig in methods.values().chain(call).chain(construct) {
                     for sig in sig.signatures() {
                         for p in &sig.params {
                             self.collect_type(&p.ty);
@@ -589,7 +583,6 @@ impl DependencyUsage {
             ("Boolean", "toString"),
             ("Number", "toJson"),
             ("Number", "toString"),
-            ("RegExpConstructor", "new"),
             ("String", "toJson"),
             ("String", "toString"),
         ] {
@@ -598,6 +591,11 @@ impl DependencyUsage {
                 member,
             ));
         }
+        // A regex literal constructs its `RegExp` through the constructor.
+        self.members
+            .insert(crate::mangle::construct_signature(&crate::mangle::prelude(
+                "RegExpConstructor",
+            )));
         // The internal throw sites (bounds, casts, parameter TDZ, assertions)
         // call the reconstructed class constructors, so these classes must
         // reconstruct in every module.

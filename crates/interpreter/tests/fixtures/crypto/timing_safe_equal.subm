@@ -16,7 +16,7 @@ function main(): void {
   const empty2: Uint8Array = Uint8Array.alloc(0);
   assert(timingSafeEqual(empty, empty2), "two empties compare true");
 
-  const x: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
-  const y: Uint8Array = Uint8Array.new([1, 2, 3, 5]);
+  const x: Uint8Array = new Uint8Array([1, 2, 3, 4]);
+  const y: Uint8Array = new Uint8Array([1, 2, 3, 5]);
   assert(!timingSafeEqual(x, y), "trailing-byte difference is false");
 }

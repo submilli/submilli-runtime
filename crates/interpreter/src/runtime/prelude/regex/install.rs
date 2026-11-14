@@ -68,7 +68,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         m,
-        ctor_key("new"),
+        crate::mangle::construct_signature(&crate::mangle::prelude("RegExpConstructor")),
         ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
         |caller, params, results| {
             *abi_result(results, 0)? =
@@ -79,7 +79,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     register_host_fn(
         linker,
         m,
-        ctor_key("@call"),
+        crate::mangle::call_signature(&crate::mangle::prelude("RegExpConstructor")),
         ft(vec![obj.clone(), obj.clone()], vec![obj.clone()]),
         |caller, params, results| {
             *abi_result(results, 0)? =
@@ -296,14 +296,11 @@ pub fn declare(defs: &mut PackageDeclaration) {
         vec![Param::new("string", Type::String)],
         Type::String,
     );
-    for method in ["new", "@call"] {
-        declare_method(
-            defs,
-            method,
-            ctor_key(method),
-            constructor_params(),
-            regexp(),
-        );
+    for key in [
+        crate::mangle::construct_signature(&crate::mangle::prelude("RegExpConstructor")),
+        crate::mangle::call_signature(&crate::mangle::prelude("RegExpConstructor")),
+    ] {
+        declare_method(defs, "RegExp", key, constructor_params(), regexp());
     }
 
     // RegExp
@@ -536,6 +533,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ("unicode".to_string(), regex_bool_prop(regex_unicode_doc)),
                     ("sticky".to_string(), regex_bool_prop(regex_sticky_doc)),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** Compiled regular expression. Lookaround and backreferences are unsupported. */",
@@ -568,6 +567,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ("input".to_string(), property(Type::String, optional)),
                     ("groups".to_string(), property(groups_type(), false)),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc("/** Array of matches: [0] is the full match, followed by captures. Unmatched captures are undefined. */"),
             },
@@ -594,21 +595,9 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             "/**\n * Returns `string` with every character that has a meaning in a pattern escaped, so `new RegExp(RegExp.escape(s))` matches `s` literally.\n * @param string The text to escape.\n */",
                         ),
                     },
-                ), (
-                    "new".to_string(),
-                    MethodSig { overloads: Vec::new(),
-                        optional: false,
-                        generics: Default::default(),
-                        params: constructor_params(),
-                        ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
-                        predicate: None,
-                        doc: doc(
-                            "/**\n * Construct a fresh `RegExp` from a pattern string or an existing regex. Throws SyntaxError on an invalid pattern or flags.\n * @param source The JS regex pattern (without delimiters), or a regex to copy.\n * @param flags Any subset of `gimsuy`; omitted or undefined flags inherit from a regex source, otherwise default to an empty string.\n */",
-                        ),
-                    },
-                ), (
-                    "@call".to_string(),
-                    MethodSig { overloads: Vec::new(),
+                )]),
+                properties: BTreeMap::new(),
+                call: Some(MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: Default::default(),
                         params: constructor_params(),
@@ -617,9 +606,17 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc(
                             "/** Compile a pattern as `new RegExp` does. Returns an existing regex unchanged when flags are omitted or undefined. */",
                         ),
-                    },
-                )]),
-                properties: BTreeMap::new(),
+                    }),
+                construct: Some(MethodSig { overloads: Vec::new(),
+                        optional: false,
+                        generics: Default::default(),
+                        params: constructor_params(),
+                        ret: Type::prelude_interface("RegExp".to_string(), Vec::new()),
+                        predicate: None,
+                        doc: doc(
+                            "/**\n * Construct a fresh `RegExp` from a pattern string or an existing regex. Throws SyntaxError on an invalid pattern or flags.\n * @param source The JS regex pattern (without delimiters), or a regex to copy.\n * @param flags Any subset of `gimsuy`; omitted or undefined flags inherit from a regex source, otherwise default to an empty string.\n */",
+                        ),
+                    }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `RegExp`. Call `RegExp(source, flags?)` or `new RegExp(source, flags?)`. */",

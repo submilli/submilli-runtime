@@ -1,4 +1,4 @@
-// expect-error: declares no `new` method
+// expect-error: declares no construct signature
 
 function main(): void {
   const bytes: Uint8Array = Uint8Array.alloc(4);

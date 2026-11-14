@@ -139,6 +139,8 @@ fn insert_agent_info_interface(defs: &mut PackageDeclaration) {
                 generics: Default::default(),
                 methods: BTreeMap::new(),
                 properties,
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: crate::doc(
                     crate::FileId::AGENTS,

@@ -719,6 +719,9 @@ impl<'a> Inferer<'a> {
                          `set {member}(value: {ty})` accessor)"
                     ));
                 }
+                ImplementsFailure::Signature(signature) => {
+                    clauses.push(format!("its instances have no signature `{signature}`"));
+                }
                 ImplementsFailure::OptionalityMismatch { member, ty } => {
                     clauses.push(format!("member `{member}` is optional"));
                     help.push(format!(
@@ -1802,8 +1805,20 @@ impl<'a> Inferer<'a> {
             return None;
         };
         let target = interface_ty.clone();
-        let non_shape_carriers =
-            self.non_shape_interface_carriers(&target, package, name, dispatch, &members);
+        let call = self.resolver().interface_signature(
+            mangled,
+            name,
+            args,
+            super::assignable::Signature::Call,
+        );
+        let non_shape_carriers = self.non_shape_interface_carriers(
+            &target,
+            package,
+            name,
+            dispatch,
+            &members,
+            call.as_ref(),
+        );
         let (index, more_indexes) =
             crate::split_index_signatures(self.resolver().index_signatures(interface_ty));
         Some(crate::InterfaceNarrowingTest {
@@ -1811,6 +1826,7 @@ impl<'a> Inferer<'a> {
             index,
             members,
             methods: methods.keys().cloned().collect(),
+            call,
             shape_allowed: *dispatch == crate::Dispatch::VTable
                 || non_shape_carriers.contains(&crate::InterfaceCarrier::ObjectShape)
                 || super::assignable::is_wrapper_interface(interface_ty),
@@ -1827,15 +1843,16 @@ impl<'a> Inferer<'a> {
         name: &str,
         dispatch: &crate::Dispatch,
         members: &std::collections::BTreeMap<String, crate::ObjectField>,
+        call: Option<&Type>,
     ) -> std::collections::BTreeSet<crate::InterfaceCarrier> {
         let mut carriers = self.primitive_interface_carriers(target);
         carriers.extend(self.collection_interface_carriers(target, name, members));
         carriers.extend(self.direct_interface_carriers(package, name, dispatch));
-        if let Some(call) = members.get("@call").filter(|call| !call.optional) {
-            if matches!(call.ty.peel(), Type::Function { .. })
-                && super::assignable(&call.ty, target, self.resolver())
+        if let Some(call) = call {
+            if matches!(call.peel(), Type::Function { .. })
+                && super::assignable(call, target, self.resolver())
             {
-                carriers.insert(crate::InterfaceCarrier::Function(call.ty.clone()));
+                carriers.insert(crate::InterfaceCarrier::Function(call.clone()));
             }
         } else if super::assignable::interface_may_hold_function(target, self.resolver()) {
             carriers.insert(crate::InterfaceCarrier::FunctionAny);
@@ -3639,7 +3656,7 @@ impl<'a> Inferer<'a> {
             &sig.ret,
             super::expr::CallLift::Method {
                 receiver_ty: &parent_ty,
-                name: &name.name,
+                member: crate::MemberKey::Named(&name.name),
                 sig: &sig,
             },
             &args,

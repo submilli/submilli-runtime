@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::Inferer;
 use crate::compiler_error::CompilerFailure;
-use crate::{ExprId, Ident, MethodSig, Span, Type, TypeAnnotation, TypedExprKind};
+use crate::{ExprId, MethodSig, Span, Type, TypeAnnotation, TypedExprKind};
 
 impl Inferer<'_> {
     #[allow(clippy::too_many_arguments)]
@@ -12,7 +12,7 @@ impl Inferer<'_> {
         &mut self,
         receiver: ExprId,
         iface: crate::MangledName,
-        name: Ident,
+        member: crate::Member,
         signature: MethodSig,
         bindings: BTreeMap<String, Type>,
         type_args: Option<Vec<TypeAnnotation>>,
@@ -49,7 +49,7 @@ impl Inferer<'_> {
                 this.infer_single_method_candidate(
                     receiver,
                     iface.clone(),
-                    name.clone(),
+                    member.clone(),
                     candidate.clone(),
                     bindings.clone(),
                     type_args.clone(),
@@ -76,7 +76,7 @@ impl Inferer<'_> {
                 .map(|sig| {
                     self.format_signature(super::format_signature::SignatureKind::Method {
                         receiver_ty: &receiver_ty,
-                        name: &name.name,
+                        member: member.key(),
                         sig,
                     })
                 })
@@ -84,8 +84,8 @@ impl Inferer<'_> {
             self.error_with_help(
                 span,
                 format!(
-                    "no overload of method `{}` accepts these arguments",
-                    name.name
+                    "no overload of {} accepts these arguments",
+                    member.key().describe()
                 ),
                 help,
             );
@@ -95,7 +95,7 @@ impl Inferer<'_> {
         self.infer_single_method_candidate(
             receiver,
             iface,
-            name,
+            member,
             candidates.remove(position),
             bindings,
             type_args,
@@ -110,7 +110,7 @@ impl Inferer<'_> {
         &mut self,
         receiver: ExprId,
         iface: crate::MangledName,
-        name: Ident,
+        member: crate::Member,
         sig: MethodSig,
         bindings: BTreeMap<String, Type>,
         type_args: Option<Vec<TypeAnnotation>>,
@@ -123,10 +123,10 @@ impl Inferer<'_> {
             .filter(|(name, _)| !sig.generics.names.contains(name))
             .collect();
         if bindings.is_empty() && sig.generics.is_empty() {
-            self.infer_method_call(receiver, iface, name, sig, type_args, args, span)
+            self.infer_method_call(receiver, iface, member, sig, type_args, args, span)
         } else {
             self.infer_generic_method_call(
-                receiver, iface, name, sig, bindings, type_args, args, expected, span,
+                receiver, iface, member, sig, bindings, type_args, args, expected, span,
             )
         }
     }

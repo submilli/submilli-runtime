@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([255, 254, 253]);
+  let bytes: Uint8Array = new Uint8Array([255, 254, 253]);
 
   assert(bytes.toBase64() === "//79", "default standard");
 
@@ -7,7 +7,7 @@ function main(): void {
 
   assert(bytes.toBase64({alphabet: "base64url"}) === "__79", "base64url");
 
-  let one: Uint8Array = Uint8Array.new([1]);
+  let one: Uint8Array = new Uint8Array([1]);
   assert(one.toBase64() === "AQ==", "padded default");
   assert(one.toBase64({omitPadding: true}) === "AQ", "omitPadding");
 

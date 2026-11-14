@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([1, 2, 3]);
+  let bytes: Uint8Array = new Uint8Array([1, 2, 3]);
 
   let doubled: Uint8Array = bytes.map((v: number) => v * 2);
   assert(doubled.length === 3, "map preserves length");
@@ -7,7 +7,7 @@ function main(): void {
 
   assert(bytes[0] === 1, "source unchanged");
 
-  let big: Uint8Array = Uint8Array.new([130]);
+  let big: Uint8Array = new Uint8Array([130]);
   let trunc: Uint8Array = big.map((v: number) => v * 2);
   assert(trunc[0] === 4, "260 truncates to 4");
 

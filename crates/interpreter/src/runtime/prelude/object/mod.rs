@@ -1343,6 +1343,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 // and `obj.toJson()` route through the per-shape vtable
                 // (slots 0 / 1). Each user-object shape generates its
                 // own per-type body.
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: doc("/** Universal base type for every object shape. */"),
             },
@@ -1456,6 +1458,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Object` — the enumeration statics (`keys`/`values`/`entries`/`hasOwn`), `assign`, `fromEntries`, `groupBy` and `is`. Accessed via the global `Object` binding. */",

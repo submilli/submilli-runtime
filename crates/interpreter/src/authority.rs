@@ -1502,11 +1502,41 @@ impl<'a> Builder<'a> {
             .chain(declaration.types.values())
         {
             let TypeKind::Interface {
-                methods, dispatch, ..
+                methods,
+                call,
+                construct,
+                dispatch,
+                ..
             } = &symbol.kind
             else {
                 continue;
             };
+            // A signature's host function is a function of its own symbol.
+            for (signature, mangled) in [
+                (call, crate::mangle::call_signature(&symbol.mangled_name)),
+                (
+                    construct,
+                    crate::mangle::construct_signature(&symbol.mangled_name),
+                ),
+            ] {
+                let Some(signature) = signature else {
+                    continue;
+                };
+                self.known_functions.insert(mangled.clone());
+                if let Some(doc) = signature
+                    .doc
+                    .as_ref()
+                    .filter(|doc| !doc.capabilities.is_empty())
+                {
+                    self.capability_functions.insert(
+                        mangled,
+                        CapabilityCallee {
+                            params: &signature.params,
+                            capabilities: &doc.capabilities,
+                        },
+                    );
+                }
+            }
             for (name, method) in methods {
                 let key = (symbol.mangled_name.clone(), name.clone());
                 self.known_methods.insert(key.clone());
@@ -1537,9 +1567,7 @@ impl<'a> Builder<'a> {
             out: &mut BTreeSet<MangledName>,
         ) {
             for symbol in types.values() {
-                if let TypeKind::Interface { methods, .. } = &symbol.kind
-                    && methods.contains_key("@call")
-                {
+                if let TypeKind::Interface { call: Some(_), .. } = &symbol.kind {
                     out.insert(symbol.mangled_name.clone());
                 }
             }
@@ -1553,9 +1581,7 @@ impl<'a> Builder<'a> {
             &mut self.callable_interfaces,
         );
         for symbol in declaration.runtime_types.values() {
-            if let TypeKind::Interface { methods, .. } = &symbol.kind
-                && methods.contains_key("@call")
-            {
+            if let TypeKind::Interface { call: Some(_), .. } = &symbol.kind {
                 self.callable_interfaces.insert(symbol.mangled_name.clone());
             }
         }
@@ -1750,32 +1776,22 @@ impl Visitor for CallVisitor<'_, '_> {
             TypedExprKind::MethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 ..
-            } => {
-                if name.name == "@call" && !self.builder.is_static_value_binding(*receiver)? {
-                    self.call_signature_call(*receiver, span)?;
-                } else {
-                    self.method_call(iface, &name.name, args, span)?;
-                }
-            }
+            } => self.member_call(*receiver, iface, member, args, span)?,
             TypedExprKind::SuperMethodCall { owner, name, args } => {
                 self.super_method_call(owner, &name.name, args, span)?;
             }
             TypedExprKind::GenericMethodCall {
                 receiver,
                 iface,
-                name,
+                member,
                 args,
                 ..
             } => {
-                if name.name == "@call" && !self.builder.is_static_value_binding(*receiver)? {
-                    self.call_signature_call(*receiver, span)?;
-                } else {
-                    let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
-                    self.method_call(iface, &name.name, &args, span)?;
-                }
+                let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
+                self.member_call(*receiver, iface, member, &args, span)?;
             }
             TypedExprKind::SuperCtorCall { parent, .. } => {
                 let target = crate::mangle::extend(parent, "constructor");
@@ -1861,20 +1877,23 @@ impl CallVisitor<'_, '_> {
             match part {
                 TypedChainPart::MethodCall {
                     iface,
-                    name,
+                    member,
                     args,
                     result_ty,
                     span,
                     ..
                 } => {
-                    if name.name == "@call" {
-                        self.builder.add_unresolved(
-                            self.caller,
-                            *span,
-                            "dynamic optional-call target",
-                        )?;
-                    } else {
-                        self.method_call(iface, &name.name, args, *span)?;
+                    match member {
+                        crate::Member::Named(name) => {
+                            self.method_call(iface, &name.name, args, *span)?;
+                        }
+                        crate::Member::CallSignature(_) | crate::Member::ConstructSignature(_) => {
+                            self.builder.add_unresolved(
+                                self.caller,
+                                *span,
+                                "dynamic optional-call target",
+                            )?;
+                        }
                     }
                     receiver_type = result_ty.clone();
                 }
@@ -2028,6 +2047,31 @@ impl CallVisitor<'_, '_> {
 
     fn closure_target(&self, id: ExprId) -> Result<Option<usize>, CompilerFailure> {
         self.builder.held_callable(id)
+    }
+
+    /// A call of an interface member: a named method, or a signature. A
+    /// signature of a prelude or host binding (`Number(x)`, `new Map()`) runs
+    /// its host function; any other call signature runs the closure the
+    /// callee holds.
+    fn member_call(
+        &mut self,
+        receiver: ExprId,
+        iface: &MangledName,
+        member: &crate::Member,
+        args: &[ExprId],
+        span: Span,
+    ) -> Result<(), CompilerFailure> {
+        match member {
+            crate::Member::Named(name) => self.method_call(iface, &name.name, args, span),
+            crate::Member::CallSignature(_)
+                if !self.builder.is_static_value_binding(receiver)? =>
+            {
+                self.call_signature_call(receiver, span)
+            }
+            crate::Member::CallSignature(_) | crate::Member::ConstructSignature(_) => {
+                self.direct_call(&member.symbol(iface), args, span)
+            }
+        }
     }
 
     fn call_signature_call(&mut self, callee: ExprId, span: Span) -> Result<(), CompilerFailure> {

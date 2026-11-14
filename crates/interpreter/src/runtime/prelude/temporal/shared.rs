@@ -2459,7 +2459,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
     // (`add`/`subtract` on Instant, Duration, ZonedDateTime). Accepting the
     // `DurationFields` options bag alongside a constructed `Duration` mirrors
     // the Temporal proposal's DurationLike rule; the prelude wrapper normalizes
-    // a bag into a `Duration` via `DurationConstructor#new` (see
+    // a bag into a `Duration` via the `DurationConstructor` construct signature (see
     // `emit_coerce_duration_arg` in temporal.rs).
     let temporal_duration_like_ref = || {
         Type::union(vec![
@@ -2649,6 +2649,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** A point in time, to nanosecond precision. Independent of any calendar or time zone — see `ZonedDateTime` for wall-clock fields. */",
@@ -2720,6 +2722,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Temporal.Instant`. Accessed via the global `Temporal.Instant` binding. */",
@@ -2775,6 +2779,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ("microseconds".to_string(), dur_field_prop("/** Microseconds. */")),
                     ("nanoseconds".to_string(), dur_field_prop("/** Nanoseconds. */")),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::VTable,
                 doc: doc(
                     "/** Options bag for `new Temporal.Duration({...})`. Every field is optional and defaults to 0. */",
@@ -2800,6 +2806,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             .iter()
                             .map(|n| ((*n).to_string(), dur_field_prop("/** Optional field; omitted fields keep the receiver's value. */")))
                             .collect(),
+                        call: None,
+                        construct: None,
                         dispatch: Dispatch::VTable,
                         doc: doc(
                             "/** Partial fields bag for `with(...)`. Every field is optional. */",
@@ -2874,6 +2882,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                                 doc: doc(field_doc),
                             },
                         )]),
+                        call: None,
+                        construct: None,
                         dispatch: Dispatch::VTable,
                         doc: doc("/** The field that completes this value into a `PlainDate`. */"),
                     },
@@ -2927,6 +2937,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             },
                         ),
                     ]),
+                    call: None,
+                    construct: None,
                     dispatch: Dispatch::VTable,
                     doc: doc("/** Options for `PlainDate.toZonedDateTime`. */"),
                 },
@@ -2960,6 +2972,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             generics: Default::default(),
             methods: BTreeMap::new(),
             properties,
+            call: None,
+            construct: None,
             dispatch: Dispatch::VTable,
             doc: doc(doc_text),
         },
@@ -3261,6 +3275,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         },
                     ),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** A span of time, expressed as separate calendar (`years`/`months`/`weeks`/`days`) and time (`hours`/…/`nanoseconds`) unit slots. Field reads return the literal slot value — use `total(unit)` for the computed total. */",
@@ -3277,19 +3293,6 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
             kind: TypeKind::Interface { extends: Vec::new(), index: None, more_indexes: Vec::new(),
                 generics: Default::default(),
                 methods: BTreeMap::from([
-                    (
-                        "new".to_string(),
-                        MethodSig { overloads: Vec::new(),
-                            optional: false,
-                            generics: Default::default(),
-                            params: vec![Param::new("fields", temporal_duration_fields_ref())],
-                            ret: temporal_duration_ref(),
-                            predicate: None,
-                            doc: doc(
-                                "/** Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). Every field defaults to 0. */",
-                            ),
-                        },
-                    ),
                     (
                         "from".to_string(),
                         MethodSig { overloads: Vec::new(),
@@ -3333,6 +3336,17 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: Some(MethodSig { overloads: Vec::new(),
+                            optional: false,
+                            generics: Default::default(),
+                            params: vec![Param::new("fields", temporal_duration_fields_ref())],
+                            ret: temporal_duration_ref(),
+                            predicate: None,
+                            doc: doc(
+                                "/** Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). Every field defaults to 0. */",
+                            ),
+                        }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Temporal.Duration`. Accessed via the global `Temporal.Duration` binding. */",
@@ -3660,6 +3674,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ("microsecond".to_string(), zdt_field_prop("/** Microsecond within the millisecond (0–999). */")),
                     ("nanosecond".to_string(), zdt_field_prop("/** Nanosecond within the microsecond (0–999). */")),
                 ]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** An Instant paired with an IANA time zone. Wall-clock fields (`year`/`month`/…/`dayOfWeek`) are computed in the tz. Arithmetic is DST-aware. */",
@@ -3707,6 +3723,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                     ),
                 ]),
                 properties: BTreeMap::new(),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Static,
                 doc: doc("/** Constructor object for `Temporal.ZonedDateTime`. */"),
             },

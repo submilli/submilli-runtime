@@ -128,6 +128,8 @@ fn run_symbols<'a>(
             TypeKind::Interface {
                 extends,
                 methods,
+                call,
+                construct,
                 properties,
                 index,
                 more_indexes,
@@ -139,7 +141,7 @@ fn run_symbols<'a>(
                 for index in crate::stored_index_signatures(index, more_indexes) {
                     collect_signature_named_types(package_name, &index.value, &mut used);
                 }
-                for method in methods.values() {
+                for method in methods.values().chain(call).chain(construct) {
                     for method in method.signatures() {
                         for param in &method.params {
                             collect_signature_named_types(package_name, &param.ty, &mut used);

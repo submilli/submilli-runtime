@@ -163,12 +163,12 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             },
         )?;
     }
-    // `MapConstructor#new(init?)` — Static dispatch (the constructor receiver is
+    // `new Map(init?)`, the `MapConstructor` construct signature — Static dispatch (the constructor receiver is
     // dropped at the call site), so the host fn sees only the `entries` arg.
     register_host_fn_async(
         linker,
         MODULE_NAME,
-        ctor_key("new"),
+        crate::mangle::construct_signature(&crate::mangle::prelude("MapConstructor")),
         ft(vec![obj.clone()], vec![obj.clone()]),
         |caller, params, results| {
             Box::pin(async move {
@@ -244,8 +244,8 @@ pub fn declare(defs: &mut PackageDeclaration) {
     // site, so the host fn sees only `entries`.
     declare_method(
         defs,
-        "new",
-        ctor_key("new"),
+        "Map",
+        crate::mangle::construct_signature(&crate::mangle::prelude("MapConstructor")),
         vec![Param::new(
             "entries",
             Type::union(vec![
@@ -509,6 +509,8 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc("/** The number of entries currently in the map. */"),
                     },
                 )]),
+                call: None,
+                construct: None,
                 dispatch: Dispatch::Direct,
                 doc: doc(
                     "/** A hash-backed key-value collection. Keys are compared by structural equality through each key's `equals` method; lookup buckets via `hash`. Iteration follows insertion order. */",
@@ -540,9 +542,10 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             "/** Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. The callback receives the element and its index. */",
                         ),
                     },
-                ), (
-                    "new".to_string(),
-                    MethodSig { overloads: Vec::new(),
+                )]),
+                properties: BTreeMap::new(),
+                call: None,
+                construct: Some(MethodSig { overloads: Vec::new(),
                         optional: false,
                         generics: crate::GenericParameters::unconstrained(vec!["K".to_string(), "V".to_string()]),
                         params: vec![Param::with_default(
@@ -581,9 +584,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                         doc: doc(
                             "/** Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([[\"a\", 1]])`. */",
                         ),
-                    },
-                )]),
-                properties: BTreeMap::new(),
+                    }),
                 dispatch: Dispatch::Static,
                 doc: doc(
                     "/** Constructor object for `Map`. Accessed via the global `Map` binding — call `new Map<K, V>()`. */",

@@ -248,7 +248,7 @@ impl Inferer<'_> {
             base,
             binding,
             MethodCallSite {
-                name: name.clone(),
+                member: crate::Member::Named(name.clone()),
                 type_args: type_args.clone(),
                 args: args.clone(),
                 expected: None,
@@ -311,7 +311,7 @@ impl Inferer<'_> {
             after.clone(),
             call.span,
         )?;
-        let method = self.find_method(&after, &call.name.name).ok_or_else(|| {
+        let method = self.find_member(&after, call.member.key()).ok_or_else(|| {
             super::inference_failure("array growth method is declared in the prelude")
         })?;
         let span = call.span;

@@ -5,7 +5,7 @@ function main(): void {
   const dst: Uint8Array = Uint8Array.alloc(3);
 
   // Source longer than the destination from offset 0 → end past the array.
-  const src: Uint8Array = Uint8Array.new([1, 2, 3, 4]);
+  const src: Uint8Array = new Uint8Array([1, 2, 3, 4]);
   let oversized: string = "<none>";
   try {
     dst.set(src, 0);
@@ -16,7 +16,7 @@ function main(): void {
   assert(oversized.length > 0, "Uint8Array#set out-of-range throws a catchable Error");
 
   // Negative offset (computed, to keep it a runtime value).
-  const one: Uint8Array = Uint8Array.new([9]);
+  const one: Uint8Array = new Uint8Array([9]);
   let off: number = -1;
   let negative: string = "<none>";
   try {

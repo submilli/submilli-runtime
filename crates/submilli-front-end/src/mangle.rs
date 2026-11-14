@@ -112,6 +112,20 @@ pub fn closure_cache(function: &MangledName) -> MangledName {
     extend(function, "<closure>")
 }
 
+/// Symbol of the host function behind an interface's call signature,
+/// `<iface>#<call>`. Only prelude and host packages declare these, and no
+/// member of theirs is named `<call>`, so the key stays apart from the
+/// `<iface>#<method>` keys of their methods.
+pub fn call_signature(interface: &(impl AsRef<str> + ?Sized)) -> MangledName {
+    MangledName(format!("{}{SEP}<call>", interface.as_ref()))
+}
+
+/// Symbol of the host function behind an interface's construct signature,
+/// `<iface>#<new>`, on the same terms as [`call_signature`].
+pub fn construct_signature(interface: &(impl AsRef<str> + ?Sized)) -> MangledName {
+    MangledName(format!("{}{SEP}<new>", interface.as_ref()))
+}
+
 pub fn host(host_module: &str, symbol: &str) -> MangledName {
     package_symbol(host_module, symbol)
 }

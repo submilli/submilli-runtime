@@ -1,5 +1,5 @@
 function main(): void {
-  let bytes: Uint8Array = Uint8Array.new([5, 3, 8, 1, 4, 2]);
+  let bytes: Uint8Array = new Uint8Array([5, 3, 8, 1, 4, 2]);
   let sorted: Uint8Array = bytes.toSorted((a: number, b: number) => a - b);
 
   assert(sorted.length === 6, "length preserved");
@@ -14,7 +14,7 @@ function main(): void {
   assert(empty_sorted.length === 0, "empty toSorted");
 
   // No comparator → numeric ascending; source untouched.
-  let def_src: Uint8Array = Uint8Array.new([2, 10, 1]);
+  let def_src: Uint8Array = new Uint8Array([2, 10, 1]);
   let def_sorted: Uint8Array = def_src.toSorted();
   assert(def_sorted[0] === 1 && def_sorted[1] === 2 && def_sorted[2] === 10,
          "default numeric toSorted");

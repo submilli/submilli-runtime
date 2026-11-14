@@ -200,6 +200,8 @@ impl<'a> Inferer<'a> {
                                 generics: generic_names,
                                 methods: BTreeMap::new(),
                                 properties: BTreeMap::new(),
+                                call: None,
+                                construct: None,
                                 dispatch: crate::Dispatch::VTable,
                                 doc: None,
                             },
@@ -402,11 +404,13 @@ impl<'a> Inferer<'a> {
         let mut property_sigs: BTreeMap<String, PropertySig> = BTreeMap::new();
         let mut typed_members: Vec<crate::TypedInterfaceMember> = Vec::new();
         let mut inherited = Vec::new();
+        let mut signatures = super::records::InheritedSignatures::default();
         let mut bases = Vec::new();
         for base in extends {
             bases.extend(self.inherit_interface(
                 &base,
                 &mut method_sigs,
+                &mut signatures,
                 &mut property_sigs,
                 &mut inherited,
             )?);
@@ -428,9 +432,84 @@ impl<'a> Inferer<'a> {
         inherited.extend(own_indexes);
         let (index, more_indexes) = crate::split_index_signatures(inherited);
         let mut own_names = BTreeSet::new();
+        let (mut own_call, mut own_construct) = (None, None);
         for member in members {
             match member {
                 InterfaceMember::IndexSignature(_) => {}
+                InterfaceMember::CallSignature {
+                    params,
+                    return_type,
+                    span,
+                    doc: s_doc,
+                } => {
+                    if own_call.is_some() {
+                        self.error(
+                            span,
+                            format!(
+                                "duplicate call signature on interface `{}`",
+                                display_type_name(&name.name)
+                            ),
+                        );
+                        continue;
+                    }
+                    let (_, resolved_params, resolved_ret) =
+                        self.resolve_method_signature(&[], &params, Some(&return_type))?;
+                    typed_members.push(crate::TypedInterfaceMember::CallSignature {
+                        span,
+                        generics: Default::default(),
+                        params: typed_interface_params(&params, &resolved_params),
+                        return_type: resolved_ret.clone(),
+                        doc: s_doc.clone(),
+                    });
+                    own_call = Some(MethodSig {
+                        overloads: Vec::new(),
+                        optional: false,
+                        generics: Default::default(),
+                        params: resolved_params,
+                        ret: resolved_ret,
+                        predicate: None,
+                        doc: s_doc,
+                    });
+                }
+                InterfaceMember::ConstructSignature {
+                    generics: s_generics,
+                    params,
+                    return_type,
+                    span,
+                    doc: s_doc,
+                } => {
+                    if own_construct.is_some() {
+                        self.error(
+                            span,
+                            format!(
+                                "duplicate construct signature on interface `{}`",
+                                display_type_name(&name.name)
+                            ),
+                        );
+                        continue;
+                    }
+                    if self.reject_shadowing_method_generics(&s_generics, &generic_names) {
+                        continue;
+                    }
+                    let (s_generic_names, resolved_params, resolved_ret) =
+                        self.resolve_method_signature(&s_generics, &params, Some(&return_type))?;
+                    typed_members.push(crate::TypedInterfaceMember::ConstructSignature {
+                        span,
+                        generics: s_generic_names.clone(),
+                        params: typed_interface_params(&params, &resolved_params),
+                        return_type: resolved_ret.clone(),
+                        doc: s_doc.clone(),
+                    });
+                    own_construct = Some(MethodSig {
+                        overloads: Vec::new(),
+                        optional: false,
+                        generics: s_generic_names,
+                        params: resolved_params,
+                        ret: resolved_ret,
+                        predicate: None,
+                        doc: s_doc,
+                    });
+                }
                 InterfaceMember::Method {
                     name: m_name,
                     generics: m_generics,
@@ -441,46 +520,18 @@ impl<'a> Inferer<'a> {
                     doc: m_doc,
                 } => {
                     if !own_names.insert(m_name.name.clone()) {
-                        // `@call` is the call-signature sentinel — give it a distinct duplicate message.
-                        let message = if m_name.name == "@call" {
-                            format!(
-                                "duplicate call signature on interface `{}`",
-                                display_type_name(&name.name)
-                            )
-                        } else {
+                        self.error(
+                            m_name.span,
                             format!(
                                 "duplicate member `{}` on interface `{}`",
                                 m_name.name,
                                 display_type_name(&name.name),
-                            )
-                        };
-                        self.diagnostics.push(Diagnostic {
-                            severity: Severity::Error,
-                            span: m_name.span,
-                            message,
-                            help: Vec::new(),
-                            notes: Vec::new(),
-                        });
+                            ),
+                        );
                         continue;
                     }
-                    // Method generics shadowing interface generics are rejected: methods have
-                    // no body to walk, so no unique body-form IDs are available for substitution.
-                    let mut shadow_rejected = false;
-                    for g in &m_generics {
-                        if generic_names.iter().any(|i| i == &g.name) {
-                            self.diagnostics.push(Diagnostic {
-                                severity: Severity::Error,
-                                span: g.span,
-                                message: format!(
-                                    "method generic `{}` shadows interface generic `{}`",
-                                    g.name, g.name,
-                                ),
-                                help: Vec::new(),
-                                notes: Vec::new(),
-                            });
-                            shadow_rejected = true;
-                        }
-                    }
+                    let shadow_rejected =
+                        self.reject_shadowing_method_generics(&m_generics, &generic_names);
                     // Even on shadow rejection, keep resolving the
                     // sig so any downstream type errors surface in
                     // one pass.
@@ -496,22 +547,10 @@ impl<'a> Inferer<'a> {
                         &m_generic_names,
                         &resolved_ret,
                     );
-                    let typed_params: Vec<crate::TypedParam> = params
-                        .iter()
-                        .zip(resolved_params.iter())
-                        .map(|(p, rp)| crate::TypedParam {
-                            name: p.name.clone(),
-                            ty: rp.ty.clone(),
-                            boxed: false,
-                            rest: rp.rest,
-                            optional: rp.optional,
-                            default: rp.default.clone(),
-                        })
-                        .collect();
                     typed_members.push(crate::TypedInterfaceMember::Method {
                         name: m_name.clone(),
                         generics: m_generic_names.clone(),
-                        params: typed_params,
+                        params: typed_interface_params(&params, &resolved_params),
                         return_type: resolved_ret.clone(),
                         doc: m_doc.clone(),
                     });
@@ -597,6 +636,8 @@ impl<'a> Inferer<'a> {
                 generics: generic_names,
                 methods: method_sigs,
                 properties: property_sigs,
+                call: own_call.or(signatures.call),
+                construct: own_construct.or(signatures.construct),
                 // User-declared interfaces use vtable dispatch; the prelude opts into direct/static dispatch.
                 dispatch: crate::Dispatch::VTable,
                 doc,
@@ -607,6 +648,30 @@ impl<'a> Inferer<'a> {
             .insert(name.name.clone(), self.package_name.to_string(), symbol);
 
         Ok(())
+    }
+
+    /// Reports each of a method's or construct signature's type parameters
+    /// that shadows one of the interface's: a declaration has no body to walk,
+    /// so no unique body-form IDs are available for substitution.
+    fn reject_shadowing_method_generics(
+        &mut self,
+        generics: &[crate::TypeParameterAnnotation],
+        interface_generics: &crate::GenericParameters,
+    ) -> bool {
+        let mut rejected = false;
+        for g in generics {
+            if interface_generics.iter().any(|i| i == &g.name) {
+                self.error(
+                    g.span,
+                    format!(
+                        "method generic `{}` shadows interface generic `{}`",
+                        g.name, g.name,
+                    ),
+                );
+                rejected = true;
+            }
+        }
+        rejected
     }
 
     pub(super) fn reject_intrinsic_name(&mut self, name: &Ident) -> bool {
@@ -1039,6 +1104,25 @@ fn mentions_generic_param(ty: &crate::Type) -> bool {
         crate::Type::Union(members) => members.iter().any(mentions_generic_param),
         _ => false,
     }
+}
+
+/// The typed form of an interface member's parameters.
+fn typed_interface_params(
+    params: &[crate::ParamDecl],
+    resolved: &[Param],
+) -> Vec<crate::TypedParam> {
+    params
+        .iter()
+        .zip(resolved)
+        .map(|(p, rp)| crate::TypedParam {
+            name: p.name.clone(),
+            ty: rp.ty.clone(),
+            boxed: false,
+            rest: rp.rest,
+            optional: rp.optional,
+            default: rp.default.clone(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
