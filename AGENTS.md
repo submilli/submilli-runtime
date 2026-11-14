@@ -458,3 +458,7 @@ Do not commit generated review screenshots, before/after captures, recordings, o
 test-output dumps. Show them in the conversation or attach them to the PR outside
 Git. Product assets and required test fixtures are separate; commit review evidence
 only when the user explicitly requests it.
+
+## Reuse over duplication
+
+Reuse over duplication, always. Before creating anything (code, packages, secrets, docs, tickets, PRs, configs, agents), check what already exists and reuse or extend it. Create something new only when nothing usable exists, and say what you checked.
