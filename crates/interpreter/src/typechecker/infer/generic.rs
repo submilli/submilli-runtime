@@ -663,7 +663,15 @@ impl Inferer<'_> {
             .map_err(crate::typechecker::arena_failure)?
             .ty
             .clone();
+        let array_flat = iface_mangled == crate::mangle::prelude("Array") && key.is_named("flat");
         let mut sub = TypeParamSubstitution::new();
+        // `flat<A, D extends number = 1>(this: A, depth?: D)` has a
+        // receiver parameter and a type default that MethodSig cannot store.
+        // Its return remains an ordinary FlatArray application, evaluated by
+        // the shared utility machinery after these bindings are inferred.
+        if array_flat && type_args.is_none() {
+            sub.insert("A".into(), receiver_ty.clone());
+        }
         let errors_at_call = self.error_count();
         // A checked host method (`Response#json<T>`) is gated and defaulted
         // like a checked host function; see `infer_generic_call`.
@@ -693,7 +701,7 @@ impl Inferer<'_> {
             .collect();
 
         if let Some(targs) = &type_args {
-            if targs.len() != sig.generics.len() {
+            if targs.len() != sig.generics.len() && !(array_flat && targs.len() == 1) {
                 let help = self.format_signature(SignatureKind::Method {
                     receiver_ty: &receiver_ty,
                     member: key,
@@ -714,6 +722,12 @@ impl Inferer<'_> {
             for (gname, annot) in sig.generics.iter().zip(targs.iter()) {
                 let resolved = self.resolve_call_type_argument(annot, &subject)?;
                 sub.insert(gname.clone(), resolved);
+            }
+            if array_flat && targs.len() == 1 {
+                sub.insert(
+                    "D".into(),
+                    Type::NumberLiteral(crate::types::LiteralF64(1.0)),
+                );
             }
         }
 
@@ -826,6 +840,16 @@ impl Inferer<'_> {
             );
         }
         self.bind_from_empty_array_arguments(&mut sub, &argument_checks)?;
+        if array_flat && sub.get("D").is_none() {
+            // No argument uses D's default; explicit `undefined` supplies no
+            // candidate and falls back to the numeric constraint, as in tsc.
+            let depth = if typed_args.is_empty() {
+                Type::NumberLiteral(crate::types::LiteralF64(1.0))
+            } else {
+                Type::Number
+            };
+            sub.insert("D".into(), depth);
+        }
 
         let object_assign =
             iface_mangled == crate::mangle::prelude("ObjectConstructor") && key.is_named("assign");
@@ -943,6 +967,15 @@ impl Inferer<'_> {
             )?;
         }
         self.check_generic_constraints(&sig.generics, &sub, &inferred_fallbacks, span)?;
+        if array_flat {
+            let this_ty = self.instantiate(&sub, &Type::TypeVar("A".into()), span)?;
+            if !super::assignable(&receiver_ty, &this_ty, self.resolver()) {
+                self.error(
+                    span,
+                    format!("`flat` expects a receiver of type `{this_ty}`, got `{receiver_ty}`"),
+                );
+            }
+        }
         self.check_arguments_after_inference(&sub, argument_checks, &close_match_spans)?;
         if let Some(sources) = spread_sources {
             let fixed = sig

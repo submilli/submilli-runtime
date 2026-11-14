@@ -1286,22 +1286,30 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             ),
                         },
                     ),
-                    // `flat`'s return type un-nests `depth` array levels; the typechecker
-                    // special-cases it (see infer::lookup) and overrides this placeholder.
                     (
                         "flat".to_string(),
                         MethodSig { overloads: Vec::new(),
                             optional: false,
-                            generics: Default::default(),
+                            generics: crate::GenericParameters {
+                                names: vec!["A".into(), "D".into()],
+                                constraints: Box::new(std::collections::BTreeMap::from([
+                                    ("D".into(), Type::Number),
+                                ])),
+                            },
                             params: vec![Param::with_default(
                                 "depth",
-                                Type::Number,
+                                Type::TypeVar("D".into()),
                                 crate::DefaultValue::Number(1.0),
                             )],
-                            ret: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
+                            ret: Type::Array(Box::new(Type::alias_ref(
+                                crate::Package::prelude(),
+                                "FlatArray",
+                                crate::mangle::prelude("FlatArray"),
+                                vec![Type::TypeVar("A".into()), Type::TypeVar("D".into())],
+                            ))),
                             predicate: None,
                             doc: doc(
-                                "/**\n * Flattens nested arrays up to `depth` levels into a new array.\n * `depth` must be an integer literal (default `1`); for deeper flattening pass a larger literal or chain `.flat()`.\n */",
+                                "/**\n * Flattens nested arrays up to `depth` levels into a new array (default `1`).\n */",
                             ),
                         },
                     ),
