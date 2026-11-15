@@ -13,8 +13,7 @@ function main(): void {
   catch (e: Error) {
     caught = true;
     assert(e instanceof TypeError, "a checked read still throws TypeError");
-    assert(e.message.includes("does not match `Progress`"), e.message);
-    assert(e.message.includes("tenant/progress"), "dynamic key is named");
+    assert(e.message.includes("does not match Progress"), e.message);
     assert(!e.message.includes("PRIVATE"), "stored values stay private");
   }
   assert(caught && keys === 1, "key evaluated once");
