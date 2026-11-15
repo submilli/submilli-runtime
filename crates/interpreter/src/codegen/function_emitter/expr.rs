@@ -1817,6 +1817,7 @@ fn emit_field_access(
         .ty;
     if physical_receiver == &Type::Unknown
         && !matches!(receiver_ty.lowered(), Type::ClassRef { .. })
+        && !interface_property_may_be_absent_on_closure(ctx.ta, &receiver_ty, &name.name)
     {
         emit_expr(emitter, ctx, *receiver)?;
         return emit_dynamic_property_read(emitter, ctx, &name.name, result_ty);
@@ -3297,7 +3298,10 @@ fn emit_chain_operation(
             crate::TypedChainPart::Field {
                 name, result_ty, ..
             } if source_ty.is_none_or(|ty| !matches!(ty.lowered(), Type::ClassRef { .. }))
-                && !source_ty.is_some_and(|ty| ctx.ta.has_string_index(ty)) =>
+                && !source_ty.is_some_and(|ty| ctx.ta.has_string_index(ty))
+                && !source_ty.is_some_and(|ty| {
+                    interface_property_may_be_absent_on_closure(ctx.ta, ty, &name.name)
+                }) =>
             {
                 return emit_dynamic_property_read(emitter, ctx, &name.name, result_ty);
             }
@@ -5221,6 +5225,14 @@ fn emit_receiver_property_read_as(
             intrinsics.object_shape,
         )));
         emitter.instruction(Instruction::I32Eqz);
+        // A weak interface may accept both primitives and plain functions.
+        // Leave closures to the optional-property/length dispatch below.
+        emitter.instruction(Instruction::LocalGet(receiver));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+            intrinsics.closure,
+        )));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32And);
         emitter.emit_if(BlockType::Result(ctx.symbols.value_type(field_ty)?));
         emitter.instruction(Instruction::LocalGet(receiver));
         emit_dynamic_property_read(emitter, ctx, prop_name, field_ty)?;

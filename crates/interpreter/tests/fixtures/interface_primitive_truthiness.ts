@@ -5,7 +5,14 @@ function truth(value: Empty): boolean { return !!value; }
 interface HasX { x: number }
 function required(value: HasX): number { return value && 1; }
 function empty(): Empty { return 0; }
+interface Sized { length?: number; label?: string }
+function label(value: Sized): string | undefined { return value.label; }
+function optionalLabel(value: Sized): string | undefined { return value?.label; }
 function main(): void {
+    const plainFunction: unknown = (n: number): number => n;
+    assert(label("abc") === undefined);
+    assert(label(plainFunction as Sized) === undefined);
+    assert(optionalLabel(plainFunction as Sized) === undefined);
     assert(required({ x: 1 }) === 1);
     const value = empty() && { a: 1 };
     assert(JSON.stringify(value) === "0");
