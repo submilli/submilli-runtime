@@ -233,6 +233,8 @@ pub(crate) fn new_object(
 pub(crate) struct TypeDescriptor {
     /// The type's structural predicate, `(value: unknown) => boolean`.
     test: Closure,
+    /// Optional construction from an already parsed JSON value.
+    from_json: Option<Closure>,
     /// The type as the program wrote it, for diagnostics.
     pub name: String,
     /// The type's JSON Schema, which codegen emits for every type that has one
@@ -241,6 +243,26 @@ pub(crate) struct TypeDescriptor {
 }
 
 impl TypeDescriptor {
+    /// Construct through the type's decoder when present; otherwise validate
+    /// the parsed value without changing it.
+    pub(crate) async fn decode_json(
+        &self,
+        caller: &mut Caller<'_, StoreData>,
+        value: Val,
+    ) -> wasmtime::Result<Val> {
+        if let Some(from_json) = &self.from_json {
+            crate::runtime::fuel::charge_call(&mut *caller)?;
+            return from_json.call(caller, &[value]).await;
+        }
+        if self.accepts(caller, value).await? {
+            return Ok(value);
+        }
+        Err(crate::runtime::host::type_error(format!(
+            "JSON value does not match {}",
+            self.name
+        )))
+    }
+
     /// The schema a schema call (`api`, e.g. `llm.call`) sends. A
     /// direct call's `T` passed the compile-time schema gate, so it has one;
     /// a `T` forwarded through a generic was named by its caller, and when it
@@ -317,7 +339,23 @@ fn decode_type_argument(
     let env = env.unwrap_array(&mut *caller)?;
     let slot = u32::try_from(slot).map_err(|_| wasmtime::Error::msg("type descriptor slot"))?;
     let descriptor = env.get(&mut *caller, slot)?;
-    let descriptor = as_struct(caller, &descriptor, "type descriptor")?;
+    read_type_descriptor(caller, &descriptor)
+}
+
+/// Only compiler-generated code supplies descriptor values. Malformed layouts
+/// are ABI failures, not guest input errors.
+pub(crate) fn read_type_descriptor(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<TypeDescriptor> {
+    decode_type_descriptor(caller, value).map_err(fatal_host_error)
+}
+
+fn decode_type_descriptor(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<TypeDescriptor> {
+    let descriptor = as_struct(caller, value, "type descriptor")?;
     let test = descriptor.field(&mut *caller, 1)?;
     let test = crate::runtime::prelude::closure::read(caller, &test, "type descriptor test")?;
     let name = descriptor.field(&mut *caller, 2)?;
@@ -330,7 +368,20 @@ fn decode_type_argument(
             "type descriptor schema",
         )?),
     };
-    Ok(TypeDescriptor { test, name, schema })
+    let from_json = match descriptor.field(&mut *caller, 4)? {
+        Val::AnyRef(None) => None,
+        value => Some(crate::runtime::prelude::closure::read(
+            caller,
+            &value,
+            "type descriptor fromJson",
+        )?),
+    };
+    Ok(TypeDescriptor {
+        test,
+        from_json,
+        name,
+        schema,
+    })
 }
 
 #[cfg(test)]

@@ -755,17 +755,20 @@ pub(super) fn reg_plain_from(
     ctor_iface: &str,
     convert: super::like::PlainConverter,
 ) -> wasmtime::Result<()> {
-    register_host_fn(
-        linker,
-        crate::runtime::prelude::MODULE_NAME,
-        prelude_key(ctor_iface, "from"),
-        FuncType::new(engine, [obj.clone(), obj.clone()], [obj.clone()]),
-        move |caller, params, results| {
-            *abi_result(results, 0)? =
-                convert(caller, abi_arg(params, 0)?, Some(*abi_arg(params, 1)?))?;
-            Ok(())
-        },
-    )
+    for (method, arity) in [("from", 2), ("fromJson", 1)] {
+        register_host_fn(
+            linker,
+            crate::runtime::prelude::MODULE_NAME,
+            prelude_key(ctor_iface, method),
+            FuncType::new(engine, vec![obj.clone(); arity], [obj.clone()]),
+            move |caller, params, results| {
+                *abi_result(results, 0)? =
+                    convert(caller, abi_arg(params, 0)?, params.get(1).copied())?;
+                Ok(())
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn reg_plain_string(
@@ -4260,6 +4263,21 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
         },
     );
     temporal.namespaces.insert("Now".to_string(), now);
+
+    for name in super::JSON_TYPES {
+        if let Some(TypeSymbol {
+            kind: TypeKind::Interface { methods, .. },
+            ..
+        }) = temporal.types.get_mut(&format!("{name}Constructor"))
+            && let Some(mut method) = methods.get("from").cloned()
+        {
+            method.params = vec![Param::new("value", Type::Unknown)];
+            method.doc = doc(
+                "/** Construct from an already parsed JSON value, using the same conversion as `from`. */",
+            );
+            methods.insert("fromJson".into(), method);
+        }
+    }
 
     for (local_name, ty_sym) in &temporal.types {
         let flat_key = format!("Temporal#{local_name}");

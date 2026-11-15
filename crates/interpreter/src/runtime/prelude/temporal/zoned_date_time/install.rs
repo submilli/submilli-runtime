@@ -24,22 +24,24 @@ fn install_construction(
     linker: &mut Linker<StoreData>,
     types: &DirectTypes,
 ) -> wasmtime::Result<()> {
-    register_host_fn(
-        linker,
-        MODULE_NAME,
-        shared::prelude_key("ZonedDateTimeConstructor", "from"),
-        FuncType::new(
-            &types.engine,
-            [types.object.clone(), types.object.clone()],
-            [types.object.clone()],
-        ),
-        |caller, params, results| {
-            let (zoned, tz_id) =
-                super::super::like::zoned(caller, abi_arg(params, 0)?, Some(*abi_arg(params, 1)?))?;
-            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
-            Ok(())
-        },
-    )?;
+    for (method, arity) in [("from", 2), ("fromJson", 1)] {
+        register_host_fn(
+            linker,
+            MODULE_NAME,
+            shared::prelude_key("ZonedDateTimeConstructor", method),
+            FuncType::new(
+                &types.engine,
+                vec![types.object.clone(); arity],
+                [types.object.clone()],
+            ),
+            |caller, params, results| {
+                let (zoned, tz_id) =
+                    super::super::like::zoned(caller, abi_arg(params, 0)?, params.get(1).copied())?;
+                *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
+                Ok(())
+            },
+        )?;
+    }
     register_host_fn(
         linker,
         MODULE_NAME,

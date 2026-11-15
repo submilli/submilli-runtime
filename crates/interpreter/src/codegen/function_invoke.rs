@@ -2,8 +2,8 @@
 //! module's exported `run` entry point with positional JSON arguments:
 //!
 //! - `<pkg>#function:argument:<i>`: `(unknown) -> unknown` per castable
-//!   parameter, validating the parsed JSON value as `value as T` and returning
-//!   the boxed runtime value before `run` executes.
+//!   parameter, constructing through its descriptor’s optional `fromJson`, or
+//!   validating with `test`, before returning the boxed value to `run`.
 //! - `<pkg>#function:invoke`: `(unknown, …) -> (ref null $string)`, coercing
 //!   each validated argument into `run`'s parameter slot, calling `run`, and
 //!   encoding the result to JSON (`null` ref when `undefined`).
@@ -103,7 +103,7 @@ pub(super) fn argument_body(
     ctx: &CodegenCtx,
     argument: &FunctionArgumentExport,
 ) -> Result<Function, crate::compiler_error::CompilerFailure> {
-    let FinalizerArgumentCheck { target, check } = argument.check;
+    let target = &argument.check.target;
     ctx.checking_standalone(target, || {
         let params = [(
             Ident {
@@ -114,8 +114,15 @@ pub(super) fn argument_body(
         )];
         let mut emitter = FunctionEmitter::new(ctx, &params)?;
         emitter.instruction(Instruction::LocalGet(0));
-        super::cast_check::emit_shape_cast_on_stack(&mut emitter, ctx, target, check)?;
-        super::function_emitter::cast::emit_box(&mut emitter, ctx, target)?;
+        super::runtime_descriptors::emit(&mut emitter, ctx, target)?;
+        let decode = ctx
+            .symbols
+            .func_idx(&crate::mangle::host(
+                crate::runtime::JSON_MODULE_NAME,
+                "decode",
+            ))
+            .ok_or_else(|| crate::codegen::internal_failure("JSON descriptor decoder imported"))?;
+        emitter.instruction(Instruction::Call(decode));
         emitter.build()
     })
 }

@@ -25,6 +25,8 @@ use crate::{PackageDeclaration, Param, Span, Type, ValueKind, ValueSymbol};
 
 pub const JSON_MODULE_NAME: &str = "submilli:json";
 
+pub(crate) use super::prelude::temporal::from_json_function;
+
 pub(super) fn install_json_module(
     linker: &mut Linker<StoreData>,
     string_type: &ArrayType,
@@ -34,6 +36,26 @@ pub(super) fn install_json_module(
 
     let object_type = crate::runtime::intrinsic_types::build_intrinsic_types(&engine)?.object;
     let unknown_result = ValType::Ref(RefType::new(true, HeapType::from(object_type)));
+
+    register_host_fn_async(
+        linker,
+        JSON_MODULE_NAME,
+        crate::mangle::host(JSON_MODULE_NAME, "decode"),
+        FuncType::new(
+            &engine,
+            [unknown_result.clone(), unknown_result.clone()],
+            [unknown_result.clone()],
+        ),
+        |caller, params, results| {
+            Box::pin(async move {
+                let descriptor =
+                    crate::stdlib::abi::read_type_descriptor(caller, abi_arg(params, 1)?)?;
+                *abi_result(results, 0)? =
+                    descriptor.decode_json(caller, *abi_arg(params, 0)?).await?;
+                Ok(())
+            })
+        },
+    )?;
 
     let ty = FuncType::new(
         &engine,
@@ -1121,6 +1143,25 @@ impl JsonUnknownAllocator {
 
 pub(super) fn json_module_definitions() -> PackageDeclaration {
     let mut defs = PackageDeclaration::with_package(JSON_MODULE_NAME);
+    let name = "decode";
+    defs.values.insert(
+        name.into(),
+        ValueSymbol {
+            name: name.into(),
+            mangled_name: crate::mangle::host(JSON_MODULE_NAME, name),
+            declaration_span: Span::at(crate::FileId::JSON),
+            kind: ValueKind::Function {
+                generics: Default::default(),
+                params: vec![
+                    Param::new("value", Type::Unknown),
+                    Param::new("descriptor", Type::Unknown),
+                ],
+                ret: Type::Unknown,
+                type_predicate: None,
+                doc: None,
+            },
+        },
+    );
     insert_json_host_fn(&mut defs, "parse", vec![Param::new("text", Type::String)]);
     insert_json_host_fn(
         &mut defs,

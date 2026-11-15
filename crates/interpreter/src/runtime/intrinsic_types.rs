@@ -633,7 +633,7 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
         ],
     )?;
 
-    // `$TypeDescriptor`: `{vtable, test: $Closure, name: $string, schema: $string?}`,
+    // `$TypeDescriptor`: `{vtable, test: $Closure, name: $string, schema: $string?, fromJson: $Closure?}`,
     // what every generic call passes per type argument in its `$types`
     // environment; a host function reads it with
     // `stdlib::abi::read_type_argument`. Mirrors codegen index 52.
@@ -657,6 +657,10 @@ pub(crate) fn build_intrinsic_types(engine: &Engine) -> wasmtime::Result<Intrins
             FieldType::new(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(true, string.clone().into()))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(true, closure.clone().into()))),
             ),
         ],
     )?;

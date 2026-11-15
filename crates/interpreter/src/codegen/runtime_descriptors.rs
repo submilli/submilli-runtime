@@ -3,7 +3,8 @@
 //!
 //! A descriptor is a `$TypeDescriptor` struct, not a closure: its `test` field
 //! is the type's structural predicate (a `$closure_1` whose body is
-//! [`body`]), beside the type's name and its JSON Schema when it has one
+//! [`body`]), beside an optional `fromJson` construction closure, the type's name,
+//! and its JSON Schema when it has one
 //! (`codegen::descriptor_schema`). Compiled generics read the predicate (`test_parameter`);
 //! host generics read all of it (`stdlib::abi::read_type_argument`). Every
 //! field is a function of the type, so a closed type's descriptor is built
@@ -106,15 +107,29 @@ pub fn bind(
     Ok(())
 }
 
+pub struct DescriptorFunction {
+    pub ty: Type,
+    pub index: u32,
+    pub from_json: bool,
+}
+
 pub fn allocate(
     ta: &TypedAst,
     extra: &BTreeSet<Type>,
     symbols: &mut SymbolTable,
     next: &mut u32,
-) -> Result<Vec<(Type, u32)>, crate::compiler_error::CompilerFailure> {
+) -> Result<Vec<DescriptorFunction>, crate::compiler_error::CompilerFailure> {
     let mut targets = BTreeSet::from([Type::Unknown]);
     targets.extend(extra.iter().cloned());
     let mut passes_type_arguments = false;
+    if let Some(plan) = &ta.function_invoke {
+        passes_type_arguments = true;
+        for argument in &plan.arguments {
+            if let crate::FunctionArgumentCheck::Checked(check) = argument {
+                targets.insert(check.target.clone());
+            }
+        }
+    }
     // A generic closure reached without type arguments binds poisoned
     // descriptors, which test as `never` (`generic_binding`).
     if symbols.generic_environment_type.is_some() {
@@ -169,8 +184,21 @@ pub fn allocate(
             continue;
         }
         symbols.type_descriptor_functions.insert(ty.clone(), *next);
-        descriptors.push((ty, *next));
+        descriptors.push(DescriptorFunction {
+            ty: ty.clone(),
+            index: *next,
+            from_json: false,
+        });
         crate::codegen::next_index(next)?;
+        if crate::runtime::json::from_json_function(&ty).is_some() {
+            symbols.type_descriptor_decoders.insert(ty.clone(), *next);
+            descriptors.push(DescriptorFunction {
+                ty,
+                index: *next,
+                from_json: true,
+            });
+            crate::codegen::next_index(next)?;
+        }
     }
     Ok(descriptors)
 }
@@ -404,24 +432,18 @@ fn emit_new_descriptor(
             .ok_or_else(|| crate::codegen::internal_failure("opaque vtable imported"))?,
     ));
     // `test`: the predicate closure, capturing its free parameters' descriptors.
-    emitter.instruction(Instruction::GlobalGet(
-        ctx.symbols
-            .closure_vtable_global_idx()
-            .ok_or_else(|| crate::codegen::internal_failure("closure vtable"))?,
-    ));
-    emitter.instruction(Instruction::RefFunc(*function));
-    capture(emitter, ctx, ty)?;
-    emitter.instruction(Instruction::I64Const(0));
-    emitter.instruction(Instruction::StructNew(
-        ctx.symbols
-            .closure_struct_type_idx(field_guards::signature())
-            .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?,
-    ));
+    emit_closure(emitter, ctx, ty, *function)?;
     emit_text(emitter, ctx, &ty.to_string())?;
     match ctx.symbols.descriptor_schemas.get(ty) {
         Some(schema) => emit_text(emitter, ctx, schema)?,
         None => {
             emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
+        }
+    }
+    match ctx.symbols.type_descriptor_decoders.get(ty) {
+        Some(function) => emit_closure(emitter, ctx, ty, *function)?,
+        None => {
+            emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.closure)));
         }
     }
     emitter.instruction(Instruction::StructNew(intrinsics.type_descriptor));
@@ -529,5 +551,55 @@ pub fn body(
         super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty, ty)
     })?;
     cast::emit_box(&mut emitter, ctx, &Type::Boolean)?;
+    emitter.build()
+}
+
+fn emit_closure(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    ty: &Type,
+    function: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emitter.instruction(Instruction::GlobalGet(
+        ctx.symbols
+            .closure_vtable_global_idx()
+            .ok_or_else(|| crate::codegen::internal_failure("closure vtable"))?,
+    ));
+    emitter.instruction(Instruction::RefFunc(function));
+    capture(emitter, ctx, ty)?;
+    emitter.instruction(Instruction::I64Const(0));
+    emitter.instruction(Instruction::StructNew(
+        ctx.symbols
+            .closure_struct_type_idx(field_guards::signature())
+            .ok_or_else(|| crate::codegen::internal_failure("predicate closure type"))?,
+    ));
+    Ok(())
+}
+
+pub fn from_json_body(
+    ctx: &CodegenCtx,
+    ty: &Type,
+) -> Result<Function, crate::compiler_error::CompilerFailure> {
+    let function = crate::runtime::json::from_json_function(ty)
+        .and_then(|name| ctx.symbols.func_idx(&name))
+        .ok_or_else(|| crate::codegen::internal_failure("descriptor fromJson imported"))?;
+    let ident = |name: &str| Ident {
+        name: name.into(),
+        span: Span::at(ctx.file),
+    };
+    let params = [
+        (
+            ident("env"),
+            ValType::Ref(RefType {
+                nullable: false,
+                heap_type: HeapType::ANY,
+            }),
+        ),
+        (ident("value"), ctx.symbols.value_type(&Type::Unknown)?),
+    ];
+    let mut emitter = FunctionEmitter::new(ctx, &params)?;
+    emitter.instruction(Instruction::LocalGet(1));
+    emitter.instruction(Instruction::Call(function));
+    cast::emit_box(&mut emitter, ctx, ty)?;
     emitter.build()
 }

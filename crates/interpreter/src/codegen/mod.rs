@@ -2072,7 +2072,7 @@ fn codegen_inner(
     );
     declared.extend(class_plan.declared_funcs(&symbols));
     declared.extend(instance_field_guards.iter().map(|guard| guard.function));
-    declared.extend(type_descriptors.iter().map(|(_, function)| *function));
+    declared.extend(type_descriptors.iter().map(|descriptor| descriptor.index));
     if !declared.is_empty() {
         let mut elements = wasm_encoder::ElementSection::new();
         elements.declared(wasm_encoder::Elements::Functions(Cow::Owned(declared)));
@@ -2182,8 +2182,13 @@ fn codegen_inner(
     for guard in &instance_field_guards {
         code.function(&field_guards::body(&ctx, guard)?);
     }
-    for (ty, _) in &type_descriptors {
-        code.function(&runtime_descriptors::body(&ctx, ty)?);
+    for descriptor in &type_descriptors {
+        let body = if descriptor.from_json {
+            runtime_descriptors::from_json_body(&ctx, &descriptor.ty)?
+        } else {
+            runtime_descriptors::body(&ctx, &descriptor.ty)?
+        };
+        code.function(&body);
     }
 
     code.function(&field_lookup::body(&ctx)?);
@@ -2347,6 +2352,10 @@ fn json_host_signature(
                 nullable: true,
                 heap_type: HeapType::Concrete(intrinsics.object),
             })],
+        ),
+        "decode" => (
+            vec![symbols.value_type(&Type::Unknown)?; 2],
+            vec![symbols.value_type(&Type::Unknown)?],
         ),
         "stringify" => (vec![raw_string_ref], vec![raw_string_ref]),
         "stringifyTypedObject" => (

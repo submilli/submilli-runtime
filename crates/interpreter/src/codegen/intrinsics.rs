@@ -1022,8 +1022,8 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
     // `$TypeDescriptor` — what every generic call passes per type argument,
     // in its `$types` environment: the type's structural predicate (a
     // `$Closure`), its display name, and its JSON Schema (null when the type
-    // has none). An `$Object` subtype so it fits a `$object_fields` slot. The
-    // host mirrors this in `runtime::intrinsic_types`.
+    // has none), and an optional `fromJson` closure. An `$Object` subtype so it
+    // fits a `$object_fields` slot. The host mirrors this in `runtime::intrinsic_types`.
     types.ty().subtype(&SubType {
         is_final: true,
         ..substruct(
@@ -1033,6 +1033,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                 fieldtype_ref(string),
                 FieldType {
                     element_type: StorageType::Val(ref_null(string)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ref_null(closure)),
                     mutable: false,
                 },
             ],

@@ -47,6 +47,7 @@ pub struct SymbolTable {
     pub runtime_generic_functions: BTreeSet<MangledName>,
     pub field_guard_targets: BTreeMap<u32, Type>,
     pub type_descriptor_functions: BTreeMap<Type, u32>,
+    pub type_descriptor_decoders: BTreeMap<Type, u32>,
     pub type_descriptor_globals: BTreeMap<Type, u32>,
     /// The JSON Schema each descriptor type carries, for the types that have
     /// one (`codegen::descriptor_schema`).

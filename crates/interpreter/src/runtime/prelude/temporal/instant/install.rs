@@ -37,17 +37,19 @@ fn install_direct(
         HeapType::ConcreteStruct(intr.bigint.clone()),
     ));
 
-    register_host_fn(
-        linker,
-        host,
-        prelude_key("InstantConstructor", "from"),
-        FuncType::new(engine, [obj.clone()], obj_result.clone()),
-        |caller, params, results| {
-            let ts = super::super::like::instant(caller, abi_arg(params, 0)?)?;
-            *abi_result(results, 0)? = make_instant(caller, ts)?;
-            Ok(())
-        },
-    )?;
+    for method in ["from", "fromJson"] {
+        register_host_fn(
+            linker,
+            host,
+            prelude_key("InstantConstructor", method),
+            FuncType::new(engine, [obj.clone()], obj_result.clone()),
+            |caller, params, results| {
+                let ts = super::super::like::instant(caller, abi_arg(params, 0)?)?;
+                *abi_result(results, 0)? = make_instant(caller, ts)?;
+                Ok(())
+            },
+        )?;
+    }
 
     register_host_fn(
         linker,
