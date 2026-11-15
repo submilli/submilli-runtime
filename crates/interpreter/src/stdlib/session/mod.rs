@@ -31,7 +31,7 @@ use crate::runtime::intrinsic_types::build_intrinsic_types;
 use crate::runtime::session_kv::{
     CursorKeys, SessionKvEntry, SessionKvError, SessionKvPage, SessionKvStore,
 };
-use crate::stdlib::abi::{self, TypeDescriptor, read_type_argument};
+use crate::stdlib::abi::{self, read_type_argument};
 use crate::stdlib::shared::{
     check_and_approve_call, check_candidate, filters_candidate, mark_filtered,
 };
@@ -128,7 +128,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 };
                 fuel::charge(&mut *caller, fuel::PARSE, payload.len() as u64)?;
                 let value = value::deserialize(caller, payload)?;
-                accept_or_throw(caller, &key, &descriptor, value).await
+                descriptor.decode_json(caller, value).await
             })
         },
     )?;
@@ -421,29 +421,6 @@ fn build_page(
     )
 }
 
-/// The stored `value` of `key` once the descriptor for `T` accepts it, or the
-/// catchable `TypeError` a mismatch throws. The message names the key and the
-/// expected type and never the value: a session holds a tenant's data. A bare
-/// `get(key)` binds `T` to `unknown`, whose descriptor accepts every value.
-async fn accept_or_throw(
-    caller: &mut wasmtime::Caller<'_, StoreData>,
-    key: &[u16],
-    descriptor: &TypeDescriptor,
-    value: Val,
-) -> wasmtime::Result<Val> {
-    if descriptor.accepts(caller, value).await? {
-        return Ok(value);
-    }
-    // The key is quoted as a JSON string, so a quote or a newline in it
-    // cannot run into the rest of the message.
-    let key = serde_json::to_string(&String::from_utf16_lossy(key))
-        .map_err(crate::runtime::host::fatal_host_error)?;
-    Err(crate::runtime::host::type_error(format!(
-        "session.get({key}): the stored value does not match `{}`",
-        descriptor.name
-    )))
-}
-
 fn read_key(
     caller: &mut wasmtime::Caller<'_, StoreData>,
     val: &Val,
@@ -664,7 +641,7 @@ mod tests {
 
     /// A typed read tests the stored value against `T` on the host — the
     /// descriptor's predicate, the same structural test `x as T` gets — and a
-    /// mismatch throws a catchable `TypeError` naming the key and the type and
+    /// mismatch throws a catchable `TypeError` naming the type and
     /// never the value: a session holds a tenant's data.
     #[tokio::test]
     async fn a_typed_read_of_a_mismatched_value_throws_a_catchable_type_error() {
@@ -687,10 +664,7 @@ mod tests {
         )
         .await
         .expect("a mismatch is caught by the program");
-        assert_eq!(
-            out,
-            "TypeError:session.get(\"p\"): the stored value does not match `Progress`"
-        );
+        assert_eq!(out, "TypeError:JSON value does not match Progress");
     }
 
     /// A bare `get(key)` binds `T` to `unknown`, whose descriptor accepts every

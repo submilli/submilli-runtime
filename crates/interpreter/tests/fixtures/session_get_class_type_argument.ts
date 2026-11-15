@@ -25,5 +25,5 @@ function main(): void {
   } catch (e: TypeError) {
     message = e.message;
   }
-  assert(message.indexOf("does not match `string`") >= 0, "a Slot<string> rejects the number");
+  assert(message.indexOf("does not match string") >= 0, "a Slot<string> rejects the number");
 }

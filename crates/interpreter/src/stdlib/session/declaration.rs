@@ -3,8 +3,8 @@
 //! `get` is declared generic in `T` and **runtime-generic**: like every
 //! generic function, a call passes one `$TypeDescriptor` per type parameter
 //! in a trailing `$types` environment, carrying the type's structural
-//! predicate (`codegen::runtime_descriptors`). The host tests the
-//! stored value against it and throws a catchable `TypeError` on a mismatch,
+//! predicate and optional JSON decoder (`codegen::runtime_descriptors`).
+//! The host decodes the stored value, or validates it when no decoder exists,
 //! so wrong-shaped stored data never arrives statically typed. Type arguments
 //! follow ordinary generic inference, including an uninferred `T` falling
 //! back to `unknown`.
@@ -36,13 +36,15 @@ pub fn package_declaration() -> PackageDeclaration {
             Type::TypeVar(GET_TYPE_PARAM.to_string()),
             Type::Undefined,
         ]),
-        "/**\n * Read a session value, checked against `T`. The stored value is tested \
+        "/**\n * Read a session value, decoded as `T`. A type with a JSON decoder (such as \
+         a Temporal type) constructs its value from the stored JSON. Otherwise it is tested \
          structurally — every field, element, and union arm — and a mismatch throws a \
          catchable `TypeError` rather than handing back a wrongly-typed value, so \
          `get<Progress>(\"progress\")` returns a real `Progress`, `undefined` for a missing key, or throws.\n *\n \
          * Returns `T | undefined`: a missing key returns `undefined`; a stored `null` \
          is preserved when `T` permits it and otherwise throws a `TypeError`.\n *\n * `T` must be a type the runtime can \
-         verify. Validation uses the runtime descriptor of `T`; `unknown` accepts \
+         decode or verify. The runtime descriptor of `T` supplies the decoder or \
+         validator; `unknown` accepts \
          every stored value. A generic \
          may pass its own type parameter, or a type built from it (`get<T>` or \
          `get<T[]>` inside `function load<T>`): the stored value is checked against \
@@ -52,7 +54,7 @@ pub fn package_declaration() -> PackageDeclaration {
          { key: $key }\n */",
     );
     // `get` reads its `T` as a `$TypeDescriptor` from the generic `$types`
-    // environment and checks the stored value against it host-side.
+    // environment and decodes the stored value through it host-side.
     defs.runtime_generics
         .insert(crate::mangle::package_symbol(MODULE_NAME, SESSION_GET));
     insert_fn(
