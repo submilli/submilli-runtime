@@ -21,6 +21,8 @@ pub mod closures;
 pub mod dependency_usage;
 pub(crate) mod descriptor_schema;
 pub mod dwarf;
+#[cfg(test)]
+mod enum_tests;
 mod field_guards;
 mod field_lookup;
 pub mod field_name_strings;
