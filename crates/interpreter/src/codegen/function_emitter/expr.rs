@@ -1810,6 +1810,18 @@ fn emit_field_access(
         cast::emit_coerce_to_slot(emitter, ctx, checked_ty, result_ty)?;
         return Ok(());
     }
+    let physical_receiver = &ctx
+        .ta
+        .try_expr(*receiver)
+        .map_err(crate::codegen::arena_failure)?
+        .ty;
+    if physical_receiver == &Type::Unknown
+        && !matches!(receiver_ty.lowered(), Type::ClassRef { .. })
+        && !interface_property_may_be_absent_on_closure(ctx.ta, &receiver_ty, &name.name)
+    {
+        emit_expr(emitter, ctx, *receiver)?;
+        return emit_dynamic_property_read(emitter, ctx, &name.name, result_ty);
+    }
     // Class instance: nominal receiver, array-backed object payload.
     if let Type::ClassRef { mangled, .. } = receiver_ty.lowered() {
         if ctx.symbols.is_class_payload_method(mangled, &name.name) {
@@ -3151,7 +3163,8 @@ fn emit_chain_parts(
     // the method may be absent although its type isn't nullish.
     let receiver_may_be_nullish = {
         let ty = source_ty.unwrap_or(receiver_ty);
-        crate::codegen::symbol_table::may_hold_null(ty)
+        receiver_ty == &Type::Unknown
+            || crate::codegen::symbol_table::may_hold_null(ty)
             || ty.holds_undefined()
             || matches!(
                 part,
@@ -3281,6 +3294,16 @@ fn emit_chain_operation(
                 emit_live_method_call(emitter, ctx, iface, &name.name, args)?;
                 emit_live_member_return_cast(emitter, ctx, result_ty)?;
                 return Ok(());
+            }
+            crate::TypedChainPart::Field {
+                name, result_ty, ..
+            } if source_ty.is_none_or(|ty| !matches!(ty.lowered(), Type::ClassRef { .. }))
+                && !source_ty.is_some_and(|ty| ctx.ta.has_string_index(ty))
+                && !source_ty.is_some_and(|ty| {
+                    interface_property_may_be_absent_on_closure(ctx.ta, ty, &name.name)
+                }) =>
+            {
+                return emit_dynamic_property_read(emitter, ctx, &name.name, result_ty);
             }
             crate::TypedChainPart::InterfaceProperty {
                 iface,
@@ -5194,6 +5217,28 @@ fn emit_receiver_property_read_as(
         .symbols
         .intrinsic_type_indices()
         .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let allows_primitive = interface_may_hold_primitive(ctx.ta, receiver_ty);
+    if allows_primitive {
+        let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
+        emitter.instruction(Instruction::LocalTee(receiver));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+            intrinsics.object_shape,
+        )));
+        emitter.instruction(Instruction::I32Eqz);
+        // A weak interface may accept both primitives and plain functions.
+        // Leave closures to the optional-property/length dispatch below.
+        emitter.instruction(Instruction::LocalGet(receiver));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+            intrinsics.closure,
+        )));
+        emitter.instruction(Instruction::I32Eqz);
+        emitter.instruction(Instruction::I32And);
+        emitter.emit_if(BlockType::Result(ctx.symbols.value_type(field_ty)?));
+        emitter.instruction(Instruction::LocalGet(receiver));
+        emit_dynamic_property_read(emitter, ctx, prop_name, field_ty)?;
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(receiver));
+    }
     let allows_closure =
         interface_property_may_be_absent_on_closure(ctx.ta, receiver_ty, prop_name);
     if allows_closure {
@@ -5230,6 +5275,9 @@ fn emit_receiver_property_read_as(
     let receiver = stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape)?;
     emit_object_property_read_as(emitter, ctx, receiver, prop_name, field_ty, check_ty)?;
     if allows_closure {
+        emitter.emit_end();
+    }
+    if allows_primitive {
         emitter.emit_end();
     }
     Ok(())
@@ -5271,6 +5319,48 @@ fn emit_hybrid_has_no_length(
     emitter.instruction(Instruction::I32Const(0));
     emitter.emit_end();
     Ok(())
+}
+
+/// Read the live receiver without requiring the shape its static type names.
+/// The host keeps accessor and class-field guards and rejects nullish values.
+fn emit_dynamic_property_read(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    name: &str,
+    result_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let name = ctx
+        .symbols
+        .field_name_string_global_idx(name)
+        .ok_or_else(|| crate::codegen::internal_failure("property name collected"))?;
+    let getter = ctx
+        .symbols
+        .prelude_func_idx("ObjectConstructor##getField")
+        .ok_or_else(|| crate::codegen::internal_failure("dynamic property getter collected"))?;
+    emitter.instruction(Instruction::GlobalGet(name));
+    emitter.instruction(Instruction::Call(getter));
+    cast::emit_cast_to(emitter, ctx, result_ty)
+}
+
+fn interface_may_hold_primitive(ast: &crate::TypedAst, ty: &Type) -> bool {
+    if let Type::Union(members) = ty.peel() {
+        return members
+            .iter()
+            .any(|member| interface_may_hold_primitive(ast, member));
+    }
+    let Some(crate::FieldNarrowingTest::Interface(test)) = ast.runtime_type_tests.get(ty.peel())
+    else {
+        return false;
+    };
+    test.non_shape_carriers.iter().any(|carrier| {
+        matches!(
+            carrier,
+            crate::InterfaceCarrier::String
+                | crate::InterfaceCarrier::Number
+                | crate::InterfaceCarrier::Boolean
+                | crate::InterfaceCarrier::BigInt
+        )
+    })
 }
 
 fn interface_property_may_be_absent_on_closure(
