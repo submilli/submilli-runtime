@@ -5,10 +5,9 @@
 //! in a trailing `$types` environment, carrying the type's structural
 //! predicate (`codegen::runtime_descriptors`). The host tests the
 //! stored value against it and throws a catchable `TypeError` on a mismatch,
-//! so wrong-shaped stored data never arrives statically typed. The typechecker
-//! gates what `T` may be through its row in the checked-call table
-//! (`stdlib::checked_call`, matched by mangled name through
-//! [`is_checked_get`]); the declaration and that row are a matched pair.
+//! so wrong-shaped stored data never arrives statically typed. Type arguments
+//! follow ordinary generic inference, including an uninferred `T` falling
+//! back to `unknown`.
 
 use std::collections::BTreeMap;
 
@@ -19,20 +18,7 @@ use crate::{
 
 use super::{MAX_LIST_LIMIT, MODULE_NAME};
 
-/// The export name of the checked read. Shared with the checked-call table
-/// (`stdlib::checked_call`) so the declaration and the gate that keeps it
-/// sound can't drift apart.
 const SESSION_GET: &str = "get";
-
-/// Whether `mangled` is this package's checked read. Matching the
-/// package-export mangled name rather than a receiver name is what makes the
-/// typechecker's gate independent of how the symbol was imported —
-/// `session.get`, `kv.get` under an aliased namespace import, and a
-/// named-import `get` all carry this name, while a user's own `session`
-/// binding never can.
-pub fn is_checked_get(mangled: &crate::MangledName) -> bool {
-    *mangled == crate::mangle::package_symbol(MODULE_NAME, SESSION_GET)
-}
 
 /// The type parameter of [`SESSION_GET`].
 const GET_TYPE_PARAM: &str = "T";
@@ -56,8 +42,8 @@ pub fn package_declaration() -> PackageDeclaration {
          `get<Progress>(\"progress\")` returns a real `Progress`, `undefined` for a missing key, or throws.\n *\n \
          * Returns `T | undefined`: a missing key returns `undefined`; a stored `null` \
          is preserved when `T` permits it and otherwise throws a `TypeError`.\n *\n * `T` must be a type the runtime can \
-         verify: object, array, tuple, union, and primitive shapes. A bare `unknown`, a \
-         class, or an interface with methods is rejected at compile time. A generic \
+         verify. Validation uses the runtime descriptor of `T`; `unknown` accepts \
+         every stored value. A generic \
          may pass its own type parameter, or a type built from it (`get<T>` or \
          `get<T[]>` inside `function load<T>`): the stored value is checked against \
          the type its caller names.\n * @param key \

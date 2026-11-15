@@ -43,6 +43,10 @@ impl CodegenAnalysis {
             static_value_bindings: collect_static_value_bindings(dependencies),
         };
 
+        analysis
+            .string_pool
+            .intern_text(super::runtime_descriptors::UNSUPPORTED_TYPE_OPERATOR);
+
         // Generated serializers also cover dependency shapes discovered later,
         // and a static-dispatch binding used as a value reads as a host object.
         for helper in ["#toJson", "#staticValue"] {
