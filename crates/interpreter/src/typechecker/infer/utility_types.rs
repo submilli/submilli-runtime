@@ -2,8 +2,8 @@
 //!
 //! The utilities are prelude aliases (`runtime::prelude::utility_types`) whose
 //! bodies are applications of themselves. An application is evaluated here,
-//! in Rust, once its arguments no longer mention a type parameter; until then
-//! it stays the application (`Type::AliasRef` to the prelude alias). The
+//! in Rust once enough operand structure is known; otherwise it stays an
+//! application (`Type::AliasRef` to the prelude alias). The
 //! results follow tsc 6.0.3 (`instantiateMappedType` for the homomorphic
 //! mapped types, distributive conditional types for `Exclude`, `Extract`,
 //! `Parameters` and `ReturnType`, and the intrinsic string mappings).
@@ -62,6 +62,7 @@ pub(crate) fn evaluate(utility: Utility, args: &[Type], types: TypeResolver<'_>)
             evaluator.signature_part(utility, operand)
         }
         (Utility::NoInfer, [operand]) => Ok(operand.clone()),
+        (Utility::FlatArray, [array, depth]) => evaluator.flat_array(array, depth, 0),
         (mapping, [operand]) if mapping.is_string_mapping() => {
             evaluator.string_mapping(mapping, operand)
         }
@@ -115,6 +116,28 @@ pub(crate) fn labeled(utility: Utility, args: Vec<Type>, body: Type) -> Type {
     )
 }
 
+/// Index lib.es2019.array's `[-1, 0, …, 20]` predecessor tuple.
+/// Negative integer keys use its numeric index type; out-of-bounds positive
+/// and fractional keys read `undefined`, which keeps choosing `recur`.
+fn flat_predecessor(depth: &Type) -> Type {
+    match depth.peel() {
+        Type::NumberLiteral(value) if (0.0..=21.0).contains(&value.0) && value.0.fract() == 0.0 => {
+            Type::NumberLiteral(crate::types::LiteralF64(value.0 - 1.0))
+        }
+        Type::Number | Type::NumberEnum { .. } => all_flat_depths(),
+        Type::NumberLiteral(value) if value.0 < 0.0 && value.0.fract() == 0.0 => all_flat_depths(),
+        _ => Type::Undefined,
+    }
+}
+
+fn all_flat_depths() -> Type {
+    Type::union(
+        (-1..=20)
+            .map(|value| Type::NumberLiteral(crate::types::LiteralF64(f64::from(value))))
+            .collect(),
+    )
+}
+
 /// `NonNullable<T>`, tsc's `T & {}`: `null`, `undefined` and `void` drop out,
 /// and `unknown` becomes `{}`.
 fn non_nullable(operand: &Type) -> Type {
@@ -153,6 +176,104 @@ type Outcome = Result<Type, Option<String>>;
 type Structure = (BTreeMap<String, ObjectField>, Vec<crate::IndexSignature>);
 
 impl Evaluator<'_> {
+    /// Interpret lib.es2019.array's `done`/`recur` lookup. The depth is a
+    /// type, not a runtime count: `number` indexes the whole predecessor tuple,
+    /// and a union containing -1 selects both branches. Bound recursive array
+    /// aliases and union fan-out by the same depth/work limits as other utilities.
+    fn flat_array(&self, array: &Type, depth: &Type, expansions: u32) -> Outcome {
+        if expansions > MAX_EXPANSIONS {
+            return Err(Some("the type argument expands too deeply".into()));
+        }
+        let mut budget = self.types.limits.budget();
+        if let Err(exceeded) = budget.charge_work(1) {
+            self.types.limits.record(exceeded);
+            return Err(Some(
+                "the FlatArray type exceeds the compiler work limit".into(),
+            ));
+        }
+        let next = expansions + 1;
+        if let Type::AliasRef {
+            mangled,
+            name,
+            args,
+            ..
+        } = array.peel()
+        {
+            let body = super::type_aliases::alias_ref_body(mangled, name, args, self.types);
+            return self.flat_array(&body, depth, next);
+        }
+        let mut depths = Vec::new();
+        for depth in members(depth) {
+            match depth.peel() {
+                Type::NumberEnum {
+                    mangled,
+                    name,
+                    member: None,
+                    ..
+                } => {
+                    let values = self
+                        .types
+                        .lookup(mangled, name)
+                        .and_then(|symbol| super::comparable::enum_variant_values(&symbol.kind))
+                        .ok_or_else(|| {
+                            Some(format!("`{depth}` has no numeric enum declaration"))
+                        })?;
+                    // enum_member_types deliberately collapses a singleton
+                    // member back to its enum; indexing needs its value here.
+                    depths.extend(values.into_iter().map(|(_, value)| value.literal_type()));
+                }
+                _ => depths.push(
+                    depth
+                        .enum_member_value()
+                        .map_or(depth, |value| value.literal_type()),
+                ),
+            }
+        }
+        let done = depths
+            .iter()
+            .any(|depth| matches!(depth.peel(), Type::NumberLiteral(value) if value.0 == -1.0));
+        let recur = depths
+            .iter()
+            .any(|depth| !matches!(depth.peel(), Type::NumberLiteral(value) if value.0 == -1.0));
+        let mut results = Vec::new();
+        if done {
+            results.push(array.clone());
+        }
+        if recur {
+            let predecessor = Type::union(depths.iter().map(flat_predecessor).collect());
+            for member in members(array) {
+                if !known_shape(&member) {
+                    results.push(deferred(
+                        Utility::FlatArray,
+                        vec![member, Type::union(depths.clone())],
+                    ));
+                    continue;
+                }
+                let element = match member.peel() {
+                    Type::Array(element) => Some(element.as_ref().clone()),
+                    Type::Tuple(tuple) => Some(Type::union(tuple.elements.clone())),
+                    _ => None,
+                };
+                results.push(match element {
+                    Some(element) => self.flat_array(&element, &predecessor, next)?,
+                    // A recursion back-edge in a union still needs expansion.
+                    None if matches!(member.peel(), Type::AliasRef { .. }) => {
+                        self.flat_array(&member, depth, next)?
+                    }
+                    None => member,
+                });
+            }
+        }
+        let result = Type::union(results);
+        if let Err(exceeded) = budget.charge_copy(&result, 1) {
+            self.types.limits.record(exceeded);
+            return Err(Some(
+                "the FlatArray result exceeds the compiler type limit".into(),
+            ));
+        }
+        Ok(result)
+    }
+
     /// `Partial`, `Required` and `Readonly`: tsc's homomorphic mapped types,
     /// which distribute over unions and map arrays and tuples elementwise.
     fn homomorphic(&self, utility: Utility, operand: &Type, depth: u32) -> Outcome {
@@ -955,14 +1076,14 @@ fn is_numeric_key(key: &Type) -> bool {
     matches!(key, Type::Number | Type::NumberLiteral(_)) || matches!(key, Type::NumberEnum { .. })
 }
 
-/// Whether `ty` holds a utility application whose arguments no longer
-/// mention a type parameter, which [`normalize`] would evaluate.
+/// Whether `ty` holds a utility application whose operand structure is
+/// known enough to evaluate, or a concrete `keyof`/index operation.
 pub(crate) fn has_evaluable_application(ty: &Type) -> bool {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
         if let Type::AliasRef { mangled, args, .. } = ty
-            && utility(mangled).is_some()
-            && !args.iter().any(holds_type_parameter)
+            && let Some(utility) = utility(mangled)
+            && structure_known(utility, args)
         {
             return true;
         }
@@ -998,8 +1119,7 @@ pub(crate) fn evaluate_concrete_operator(ty: &Type, types: TypeResolver<'_>) -> 
     Some(normalize(operator, types).unwrap_or(Type::Error))
 }
 
-/// `ty` with every utility application, `keyof` and `T[K]` whose operands
-/// became concrete (after instantiation substituted its type parameters)
+/// `ty` with every evaluable utility application and concrete `keyof`/`T[K]`
 /// replaced by the type it stands for, labeled as a written application is.
 /// One that has no evaluation becomes `Type::Error`; [`normalize_reporting`]
 /// says why.
@@ -1048,10 +1168,12 @@ thread_local! {
     static EVALUATING: std::cell::RefCell<Vec<Type>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Whether `ty` is a `keyof`, `T[K]` or utility application whose operands
-/// are concrete, which evaluates to another type.
-fn is_concrete_operator(ty: &Type) -> bool {
-    is_concrete_keyof_or_index(ty) || (ty.is_utility_application() && !holds_type_parameter(ty))
+/// Whether `ty` is a concrete `keyof`/index operation or a utility
+/// application with enough known structure to evaluate.
+fn is_evaluable_operator(ty: &Type) -> bool {
+    is_concrete_keyof_or_index(ty)
+        || matches!(ty, Type::AliasRef { mangled, args, .. }
+            if utility(mangled).is_some_and(|utility| structure_known(utility, args)))
 }
 
 thread_local! {
@@ -1096,12 +1218,12 @@ impl Drop for Evaluating {
     }
 }
 
-/// `ty` evaluated while it is a concrete form, through as many forms as it
+/// `ty` evaluated while its operand structure is known, through as many forms as it
 /// names, guarded against cycles. Only the outer type is evaluated: the
 /// fields of a result keep their lazy forms, so mutually referring
 /// declarations (`A` holding `Partial<B>`, `B` holding `Partial<A>`) stay finite.
 fn evaluate_guarded(ty: Type, types: TypeResolver<'_>, failures: &mut Vec<String>) -> Type {
-    if !is_concrete_operator(&ty) {
+    if !is_evaluable_operator(&ty) {
         return ty;
     }
     if EVALUATING.with(|stack| stack.borrow().contains(&ty)) {
@@ -1354,6 +1476,12 @@ fn structure_known(utility: Utility, args: &[Type]) -> bool {
             | Utility::Parameters,
             [operand],
         ) => known_shape(operand),
+        (Utility::FlatArray, [array, depth]) => {
+            !holds_type_parameter(depth)
+                && (known_shape(array)
+                    || matches!(depth.peel(), Type::Never | Type::NumberEnum { .. })
+                    || matches!(depth.peel(), Type::NumberLiteral(value) if value.0 == -1.0))
+        }
         (Utility::Pick | Utility::Omit, [object, keys]) => {
             known_shape(object) && !holds_type_parameter(keys)
         }

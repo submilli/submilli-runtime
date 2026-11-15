@@ -23,6 +23,12 @@ struct UtilityDeclaration {
 
 const UTILITIES: &[UtilityDeclaration] = &[
     UtilityDeclaration {
+        utility: Utility::FlatArray,
+        params: &["Arr", "Depth"],
+        declaration: "type FlatArray<Arr, Depth extends number> = { done: Arr; recur: Arr extends ReadonlyArray<infer InnerArr> ? FlatArray<InnerArr, [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20][Depth]> : Arr; }[Depth extends -1 ? \"done\" : \"recur\"];",
+        doc: "/** The element type after flattening an array through `Depth` levels. */",
+    },
+    UtilityDeclaration {
         utility: Utility::Partial,
         params: &["T"],
         declaration: "type Partial<T> = { [P in keyof T]?: T[P] };",
@@ -135,6 +141,7 @@ fn constraints(utility: Utility) -> BTreeMap<String, Type> {
         has_rest: true,
     };
     match utility {
+        Utility::FlatArray => BTreeMap::from([("Depth".to_string(), Type::Number)]),
         Utility::Pick => BTreeMap::from([(
             "K".to_string(),
             Type::KeyOf(Box::new(Type::TypeVar("T".to_string()))),

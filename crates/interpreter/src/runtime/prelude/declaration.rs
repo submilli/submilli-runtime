@@ -511,6 +511,7 @@ mod tests {
                 "ErrorOptions",
                 "Exclude",
                 "Extract",
+                "FlatArray",
                 "Function",
                 "Iterable",
                 "Iterator",

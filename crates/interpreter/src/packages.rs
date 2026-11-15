@@ -1694,6 +1694,12 @@ fn render_ts_compiler_globals(out: &mut String, defs: &PackageDeclaration) {
 // prelude interface declaring `iterator()`. Users never write these; only
 // the checker reads them.
 fn render_ts_checker_plumbing(out: &mut String, defs: &PackageDeclaration) {
+    // FlatArray's conditional type needs the readonly array target in noLib
+    // projects. Numeric indexing gives inference the same element as lib.d.ts.
+    let _ = writeln!(
+        out,
+        "interface ReadonlyArray<T> {{\n  readonly length: number;\n  readonly [index: number]: T;\n  {ARRAY_FLAT_DECLARATION}\n}}\n"
+    );
     out.push_str("declare const Symbol: { readonly iterator: unique symbol };\n\n");
     out.push_str(
         "interface Array<T> {\n  [index: number]: T;\n  [Symbol.iterator](): Iterator<T>;\n}\n\n",
@@ -1953,6 +1959,9 @@ fn render_ts_interface_parents(
     }
 }
 
+const ARRAY_FLAT_DECLARATION: &str =
+    "flat<A, D extends number = 1>(this: A, depth?: D): FlatArray<A, D>[];";
+
 /// `parent` is the rendered `extends` target, if it has one.
 fn render_ts_type(
     out: &mut String,
@@ -2031,6 +2040,13 @@ fn render_ts_type(
             }
             for (mname, m) in methods {
                 if properties.contains_key(mname) {
+                    continue;
+                }
+                // The built-in's receiver type parameter and default are
+                // bound by generic call inference; MethodSig cannot spell them.
+                if export_prefix == "declare " && name == "Array" && mname == "flat" {
+                    push_doc(out, &m.doc, &inner);
+                    let _ = writeln!(out, "{inner}{ARRAY_FLAT_DECLARATION}");
                     continue;
                 }
                 for m in m.signatures() {
@@ -2668,6 +2684,11 @@ fn render_type_for(
             }
             for (mname, m) in methods {
                 if properties.contains_key(mname) {
+                    continue;
+                }
+                if sym.mangled_name == crate::mangle::prelude("Array") && mname == "flat" {
+                    push_doc_for(out, &m.doc, &inner, audience);
+                    let _ = writeln!(out, "{inner}{ARRAY_FLAT_DECLARATION}");
                     continue;
                 }
                 for m in m.signatures() {
@@ -4377,6 +4398,41 @@ mod tests {
     }
 
     #[test]
+    fn optional_overloaded_chain_method_keeps_its_optional_call_guard() {
+        let mut base = inheritance_package(
+            "@test/optional-overloads",
+            "export interface Operations { run(value: number): number; }",
+            &[],
+        );
+        let TypeKind::Interface { methods, .. } =
+            &mut base.types.get_mut("Operations").unwrap().kind
+        else {
+            panic!("interface");
+        };
+        methods.get_mut("run").unwrap().optional = true;
+        methods
+            .get_mut("run")
+            .unwrap()
+            .overloads
+            .push(crate::MethodOverload {
+                generics: Default::default(),
+                params: vec![crate::Param::new("value", Type::String)],
+                ret: Type::String,
+                predicate: None,
+            });
+        inheritance_package(
+            "@test/optional-caller",
+            r#"
+            import { Operations } from "@test/optional-overloads";
+            export function call(operations: Operations): number | undefined {
+                return operations.run?.(1);
+            }
+            "#,
+            &[&base],
+        );
+    }
+
+    #[test]
     fn interface_instance_unions_combine_every_overload_return() {
         let mut base = inheritance_package(
             "@test/union-overloads",
@@ -5024,6 +5080,21 @@ mod tests {
         let docs = render_packages_d_ts(&[&package], &[]);
 
         assert!(docs.contains("  export class BillingError {"), "{docs}");
+    }
+
+    #[test]
+    fn flat_declaration_uses_typescript_receiver_depth_and_utility() {
+        let lib = render_lib_submilli_d_ts();
+        assert!(
+            lib.contains("flat<A, D extends number = 1>(this: A, depth?: D): FlatArray<A, D>[];")
+        );
+        assert!(lib.contains("type FlatArray<Arr, Depth extends number> ="));
+        assert!(lib.contains("Arr extends ReadonlyArray<infer InnerArr>"));
+        assert!(lib.contains("interface ReadonlyArray<T> {"));
+        let BuiltinLookup::Found(array) = builtin_lookup("Array") else {
+            panic!("Array must be a built-in");
+        };
+        assert!(array.contains(ARRAY_FLAT_DECLARATION));
     }
 
     #[test]

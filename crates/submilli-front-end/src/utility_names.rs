@@ -17,6 +17,7 @@ pub enum Utility {
     Parameters,
     ReturnType,
     NoInfer,
+    FlatArray,
     Uppercase,
     Lowercase,
     Capitalize,
@@ -36,7 +37,7 @@ pub fn utility(mangled: &MangledName) -> Option<Utility> {
 }
 
 impl Utility {
-    pub const ALL: [Utility; 15] = [
+    pub const ALL: [Utility; 16] = [
         Utility::Partial,
         Utility::Required,
         Utility::Readonly,
@@ -48,6 +49,7 @@ impl Utility {
         Utility::Parameters,
         Utility::ReturnType,
         Utility::NoInfer,
+        Utility::FlatArray,
         Utility::Uppercase,
         Utility::Lowercase,
         Utility::Capitalize,
@@ -67,6 +69,7 @@ impl Utility {
             Utility::Parameters => "Parameters",
             Utility::ReturnType => "ReturnType",
             Utility::NoInfer => "NoInfer",
+            Utility::FlatArray => "FlatArray",
             Utility::Uppercase => "Uppercase",
             Utility::Lowercase => "Lowercase",
             Utility::Capitalize => "Capitalize",

@@ -3742,52 +3742,6 @@ impl Inferer<'_> {
         ))
     }
 
-    /// Computes `flat`'s return type by un-nesting `depth` array levels from the
-    /// receiver's element type. `depth` must be a non-negative integer literal
-    /// (default `1`) so the result type is statically known; anything else is a
-    /// compile error and the depth falls back to `1`.
-    fn array_flat_return_type(
-        &mut self,
-        recv_ty: &Type,
-        args: &[ExprId],
-    ) -> Result<Type, CompilerFailure> {
-        let elem = match recv_ty.peel() {
-            Type::Array(inner) => (**inner).clone(),
-            _ => return Ok(Type::Error),
-        };
-        let depth = match args.first() {
-            None => 1usize,
-            Some(arg) => {
-                let arg_expr = self.ast.try_expr(*arg).map_err(super::arena_failure)?;
-                match &arg_expr.kind {
-                    ExprKind::Number(v) if v.is_finite() && *v >= 0.0 && v.fract() == 0.0 => {
-                        *v as usize
-                    }
-                    _ => {
-                        let arg_span = arg_expr.span;
-                        self.error_with_help(
-                            arg_span,
-                            "`flat`'s depth must be a non-negative integer literal".to_string(),
-                            vec![
-                                "pass a literal like `.flat()` or `.flat(2)`, or chain `.flat().flat()` for deeper flattening"
-                                    .to_string(),
-                            ],
-                        );
-                        1
-                    }
-                }
-            }
-        };
-        let mut result_elem = elem;
-        for _ in 0..depth {
-            match result_elem.peel() {
-                Type::Array(inner) => result_elem = (**inner).clone(),
-                _ => break,
-            }
-        }
-        Ok(Type::Array(Box::new(result_elem)))
-    }
-
     /// Typecheck a method call where neither the interface nor the
     /// method declares any generic parameters. No substitution work
     /// is needed — the sig's params + return type are already
@@ -9988,7 +9942,7 @@ impl Inferer<'_> {
             expected,
             span,
         } = call;
-        let (mut sig, interface_bindings, iface_mangled, _dispatch) = method;
+        let (sig, interface_bindings, iface_mangled, _dispatch) = method;
         if sig.optional {
             let name = member.as_named().map_or("", |name| name.name.as_str());
             self.error_with_help(
@@ -10011,12 +9965,6 @@ impl Inferer<'_> {
                 expected,
                 span,
             );
-        }
-        // `flat` un-nests `depth` array levels — a return type the
-        // generic machinery can't express. Validate the literal depth
-        // and override the resolved return type before dispatch.
-        if member.is_named("flat") && matches!(recv_ty.peel(), Type::Array(_)) {
-            sig.ret = self.array_flat_return_type(recv_ty, &args)?;
         }
         // Anything with substitution work — interface generics
         // (`Array<T>`), method generics (`map<U>`), or both —
@@ -13586,9 +13534,13 @@ impl Inferer<'_> {
                     );
                 }
                 if let Some(method) = &resolved_method
-                    && !method.sig.overloads.is_empty()
+                    && (!method.sig.overloads.is_empty()
+                        || (method.name == "flat"
+                            && method.receiver_ty.interface_routing().is_some_and(
+                                |(owner, _, _, _)| owner == crate::mangle::prelude("Array"),
+                            )))
                 {
-                    return self.infer_overloaded_chain_method_call(
+                    return self.infer_instantiated_chain_method_call(
                         method,
                         type_args,
                         args,
@@ -13818,7 +13770,7 @@ impl Inferer<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn infer_overloaded_chain_method_call(
+    fn infer_instantiated_chain_method_call(
         &mut self,
         method: &ChainMethod,
         type_args: Option<Vec<TypeAnnotation>>,
@@ -13834,11 +13786,11 @@ impl Inferer<'_> {
                     .with_span(span),
             );
         };
-        // The synthetic receiver supplies only a type to overload
-        // inference. The chain retains and evaluates its real receiver.
+        // The synthetic receiver supplies only a type to call inference.
+        // The chain retains and evaluates its real receiver.
         let receiver =
             self.push_synthetic_expr(TypedExprKind::Undefined, method.receiver_ty.clone(), span)?;
-        let (call, ret_ty) = self.infer_overloaded_method_call(
+        let (call, ret_ty) = self.infer_generic_method_call(
             receiver,
             iface.clone(),
             crate::Member::Named(Ident {
@@ -13859,10 +13811,10 @@ impl Inferer<'_> {
             }
             TypedExprKind::Undefined if ret_ty == Type::Error => Vec::new(),
             _ => {
-                return Err(super::inference_failure(
-                    "overload inference produced a non-method call",
-                )
-                .with_span(span));
+                return Err(
+                    super::inference_failure("call inference produced a non-method call")
+                        .with_span(span),
+                );
             }
         };
         let Some(
