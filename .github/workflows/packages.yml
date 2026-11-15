@@ -1,0 +1,57 @@
+name: Packages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+env:
+  SUBMILLI_TELEMETRY: "0"
+  SUBMILLI_TEST_NIGHTLY_ONLY: "0"
+  SUBMILLI_FULL_TEST: "0"
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect package and compiler changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: bash scripts/ci_changes.sh packages
+      - uses: dtolnay/rust-toolchain@1.98.1
+        if: steps.changes.outputs.run == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.changes.outputs.run == 'true'
+
+      # These read the curated package sources, so package-only changes need
+      # them even when the workspace's Rust test job skips its expensive steps.
+      - name: Package policies and caller attribution
+        if: steps.changes.outputs.run == 'true'
+        run: cargo test --locked -p submilli --test package_policy
+      - name: Package documentation contract
+        if: steps.changes.outputs.run == 'true'
+        run: cargo test --locked -p submilli-build --test doc_examples
+      - name: Package blueprint fixtures
+        if: steps.changes.outputs.run == 'true'
+        run: >-
+          cargo test --locked -p submilli-blueprint --lib --
+          corpus_drafts_keep_every_existing_line locates_every_rule_in_the_repository_blueprints
+      - name: Package discovery documentation
+        if: steps.changes.outputs.run == 'true'
+        run: cargo test --locked -p submilli --test discovery_cli read_only_linear_docs_snapshot
+
+      # Package identity is stamped by the CLI at compile time. The packages'
+      # own scripts and examples therefore run under build test, not cargo test.
+      - name: Package tests
+        if: steps.changes.outputs.run == 'true'
+        run: cargo run -p submilli -- build test --skip-network
