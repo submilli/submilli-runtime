@@ -17,5 +17,5 @@ function main(): void {
   } catch (e: TypeError) {
     message = e.message;
   }
-  assert(message.indexOf("does not match `Progress`") >= 0, "a mismatch names the caller's type");
+  assert(message.indexOf("does not match Progress") >= 0, "a mismatch names the caller's type");
 }
