@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "47b21a1d955c5b73ef662c7008969f1d3a4ca417d52f5c186eadb0adfe233115"
+  contentHash: "a1fec31084ca557d2d745b5e1843740604debf8a00acb5160cd577755308dac7"
   confirmedAt: "2026-10-09T15:40:52.000Z"
 ---
 
@@ -208,7 +208,7 @@ A homogeneous array of `T`.
 | `findIndex(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): number` | Returns the index of the first element for which `callback` returns a truthy value, or `-1` if none match. |
 | `findLast(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): T \| undefined` | Returns the last element for which `callback` returns a truthy value, or `undefined` if none match. |
 | `findLastIndex(callback: (arg0: T, arg1: number, arg2: T[]) => unknown): number` | Returns the index of the last element for which `callback` returns a truthy value, or `-1` if none match. |
-| `flat(depth?: number): T[]` | Flattens nested arrays up to `depth` levels into a new array. |
+| `flat<A, D extends number = 1>(this: A, depth?: D): FlatArray<A, D>[]` | Flattens nested arrays up to `depth` levels into a new array (default `1`). |
 | `flatMap<U>(callback: (arg0: T, arg1: number, arg2: T[]) => U[]): U[]` | Maps each element to an array via `callback`, then flattens the results one level. |
 | `forEach(callback: (arg0: T, arg1: number, arg2: T[]) => void): void` | Calls `callback(value, index, array)` once for each element in order. |
 | `includes(elem: T, fromIndex?: number): boolean` | Returns `true` if some element at or after `fromIndex` equals `elem`. |
@@ -271,6 +271,7 @@ Constructor object for `bigint`.
 | Member | Description |
 | --- | --- |
 | `(value: string \| number): bigint` | Convert a `string` or `number` to a `bigint`. |
+| `fromString(value: string): bigint` | Parse a decimal string as a bigint. |
 
 ## `Boolean`
 
@@ -344,6 +345,16 @@ Extract from `T` those types that are assignable to `U`.
 type Extract<T, U> = T extends U ? T : never;
 ```
 
+## `FlatArray`
+
+### `FlatArray`
+
+The element type after flattening an array through `Depth` levels.
+
+```typescript
+type FlatArray<Arr, Depth extends number> = { done: Arr; recur: Arr extends ReadonlyArray<infer InnerArr> ? FlatArray<InnerArr, [-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20][Depth]> : Arr; }[Depth extends -1 ? "done" : "recur"];
+```
+
 ## `Lowercase`
 
 ### `Lowercase`
@@ -382,8 +393,8 @@ Constructor object for `Map`.
 
 | Member | Description |
 | --- | --- |
-| `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): Map<K, T[]>` | Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. |
 | `new <K, V>(entries?: readonly (readonly [K, V])[] \| Iterable<[K, V]> \| Iterator<[K, V]> \| null): Map<K, V>` | Construct a `Map<K, V>`, optionally from an iterable of `[K, V]` entries: `new Map([["a", 1]])`. |
+| `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): Map<K, T[]>` | Groups iterable elements by the callback's result: a `Map` from each key to the elements it was returned for, in first-seen order. |
 
 ## `MissingValueError`
 
@@ -476,7 +487,7 @@ Constructor object for `Object` — the enumeration statics (`keys`/`values`/`en
 | `fromEntries<T>(entries: readonly (readonly [number \| string, T])[] \| Iterable<readonly [number \| string, T]> \| Iterator<readonly [number \| string, T]>): { [key: string]: T }` | Creates a string-keyed object from entry pairs. |
 | `groupBy<K, T>(items: readonly T[] \| Iterable<T> \| Iterator<T>, keySelector: (arg0: T, arg1: number) => K): { [key: string]: T[] }` | Groups iterable elements by the callback's property key. |
 | `hasOwn(obj: unknown, key: string): boolean` | Returns `true` when `obj` has a field named `key`: an omitted optional field answers `false`, one holding `undefined` answers `true`. |
-| `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. Two objects or arrays are the same value only when they are one object, while `===` compares them by structure. |
+| `is(a: unknown, b: unknown): boolean` | SameValue comparison: like `===` but `Object.is(NaN, NaN)` is `true` and `Object.is(0, -0)` is `false`. |
 | `keys(obj: unknown): string[]` | Returns the object's field names in canonical sorted order (the same order JSON output uses). |
 | `values(obj: unknown): unknown[]` | Returns the object's field values, aligned with `Object.keys` order. |
 
@@ -564,7 +575,7 @@ type Readonly<T> = { readonly [P in keyof T]: T[P] };
 A `Map` that can only be read: `get`, `has`, `size`, `forEach` and iteration, but not `set`, `delete` or `clear`.
 
 ```typescript
-type ReadonlyMap<K, V> = ReadonlyMap<K, V>;
+type ReadonlyMap<K, V> = Omit<Map<K, V>, "set" | "delete" | "clear" | "forEach"> & { forEach(callback: (value: V, key: K, map: ReadonlyMap<K, V>) => void): void };
 ```
 
 ## `ReadonlySet`
@@ -574,7 +585,7 @@ type ReadonlyMap<K, V> = ReadonlyMap<K, V>;
 A `Set` that can only be read: `has`, `size`, `forEach`, iteration and the set algebra, but not `add`, `delete` or `clear`.
 
 ```typescript
-type ReadonlySet<T> = ReadonlySet<T>;
+type ReadonlySet<T> = Omit<Set<T>, "add" | "delete" | "clear" | "forEach"> & { forEach(callback: (value: T, value2: T, set: ReadonlySet<T>) => void): void };
 ```
 
 ## `Record`
@@ -624,8 +635,8 @@ Constructor object for `RegExp`.
 | Member | Description |
 | --- | --- |
 | `(source: string \| RegExp, flags?: string): RegExp` | Compile a pattern as `new RegExp` does. |
-| `escape(string: string): string` | Returns `string` with every character that has a meaning in a pattern escaped, so `new RegExp(RegExp.escape(s))` matches `s` literally. |
 | `new (source: string \| RegExp, flags?: string): RegExp` | Construct a fresh `RegExp` from a pattern string or an existing regex. |
+| `escape(string: string): string` | Returns `string` with every character that has a meaning in a pattern escaped, so `new RegExp(RegExp.escape(s))` matches `s` literally. |
 
 ## `Required`
 
@@ -871,12 +882,12 @@ Constructor object for `Uint8Array`.
 | Member | Description |
 | --- | --- |
 | `readonly BYTES_PER_ELEMENT: number` | The size in bytes of each element: always `1`. |
+| `new (values?: number \| number[]): Uint8Array` | Build a new `Uint8Array`. |
 | `alloc(n: number): Uint8Array` | Allocate a zero-filled `Uint8Array` of length `n`. |
 | `fromArray(values: number[]): Uint8Array` | Build a new `Uint8Array` from `values` — canonical name for `new Uint8Array(values)`. |
 | `fromBase64(s: string, options?: Base64Options): Uint8Array` | Decode `s` as base64; `options.alphabet` picks standard vs URL-safe. |
 | `fromBytes(other: Uint8Array): Uint8Array` | Returns a deep copy of `other`. |
 | `fromHex(s: string): Uint8Array` | Decode `s` as a hex string. |
-| `new (values?: number \| number[]): Uint8Array` | Build a new `Uint8Array`. |
 | `of(...values: number[]): Uint8Array` | Build a `Uint8Array` from the supplied byte values — `Uint8Array.of(1, 2, 3)`. |
 
 ## `Uncapitalize`
@@ -901,10 +912,12 @@ type Uppercase<S extends string> = intrinsic;
 
 ## `JSON`
 
-| Function | Capability | Description |
-| --- | --- | --- |
-| `parse(text: string): unknown` |  | Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. |
-| `stringify<T>(value: T, replacer?: null, space?: number \| string \| null): string` |  | Serialize a value to a JSON string. |
+The `JSON` value.
+
+| Member | Description |
+| --- | --- |
+| `parse(text: string): unknown` | Parse a JSON string as unknown; use `JSON.parse(s) as T` to validate a target type. |
+| `stringify(value: unknown, replacer?: null, space?: number \| string \| null): string` | Serialize a value to a JSON string. |
 
 ## `Math`
 
@@ -1012,9 +1025,10 @@ Constructor object for `Temporal.Duration`.
 
 | Member | Description |
 | --- | --- |
+| `new (fields: Temporal.DurationFields): Temporal.Duration` | Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). |
 | `compare(a: string \| Temporal.Duration \| Temporal.DurationFields, b: string \| Temporal.Duration \| Temporal.DurationFields, options?: Temporal.DurationCompareOptions): number` | Compares two Durations: `-1`, `0`, or `1`. |
 | `from(item: string \| Temporal.Duration \| Temporal.DurationFields): Temporal.Duration` | Build a Duration from an ISO 8601 string (e.g. `"PT1H30M"`), an existing Duration, or a fields bag (`{ hours: 1 }`). |
-| `new (fields: Temporal.DurationFields): Temporal.Duration` | Construct a Duration from a fields bag (e.g. `{ hours: 1, minutes: 30 }`). |
+| `fromJson(value: unknown): Temporal.Duration` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.DurationFields`
 
@@ -1092,6 +1106,7 @@ Constructor object for `Temporal.Instant`.
 | `from(item: string \| Temporal.Instant \| Temporal.ZonedDateTime): Temporal.Instant` | Parse an ISO 8601 instant string (e.g. `"2024-03-09T15:30:45.123Z"`). |
 | `fromEpochMilliseconds(ms: number): Temporal.Instant` | Construct an Instant from milliseconds since the Unix epoch. |
 | `fromEpochNanoseconds(ns: bigint): Temporal.Instant` | Construct an Instant from nanoseconds since the Unix epoch (full precision). |
+| `fromJson(value: unknown): Temporal.Instant` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.InstantRoundOptions`
 
@@ -1143,6 +1158,7 @@ Constructor object, accessed via the `Temporal` binding.
 | --- | --- |
 | `compare(a: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, b: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
 | `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainDate` | Convert a Temporal value, ISO string, or ISO fields bag. |
+| `fromJson(value: unknown): Temporal.PlainDate` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.PlainDateFields`
 
@@ -1201,6 +1217,7 @@ Constructor object, accessed via the `Temporal` binding.
 | --- | --- |
 | `compare(a: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, b: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
 | `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; second?: number; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainDateTime` | Convert a Temporal value, ISO string, or ISO fields bag. |
+| `fromJson(value: unknown): Temporal.PlainDateTime` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.PlainDateTimeFields`
 
@@ -1249,6 +1266,7 @@ Constructor object, accessed via the `Temporal` binding.
 | Member | Description |
 | --- | --- |
 | `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainMonthDay \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainMonthDay` | Convert a Temporal value, ISO string, or ISO fields bag. |
+| `fromJson(value: unknown): Temporal.PlainMonthDay` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.PlainMonthDayFields`
 
@@ -1296,6 +1314,7 @@ Constructor object, accessed via the `Temporal` binding.
 | --- | --- |
 | `compare(a: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime, b: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
 | `from(item: string \| { hour?: number; microsecond?: number; millisecond?: number; minute?: number; nanosecond?: number; second?: number } \| Temporal.PlainDateTime \| Temporal.PlainTime \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainTime` | Convert a Temporal value, ISO string, or ISO fields bag. |
+| `fromJson(value: unknown): Temporal.PlainTime` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.PlainTimeFields`
 
@@ -1341,6 +1360,7 @@ Constructor object, accessed via the `Temporal` binding.
 | --- | --- |
 | `compare(a: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime, b: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime): number` | Orders two values: -1, 0, or 1. |
 | `from(item: string \| { calendar?: string; era?: string; eraYear?: number; month?: number; monthCode?: string; year?: number } \| Temporal.PlainDate \| Temporal.PlainDateTime \| Temporal.PlainYearMonth \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.PlainYearMonth` | Convert a Temporal value, ISO string, or ISO fields bag. |
+| `fromJson(value: unknown): Temporal.PlainYearMonth` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.PlainYearMonthFields`
 
@@ -1425,6 +1445,7 @@ Constructor object for `Temporal.ZonedDateTime`.
 | --- | --- |
 | `compare(a: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime, b: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime): number` | Orders two ZonedDateTimes by their exact instant: -1, 0, or 1. |
 | `from(item: string \| { calendar?: string; day: number; era?: string; eraYear?: number; hour?: number; microsecond?: number; millisecond?: number; minute?: number; month?: number; monthCode?: string; nanosecond?: number; offset?: string; second?: number; timeZone: string \| Temporal.ZonedDateTime; year?: number } \| Temporal.ZonedDateTime, options?: { overflow?: "constrain" \| "reject" }): Temporal.ZonedDateTime` | Parse an ISO 8601 zoned datetime with bracketed tz (e.g. `"2026-01-15T10:00:00-05:00[America/New_York]"`). |
+| `fromJson(value: unknown): Temporal.ZonedDateTime` | Construct from an already parsed JSON value, using the same conversion as `from`. |
 
 ### `Temporal.ZonedDateTimeFields`
 
