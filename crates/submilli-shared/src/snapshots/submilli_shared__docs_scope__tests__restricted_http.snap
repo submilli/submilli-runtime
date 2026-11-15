@@ -66,7 +66,7 @@ interface Response {
    */
   readonly url: string;
   /**
-   * Parse the response body as JSON and check it against `T`, for example `r.json<User>()`. The check covers every field, element, and union arm; a body that does not match throws a catchable `TypeError` naming the type, a body that is not JSON throws a `SyntaxError`, and a number past the `number` range throws a `RangeError`. The expected type supplies `T` when none is written (`const user: User = r.json()`); with neither, the result is an unchecked `unknown`.
+   * Parse the response body as JSON and decode it as `T`, for example `r.json<User>()`. A type with `fromJson`, such as a direct Temporal type, constructs its value; otherwise the value is validated structurally. Nested conversion is not performed; a body that does not match throws a catchable `TypeError` naming the type, a body that is not JSON throws a `SyntaxError`, and a number past the `number` range throws a `RangeError`. The expected type supplies `T` when none is written (`const user: User = r.json()`); with neither, the result is an unchecked `unknown`.
    */
   json<T>(): T;
   /**

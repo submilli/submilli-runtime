@@ -5996,13 +5996,29 @@ impl<'a> Parser<'a> {
                 // Speculatively parse; on failure restore state and let `parse_binary`
                 // treat `<` as a comparison.
                 TokenKind::LessThan => {
-                    if chain_parts.is_some() {
-                        // `a?.<T>()` not yet supported — terminate the chain.
-                        break;
-                    }
                     let saved_pos = self.pos;
                     let saved_splits = self.split_type_tokens.len();
                     let saved_diag_len = self.diagnostics.len();
+                    if let Some((_, parts)) = &mut chain_parts {
+                        if let Some(type_args) = self.try_parse_type_args_only()
+                            && matches!(self.peek().kind, TokenKind::LeftParen)
+                        {
+                            let mut part = self.parse_chain_call_tail(false)?;
+                            if let crate::ChainPart::Call {
+                                type_args: arguments,
+                                ..
+                            } = &mut part
+                            {
+                                *arguments = Some(type_args);
+                            }
+                            parts.push(part);
+                            continue;
+                        }
+                        self.restore_type_tokens(saved_splits);
+                        self.pos = saved_pos;
+                        self.diagnostics.truncate(saved_diag_len);
+                        break;
+                    }
                     if let Some(call_id) = self.try_parse_generic_call_tail(expr) {
                         expr = call_id;
                     } else {

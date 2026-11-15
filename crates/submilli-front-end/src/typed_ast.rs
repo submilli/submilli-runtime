@@ -361,6 +361,7 @@ pub enum TypedChainPart {
     MethodCall {
         iface: MangledName,
         member: Member,
+        type_args: Vec<Type>,
         args: Vec<ExprId>,
         optional: bool,
         result_ty: Type,

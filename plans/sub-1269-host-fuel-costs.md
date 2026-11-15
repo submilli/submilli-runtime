@@ -1857,6 +1857,8 @@ Facts that apply to the whole slice:
 
 ### submilli:http
 
+`Response#json`: `CALL + COPY(body units) + PARSE(body units)` plus shared JSON allocation charges, descriptor name/schema marshalling, and `CALL` for descriptor decoding. Charge before reading and parsing; the selected host decoder charges its own work and guest decoder/predicate Wasm pays its own fuel. No recursive conversion of composite types.
+
 Variables: `u = len(url)`; `h` = request headers, `hu` = their total units; `B = bytes(request body)`; `r` = redirect hops followed (limit `MAX_REDIRECTS` = 10, `stdlib/http/transport.rs:211`); `R = bytes(response body)`; `rh` = response headers, `rhu` = their total bytes.
 
 What the shared verb path `perform_request` (`stdlib/http/mod.rs:340`) does, in order:

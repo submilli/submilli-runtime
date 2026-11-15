@@ -740,6 +740,8 @@ impl Inferer<'_> {
             );
         }
         let key = member.key();
+        let method_symbol = member.symbol(&iface_mangled);
+        let runtime_generic = self.is_runtime_generic_host(&method_symbol);
         // The no-mapper form preserves the source type; the mapped form has
         // an independent result parameter, like TypeScript's two overloads.
         let mut sig = sig;
@@ -771,7 +773,7 @@ impl Inferer<'_> {
             sub.insert("A".into(), receiver_ty.clone());
         }
         let errors_at_call = self.error_count();
-        // A checked host method (`Response#json<T>`) is gated and defaulted
+        // A checked host method is gated and defaulted
         // like a checked host function; see `infer_generic_call`.
         let checked = member.as_named().and_then(|name| {
             crate::stdlib::checked_call::checked_call(&crate::mangle::extend(
@@ -1033,7 +1035,7 @@ impl Inferer<'_> {
             return Ok((TypedExprKind::Null, Type::Error));
         }
         let mut inferred_fallbacks =
-            self.bind_uninferred_type_parameters(&mut sub, &sig.generics, &iface_mangled, span)?;
+            self.bind_uninferred_type_parameters(&mut sub, &sig.generics, &method_symbol, span)?;
         if let Err(unbound) = sub
             .resolve_all(&sig.generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -1145,7 +1147,7 @@ impl Inferer<'_> {
                 }
                 runtime_type_args
             }
-            None if program_generic_method => {
+            None if program_generic_method || runtime_generic => {
                 let own: Vec<Type> = sig
                     .generics
                     .iter()
@@ -1426,7 +1428,7 @@ impl Inferer<'_> {
 
     /// Settle a checked host call's `T` that neither a written type argument
     /// nor the expected type bound. A predicate call reads `unknown`,
-    /// unchecked: `session.get(key)` and `r.json()` keep their pre-generic
+    /// unchecked: `session.get(key)` keeps its pre-generic
     /// meaning, a read the caller narrows with a runtime-checked `as`. A
     /// schema call is an error naming its text form, the function for the
     /// unchecked answer, unless the call was already reported (a wrong
@@ -1483,10 +1485,19 @@ impl Inferer<'_> {
         declared_by: &crate::MangledName,
         span: Span,
     ) -> Result<Vec<String>, CompilerFailure> {
-        if crate::mangle::is_builtin(declared_by) {
+        // Runtime-generic hosts receive descriptors even for an uninferred
+        // type, so they use the same unknown fallback as user generics.
+        let runtime_generic = self.is_runtime_generic_host(declared_by);
+        if crate::mangle::is_builtin(declared_by) && !runtime_generic {
             return Ok(Vec::new());
         }
         self.bind_constraint_defaults(sub, generics, span)
+    }
+
+    pub(super) fn is_runtime_generic_host(&self, symbol: &crate::MangledName) -> bool {
+        self.packages_by_name
+            .values()
+            .any(|defs| defs.runtime_generics.contains(symbol))
     }
 
     fn bind_constraint_defaults(

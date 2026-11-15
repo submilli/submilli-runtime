@@ -4,7 +4,7 @@
 // one that really is unimplemented, and keeps that message.
 // expect-error: method `map` must be called — a method reference is not a value
 // expect-error: method `keys` must be called — a method reference is not a value
-// expect-error: optional method `map` with method-level generics is not yet supported in chain position
+// expect-error: method `map` with method-level generics is not yet supported in chain position
 // expect-error: method `reduce` must be called — a method reference is not a value
 
 export function main(): string {
