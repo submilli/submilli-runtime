@@ -40,6 +40,22 @@ fn install_construction(
             Ok(())
         },
     )?;
+
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        shared::prelude_key("ZonedDateTimeConstructor", "fromJson"),
+        FuncType::new(
+            &types.engine,
+            [types.object.clone()],
+            [types.object.clone()],
+        ),
+        |caller, params, results| {
+            let (zoned, tz_id) = super::super::like::zoned(caller, abi_arg(params, 0)?, None)?;
+            *abi_result(results, 0)? = shared::make_zoned_date_time(caller, &zoned, &tz_id)?;
+            Ok(())
+        },
+    )?;
     register_host_fn(
         linker,
         MODULE_NAME,

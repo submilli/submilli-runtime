@@ -4717,7 +4717,12 @@ impl Inferer<'_> {
         }
         let mut arguments = Vec::with_capacity(params.len());
         for param in params {
-            match self.as_check_shape(&param.ty) {
+            let check = if crate::runtime::json::from_json_function(&param.ty).is_some() {
+                Ok(param.ty.clone())
+            } else {
+                self.as_check_shape(&param.ty)
+            };
+            match check {
                 Ok(check) => {
                     self.record_runtime_type_test(&param.ty)?;
                     arguments.push(crate::FunctionArgumentCheck::Checked(Box::new(

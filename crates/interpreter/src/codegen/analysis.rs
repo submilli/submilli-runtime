@@ -180,7 +180,8 @@ impl CodegenAnalysis {
         for expr_id in ta.class_field_initializers() {
             analysis.walk_expr(ta, expr_id)?;
         }
-        if !ta.runtime_class_fields.is_empty()
+        if ta.function_invoke.is_some()
+            || !ta.runtime_class_fields.is_empty()
             || ta.types.iter().any(|declaration| {
                 matches!(declaration, crate::TypedTypeDecl::Class(class) if !class.generics.is_empty())
             })
@@ -204,6 +205,10 @@ impl CodegenAnalysis {
             analysis.note_cast(&argument.target, Some(&argument.check))?;
         }
         if let Some(plan) = &ta.function_invoke {
+            analysis.dependency_usage.note_value(crate::mangle::host(
+                crate::runtime::JSON_MODULE_NAME,
+                "decode",
+            ));
             analysis.dependency_usage.collect_json_host_values();
             analysis
                 .string_pool

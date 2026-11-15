@@ -52,6 +52,18 @@ fn install_direct(
     register_host_fn(
         linker,
         host,
+        prelude_key("InstantConstructor", "fromJson"),
+        FuncType::new(engine, [obj.clone()], obj_result.clone()),
+        |caller, params, results| {
+            let ts = super::super::like::instant(caller, abi_arg(params, 0)?)?;
+            *abi_result(results, 0)? = make_instant(caller, ts)?;
+            Ok(())
+        },
+    )?;
+
+    register_host_fn(
+        linker,
+        host,
         prelude_key("InstantConstructor", "fromEpochMilliseconds"),
         FuncType::new(engine, [ValType::F64], obj_result.clone()),
         |caller, params, results| {

@@ -88,4 +88,35 @@ pub fn declare(defs: &mut PackageDeclaration) {
     plain_year_month::declare(defs);
     plain_month_day::declare(defs);
     zoned_date_time::declare(defs);
+    for name in JSON_TYPES {
+        shared::declare_direct_fn(
+            defs,
+            "fromJson",
+            shared::prelude_key(&format!("{name}Constructor"), "fromJson"),
+            vec![crate::Param::new("value", crate::Type::Unknown)],
+            shared::temporal_type(name),
+        );
+    }
+}
+
+pub(crate) const JSON_TYPES: [&str; 8] = [
+    "Instant",
+    "Duration",
+    "ZonedDateTime",
+    "PlainDate",
+    "PlainTime",
+    "PlainDateTime",
+    "PlainYearMonth",
+    "PlainMonthDay",
+];
+
+/// The decoder is selected by nominal prelude identity, never a display name.
+pub(crate) fn from_json_function(ty: &crate::Type) -> Option<crate::MangledName> {
+    let crate::Type::InterfaceRef { mangled, .. } = ty.peel() else {
+        return None;
+    };
+    JSON_TYPES
+        .into_iter()
+        .find(|name| *mangled == crate::mangle::extend(&crate::mangle::prelude("Temporal"), name))
+        .map(|name| shared::prelude_key(&format!("{name}Constructor"), "fromJson"))
 }

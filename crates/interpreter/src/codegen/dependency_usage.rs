@@ -417,6 +417,10 @@ impl DependencyUsage {
     /// The import half only. `CodegenAnalysis` calls this through its own
     /// `visit_type` funnel, which also collects the type's closure shapes.
     pub(crate) fn collect_type(&mut self, ty: &Type) {
+        if let Some(function) = crate::runtime::json::from_json_function(ty) {
+            self.note_value(function);
+        }
+
         if let Some(shape) = Shape::from_type(ty) {
             // A shape carries its member types, so its subtree was collected
             // with it. Walking it again for every expression that has the type

@@ -1083,6 +1083,14 @@ Zoned strings add `TZ`; zoned bags add zone-string marshalling and `TZ` through
 existing options-field probe. These conversions have no external side effects;
 charges refuse before their work.
 
+### Temporal JSON construction
+
+| Function | What the host does | Formula | Charge point | Notes |
+| --- | --- | --- | --- | --- |
+| `Temporal.Instant.fromJson`, `Temporal.ZonedDateTime.fromJson`, `Temporal.PlainDate.fromJson`, `Temporal.PlainTime.fromJson`, `Temporal.PlainDateTime.fromJson`, `Temporal.PlainYearMonth.fromJson`, `Temporal.PlainMonthDay.fromJson` | Converts an already parsed unknown through the existing Like reader, then constructs the native value | `CALL + LIKE(T, value)` | before | Shared conversion, string and zone helpers charge their own work, exactly as `from` without options. |
+| `Temporal.Duration.fromJson` | Reads a native duration, string or property bag through `read_duration_like` and constructs a Duration | `CALL + BAG(10, f)` + [string] `SCAN(len(value)) + PARSE(len(value))` | before | Same shared helpers as `Duration.from`; no second charge for conversion. |
+| `submilli:json#decode` | Reads a compiler-generated descriptor and invokes its `fromJson` closure when present, otherwise its `test` predicate | `CALL + COPY(name/schema units) + SCAN(name/schema units) + CALL` | before | Descriptor string readers charge marshalling; the second `CALL` is the closure dispatch. Guest code and the selected Temporal host function pay their own fuel. No recursive conversion of composite types. |
+
 ### Temporal.Duration
 
 | Function | What the host does | Formula | Charge point | Notes |

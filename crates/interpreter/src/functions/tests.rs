@@ -1962,3 +1962,141 @@ fn a_function_set_compiles_from_a_worker_sized_thread() {
         .expect("the worker-sized thread does not panic");
     assert_eq!(compiled, 2);
 }
+
+#[test]
+fn invoke_temporal_arguments_from_json() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let cases = [
+            (
+                "Instant",
+                r#""2026-10-15T06:00:00Z""#,
+                "2026-10-15T06:00:00Z",
+            ),
+            (
+                "Instant",
+                r#""2026-10-15T09:00:00+03:00[Asia/Jerusalem]""#,
+                "2026-10-15T06:00:00Z",
+            ),
+            (
+                "ZonedDateTime",
+                r#""2026-10-15T09:00:00+03:00[Asia/Jerusalem]""#,
+                "2026-10-15T09:00:00+03:00[Asia/Jerusalem]",
+            ),
+            (
+                "ZonedDateTime",
+                r#"{"timeZone":"Asia/Jerusalem","year":2026,"month":10,"day":15,"hour":9}"#,
+                "2026-10-15T09:00:00+03:00[Asia/Jerusalem]",
+            ),
+            (
+                "PlainDateTime",
+                r#""2026-10-15T09:30:00""#,
+                "2026-10-15T09:30:00",
+            ),
+            (
+                "PlainDateTime",
+                r#"{"year":2026,"month":10,"day":15,"hour":9,"minute":30}"#,
+                "2026-10-15T09:30:00",
+            ),
+            ("PlainDate", r#""2026-10-15""#, "2026-10-15"),
+            ("PlainTime", r#""09:30:00""#, "09:30:00"),
+            ("PlainYearMonth", r#""2026-10""#, "2026-10"),
+            ("PlainMonthDay", r#""10-15""#, "10-15"),
+            ("Duration", r#""PT90M""#, "PT90M"),
+            ("Duration", r#"{"hours":1,"minutes":30}"#, "PT1H30M"),
+        ];
+        for (ty, input, expected) in cases {
+            let source = format!(
+                "export function run(at: Temporal.{ty}): string {{ return at.toString(); }}"
+            );
+            let set = FunctionSet::new(vec![def(
+                "temporal-argument",
+                "Accept a Temporal value.",
+                &source,
+            )]);
+            let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
+            let data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+            let mut store = cfg.store(&engine, data).expect("store");
+            {
+                let invalid = r#""not-temporal""#;
+                let error = invoke_function_async(
+                    &mut store,
+                    &compiled,
+                    &[],
+                    "temporal-argument",
+                    &[invalid],
+                )
+                .await
+                .expect_err("invalid Temporal input");
+                assert!(
+                    matches!(error, FunctionError::InvalidArguments(_)),
+                    "{ty}({invalid}): {error}"
+                );
+            }
+            let out =
+                invoke_function_async(&mut store, &compiled, &[], "temporal-argument", &[input])
+                    .await
+                    .unwrap_or_else(|err| panic!("{ty}({input}): {err}"));
+            assert_eq!(
+                out.as_deref(),
+                Some(serde_json::to_string(expected).expect("json").as_str()),
+                "{ty}({input})"
+            );
+        }
+    });
+}
+
+#[test]
+fn temporal_decoder_rejects_before_run_and_preserves_plain_validation() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let set = FunctionSet::new(vec![def(
+            "scheduled",
+            "Decode an instant and validate ordinary JSON data.",
+            r#"
+            import * as http from "submilli:http";
+            export type Tick = Temporal.Instant;
+            export function run(at: Tick, input: { count: number; tags: string[] }): string {
+                http.get("https://temporal.example/effect");
+                return `${at.toString()}:${input.count}:${input.tags.length}`;
+            }
+            "#,
+        )]);
+        let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
+        let http = MockHttp::scripted(vec![MockHttp::ok_json(
+            "https://temporal.example/effect",
+            "{}",
+        )]);
+        let mut data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+        data.security_check = Arc::new(AllowAllSecurityCheck);
+        data.http_client = http.clone();
+        let mut store = cfg.store(&engine, data).expect("store");
+        let valid = [
+            r#""2026-10-15T06:00:00Z""#,
+            r#"{"count":3,"tags":["tick"]}"#,
+        ];
+        for args in [
+            [r#""bad""#, valid[1]],
+            ["null", valid[1]],
+            ["false", valid[1]],
+            [valid[0], r#"{"count":"3","tags":["tick"]}"#],
+            [valid[0], r#"{"count":3,"tags":[1]}"#],
+        ] {
+            let error = invoke_function_async(&mut store, &compiled, &[], "scheduled", &args)
+                .await
+                .expect_err("invalid argument");
+            assert!(
+                matches!(error, FunctionError::InvalidArguments(_)),
+                "{error}"
+            );
+            assert_eq!(http.call_count(), 0);
+        }
+        let out = invoke_function_async(&mut store, &compiled, &[], "scheduled", &valid)
+            .await
+            .expect("valid invocation after failures");
+        assert_eq!(out.as_deref(), Some(r#""2026-10-15T06:00:00Z:3:1""#));
+        assert_eq!(http.call_count(), 1);
+    });
+}

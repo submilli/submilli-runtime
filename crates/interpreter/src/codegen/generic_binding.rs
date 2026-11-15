@@ -409,6 +409,7 @@ fn emit_poisoned_descriptor(
         .ok_or_else(|| crate::codegen::internal_failure("poisoned name interned"))?;
     crate::codegen::function_emitter::emit_pooled_string(emitter, ctx, pool_idx)?;
     emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.string)));
+    emitter.instruction(Instruction::RefNull(HeapType::Concrete(intrinsics.closure)));
     emitter.instruction(Instruction::StructNew(type_descriptor));
     Ok(())
 }
