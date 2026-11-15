@@ -214,6 +214,7 @@ Ast {
         ),
     ],
     call_spread_args: {},
+    implicit_json_casts: {},
     pattern_origins: {},
     tuple_pattern_sources: {},
     tuple_pattern_pad_defaults: {},

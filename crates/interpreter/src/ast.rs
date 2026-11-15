@@ -858,6 +858,9 @@ pub struct Ast {
     pub top_level: Vec<StmtId>,
     /// Call argument operands written with a leading `...`.
     pub call_spread_args: std::collections::BTreeSet<ExprId>,
+    /// Synthetic annotated-initializer casts → original calls. Inference
+    /// bypasses these casts when a user binding shadows the JSON namespace.
+    pub(crate) implicit_json_casts: std::collections::BTreeMap<ExprId, ExprId>,
     /// Maps synthesized `IndexAccess` IDs → their source pattern (populated by `lower_patterns`).
     /// `BTreeMap` is precautionary: the compiler only ever looks entries up by `ExprId`, and
     /// the parser snapshots that render `Ast`'s `Debug` all run before `lower_patterns`

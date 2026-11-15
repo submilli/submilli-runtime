@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "b7adf89b1ed22858cc06091f7db83b28c76452cd83bf7f0466770b51a788ee09"
+  contentHash: "bbd2ae84d86b84c8e57392009968c2a986e583c414dbbe006eaca3f0be70ccd1"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -71,6 +71,12 @@ program. Narrow an `unknown` value with `typeof`, `Array.isArray`,
 ```typescript
 const tickets = JSON.parse(text) as Ticket[];
 ```
+
+An annotated `const` or `let` initialized directly by `JSON.parse` performs
+the same runtime check: `const tickets: Ticket[] = JSON.parse(text)` checks
+every element and throws `TypeError` on a mismatch. This shorthand applies
+only to binding initializers. Assignments, arguments, returns, and values
+already held as `unknown` still require narrowing or an explicit cast.
 
 ### `as` checks the value
 

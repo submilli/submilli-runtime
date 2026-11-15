@@ -26,6 +26,7 @@ pub mod functions;
 pub mod import_suggestions;
 pub mod imports;
 pub mod lexer;
+mod lower_json_initializers;
 pub(crate) mod lower_local_types;
 pub mod lower_patterns;
 pub mod package_config;
