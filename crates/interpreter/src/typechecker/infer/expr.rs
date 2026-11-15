@@ -4332,7 +4332,7 @@ impl Inferer<'_> {
     }
 
     /// The gate of a checked host call (`session.get<T>`, `llm.call<T>`,
-    /// `r.json<T>()`, …; [`crate::stdlib::checked_call::checked_call`]):
+    /// …; [`crate::stdlib::checked_call::checked_call`]):
     /// whether `T` is a type the host's descriptor check can verify and, for
     /// a call that sends a JSON Schema, one a request can carry. The host
     /// tests what it hands back against the descriptor's predicate — the same
@@ -13049,7 +13049,7 @@ impl Inferer<'_> {
         &mut self,
         mut base: ExprId,
         mut parts: Vec<ChainPart>,
-        _expected: Option<&Type>,
+        expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         // Keep a method's receiver attached when `?.()` starts after its name.
@@ -13078,7 +13078,7 @@ impl Inferer<'_> {
             parts.pop();
             asserts_chain = true;
         }
-        let (kind, ty) = self.infer_chain_steps(base, parts, asserts_chain)?;
+        let (kind, ty) = self.infer_chain_steps(base, parts, asserts_chain, expected)?;
         if !asserts_chain {
             return Ok((kind, ty));
         }
@@ -13110,6 +13110,7 @@ impl Inferer<'_> {
         base: ExprId,
         parts: Vec<ChainPart>,
         asserts_tail: bool,
+        expected: Option<&Type>,
     ) -> Result<(TypedExprKind, Type), CompilerFailure> {
         if let Some(inferred) = self.infer_evolving_chain(base, &parts, asserts_tail)? {
             return Ok(inferred);
@@ -13179,8 +13180,13 @@ impl Inferer<'_> {
         // Whether a `?.` can short-circuit on a `null` or `undefined` its
         // receiver's type allows, which adds `undefined` to the chain's type.
         let mut adds_undefined = false;
-        for ((part, asserted), ends_or_short_circuits) in
-            parts.into_iter().zip(asserted).zip(ends_or_short_circuits)
+        let part_count = parts.len();
+        let call_expected = expected.map(super::param_defaults::without_undefined);
+        for (index, ((part, asserted), ends_or_short_circuits)) in parts
+            .into_iter()
+            .zip(asserted)
+            .zip(ends_or_short_circuits)
+            .enumerate()
         {
             let authored_optional = part.is_optional();
             let checks_missing_receiver = part.is_optional() && receiver_may_miss;
@@ -13284,6 +13290,11 @@ impl Inferer<'_> {
                 part,
                 &mut typed_parts,
                 &mut pending_method,
+                if index + 1 == part_count {
+                    call_expected.as_ref()
+                } else {
+                    None
+                },
             )?;
             if invokes {
                 self.invalidate_globals_after_call(part_span);
@@ -13389,6 +13400,7 @@ impl Inferer<'_> {
         part: ChainPart,
         typed_parts: &mut Vec<TypedChainPart>,
         pending_method: &mut Option<ChainMethod>,
+        expected: Option<&Type>,
     ) -> Result<(TypedChainPart, Type), CompilerFailure> {
         Ok(match string_key_as_field(self.ast, part)? {
             ChainPart::NonNull { .. } => {
@@ -13603,6 +13615,15 @@ impl Inferer<'_> {
                 }
                 if let Some(method) = &resolved_method
                     && (!method.sig.overloads.is_empty()
+                        || (type_args.is_some() && method.sig.generics.is_empty())
+                        || self
+                            .find_method(&method.receiver_ty, &method.name)
+                            .is_some_and(|(_, _, iface, _)| {
+                                self.is_runtime_generic_host(&crate::mangle::extend(
+                                    &iface,
+                                    &method.name,
+                                ))
+                            })
                         || (method.name == "flat"
                             && method.receiver_ty.interface_routing().is_some_and(
                                 |(owner, _, _, _)| owner == crate::mangle::prelude("Array"),
@@ -13614,6 +13635,7 @@ impl Inferer<'_> {
                         args,
                         typed_parts,
                         optional,
+                        expected,
                         span,
                     );
                 }
@@ -13629,7 +13651,7 @@ impl Inferer<'_> {
                     self.error(
                         m.span,
                         format!(
-                            "optional method `{}` with method-level generics is not yet \
+                            "method `{}` with method-level generics is not yet \
                              supported in chain position",
                             m.name,
                         ),
@@ -13663,6 +13685,14 @@ impl Inferer<'_> {
                             "matched on InterfaceProperty above",
                         ));
                     };
+                    if resolved_method.is_none()
+                        && type_args.as_ref().is_some_and(|args| !args.is_empty())
+                    {
+                        self.error(
+                            span,
+                            "non-generic call expects 0 type arguments".to_string(),
+                        );
+                    }
                     if resolved_method.is_none()
                         && let Some(rejected) =
                             self.reject_generic_chain_call(&fn_ty, &args, optional, span)?
@@ -13744,6 +13774,7 @@ impl Inferer<'_> {
                             iface,
                             member: crate::Member::Named(name),
                             args: typed_args,
+                            type_args: Vec::new(),
                             optional: prop_optional,
                             result_ty: ret_ty.clone(),
                             span: combined_span,
@@ -13765,6 +13796,14 @@ impl Inferer<'_> {
                 // Closure-typed receiver: ordinary `Call` part.
                 let union_signature = self.union_signature_of(receiver_ty, Some(args.len()));
                 let callee_ty = union_signature.as_ref().unwrap_or(receiver_ty);
+                if type_args.as_ref().is_some_and(|args| !args.is_empty())
+                    && matches!(callee_ty.peel(), Type::Function { generics, .. } if generics.is_empty())
+                {
+                    self.error(
+                        span,
+                        "non-generic call expects 0 type arguments".to_string(),
+                    );
+                }
                 if let Some(rejected) =
                     self.reject_generic_chain_call(callee_ty, &args, optional, span)?
                 {
@@ -13816,6 +13855,7 @@ impl Inferer<'_> {
                             iface: crate::mangle::prelude("Object"),
                             member: crate::Member::CallSignature(span),
                             args: typed_args,
+                            type_args: Vec::new(),
                             optional,
                             result_ty: ret_ty.clone(),
                             span,
@@ -13845,6 +13885,7 @@ impl Inferer<'_> {
         args: Vec<ExprId>,
         typed_parts: &mut Vec<TypedChainPart>,
         optional: bool,
+        expected: Option<&Type>,
         span: Span,
     ) -> Result<(TypedChainPart, Type), CompilerFailure> {
         let Some((sig, bindings, iface, _)) = self.find_method(&method.receiver_ty, &method.name)
@@ -13869,15 +13910,17 @@ impl Inferer<'_> {
             bindings,
             type_args,
             args,
-            None,
+            expected,
             span,
         )?;
-        let args = match call {
-            TypedExprKind::MethodCall { args, .. } => args,
-            TypedExprKind::GenericMethodCall { args, .. } => {
-                args.into_iter().map(|arg| arg.expr).collect()
+        let (args, type_args) = match call {
+            TypedExprKind::MethodCall { args, .. } => (args, Vec::new()),
+            TypedExprKind::GenericMethodCall {
+                args, type_args, ..
+            } => (args.into_iter().map(|arg| arg.expr).collect(), type_args),
+            TypedExprKind::Undefined | TypedExprKind::Null if ret_ty == Type::Error => {
+                (Vec::new(), Vec::new())
             }
-            TypedExprKind::Undefined if ret_ty == Type::Error => Vec::new(),
             _ => {
                 return Err(
                     super::inference_failure("call inference produced a non-method call")
@@ -13944,6 +13987,7 @@ impl Inferer<'_> {
                 iface,
                 member: crate::Member::Named(name),
                 args,
+                type_args,
                 optional: field_optional,
                 result_ty: ret_ty.clone(),
                 span: Span {
@@ -14000,6 +14044,7 @@ impl Inferer<'_> {
                 iface,
                 member,
                 args,
+                type_args: Vec::new(),
                 optional,
                 result_ty: ret_ty.clone(),
                 span,
@@ -14063,6 +14108,12 @@ impl Inferer<'_> {
             );
             return self.rejected_chain_call(args, optional, span).map(Some);
         }
+        if type_args.as_ref().is_some_and(|args| !args.is_empty()) {
+            self.error(
+                span,
+                "non-generic call expects 0 type arguments".to_string(),
+            );
+        }
         let params: Vec<crate::Param> = sig
             .params
             .iter()
@@ -14093,6 +14144,7 @@ impl Inferer<'_> {
                 iface: iface_mangled,
                 member: crate::Member::CallSignature(span),
                 args: typed_args,
+                type_args: Vec::new(),
                 optional,
                 result_ty: ret_ty.clone(),
                 span,
@@ -18121,68 +18173,39 @@ mod tests {
         );
     }
 
-    /// `r.json<T>()` is gated like every checked call: a written `<unknown>`
-    /// and a type the runtime cannot test are errors, and a generic forwards
-    /// its own `T` or a type built from it.
     #[test]
-    fn response_json_is_gated_like_a_checked_call() {
+    fn chain_calls_reject_type_arguments_on_non_generic_signatures() {
+        for source in [
+            "function f(r: number[] | null): void { r?.join<number>(); }",
+            "function f(r: { call: () => number } | null): void { r?.call<number>(); }",
+            "interface F { (): number; } function f(r: { call: F } | null): void { r?.call<number>(); }",
+            "function f(r: { call: (() => number) | (() => string) } | null): void { r?.call<number>(); }",
+        ] {
+            let (_, diagnostics) = run(source);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("expects 0 type argument")),
+                "{source}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn response_json_uses_ordinary_generic_type_arguments() {
         let http = crate::stdlib::http::package_declaration();
         let (_, diags) = run_with_packages(
-            "import * as http from \"submilli:http\"; \
-             class C { n: number = 0; } \
-             function main(): void { \
-               const r = http.get(\"https://example.com\"); \
-               r.json<unknown>(); r.json<C>(); }",
-            &[&http],
-        );
-        let messages: Vec<&str> = diags.iter().map(|d| d.message.as_str()).collect();
-        assert_eq!(messages.len(), 2, "{messages:?}");
-        assert!(
-            messages[0].starts_with("`r.json<unknown>` would not verify anything"),
-            "{messages:?}"
-        );
-        assert!(
-            messages[1].starts_with("`r.json<C>` cannot be verified at runtime"),
-            "{messages:?}"
-        );
-        let (_, diags) = run_with_packages(
-            "import * as http from \"submilli:http\"; \
-             function one<T>(r: http.Response): T { return r.json<T>(); } \
-             function all<T>(r: http.Response): T[] { return r.json<T[]>(); } \
-             function main(): void { \
-               const r = http.get(\"https://example.com\"); \
-               const n: number = one<number>(r); const s: string[] = all<string>(r); }",
+            r#"import * as http from "submilli:http";
+            class C { n: number = 0; }
+            function read<T>(r: http.Response | null): T | undefined { return r?.json<T>(); }
+            function main(): void {
+                const r = http.get("https://example.com");
+                r.json<unknown>(); r.json<C>();
+                const c: C = r.json();
+            }"#,
             &[&http],
         );
         assert!(diags.is_empty(), "{diags:?}");
-    }
-
-    /// A `T` the expected type supplied is gated like a written one, and the
-    /// diagnostic says where it came from.
-    #[test]
-    fn an_expected_type_the_gate_rejects_says_it_supplied_the_type() {
-        let http = crate::stdlib::http::package_declaration();
-        let (_, diags) = run_with_packages(
-            "import * as http from \"submilli:http\"; \
-             class C { n: number = 0; } \
-             function main(): void { const c: C = http.get(\"https://example.com\").json(); }",
-            &[&http],
-        );
-        assert_eq!(diags.len(), 1, "{diags:?}");
-        assert!(
-            diags[0]
-                .message
-                .starts_with("`r.json<C>` cannot be verified at runtime"),
-            "{diags:?}"
-        );
-        assert!(
-            diags[0]
-                .help
-                .iter()
-                .any(|h| h
-                    .starts_with("no type argument is written, so the expected type supplies `C`")),
-            "{diags:?}"
-        );
     }
 
     /// A schema call's `T` from the expected type gets the same note when the

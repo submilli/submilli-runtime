@@ -287,24 +287,16 @@ mod optional_tests;
 mod tests {
     use super::*;
 
-    /// Every runtime-generic host function or method is a row of the
-    /// checked-call table the typechecker gates by: the gate rejects a `T`
-    /// the host's predicate cannot test, or a schema call's `T` with no
-    /// schema. A host generic outside the table would reach the host at a
-    /// type nothing vetted.
+    /// Runtime-generic hosts declare their descriptor ABI independently of
+    /// additional compile-time schema policies.
     #[test]
-    fn every_runtime_generic_host_function_is_a_checked_call() {
+    fn runtime_generic_host_functions_declare_their_descriptor_abi() {
         let all = Stdlib::core()
             .with(OptionalPackage::Agents)
             .with(OptionalPackage::Skills);
         let mut seen = Vec::new();
         for defs in all.package_declarations() {
             for mangled in &defs.runtime_generics {
-                assert!(
-                    checked_call::checked_call(mangled).is_some(),
-                    "{} is runtime-generic but the typechecker does not gate it",
-                    mangled.as_str()
-                );
                 seen.push(mangled.as_str().to_string());
             }
         }

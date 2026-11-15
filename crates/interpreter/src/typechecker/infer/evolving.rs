@@ -260,7 +260,7 @@ impl Inferer<'_> {
         }
         let value = self.push_synthetic_expr(kind, ty, *span)?;
         self.with_held_arguments(BTreeMap::from([(base, value)]), |this| {
-            this.infer_chain_steps(base, tail.to_vec(), asserts_tail)
+            this.infer_chain_steps(base, tail.to_vec(), asserts_tail, None)
         })
         .map(Some)
     }

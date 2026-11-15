@@ -20,6 +20,8 @@ use wasm_encoder::{
     ValType,
 };
 
+const UNSUPPORTED_TYPE_OPERATOR: &str = "cannot validate an unresolved type operator at runtime; pass a concrete type or a type parameter directly";
+
 pub fn environment_type(
     symbols: &SymbolTable,
 ) -> Result<ValType, crate::compiler_error::CompilerFailure> {
@@ -142,6 +144,16 @@ pub fn allocate(
             .map_err(crate::codegen::arena_failure)?
             .kind
         {
+            TypedExprKind::OptionalChain { parts, .. } => {
+                for part in parts {
+                    if let crate::TypedChainPart::MethodCall { type_args, .. } = part
+                        && !type_args.is_empty()
+                    {
+                        passes_type_arguments = true;
+                        targets.extend(type_args.iter().cloned());
+                    }
+                }
+            }
             TypedExprKind::GenericCall { type_args, .. } => {
                 passes_type_arguments = true;
                 targets.extend(type_args.iter().cloned());
@@ -465,6 +477,9 @@ pub fn prepare_descriptor_data(
         pool.intern_text(super::generic_binding::POISONED_NAME);
     }
     for ty in types {
+        if contains_unresolved_operator(ta, &ty) {
+            pool.intern_text(UNSUPPORTED_TYPE_OPERATOR);
+        }
         pool.intern_text(&ty.to_string());
         if let Some(schema) = super::descriptor_schema::schema_of(ta, &ty) {
             pool.intern_text(&schema);
@@ -546,6 +561,11 @@ pub fn body(
         (ident("value"), ctx.symbols.value_type(&Type::Unknown)?),
     ];
     let mut emitter = FunctionEmitter::new(ctx, &params)?;
+    if contains_unresolved_operator(ctx.ta, ty) {
+        super::throw::emit_type_error_throw(&mut emitter, ctx, UNSUPPORTED_TYPE_OPERATOR);
+        emitter.instruction(Instruction::Unreachable);
+        return emitter.build();
+    }
     bind(&mut emitter, &parameters(ty), 0)?;
     ctx.checking_standalone(ty, || {
         super::cast_check::emit_structural_test(&mut emitter, ctx, 1, ty, ty)
@@ -602,4 +622,38 @@ pub fn from_json_body(
     emitter.instruction(Instruction::Call(function));
     cast::emit_box(&mut emitter, ctx, ty)?;
     emitter.build()
+}
+
+// A descriptor may be passed without ever being tested. Reject unsupported
+// operators when its predicate runs, without changing permissive field-read
+// guards that share the structural-test emitter.
+fn contains_unresolved_operator(ta: &TypedAst, ty: &Type) -> bool {
+    let mut pending = vec![ty];
+    let mut visited = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        let ty = ty.lowered();
+        if !visited.insert(ty) {
+            continue;
+        }
+        if ty.is_type_operator() || ty.is_utility_application() {
+            return true;
+        }
+        // Do not infer structural requirements from callable signatures or
+        // nominal class arguments alone.
+        if matches!(ty, Type::Function { .. } | Type::ClassRef { .. }) {
+            continue;
+        }
+        crate::type_size::for_each_child(ty, |child| pending.push(child));
+        match ta.runtime_type_tests.get(ty) {
+            Some(crate::FieldNarrowingTest::Shape(shape)) => pending.push(shape),
+            Some(crate::FieldNarrowingTest::Interface(test)) => {
+                pending.extend(test.members.values().map(|field| &field.ty));
+                for index in test.index.iter().chain(&test.more_indexes) {
+                    pending.push(&index.value);
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }

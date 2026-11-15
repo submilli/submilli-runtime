@@ -2123,9 +2123,9 @@ fn is_fresh(ta: &crate::TypedAst, expr: &TypedExpr) -> Result<bool, CompilerFail
             let constructs = iface.as_str().ends_with("Constructor")
                 && CONSTRUCTORS.contains(&name.name.as_str());
             // `r.json()` parses the body into a new value, as `JSON.parse` does.
-            let parses = crate::stdlib::http::declaration::is_checked_json(&crate::mangle::extend(
-                iface, &name.name,
-            ));
+            let parses = crate::stdlib::http::declaration::is_response_json(
+                &crate::mangle::extend(iface, &name.name),
+            );
             constructs || parses || copies(&receiver.ty, &name.name)
         }
         _ => false,

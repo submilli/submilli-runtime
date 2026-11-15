@@ -1076,13 +1076,8 @@ fn install_response_members(
                 let body_val = st.field(&mut *caller, R_BODY)?;
                 let body = read_string_arg(caller, &body_val, "Response (body)")?;
                 let descriptor = abi::read_type_argument(caller, abi_arg(params, 1)?, 0)?;
-                // Messages name the type and give advice, never the body or a
-                // key in it: the body is whatever the server sent. A failed
-                // response's body is an error document, often not JSON, which a
-                // program may or may not mean to read: its messages name the
-                // status, for a program that meant to read a success body, and
-                // qualify the field advice, which would otherwise widen the type
-                // until it accepts the error.
+                // A failed response may contain an HTML error document. Syntax
+                // errors include its status, but never echo the response body.
                 let failed_status = if response_is_ok(caller, &st)? {
                     None
                 } else {
@@ -1100,22 +1095,7 @@ fn install_response_members(
                     &body,
                     &format!("r.json(){status_note}: cannot parse the body"),
                 )?;
-                if descriptor.accepts(caller, value).await? {
-                    return Ok(value);
-                }
-                let field_advice = "a field the server may send as `null` needs `| null` in that \
-                                    type, and one it may leave out needs `?`";
-                let advice = match (descriptor.declares_fields(), failed_status) {
-                    (false, _) => String::new(),
-                    (true, None) => format!(" — {field_advice}"),
-                    (true, Some(_)) => {
-                        format!(" — if it is the error document you meant to read, {field_advice}")
-                    }
-                };
-                Err(crate::runtime::host::type_error(format!(
-                    "r.json(){status_note}: the body does not match `{}`{advice}",
-                    descriptor.name
-                )))
+                descriptor.decode_json(caller, value).await
             })
         },
     )?;
@@ -3447,6 +3427,85 @@ function main(): void {
     }
 
     #[tokio::test]
+    async fn response_json_decodes_temporal_values() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function read<T>(r: Response | null): T | undefined { return r?.json<T>(); }
+            function main(): void {
+                assert(read<Temporal.Instant>(null) === undefined, "skip decoder");
+                const r = get("https://example.test/json");
+                const direct = r.json<Temporal.Instant>();
+                const contextual: Temporal.Instant = r.json();
+                const chained = read<Temporal.Instant>(r);
+                assert(direct.toString() === "2026-10-15T06:00:00Z", "direct decoder");
+                assert(contextual.equals(direct), "contextual decoder");
+                assert(chained !== undefined && chained.equals(direct), "chain decoder");
+                assert(r.json<unknown>() === "2026-10-15T06:00:00Z", "unknown stays JSON");
+                try {
+                    r.json<Response>();
+                    assert(false, "JSON cannot manufacture a response");
+                } catch (e: TypeError) {
+                    assert(e.message.includes("does not match"), e.message);
+                }
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#""2026-10-15T06:00:00Z""#)]).await;
+    }
+
+    #[tokio::test]
+    async fn response_json_optional_chain_preserves_decoder_errors() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            function read(r: Response | null): Temporal.Instant | undefined {
+                return r?.json<Temporal.Instant>();
+            }
+            function main(): void {
+                assert(read(null) === undefined, "no decode on missing receiver");
+                const r = get("https://example.test/json");
+                let rejected = false;
+                try { read(r); } catch (e) { rejected = e instanceof RangeError; }
+                assert(rejected, "decoder RangeError remains catchable");
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#""not-an-instant""#)]).await;
+    }
+
+    #[tokio::test]
+    async fn response_json_optional_chain_checks_and_short_circuits() {
+        let source = r#"
+            import { get, Response } from "submilli:http";
+            type User = { k: string };
+            function read(r: Response | null | undefined): User | undefined {
+                return r?.json<User>();
+            }
+            function contextual(r: Response | null): User | undefined {
+                const value: User | undefined = r?.json();
+                return value;
+            }
+            function generic<T>(r: Response | null): T | undefined {
+                return r?.json<T>();
+            }
+            function bare(r: Response | null): unknown { return r?.json(); }
+            function main(): void {
+                assert(read(null) === undefined, "null short circuits");
+                assert(read(undefined) === undefined, "undefined short circuits");
+                const r = get("https://example.test/json");
+                assert(read(r)?.k === "v", "explicit type argument");
+                assert(contextual(r)?.k === "v", "contextual type argument");
+                assert(generic<User>(r)?.k === "v", "forwarded type argument");
+                assert(bare(r) !== undefined, "unchecked call");
+                try {
+                    generic<{ k: number }>(r);
+                    assert(false, "mismatch must throw");
+                } catch (e: TypeError) {
+                    assert(e.message.length > 0, "checked mismatch");
+                }
+            }
+        "#;
+        run_with_mock(source, vec![json_response(r#"{"k":"v"}"#)]).await;
+    }
+
+    #[tokio::test]
     async fn response_json_takes_its_type_from_the_expected_type() {
         let source = r#"
             import { get, Response } from "submilli:http";
@@ -3459,7 +3518,7 @@ function main(): void {
                     assert(false, "a mismatch must throw");
                 } catch (e: TypeError) {
                     assert(
-                        e.message === "r.json(): the body does not match `{ k: number }` — a field the server may send as `null` needs `| null` in that type, and one it may leave out needs `?`",
+                        e.message === "JSON value does not match { k: number }",
                         e.message
                     );
                 }
@@ -3485,11 +3544,9 @@ function main(): void {
         run_with_mock(source, vec![json_response("not json")]).await;
     }
 
-    /// A failed status's body is an error document: the mismatch leads with
-    /// the status, for a program that meant to read a success body, and keeps
-    /// the field advice, for one that meant to read the error.
+    /// A failed status does not bypass descriptor validation.
     #[tokio::test]
-    async fn a_mismatched_error_body_names_the_status() {
+    async fn a_mismatched_error_body_uses_the_shared_decoder_error() {
         let source = r#"
             import { get, Response } from "submilli:http";
             function main(): void {
@@ -3499,7 +3556,7 @@ function main(): void {
                     assert(false, "a mismatch must throw");
                 } catch (e: TypeError) {
                     assert(
-                        e.message === "r.json() on a 404 response (if you expected a success body, check `r.ok` first): the body does not match `{ id: string; name: string }` — if it is the error document you meant to read, a field the server may send as `null` needs `| null` in that type, and one it may leave out needs `?`",
+                        e.message === "JSON value does not match { id: string; name: string }",
                         e.message
                     );
                 }
@@ -3512,7 +3569,7 @@ function main(): void {
     }
 
     /// A program that reads a failed response's error document on purpose
-    /// gets it when it matches; a type without fields gets the status alone.
+    /// gets it when it matches; a mismatched type uses the shared error.
     #[tokio::test]
     async fn a_failed_response_body_reads_when_it_matches() {
         let source = r#"
@@ -3528,7 +3585,7 @@ function main(): void {
                     assert(false, "a mismatch must throw");
                 } catch (n: TypeError) {
                     assert(
-                        n.message === "r.json() on a 404 response (if you expected a success body, check `r.ok` first): the body does not match `number`",
+                        n.message === "JSON value does not match number",
                         n.message
                     );
                 }
@@ -3579,7 +3636,7 @@ function main(): void {
                 } catch (e: TypeError) {
                     assert(!e.message.includes("sk-live"), e.message);
                     assert(
-                        e.message === "r.json(): the body does not match `{ [key: string]: number }`",
+                        e.message === "JSON value does not match { [key: string]: number }",
                         e.message
                     );
                 }
@@ -3634,7 +3691,7 @@ function main(): void {
                     new Loader<number>().load(r);
                     assert(false, "a mismatch must throw");
                 } catch (e: TypeError) {
-                    assert(e.message === "r.json(): the body does not match `number`", e.message);
+                    assert(e.message === "JSON value does not match number", e.message);
                 }
             }
         "#;
@@ -3654,7 +3711,7 @@ function main(): void {
                     load<number[]>(r);
                     assert(false, "a forwarded mismatch must throw");
                 } catch (e: TypeError) {
-                    assert(e.message === "r.json(): the body does not match `number[]`", e.message);
+                    assert(e.message === "JSON value does not match number[]", e.message);
                 }
             }
         "#;

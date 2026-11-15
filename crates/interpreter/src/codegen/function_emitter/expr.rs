@@ -4246,6 +4246,7 @@ fn emit_chain_access(
             iface,
             member,
             args,
+            type_args,
             result_ty,
             span,
             ..
@@ -4283,8 +4284,8 @@ fn emit_chain_access(
                 member.key(),
                 args,
                 None,
-                &[],
-                None,
+                type_args,
+                (!type_args.is_empty()).then_some(result_ty),
                 result_ty,
                 Some(*span),
             )?;

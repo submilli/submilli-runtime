@@ -14,7 +14,7 @@ use super::MODULE_NAME;
 /// its type argument.
 const RESPONSE_JSON: &str = "json";
 
-/// The mangled name of `Response#json`, the key the typechecker's gate, the
+/// The mangled name of `Response#json`, the key the
 /// runtime-generic set and the host registration share.
 pub(crate) fn response_json() -> crate::MangledName {
     crate::mangle::extend(
@@ -23,8 +23,7 @@ pub(crate) fn response_json() -> crate::MangledName {
     )
 }
 
-/// Whether `mangled` is `Response#json`.
-pub(crate) fn is_checked_json(mangled: &crate::MangledName) -> bool {
+pub(crate) fn is_response_json(mangled: &crate::MangledName) -> bool {
     *mangled == response_json()
 }
 
@@ -308,7 +307,7 @@ fn insert_response_interface(defs: &mut PackageDeclaration) {
             ret: Type::TypeVar("T".to_string()),
             predicate: None,
             doc: crate::doc(crate::FileId::HTTP,
-                "/** Parse the response body as JSON and check it against `T`, for example `r.json<User>()`. The check covers every field, element, and union arm; a body that does not match throws a catchable `TypeError` naming the type, a body that is not JSON throws a `SyntaxError`, and a number past the `number` range throws a `RangeError`. The expected type supplies `T` when none is written (`const user: User = r.json()`); with neither, the result is an unchecked `unknown`. */",
+                "/** Parse the response body as JSON and decode it as `T`, for example `r.json<User>()`. A type with `fromJson`, such as a direct Temporal type, constructs its value; otherwise the value is validated structurally. Nested conversion is not performed; a body that does not match throws a catchable `TypeError` naming the type, a body that is not JSON throws a `SyntaxError`, and a number past the `number` range throws a `RangeError`. The expected type supplies `T` when none is written (`const user: User = r.json()`); with neither, the result is an unchecked `unknown`. */",
             ),
         },
     );

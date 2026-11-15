@@ -7,9 +7,8 @@
 //! **schema** call (`llm.call<T>`, `llm.batch<T>`, `agents.run<T>`) also
 //! sends the JSON Schema codegen emitted for `T`, and its `T` is required:
 //! written, or supplied by the expected type, since the call has a text form
-//! (`llm.text`, `agents.runText`) for the unchecked answer. A **predicate**
-//! call (`session.get<T>`, `r.json<T>()`) only checks; with neither a written
-//! `T` nor an expected type it reads an unchecked `unknown`.
+//! (`llm.text`, `agents.runText`) for the unchecked answer. JSON decoding
+//! calls use ordinary generic inference instead of this additional policy.
 //!
 //! [`checked_call`] is the one table the typechecker gates these calls by,
 //! for functions and methods alike, so a new checked call is a row here and
@@ -78,16 +77,6 @@ pub(crate) fn checked_call(mangled: &MangledName) -> Option<CheckedCall> {
             checks: "the stored value",
             alternative: "narrow an unchecked `session.get(key)` yourself with a \
                           runtime-checked `as`: `session.get(key) as Progress`",
-            answerer: None,
-        });
-    }
-    if super::http::declaration::is_checked_json(mangled) {
-        return Some(CheckedCall {
-            callee: "r.json",
-            example: "r.json<User>()",
-            checks: "the response body",
-            alternative: "narrow an unchecked `r.json()` yourself with a runtime-checked \
-                          `as`: `r.json() as User`",
             answerer: None,
         });
     }
