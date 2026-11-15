@@ -1,7 +1,5 @@
-// A call can move a narrowed module variable outside the narrowed type, as in
-// TypeScript, so an exhaustive `switch` on it may match no case. JavaScript
-// then runs off the end and returns `undefined`, which a `number` cannot hold;
-// the function throws a catchable `TypeError` instead of trapping.
+// expect-error: non-exhaustive `switch`: missing case(s) "c"
+// The intervening call invalidates the narrowing, so both switches must handle "c".
 let tag: "a" | "b" | "c" = "a";
 
 function setC(): void {

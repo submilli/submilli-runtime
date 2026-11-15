@@ -1194,6 +1194,53 @@ impl<'a> Inferer<'a> {
         );
     }
 
+    /// Calls may run another function that writes a module binding. Imported
+    /// mutable bindings have no local write inventory, so treat them as writable.
+    pub(super) fn invalidate_globals_after_call(&mut self, span: Span) {
+        let globals: Vec<_> = self
+            .top_symbols
+            .iter()
+            .filter(|(name, entry)| {
+                matches!(entry.kind, ValueKind::Let { .. })
+                    && (self.function_written_globals.contains(*name)
+                        || self
+                            .mangle_top_symbol(name)
+                            .is_ok_and(|own| own != entry.mangled_name))
+            })
+            .map(|(_, entry)| narrowing::ReferencePath {
+                root: narrowing::BindingId::Global(entry.mangled_name.clone()),
+                chain: Vec::new(),
+            })
+            .collect();
+        for path in globals {
+            self.invalidate(path, narrowing::InvalidationReason::Call { span });
+        }
+    }
+
+    /// Structural property contracts do not reveal whether a class getter or
+    /// setter implements them. Concrete class data fields need no call boundary.
+    pub(super) fn property_access_may_run_code(&self, receiver: &Type, name: &str) -> bool {
+        match receiver.peel() {
+            Type::ClassRef { mangled, args, .. } => {
+                self.class_getter(mangled, args, name).is_some()
+                    || self.class_setter(mangled, args, name).is_some()
+            }
+            Type::InterfaceRef { .. }
+            | Type::Object { .. }
+            | Type::GenericParam { .. }
+            | Type::TypeVar(_)
+            | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
+            | Type::KeyOf(_)
+            | Type::AliasRef { .. } => true,
+            Type::Union(members) | Type::Intersection(members) => members
+                .iter()
+                .any(|member| self.property_access_may_run_code(member, name)),
+            _ => false,
+        }
+    }
+
     /// Drops narrowings on `path` and its extensions, and records `path` as
     /// assigned so the kill outlives the frame.
     ///

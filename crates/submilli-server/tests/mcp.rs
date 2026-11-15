@@ -2491,6 +2491,41 @@ async fn mcp_named_root_mounts_the_declared_volume() {
     assert!(dir.path().join("a.txt").exists(), "{rpc}");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn files_read_refuses_a_fifo_in_a_named_volume() {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().expect("volume dir");
+    let pipe = dir.path().join("pipe");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let h = Harness::from_blueprints_with_volumes(
+        vec![volume_blueprint("work")],
+        VolumeTable::from([("work".into(), VolumeSpec::local_path(dir.path()))]),
+    );
+    let session = h.handshake(VOL).await;
+    // A blocking regression must fail instead of hanging the test process. This
+    // writer releases a blocked open; nonblocking open also exits when fixed.
+    let rescue = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _writer = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(pipe);
+    });
+    let call = rpc_call(3, "submilli__files__read", json!({ "path": "/pipe" }));
+    let (_, _, rpc) = h.post(VOL, call, Some(&session)).await;
+    rescue.join().unwrap();
+    assert_eq!(output(&rpc)["error"]["kind"], json!("file_error"), "{rpc}");
+    assert!(refuses_with(&rpc, "regular file"), "{rpc}");
+}
+
 /// The file tools describe themselves as a way to read what an `execute` run wrote,
 /// and name the modes where that survives. A named volume is one of them — an agent
 /// told otherwise would page a large payload back through a single result instead.

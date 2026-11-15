@@ -492,6 +492,10 @@ fn unlisted_capability_warnings(blueprint: &Blueprint, packages: &DeclaredPackag
                         .collect::<Vec<_>>()
                         .join(" or ")
                 ),
+                UnlistedName::Unreachable { provider } => format!(
+                    "{rule_label} never matches: `{provider}` provides it, but `{caller}` \
+                     neither provides it nor directly depends on its provider"
+                ),
                 UnlistedName::Unknown { near } => format!(
                     "{rule_label} never matches: no standard-library operation, declared \
                      package, or declared MCP server provides it{}",

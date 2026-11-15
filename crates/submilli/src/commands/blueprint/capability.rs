@@ -655,9 +655,22 @@ fn validate_name(
     name: &str,
     force: bool,
 ) -> Result<()> {
+    if !force
+        && caller != interpreter::mangle::USER_PACKAGE
+        && !packages.artifacts.contains_key(caller)
+    {
+        bail!(
+            "unknown caller '{caller}'; use a loaded package from this blueprint or pass --force"
+        );
+    }
     match unlisted_name(blueprint, packages, caller, name) {
         None => Ok(()),
-        Some(UnlistedName::DependencyOnly { .. } | UnlistedName::Unknown { .. }) if force => Ok(()),
+        Some(_) if force => Ok(()),
+        Some(UnlistedName::Unreachable { provider }) => {
+            bail!(
+                "'{name}' is provided by `{provider}`, but caller `{caller}` neither provides it nor directly depends on its provider; pass --force to add the rule anyway"
+            );
+        }
         Some(UnlistedName::DependencyOnly {
             dependency,
             dependents,
@@ -915,10 +928,11 @@ mod tests {
     }
 
     #[test]
-    fn add_allows_the_same_capability_under_a_package_caller() {
+    fn force_allows_an_unloaded_package_caller() {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut package = add_args("secrets.get", &path);
         package.caller = "@pied-piper/sdk".into();
+        package.force = true;
 
         add(&package).unwrap();
 
@@ -1022,10 +1036,12 @@ mod tests {
         let (_tmp, path) = temp_blueprint("name: t\n");
         let mut whole = add_args("fs.read", &path);
         whole.caller = "@pied-piper/x".into();
+        whole.force = true;
         add(&whole).unwrap();
 
         let mut narrowed = add_args("fs.read", &path);
         narrowed.caller = "@pied-piper/x".into();
+        narrowed.force = true;
         narrowed.filter = Some("path == \"/x\"".into());
         let message = add(&narrowed).unwrap();
 

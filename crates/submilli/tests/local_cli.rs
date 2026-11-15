@@ -1828,6 +1828,58 @@ fn capability_add_knows_a_dependencys_provided_capabilities() {
     );
 }
 
+#[test]
+fn capability_add_refuses_unreachable_package_callers() {
+    let home = tempfile::tempdir().expect("home tempdir");
+    let _project = publish_dependency_chain(home.path());
+    let file = home.path().join("blueprint.yaml");
+    write_file(
+        &file,
+        "name: x\npackages: ['@pied-piper/desk', '@pied-piper/billing']\n",
+    );
+    for caller in ["@pied-piper/desk", "@pied-piper/nobody"] {
+        let original = fs::read_to_string(&file).unwrap();
+        let args = [
+            os("blueprint"),
+            os("capability"),
+            os("add"),
+            os("pied-piper.example/credits.apply"),
+            os("--caller"),
+            os(caller),
+            os("--blueprint"),
+            file.as_os_str(),
+        ];
+        let out = run_with_home(&args, home.path());
+        assert!(!out.status.success(), "{caller}: {}", stdout(&out));
+        assert_eq!(fs::read_to_string(&file).unwrap(), original);
+        let mut forced = args.to_vec();
+        forced.push(os("--force"));
+        let out = run_with_home(&forced, home.path());
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    let lint = run_with_home(
+        &[os("blueprint"), os("lint"), file.as_os_str()],
+        home.path(),
+    );
+    assert!(stderr(&lint).contains("`permissions.@pied-piper/desk` rule 1 for `pied-piper.example/credits.apply` never matches"), "{}", stderr(&lint));
+    for caller in ["@pied-piper/support", "@pied-piper/billing"] {
+        let out = run_with_home(
+            &[
+                os("blueprint"),
+                os("capability"),
+                os("add"),
+                os("pied-piper.example/credits.apply"),
+                os("--caller"),
+                os(caller),
+                os("--blueprint"),
+                file.as_os_str(),
+            ],
+            home.path(),
+        );
+        assert!(out.status.success(), "{caller}: {}", stderr(&out));
+    }
+}
+
 /// `main` cannot import a dependency, so a `main` rule for what only a
 /// dependency provides could never match.
 #[test]
