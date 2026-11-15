@@ -31,25 +31,33 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             Ok(())
         },
     )?;
-    for method in ["from", "fromJson"] {
-        let intr = types.intr.clone();
-        register_host_fn(
-            linker,
-            MODULE_NAME,
-            shared::prelude_key("DurationConstructor", method),
-            FuncType::new(engine, [object.clone()], object_result.clone()),
-            move |caller, params, results| {
-                let span = shared::read_duration_like(
-                    caller,
-                    abi_arg(params, 0)?,
-                    &intr,
-                    "Duration.from",
-                )?;
-                *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
-                Ok(())
-            },
-        )?;
-    }
+    let intr = types.intr.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        shared::prelude_key("DurationConstructor", "from"),
+        FuncType::new(engine, [object.clone()], object_result.clone()),
+        move |caller, params, results| {
+            let span =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.from")?;
+            *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
+            Ok(())
+        },
+    )?;
+
+    let intr = types.intr.clone();
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        shared::prelude_key("DurationConstructor", "fromJson"),
+        FuncType::new(engine, [object.clone()], object_result.clone()),
+        move |caller, params, results| {
+            let span =
+                shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration.from")?;
+            *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
+            Ok(())
+        },
+    )?;
 
     let intr = types.intr.clone();
     for (method, add) in [("add", true), ("subtract", false)] {
