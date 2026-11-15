@@ -27,7 +27,7 @@ function main(): void {
   } catch (e: TypeError) {
     message = e.message;
   }
-  assert(message.indexOf("does not match `Progress`") >= 0, "the same key fails a different type");
+  assert(message.indexOf("does not match Progress") >= 0, "the same key fails a different type");
 
   session.set("list", [1, 2]);
   const list = loadAll<number>("list");
