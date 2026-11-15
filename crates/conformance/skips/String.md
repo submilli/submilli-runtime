@@ -34,7 +34,6 @@ Porting adaptations used throughout (README rules):
 |:--|:--|
 | `prototype/match/S15.5.4.10_A2_T3` | `match` with a g-flagged RegExp returns a single `RegExpMatch` instead of the array of all matched substrings (the prelude doc itself calls the g-flag array shape a follow-up). |
 | `prototype/matchAll/flags-nonglobal-throws` | `matchAll` with a non-g RegExp should throw a TypeError; it matches the whole string anyway. Undocumented — neither spec.md nor docs/regex.md records the laxer behavior. |
-| `prototype/repeat/count-is-infinity-throws` | `repeat(Infinity)` should throw a RangeError; the count saturates and `""` is returned for an empty receiver. (Negative counts do throw — `count-less-than-zero-throws` passes.) |
 
 ## Rejected (design decisions)
 
