@@ -1,4 +1,4 @@
-types: 209 of 483 tsc entries compared, 15 differ
+types: 211 of 483 tsc entries compared, 15 differ
 
 line 138: x => x[key]
   tsc:  (x: T) => T[K]
@@ -62,9 +62,7 @@ line 497: newId
 
 errors:
 line 148: ours: expected `Shape`, got `{ height: number; name: string; visible: boolean; width: number }` (tsc accepts)
-line 149: ours: cannot index into non-array type `Shape` (tsc accepts)
 line 153: ours: expected `Shape`, got `{ height: number; name: string; visible: boolean; width: number }` (tsc accepts)
-line 154: ours: cannot index into non-array type `Shape` (tsc accepts)
 line 186: ours: cannot cast `string` to `keyof T`: no assignable direction between these types (tsc accepts)
 line 187: ours: cannot cast `keyof T` to `string`: no assignable direction between these types (tsc accepts)
 line 191: ours: cannot cast `string` to `keyof T`: no assignable direction between these types (tsc accepts)

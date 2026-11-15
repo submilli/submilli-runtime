@@ -682,8 +682,8 @@ impl Type {
     }
 
     /// Whether `receiver[key]` reads and writes the property by name at run
-    /// time: a structural object, or an erased generic receiver (`T`, whose
-    /// `o[k]` is tsc's `T[K]`).
+    /// time: a structural object, a class instance, or an erased generic
+    /// receiver (`T`, whose `o[k]` is tsc's `T[K]`).
     pub fn indexes_by_name(&self) -> bool {
         // A narrowed parameter (`T & ({} | null)` after `value !==
         // undefined`, `(T | undefined) & object` after `?.`) indexes as `T`
@@ -702,7 +702,10 @@ impl Type {
             }
             _ => false,
         };
-        refined || self.is_structural_object() || self.lowers_to_erased_slot()
+        refined
+            || self.is_structural_object()
+            || matches!(self.peel(), Type::ClassRef { .. })
+            || self.lowers_to_erased_slot()
     }
 
     /// Whether every value of `self` is a string, array, tuple or byte array,

@@ -1895,7 +1895,8 @@ impl Inferer<'_> {
         let (mut typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
         let evolving = evolving.filter(|_| super::evolving::array_element(&receiver_ty).is_some());
-        let object = receiver_ty.is_structural_object();
+        let object = receiver_ty.is_structural_object()
+            || matches!(receiver_ty.peel(), Type::ClassRef { .. });
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {
@@ -3004,7 +3005,8 @@ impl Inferer<'_> {
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         let (typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
-        let object = receiver_ty.is_structural_object();
+        let object = receiver_ty.is_structural_object()
+            || matches!(receiver_ty.peel(), Type::ClassRef { .. });
         let (typed_index, key_ty) = if object {
             self.infer_object_key(index)?
         } else {

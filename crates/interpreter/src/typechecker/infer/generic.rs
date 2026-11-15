@@ -830,7 +830,11 @@ impl Inferer<'_> {
             }
         }
 
-        if let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
+        let object_assign =
+            iface_mangled == crate::mangle::prelude("ObjectConstructor") && key.is_named("assign");
+        // Sources contribute fields to assign's result; its target need not
+        // satisfy the context of the completed call.
+        if !object_assign && let Some(want) = expected.filter(|want| pins_type_parameters(want)) {
             self.bind_from_expected_result(&mut sub, &sig.ret, want);
         }
 
@@ -950,8 +954,6 @@ impl Inferer<'_> {
             sub.insert("D".into(), depth);
         }
 
-        let object_assign =
-            iface_mangled == crate::mangle::prelude("ObjectConstructor") && key.is_named("assign");
         let assign_result = if object_assign {
             Some(self.object_assign_result(&typed_args)?)
         } else {

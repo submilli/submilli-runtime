@@ -168,10 +168,8 @@ parser/ecmascript5/VariableDeclarations/parserVariableDeclaration9.ts 2 type
 types/keyof/keyofAndIndexedAccess.ts 138 type
 types/keyof/keyofAndIndexedAccess.ts 148 type
 types/keyof/keyofAndIndexedAccess.ts 148 extra
-types/keyof/keyofAndIndexedAccess.ts 149 extra
 types/keyof/keyofAndIndexedAccess.ts 153 type
 types/keyof/keyofAndIndexedAccess.ts 153 extra
-types/keyof/keyofAndIndexedAccess.ts 154 extra
 types/keyof/keyofAndIndexedAccess.ts 186 extra
 types/keyof/keyofAndIndexedAccess.ts 187 type
 types/keyof/keyofAndIndexedAccess.ts 187 extra
