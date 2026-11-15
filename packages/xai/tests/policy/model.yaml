@@ -1,0 +1,12 @@
+kind: blueprint
+name: xai-model-test
+packages:
+  - '@submilli/xai'
+default: deny
+permissions:
+  main:
+    - capability: x.ai/research
+      filter: model == "grok-4.7"
+      action: allow
+  # Deliberate sentinel: allowed research must reach this denial before HTTP.
+  '@submilli/xai': []

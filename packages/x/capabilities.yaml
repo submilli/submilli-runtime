@@ -1,0 +1,18 @@
+namespace: submilli
+provides:
+- name: x.com/getTweet
+  description: Retrieve a public tweet by numeric ID or X/Twitter post URL.
+  fields:
+    id:
+      type: string
+- name: x.com/searchAll
+  description: Search one page of the full public tweet archive; requires archive API access.
+  fields: {}
+- name: x.com/searchRecent
+  description: Search one page of public tweets from the last seven days.
+  fields: {}
+requires:
+- capability: http.get
+  filter: host == "api.x.com"
+- capability: secrets.get
+  filter: name == "X_BEARER_TOKEN"

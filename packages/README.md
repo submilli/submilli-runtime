@@ -26,3 +26,5 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/slack-bot`](slack-bot/readme.md) | Slack messages, conversations, users, and reactions as the app's bot. |
 | [`@submilli/slack-user`](slack-user/readme.md) | Slack search, messages, channels, users, files, and reactions as the authenticated user. |
 | [`@submilli/typesafe`](typesafe/readme.md) | TypeSafe's Jev model for yes/no, choice, and scoring judgments with typed answers and probabilities. |
+| [`@submilli/x`](x/readme.md) | Official X API tweet lookup, recent/archive search, and conversation replies with structured source data. |
+| [`@submilli/xai`](xai/readme.md) | Grok X Search research and tweet summaries with citations and usage. |
