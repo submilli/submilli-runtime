@@ -1547,6 +1547,7 @@ impl<'a> Parser<'a> {
         }
         Some(TypeAnnotation {
             kind: TypeAnnotationKind::Function {
+                generics: Default::default(),
                 params: fields,
                 return_type: Box::new(return_type),
             },
@@ -3974,6 +3975,7 @@ impl<'a> Parser<'a> {
                 }
             }
             TokenKind::LeftBrace => self.parse_object_type_annotation()?,
+            TokenKind::LessThan => self.parse_generic_function_type_annotation()?,
             TokenKind::LeftParen if self.paren_at_opens_function_type(self.pos, type_pos) => {
                 self.parse_function_type_annotation()?
             }
@@ -4140,6 +4142,22 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `<T extends C>(x: T) => T`: a function type with its own type parameters.
+    fn parse_generic_function_type_annotation(&mut self) -> Option<TypeAnnotation> {
+        let start = self.peek().span.start;
+        let generics = self.parse_generic_param_list()?;
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after the type parameters of a function type");
+            return None;
+        }
+        let mut function = self.parse_function_type_annotation()?;
+        if let TypeAnnotationKind::Function { generics: own, .. } = &mut function.kind {
+            *own = generics;
+        }
+        function.span = self.span(start, function.span.end);
+        Some(function)
+    }
+
     // Param names are required — bare `(T, U) => R` is rejected.
     fn parse_function_type_annotation(&mut self) -> Option<TypeAnnotation> {
         let open = self.advance();
@@ -4153,6 +4171,7 @@ impl<'a> Parser<'a> {
         let end = return_type.span.end;
         Some(TypeAnnotation {
             kind: TypeAnnotationKind::Function {
+                generics: Default::default(),
                 params,
                 return_type: Box::new(return_type),
             },
@@ -4588,7 +4607,7 @@ impl<'a> Parser<'a> {
         if optional {
             self.advance();
         }
-        let method = matches!(self.peek().kind, TokenKind::LeftParen);
+        let method = matches!(self.peek().kind, TokenKind::LeftParen | TokenKind::LessThan);
         let ty = if method {
             if readonly {
                 self.reject_readonly_modifier(self.readonly_modifier_span(member_start));
@@ -4617,6 +4636,15 @@ impl<'a> Parser<'a> {
     /// interfaces already accept both spellings for the same member. `start` is the
     /// member name's offset, so the annotation's span covers the name too.
     fn parse_object_type_method_signature(&mut self, start: u32) -> Option<TypeAnnotation> {
+        let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.parse_generic_param_list()?
+        } else {
+            Vec::new()
+        };
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after the type parameters of a method");
+            return None;
+        }
         self.advance();
         let params = self.parse_function_type_params()?;
         if !matches!(self.peek().kind, TokenKind::Colon) {
@@ -4628,6 +4656,7 @@ impl<'a> Parser<'a> {
         let end = return_type.span.end;
         Some(TypeAnnotation {
             kind: TypeAnnotationKind::Function {
+                generics,
                 params,
                 return_type: Box::new(return_type),
             },
@@ -4953,8 +4982,35 @@ impl<'a> Parser<'a> {
         match self.peek().kind {
             TokenKind::Identifier => matches!(self.peek_at(1).kind, TokenKind::Arrow),
             TokenKind::LeftParen => self.find_arrow_after_matching_paren(self.pos),
+            TokenKind::LessThan => self.generic_arrow_at(self.pos),
             _ => false,
         }
+    }
+
+    /// Whether `<` at `start` opens a generic arrow's type parameters, `<T>(x:
+    /// T) => x`, rather than a `<T>expr` cast: a name followed by `extends`, `,`
+    /// or `>`, then a parenthesized parameter list and `=>`.
+    fn generic_arrow_at(&self, start: usize) -> bool {
+        if !matches!(
+            self.tokens.get(start + 1).map(|t| &t.kind),
+            Some(TokenKind::Identifier)
+        ) || !matches!(
+            self.tokens.get(start + 2).map(|t| &t.kind),
+            Some(TokenKind::Extends | TokenKind::Comma | TokenKind::GreaterThan)
+        ) {
+            return false;
+        }
+        let Some(after) = self.scan_past_balanced(
+            start,
+            |k| matches!(k, TokenKind::LessThan),
+            |k| matches!(k, TokenKind::GreaterThan),
+        ) else {
+            return false;
+        };
+        matches!(
+            self.tokens.get(after).map(|t| &t.kind),
+            Some(TokenKind::LeftParen)
+        ) && self.find_arrow_after_matching_paren(after)
     }
 
     /// Reject an `async` that modifies a function, arrow or method, and keep a
@@ -5214,6 +5270,33 @@ impl<'a> Parser<'a> {
                     |k| matches!(k, TokenKind::RightBracket),
                 )?;
             }
+            // `<T>(x: T) => T`: skip the type parameters, then the function type.
+            TokenKind::LessThan => {
+                i = self.scan_past_balanced(
+                    i,
+                    |k| matches!(k, TokenKind::LessThan),
+                    |k| matches!(k, TokenKind::GreaterThan),
+                )?;
+                if !matches!(
+                    self.tokens.get(i).map(|t| &t.kind),
+                    Some(TokenKind::LeftParen)
+                ) {
+                    return None;
+                }
+                i = self.scan_past_balanced(
+                    i,
+                    |k| matches!(k, TokenKind::LeftParen),
+                    |k| matches!(k, TokenKind::RightParen),
+                )?;
+                if !matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Arrow)) {
+                    return None;
+                }
+                return self.scan_past_type_annotation_at_depth(
+                    i + 1,
+                    TypePos::Anywhere,
+                    depth + 1,
+                );
+            }
             // Same `(`-disambiguation `parse_type_array` uses, and it has to agree:
             // a function type carries its own `=>`, so everything after it is the
             // return type and the scan ends with that. Grouping parens instead fall
@@ -5291,6 +5374,16 @@ impl<'a> Parser<'a> {
 
     fn parse_arrow(&mut self) -> Option<ExprId> {
         let start_span = self.peek().span;
+        let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
+            let generics = self.parse_generic_param_list()?;
+            if !matches!(self.peek().kind, TokenKind::LeftParen) {
+                self.error_at_peek("expected `(` after the type parameters of an arrow function");
+                return None;
+            }
+            generics
+        } else {
+            Vec::new()
+        };
 
         let params = match self.peek().kind {
             TokenKind::Identifier => {
@@ -5355,6 +5448,7 @@ impl<'a> Parser<'a> {
         parse_arena_result(
             self.ast.try_push_expr(Expr {
                 kind: ExprKind::Arrow {
+                    generics,
                     params,
                     return_type,
                     type_predicate,
@@ -5371,17 +5465,17 @@ impl<'a> Parser<'a> {
     fn parse_function_expression(&mut self) -> Option<ExprId> {
         let kw = self.advance();
 
-        if matches!(self.peek().kind, TokenKind::LessThan) {
-            self.error_at_peek("generic function expressions are not supported");
-            return None;
-        }
-
         let self_name = if matches!(self.peek().kind, TokenKind::Identifier) {
             let name_tok = self.advance();
             self.reject_eval_or_arguments(name_tok.span);
             Some(self.ident_from_token(&name_tok))
         } else {
             None
+        };
+        let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.parse_generic_param_list()?
+        } else {
+            Vec::new()
         };
 
         if !matches!(self.peek().kind, TokenKind::LeftParen) {
@@ -5451,6 +5545,7 @@ impl<'a> Parser<'a> {
         let function = parse_arena_result(
             self.ast.try_push_expr(Expr {
                 kind: ExprKind::Arrow {
+                    generics,
                     params,
                     return_type,
                     type_predicate,
@@ -6455,7 +6550,7 @@ impl<'a> Parser<'a> {
         // expression does not, so the arrow is an exact lowering. Checked before the
         // `:` branch and independently of `shorthandable`, because a keyword or string
         // key can name a method too.
-        if matches!(self.peek().kind, TokenKind::LeftParen) {
+        if matches!(self.peek().kind, TokenKind::LeftParen | TokenKind::LessThan) {
             let value = self.parse_method_shorthand_body(name.span)?;
             return Some(ObjectLiteralField { name, value });
         }
@@ -6485,6 +6580,15 @@ impl<'a> Parser<'a> {
     /// The `(params): R { … }` tail of an object-literal method, lowered to an arrow.
     /// `name_span` is the key's span, so the arrow spans the whole member.
     fn parse_method_shorthand_body(&mut self, name_span: Span) -> Option<ExprId> {
+        let generics = if matches!(self.peek().kind, TokenKind::LessThan) {
+            self.parse_generic_param_list()?
+        } else {
+            Vec::new()
+        };
+        if !matches!(self.peek().kind, TokenKind::LeftParen) {
+            self.error_at_peek("expected `(` after the type parameters of a method");
+            return None;
+        }
         self.advance();
 
         let params = if matches!(self.peek().kind, TokenKind::RightParen) {
@@ -6517,6 +6621,7 @@ impl<'a> Parser<'a> {
         parse_arena_result(
             self.ast.try_push_expr(Expr {
                 kind: ExprKind::Arrow {
+                    generics,
                     params,
                     return_type,
                     type_predicate,
@@ -12802,14 +12907,34 @@ mod tests {
         assert!(diags.is_empty(), "{diags:?}");
     }
 
+    /// Every form a generic function literal or type takes (SUB-2137).
     #[test]
-    fn rejects_a_generic_function_expression() {
-        let (_ast, diags) = parse_str("const f = function <T>(x: T): T { return x; };");
+    fn accepts_generic_function_literals_and_types() {
+        for source in [
+            "const f = function <T>(x: T): T { return x; };",
+            "const f = function named<T>(x: T): T { return x; };",
+            "const f = <T,>(x: T): T => x;",
+            "const f = <T extends string>(x: T): T => x;",
+            "const o = { id<T>(x: T): T { return x; } };",
+            "let f: <T>(x: T) => T;",
+            "let o: { id<T>(x: T): T; m?<U>(): U };",
+        ] {
+            let (_ast, diags) = parse_str(source);
+            assert!(diags.is_empty(), "{source}: {diags:?}");
+        }
+    }
+
+    /// `<T>(x)` without `=>` is still an angle-bracket cast.
+    #[test]
+    fn angle_bracket_without_an_arrow_stays_a_cast() {
+        let (ast, diags) = parse_str("const v = <number>(x);");
+        assert!(diags.is_empty(), "{diags:?}");
         assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("generic function expressions")),
-            "generic function expression should be rejected: {diags:?}"
+            ast.expr_ids().expect("expression ids").any(|id| matches!(
+                ast.try_expr(id).map(|expr| &expr.kind),
+                Ok(crate::ExprKind::As { .. })
+            )),
+            "the angle bracket parses as a cast"
         );
     }
 

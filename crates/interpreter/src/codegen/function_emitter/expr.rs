@@ -291,6 +291,11 @@ fn emit_expr_value(
                 args,
                 abi.as_ref().map(|a| a.params.as_slice()),
             )?;
+            // `super.m()` on a generic method is rejected, so a generic slot's
+            // parent body here is a plain override, which ignores `$types`.
+            if abi.as_ref().is_some_and(|abi| abi.types) {
+                crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
+            }
             let func = ctx
                 .symbols
                 .class_method_func_idx(owner, &name.name)
@@ -309,13 +314,25 @@ fn emit_expr_value(
             }
             super::virtual_call::emit_virtual_call(emitter, ctx, target, tool, args)?;
         }
-        TypedExprKind::CallClosure { callee, args } => {
+        TypedExprKind::CallClosure {
+            type_args,
+            callee,
+            args,
+        } => {
             // Indirect dispatch via `call_ref` through a closure
             // struct: `LocalRef` to a function-typed binding, an
             // inline `Closure` expression, a function-typed field,
             // etc. The typechecker decided this isn't a static
             // top-level call.
-            emit_indirect_closure_call(emitter, ctx, *callee, args, &expr.ty, Some(expr.span))?;
+            emit_indirect_closure_call(
+                emitter,
+                ctx,
+                *callee,
+                args,
+                type_args,
+                &expr.ty,
+                Some(expr.span),
+            )?;
         }
         TypedExprKind::GenericCall {
             mangled,
@@ -544,6 +561,7 @@ fn emit_expr_value(
             emitter.pop_scope()?;
         }
         TypedExprKind::Closure {
+            generics,
             params,
             captured,
             runtime_generics,
@@ -557,6 +575,7 @@ fn emit_expr_value(
                 params,
                 captured,
                 runtime_generics,
+                !generics.is_empty(),
             )?;
         }
         // `cond ? then_: else_`. Wasm `if`-with-result lifts
@@ -656,6 +675,11 @@ fn emit_expr_value(
         }
         TypedExprKind::NonNullAssert { value } => {
             crate::codegen::cast_check::emit_non_null_assert(emitter, ctx, *value, &expr.ty)?;
+        }
+        TypedExprKind::InstantiateFunction { value, type_args } => {
+            crate::codegen::generic_binding::emit_instantiation(
+                emitter, ctx, id, *value, type_args,
+            )?;
         }
         TypedExprKind::Cast {
             value,
@@ -842,6 +866,9 @@ fn emit_function_ref(
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
     emitter.instruction(Instruction::RefFunc(adapter_idx));
     emitter.instruction(Instruction::GlobalGet(vtable_idx));
+    if ctx.symbols.runtime_generic_functions.contains(mangled) {
+        crate::codegen::generic_binding::emit_creation_wrapper(emitter, ctx)?;
+    }
     if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
         crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
     }
@@ -1892,6 +1919,7 @@ fn emit_field_access(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_closure_value(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -1900,6 +1928,7 @@ fn emit_closure_value(
     params: &[crate::TypedParam],
     captured: &[crate::CapturedVar],
     runtime_generics: &[String],
+    generic: bool,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     // emit the closure value at the creation site.
     // `$closure_<sig>` is `(sub $Object (struct (ref $VTable)
@@ -1973,6 +2002,9 @@ fn emit_closure_value(
     emitter.instruction(Instruction::StructNew(env_type_idx));
     if let Some(local) = self_environment {
         emitter.instruction(Instruction::LocalTee(local));
+    }
+    if generic {
+        crate::codegen::generic_binding::emit_creation_wrapper(emitter, ctx)?;
     }
     if let Some(metadata) = crate::codegen::call_arguments::typed_metadata(params) {
         crate::codegen::call_arguments::wrap(emitter, ctx, &metadata)?;
@@ -3975,7 +4007,15 @@ fn emit_chain_access(
                 }
                 let Some(slot) = ctx.symbols.class_field_slot(mangled, &name.name) else {
                     let getter = crate::codegen::classes::accessor_getter_name(&name.name);
-                    emit_class_vtable_dispatch(emitter, ctx, mangled, &getter, &[], result_ty)?;
+                    emit_class_vtable_dispatch(
+                        emitter,
+                        ctx,
+                        mangled,
+                        &getter,
+                        &[],
+                        &[],
+                        result_ty,
+                    )?;
                     return Ok(());
                 };
                 let struct_idx = ctx.symbols.class_struct_type_idx(mangled).ok_or_else(|| {
@@ -4177,6 +4217,7 @@ fn emit_chain_access(
                 ctx,
                 union_signature.as_ref().unwrap_or(receiver_ty),
                 args,
+                &[],
                 part.result_ty(),
                 Some(*span),
             )?;
@@ -5839,6 +5880,7 @@ fn emit_indirect_closure_call(
     ctx: &CodegenCtx,
     callee: ExprId,
     args: &[ExprId],
+    type_args: &[Type],
     result_ty: &Type,
     call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -5850,7 +5892,7 @@ fn emit_indirect_closure_call(
     let receiver = emit_callee(emitter, ctx, callee)?;
     emitter.call_receiver = receiver;
     emit_indirect_closure_call_with_receiver_on_stack(
-        emitter, ctx, &callee_ty, args, result_ty, call_span,
+        emitter, ctx, &callee_ty, args, type_args, result_ty, call_span,
     )?;
     Ok(())
 }
@@ -5917,7 +5959,9 @@ fn reference_expression(
             .map_err(crate::codegen::arena_failure)?
             .kind
         {
-            TypedExprKind::Cast { value, .. } | TypedExprKind::NonNullAssert { value } => {
+            TypedExprKind::Cast { value, .. }
+            | TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. } => {
                 id = value;
             }
             _ => return Ok(id),
@@ -5935,6 +5979,7 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     ctx: &CodegenCtx,
     callee_ty: &Type,
     args: &[ExprId],
+    type_args: &[Type],
     result_ty: &Type,
     call_span: Option<crate::Span>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
@@ -6001,6 +6046,9 @@ fn emit_indirect_closure_call_with_receiver_on_stack(
     });
     if let Some(receiver) = receiver {
         crate::codegen::this_binding::bind(emitter, ctx, receiver)?;
+    }
+    if !type_args.is_empty() {
+        crate::codegen::generic_binding::emit_rebind(emitter, ctx, type_args)?;
     }
     // note: variadic closures arrive with their trailing args
     // already packed into a synthesized `ArrayLiteral` filling the
@@ -6713,14 +6761,15 @@ fn emit_method_call_with_receiver_on_stack(
         emit_live_member_call(emitter, ctx, iface, member, live_args)?;
         return emit_live_member_return_cast(emitter, ctx, call_ret_ty);
     };
-    // Interface aliases write the same method payload a class-typed call reads.
-    // Generic methods and synthetic accessors retain their dedicated vtable ABI.
+    // Interface aliases write the same method payload a class-typed call reads;
+    // a generic method's payload closure takes the call's type arguments.
     if ctx.symbols.is_rewritable_class_method(iface, method) {
-        emit_interface_method_via_shape_with_receiver_on_stack(
+        emit_generic_interface_method_via_shape(
             emitter,
             ctx,
             method,
             args,
+            type_args,
             call_ret_ty,
             None,
         )?;
@@ -6731,7 +6780,7 @@ fn emit_method_call_with_receiver_on_stack(
     // only populated for classes, so a `Some` here means a genuine class method
     // (a user method named `toString` etc. also resolves here, not slot 0–3).
     if ctx.symbols.class_method_slot(iface, method).is_some() {
-        emit_class_vtable_dispatch(emitter, ctx, iface, method, args, call_ret_ty)?;
+        emit_class_vtable_dispatch(emitter, ctx, iface, method, args, type_args, call_ret_ty)?;
         return Ok(());
     }
     if let Some(slot) = vtable_slot_for_method(method) {
@@ -6750,11 +6799,12 @@ fn emit_method_call_with_receiver_on_stack(
     if matches!(recv_ty.lowered(), Type::InterfaceRef { .. })
         || recv_ty.interface_instance_union_members().is_some()
     {
-        emit_interface_method_via_shape_with_receiver_on_stack(
+        emit_generic_interface_method_via_shape(
             emitter,
             ctx,
             method,
             args,
+            type_args,
             call_ret_ty,
             None,
         )?;
@@ -6816,12 +6866,42 @@ pub(in crate::codegen) fn emit_interface_method_via_shape_with_receiver_on_stack
     call_ret_ty: &Type,
     slot_index_local: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_generic_interface_method_via_shape(
+        emitter,
+        ctx,
+        method,
+        args,
+        &[],
+        call_ret_ty,
+        slot_index_local,
+    )
+}
+
+/// [`emit_interface_method_via_shape_with_receiver_on_stack`] for a generic
+/// method, whose closure binds `type_args` for the call.
+fn emit_generic_interface_method_via_shape(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    method: &str,
+    args: &[ExprId],
+    type_args: &[Type],
+    call_ret_ty: &Type,
+    slot_index_local: Option<u32>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let args: Vec<_> = args
         .iter()
         .copied()
         .map(ShapeArgument::Expression)
         .collect();
-    emit_shape_method_with_arguments(emitter, ctx, method, &args, call_ret_ty, slot_index_local)?;
+    emit_shape_method_with_type_arguments(
+        emitter,
+        ctx,
+        method,
+        &args,
+        type_args,
+        call_ret_ty,
+        slot_index_local,
+    )?;
     Ok(())
 }
 
@@ -6866,6 +6946,26 @@ fn emit_shape_method_with_arguments(
     call_ret_ty: &Type,
     slot_index_local: Option<u32>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
+    emit_shape_method_with_type_arguments(
+        emitter,
+        ctx,
+        method,
+        args,
+        &[],
+        call_ret_ty,
+        slot_index_local,
+    )
+}
+
+fn emit_shape_method_with_type_arguments(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    method: &str,
+    args: &[ShapeArgument],
+    type_args: &[Type],
+    call_ret_ty: &Type,
+    slot_index_local: Option<u32>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intrinsics = ctx
         .symbols
         .intrinsic_type_indices()
@@ -6875,6 +6975,7 @@ fn emit_shape_method_with_arguments(
     // call's return type. `classify` reduces to (arity, is_void).
     let arg_tys: Vec<Type> = args.iter().map(|a| a.ty(ctx)).collect::<Result<_, _>>()?;
     let fn_ty = Type::Function {
+        generics: Default::default(),
         params: arg_tys,
         ret: Box::new(call_ret_ty.clone()),
         predicate: None,
@@ -6978,6 +7079,9 @@ fn emit_shape_method_with_arguments(
     });
 
     crate::codegen::this_binding::bind(emitter, ctx, rcv_local)?;
+    if !type_args.is_empty() {
+        crate::codegen::generic_binding::emit_rebind(emitter, ctx, type_args)?;
+    }
     // 5. Emit each user arg, boxing to `(ref $Object)` per the
     // closure ABI's erasure.
     for slot in evaluated_args {
@@ -7202,6 +7306,7 @@ fn wrapper_abi_for_call(
     let slot_is_erased =
         |i: usize| generic_args.is_some_and(|flags| flags.get(i).is_some_and(|g| g.is_generic));
     Ok(MethodSlotAbi {
+        types: false,
         params: args
             .iter()
             .enumerate()
@@ -7285,6 +7390,7 @@ fn emit_class_vtable_dispatch(
     class: &crate::MangledName,
     method: &str,
     args: &[ExprId],
+    type_args: &[Type],
     call_ret_ty: &Type,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let struct_idx = ctx
@@ -7338,6 +7444,16 @@ fn emit_class_vtable_dispatch(
         args,
         abi.as_ref().map(|a| a.params.as_slice()),
     )?;
+    // A generic slot takes the call's type arguments after its parameters;
+    // a call without any (an override without type parameters called
+    // directly) passes null, which a generic body would bind as poisoned.
+    if abi.as_ref().is_some_and(|abi| abi.types) {
+        if type_args.is_empty() {
+            crate::codegen::generic_binding::emit_no_types(emitter, ctx)?;
+        } else {
+            crate::codegen::runtime_descriptors::environment(emitter, ctx, type_args)?;
+        }
+    }
     emitter.instruction(Instruction::LocalGet(fn_local));
     emitter.instruction(Instruction::CallRef(sig_idx));
     emit_slot_return_cast(emitter, ctx, call_ret_ty, abi.as_ref())?;

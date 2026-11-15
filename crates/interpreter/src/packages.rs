@@ -2396,6 +2396,7 @@ fn ts_type(ty: &Type) -> String {
         Type::Unknown => "unknown".to_string(),
         Type::NonPrimitive => "object".to_string(),
         Type::Function {
+            generics: _,
             params,
             ret,
             predicate,
@@ -4575,15 +4576,27 @@ mod tests {
     }
 
     #[test]
-    fn unused_constrained_source_method_generics_do_not_restrict_assignability() {
-        inheritance_package(
+    fn generic_source_methods_do_not_stand_for_plain_ones() {
+        // A generic method takes its type arguments by position, so it can't
+        // stand for one without type parameters, even when they are unused
+        // in its signature: its body may still test them (SUB-2137).
+        let errors = crate::compile_package(
             "@test/unused",
-            r#"
+            crate::ModulePath::from("lib"),
+            &[crate::PackageSourceModule {
+                path: crate::ModulePath::from("lib"),
+                source: r#"
             export interface Source { read<T extends string>(value: number): number; }
             export interface Target { read(value: number): number; }
             export function convert(value: Source): Target { return value; }
         "#,
+            }],
             &[],
+        )
+        .expect_err("a generic method can't stand for a plain one");
+        assert!(
+            format!("{errors:?}").contains("expected `Target`, got `Source`"),
+            "{errors:#?}"
         );
     }
 
@@ -5187,6 +5200,7 @@ mod tests {
             "asserts x"
         );
         let function = |predicate: &TypePredicate| Type::Function {
+            generics: Default::default(),
             params: vec![Type::Unknown],
             ret: Box::new(Type::Void),
             predicate: Some(Box::new(predicate.clone())),

@@ -1244,6 +1244,7 @@ fn group_by_params() -> Vec<Param> {
         Param::new(
             "keySelector",
             Type::Function {
+                generics: Default::default(),
                 params: vec![element, Type::Number],
                 optional: 0,
                 ret: Box::new(Type::TypeVar("K".into())),

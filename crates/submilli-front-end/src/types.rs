@@ -401,7 +401,23 @@ pub enum Type {
     /// Unlike TypeScript's `any`, requires explicit narrowing before use.
     /// `Unknown | T` collapses to `Unknown`.
     Unknown,
+    /// `generics` are the function type's own type parameters (`<T>(x: T) =>
+    /// T`), empty for an ordinary function type. Each name appears in
+    /// `params`, `ret` and `predicate` as `Type::TypeVar(name)`. Like a mapped
+    /// type's key, the names differ from every type parameter in scope (a
+    /// front end renames them if needed). Substitution treats the own names
+    /// as bound: it never replaces them inside the function type, and it
+    /// replaces outer names there without capture. A value of a generic
+    /// function type receives its type arguments by position: from a call
+    /// through a generic function type with the same type parameters
+    /// (`CallClosure.type_args`), or bound once by `InstantiateFunction`
+    /// where it converts to a function type without them. A front end
+    /// rejects every other conversion of it; reached anyway (through
+    /// `unknown`), its type parameters are poisoned (`codegen::generic_binding`
+    /// in the engine).
     Function {
+        #[serde(default, skip_serializing_if = "crate::GenericParameters::is_empty")]
+        generics: crate::GenericParameters,
         params: Vec<Type>,
         /// Number of trailing fixed parameters callers may omit.
         optional: usize,
@@ -1454,6 +1470,96 @@ impl Type {
         )
     }
 
+    /// This function type with `generics` as its own type parameters; any
+    /// other type unchanged.
+    /// This function type with its own type parameters renamed by position
+    /// (`$0`, `$1`, …) in their bounds, its parameters, its return type and
+    /// its predicate, so two generic function types that differ only in
+    /// those names are equal. Any other type is returned as it is.
+    pub fn with_positional_type_parameters(&self) -> Type {
+        let Type::Function {
+            generics,
+            params,
+            optional,
+            ret,
+            predicate,
+            has_rest,
+        } = self
+        else {
+            return self.clone();
+        };
+        if generics.is_empty() {
+            return self.clone();
+        }
+        let positional: Vec<String> = (0..generics.len())
+            .map(|position| format!("${position}"))
+            .collect();
+        let renames: BTreeMap<&str, Type> = generics
+            .names
+            .iter()
+            .map(String::as_str)
+            .zip(positional.iter().cloned().map(Type::TypeVar))
+            .collect();
+        let rename = |ty: &Type| {
+            crate::type_size::substitute_type_vars(ty, &|name| renames.get(name).cloned())
+        };
+        Type::Function {
+            generics: crate::GenericParameters {
+                constraints: Box::new(
+                    generics
+                        .names
+                        .iter()
+                        .zip(&positional)
+                        .filter_map(|(name, renamed)| {
+                            generics
+                                .constraints
+                                .get(name)
+                                .map(|bound| (renamed.clone(), rename(bound)))
+                        })
+                        .collect(),
+                ),
+                names: positional,
+            },
+            params: params.iter().map(rename).collect(),
+            optional: *optional,
+            ret: Box::new(rename(ret)),
+            predicate: predicate.as_ref().map(|predicate| {
+                Box::new(TypePredicate {
+                    asserted_type: rename(&predicate.asserted_type),
+                    ..(**predicate).clone()
+                })
+            }),
+            has_rest: *has_rest,
+        }
+    }
+
+    /// Whether this is a function type with its own type parameters
+    /// (through aliases and `readonly`).
+    pub fn is_generic_function(&self) -> bool {
+        matches!(self.peel(), Type::Function { generics, .. } if !generics.is_empty())
+    }
+
+    pub fn with_type_parameters(self, generics: crate::GenericParameters) -> Type {
+        match self {
+            Type::Function {
+                params,
+                optional,
+                ret,
+                predicate,
+                has_rest,
+                ..
+            } => Type::Function {
+                generics,
+                params,
+                optional,
+                ret,
+                predicate,
+                has_rest,
+            },
+            other => other,
+        }
+    }
+
     /// Normalizes to a flat member list that is unique *by peeled type*.
     ///
     /// Both halves peel because a nominal key is unsound here: an alias whose
@@ -2139,6 +2245,7 @@ mod tests {
     #[test]
     fn optional_function_and_tuple_display_preserve_omission() {
         let ty = Type::Function {
+            generics: Default::default(),
             params: vec![Type::union(vec![Type::String, Type::Undefined])],
             optional: 1,
             ret: Box::new(Type::Void),
@@ -2215,6 +2322,7 @@ mod tests {
         assert_ne!(Type::Number, Type::String);
 
         let a = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::Boolean),
             predicate: None,
@@ -2222,6 +2330,7 @@ mod tests {
             optional: 0,
         };
         let b = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::Boolean),
             predicate: None,
@@ -2229,6 +2338,7 @@ mod tests {
             optional: 0,
         };
         let c = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number],
             ret: Box::new(Type::Boolean),
             predicate: None,
@@ -2242,6 +2352,7 @@ mod tests {
     #[test]
     fn function_display_no_params() {
         let t = Type::Function {
+            generics: Default::default(),
             params: vec![],
             ret: Box::new(Type::Number),
             predicate: None,
@@ -2254,6 +2365,7 @@ mod tests {
     #[test]
     fn function_display_one_param() {
         let t = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number],
             ret: Box::new(Type::Boolean),
             predicate: None,
@@ -2266,6 +2378,7 @@ mod tests {
     #[test]
     fn function_display_multi_param() {
         let t = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::Void),
             predicate: None,
@@ -2278,6 +2391,7 @@ mod tests {
     #[test]
     fn function_display_nested() {
         let inner = Type::Function {
+            generics: Default::default(),
             params: vec![],
             ret: Box::new(Type::Number),
             predicate: None,
@@ -2285,6 +2399,7 @@ mod tests {
             optional: 0,
         };
         let outer = Type::Function {
+            generics: Default::default(),
             params: vec![],
             ret: Box::new(inner),
             predicate: None,
@@ -2297,6 +2412,7 @@ mod tests {
     #[test]
     fn clone_roundtrip() {
         let t = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::Boolean),
             predicate: None,
@@ -2453,6 +2569,7 @@ mod tests {
         let arr = Type::Array(Box::new(Type::TypeVar("T".to_string())));
         assert_eq!(arr.to_string(), "T[]");
         let func = Type::Function {
+            generics: Default::default(),
             params: vec![Type::TypeVar("T".to_string())],
             ret: Box::new(Type::TypeVar("U".to_string())),
             predicate: None,
@@ -2543,6 +2660,7 @@ mod tests {
     #[test]
     fn union_display_wraps_function_member() {
         let fn_ty = Type::Function {
+            generics: Default::default(),
             params: vec![],
             ret: Box::new(Type::String),
             predicate: None,

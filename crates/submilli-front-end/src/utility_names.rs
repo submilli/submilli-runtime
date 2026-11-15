@@ -94,15 +94,10 @@ pub fn deferred_application(ty: &Type) -> Option<(Utility, &[Type])> {
         .then_some((utility, args.as_slice()))
 }
 
-/// Whether a type parameter occurs anywhere in `ty`, either a signature
-/// `TypeVar` or a body `GenericParam`.
+/// Whether a type parameter occurs anywhere in `ty`, either a body
+/// `GenericParam` or a signature `TypeVar` no generic function type inside
+/// `ty` binds.
 pub fn holds_type_parameter(ty: &Type) -> bool {
-    let mut pending = vec![ty];
-    while let Some(ty) = pending.pop() {
-        if matches!(ty, Type::TypeVar(_) | Type::GenericParam { .. }) {
-            return true;
-        }
-        crate::type_size::for_each_child(ty, |child| pending.push(child));
-    }
-    false
+    crate::type_size::any_node(ty, &|node| matches!(node, Type::GenericParam { .. }))
+        || !crate::type_size::free_type_vars(ty).is_empty()
 }

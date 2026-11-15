@@ -63,6 +63,10 @@ TypedAst {
                 end: 86,
             },
             ty: Function {
+                generics: GenericParameters {
+                    names: [],
+                    constraints: {},
+                },
                 params: [
                     Number,
                     Number,
@@ -513,6 +517,10 @@ TypedAst {
             Boolean,
         ),
         Function {
+            generics: GenericParameters {
+                names: [],
+                constraints: {},
+            },
             params: [
                 Number,
                 Number,
@@ -523,6 +531,10 @@ TypedAst {
             has_rest: false,
         }: Shape(
             Function {
+                generics: GenericParameters {
+                    names: [],
+                    constraints: {},
+                },
                 params: [
                     Number,
                     Number,

@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::assignable::{TypeResolver, assignable_rec};
 use super::generic::{instantiate_method_signature, substitute_or_record, substitute_typevars};
 use crate::type_size::TypeTooLarge;
-use crate::typechecker::type_param_substitution::TypeParamSubstitution;
 use crate::{MethodSig, ObjectField, Type, TypeKind};
 
 impl TypeResolver<'_> {
@@ -288,12 +287,20 @@ impl TypeResolver<'_> {
         MethodSig::from_function_type(ty, optional)
     }
 
-    fn signature_assignable(
+    pub(super) fn signature_assignable(
         self,
         actual: &MethodSig,
         expected: &MethodSig,
         seen: &mut Vec<(Type, Type)>,
     ) -> bool {
+        // A generic signature fits only one with the same type parameters:
+        // Submilli passes a generic function its type arguments by position,
+        // so nothing else could tell it what they are.
+        if !actual.generics.is_empty()
+            && !same_type_parameters(&actual.function_type(), &expected.function_type())
+        {
+            return false;
+        }
         self.limits
             .ok_or_record(self.limits.compare_methods(actual, expected, || {
                 self.compare_signatures(actual, expected, seen)
@@ -358,38 +365,34 @@ impl TypeResolver<'_> {
         if actual.generics.is_empty() {
             return Ok(assignable_rec(&actual_ty, &expected_ty, resolver, seen));
         }
-        let mut inferred = TypeParamSubstitution::new();
-        let _ = inferred.unify(&actual_ty, &expected_ty, resolver);
-        let mut unused = BTreeSet::new();
-        for name in &actual.generics {
-            if inferred.get(name).is_none() {
-                unused.insert(name.clone());
-                inferred.insert(
-                    name.clone(),
-                    actual
-                        .generics
-                        .constraints
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(Type::Unknown),
-                );
-            }
+        // A generic source meets only a target with as many type parameters
+        // (`signature_assignable`), and takes the target's by position, as a
+        // call passes them: the same opaque parameter on both sides.
+        let positional: BTreeMap<String, Type> = actual
+            .generics
+            .names
+            .iter()
+            .zip(&expected.generics.names)
+            .filter_map(|(own, target)| Some((own.clone(), bindings.get(target)?.clone())))
+            .collect();
+        let actual_ty = substitute_typevars(&actual_ty, &positional, self.limits)?;
+        Ok(assignable_rec(&actual_ty, &expected_ty, resolver, seen))
+    }
+}
+
+/// Whether two generic function types declare the same type parameters, up
+/// to their names: the same count and the same bounds, in order. A generic
+/// function or method converts only to such a type (outside a conversion
+/// point, where the typechecker instantiates it), so the positional type
+/// arguments a call passes mean the same to the caller and to the callee.
+pub(super) fn same_type_parameters(actual: &Type, expected: &Type) -> bool {
+    match (
+        actual.peel().with_positional_type_parameters(),
+        expected.peel().with_positional_type_parameters(),
+    ) {
+        (Type::Function { generics: a, .. }, Type::Function { generics: e, .. }) => {
+            !a.is_empty() && a == e
         }
-        for (name, bound) in actual.generics.constraints.iter() {
-            if unused.contains(name) {
-                continue;
-            }
-            let argument = inferred.apply(&Type::TypeVar(name.clone()), self.limits)?;
-            let bound = inferred.apply(bound, self.limits)?;
-            if !assignable_rec(&argument, &bound, resolver, seen) {
-                return Ok(false);
-            }
-        }
-        Ok(assignable_rec(
-            &inferred.apply(&actual_ty, self.limits)?,
-            &expected_ty,
-            resolver,
-            seen,
-        ))
+        _ => false,
     }
 }

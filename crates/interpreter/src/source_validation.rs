@@ -621,6 +621,7 @@ impl<'a> Validator<'a> {
                     }
                 }
                 TypeAnnotationKind::Function {
+                    generics: _,
                     params,
                     return_type,
                 } => {

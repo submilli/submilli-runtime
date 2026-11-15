@@ -350,6 +350,7 @@ impl Inferer<'_> {
             self.common_subtype(&returns, depth_left, fields_left)?
         };
         let combined = Type::Function {
+            generics: Default::default(),
             params,
             optional: 0,
             ret: Box::new(ret),
@@ -377,6 +378,7 @@ impl Signature {
     /// The signature of function type `ty`, and its return type.
     fn of(ty: &Type) -> Option<(Self, Type)> {
         let Type::Function {
+            generics,
             params,
             optional,
             ret,
@@ -386,6 +388,11 @@ impl Signature {
         else {
             return None;
         };
+        // A generic member's type arguments would go unbound through the
+        // union's combined signature, so such a union isn't callable.
+        if !generics.is_empty() {
+            return None;
+        }
         if *has_rest && params.last()?.rest_element().is_none() {
             return None;
         }
@@ -452,6 +459,7 @@ impl Signature {
 
     fn into_function(self, ret: Type) -> Type {
         Type::Function {
+            generics: Default::default(),
             params: self.params,
             optional: self.optional,
             ret: Box::new(ret),

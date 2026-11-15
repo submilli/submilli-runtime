@@ -521,7 +521,6 @@ fn reconstruct_one(
             slot.param_tys = param_tys.clone();
             slot.argument_metadata = argument_metadata;
             slot.ret_ty = ret_ty.clone();
-            slot.generic = generic;
         } else {
             slots.push(ImportedSlot {
                 name: name.clone(),
@@ -557,7 +556,14 @@ fn reconstruct_one(
         let abi = MethodSlotAbi {
             params: params.iter().skip(1).copied().collect(),
             ret: results.first().copied(),
+            types: class
+                .methods
+                .get(name)
+                .is_some_and(|sig| !sig.generics.is_empty()),
         };
+        if abi.types {
+            params.push(super::generic_binding::types_value_type(symbols)?);
+        }
         super::check_function_parameters(
             || {
                 format!(
@@ -691,10 +697,7 @@ fn reconstruct_one(
     for (i, slot) in slots.iter().enumerate() {
         // Native classes keep their methods in the vtable, without the mutable
         // closure payload emitted by the compiler for guest class instances.
-        if class.compiled_class
-            && !slot.generic
-            && !slot.name.starts_with("get ")
-            && !slot.name.starts_with("set ")
+        if class.compiled_class && !slot.name.starts_with("get ") && !slot.name.starts_with("set ")
         {
             symbols.record_class_payload_method(mangled.clone(), slot.name.clone());
         }
@@ -718,7 +721,7 @@ fn reconstruct_one(
     };
     let named_payload_len = fields
         .len()
-        .checked_add(slots.iter().filter(|slot| !slot.generic).count())
+        .checked_add(slots.len())
         .ok_or_else(|| internal_failure("an imported class payload is too large"))?;
     symbols.record_class_guard_layout(
         mangled.clone(),

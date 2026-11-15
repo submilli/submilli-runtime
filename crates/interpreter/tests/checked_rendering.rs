@@ -72,6 +72,7 @@ fn huge_source_context_and_many_diagnostics_share_limits() {
 #[test]
 fn invalid_rest_signature_is_checked_but_display_never_panics() {
     let ty = Type::Function {
+        generics: Default::default(),
         params: Vec::new(),
         optional: 0,
         ret: Box::new(Type::Number),

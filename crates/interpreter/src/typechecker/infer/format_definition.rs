@@ -920,6 +920,7 @@ mod tests {
             params: vec![Param::new(
                 "fn",
                 Type::Function {
+                    generics: Default::default(),
                     params: vec![Type::TypeVar("T".to_string())],
                     ret: Box::new(Type::TypeVar("U".to_string())),
                     predicate: None,
@@ -966,6 +967,7 @@ mod tests {
     fn function_renders_arrow_form() {
         let out = format_definition(
             &Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number, Type::String],
                 ret: Box::new(Type::Boolean),
                 predicate: None,

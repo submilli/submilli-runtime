@@ -813,7 +813,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                 properties: BTreeMap::from([(
                     "close".to_string(),
                     PropertySig {
-                        ty: Type::Function {
+                        ty: Type::Function { generics: Default::default(),
                             optional: 0,
                             params: Vec::new(),
                             ret: Box::new(Type::Void),

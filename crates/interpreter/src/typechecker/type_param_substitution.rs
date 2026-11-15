@@ -488,6 +488,39 @@ impl TypeParamSubstitution {
             budget.charge_copy(bound, depth)?;
             return Ok(bound.clone());
         }
+        // A generic function type's own type parameter that a substituted
+        // value names is renamed first, so the value isn't captured.
+        if let Type::Function { generics, .. } = ty
+            && !generics.is_empty()
+        {
+            let avoid: std::collections::BTreeSet<String> = crate::type_size::free_type_vars(ty)
+                .iter()
+                .filter_map(|name| self.bindings.get(name))
+                .flat_map(crate::type_size::free_type_vars)
+                .collect();
+            if generics.names.iter().any(|name| avoid.contains(name)) {
+                let renamed = crate::type_size::rename_capturing_binders(ty, &avoid);
+                return self.apply_rec(&renamed, depth, budget, substituting);
+            }
+        }
+        // A generic function type binds its own type parameters: an outer
+        // binding of the same name does not reach inside it.
+        if let Type::Function { generics, .. } = ty
+            && generics
+                .names
+                .iter()
+                .any(|name| self.bindings.contains_key(name))
+        {
+            let mut inner = self.clone();
+            for name in &generics.names {
+                inner.bindings.remove(name);
+            }
+            budget.charge(depth)?;
+            let child = depth.saturating_add(1);
+            return map_children(ty, |child_ty| {
+                inner.apply_rec(child_ty, child, budget, substituting)
+            });
+        }
         let open_before = substituting.len();
         let applied = self
             .chase_binding(ty, budget, substituting)
@@ -807,6 +840,12 @@ impl<'a> Unifier<'a> {
 
         if let Some(result) = self.unify_type_operator(param_ty, unpeeled_arg) {
             return result;
+        }
+        // Inference doesn't look inside a generic function type: its own
+        // type parameters are not the call's, and an argument's would leak
+        // into the call's bindings.
+        if param_ty.is_generic_function() || arg_ty.is_generic_function() {
+            return Ok(());
         }
         if let Some(types) = self.alias_ref_expansion(param_ty, arg_ty) {
             return self.unify_expanded(param_ty, arg_ty, types);
@@ -2631,6 +2670,7 @@ mod tests {
         s.insert("T".to_string(), Type::Number);
         s.insert("U".to_string(), Type::String);
         let f = Type::Function {
+            generics: Default::default(),
             params: vec![t("T")],
             ret: Box::new(t("U")),
             predicate: None,
@@ -2641,6 +2681,7 @@ mod tests {
             s.apply(&f, &crate::type_size::TypeLimits::default())
                 .unwrap(),
             Type::Function {
+                generics: Default::default(),
                 params: vec![Type::Number],
                 ret: Box::new(Type::String),
                 predicate: None,
@@ -2767,6 +2808,7 @@ mod tests {
     fn unify_function_recurses_per_param_and_ret() {
         let mut s = TypeParamSubstitution::new();
         let param = Type::Function {
+            generics: Default::default(),
             params: vec![t("T")],
             ret: Box::new(t("U")),
             predicate: None,
@@ -2774,6 +2816,7 @@ mod tests {
             optional: 0,
         };
         let arg = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number],
             ret: Box::new(Type::String),
             predicate: None,
@@ -2789,6 +2832,7 @@ mod tests {
     fn unify_function_arity_mismatch_fails() {
         let mut s = TypeParamSubstitution::new();
         let param = Type::Function {
+            generics: Default::default(),
             params: vec![t("T")],
             ret: Box::new(t("U")),
             predicate: None,
@@ -2796,6 +2840,7 @@ mod tests {
             optional: 0,
         };
         let arg = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number, Type::String],
             ret: Box::new(Type::String),
             predicate: None,
@@ -2810,6 +2855,7 @@ mod tests {
     fn unify_function_with_fewer_params_binds_the_return() {
         let mut s = TypeParamSubstitution::new();
         let param = Type::Function {
+            generics: Default::default(),
             params: vec![t("T"), Type::Number],
             ret: Box::new(t("U")),
             predicate: None,
@@ -2817,6 +2863,7 @@ mod tests {
             optional: 0,
         };
         let arg = Type::Function {
+            generics: Default::default(),
             params: vec![Type::String],
             ret: Box::new(Type::Boolean),
             predicate: None,

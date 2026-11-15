@@ -804,8 +804,17 @@ impl<'a> Inferer<'a> {
             generics.iter().cloned().zip(args.iter().cloned()).collect();
         let mut result: BTreeMap<String, ObjectField> = BTreeMap::new();
         for (name, sig) in methods {
-            // Method-level generics can't be represented as object-literal field shapes.
+            // A generic method is a field of a generic function type.
             if !sig.generics.is_empty() {
+                result.insert(
+                    name.clone(),
+                    ObjectField {
+                        ty: self.resolver().method_value_type(sig, &bindings),
+                        optional: sig.optional,
+                        readonly: true,
+                        method: true,
+                    },
+                );
                 continue;
             }
             let params: Vec<Type> = sig
@@ -823,6 +832,7 @@ impl<'a> Inferer<'a> {
                 name.clone(),
                 ObjectField {
                     ty: Type::Function {
+                        generics: Default::default(),
                         params,
                         ret: Box::new(ret),
                         predicate: None,
@@ -891,12 +901,14 @@ fn restrict_to_reads(mut sig: MethodSig, generics: &[String]) -> Option<MethodSi
 fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
     match ty {
         Type::Function {
+            generics: own,
             params,
             optional,
             ret,
             predicate,
             has_rest,
         } => Type::Function {
+            generics: own.clone(),
             optional: *optional,
             params: params
                 .iter()
@@ -928,6 +940,7 @@ fn readonly_callback_arrays(ty: &Type, generics: &[String]) -> Type {
 /// `ReadonlyMap`, as tsc declares it.
 fn readonly_callback_receivers(ty: &Type, mangled: &crate::MangledName) -> Type {
     let Type::Function {
+        generics,
         params,
         optional,
         ret,
@@ -938,6 +951,7 @@ fn readonly_callback_receivers(ty: &Type, mangled: &crate::MangledName) -> Type 
         return ty.clone();
     };
     Type::Function {
+        generics: generics.clone(),
         optional: *optional,
         params: params
             .iter()

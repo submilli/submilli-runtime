@@ -626,6 +626,7 @@ mod tests {
         // This shape compiles today under the cast gate, which returns `None`
         // for `Function`. The schema gate must name `handler`.
         let handler = Type::Function {
+            generics: Default::default(),
             params: vec![Type::Number],
             ret: Box::new(Type::Number),
             predicate: None,
@@ -649,6 +650,7 @@ mod tests {
     #[test]
     fn nested_field_path_is_built_through_objects_and_arrays() {
         let handler = Type::Function {
+            generics: Default::default(),
             params: Vec::new(),
             ret: Box::new(Type::Void),
             predicate: None,

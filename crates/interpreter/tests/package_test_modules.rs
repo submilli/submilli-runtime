@@ -405,21 +405,11 @@ fn intersection_method_package() -> CompiledPackage {
         export interface NumberCall { (value: number): number; }
         export interface StringCall { (value: string): string; }
         export const identity: (value: unknown) => unknown = (value: unknown): unknown => value;
-        export class Identity { read(value: unknown): unknown { return value; } }
+        export class Identity { read<T>(value: T): T { return value; } }
     "#,
         )],
         PackageSurface::Public,
     );
-    // Model an external front end's generic identity method over the same
-    // erased implementation; source instance-method generics are separate.
-    if let submilli_engine::TypeKind::Class { methods, .. } =
-        &mut package.declaration.types.get_mut("Identity").unwrap().kind
-    {
-        let method = methods.get_mut("read").unwrap();
-        method.generics = submilli_engine::GenericParameters::unconstrained(vec!["T".into()]);
-        method.params[0].ty = submilli_engine::Type::TypeVar("T".into());
-        method.ret = submilli_engine::Type::TypeVar("T".into());
-    }
     let reference = |name: &str| {
         submilli_engine::Type::interface_ref(
             submilli_engine::Package(PACKAGE.into()),
@@ -560,35 +550,49 @@ fn intersection_method_overloads_preserve_runtime_values_and_argument_effects() 
         run_test(
             &package,
             r#"
-        import { Both, Maybe, Callable, Identity, identity } from "@test/paths";
+        import { Both, Maybe, Callable, identity } from "@test/paths";
         interface Child extends Both {}
         interface OptionalChild extends Maybe {}
         interface Calls extends Callable {}
         let count: number = 0;
-        function numberArg(): number { count++; return 3; }
         function stringArg(): string { count++; return "ok"; }
         function missingReader(): OptionalChild { return {}; }
         function main(): string {
-            const reader: Child = new Identity();
-            const n: number = reader.read(numberArg());
-            const s: string = reader.read(stringArg());
-            const b: boolean = reader.read(true);
-            const explicit: boolean = reader.read<boolean>(false);
-            const chained: string | undefined = reader?.read("chain");
-            const genericChain: boolean | undefined = reader?.read(true);
             const fn: Calls = identity;
             const called: string = fn?.("called");
             const direct: number = fn(7);
             assert(called === "called" && direct === 7);
             const missing: OptionalChild = missingReader();
             const absent = missing.read?.(stringArg());
-            assert(absent === undefined && chained === "chain" && genericChain === true);
-            assert(n === 3 && s === "ok" && b && !explicit && count === 2);
-            return s;
+            assert(absent === undefined && count === 0);
+            return "ok";
         }
     "#
         ),
         "ok"
+    );
+}
+
+#[test]
+fn generic_method_does_not_satisfy_plain_overloads() {
+    // A generic method takes its type arguments by position, so it can't
+    // stand for an intersection's non-generic overloads (SUB-2137).
+    let package = intersection_method_package();
+    let errors = compile_test(
+        &package,
+        "tests/generic",
+        r#"
+        import { Both, Identity } from "@test/paths";
+        interface Child extends Both {}
+        function main(): void { const reader: Child = new Identity(); }
+    "#,
+    )
+    .expect_err("a generic method can't stand for plain overloads");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Child`, got `Identity`")),
+        "{errors:?}"
     );
 }
 

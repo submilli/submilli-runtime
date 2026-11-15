@@ -192,6 +192,9 @@ impl CodegenAnalysis {
                 .runtime_class_contexts
                 .values()
                 .any(|contexts| !contexts.is_empty())
+            // A generic closure reached without type arguments binds poisoned
+            // descriptors, which test as `never`.
+            || super::generic_binding::binds_type_arguments(ta, dependencies)?
         {
             analysis
                 .mentioned_closure_sigs
@@ -663,7 +666,11 @@ impl CodegenAnalysis {
                     }
                 }
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.walk_expr(ta, *callee)?;
                 if args.is_empty() {
                     self.walk_authored_call_arguments(ta, expr.span)?;
@@ -710,7 +717,8 @@ impl CodegenAnalysis {
             TypedExprKind::Unary { operand, .. }
             | TypedExprKind::TypeofTag { value: operand, .. }
             | TypedExprKind::InstanceOf { value: operand, .. }
-            | TypedExprKind::NonNullAssert { value: operand } => {
+            | TypedExprKind::NonNullAssert { value: operand }
+            | TypedExprKind::InstantiateFunction { value: operand, .. } => {
                 self.walk_expr(ta, *operand)?;
             }
             TypedExprKind::MethodCall {
@@ -1313,15 +1321,16 @@ impl CodegenAnalysis {
                 );
             }
             TypedExprKind::Closure {
+                generics,
                 runtime_generics,
                 params,
                 captured,
                 body,
                 return_type,
-                ..
             } => {
                 self.closure_metas.push(ClosureMeta {
                     this_type: ta.closure_this.get(&id).cloned(),
+                    generics: generics.clone(),
                     self_name: ta.closure_names.get(&id).cloned(),
                     runtime_generics: runtime_generics.clone(),
                     expr_id: id,
@@ -1380,6 +1389,7 @@ impl CodegenAnalysis {
             TypedExprKind::NonNullAssert { .. } => {
                 self.string_pool.intern_text(throw::NON_NULL_ASSERT_MESSAGE);
             }
+            TypedExprKind::InstantiateFunction { .. } => {}
             TypedExprKind::Cast {
                 target_ty, check, ..
             } => self.note_cast(target_ty, check.as_deref())?,

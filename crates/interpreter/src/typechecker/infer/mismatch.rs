@@ -28,6 +28,23 @@ impl Inferer<'_> {
         got: &Type,
         mut help: Vec<String>,
     ) {
+        // Why a value holding a generic function doesn't fit (SUB-2137): a
+        // generic function passed where the call is still inferring (G5), or
+        // one nested where it can't be instantiated (G1, G2).
+        let holds_generic = got.is_generic_function()
+            || holds_function(got, self.resolver(), HELP_DEPTH, &|generics| {
+                !generics.is_empty()
+            });
+        if holds_generic && holds_function(expected, self.resolver(), HELP_DEPTH, &|_| true) {
+            help.push(
+                if super::generic::has_free_type_vars(expected) {
+                    GENERIC_INFERENCE_HELP
+                } else {
+                    GENERIC_CONVERSION_HELP
+                }
+                .to_string(),
+            );
+        }
         let (message, collision) = self.mismatch_details(expected, got);
         if let Some((expected_name, got_name)) = collision {
             let expected_shape = self.mismatch_shape(expected_name);
@@ -248,6 +265,57 @@ fn named_type(ty: &Type) -> Option<(&str, &MangledName, &Package)> {
             ..
         } => Some((name, mangled, package)),
         _ => None,
+    }
+}
+
+/// Why a value holding a generic function or method fails a conversion
+/// tsc would accept (SUB-2137).
+const GENERIC_CONVERSION_HELP: &str = "a generic function or method takes its type arguments \
+     by position, so it becomes a function type without the same type parameters only where \
+     it is assigned, passed, returned or cast directly, which fixes its type arguments; inside \
+     an object, an array or a class it keeps its own type parameters";
+
+/// How deep [`holds_function`] looks: fields of fields of elements, enough
+/// for the nested shapes the generic conversion rules reject.
+const HELP_DEPTH: u8 = 4;
+
+/// Why a value holding a generic function fails where the target still has
+/// type parameters of the call being inferred (SUB-2137).
+const GENERIC_INFERENCE_HELP: &str = "a generic function passed where the call is still \
+     inferring its own type parameters can't be instantiated yet: pass the call's type \
+     arguments explicitly (`f<number>(…)`)";
+
+/// Whether `ty` is, or holds within `depth` levels (fields, methods,
+/// elements, union members), a function type whose own type parameters
+/// `accepts`.
+fn holds_function(
+    ty: &Type,
+    resolver: super::assignable::TypeResolver<'_>,
+    depth: u8,
+    accepts: &dyn Fn(&crate::GenericParameters) -> bool,
+) -> bool {
+    let Some(depth) = depth.checked_sub(1) else {
+        return false;
+    };
+    let nested = |ty: &Type| holds_function(ty, resolver, depth, accepts);
+    match ty.peel() {
+        Type::Function { generics, .. } => accepts(generics),
+        Type::Object { fields, .. } => fields.values().any(|field| nested(&field.ty)),
+        Type::Array(element) => nested(element),
+        Type::Tuple(tuple) => tuple.elements.iter().any(nested),
+        Type::Union(members) => members.iter().any(nested),
+        Type::InterfaceRef {
+            mangled,
+            name,
+            args,
+            ..
+        } => resolver
+            .interface_full_form(mangled, name, args)
+            .is_some_and(|fields| fields.values().any(|field| nested(&field.ty))),
+        Type::ClassRef { mangled, args, .. } => resolver
+            .class_full_form(mangled, args)
+            .is_some_and(|fields| fields.values().any(|field| nested(&field.ty))),
+        _ => false,
     }
 }
 

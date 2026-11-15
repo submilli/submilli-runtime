@@ -9,6 +9,7 @@ use submilli_engine::{FileId, ModulePath, PackageSourceModule, Type};
 
 fn signature(arity: usize, ret: Type) -> Type {
     Type::Function {
+        generics: Default::default(),
         optional: 0,
         params: vec![Type::Number; arity],
         ret: Box::new(ret),
@@ -222,7 +223,8 @@ fn closure_index_exhaustion_is_reported_before_mutation() {
     let mut types = wasm_encoder::TypeSection::new();
     let mut symbols = SymbolTable::default();
     next = u32::MAX;
-    let error = closures::emit_env_types(&[], &mut types, &mut symbols, &mut next).unwrap_err();
+    let error =
+        closures::emit_env_types(false, &[], &mut types, &mut symbols, &mut next).unwrap_err();
     assert!(matches!(error, CompilerFailure::Limit { .. }));
     assert_eq!(next, u32::MAX);
     assert_eq!(types.len(), 0);

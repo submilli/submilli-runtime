@@ -534,6 +534,7 @@ impl<'a> Inferer<'a> {
             return None;
         }
         let fn_ty = Type::Function {
+            generics: Default::default(),
             params: sig
                 .params
                 .iter()

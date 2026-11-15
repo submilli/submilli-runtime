@@ -804,6 +804,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
     let t_or_undefined = || Type::Union(vec![t(), Type::Undefined]);
     let iter = |item: Type| Type::prelude_interface("Iterator".to_string(), vec![item]);
     let func = |params: Vec<Type>, ret: Type| Type::Function {
+        generics: Default::default(),
         optional: 0,
         params,
         ret: Box::new(ret),
@@ -1127,7 +1128,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::TypeVar("U".to_string())),
@@ -1199,7 +1200,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1224,7 +1225,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1249,7 +1250,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1271,7 +1272,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1312,7 +1313,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: crate::GenericParameters::unconstrained(vec!["U".to_string()]),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Array(Box::new(Type::TypeVar(
@@ -1450,7 +1451,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "predicate",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1473,7 +1474,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![
                                 Param::new(
                                     "callback",
-                                    Type::Function {
+                                    Type::Function { generics: Default::default(),
                                         optional: 0,
                                         params: element_callback_params(vec![Type::TypeVar("U".to_string())]),
                                         ret: Box::new(Type::TypeVar("U".to_string())),
@@ -1497,7 +1498,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "callback",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Void),
@@ -1519,7 +1520,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "predicate",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1541,7 +1542,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             generics: Default::default(),
                             params: vec![Param::new(
                                 "predicate",
-                                Type::Function {
+                                Type::Function { generics: Default::default(),
                                     optional: 0,
                                     params: element_callback_params(Vec::new()),
                                     ret: Box::new(Type::Unknown),
@@ -1564,7 +1565,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::with_default(
                                 "compareFn",
                                 Type::Union(vec![
-                                    Type::Function {
+                                    Type::Function { generics: Default::default(),
                                         optional: 0,
                                         params: vec![
                                             Type::TypeVar("T".to_string()),
@@ -1616,7 +1617,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![
                                 Param::new(
                                     "callback",
-                                    Type::Function {
+                                    Type::Function { generics: Default::default(),
                                         optional: 0,
                                         params: element_callback_params(vec![Type::TypeVar("U".to_string())]),
                                         ret: Box::new(Type::TypeVar("U".to_string())),
@@ -1704,7 +1705,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             params: vec![Param::with_default(
                                 "compareFn",
                                 Type::Union(vec![
-                                    Type::Function {
+                                    Type::Function { generics: Default::default(),
                                         optional: 0,
                                         params: vec![
                                             Type::TypeVar("T".to_string()),
@@ -1877,7 +1878,7 @@ pub(crate) fn declare_types(defs: &mut crate::PackageDeclaration) {
                             Param::with_default(
                                 "mapFn",
                                 Type::union(vec![
-                                    Type::Function {
+                                    Type::Function { generics: Default::default(),
                                         optional: 0,
                                         params: vec![Type::TypeVar("T".to_string()), Type::Number],
                                         ret: Box::new(Type::TypeVar("U".to_string())),

@@ -54,6 +54,9 @@ pub enum ExprKind {
         function: ExprId,
     },
     Arrow {
+        /// Own type parameters: `<T>(x: T) => x`, a generic object-literal
+        /// method or `function<T>(…) {}`.
+        generics: Vec<TypeParameterAnnotation>,
         params: Vec<ParamDecl>,
         return_type: Option<TypeAnnotation>,
         type_predicate: Option<TypePredicateAnnotation>,
@@ -779,6 +782,8 @@ pub enum TypeAnnotationKind {
     },
     /// Function type annotation. Only the named-parameter form is accepted.
     Function {
+        /// Own type parameters: `<T>(x: T) => T`, a generic method signature.
+        generics: Vec<TypeParameterAnnotation>,
         params: Vec<TypeAnnotationField>,
         return_type: Box<TypeAnnotation>,
     },

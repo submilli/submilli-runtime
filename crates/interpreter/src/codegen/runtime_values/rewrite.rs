@@ -284,15 +284,45 @@ fn rewrite_operation(
         {
             rewrite_member_call(ast, id, receiver, &iface, &name.name, args)?;
         }
+        // A program's generic method on a wide receiver: read the method
+        // through the host, then call it as a closure that binds the call's
+        // type arguments.
         TypedExprKind::GenericMethodCall {
             receiver,
             iface,
             member: crate::Member::Named(name),
             args,
+            type_args,
+            ..
+        } if !type_args.is_empty()
+            && !crate::codegen::is_host_package(iface.as_str())
+            && flow.expr_is_wide(receiver) =>
+        {
+            rewrite_generic_member_call(
+                ast,
+                id,
+                receiver,
+                &iface,
+                &name.name,
+                args.into_iter().map(|arg| arg.expr).collect(),
+                type_args,
+            )?;
+        }
+        // Any other generic method call on a wide receiver, or a program's
+        // call without type arguments that carries authored arguments, goes
+        // through the host's member call. (A narrow receiver's call with type
+        // arguments keeps static dispatch, which passes them.)
+        TypedExprKind::GenericMethodCall {
+            receiver,
+            iface,
+            member: crate::Member::Named(name),
+            args,
+            type_args,
             ..
         } if super::dynamic_member_interface(&iface)
             && (flow.expr_is_wide(receiver)
-                || (!crate::codegen::is_host_package(iface.as_str())
+                || (type_args.is_empty()
+                    && !crate::codegen::is_host_package(iface.as_str())
                     && ast
                         .authored_call_arguments(
                             ast.try_expr(id)
@@ -462,6 +492,55 @@ fn member_arguments(
         })
         .map_err(crate::codegen::arena_failure)?;
     Ok(vec![receiver, name, iface])
+}
+
+/// `receiver.name<type_args>(args)` on a wide receiver: the method value the
+/// host reads, called as a closure of a generic function type, so the call
+/// binds its type arguments as any generic closure call does.
+fn rewrite_generic_member_call(
+    ast: &mut TypedAst,
+    id: ExprId,
+    receiver: ExprId,
+    iface: &crate::MangledName,
+    name: &str,
+    args: Vec<ExprId>,
+    type_args: Vec<Type>,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let call = ast.try_expr(id).map_err(crate::codegen::arena_failure)?;
+    let span = call.span;
+    let returns_void = call.ty.is_void();
+    let lookup_args = member_arguments(ast, id, receiver, iface, name)?;
+    let method_ty = Type::Function {
+        generics: crate::GenericParameters::unconstrained(
+            (0..type_args.len())
+                .map(|index| format!("$T{index}"))
+                .collect(),
+        ),
+        params: vec![Type::Unknown; args.len()],
+        optional: 0,
+        ret: Box::new(if returns_void {
+            Type::Void
+        } else {
+            Type::Unknown
+        }),
+        predicate: None,
+        has_rest: false,
+    };
+    let callee = ast
+        .try_push_expr(crate::TypedExpr {
+            kind: member_helper("property", lookup_args),
+            ty: method_ty,
+            span,
+        })
+        .map_err(crate::codegen::arena_failure)?;
+    ast.try_expr_mut(id)
+        .map_err(crate::codegen::arena_failure)?
+        .kind = TypedExprKind::CallClosure {
+        callee,
+        args,
+        type_args,
+    };
+    Ok(())
 }
 
 fn rewrite_member_call(

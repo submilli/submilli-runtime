@@ -1,0 +1,7 @@
+# Generic function types across a package boundary: the package exports a
+# value of a generic function type, a generic function, an interface with a
+# generic method, and a class with one. The app calls, spreads, instantiates
+# and extends them, and their type arguments still reach a host check.
+# name         dir    deps         root
+@test/tools    tools  -
+main           app    @test/tools  root

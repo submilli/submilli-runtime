@@ -515,7 +515,11 @@ impl<'a> Inferer<'a> {
                 type_predicate: Some(predicate),
                 ..
             } => Some(((**predicate).clone(), args.iter().map(|a| a.expr).collect())),
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 match self
                     .typed_ast
                     .try_expr(*callee)

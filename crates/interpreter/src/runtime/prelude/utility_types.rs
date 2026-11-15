@@ -127,6 +127,7 @@ pub(crate) fn declaration_text(mangled: &crate::MangledName) -> Option<&'static 
 /// The bound of each constrained utility parameter.
 fn constraints(utility: Utility) -> BTreeMap<String, Type> {
     let callable = || Type::Function {
+        generics: Default::default(),
         params: vec![Type::Array(Box::new(Type::Never))],
         optional: 0,
         ret: Box::new(Type::Unknown),

@@ -221,10 +221,10 @@ impl<'a> Inferer<'a> {
         span: crate::Span,
     ) -> Result<Type, CompilerFailure> {
         use super::utility_types::{Evaluated, Utility, deferred, evaluate, label};
-        // `typeof identity` names a generic function, whose own type
-        // parameters are no parameter in scope here. tsc instantiates them
-        // with their constraints for `ReturnType` and `Parameters`; the
-        // function type no longer records those, so they become `unknown`.
+        // A type variable that names no type parameter in scope here (one a
+        // function type left free) becomes `unknown`. A generic function
+        // type's own type parameters are bound: `utility_types` reads them
+        // as their bounds, as tsc does for `ReturnType` and `Parameters`.
         let args = if matches!(utility, Utility::Parameters | Utility::ReturnType) {
             args.iter()
                 .map(|arg| self.instantiate_foreign_type_vars(arg))
@@ -251,15 +251,14 @@ impl<'a> Inferer<'a> {
         Ok(ty)
     }
 
-    /// `ty` with each type variable that names no type parameter in scope
-    /// replaced by `unknown`.
+    /// `ty` with each free type variable that names no type parameter in
+    /// scope replaced by `unknown`. A generic function type's own type
+    /// parameters are bound, not foreign: `Parameters` and `ReturnType` read
+    /// them as their bounds.
     fn instantiate_foreign_type_vars(&self, ty: &Type) -> Type {
-        match ty {
-            Type::TypeVar(name) if !self.is_generic_in_scope(name) => Type::Unknown,
-            _ => crate::type_size::map_children_infallible(ty, |child| {
-                self.instantiate_foreign_type_vars(child)
-            }),
-        }
+        crate::type_size::substitute_type_vars(ty, &|name| {
+            (!self.is_generic_in_scope(name)).then_some(Type::Unknown)
+        })
     }
 
     /// Run `bind` for the interface or class `name`: a form over it there is

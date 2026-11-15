@@ -451,7 +451,7 @@ impl Evaluator<'_> {
     fn signature_part(&self, utility: Utility, operand: &Type) -> Outcome {
         let parts = members(operand)
             .into_iter()
-            .map(|member| match member.peel() {
+            .map(|member| match &instantiate_own_type_parameters(member.peel()) {
                 Type::Function {
                     params,
                     optional,
@@ -1369,4 +1369,40 @@ fn known_shape(ty: &Type) -> bool {
         Type::Refined { .. } => false,
         other => !other.lowers_to_erased_slot(),
     }
+}
+
+/// A generic function type with its own type parameters replaced by their
+/// bounds (each bound with every own parameter as `unknown`), or `unknown`,
+/// as tsc reads `Parameters` and `ReturnType` of one: its parameter and
+/// result types must not name its bound type parameters freely. Any other
+/// type is returned as it is.
+fn instantiate_own_type_parameters(ty: &Type) -> Type {
+    let Type::Function { generics, .. } = ty else {
+        return ty.clone();
+    };
+    if generics.is_empty() {
+        return ty.clone();
+    }
+    let unknowns = |name: &str| {
+        generics
+            .names
+            .iter()
+            .any(|own| own == name)
+            .then_some(Type::Unknown)
+    };
+    let arguments: std::collections::BTreeMap<&str, Type> = generics
+        .names
+        .iter()
+        .map(|name| {
+            let argument = generics
+                .constraints
+                .get(name)
+                .map_or(Type::Unknown, |bound| {
+                    crate::type_size::substitute_type_vars(bound, &unknowns)
+                });
+            (name.as_str(), argument)
+        })
+        .collect();
+    let erased = ty.clone().with_type_parameters(Default::default());
+    crate::type_size::substitute_type_vars(&erased, &|name| arguments.get(name).cloned())
 }

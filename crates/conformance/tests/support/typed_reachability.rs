@@ -159,7 +159,11 @@ impl Reachable {
                 }
                 self.walk_authored_call_arguments(ta, span);
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.walk_expr(ta, *callee);
                 for &arg in args {
                     self.walk_expr(ta, arg);
@@ -193,7 +197,10 @@ impl Reachable {
             TypedExprKind::Unary { operand, .. }
             | TypedExprKind::TypeofTag { value: operand, .. }
             | TypedExprKind::InstanceOf { value: operand, .. }
-            | TypedExprKind::NonNullAssert { value: operand } => self.walk_expr(ta, *operand),
+            | TypedExprKind::NonNullAssert { value: operand }
+            | TypedExprKind::InstantiateFunction { value: operand, .. } => {
+                self.walk_expr(ta, *operand);
+            }
             TypedExprKind::MethodCall { receiver, args, .. } => {
                 self.walk_expr(ta, *receiver);
                 for &arg in args {

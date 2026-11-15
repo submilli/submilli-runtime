@@ -391,6 +391,7 @@ fn write_node<'a>(
             }
         }
         Type::Function {
+            generics,
             params,
             ret,
             has_rest,
@@ -402,7 +403,11 @@ fn write_node<'a>(
                     "rest signature has no parameter",
                 ));
             }
-            out.push("(")?;
+            if generics.is_empty() {
+                out.push("(")?;
+            } else {
+                out.push("<")?;
+            }
             push(frames, Frame::Type(ret, child))?;
             push(frames, Frame::Text(") => "))?;
             let fixed = params.len().saturating_sub(usize::from(*has_rest));
@@ -418,7 +423,23 @@ fn write_node<'a>(
                     },
                     depth: child,
                 },
-            )
+            )?;
+            if generics.is_empty() {
+                return Ok(());
+            }
+            // `<T extends C, U>(`, pushed last first.
+            push(frames, Frame::Text(">("))?;
+            for (position, name) in generics.names.iter().enumerate().rev() {
+                if let Some(bound) = generics.constraints.get(name) {
+                    push(frames, Frame::Type(bound, child))?;
+                    push(frames, Frame::Text(" extends "))?;
+                }
+                push(frames, Frame::Text(name))?;
+                if position > 0 {
+                    push(frames, Frame::Text(", "))?;
+                }
+            }
+            Ok(())
         }
         Type::Object {
             fields,
@@ -815,6 +836,11 @@ fn copied_text_bytes(ty: &Type) -> Result<usize, RenderError> {
             add(name)?;
         }
         Type::Mapped { key, .. } => add(key)?,
+        Type::Function { generics, .. } => {
+            for name in &generics.names {
+                add(name)?;
+            }
+        }
         Type::Conditional { infers, .. } => {
             for name in infers {
                 add(name)?;
@@ -855,6 +881,45 @@ mod tests {
     }
 
     #[test]
+    fn generic_function_types_render_their_type_parameters() {
+        let var = |name: &str| Type::TypeVar(name.into());
+        let function = |generics: crate::GenericParameters| Type::Function {
+            generics,
+            params: vec![var("T"), var("U")],
+            optional: 0,
+            ret: Box::new(var("T")),
+            predicate: None,
+            has_rest: false,
+        };
+        let plain = crate::GenericParameters::unconstrained(vec!["T".into(), "U".into()]);
+        assert_eq!(function(plain).to_string(), "<T, U>(arg0: T, arg1: U) => T");
+        let bounded = crate::GenericParameters {
+            names: vec!["T".into(), "U".into()],
+            constraints: Box::new([("T".to_string(), Type::String)].into()),
+        };
+        let ty = function(bounded);
+        assert_eq!(
+            ty.to_string(),
+            "<T extends string, U>(arg0: T, arg1: U) => T"
+        );
+        let json = serde_json::to_string(&ty).expect("serializes");
+        assert_eq!(
+            serde_json::from_str::<Type>(&json).expect("deserializes"),
+            ty
+        );
+        let plain = Type::Function {
+            generics: crate::GenericParameters::default(),
+            params: vec![Type::Number],
+            optional: 0,
+            ret: Box::new(Type::Void),
+            predicate: None,
+            has_rest: false,
+        };
+        let plain_json = serde_json::to_string(&plain).expect("serializes");
+        assert!(!plain_json.contains("generics"), "{plain_json}");
+    }
+
+    #[test]
     fn type_operators_render_as_tsc_spells_them() {
         use crate::types::MappedModifier;
         let var = |name: &str| Type::TypeVar(name.into());
@@ -886,6 +951,7 @@ mod tests {
             };
         let string_test = conditional(var("T"), Type::String, &[], Type::Number);
         let function = Type::Function {
+            generics: Default::default(),
             params: Vec::new(),
             optional: 0,
             ret: Box::new(Type::Void),

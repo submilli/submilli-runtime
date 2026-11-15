@@ -269,7 +269,11 @@ impl<V: Visitor> Walk<'_, V> {
                 }
                 self.authored_call_arguments(span)?;
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.expr(*callee)?;
                 for &a in args {
                     self.expr(a)?;
@@ -363,7 +367,9 @@ impl<V: Visitor> Walk<'_, V> {
                 }
                 PostfixTarget::Local { .. } | PostfixTarget::Global { .. } => {}
             },
-            TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
+            TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
+            | TypedExprKind::Cast { value, .. } => {
                 self.expr(*value)?;
             }
             TypedExprKind::Number(_)

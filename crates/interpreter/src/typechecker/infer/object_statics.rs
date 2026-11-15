@@ -198,6 +198,19 @@ impl Inferer<'_> {
     fn assign_shape(&self, ty: &Type) -> Option<BTreeMap<String, ObjectField>> {
         match ty.peel() {
             Type::ClassRef { mangled, args, .. } => self.resolver().class_full_form(mangled, args),
+            // As a spread copies it: every member of a structural interface,
+            // its methods (generic ones too) among them.
+            interface @ Type::InterfaceRef {
+                mangled,
+                name,
+                args,
+                ..
+            } if !super::assignable::is_host_backed_interface(interface)
+                && !super::assignable::is_wrapper_interface(interface)
+                && !interface.is_regexp_match_array() =>
+            {
+                self.resolver().interface_full_form(mangled, name, args)
+            }
             _ => self.sole_object_shape(ty),
         }
     }

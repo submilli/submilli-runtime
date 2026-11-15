@@ -738,7 +738,11 @@ impl State<'_> {
                     self.mark_cross_frame_capture(THIS_BINDING, &b)?;
                 }
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 self.walk_expr(callee)?;
                 for a in args {
                     self.walk_expr(a)?;
@@ -844,7 +848,9 @@ impl State<'_> {
                     self.walk_expr(index)?;
                 }
             },
-            TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
+            TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
+            | TypedExprKind::Cast { value, .. } => {
                 self.walk_expr(value)?;
             }
             TypedExprKind::Number(_)
@@ -1547,7 +1553,11 @@ mod tests {
                     walk_expr(ta, a, out);
                 }
             }
-            TypedExprKind::CallClosure { callee, args } => {
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => {
                 walk_expr(ta, *callee, out);
                 for &a in args {
                     walk_expr(ta, a, out);
@@ -1659,7 +1669,9 @@ mod tests {
                     walk_expr(ta, *index, out);
                 }
             },
-            TypedExprKind::NonNullAssert { value } | TypedExprKind::Cast { value, .. } => {
+            TypedExprKind::NonNullAssert { value }
+            | TypedExprKind::InstantiateFunction { value, .. }
+            | TypedExprKind::Cast { value, .. } => {
                 walk_expr(ta, *value, out);
             }
         }
@@ -1766,9 +1778,11 @@ mod tests {
             TypedExprKind::Call { args, .. } | TypedExprKind::VirtualCall { args, .. } => {
                 args.iter().find_map(|&a| scan_expr(ta, a))
             }
-            TypedExprKind::CallClosure { callee, args } => {
-                scan_expr(ta, *callee).or_else(|| args.iter().find_map(|&a| scan_expr(ta, a)))
-            }
+            TypedExprKind::CallClosure {
+                type_args: _,
+                callee,
+                args,
+            } => scan_expr(ta, *callee).or_else(|| args.iter().find_map(|&a| scan_expr(ta, a))),
             TypedExprKind::GenericCall { args, .. } => {
                 args.iter().find_map(|a| scan_expr(ta, a.expr))
             }

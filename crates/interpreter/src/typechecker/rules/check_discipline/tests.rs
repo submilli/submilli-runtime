@@ -100,6 +100,7 @@ fn a_type_the_caller_can_change_or_run_code_behind_is_not_primitive() {
         Type::Uint8Array,
         Type::Unknown,
         Type::Function {
+            generics: Default::default(),
             params: Vec::new(),
             ret: Box::new(Type::String),
             predicate: None,
