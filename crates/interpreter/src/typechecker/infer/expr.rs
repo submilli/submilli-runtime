@@ -764,6 +764,15 @@ impl Inferer<'_> {
         expr_id: ExprId,
         expected: Option<&Type>,
     ) -> Result<(ExprId, Type), CompilerFailure> {
+        // The syntactic pass cannot resolve a user binding named JSON. Keep
+        // that call's original contextual typing, including generic inference.
+        let expr_id = if let Some(original) = self.ast.implicit_json_casts.get(&expr_id)
+            && self.shadows_namespace("JSON")
+        {
+            *original
+        } else {
+            expr_id
+        };
         let inferred = match self.deferred_constraint_literals(expr_id)? {
             None => self.infer_expr_inner(expr_id, expected)?,
             Some(context) => {
@@ -17955,7 +17964,7 @@ mod tests {
 
     #[test]
     fn unknown_where_a_type_is_expected_names_the_checked_cast() {
-        let (_, diags) = run("const arr: string[] = JSON.parse(\"[]\");");
+        let (_, diags) = run("function arr(): string[] { return JSON.parse(\"[]\"); }");
         assert_eq!(diags.len(), 1, "{diags:?}");
         assert_eq!(diags[0].message, "expected `string[]`, got `unknown`");
         assert_eq!(
@@ -17963,6 +17972,33 @@ mod tests {
             Some(
                 "`JSON.parse(\"[]\")` returns `unknown`. Cast it to the type you expect, which checks the value at run time and throws a `TypeError` if it doesn't match: `JSON.parse(\"[]\") as string[]`"
             )
+        );
+    }
+
+    #[test]
+    fn annotated_json_parse_keeps_other_unknown_boundaries() {
+        for source in [
+            "const u = JSON.parse(\"[]\"); const xs: number[] = u;",
+            "function f(): number[] { return JSON.parse(\"[]\"); }",
+            "let xs: number[] = []; xs = JSON.parse(\"[]\");",
+            "function f(xs: number[]): void {} f(JSON.parse(\"[]\"));",
+            "function f(JSON: { parse: (s: string) => unknown }): void { const xs: number[] = JSON.parse(\"[]\"); }",
+            "function f(): unknown { return 1; } const xs: number[] = f();",
+        ] {
+            let (_, diagnostics) = run(source);
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.message == "expected `number[]`, got `unknown`"),
+                "{source}: {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn annotated_json_parse_preserves_shadowed_generic_context() {
+        run_clean(
+            "function f(JSON: { parse: <T>(s: string) => T }): number[] { const xs: number[] = JSON.parse(\"[]\"); return xs; }",
         );
     }
 
@@ -18032,7 +18068,8 @@ mod tests {
             diags.iter().flat_map(|d| &d.help).any(|h| h.contains("`(c ? JSON.parse(\"[]\") : JSON.parse(\"[1]\")) as string[]`")),
             "{diags:?}"
         );
-        let (_, diags) = run("class Box { n: number = 0; } const b: Box = JSON.parse(\"{}\");");
+        let (_, diags) =
+            run("class Box { n: number = 0; } function b(): Box { return JSON.parse(\"{}\"); }");
         assert!(
             !diags[0].help.iter().any(|h| h.starts_with("cast it")),
             "{diags:?}"
@@ -18189,17 +18226,17 @@ mod tests {
                    interface Id { id: bigint; } \
                    function main(): void { \
                      const t = \"1\"; \
-                     const f: () => void = JSON.parse(t); \
-                     const b: bigint = JSON.parse(t); \
-                     const s: http.Response | null = JSON.parse(t); \
-                     const o: { s?: http.Response } = JSON.parse(t); \
-                     const h: Holder = JSON.parse(t); \
-                     const g: { a: Box<number>; b: Box<http.Response> } = JSON.parse(t); \
-                     const d: Dir = JSON.parse(t); \
-                     const i: Id = JSON.parse(t); \
-                     const n: Box<number> | undefined = JSON.parse(t); \
-                     const e: ErrorOptions = JSON.parse(t); \
-                     const x: number = JSON.parse(\"a very long piece of text to parse, longer than the limit\"); }";
+                     function f(): () => void { return JSON.parse(t); } \
+                     function b(): bigint { return JSON.parse(t); } \
+                     function s(): http.Response | null { return JSON.parse(t); } \
+                     function o(): { s?: http.Response } { return JSON.parse(t); } \
+                     function h(): Holder { return JSON.parse(t); } \
+                     function g(): { a: Box<number>; b: Box<http.Response> } { return JSON.parse(t); } \
+                     function d(): Dir { return JSON.parse(t); } \
+                     function i(): Id { return JSON.parse(t); } \
+                     function n(): Box<number> | undefined { return JSON.parse(t); } \
+                     function e(): ErrorOptions { return JSON.parse(t); } \
+                     function x(): number { return JSON.parse(\"a very long piece of text to parse, longer than the limit\"); } }";
         let (_, diags) = run_with_packages(src, &[&http]);
         let offered: Vec<_> = diags
             .iter()
@@ -18220,14 +18257,18 @@ mod tests {
             any_cast, 3,
             "a withheld cast came back in other words: {diags:?}"
         );
-        assert_eq!(
-            offered[0].0,
-            "expected `Box<number> | undefined`, got `unknown`"
-        );
+        assert!(offered.iter().any(|(message, _)| *message == "expected `Box<number> | undefined`, got `unknown`"), "{offered:?}");
         // A prelude data interface is no host type: a parsed object serves it.
-        assert_eq!(offered[1].0, "expected `ErrorOptions`, got `unknown`");
         assert!(
-            offered[2].1.ends_with("`JSON.parse(…) as number`"),
+            offered
+                .iter()
+                .any(|(message, _)| *message == "expected `ErrorOptions`, got `unknown`"),
+            "{offered:?}"
+        );
+        assert!(
+            offered
+                .iter()
+                .any(|(_, help)| help.ends_with("`JSON.parse(…) as number`")),
             "{offered:?}"
         );
     }

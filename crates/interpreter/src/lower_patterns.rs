@@ -20,6 +20,7 @@ pub fn lower(mut ast: Ast) -> Result<Ast, CompilerFailure> {
     // Callers may supply an AST that did not come from `parse_checked`. Pattern
     // lowering reports its failures in the inference stage it feeds.
     tree_height::check_syntax(&ast).map_err(|failure| failure.with_stage(CompilerStage::Infer))?;
+    crate::lower_json_initializers::lower(&mut ast)?;
     let mut ctx = LowerCtx { next_tmp: 0 };
     ctx.lower_arrows(&mut ast)?;
     ctx.lower_function_params(&mut ast)?;
