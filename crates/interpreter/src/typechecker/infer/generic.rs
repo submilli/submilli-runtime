@@ -1426,7 +1426,7 @@ impl Inferer<'_> {
 
     /// Settle a checked host call's `T` that neither a written type argument
     /// nor the expected type bound. A predicate call reads `unknown`,
-    /// unchecked: `session.get(key)` and `r.json()` keep their pre-generic
+    /// unchecked: `r.json()` keeps its pre-generic
     /// meaning, a read the caller narrows with a runtime-checked `as`. A
     /// schema call is an error naming its text form, the function for the
     /// unchecked answer, unless the call was already reported (a wrong
@@ -1483,7 +1483,13 @@ impl Inferer<'_> {
         declared_by: &crate::MangledName,
         span: Span,
     ) -> Result<Vec<String>, CompilerFailure> {
-        if crate::mangle::is_builtin(declared_by) {
+        // Runtime-generic hosts receive descriptors even for an uninferred
+        // type, so they use the same unknown fallback as user generics.
+        let runtime_generic = self
+            .packages_by_name
+            .values()
+            .any(|defs| defs.runtime_generics.contains(declared_by));
+        if crate::mangle::is_builtin(declared_by) && !runtime_generic {
             return Ok(Vec::new());
         }
         self.bind_constraint_defaults(sub, generics, span)
@@ -3234,7 +3240,7 @@ impl Inferer<'_> {
         let mut sub = TypeParamSubstitution::new();
         let type_args_written = type_args.is_some();
         let errors_at_call = self.error_count();
-        // A checked host call (`session.get<T>`, `llm.call<T>`, …) is a
+        // A checked host call (`llm.call<T>`, …) is a
         // generic host function: the host reads `T` from its
         // `$TypeDescriptor` in the call's `$types` environment — its
         // predicate, and for a schema call the JSON Schema codegen emits —
@@ -3380,8 +3386,11 @@ impl Inferer<'_> {
         {
             return Ok((TypedExprKind::Null, Type::Error));
         }
-        let mut inferred_fallbacks =
-            self.bind_uninferred_type_parameters(&mut sub, &generics, &mangled, span)?;
+        let mut inferred_fallbacks = if matches!(callee, GenericCallee::Value(_)) {
+            self.bind_constraint_defaults(&mut sub, &generics, span)?
+        } else {
+            self.bind_uninferred_type_parameters(&mut sub, &generics, &mangled, span)?
+        };
         if let Err(unbound) = sub
             .resolve_all(&generics, &self.type_limits)
             .map_err(type_limit_at(span))?
@@ -3432,8 +3441,7 @@ impl Inferer<'_> {
         // gets the ordinary arity error. A failed gate (an unschemable or
         // unverifiable `T`) makes the whole call an error and builds no node.
         // The checked type is the type argument itself: `agents.run<T>`
-        // returns it, `llm.call<T>` returns an envelope holding it,
-        // `session.get<T>` returns it or `undefined`.
+        // returns it, while `llm.call<T>` returns an envelope holding it.
         let checked_ty = if checked.is_some() {
             let Some(type_param) = generics.first() else {
                 return Err(super::inference_failure(

@@ -4322,7 +4322,7 @@ impl Inferer<'_> {
         })
     }
 
-    /// The gate of a checked host call (`session.get<T>`, `llm.call<T>`,
+    /// The gate of a checked host call (`llm.call<T>`,
     /// `r.json<T>()`, …; [`crate::stdlib::checked_call::checked_call`]):
     /// whether `T` is a type the host's descriptor check can verify and, for
     /// a call that sends a JSON Schema, one a request can carry. The host
@@ -17463,7 +17463,7 @@ mod tests {
             else {
                 continue;
             };
-            if crate::stdlib::session::declaration::is_checked_get(mangled) {
+            if *mangled == crate::mangle::package_symbol("submilli:session", "get") {
                 out.push((
                     wrapped.contains(&id),
                     type_args.clone(),
@@ -17504,9 +17504,7 @@ mod tests {
         );
     }
 
-    /// The same invariant across every import form: the gate matches the
-    /// package-export mangled name, so an alias, a named import, and a
-    /// namespace import all land on the checked path.
+    /// Every import form uses the ordinary generic call representation.
     #[test]
     fn every_import_form_of_session_get_is_a_checked_read() {
         let src = "import session from \"submilli:session\"; \
@@ -17537,18 +17535,13 @@ mod tests {
         assert!(diags.is_empty(), "bare get should not error: {diags:?}");
     }
 
-    /// Only a *written* `<unknown>` is rejected; the message names the fix.
+    /// Explicit `unknown` follows the ordinary generic rules.
     #[test]
-    fn explicit_unknown_type_argument_is_rejected() {
+    fn explicit_unknown_session_type_argument_is_accepted() {
         let src = "import session from \"submilli:session\"; \
                    function main(): void { const v = session.get<unknown>(\"k\"); }";
         let (_, diags) = run_with_session(src);
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.message.contains("would not verify anything")),
-            "expected the unknown-target rejection, got: {diags:?}",
-        );
+        assert!(diags.is_empty(), "unexpected diags: {diags:?}");
     }
 
     /// A generic forwards its own `T`: the call passes the caller's descriptor,
