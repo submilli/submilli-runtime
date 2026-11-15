@@ -1,3 +1,6 @@
+// expect-error-count: 2
+// expect-error: expected `string`, got `string | Search`
+// A call in the condition invalidates the preceding module-variable guard.
 let events = "";
 class Search { toString(): string { events += "s"; return "x"; } }
 class Position { valueOf(): number { events += "p"; return 0; } }

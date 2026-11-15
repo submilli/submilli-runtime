@@ -1,3 +1,7 @@
+// expect-error-count: 2
+// expect-error: narrowing on `text` was dropped by the write
+// expect-error: narrowing on `count` was dropped by the write
+// A guard does not survive a call that can reassign its module binding.
 let text: string | null = "before";
 let count: number | null = 3;
 function clearText(): boolean { text = null; return true; }

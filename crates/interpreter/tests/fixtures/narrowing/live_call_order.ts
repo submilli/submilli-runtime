@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: cannot call value of type
+// A call in the condition invalidates the preceding module-variable guard.
 let callback: ((value: number) => number) | null = (value: number): number => value;
 let calls = 0;
 function clear(): boolean { callback = null; return false; }

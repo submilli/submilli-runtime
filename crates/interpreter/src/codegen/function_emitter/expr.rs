@@ -3166,10 +3166,7 @@ fn emit_chain_parts(
         receiver_ty == &Type::Unknown
             || crate::codegen::symbol_table::may_hold_null(ty)
             || ty.holds_undefined()
-            || matches!(
-                part,
-                crate::TypedChainPart::Call { .. } | crate::TypedChainPart::MethodCall { .. }
-            )
+            || matches!(part, crate::TypedChainPart::Call { .. })
     };
     let recv_val = (part.is_optional() && receiver_may_be_nullish)
         .then(|| ctx.symbols.value_type(receiver_ty))

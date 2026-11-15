@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: expected `string`, got `string | RegExp`
+// A call in the condition invalidates the preceding module-variable guard.
 let search: string | RegExp = "x";
 function change(): boolean { search = /x/; return false; }
 function read(): string {

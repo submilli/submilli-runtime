@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: expected `string`, got `string | null`
+// A call in the condition invalidates the preceding module-variable guard.
 let needle: string | null = "x";
 function clear(): boolean { needle = null; return false; }
 function check(): boolean {

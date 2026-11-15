@@ -1,3 +1,6 @@
+// expect-error-count: 2
+// expect-error: narrowing on `current` was dropped by the write
+// A call in the condition invalidates the preceding module-variable guard.
 let current: number | null = 3;
 function clear(): boolean { current = null; return false; }
 function arithmetic(): number {

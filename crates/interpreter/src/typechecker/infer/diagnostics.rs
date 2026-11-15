@@ -576,6 +576,14 @@ impl<'a> Inferer<'a> {
                 ),
                 format!("this reassignment invalidates the narrowing on `{rendered}`"),
             ),
+            narrowing::InvalidationReason::Call { .. } => (
+                format!(
+                    "narrowing on `{rendered}` was dropped because a call may run a function \
+                     that reassigns it — stability rule 5. Read it into a `const` before \
+                     the guard, or re-narrow it after the call."
+                ),
+                format!("this call invalidates the narrowing on `{rendered}`"),
+            ),
             narrowing::InvalidationReason::CapturedMutator { .. } => {
                 // Should not be reachable via lookup_tombstone — the
                 // captured-mutator case is detected via

@@ -170,6 +170,8 @@ pub enum InvalidationReason {
     /// An identifier was reassigned. Distinguished from [`Self::Write`] only so
     /// the diagnostic can name the statement the reader is looking at.
     Reassignment { span: crate::Span },
+    /// A call may execute another function that writes the module binding.
+    Call { span: crate::Span },
     /// Path root is in captured_mutators; the engine refused to install a NarrowedView.
     /// closure_span: one offending closure declaration.
     CapturedMutator { closure_span: Option<crate::Span> },
@@ -184,7 +186,7 @@ impl InvalidationReason {
         match self {
             Self::ShapeUnrebuildable { .. } => None,
             Self::Write { span } => Some(*span),
-            Self::Reassignment { span } => Some(*span),
+            Self::Reassignment { span } | Self::Call { span } => Some(*span),
             Self::CapturedMutator { closure_span } => *closure_span,
         }
     }

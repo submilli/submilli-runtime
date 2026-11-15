@@ -16,13 +16,15 @@ pub(super) enum UnlistedName<'a> {
         dependency: &'a str,
         dependents: Vec<&'a str>,
     },
+    /// A loaded package provides it, but this package caller cannot call it.
+    Unreachable { provider: &'a str },
     /// Nothing reachable provides it; `near` are known names it may misspell.
     Unknown { near: Vec<String> },
 }
 
 /// `None` when the stdlib catalog, a declared MCP server, or a package
 /// `caller` can reach provides `name`: for `main`, a declared package; for a
-/// package, also a package a declared one depends on.
+/// package, itself or one of its direct dependencies.
 pub(super) fn unlisted_name<'a>(
     blueprint: &Blueprint,
     packages: &'a DeclaredPackages,
@@ -32,6 +34,17 @@ pub(super) fn unlisted_name<'a>(
     let known = known_capabilities(blueprint, packages, caller);
     if known.iter().any(|k| k == name) {
         return None;
+    }
+    if caller != interpreter::mangle::USER_PACKAGE
+        && let Some((provider, _)) = packages.artifacts.iter().find(|(_, artifact)| {
+            artifact
+                .capabilities
+                .provides
+                .iter()
+                .any(|provided| provided.name == name)
+        })
+    {
+        return Some(UnlistedName::Unreachable { provider });
     }
     if let Some(dependency) = dependency_providing(packages, name) {
         return Some(UnlistedName::DependencyOnly {
@@ -57,11 +70,18 @@ fn known_capabilities(
         .map(|c| c.name.to_string())
         .collect();
     names.extend(blueprint.mcp.keys().map(|server| format!("mcp.{server}")));
-    // `main` imports only declared packages, so a `main` rule for what only a
-    // dependency provides could never match.
-    let reaches_dependencies = caller != interpreter::mangle::USER_PACKAGE;
     for (package, artifact) in &packages.artifacts {
-        if packages.dependencies.contains(package) && !reaches_dependencies {
+        let reachable = if caller == interpreter::mangle::USER_PACKAGE {
+            blueprint.packages.contains(package)
+        } else {
+            packages
+                .artifacts
+                .get(caller)
+                .is_some_and(|caller_artifact| {
+                    package == caller || declared_packages::depends_on(caller_artifact, package)
+                })
+        };
+        if !reachable {
             continue;
         }
         names.extend(

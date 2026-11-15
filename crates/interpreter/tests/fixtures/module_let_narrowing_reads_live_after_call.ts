@@ -1,7 +1,6 @@
-// Inside a function, a narrowing on a module-level `let` survives a call that
-// reassigns it, as in TypeScript, and the read after the call sees the value
-// the call left, as in JavaScript: a member the value lacks throws a
-// `TypeError`, and a value read whole is the new one.
+// expect-error-count: 1
+// expect-error: narrowing on `label` was dropped because a call may run a function
+// The read after clear() must re-check the nullable module binding.
 let label: string | null = "a";
 let value: string | number = "s";
 

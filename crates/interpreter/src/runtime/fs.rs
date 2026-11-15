@@ -222,7 +222,7 @@ impl ContentPath {
 
     /// Refuse special files without waiting for a FIFO writer. The descriptor check
     /// also covers a regular path replaced between metadata inspection and open.
-    pub(crate) fn open_regular(&self) -> Result<(File, Metadata), ContainError> {
+    pub fn open_regular(&self) -> Result<(File, Metadata), ContainError> {
         require_regular_file(&self.metadata()?)?;
         let mut options = OpenOptions::new();
         options.read(true).nonblock(true);

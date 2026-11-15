@@ -773,6 +773,10 @@ impl Inferer<'_> {
                 result?
             }
         };
+        let expression = self.ast.try_expr(expr_id).map_err(super::arena_failure)?;
+        if matches!(expression.kind, ExprKind::New { .. }) {
+            self.invalidate_globals_after_call(expression.span);
+        }
         self.instantiate_generic_value(inferred, expected)
     }
 
@@ -6325,6 +6329,10 @@ impl Inferer<'_> {
         if matches!(peeled, Type::String | Type::StringLiteral(_)) {
             return Ok(expr_id);
         }
+        // Objects and collection elements may provide user-defined conversion hooks.
+        if !is_primitive(peeled) {
+            self.invalidate_globals_after_call(substitution_span);
+        }
         // A `never` value has no `toString` to call, yet a read of a `never[]`
         // an alias filled holds a value.
         if matches!(peeled, Type::Never) {
@@ -9628,6 +9636,9 @@ impl Inferer<'_> {
         } else {
             self.infer_expr(receiver, None)?
         };
+        if self.property_access_may_run_code(&receiver_ty, &name.name) {
+            self.invalidate_globals_after_call(span);
+        }
         // Plan 75.17: in-region rewrite for field-path
         // narrowings. If the candidate path `<receiver>.<name>` has an
         // active `NarrowedView`, return a `LocalNarrowRef` to the
@@ -10496,13 +10507,16 @@ impl Inferer<'_> {
         let pattern_origin = self.ast.pattern_origins.get(&expr_id).cloned();
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         if self.is_generic_index_receiver(&receiver_ty) {
-            return self.infer_generic_index_access(typed_receiver, receiver_ty, index);
+            let inferred = self.infer_generic_index_access(typed_receiver, receiver_ty, index)?;
+            self.invalidate_globals_after_call(span);
+            return Ok(inferred);
         }
         let (typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, span)?;
         if receiver_ty.is_structural_object() || matches!(receiver_ty.peel(), Type::ClassRef { .. })
         {
             let (typed_index, key_ty) = self.infer_object_key(index)?;
+            self.invalidate_globals_after_call(span);
             let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
             let kind = TypedExprKind::IndexAccess {
                 receiver: typed_receiver,
@@ -12506,6 +12520,9 @@ impl Inferer<'_> {
                 .push(narrowing::PathElem::Field(name.name.clone()));
             self.invalidate_for_write(path, name.span);
         }
+        if self.property_access_may_run_code(&receiver_ty, &name.name) {
+            self.invalidate_globals_after_call(span);
+        }
         Ok((
             TypedExprKind::PostfixUnary {
                 op,
@@ -12655,6 +12672,9 @@ impl Inferer<'_> {
         let result_ty = postfix_result_ty(&read_ty);
         if !matches!(elem_ty, Type::Error) && !self.postfix_write_fits(&result_ty, &elem_ty) {
             self.error_type_mismatch(span, &elem_ty, &result_ty, vec![]);
+        }
+        if object {
+            self.invalidate_globals_after_call(span);
         }
         self.invalidate_index_write(typed_receiver, typed_index, span)?;
         Ok((
@@ -13243,6 +13263,7 @@ impl Inferer<'_> {
             // resulting type.
             self.pending_read = None;
             let part_span = part.span();
+            let invokes = matches!(part, ChainPart::Call { .. });
             let (mut typed_part, mut next_ty) = self.infer_chain_part(
                 &effective_recv,
                 step_path.as_ref(),
@@ -13250,6 +13271,9 @@ impl Inferer<'_> {
                 &mut typed_parts,
                 &mut pending_method,
             )?;
+            if invokes {
+                self.invalidate_globals_after_call(part_span);
+            }
             // Static nullability controls inference, but a live property can
             // later be missing. Preserve authored member short-circuiting for
             // emission when runtime value tracking widens its receiver.
@@ -13435,6 +13459,7 @@ impl Inferer<'_> {
                             Type::Error,
                         ));
                     };
+                    self.invalidate_globals_after_call(span);
                     let ty = Type::indexed_access(generic_receiver(receiver_ty).clone(), key_ty);
                     let result_ty = self.chain_read_result_type(&ty);
                     return Ok((
@@ -13458,6 +13483,7 @@ impl Inferer<'_> {
                 if receiver_ty.is_structural_object()
                     || matches!(receiver_ty.peel(), Type::ClassRef { .. })
                 {
+                    self.invalidate_globals_after_call(span);
                     let (ty, result_ty) =
                         if let Some(ty) = self.generic_key_read(receiver_ty, &idx_ty, idx_span) {
                             let result_ty = self.chain_read_result_type(&ty);
@@ -14438,6 +14464,9 @@ impl Inferer<'_> {
         name: &Ident,
         span: Span,
     ) -> ChainField {
+        if self.property_access_may_run_code(receiver_ty, &name.name) {
+            self.invalidate_globals_after_call(span);
+        }
         if name.name == "length"
             && let Some(length_ty) = tuple_receiver_length_type(receiver_ty)
         {

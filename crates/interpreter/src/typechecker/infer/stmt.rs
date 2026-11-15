@@ -1781,6 +1781,9 @@ impl Inferer<'_> {
             let target_ty = self.write_target_ty(&receiver_ty, &name.name);
             placeholder(self, target_ty.as_ref())?
         };
+        if self.property_access_may_run_code(&receiver_ty, &name.name) {
+            self.invalidate_globals_after_call(name.span);
+        }
         if let Some(path) = target_path {
             self.invalidate_for_write(path.clone(), name.span);
             if let TypedStmtKind::AssignField { value, .. } = &result {
@@ -1884,13 +1887,15 @@ impl Inferer<'_> {
         let evolving = self.evolving_array_receiver(receiver)?;
         let (typed_receiver, receiver_ty) = self.infer_array_operation_receiver(receiver)?;
         if self.is_generic_index_receiver(&receiver_ty) {
-            return self.infer_generic_index_write(
+            let inferred = self.infer_generic_index_write(
                 typed_receiver,
                 receiver_ty,
                 index,
                 value,
                 recv_span,
-            );
+            )?;
+            self.invalidate_globals_after_call(recv_span);
+            return Ok(inferred);
         }
         let (mut typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
@@ -1958,6 +1963,9 @@ impl Inferer<'_> {
                 grown,
                 recv_span,
             )?;
+        }
+        if object {
+            self.invalidate_globals_after_call(index_span);
         }
         self.invalidate_index_write(typed_receiver, typed_index, index_span)?;
         self.narrow_keyed_field_after_write(
@@ -2766,6 +2774,10 @@ impl Inferer<'_> {
         let (typed_receiver, receiver_ty) = self.infer_expr(receiver, None)?;
         let (typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, recv_span)?;
+        let invokes_accessor = self.property_access_may_run_code(&receiver_ty, &name.name);
+        if invokes_accessor {
+            self.invalidate_globals_after_call(name.span);
+        }
         let target_path = self
             .expr_to_reference_path(
                 self.typed_ast
@@ -2909,6 +2921,9 @@ impl Inferer<'_> {
             );
             placeholder(self)?
         };
+        if invokes_accessor {
+            self.invalidate_globals_after_call(name.span);
+        }
         if let Some(path) = target_path {
             self.invalidate_for_write(path, name.span);
         }
@@ -3031,6 +3046,9 @@ impl Inferer<'_> {
             elem_ty.clone()
         };
         let read_ty = self.index_read_ty(typed_receiver, typed_index, &declared_read)?;
+        if object {
+            self.invalidate_globals_after_call(op_span);
+        }
         let (typed_value, value_ty) =
             self.infer_expr(value, compound_value_hint(op, &elem_ty).as_ref())?;
         // Built before the operator check so the check can name it as the
@@ -3068,6 +3086,9 @@ impl Inferer<'_> {
                 ty: result_ty,
             })
             .map_err(crate::typechecker::arena_failure)?;
+        if object {
+            self.invalidate_globals_after_call(op_span);
+        }
         self.invalidate_index_write(
             typed_receiver,
             typed_index,

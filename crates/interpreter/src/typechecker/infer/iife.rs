@@ -123,8 +123,12 @@ impl Inferer<'_> {
         span: Span,
     ) -> Result<(crate::TypedExprKind, Type), CompilerFailure> {
         let Some(arrow) = immediately_invoked_arrow(self.ast, callee, &args)? else {
-            return self
-                .infer_call_typing_invoked_parameters(callee, type_args, args, expected, span);
+            let inferred =
+                self.infer_call_typing_invoked_parameters(callee, type_args, args, expected, span)?;
+            if !Self::call_preserves_globals(&inferred.0) {
+                self.invalidate_globals_after_call(span);
+            }
+            return Ok(inferred);
         };
         let arrow_span = self.ast.try_expr(arrow).map_err(super::arena_failure)?.span;
         self.immediately_invoked = Some(arrow_span);

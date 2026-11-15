@@ -1194,6 +1194,207 @@ impl<'a> Inferer<'a> {
         );
     }
 
+    /// Calls may run another function that writes a module binding. Imported
+    /// mutable bindings have no local write inventory, so treat them as writable.
+    pub(super) fn invalidate_globals_after_call(&mut self, span: Span) {
+        for path in self.function_written_global_paths() {
+            self.invalidate(path, narrowing::InvalidationReason::Call { span });
+        }
+    }
+
+    pub(super) fn function_written_global_paths(&self) -> Vec<narrowing::ReferencePath> {
+        self.top_symbols
+            .iter()
+            .filter(|(name, entry)| {
+                matches!(entry.kind, ValueKind::Let { .. })
+                    && (self.function_written_globals.contains(*name)
+                        || self
+                            .mangle_top_symbol(name)
+                            .is_ok_and(|own| own != entry.mangled_name))
+            })
+            .map(|(_, entry)| narrowing::ReferencePath {
+                root: narrowing::BindingId::Global(entry.mangled_name.clone()),
+                chain: Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Calls whose implementation only inspects the already-evaluated arguments.
+    /// Argument expressions still apply their own invalidations before this check.
+    pub(super) fn call_preserves_globals(kind: &crate::TypedExprKind) -> bool {
+        match kind {
+            crate::TypedExprKind::IntrinsicCall {
+                kind: crate::Intrinsic::Assert,
+                ..
+            } => true,
+            crate::TypedExprKind::MethodCall { iface, member, .. }
+            | crate::TypedExprKind::GenericMethodCall { iface, member, .. } => {
+                *iface == crate::mangle::prelude("ArrayConstructor")
+                    && member.key().is_named("isArray")
+            }
+            _ => false,
+        }
+    }
+
+    /// Structural property contracts do not reveal whether a class getter or
+    /// setter implements them. Concrete class data fields need no call boundary.
+    pub(super) fn property_access_may_run_code(&self, receiver: &Type, name: &str) -> bool {
+        match receiver.peel() {
+            Type::ClassRef { mangled, args, .. } => {
+                self.class_getter(mangled, args, name).is_some()
+                    || self.class_setter(mangled, args, name).is_some()
+            }
+            Type::InterfaceRef { .. }
+            | Type::Object { .. }
+            | Type::GenericParam { .. }
+            | Type::TypeVar(_)
+            | Type::IndexedAccess { .. }
+            | Type::Mapped { .. }
+            | Type::Conditional { .. }
+            | Type::KeyOf(_)
+            | Type::AliasRef { .. } => true,
+            Type::Union(members) | Type::Intersection(members) => members
+                .iter()
+                .any(|member| self.property_access_may_run_code(member, name)),
+            _ => false,
+        }
+    }
+
+    /// Effects that must also invalidate earlier predicates when a condition is
+    /// reconstructed after inference. Child expressions have their own arena IDs.
+    pub(super) fn expression_may_write_globals(
+        &self,
+        kind: &crate::TypedExprKind,
+    ) -> Result<bool, CompilerFailure> {
+        use crate::TypedExprKind;
+        let effectful = match kind {
+            TypedExprKind::Call { .. }
+            | TypedExprKind::GenericCall { .. }
+            | TypedExprKind::VirtualCall { .. }
+            | TypedExprKind::SuperCtorCall { .. }
+            | TypedExprKind::SuperMethodCall { .. }
+            | TypedExprKind::MethodCall { .. }
+            | TypedExprKind::GenericMethodCall { .. }
+            | TypedExprKind::IntrinsicCall { .. } => !Self::call_preserves_globals(kind),
+            TypedExprKind::CallClosure { callee, .. } => {
+                self.directly_invoked_body(*callee)?.is_none()
+            }
+            TypedExprKind::PostfixUnary { target, .. } => match target {
+                crate::PostfixTarget::Field { receiver, name, .. } => {
+                    let ty = &self
+                        .typed_ast
+                        .try_expr(*receiver)
+                        .map_err(super::arena_failure)?
+                        .ty;
+                    self.property_access_may_run_code(ty, &name.name)
+                }
+                crate::PostfixTarget::Index { receiver, .. } => {
+                    let ty = &self
+                        .typed_ast
+                        .try_expr(*receiver)
+                        .map_err(super::arena_failure)?
+                        .ty;
+                    ty.is_structural_object()
+                        || matches!(ty.peel(), Type::ClassRef { .. })
+                        || self.is_generic_index_receiver(ty)
+                }
+                crate::PostfixTarget::Local { .. } | crate::PostfixTarget::Global { .. } => false,
+            },
+            TypedExprKind::FieldAccess { receiver, name }
+            | TypedExprKind::InterfacePropertyAccess { receiver, name, .. } => {
+                let ty = &self
+                    .typed_ast
+                    .try_expr(*receiver)
+                    .map_err(super::arena_failure)?
+                    .ty;
+                self.property_access_may_run_code(ty, &name.name)
+            }
+            TypedExprKind::IndexAccess { receiver, .. } => {
+                let ty = &self
+                    .typed_ast
+                    .try_expr(*receiver)
+                    .map_err(super::arena_failure)?
+                    .ty;
+                ty.is_structural_object()
+                    || matches!(ty.peel(), Type::ClassRef { .. })
+                    || self.is_generic_index_receiver(ty)
+            }
+            TypedExprKind::OptionalChain { base, parts } => {
+                self.chain_may_write_globals(*base, parts)?
+            }
+            _ => false,
+        };
+        Ok(effectful)
+    }
+
+    fn chain_may_write_globals(
+        &self,
+        base: ExprId,
+        parts: &[crate::TypedChainPart],
+    ) -> Result<bool, CompilerFailure> {
+        use crate::TypedChainPart;
+        let mut receiver = &self
+            .typed_ast
+            .try_expr(base)
+            .map_err(super::arena_failure)?
+            .ty;
+        for part in parts {
+            let (effectful, result) = match part {
+                TypedChainPart::Call { result_ty, .. }
+                | TypedChainPart::MethodCall { result_ty, .. } => (true, result_ty),
+                TypedChainPart::Field {
+                    name, result_ty, ..
+                }
+                | TypedChainPart::InterfaceProperty {
+                    name, result_ty, ..
+                } => (
+                    self.property_access_may_run_code(receiver, &name.name),
+                    result_ty,
+                ),
+                TypedChainPart::Index { result_ty, .. } => (
+                    receiver.is_structural_object()
+                        || matches!(receiver.peel(), Type::ClassRef { .. })
+                        || self.is_generic_index_receiver(receiver),
+                    result_ty,
+                ),
+                TypedChainPart::Constraint { result_ty, .. }
+                | TypedChainPart::NonNull { result_ty, .. } => (false, result_ty),
+            };
+            if effectful {
+                return Ok(true);
+            }
+            receiver = result;
+        }
+        Ok(false)
+    }
+
+    pub(super) fn statement_may_write_globals(
+        &self,
+        kind: &TypedStmtKind,
+    ) -> Result<bool, CompilerFailure> {
+        Ok(match kind {
+            TypedStmtKind::AssignField { receiver, name, .. } => {
+                let ty = &self
+                    .typed_ast
+                    .try_expr(*receiver)
+                    .map_err(super::arena_failure)?
+                    .ty;
+                self.property_access_may_run_code(ty, &name.name)
+            }
+            TypedStmtKind::AssignIndex { receiver, .. } => {
+                let ty = &self
+                    .typed_ast
+                    .try_expr(*receiver)
+                    .map_err(super::arena_failure)?
+                    .ty;
+                ty.is_structural_object()
+                    || matches!(ty.peel(), Type::ClassRef { .. })
+                    || self.is_generic_index_receiver(ty)
+            }
+            _ => false,
+        })
+    }
+
     /// Drops narrowings on `path` and its extensions, and records `path` as
     /// assigned so the kill outlives the frame.
     ///

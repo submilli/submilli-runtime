@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: cannot read field `join`
+// A call in the condition invalidates the preceding module-variable guard.
 class Joiner { join(separator: string = "custom"): string { return separator; } }
 let value: number[] | Joiner = [1];
 function change(): boolean { value = new Joiner(); return false; }

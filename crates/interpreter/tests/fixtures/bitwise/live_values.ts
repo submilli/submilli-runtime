@@ -1,3 +1,7 @@
+// expect-error-count: 2
+// expect-error: narrowing on `current` was dropped by the write
+// expect-error: expected `bigint`, got `number | bigint`
+// Calls invalidate the earlier guards before either bitwise operation.
 let current: number | null = 7;
 function clear(): boolean { current = null; return false; }
 function calculate(): number {

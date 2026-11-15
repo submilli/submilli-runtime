@@ -1166,7 +1166,14 @@ impl SymbolTable {
                 let first_lowering = *lowered.first().ok_or_else(|| {
                     crate::codegen::internal_failure("Type::Union holds ≥2 members")
                 })?;
-                if lowered.iter().all(|&lowering| lowering == first_lowering) {
+                // Function members may accept a closure through an adapter (fewer
+                // parameters, defaults, or a different return convention). Keep
+                // the original closure in the universal slot until a call selects
+                // its signature, even when every member has the same Wasm layout.
+                let has_function = members
+                    .iter()
+                    .any(|member| matches!(member.lowered(), Type::Function { .. }));
+                if !has_function && lowered.iter().all(|&lowering| lowering == first_lowering) {
                     return Ok(first_lowering);
                 }
                 // Object-only union → `$ObjectShape`; mixed union → `$Object`.

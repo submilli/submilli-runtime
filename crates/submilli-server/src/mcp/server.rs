@@ -939,8 +939,9 @@ fn read_window(
 ) -> Result<ReadFileOutput, ContainError> {
     use std::io::{BufRead, BufReader};
 
-    let bytes = resolved.metadata()?.len();
-    let mut reader = BufReader::new(resolved.open()?.into_std());
+    let (file, metadata) = resolved.open_regular()?;
+    let bytes = metadata.len();
+    let mut reader = BufReader::new(file.into_std());
 
     let mut content = String::new();
     let mut buf = Vec::new();
