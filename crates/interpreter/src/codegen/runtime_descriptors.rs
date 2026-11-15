@@ -20,7 +20,7 @@ use wasm_encoder::{
     ValType,
 };
 
-pub(super) const UNSUPPORTED_TYPE_OPERATOR: &str = "cannot validate an unresolved type operator at runtime; pass a concrete type or a type parameter directly";
+const UNSUPPORTED_TYPE_OPERATOR: &str = "cannot validate an unresolved type operator at runtime; pass a concrete type or a type parameter directly";
 
 pub fn environment_type(
     symbols: &SymbolTable,
@@ -467,6 +467,9 @@ pub fn prepare_descriptor_data(
         pool.intern_text(super::generic_binding::POISONED_NAME);
     }
     for ty in types {
+        if contains_unresolved_operator(ta, &ty) {
+            pool.intern_text(UNSUPPORTED_TYPE_OPERATOR);
+        }
         pool.intern_text(&ty.to_string());
         if let Some(schema) = super::descriptor_schema::schema_of(ta, &ty) {
             pool.intern_text(&schema);
