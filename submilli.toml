@@ -83,6 +83,20 @@ keywords = ["exa", "search", "web", "contents", "research", "llm"]
 path = "packages/exa"
 
 [[package]]
+name = "@submilli/xai"
+version = "0.1.0"
+description = "Read-only X/Twitter research through Grok X Search, with citations, completion status, and provider usage and cost."
+keywords = ["xai", "grok", "twitter", "x", "search", "research"]
+path = "packages/xai"
+
+[[package]]
+name = "@submilli/x"
+version = "0.1.0"
+description = "Read-only X API v2 client for structured tweet lookup, recent and archive search, and paginated conversation replies."
+keywords = ["x", "twitter", "tweets", "search", "replies", "research"]
+path = "packages/x"
+
+[[package]]
 name = "@submilli/firecrawl"
 version = "0.1.0"
 description = "Firecrawl v2 web search, scraping, URL discovery, and explicit batch/crawl jobs with paginated results and failures."

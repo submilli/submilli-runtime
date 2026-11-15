@@ -1,0 +1,13 @@
+namespace: submilli
+provides:
+- name: x.ai/research
+  description: Research public X posts and replies in one request, using only Grok X Search.
+  fields:
+    model:
+      type: string
+requires:
+- capability: cost.report
+- capability: http.post
+  filter: host == "api.x.ai" and path == "/v1/responses"
+- capability: secrets.get
+  filter: name == "XAI_API_KEY"

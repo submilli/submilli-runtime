@@ -1,0 +1,14 @@
+kind: blueprint
+name: x-read-policy-test
+packages:
+  - '@submilli/x'
+default: deny
+permissions:
+  main:
+    - capability: x.com/getTweet
+      filter: id == "123"
+      action: allow
+    - capability: x.com/searchRecent
+      action: allow
+  # Sentinel: approved reads stop at secret access before any HTTP request.
+  '@submilli/x': []
