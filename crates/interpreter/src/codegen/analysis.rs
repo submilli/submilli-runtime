@@ -1684,6 +1684,13 @@ impl CodegenAnalysis {
     /// whole-program fact, and a library that declares an interface and reads it
     /// never sees the consumer's accessor implementation.
     fn note_shaped_property_access(&mut self, receiver_ty: &Type, prop: &str, kind: AccessorKind) {
+        // An interface's optional length can be read from a plain closure.
+        if prop == "length" && matches!(kind, AccessorKind::Get) {
+            self.dependency_usage.note_member(crate::mangle::extend(
+                &crate::mangle::prelude("Function"),
+                "length",
+            ));
+        }
         if matches!(kind, AccessorKind::Set) {
             self.dependency_usage.note_member(crate::mangle::extend(
                 &crate::mangle::prelude("ObjectConstructor"),

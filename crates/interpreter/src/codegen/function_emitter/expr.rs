@@ -1889,10 +1889,6 @@ fn emit_field_access(
         )?;
         return Ok(());
     }
-    let intrinsics = ctx
-        .symbols
-        .intrinsic_type_indices()
-        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
     // Use the expression's physical type so a field read preserves
     // unexpected values after its source refinement becomes stale.
     let field_ty = ctx
@@ -1904,11 +1900,10 @@ fn emit_field_access(
     // Stashed so we can re-push it (as the call's self argument) and
     // then read its slot 2 to get the getter funcref.
     emit_receiver(emitter, ctx, *receiver)?;
-    let rcv_local = stash_receiver_as_object_shape(emitter, &receiver_ty, intrinsics.object_shape)?;
-    emit_object_property_read_as(
+    emit_receiver_property_read_as(
         emitter,
         ctx,
-        rcv_local,
+        &receiver_ty,
         &name.name,
         &field_ty,
         ctx.ta
@@ -4044,9 +4039,14 @@ fn emit_chain_access(
                 )?;
                 return Ok(());
             }
-            let rcv_local =
-                stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape)?;
-            emit_object_property_read_as(emitter, ctx, rcv_local, &name.name, result_ty, check_ty)?;
+            emit_receiver_property_read_as(
+                emitter,
+                ctx,
+                receiver_ty,
+                &name.name,
+                result_ty,
+                check_ty,
+            )?;
         }
         crate::TypedChainPart::Index { idx, result_ty, .. } => {
             if receiver_ty.indexes_by_name() {
@@ -5178,6 +5178,124 @@ pub(crate) fn emit_object_property_read(
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     emit_object_property_read_as(emitter, ctx, object_local, prop_name, field_ty, field_ty)?;
     Ok(())
+}
+
+/// Read a property from the receiver on the stack. A plain closure has no
+/// user property slots; a callable shape still reads its stored properties.
+fn emit_receiver_property_read_as(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver_ty: &Type,
+    prop_name: &str,
+    field_ty: &Type,
+    check_ty: &Type,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    let allows_closure =
+        interface_property_may_be_absent_on_closure(ctx.ta, receiver_ty, prop_name);
+    if allows_closure {
+        let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
+        emitter.instruction(Instruction::LocalTee(receiver));
+        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+            intrinsics.closure,
+        )));
+        if prop_name == "length" {
+            emit_hybrid_has_no_length(emitter, ctx, receiver)?;
+            emitter.instruction(Instruction::I32Or);
+        }
+        emitter.emit_if(BlockType::Result(ctx.symbols.value_type(field_ty)?));
+        if prop_name == "length" {
+            let getter = ctx
+                .symbols
+                .func_idx(&crate::mangle::extend(
+                    &crate::mangle::prelude("Function"),
+                    "length",
+                ))
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("function length getter collected")
+                })?;
+            emitter.instruction(Instruction::LocalGet(receiver));
+            emitter.instruction(Instruction::Call(getter));
+            cast::emit_coerce_to_slot(emitter, ctx, &Type::Number, field_ty)?;
+        } else {
+            emit_undefined(emitter, ctx)?;
+            cast::emit_cast_to(emitter, ctx, field_ty)?;
+        }
+        emitter.emit_else();
+        emitter.instruction(Instruction::LocalGet(receiver));
+    }
+    let receiver = stash_receiver_as_object_shape(emitter, receiver_ty, intrinsics.object_shape)?;
+    emit_object_property_read_as(emitter, ctx, receiver, prop_name, field_ty, check_ty)?;
+    if allows_closure {
+        emitter.emit_end();
+    }
+    Ok(())
+}
+
+/// Callable shapes copy ordinary properties in Object.assign. Without an own
+/// length slot, they retain the arity of the function stored in their header.
+fn emit_hybrid_has_no_length(
+    emitter: &mut FunctionEmitter,
+    ctx: &CodegenCtx,
+    receiver: u32,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intrinsics = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
+    emitter.instruction(Instruction::LocalGet(receiver));
+    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
+        intrinsics.callable_shape,
+    )));
+    emitter.emit_if(BlockType::Result(ValType::I32));
+    emitter.instruction(Instruction::LocalGet(receiver));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intrinsics.object_shape,
+    )));
+    let shape = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(intrinsics.object_shape),
+    }))?;
+    emitter.instruction(Instruction::LocalSet(shape));
+    let name = ctx
+        .symbols
+        .field_name_string_global_idx("length")
+        .ok_or_else(|| crate::codegen::internal_failure("length property name collected"))?;
+    emit_object_field_index_by_name(emitter, ctx, shape, name);
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.instruction(Instruction::I32LtS);
+    emitter.emit_else();
+    emitter.instruction(Instruction::I32Const(0));
+    emitter.emit_end();
+    Ok(())
+}
+
+fn interface_property_may_be_absent_on_closure(
+    ast: &crate::TypedAst,
+    ty: &Type,
+    property: &str,
+) -> bool {
+    if let Type::Union(members) = ty.peel() {
+        return members
+            .iter()
+            .any(|member| interface_property_may_be_absent_on_closure(ast, member, property));
+    }
+    let Some(crate::FieldNarrowingTest::Interface(test)) = ast.runtime_type_tests.get(ty.peel())
+    else {
+        return false;
+    };
+    test.members
+        .get(property)
+        .is_some_and(|field| field.optional)
+        && test.non_shape_carriers.iter().any(|carrier| {
+            matches!(
+                carrier,
+                crate::InterfaceCarrier::Function(_) | crate::InterfaceCarrier::FunctionAny
+            )
+        })
 }
 
 fn emit_object_property_read_as(

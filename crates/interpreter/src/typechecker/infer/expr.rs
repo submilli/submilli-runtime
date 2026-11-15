@@ -10494,7 +10494,8 @@ impl Inferer<'_> {
         }
         let (typed_receiver, receiver_ty) =
             self.constraint_receiver(typed_receiver, receiver_ty, span)?;
-        if receiver_ty.is_structural_object() {
+        if receiver_ty.is_structural_object() || matches!(receiver_ty.peel(), Type::ClassRef { .. })
+        {
             let (typed_index, key_ty) = self.infer_object_key(index)?;
             let index_span = self.ast.try_expr(index).map_err(super::arena_failure)?.span;
             let kind = TypedExprKind::IndexAccess {
@@ -13420,13 +13421,17 @@ impl Inferer<'_> {
                         ty,
                     ));
                 }
-                let (typed_idx, idx_ty) = if receiver_ty.is_structural_object() {
+                let (typed_idx, idx_ty) = if receiver_ty.is_structural_object()
+                    || matches!(receiver_ty.peel(), Type::ClassRef { .. })
+                {
                     self.infer_object_key(idx)?
                 } else {
                     self.infer_expr(idx, None)?
                 };
                 let idx_span = self.ast.try_expr(idx).map_err(super::arena_failure)?.span;
-                if receiver_ty.is_structural_object() {
+                if receiver_ty.is_structural_object()
+                    || matches!(receiver_ty.peel(), Type::ClassRef { .. })
+                {
                     let (ty, result_ty) =
                         if let Some(ty) = self.generic_key_read(receiver_ty, &idx_ty, idx_span) {
                             let result_ty = self.chain_read_result_type(&ty);
