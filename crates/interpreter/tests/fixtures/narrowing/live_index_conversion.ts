@@ -1,3 +1,6 @@
+// expect-error-count: 3
+// expect-error: expected `number`, got `number | Key`
+// A call in the condition invalidates the preceding module-variable guard.
 let log: string = "";
 class Key {
   private reads: number = 0;

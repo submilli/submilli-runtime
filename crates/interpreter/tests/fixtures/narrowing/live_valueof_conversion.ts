@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: `+` not defined for `number | Value` and `number`
+// A call in the condition invalidates the preceding module-variable guard.
 let calls: number = 0;
 class Value {
   valueOf(): number { calls += 1; return 7; }

@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: expected `number`, got `number | Key`
+// A call in the condition invalidates the preceding module-variable guard.
 class Key {
   constructor(private text: string) {}
   toString(): string { return this.text; }

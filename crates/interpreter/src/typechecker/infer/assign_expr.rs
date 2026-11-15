@@ -446,26 +446,123 @@ impl Inferer<'_> {
         Ok(())
     }
 
-    /// The paths the assignments among the typed expressions after `read` and
-    /// up to `end` write.
+    /// Writes evaluated after `read` on the way to `end`. Deferred function
+    /// bodies are opaque; a directly invoked closure contributes its body's effects.
     pub(super) fn writes_between(
         &self,
         read: ExprId,
         end: ExprId,
     ) -> Result<Vec<narrowing::ReferencePath>, crate::compiler_error::CompilerFailure> {
+        use crate::tree_height::{Node, typed_children};
         let mut written = Vec::new();
-        for id in read.0.saturating_add(1)..=end.0 {
-            let TypedExprKind::Sequence { stmts, .. } = &self
-                .typed_ast
-                .try_expr(ExprId(id))
-                .map_err(crate::typechecker::arena_failure)?
-                .kind
-            else {
+        let mut pending = vec![(Node::Expr(end), false)];
+        let mut seen = std::collections::HashSet::new();
+        let mut may_write_globals = false;
+        while let Some((node, invoked_body)) = pending.pop() {
+            if seen.contains(&(node, invoked_body)) {
                 continue;
-            };
-            written.extend(self.sequence_written_path(stmts)?);
+            }
+            seen.try_reserve(1)
+                .map_err(|_| super::inference_failure("cannot allocate effect traversal"))?;
+            seen.insert((node, invoked_body));
+            match node {
+                Node::Expr(id) => {
+                    if !invoked_body && id.0 <= read.0 {
+                        continue;
+                    }
+                    let kind = &self
+                        .typed_ast
+                        .try_expr(id)
+                        .map_err(super::arena_failure)?
+                        .kind;
+                    // Defining a function does not run it. A direct invocation
+                    // adds its body explicitly below, retaining precise IIFE effects.
+                    if matches!(kind, TypedExprKind::Closure { .. }) {
+                        continue;
+                    }
+                    if let TypedExprKind::CallClosure { callee, .. } = kind
+                        && let Some(body) = self.directly_invoked_body(*callee)?
+                    {
+                        pending.try_reserve(1).map_err(|_| {
+                            super::inference_failure("cannot allocate effect traversal")
+                        })?;
+                        // The body is allocated before the arguments, but runs
+                        // after them. Its IDs cannot define the read boundary.
+                        pending.push((
+                            match body {
+                                crate::ClosureBody::Expr(id) => Node::Expr(id),
+                                crate::ClosureBody::Block(id) => Node::Stmt(id),
+                            },
+                            true,
+                        ));
+                    }
+                    may_write_globals |= self.expression_may_write_globals(kind)?;
+                    if let TypedExprKind::Sequence { stmts, .. } = kind
+                        && let Some(path) = self.sequence_written_path(stmts)?
+                    {
+                        written.try_reserve(1).map_err(|_| {
+                            super::inference_failure("cannot allocate effect paths")
+                        })?;
+                        written.push(path);
+                    }
+                    if let TypedExprKind::PostfixUnary {
+                        target: crate::PostfixTarget::Global { mangled, .. },
+                        ..
+                    } = kind
+                    {
+                        written.try_reserve(1).map_err(|_| {
+                            super::inference_failure("cannot allocate effect paths")
+                        })?;
+                        written.push(narrowing::ReferencePath {
+                            root: narrowing::BindingId::Global(mangled.clone()),
+                            chain: Vec::new(),
+                        });
+                    }
+                }
+                Node::Stmt(id) => {
+                    let kind = &self
+                        .typed_ast
+                        .try_stmt(id)
+                        .map_err(super::arena_failure)?
+                        .kind;
+                    may_write_globals |= self.statement_may_write_globals(kind)?;
+                    if let TypedStmtKind::AssignGlobal { mangled, .. } = kind {
+                        written.try_reserve(1).map_err(|_| {
+                            super::inference_failure("cannot allocate effect paths")
+                        })?;
+                        written.push(narrowing::ReferencePath {
+                            root: narrowing::BindingId::Global(mangled.clone()),
+                            chain: Vec::new(),
+                        });
+                    }
+                }
+            }
+            for child in typed_children(&self.typed_ast, node)? {
+                pending
+                    .try_reserve(1)
+                    .map_err(|_| super::inference_failure("cannot allocate effect traversal"))?;
+                pending.push((child, invoked_body));
+            }
+        }
+        if may_write_globals {
+            written.extend(self.function_written_global_paths());
         }
         Ok(written)
+    }
+
+    pub(super) fn directly_invoked_body(
+        &self,
+        callee: ExprId,
+    ) -> Result<Option<crate::ClosureBody>, CompilerFailure> {
+        let kind = &self
+            .typed_ast
+            .try_expr(callee)
+            .map_err(super::arena_failure)?
+            .kind;
+        Ok(match kind {
+            TypedExprKind::Closure { body, .. } => Some(body.clone()),
+            _ => None,
+        })
     }
 
     /// The path an assignment sequence writes, or the root it writes under

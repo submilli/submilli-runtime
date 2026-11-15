@@ -66,8 +66,8 @@ pub fn check_typed(ta: &TypedAst, stage: CompilerStage) -> Result<(), CompilerFa
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Node {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Node {
     Expr(ExprId),
     Stmt(StmtId),
 }
@@ -964,6 +964,18 @@ impl<'a> Iterator for AnnotationChildren<'a> {
             .or_else(|| self.fields.next_back().map(|field| &field.ty))
             .or_else(|| self.members.next_back())
     }
+}
+
+/// Shared typed arena edges, including authored arguments retained outside a call node.
+pub(crate) fn typed_children(
+    ta: &TypedAst,
+    node: Node,
+) -> Result<impl Iterator<Item = Node>, CompilerFailure> {
+    Ok(TypedTree(ta)
+        .node(node)?
+        .children
+        .into_iter()
+        .map(|child| child.node))
 }
 
 struct TypedTree<'a>(&'a TypedAst);

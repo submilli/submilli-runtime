@@ -1,3 +1,6 @@
+// expect-error-count: 1
+// expect-error: cannot read field `concat`
+// A call in the condition invalidates the preceding module-variable guard.
 class Joiner { concat(first: number[], second: number[]): number[] { return first; } }
 let value: number[] | Joiner = new Joiner();
 function change(): boolean { value = [1]; return false; }
