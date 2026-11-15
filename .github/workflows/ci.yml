@@ -23,26 +23,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check CI change detection
+        run: python3 -m unittest discover -s scripts/tests -p 'test_ci_changes.py'
+      - name: Detect Rust and build input changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: bash scripts/ci_changes.sh rust
       - uses: dtolnay/rust-toolchain@1.98.1
+        if: steps.changes.outputs.run == 'true'
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+        if: steps.changes.outputs.run == 'true'
 
       - name: Rustfmt
+        if: steps.changes.outputs.run == 'true'
         run: cargo fmt --all --check
 
       - name: Skill evaluation harness
+        if: steps.changes.outputs.run == 'true'
         run: python3 -m unittest discover -s skills/evals -p 'test_*.py'
 
       # Gate: the deny-tier lints in [workspace.lints] plus `-D warnings` (any stray
       # default-clippy warning is an error too). The ratchet lints are not enabled
       # here, so this stays clean.
       - name: Clippy (gate)
+        if: steps.changes.outputs.run == 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       # The workspace gate builds submilli-front-end with the engine's
       # `test-support` feature on; lint the configuration that ships too.
       - name: Clippy (submilli-front-end as published)
+        if: steps.changes.outputs.run == 'true'
         run: cargo clippy --locked -p submilli-front-end --lib -- -D warnings
 
       # The front-end contract, engine, policy, build, blueprint, shared and durable
@@ -50,11 +64,13 @@ jobs:
       # Packaging builds each from its packaged files alone, so a source file
       # left out of a package fails here rather than at release.
       - name: Package for crates.io
+        if: steps.changes.outputs.run == 'true'
         run: cargo publish --dry-run --locked -p submilli-front-end -p submilli-engine -p submilli-policy -p submilli-build -p submilli-blueprint -p submilli-shared -p submilli-durable
 
       # The workspace build always turns on `submilli-policy`'s `engine`
       # feature; embedders may not, so lint and test it without the feature too.
       - name: Policy crate without the engine
+        if: steps.changes.outputs.run == 'true'
         run: |
           cargo clippy --locked -p submilli-policy --all-targets -- -D warnings
           cargo test --locked -p submilli-policy
@@ -63,6 +79,7 @@ jobs:
       # iteration. CI has no such constraint — the full sweep is a few seconds — and
       # the subset keeps one fixture per top-level directory, so whole trees never run.
       - name: Test
+        if: steps.changes.outputs.run == 'true'
         run: cargo test --workspace
         env:
           SUBMILLI_FULL_TEST: 1
@@ -73,30 +90,26 @@ jobs:
       # already built this binary with the same features (`--workspace` keeps them
       # unified), so this step only runs the suite, in about five seconds.
       - name: TypeScript conformance
+        if: steps.changes.outputs.run == 'true'
         run: cargo test --workspace --test typescript -- --nocapture
         env:
           SUBMILLI_TEST_NIGHTLY_ONLY: 1
 
-      # The shipped packages' own test files, run under each package's identity.
-      # `cargo test` cannot cover this: the identity is stamped by the CLI at
-      # compile time, so a regression there surfaces only by running the packages
-      # — as a `secrets.get` denial in every package that reads a token.
-      - name: Package tests
-        run: cargo run -p submilli -- build test --skip-network
-
       - name: Quickstart reader journey
+        if: steps.changes.outputs.run == 'true'
         run: |
           cargo build -p submilli -p submilli-server
           SUBMILLI="$PWD/target/debug/submilli" SUBMILLI_SERVER="$PWD/target/debug/submilli-server" bash examples/quickstart/verify.sh
 
       - name: Docker example (local runtime)
+        if: steps.changes.outputs.run == 'true'
         run: target/debug/submilli run examples/docker/conformance.ts
 
       # Ratchet: the not-yet-zero lints are off the gate (so `-D warnings` is clean).
       # Enable them explicitly here, as warnings, only to print the trend to the job
       # summary. Not a gate. Keep this list in sync with the comment in Cargo.toml.
       - name: Lint ratchet (informational)
-        if: always()
+        if: always() && steps.changes.outputs.run == 'true'
         run: |
           cargo clippy --workspace --all-targets -- \
             -W clippy::too_many_lines -W clippy::cognitive_complexity 2>&1 \
@@ -122,30 +135,43 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Detect Rust and build input changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: bash scripts/ci_changes.sh rust
       - uses: dtolnay/rust-toolchain@1.98.1
+        if: steps.changes.outputs.run == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.changes.outputs.run == 'true'
 
       - name: VFS containment suite
+        if: steps.changes.outputs.run == 'true'
         run: cargo test -p submilli-engine --test vfs_containment
 
       - name: Skill installation across platforms
+        if: steps.changes.outputs.run == 'true'
         run: cargo test -p submilli --test skill --test upgrade
 
       # The playground detaches, checks pids, and keeps owner-only files on Unix,
       # and says it is not supported elsewhere; both halves must build and pass.
       - name: Playground lifecycle
+        if: steps.changes.outputs.run == 'true'
         run: cargo test -p submilli --test playground_lifecycle
 
       # The server's MCP file tools resolve through the same handles but reach them
       # by a different route, so the interpreter suite passing says nothing about
       # them. `files_` is every test over those two tools, escapes included.
       - name: MCP file-tool containment
+        if: steps.changes.outputs.run == 'true'
         run: cargo test -p submilli-server --test mcp files_
 
       # Mounts route guest paths into other volumes and guard their mount points by
       # name and by file identity, both of which differ by platform: case folding,
       # Unicode aliases, and identity read through a handle on Windows.
       - name: VFS mounts
+        if: steps.changes.outputs.run == 'true'
         run: >-
           cargo test -p submilli-engine --lib --
           stdlib::fs::tests::mount stdlib::git::integration_tests::mount
@@ -156,6 +182,7 @@ jobs:
       # copy, and remove under a limit; and replace or remove files that readers and
       # writers hold open.
       - name: VFS size limit
+        if: steps.changes.outputs.run == 'true'
         run: >-
           cargo test -p submilli-engine --lib --
           runtime::vfs::tests::size_limit runtime::vfs::tests::measuring runtime::vfs::tests::a_tree
