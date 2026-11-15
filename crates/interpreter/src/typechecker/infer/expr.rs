@@ -6635,6 +6635,11 @@ impl Inferer<'_> {
     fn union_object_shapes(&self, union_members: &[Type]) -> Option<Vec<ObjectFields>> {
         let mut shapes = Vec::new();
         for member in union_members {
+            if matches!(member.peel(), Type::InterfaceRef { mangled, .. }
+                if mangled == &crate::mangle::prelude("Object"))
+            {
+                return None;
+            }
             if is_primitive(member) {
                 continue;
             }
@@ -6934,7 +6939,8 @@ impl Inferer<'_> {
                         name,
                         args,
                     },
-                ) if !assignable::is_host_backed_interface(interface)
+                ) if mangled != &crate::mangle::prelude("Object")
+                    && !assignable::is_host_backed_interface(interface)
                     && !assignable::interface_has_signature(interface, self.resolver()) =>
                 {
                     Some((package.clone(), name.clone(), mangled.clone(), args.clone()))
@@ -13142,6 +13148,7 @@ impl Inferer<'_> {
         for ((part, asserted), ends_or_short_circuits) in
             parts.into_iter().zip(asserted).zip(ends_or_short_circuits)
         {
+            let authored_optional = part.is_optional();
             let checks_missing_receiver = part.is_optional() && receiver_may_miss;
             let apparent = self.constraint_receiver_type(&receiver_ty, part.span())?;
             self.report_unreadable_form(&receiver_ty, &apparent, part.span());
@@ -13235,6 +13242,7 @@ impl Inferer<'_> {
             // element. It returns the new part to push and the
             // resulting type.
             self.pending_read = None;
+            let part_span = part.span();
             let (mut typed_part, mut next_ty) = self.infer_chain_part(
                 &effective_recv,
                 step_path.as_ref(),
@@ -13242,6 +13250,24 @@ impl Inferer<'_> {
                 &mut typed_parts,
                 &mut pending_method,
             )?;
+            // Static nullability controls inference, but a live property can
+            // later be missing. Preserve authored member short-circuiting for
+            // emission when runtime value tracking widens its receiver.
+            if authored_optional {
+                match &mut typed_part {
+                    TypedChainPart::Field { optional, .. }
+                    | TypedChainPart::Index { optional, .. }
+                    | TypedChainPart::Call { optional, .. }
+                    | TypedChainPart::InterfaceProperty { optional, .. } => *optional = true,
+                    _ => {}
+                }
+            }
+            // Each chain step is a member read, just like a standalone expression:
+            // expand recursive alias back-edges before the next step uses them.
+            next_ty = self
+                .rehydrate_and_evaluate(&next_ty)
+                .map_err(super::type_limit_at(part_span))?;
+            typed_part.set_result_ty(next_ty.clone());
             let missable = matches!(self.pending_read.take(), Some(PendingRead::Missable))
                 && !asserted
                 && !next_ty.holds_undefined()

@@ -449,7 +449,10 @@ fn emit_ref_truthiness(
         .iter()
         .filter(|m| !matches!(m.lowered(), Type::Null))
         .map(|m| match m.lowered() {
-            Type::Void => Dynamic,
+            // Structural interfaces can hold boxed primitives. Their runtime
+            // truthiness follows the value, even when narrowing treats the
+            // interface as an object type.
+            Type::Void | Type::InterfaceRef { .. } => Dynamic,
             Type::Undefined => AlwaysFalsy,
             _ => truthiness_class(m),
         })

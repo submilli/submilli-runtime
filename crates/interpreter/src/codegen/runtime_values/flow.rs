@@ -268,6 +268,7 @@ fn connect_reads(
     seed_imported_callbacks(ast, dependencies, flow)?;
     for id in ast.expr_ids().map_err(crate::codegen::arena_failure)? {
         connect_expression(ast, id, flow)?;
+        seed_interface_logical_operand(ast, id, flow)?;
         seed_imported_read(ast, dependencies, id, flow)?;
         seed_never_read(ast, id, flow)?;
         if let Some(name) = locals.reads.get(&id) {
@@ -282,6 +283,31 @@ fn connect_reads(
             }
         }
         connect_live_narrow_read(ast, lowered, locals, sources, id, flow)?;
+    }
+    Ok(())
+}
+
+/// An interface's static truthy narrowing does not describe its boxed
+/// primitive values. Keep both short-circuit outcomes in erased storage.
+fn seed_interface_logical_operand(
+    ast: &TypedAst,
+    id: ExprId,
+    flow: &mut Flow,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let expr = ast.try_expr(id).map_err(crate::codegen::arena_failure)?;
+    if let TypedExprKind::Binary {
+        op: BinOp::And | BinOp::Or,
+        lhs,
+        ..
+    } = &expr.kind
+    {
+        let ty = &ast
+            .try_expr(*lhs)
+            .map_err(crate::codegen::arena_failure)?
+            .ty;
+        if ty.any_member(&|member| matches!(member, Type::InterfaceRef { .. })) {
+            flow.widened.insert(Place::Expr(*lhs));
+        }
     }
     Ok(())
 }

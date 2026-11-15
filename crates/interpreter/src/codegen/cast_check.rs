@@ -1354,7 +1354,14 @@ fn emit_interface_test_inner(
     }
 
     if !test.shape_allowed {
-        emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
+        emit_non_shape_interface_test(
+            emitter,
+            ctx,
+            value_local,
+            test,
+            interface_stack,
+            validator_state,
+        )?;
         if test.nullable || test.undefined {
             emitter.emit_end();
         }
@@ -1445,10 +1452,24 @@ fn emit_interface_test_inner(
     // an inert receiver carrier (for example TextEncoder/TextDecoder); their
     // methods are host imports, not payload slots. Admit those exact carriers
     // alongside ordinary structural conformance.
-    emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
+    emit_non_shape_interface_test(
+        emitter,
+        ctx,
+        value_local,
+        test,
+        interface_stack,
+        validator_state,
+    )?;
     emitter.instruction(Instruction::I32Or);
     emitter.emit_else();
-    emit_non_shape_interface_test(emitter, ctx, value_local, test, validator_state)?;
+    emit_non_shape_interface_test(
+        emitter,
+        ctx,
+        value_local,
+        test,
+        interface_stack,
+        validator_state,
+    )?;
     emitter.emit_end();
 
     if test.nullable || test.undefined {
@@ -1471,6 +1492,7 @@ fn emit_non_shape_interface_test(
     ctx: &CodegenCtx,
     value_local: u32,
     test: &crate::InterfaceNarrowingTest,
+    interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     use crate::InterfaceCarrier;
@@ -1489,7 +1511,7 @@ fn emit_non_shape_interface_test(
                 ctx,
                 value_local,
                 &Type::Array(Box::new(Type::Unknown)),
-                &mut std::collections::BTreeSet::new(),
+                interface_stack,
                 validator_state,
             )?,
             InterfaceCarrier::Array(ty) | InterfaceCarrier::Function(ty) => {
@@ -1498,7 +1520,7 @@ fn emit_non_shape_interface_test(
                     ctx,
                     value_local,
                     ty,
-                    &mut std::collections::BTreeSet::new(),
+                    interface_stack,
                     validator_state,
                 )?;
             }
@@ -1514,11 +1536,26 @@ fn emit_non_shape_interface_test(
             InterfaceCarrier::Uint8Array => emit_ref_test(emitter, value_local, intr.uint8_array),
             InterfaceCarrier::MapAny => emit_ref_test(emitter, value_local, intr.map),
             InterfaceCarrier::Map(key, value) => {
-                emit_map_carrier_test(emitter, ctx, value_local, key, value, validator_state)?;
+                emit_map_carrier_test(
+                    emitter,
+                    ctx,
+                    value_local,
+                    key,
+                    value,
+                    interface_stack,
+                    validator_state,
+                )?;
             }
             InterfaceCarrier::SetAny => emit_ref_test(emitter, value_local, intr.set),
             InterfaceCarrier::Set(element) => {
-                emit_set_carrier_test(emitter, ctx, value_local, element, validator_state)?;
+                emit_set_carrier_test(
+                    emitter,
+                    ctx,
+                    value_local,
+                    element,
+                    interface_stack,
+                    validator_state,
+                )?;
             }
             InterfaceCarrier::RegExp => emit_ref_test(emitter, value_local, intr.regex),
             InterfaceCarrier::RegExpMatch => {
@@ -1690,6 +1727,7 @@ fn emit_set_carrier_test(
     ctx: &CodegenCtx,
     value_local: u32,
     element: &Type,
+    interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
@@ -1734,6 +1772,7 @@ fn emit_set_carrier_test(
             order,
         },
         &[(elements, element)],
+        interface_stack,
         validator_state,
     )?;
     emitter.emit_else();
@@ -1748,6 +1787,7 @@ fn emit_map_carrier_test(
     value_local: u32,
     key: &Type,
     value: &Type,
+    interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
@@ -1802,6 +1842,7 @@ fn emit_map_carrier_test(
             order,
         },
         &[(keys, key), (values, value)],
+        interface_stack,
         validator_state,
     )?;
     emitter.emit_else();
@@ -1815,6 +1856,7 @@ fn emit_ordered_collection_members_test(
     ctx: &CodegenCtx,
     storage: CollectionStorage,
     payloads: &[(u32, &Type)],
+    interface_stack: &mut std::collections::BTreeSet<Type>,
     validator_state: Option<ValidatorState>,
 ) -> Result<(), crate::compiler_error::CompilerFailure> {
     let intr = ctx
@@ -1862,14 +1904,7 @@ fn emit_ordered_collection_members_test(
         emitter.instruction(Instruction::ArrayGet(intr.raw_array));
         emitter.instruction(Instruction::LocalSet(member));
         emitter.instruction(Instruction::LocalGet(acc));
-        emit_structural_test_inner(
-            emitter,
-            ctx,
-            member,
-            ty,
-            &mut std::collections::BTreeSet::new(),
-            validator_state,
-        )?;
+        emit_structural_test_inner(emitter, ctx, member, ty, interface_stack, validator_state)?;
         diagnostic::pop(emitter, member_path);
         diagnostic::pop(emitter, parent_path);
         emitter.instruction(Instruction::I32And);
