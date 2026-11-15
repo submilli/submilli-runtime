@@ -1962,3 +1962,359 @@ fn a_function_set_compiles_from_a_worker_sized_thread() {
         .expect("the worker-sized thread does not panic");
     assert_eq!(compiled, 2);
 }
+
+#[test]
+fn invoke_temporal_arguments_from_json() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let cases = [
+            (
+                "Instant",
+                r#""2026-10-15T06:00:00Z""#,
+                "2026-10-15T06:00:00Z",
+            ),
+            (
+                "Instant",
+                r#""2026-10-15T09:00:00+03:00[Asia/Jerusalem]""#,
+                "2026-10-15T06:00:00Z",
+            ),
+            (
+                "ZonedDateTime",
+                r#""2026-10-15T09:00:00+03:00[Asia/Jerusalem]""#,
+                "2026-10-15T09:00:00+03:00[Asia/Jerusalem]",
+            ),
+            (
+                "ZonedDateTime",
+                r#"{"timeZone":"Asia/Jerusalem","year":2026,"month":10,"day":15,"hour":9}"#,
+                "2026-10-15T09:00:00+03:00[Asia/Jerusalem]",
+            ),
+            (
+                "PlainDateTime",
+                r#""2026-10-15T09:30:00""#,
+                "2026-10-15T09:30:00",
+            ),
+            (
+                "PlainDateTime",
+                r#"{"year":2026,"month":10,"day":15,"hour":9,"minute":30}"#,
+                "2026-10-15T09:30:00",
+            ),
+            ("PlainDate", r#""2026-10-15""#, "2026-10-15"),
+            ("PlainTime", r#""09:30:00""#, "09:30:00"),
+            ("PlainYearMonth", r#""2026-10""#, "2026-10"),
+            ("PlainMonthDay", r#""10-15""#, "10-15"),
+            ("Duration", r#""PT90M""#, "PT90M"),
+            ("Duration", r#"{"hours":1,"minutes":30}"#, "PT1H30M"),
+        ];
+        for (ty, input, expected) in cases {
+            let source = format!(
+                "export function run(at: Temporal.{ty}): string {{ return at.toString(); }}"
+            );
+            let set = FunctionSet::new(vec![def(
+                "temporal-argument",
+                "Accept a Temporal value.",
+                &source,
+            )]);
+            let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
+            let data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+            let mut store = cfg.store(&engine, data).expect("store");
+            {
+                let invalid = r#""not-temporal""#;
+                let error = invoke_function_async(
+                    &mut store,
+                    &compiled,
+                    &[],
+                    "temporal-argument",
+                    &[invalid],
+                )
+                .await
+                .expect_err("invalid Temporal input");
+                assert!(
+                    matches!(error, FunctionError::InvalidArguments(_)),
+                    "{ty}({invalid}): {error}"
+                );
+            }
+            let out =
+                invoke_function_async(&mut store, &compiled, &[], "temporal-argument", &[input])
+                    .await
+                    .unwrap_or_else(|err| panic!("{ty}({input}): {err}"));
+            assert_eq!(
+                out.as_deref(),
+                Some(serde_json::to_string(expected).expect("json").as_str()),
+                "{ty}({input})"
+            );
+        }
+    });
+}
+
+#[test]
+fn invoke_nested_temporal_arguments_before_effects() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let set = FunctionSet::new(vec![def(
+            "nested-temporal",
+            "Build nested Temporal arguments.",
+            r#"
+            import * as http from "submilli:http";
+            export type Tick = Temporal.Instant;
+            export interface Input { at: Tick; limit: number; optional?: Temporal.PlainDate; }
+            export function run(input: Input, times: Temporal.PlainTime[], pair: [Temporal.PlainDateTime, string], ...durations: Temporal.Duration[]): string {
+                http.get("https://temporal.example/effect");
+                return `${input.at.toString()}|${input.limit}|${input.optional?.toString() ?? "missing"}|${times[0].toString()}|${pair[0].toString()}|${pair[1]}|${durations[0].toString()}`;
+            }
+        "#,
+        )]);
+        let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
+        let http = MockHttp::scripted(vec![MockHttp::ok_json(
+            "https://temporal.example/effect",
+            "{}",
+        )]);
+        let mut data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+        data.security_check = Arc::new(AllowAllSecurityCheck);
+        data.http_client = http.clone();
+        let mut store = cfg.store(&engine, data).expect("store");
+        let valid = [
+            r#"{"at":"2026-10-15T06:00:00Z","limit":3}"#,
+            r#"["09:30:00"]"#,
+            r#"["2026-10-15T09:30:00","tag"]"#,
+            r#"{"minutes":90}"#,
+        ];
+        for (position, invalid) in [
+            (0, r#"{"at":"bad","limit":3}"#),
+            (0, r#"{"at":"2026-10-15T06:00:00Z","limit":"bad"}"#),
+            (1, r#"["bad"]"#),
+            (2, r#"["bad","tag"]"#),
+            (3, r#"{"minutes":"bad"}"#),
+        ] {
+            let mut args = valid;
+            args[position] = invalid;
+            let error = invoke_function_async(&mut store, &compiled, &[], "nested-temporal", &args)
+                .await
+                .expect_err("invalid before effect");
+            assert!(
+                matches!(error, FunctionError::InvalidArguments(_)),
+                "{error}"
+            );
+            assert!(
+                http.call_count() == 0,
+                "invalid invocation performed an effect"
+            );
+        }
+        let out = invoke_function_async(&mut store, &compiled, &[], "nested-temporal", &valid)
+            .await
+            .expect("valid after failures");
+        assert_eq!(
+            out.as_deref(),
+            Some(r#""2026-10-15T06:00:00Z|3|missing|09:30:00|2026-10-15T09:30:00|tag|PT90M""#)
+        );
+        assert_eq!(http.call_count(), 1);
+    });
+}
+
+#[test]
+fn invoke_temporal_unions_recursive_aliases_and_index_domains() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let cases = [
+            (
+                "export function run(at: Temporal.PlainDate | Temporal.PlainTime): boolean { return true; }",
+                r#""09:30:00""#,
+                "true",
+            ),
+            (
+                "export function run(at: Temporal.Instant | null): string { return at?.toString() ?? 'null'; }",
+                "null",
+                r#""null""#,
+            ),
+            (
+                "export function run(at: Temporal.Instant | string): string { return typeof at === 'string' ? at : at.toString(); }",
+                r#""plain text""#,
+                r#""plain text""#,
+            ),
+            (
+                "export type Input = { at: Temporal.Instant; next: Input | null }; export function run(input: Input): string { return input.next?.at.toString() ?? input.at.toString(); }",
+                r#"{"at":"2026-10-15T06:00:00Z","next":{"at":"2026-10-16T06:00:00Z","next":null}}"#,
+                r#""2026-10-16T06:00:00Z""#,
+            ),
+            (
+                "export interface Input { [key: `at_${string}`]: Temporal.Instant; [key: `n_${string}`]: number; } export function run(input: Input): string { return `${input.at_x.toString()}|${input.n_x}`; }",
+                r#"{"at_x":"2026-10-15T06:00:00Z","n_x":3}"#,
+                r#""2026-10-15T06:00:00Z|3""#,
+            ),
+            (
+                "export interface Input { at: Temporal.Instant; [key: string]: Temporal.Instant | string } export function run(input: Input): string { return input.at.toString(); }",
+                r#"{"at":"2026-10-15T06:00:00Z","note":"text"}"#,
+                r#""2026-10-15T06:00:00Z""#,
+            ),
+            (
+                "export function run(input: { at: Temporal.Instant; tag: string | undefined } | null): string { return input?.at.toString() ?? 'null'; }",
+                r#"{"at":"2026-10-15T06:00:00Z"}"#,
+                r#""2026-10-15T06:00:00Z""#,
+            ),
+            (
+                "export interface Input { [key: string]: { instant: Temporal.Instant | string }; [key: `at_${string}`]: { instant: Temporal.Instant; date: Temporal.PlainDate }; } export function run(input: Input): boolean { return true; }",
+                r#"{"at_both":{"instant":"2026-10-15T06:00:00Z","date":"2026-10-15"}}"#,
+                "true",
+            ),
+            (
+                "export interface Input { [key: string]: { at: Temporal.Instant } | { at: Temporal.PlainDate }; [key: `date_${string}`]: { at: Temporal.PlainDate }; } export function run(input: Input): boolean { return true; }",
+                r#"{"date_x":{"at":"2026-10-15T09:00:00+03:00"}}"#,
+                "true",
+            ),
+            (
+                "export interface Input { [key: string]: Temporal.PlainDate | Temporal.PlainDateTime | Temporal.PlainYearMonth; [key: `at_${string}`]: Temporal.PlainDateTime | Temporal.PlainYearMonth; } export function run(input: Input): boolean { return true; }",
+                r#"{"at_x":{"year":2026,"month":10,"day":15}}"#,
+                "true",
+            ),
+            (
+                "export function run(input: {at: Temporal.Instant; value: {} | null}): boolean { return true; }",
+                r#"{"at":"2026-10-15T06:00:00Z","value":3}"#,
+                "true",
+            ),
+            (
+                "export function run(input: {at: Temporal.Instant; value: {} | null}): boolean { return true; }",
+                r#"{"at":"2026-10-15T06:00:00Z","value":[1]}"#,
+                "true",
+            ),
+            (
+                "export interface Input { at: Temporal.Instant; [key: string]: {} } export function run(input: Input): string { return input.at.toString(); }",
+                r#"{"at":"2026-10-15T06:00:00Z"}"#,
+                r#""2026-10-15T06:00:00Z""#,
+            ),
+            (
+                "export function run(input: {at: Temporal.Instant; match: RegExpMatchArray | null}): number { return input.match?.length ?? 0; }",
+                r#"{"at":"2026-10-15T06:00:00Z","match":["a"]}"#,
+                "1",
+            ),
+            (
+                r#"export function run(input: {"\ud800": Temporal.Instant}): string { return input["\ud800"].toString(); }"#,
+                r#"{"\ud800":"2026-10-15T06:00:00Z"}"#,
+                r#""2026-10-15T06:00:00Z""#,
+            ),
+            (
+                r#"export function run(input: {"\u{10fffe}": Temporal.Instant}): string { return input["\u{10fffe}"].toString(); }"#,
+                r#"{"\udbff\udffe":"2026-10-15T06:00:00Z"}"#,
+                r#""2026-10-15T06:00:00Z""#,
+            ),
+        ];
+        for (source, input, expected) in cases {
+            let set = FunctionSet::new(vec![def(
+                "temporal-argument",
+                "Accept Temporal containers.",
+                source,
+            )]);
+            let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
+            let data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+            let mut store = cfg.store(&engine, data).expect("store");
+            let out =
+                invoke_function_async(&mut store, &compiled, &[], "temporal-argument", &[input])
+                    .await
+                    .unwrap_or_else(|err| panic!("{source}: {err}"));
+            assert_eq!(out.as_deref(), Some(expected), "{source}");
+        }
+    });
+}
+
+#[test]
+fn invoke_invalid_temporal_precedes_module_initializer() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig::default();
+        let engine = cfg.engine().expect("engine");
+        let package = compile_package(
+            "@test/temporal",
+            ModulePath::from("index"),
+            &[PackageSourceModule {
+                path: ModulePath::from("index"),
+                source: r#"import * as http from "submilli:http";
+                const initialized = http.get("https://temporal.example/dependency");
+                export function status(): number { return initialized.status; }"#,
+            }],
+            &[],
+        )
+        .expect("compile dependency");
+        let module = Module::new(&engine, &package.wasm).expect("dependency module");
+        let linked = [LinkedPackageModule {
+            module: &module,
+            declaration: &package.declaration,
+            type_info: &package.type_info,
+        }];
+        let set = FunctionSet::new(vec![def(
+            "temporal-initializer",
+            "Validate before initialization.",
+            r#"
+            import * as http from "submilli:http";
+            import { status } from "@test/temporal";
+            const initialized = http.get("https://temporal.example/initialize");
+            export function run(at: Temporal.Instant): string { return `${at.toString()}|${initialized.status}|${status()}`; }
+        "#,
+        )]);
+        let compiled = compile_function_set(&engine, &set, &[&package.declaration], &[], None)
+            .expect("compile");
+        let http = MockHttp::scripted(vec![
+            MockHttp::ok_json("https://temporal.example/dependency", "{}"),
+            MockHttp::ok_json("https://temporal.example/initialize", "{}"),
+        ]);
+        let history = MemoryHistory::new();
+        let mut data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+        data.security_check = Arc::new(AllowAllSecurityCheck);
+        data.http_client = http.clone();
+        data.effects = Some(history.clone());
+        let mut store = cfg.store(&engine, data).expect("store");
+        let error = invoke_function_async(
+            &mut store,
+            &compiled,
+            &linked,
+            "temporal-initializer",
+            &[r#""bad""#],
+        )
+        .await
+        .expect_err("invalid before initialization");
+        assert!(
+            matches!(error, FunctionError::InvalidArguments(_)),
+            "{error}"
+        );
+        assert_eq!(http.call_count(), 0);
+        assert_eq!(history.recorded_len(), 0);
+        let out = invoke_function_async(
+            &mut store,
+            &compiled,
+            &linked,
+            "temporal-initializer",
+            &[r#""2026-10-15T06:00:00Z""#],
+        )
+        .await
+        .expect("healthy invocation after rejection");
+        assert_eq!(out.as_deref(), Some(r#""2026-10-15T06:00:00Z|200|200""#));
+        assert_eq!(http.call_count(), 2);
+        assert_eq!(history.recorded_len(), 2);
+    });
+}
+
+#[test]
+fn invoke_temporal_construction_preserves_budget_errors() {
+    run_async_on_stack(|| async {
+        let cfg = RuntimeConfig {
+            fuel: 2_500,
+            ..RuntimeConfig::default()
+        };
+        let engine = cfg.engine().expect("engine");
+        let set = FunctionSet::new(vec![def(
+            "temporal-budget",
+            "Bound construction work.",
+            "export function run(values: (Temporal.Instant | Temporal.PlainDate)[]): number { return values.length; }",
+        )]);
+        let compiled = compile_function_set(&engine, &set, &[], &[], None).expect("compile");
+        let input = serde_json::to_string(&vec!["2026-10-15T06:00:00Z"; 10]).expect("json");
+        let data = StoreData::with_vfs("temporal-invoke".into(), Vfs::tempdir().expect("vfs"));
+        let mut store = cfg.store(&engine, data).expect("store");
+        let error = invoke_function_async(&mut store, &compiled, &[], "temporal-budget", &[input])
+            .await
+            .expect_err("construction exceeds fuel");
+        assert!(
+            matches!(error, FunctionError::BudgetExhausted(_)),
+            "{error}"
+        );
+    });
+}

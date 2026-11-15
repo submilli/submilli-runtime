@@ -1235,6 +1235,12 @@ pub struct FunctionInvokePlan {
 pub enum FunctionArgumentCheck {
     /// Castable from `unknown` (`JSON.parse` output) via `value as T`.
     Checked(Box<FinalizerArgumentCheck>),
+    /// Build Temporal leaves using their `from` constructors before checking.
+    Temporal {
+        check: Box<FinalizerArgumentCheck>,
+        /// Reduced bodies reached through recursive alias back-edges.
+        aliases: std::collections::BTreeMap<Type, Type>,
+    },
     /// Not runtime-castable from JSON (e.g. a closure or nominal class).
     /// Compilation still succeeds for guest `@functions` callers; direct host
     /// invocation rejects supplying this parameter with `InvalidArguments`.

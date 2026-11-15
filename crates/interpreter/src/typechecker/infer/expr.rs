@@ -4717,17 +4717,29 @@ impl Inferer<'_> {
         }
         let mut arguments = Vec::with_capacity(params.len());
         for param in params {
-            match self.as_check_shape(&param.ty) {
-                Ok(check) => {
+            let shape = self.reduce_enums_to_members(&self.reduce_cast_target(&param.ty));
+            match unsupported_invoke_target_reason(&shape, self.resolver(), &mut Vec::new()) {
+                None => {
                     self.record_runtime_type_test(&param.ty)?;
-                    arguments.push(crate::FunctionArgumentCheck::Checked(Box::new(
-                        crate::FinalizerArgumentCheck {
-                            target: param.ty.clone(),
-                            check,
-                        },
-                    )));
+                    let check = Box::new(crate::FinalizerArgumentCheck {
+                        target: param.ty.clone(),
+                        check: shape,
+                    });
+                    arguments.push(if self.as_check_shape(&param.ty).is_ok() {
+                        crate::FunctionArgumentCheck::Checked(check)
+                    } else {
+                        let mut aliases = BTreeMap::new();
+                        let result = self.collect_invoke_aliases(
+                            &check.check,
+                            &mut aliases,
+                            &mut self.type_limits.budget(),
+                            1,
+                        );
+                        self.type_limits.ok_or_record(result);
+                        crate::FunctionArgumentCheck::Temporal { check, aliases }
+                    });
                 }
-                Err(reason) => {
+                Some(reason) => {
                     arguments.push(crate::FunctionArgumentCheck::Uncastable {
                         reason: reason.to_string(),
                     });
@@ -4739,6 +4751,34 @@ impl Inferer<'_> {
             return_type: ret.clone(),
         });
         Ok(())
+    }
+
+    fn collect_invoke_aliases(
+        &self,
+        ty: &Type,
+        aliases: &mut BTreeMap<Type, Type>,
+        budget: &mut TypeBudget<'_>,
+        depth: u32,
+    ) -> Result<(), TypeTooLarge> {
+        budget.charge(depth)?;
+        if matches!(ty.peel(), Type::AliasRef { .. }) {
+            let key = ty.peel();
+            if aliases.contains_key(key) {
+                return Ok(());
+            }
+            let body = assignable::expand_alias_ref(key, self.resolver());
+            let shape = self.reduce_enums_to_members(&self.reduce_cast_target(&body));
+            aliases.insert(key.clone(), shape.clone());
+            return self.collect_invoke_aliases(&shape, aliases, budget, depth.saturating_add(1));
+        }
+        let mut result = Ok(());
+        crate::type_size::for_each_child(ty, |child| {
+            if result.is_ok() {
+                result =
+                    self.collect_invoke_aliases(child, aliases, budget, depth.saturating_add(1));
+            }
+        });
+        result
     }
 
     /// dispatch a `<ns>.<member>(args)` call where `<ns>` is
@@ -15833,10 +15873,27 @@ fn cast_gate_help(reason: &str, general: String) -> Vec<String> {
 /// runtime. A leftover `InterfaceRef` here is one that reduction keeps: a
 /// host-backed interface, which no cast can produce, or one it could not
 /// expand, method-bearing (nominal) or recursive/mutually-recursive.
+fn unsupported_invoke_target_reason(
+    target_ty: &Type,
+    types: super::assignable::TypeResolver,
+    seen: &mut Vec<Type>,
+) -> Option<&'static str> {
+    unsupported_target_reason(target_ty, types, seen, true)
+}
+
 fn unsupported_cast_target_reason(
     target_ty: &Type,
     types: super::assignable::TypeResolver,
     seen: &mut Vec<Type>,
+) -> Option<&'static str> {
+    unsupported_target_reason(target_ty, types, seen, false)
+}
+
+fn unsupported_target_reason(
+    target_ty: &Type,
+    types: super::assignable::TypeResolver,
+    seen: &mut Vec<Type>,
+    invoke: bool,
 ) -> Option<&'static str> {
     // `Uppercase<string>` is a `string` the mapping leaves unchanged, a set no
     // run-time string test describes.
@@ -15872,16 +15929,18 @@ fn unsupported_cast_target_reason(
             .values()
             .map(|f| &f.ty)
             .chain(crate::stored_index_signatures(index, more_indexes).map(|i| i.value.as_ref()))
-            .find_map(|ty| unsupported_cast_target_reason(ty, types, seen)),
-        Type::Array(elem) => unsupported_cast_target_reason(elem, types, seen),
+            .find_map(|ty| unsupported_target_reason(ty, types, seen, invoke)),
+        Type::Array(elem) => unsupported_target_reason(elem, types, seen, invoke),
         Type::Tuple(elems) => elems
             .iter()
-            .find_map(|e| unsupported_cast_target_reason(e, types, seen)),
+            .find_map(|e| unsupported_target_reason(e, types, seen, invoke)),
         Type::Union(members) => members
             .iter()
-            .find_map(|m| unsupported_cast_target_reason(m, types, seen)),
+            .find_map(|m| unsupported_target_reason(m, types, seen, invoke)),
         Type::InterfaceRef { mangled, name, .. } => {
-            if peeled.is_regexp_match_array() {
+            if (invoke && crate::functions::temporal_constructor(peeled).is_some())
+                || peeled.is_regexp_match_array()
+            {
                 None
             } else if assignable::is_host_backed_interface(peeled) {
                 Some(HOST_BACKED_TARGET)
@@ -15914,7 +15973,7 @@ fn unsupported_cast_target_reason(
             if matches!(expanded, Type::AliasRef { .. }) {
                 return Some("recursive type targets need a recursive structural check at runtime");
             }
-            unsupported_cast_target_reason(&expanded, types, seen)
+            unsupported_target_reason(&expanded, types, seen, invoke)
         }
         // Infer reduces an enum to its variant values before asking, so one
         // left here sits behind a recursive alias it doesn't expand.
@@ -15932,7 +15991,7 @@ fn unsupported_cast_target_reason(
         Type::Error => None,
         Type::Alias { ty: underlying, .. }
         | Type::Refined { ty: underlying, .. }
-        | Type::Readonly(underlying) => unsupported_cast_target_reason(underlying, types, seen),
+        | Type::Readonly(underlying) => unsupported_target_reason(underlying, types, seen, invoke),
     }
 }
 

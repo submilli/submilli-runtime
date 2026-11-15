@@ -209,7 +209,9 @@ impl CodegenAnalysis {
                 .string_pool
                 .intern_text(super::function_emitter::json::FUNCTION_RETURN_NOT_JSON_MESSAGE);
             for argument in &plan.arguments {
-                if let crate::FunctionArgumentCheck::Checked(check) = argument {
+                if let crate::FunctionArgumentCheck::Checked(check)
+                | crate::FunctionArgumentCheck::Temporal { check, .. } = argument
+                {
                     analysis.note_cast(&check.target, Some(&check.check))?;
                 }
             }

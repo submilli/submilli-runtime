@@ -953,6 +953,11 @@ fn stringify_space_from_number(space: f64) -> String {
     " ".repeat((space.floor() as usize).min(10))
 }
 
+pub(crate) enum JsonChild<'a> {
+    Element(usize),
+    Field(&'a [u16]),
+}
+
 pub(crate) struct JsonUnknownAllocator {
     string_pre: StructRefPre,
     boxed_number_pre: StructRefPre,
@@ -1024,6 +1029,17 @@ impl JsonUnknownAllocator {
         ctx: &mut impl AsContextMut<Data = StoreData>,
         value: &JsonValue,
     ) -> wasmtime::Result<Val> {
+        self.allocate_with_children(ctx, value, |ctx, _, child| self.allocate(ctx, child))
+    }
+
+    /// Allocate a JSON container, allowing its caller to build each child.
+    /// The parsed JSON reader bounds nesting before either allocator walks it.
+    pub(crate) fn allocate_with_children<C: AsContextMut<Data = StoreData>>(
+        &self,
+        ctx: &mut C,
+        value: &JsonValue,
+        mut allocate_child: impl FnMut(&mut C, JsonChild<'_>, &JsonValue) -> wasmtime::Result<Val>,
+    ) -> wasmtime::Result<Val> {
         // One GC value per node; strings and arrays charge their own copies.
         fuel::charge(&mut *ctx, fuel::ELEM, 1)?;
         match value {
@@ -1062,8 +1078,8 @@ impl JsonUnknownAllocator {
                 elements
                     .try_reserve_exact(items.len())
                     .map_err(crate::runtime::host::fatal_host_error)?;
-                for item in items {
-                    elements.push(self.allocate(&mut *ctx, item)?);
+                for (index, item) in items.iter().enumerate() {
+                    elements.push(allocate_child(ctx, JsonChild::Element(index), item)?);
                 }
                 let raw = ArrayRef::new_fixed(&mut *ctx, &self.raw_array_pre, &elements)?;
                 let object = StructRef::new(
@@ -1098,7 +1114,7 @@ impl JsonUnknownAllocator {
                         ],
                     )?;
                     names.push(Val::AnyRef(Some(name_object.to_anyref())));
-                    values.push(self.allocate(&mut *ctx, item)?);
+                    values.push(allocate_child(ctx, JsonChild::Field(&name.0), item)?);
                 }
                 let field_names = ArrayRef::new_fixed(&mut *ctx, &self.field_names_pre, &names)?;
                 let object_fields =

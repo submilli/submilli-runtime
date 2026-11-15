@@ -544,7 +544,9 @@ impl<'a> Discovery<'a> {
         }
         if let Some(plan) = &ta.function_invoke {
             for argument in &plan.arguments {
-                if let crate::FunctionArgumentCheck::Checked(check) = argument {
+                if let crate::FunctionArgumentCheck::Checked(check)
+                | crate::FunctionArgumentCheck::Temporal { check, .. } = argument
+                {
                     self.walk(&check.check)?;
                 }
             }

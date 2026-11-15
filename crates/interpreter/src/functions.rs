@@ -8,6 +8,10 @@
 //! resolve to the `"main"` principal so functions never amplify caller
 //! permissions and never receive package-scoped secrets.
 //!
+//! Direct host invocation constructs Temporal parameters from JSON strings or
+//! property bags using their `from` constructors, including nested parameters.
+//! Invalid Temporal inputs are rejected before the function module initializes.
+//!
 //! # Embedder workflow
 //!
 //! ```no_run
@@ -80,6 +84,11 @@
 //! # Ok(())
 //! # }
 //! ```
+
+mod arguments;
+use crate::Type;
+use arguments::allocate_argument;
+pub(crate) use arguments::temporal_constructor;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -425,7 +434,14 @@ struct RuntimeParamPlan {
 #[derive(Clone)]
 enum RuntimeParamCast {
     Checked,
-    Uncastable { ty_display: String, reason: String },
+    Temporal {
+        shape: Box<Type>,
+        aliases: BTreeMap<Type, Type>,
+    },
+    Uncastable {
+        ty_display: String,
+        reason: String,
+    },
 }
 
 impl CompiledFunction {
@@ -938,14 +954,6 @@ pub async fn invoke_function_async<S: AsRef<str>>(
         .await
         .map_err(classify_function_error)?;
     crate::stdlib::functions::install(&mut linker).map_err(classify_function_error)?;
-    install_package_modules_async(&mut linker, store, packages)
-        .await
-        .map_err(classify_function_error)?;
-
-    store.data_mut().install_type_info(func.type_info.clone());
-    let init_outcome = linker.instantiate_async(&mut *store, &func.module).await;
-    let instance = name_failing_initializer(store, "function", &func.name, init_outcome)
-        .map_err(classify_function_error)?;
 
     let allocator = JsonUnknownAllocator::new(store).map_err(classify_function_error)?;
     let undefined_val = store
@@ -968,11 +976,9 @@ pub async fn invoke_function_async<S: AsRef<str>>(
             checked_vals.push(undefined_val);
             continue;
         };
-        let raw_val = allocator
-            .allocate(store, &parsed_val)
-            .map_err(classify_function_error)?;
-        let checked = check_single_argument(store, &instance, func, param, raw_val).await?;
-        checked_vals.push(checked);
+        let raw_val = allocate_argument(store, &linker, &allocator, param, &parsed_val)
+            .map_err(|error| classify_argument_error(store, func, param, error))?;
+        checked_vals.push(raw_val);
     }
     if let Some(rest_param) = rest {
         let rest_items: Vec<JsonValue> = parsed_iter.collect();
@@ -983,17 +989,41 @@ pub async fn invoke_function_async<S: AsRef<str>>(
                 .map_err(classify_function_error)?;
             checked_vals.push(empty);
         } else {
-            let raw_rest = allocator
-                .allocate(store, &JsonValue::Array(rest_items))
-                .map_err(classify_function_error)?;
-            let checked =
-                check_single_argument(store, &instance, func, rest_param, raw_rest).await?;
-            checked_vals.push(checked);
+            let raw_rest = allocate_argument(
+                store,
+                &linker,
+                &allocator,
+                rest_param,
+                &JsonValue::Array(rest_items),
+            )
+            .map_err(|error| classify_argument_error(store, func, rest_param, error))?;
+            checked_vals.push(raw_rest);
         }
     }
     // Parsed host trees have been moved into WasmGC heap values; release the
     // transient host-byte reservation before running guest code.
     drop(input_bytes_guard);
+
+    install_package_modules_async(&mut linker, store, packages)
+        .await
+        .map_err(classify_function_error)?;
+
+    store.data_mut().install_type_info(func.type_info.clone());
+    let init_outcome = linker.instantiate_async(&mut *store, &func.module).await;
+    let instance = name_failing_initializer(store, "function", &func.name, init_outcome)
+        .map_err(classify_function_error)?;
+
+    for (param, value) in fixed.iter().zip(&mut checked_vals).take(supplied) {
+        *value = check_single_argument(store, &instance, func, param, *value).await?;
+    }
+    if let Some(param) = rest
+        && !matches!(param.cast, RuntimeParamCast::Uncastable { .. })
+    {
+        let value = checked_vals.get_mut(fixed.len()).ok_or_else(|| {
+            FunctionError::Failed(host::fatal_host_error("rest argument slot is missing"))
+        })?;
+        *value = check_single_argument(store, &instance, func, param, *value).await?;
+    }
 
     let invoke_export_name = crate::mangle::function_invoke(&func.module_name);
     let invoke_fn = instance
@@ -1192,6 +1222,10 @@ fn build_param_plan(
 ) -> RuntimeParamPlan {
     let cast = match check {
         FunctionArgumentCheck::Checked(_) => RuntimeParamCast::Checked,
+        FunctionArgumentCheck::Temporal { check, aliases } => RuntimeParamCast::Temporal {
+            shape: Box::new(check.check.clone()),
+            aliases: aliases.clone(),
+        },
         FunctionArgumentCheck::Uncastable { reason } => RuntimeParamCast::Uncastable {
             ty_display: param.ty.to_string(),
             reason: reason.clone(),
@@ -1473,21 +1507,28 @@ async fn check_single_argument(
     let outcome = check_fn
         .call_async(&mut *store, &[raw_value], &mut checked)
         .await;
-    outcome.map_err(
-        |error| match classify_function_error(exec::uncaught_error(store, error)) {
-            FunctionError::Failed(err) if err.is::<ThrownError>() => {
-                FunctionError::InvalidArguments(format!(
-                    "invalid argument `{}` (position {}) for function `{}`: {err}",
-                    param.name,
-                    param.index + 1,
-                    func.name
-                ))
-            }
-            other => other,
-        },
-    )?;
+    outcome.map_err(|error| classify_argument_error(store, func, param, error))?;
     let [value] = checked;
     Ok(value)
+}
+
+fn classify_argument_error(
+    store: &mut Store<StoreData>,
+    func: &CompiledFunction,
+    param: &RuntimeParamPlan,
+    error: wasmtime::Error,
+) -> FunctionError {
+    match classify_function_error(exec::uncaught_error(store, error)) {
+        FunctionError::Failed(err) if err.is::<ThrownError>() || err.is::<host::TypeError>() => {
+            FunctionError::InvalidArguments(format!(
+                "invalid argument `{}` (position {}) for function `{}`: {err}",
+                param.name,
+                param.index + 1,
+                func.name
+            ))
+        }
+        other => other,
+    }
 }
 
 fn classify_function_error(error: wasmtime::Error) -> FunctionError {

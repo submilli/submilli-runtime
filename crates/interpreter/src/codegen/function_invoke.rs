@@ -3,7 +3,8 @@
 //!
 //! - `<pkg>#function:argument:<i>`: `(unknown) -> unknown` per castable
 //!   parameter, validating the parsed JSON value as `value as T` and returning
-//!   the boxed runtime value before `run` executes.
+//!   the boxed runtime value before `run` executes. Temporal leaves are already
+//!   constructed by the host using the recorded invocation plan.
 //! - `<pkg>#function:invoke`: `(unknown, …) -> (ref null $string)`, coercing
 //!   each validated argument into `run`'s parameter slot, calling `run`, and
 //!   encoding the result to JSON (`null` ref when `undefined`).
@@ -62,7 +63,9 @@ pub(super) fn allocate<'a>(
 
     let mut allocated_args = Vec::new();
     for (index, argument) in arguments.iter().enumerate() {
-        let FunctionArgumentCheck::Checked(check) = argument else {
+        let (FunctionArgumentCheck::Checked(check) | FunctionArgumentCheck::Temporal { check, .. }) =
+            argument
+        else {
             continue;
         };
         let type_idx = *next_type;
