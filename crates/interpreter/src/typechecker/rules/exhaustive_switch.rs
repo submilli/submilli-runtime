@@ -86,7 +86,7 @@ fn format_missing(values: &Type) -> String {
 fn format_one_literal(ty: &Type) -> Option<String> {
     match ty.peel() {
         Type::StringLiteral(s) => Some(format!("\"{}\"", crate::types::escape_string_literal(s))),
-        Type::NumberLiteral(n) => Some(format!("{}", n.0)),
+        Type::NumberLiteral(n) => Some(crate::runtime::number::format_number_js(n.0)),
         Type::BooleanLiteral(b) => Some(b.to_string()),
         Type::Null => Some("null".to_string()),
         Type::Undefined => Some("undefined".to_string()),

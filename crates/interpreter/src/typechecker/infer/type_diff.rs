@@ -2,28 +2,35 @@ use crate::lower_local_types::display_type_name;
 use crate::rendering::{RenderError, RenderLimits, Writer};
 use crate::type_rendering::write_type;
 use crate::{MangledName, ObjectField, Type};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 #[cfg(test)]
 thread_local! {
     static FAIL_RENDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub(super) fn type_mismatch_help(expected: &Type, got: &Type) -> Result<Vec<String>, RenderError> {
-    let mut help = Vec::new();
-    help.try_reserve(4).map_err(|_| RenderError::Allocation)?;
-    if let Some(diff) = format_type_diff(expected, got)? {
-        help.push(diff);
+impl super::Inferer<'_> {
+    pub(super) fn type_mismatch_help(
+        &self,
+        expected: &Type,
+        got: &Type,
+    ) -> Result<Vec<String>, RenderError> {
+        let mut help = Vec::new();
+        help.try_reserve(4).map_err(|_| RenderError::Allocation)?;
+        if let Some(diff) = format_type_diff(expected, got)? {
+            help.push(diff);
+        }
+        if let Some(note) = guard_loss_note(got)? {
+            help.push(note);
+        }
+        if let Some(note) = weak_type_note(expected, got, self.resolver())? {
+            help.push(note);
+        }
+        if let Some(note) = same_name_note(expected, got)? {
+            help.push(note);
+        }
+        Ok(help)
     }
-    if let Some(note) = guard_loss_note(got)? {
-        help.push(note);
-    }
-    if let Some(note) = weak_type_note(expected, got)? {
-        help.push(note);
-    }
-    if let Some(note) = same_name_note(expected, got)? {
-        help.push(note);
-    }
-    Ok(help)
 }
 
 /// Two different types can share a name when they are declared in different
@@ -87,21 +94,25 @@ fn nominal_body(mut ty: &Type) -> Option<&MangledName> {
 
 /// Explains a rejection by the weak-type rule: an object type whose fields are
 /// all optional takes only a value that has at least one of them.
-fn weak_type_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
-    let (
-        Type::Object {
-            fields: expected_fields,
-            index: None,
-            ..
-        },
-        Type::Object {
-            fields: got_fields, ..
-        },
-    ) = (expected.peel(), got.peel())
-    else {
+fn weak_type_note(
+    expected: &Type,
+    got: &Type,
+    types: super::assignable::TypeResolver<'_>,
+) -> Result<Option<String>, RenderError> {
+    use super::assignable::Signature;
+    if types.has_index_signature(expected)
+        || types.signature_of(expected, Signature::Call).is_some()
+        || types.signature_of(expected, Signature::Construct).is_some()
+    {
+        return Ok(None);
+    }
+    let (Some(expected_fields), Some(got_fields)) = (
+        diagnostic_fields(expected, types),
+        diagnostic_fields(got, types),
+    ) else {
         return Ok(None);
     };
-    if !super::assignable::weak_type_rejects(got_fields, expected_fields) {
+    if !super::assignable::weak_type_rejects(&got_fields, &expected_fields) {
         return Ok(None);
     }
     for ty in [expected, got] {
@@ -119,6 +130,28 @@ fn weak_type_note(expected: &Type, got: &Type) -> Result<Option<String>, RenderE
         out.push("` has none of them; as in TypeScript, a value must share at least one field with such a type")
     })
     .map(|rendered| Some(rendered.text))
+}
+
+/// Structural fields behind a diagnostic's displayed type name.
+fn diagnostic_fields<'a>(
+    ty: &'a Type,
+    types: super::assignable::TypeResolver<'_>,
+) -> Option<Cow<'a, BTreeMap<String, ObjectField>>> {
+    match ty.peel() {
+        Type::Object { fields, .. } => Some(Cow::Borrowed(fields)),
+        Type::InterfaceRef {
+            mangled,
+            name,
+            args,
+            ..
+        } => types
+            .interface_full_form(mangled, name, args)
+            .map(Cow::Owned),
+        Type::ClassRef { mangled, args, .. } => {
+            types.class_full_form(mangled, args).map(Cow::Owned)
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn format_type_diff(expected: &Type, got: &Type) -> Result<Option<String>, RenderError> {
@@ -425,6 +458,39 @@ mod tests {
     fn notes_same_name(help: &[String]) -> bool {
         help.iter()
             .any(|line| line.contains("declared in different scopes"))
+    }
+
+    #[test]
+    fn weak_interface_note_resolves_generics_inherited_fields_and_aliases() {
+        let help = help_lines(
+            "interface Base<T> { a?: T }\n\
+             interface Weak extends Base<number> { b?: string }\n\
+             type Target = Weak;\n\
+             interface Source { unrelated: number }\n\
+             function f(source: Source): Target { return source; }\n\
+             function main(): void {}\n",
+        );
+        assert!(
+            help.iter()
+                .any(|line| line.contains("every field of `Target` is optional")
+                    && line.contains("must share at least one field")),
+            "{help:?}"
+        );
+    }
+
+    #[test]
+    fn a_shared_field_with_the_wrong_type_is_not_a_weak_type_rejection() {
+        let help = help_lines(
+            "interface Weak { a?: number }\n\
+             function f(source: { a: string }): Weak { return source; }\n\
+             function main(): void {}\n",
+        );
+        assert!(
+            !help
+                .iter()
+                .any(|line| line.contains("must share at least one field")),
+            "{help:?}"
+        );
     }
 
     #[test]

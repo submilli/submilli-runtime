@@ -192,6 +192,8 @@ pub fn last_index_of(s: &Str, search: &Str, from: f64) -> f64 {
         return -1.0;
     }
     let max_start = haystack.len() - needle.len();
+    // lastIndexOf treats NaN like an omitted position, unlike indexOf.
+    let from = if from.is_nan() { f64::INFINITY } else { from };
     let from = clamp_to_len(trunc_sat_i32(from), max_start);
     if needle.is_empty() {
         return from as f64;

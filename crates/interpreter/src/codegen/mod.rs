@@ -3497,6 +3497,39 @@ function main(): string {
         (store, consumer_inst)
     }
 
+    #[test]
+    fn bigint_literal_union_truthiness_from_an_external_front_end() {
+        let source = r#"
+            function main(): number {
+                let g: bigint = 0n;
+                let n: number = 1;
+                if (g && n) { return 10; }
+                return !(g && n) ? 1 : 0;
+            }
+        "#;
+        let mut ta = type_check(source);
+        // ts-rust preserves the falsy literal in `g && n`: the engine's
+        // front end widens it to bigint. Both use the same boxed union slot.
+        let mut replaced = 0;
+        for id in ta.expr_ids().unwrap() {
+            let expr = ta.try_expr_mut(id).unwrap();
+            if matches!(
+                expr.kind,
+                crate::TypedExprKind::Binary {
+                    op: crate::BinOp::And,
+                    ..
+                }
+            ) {
+                expr.ty = Type::union(vec![Type::Number, Type::BigIntLiteral("0".into())]);
+                replaced += 1;
+            }
+        }
+        assert_eq!(replaced, 2);
+        let dependencies = runtime_packages(&[]);
+        let wasm = codegen(source, "main.ts", crate::FileId(0), &ta, &dependencies).unwrap();
+        assert_eq!(run_main_number(&wasm), 1.0);
+    }
+
     fn run_main_f64(source: &str) -> f64 {
         run_main_number(&compile(source))
     }

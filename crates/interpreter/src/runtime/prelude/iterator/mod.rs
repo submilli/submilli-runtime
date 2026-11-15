@@ -146,24 +146,24 @@ pub(crate) fn iterator_result_struct(
     )
 }
 
-/// Build `{ done: false, value }` (an `IteratorYieldResult`).
+/// Build `{ value, done: false }` (an `IteratorYieldResult`).
 pub(crate) fn iter_yield(caller: &mut Caller<'_, StoreData>, value: Val) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, false)?;
-    let names = field_names_array(caller, &intr, &["done", "value"])?;
-    let fields = object_fields_array(caller, &intr, &[done, value])?;
+    let names = field_names_array(caller, &intr, &["value", "done"])?;
+    let fields = object_fields_array(caller, &intr, &[value, done])?;
     build_result(caller, &intr, vtable, names, fields)
 }
 
-/// Build `{ done: true, value: undefined }` (an `IteratorReturnResult`).
+/// Build `{ value: undefined, done: true }` (an `IteratorReturnResult`).
 pub(crate) fn iter_done(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
     let intr = intrinsic_types(&mut *caller)?;
     let vtable = host_object_vtable(caller)?;
     let done = box_boolean(caller, true)?;
     let value = super::undefined::value(caller)?;
-    let names = field_names_array(caller, &intr, &["done", "value"])?;
-    let fields = object_fields_array(caller, &intr, &[done, value])?;
+    let names = field_names_array(caller, &intr, &["value", "done"])?;
+    let fields = object_fields_array(caller, &intr, &[value, done])?;
     build_result(caller, &intr, vtable, names, fields)
 }
 
@@ -213,6 +213,27 @@ fn object_fields_array(
     Ok(Val::AnyRef(Some(arr.to_anyref())))
 }
 
+/// Built-in iterator results retain JavaScript's property order even though
+/// ordinary Submilli objects serialize in canonical key order. A private
+/// subtype marks these results without changing their structural field ABI.
+fn builtin_result_struct(
+    engine: &wasmtime::Engine,
+    intr: &IntrinsicTypes,
+) -> wasmtime::Result<StructType> {
+    let parent = iterator_result_struct(engine, intr)?;
+    let fields = parent.fields().collect();
+    singleton_struct(engine, Finality::Final, Some(parent), fields)
+}
+
+pub(super) fn is_builtin_result(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<wasmtime::StructRef>,
+) -> wasmtime::Result<bool> {
+    let intr = intrinsic_types(&mut *caller)?;
+    let ty = builtin_result_struct(caller.engine(), &intr)?;
+    object.matches_ty(&*caller, &ty)
+}
+
 fn build_result(
     caller: &mut Caller<'_, StoreData>,
     intr: &IntrinsicTypes,
@@ -220,7 +241,7 @@ fn build_result(
     names: Val,
     fields: Val,
 ) -> wasmtime::Result<Val> {
-    let ty = iterator_result_struct(caller.engine(), intr)?;
+    let ty = builtin_result_struct(caller.engine(), intr)?;
     let pre = StructRefPre::new(&mut *caller, ty);
     let st = StructRef::new(
         &mut *caller,

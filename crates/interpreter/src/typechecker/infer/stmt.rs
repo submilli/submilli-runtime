@@ -1664,9 +1664,7 @@ impl Inferer<'_> {
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
-                        &field_ty, &value_ty,
-                    ));
+                    let help = self.render_help_list(self.type_mismatch_help(&field_ty, &value_ty));
                     self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
@@ -1708,9 +1706,7 @@ impl Inferer<'_> {
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
-                        &field_ty, &value_ty,
-                    ));
+                    let help = self.render_help_list(self.type_mismatch_help(&field_ty, &value_ty));
                     self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
@@ -1752,9 +1748,7 @@ impl Inferer<'_> {
                     self.infer_assigned_value(value, Some(&field_ty))?;
                 let value_ty = self.absorb_into_declared(Some(&field_ty), typed_value, value_ty)?;
                 if !reported && !assignable(&value_ty, &field_ty, self.resolver()) {
-                    let help = self.render_help_list(super::type_diff::type_mismatch_help(
-                        &field_ty, &value_ty,
-                    ));
+                    let help = self.render_help_list(self.type_mismatch_help(&field_ty, &value_ty));
                     self.error_type_mismatch(value_span, &field_ty, &value_ty, help);
                 }
                 TypedStmtKind::AssignField {
@@ -1940,8 +1934,7 @@ impl Inferer<'_> {
                 !matches!(target, Type::Error) && !self.fits_index_write(&value_ty, target)
             })
         {
-            let help =
-                self.render_help_list(super::type_diff::type_mismatch_help(target, &value_ty));
+            let help = self.render_help_list(self.type_mismatch_help(target, &value_ty));
             self.error_type_mismatch(value_span, target, &value_ty, help);
         }
         let current_element = evolving

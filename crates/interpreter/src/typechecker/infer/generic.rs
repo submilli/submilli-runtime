@@ -1576,7 +1576,7 @@ impl Inferer<'_> {
                 error_span,
                 &expected,
                 &got,
-                self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
+                self.render_help_list(self.type_mismatch_help(&expected, &got)),
             );
             reported.push(error_span);
         }
@@ -2650,8 +2650,7 @@ impl Inferer<'_> {
             {
                 continue;
             }
-            let help =
-                self.render_help_list(super::type_diff::type_mismatch_help(&param, &check.arg_ty));
+            let help = self.render_help_list(self.type_mismatch_help(&param, &check.arg_ty));
             self.error_type_mismatch(span, &param, &check.arg_ty, help);
         }
         Ok(())
@@ -3138,9 +3137,7 @@ impl Inferer<'_> {
                 }
                 let expected = sub.apply_or_record(&expected, &self.type_limits);
                 let mut help = vec![signature_help(self)];
-                help.extend(
-                    self.render_help_list(super::type_diff::type_mismatch_help(&expected, &got)),
-                );
+                help.extend(self.render_help_list(self.type_mismatch_help(&expected, &got)));
                 self.error_type_mismatch(arg_span, &expected, &got, help);
             }
         };

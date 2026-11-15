@@ -481,7 +481,7 @@ fn emit_ref_truthiness(
     });
     let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
     let test_boolean = needs(BooleanLike, |m| matches!(m, Type::BooleanLiteral(_)));
-    let test_bigint = needs(BigIntLike, |_| false);
+    let test_bigint = needs(BigIntLike, |m| matches!(m, Type::BigIntLiteral(_)));
     let test_undefined = classes.contains(&Dynamic)
         || members
             .iter()
