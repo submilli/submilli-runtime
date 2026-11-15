@@ -1,2 +1,4 @@
 
 *.sql text eol=lf
+# The Windows CI runner invokes this script through Bash.
+scripts/ci_changes.sh text eol=lf

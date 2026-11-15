@@ -274,10 +274,14 @@ must not run full suites. Neither `fix-issue` nor `launch-review-agents-loop`
 runs full suites at handoff.
 
 Do not run full suites locally, not even before opening a pull request; the
-[release skill](.agents/skills/release/SKILL.md) keeps its own gate. PR CI
+[release skill](.agents/skills/release/SKILL.md) keeps its own gate. Rust CI
 (`.github/workflows/ci.yml`) runs formatting, clippy, the full workspace tests,
-the TypeScript conformance suite and the package tests, and every PR waits for
-it, so a local full run only doubles the wait. After a rebase, rerun affected
+and the TypeScript conformance suite when Rust or its build/test inputs change.
+Package CI (`.github/workflows/packages.yml`) independently runs package tests
+and their Rust integration contracts when package or Rust inputs
+change. Both workflows report checks for every PR and skip expensive steps
+internally for unrelated changes. A local full run only doubles the wait.
+After a rebase, rerun affected
 checks only where the new base or a conflict resolution changed those areas.
 When CI fails, fix the cause, rerun the affected checks locally, and push again.
 
