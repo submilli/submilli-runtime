@@ -480,9 +480,14 @@ fn emit_ref_truthiness(
             || members.iter().any(|m| literal(m.lowered()))
     };
     let test_string = needs(StringLike, |m| {
-        matches!(m, Type::StringLiteral(_) | Type::TemplateLiteral { .. })
+        matches!(
+            m,
+            Type::StringLiteral(_) | Type::TemplateLiteral { .. } | Type::StringEnum { .. }
+        )
     });
-    let test_number = needs(NumberLike, |m| matches!(m, Type::NumberLiteral(_)));
+    let test_number = needs(NumberLike, |m| {
+        matches!(m, Type::NumberLiteral(_) | Type::NumberEnum { .. })
+    });
     let test_boolean = needs(BooleanLike, |m| matches!(m, Type::BooleanLiteral(_)));
     let test_bigint = needs(BigIntLike, |m| matches!(m, Type::BigIntLiteral(_)));
     let test_undefined = classes.contains(&Dynamic)
@@ -614,6 +619,13 @@ pub fn emit_narrowing_cast(
     // `(ref null $Object)`.
     if from_val == to_val {
         return Ok(());
+    }
+    // Enum members retain their boxed representation even when TypeScript
+    // narrows an unboxed number to one. Box before the reference downcast;
+    // CastKind describes the narrowing, not the source's Wasm representation.
+    if matches!(from_val, ValType::F64 | ValType::I32) {
+        emit_box(emitter, ctx, &cast_info.from_ty)?;
+        return emit_cast_to(emitter, ctx, &cast_info.to_ty);
     }
     // Repr changes only in the nullable bit (same heap type, source nullable,
     // target non-null) — e.g. the false-branch of `!== null` on a union like
