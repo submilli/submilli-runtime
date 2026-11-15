@@ -972,6 +972,22 @@ fn json_property_slots(
         }
         entries.push((units, slot, getter));
     }
+    if super::iterator::is_builtin_result(caller, &object)? {
+        // A result may have acquired properties through Object.assign. Integer
+        // indices precede the other keys; those retain their insertion order.
+        fuel::charge(&mut *caller, fuel::ELEM, entries.len() as u64)?;
+        if entries
+            .iter()
+            .any(|entry| super::object::integer_key(&entry.0).is_some())
+        {
+            fuel::charge_host_fuel(&mut *caller, fuel::sort_cost(entries.len() as u64))?;
+            entries.sort_unstable_by_key(|(name, slot, _)| {
+                let index = super::object::integer_key(name);
+                (index.is_none(), index.unwrap_or(*slot))
+            });
+        }
+        return Ok(entries);
+    }
     let _sort_memory = super::array::sort::reserve_key_sort_memory(caller, entries.len())?;
     let mut indices = Vec::new();
     indices

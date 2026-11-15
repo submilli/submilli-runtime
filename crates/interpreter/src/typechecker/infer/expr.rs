@@ -1079,7 +1079,7 @@ impl Inferer<'_> {
             let has_structural_diff = self
                 .render_optional_help(super::type_diff::format_type_diff(want, &ty))
                 .is_some();
-            let mut help = self.render_help_list(super::type_diff::type_mismatch_help(want, &ty));
+            let mut help = self.render_help_list(self.type_mismatch_help(want, &ty));
             // No structural diff to show (e.g. `number` vs an interface): lift
             // the expected interface's shape so the fix is visible in-place. Keyed
             // on the structural half alone — a lossy-rendering note is not a
@@ -8345,10 +8345,7 @@ impl Inferer<'_> {
                                         Box::new(running.clone()),
                                     )));
                                     let help = self.render_help_list(
-                                        super::type_diff::type_mismatch_help(
-                                            &expected_source,
-                                            &source_ty,
-                                        ),
+                                        self.type_mismatch_help(&expected_source, &source_ty),
                                     );
                                     self.error_type_mismatch(
                                         self.ast

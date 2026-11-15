@@ -1,5 +1,6 @@
 // Conformance program for the container image, executed through /v1/execute
-// against a running container by scripts/docker-conformance.sh.
+// against a running container by scripts/docker-conformance.sh, and locally
+// through `submilli run` in PR CI.
 //
 // It deliberately does *not* re-prove language semantics. The fixture suite in
 // crates/interpreter/tests/fixtures/ already does that, and those results cannot
@@ -23,7 +24,7 @@ export function main(): string {
   checkOutboundTls();
   checkTimeZoneDatabase();
   checkSandboxFilesystem();
-  return "conformance ok: tls, tzdata, vfs";
+  return `conformance ok: tls, tzdata, vfs (${fs.info().mode})`;
 }
 
 // Exercises reqwest 0.12's bundled webpki-roots and musl's static DNS resolver.
@@ -43,12 +44,13 @@ function checkTimeZoneDatabase(): void {
   assert(summer.offset === "-04:00", `July offset was ${summer.offset}`);
 }
 
-// The per_session VFS on the mounted volume, written as uid 65532. The 64 KiB
+// The per_session VFS on the container volume, or the CLI's ephemeral VFS.
+// The container writes as uid 65532. The 64 KiB
 // write is there so the check fails on a volume that is present but not
 // writable past the first block, rather than passing on a trivial one.
 function checkSandboxFilesystem(): void {
   const info = fs.info();
-  assert(info.mode === "per_session", `VFS mode was ${info.mode}`);
+  assert(info.mode === "per_session" || info.mode === "ephemeral", `VFS mode was ${info.mode}`);
 
   fs.mkdir("/conformance", { recursive: false });
   fs.writeText("/conformance/note.txt", "durable");

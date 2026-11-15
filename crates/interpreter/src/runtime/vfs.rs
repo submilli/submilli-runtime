@@ -1631,12 +1631,20 @@ mod tests {
         let locked = outer.path().join("locked");
         std::fs::create_dir(&locked).expect("mkdir");
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        // Root (or a process with permission-bypass capabilities) can still
+        // read mode-000 directories. Only exercise this case when chmod has
+        // established the unreadable-directory precondition.
+        let unreadable = std::fs::read_dir(&locked).is_err();
         let vfs = Vfs::external(outer.path().to_path_buf())
             .expect("external")
             .with_size_limit(1_000);
         let unmeasured = vfs.quota().is_some_and(|quota| quota.is_unmeasured());
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
             .expect("chmod back");
+        if !unreadable {
+            eprintln!("skipped: this process can read mode-000 directories");
+            return;
+        }
         assert!(unmeasured, "a failed walk leaves the VFS treated as full");
     }
 

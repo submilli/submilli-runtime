@@ -1786,7 +1786,7 @@ fn render_ts_declarations(
             render_ts_type(
                 out,
                 name,
-                &sym.kind,
+                sym,
                 indent,
                 export_prefix,
                 parent.as_deref(),
@@ -1889,10 +1889,33 @@ fn interface_parents(
     }
 }
 
-/// The `lib.es5.d.ts` text of a built-in utility type, whose alias body is an
-/// application of itself.
-fn utility_declaration(name: &str, body: &Type) -> Option<&'static str> {
+/// Built-in aliases whose runtime representation would produce a circular
+/// editor declaration: utility applications and readonly collection views.
+fn utility_declaration(
+    name: &str,
+    body: &Type,
+    identity: &crate::MangledName,
+) -> Option<&'static str> {
     match body {
+        Type::Readonly(inner) if identity == &crate::mangle::prelude(name) => {
+            match inner.as_ref() {
+                Type::InterfaceRef { mangled, .. }
+                    if name == "ReadonlyMap" && mangled == &crate::mangle::prelude("Map") =>
+                {
+                    Some(
+                        "type ReadonlyMap<K, V> = Omit<Map<K, V>, \"set\" | \"delete\" | \"clear\" | \"forEach\"> & { forEach(callback: (value: V, key: K, map: ReadonlyMap<K, V>) => void): void };",
+                    )
+                }
+                Type::InterfaceRef { mangled, .. }
+                    if name == "ReadonlySet" && mangled == &crate::mangle::prelude("Set") =>
+                {
+                    Some(
+                        "type ReadonlySet<T> = Omit<Set<T>, \"add\" | \"delete\" | \"clear\" | \"forEach\"> & { forEach(callback: (value: T, value2: T, set: ReadonlySet<T>) => void): void };",
+                    )
+                }
+                _ => None,
+            }
+        }
         Type::AliasRef {
             mangled,
             name: applied,
@@ -1966,12 +1989,13 @@ const ARRAY_FLAT_DECLARATION: &str =
 fn render_ts_type(
     out: &mut String,
     name: &str,
-    kind: &TypeKind,
+    sym: &TypeSymbol,
     indent: &str,
     export_prefix: &str,
     parent: Option<&str>,
     occupied: &std::collections::BTreeSet<String>,
 ) {
+    let kind = &sym.kind;
     let inner = format!("{indent}  ");
     match kind {
         TypeKind::Interface {
@@ -2079,7 +2103,9 @@ fn render_ts_type(
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
-        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
+        TypeKind::Alias { ty, .. }
+            if let Some(text) = utility_declaration(name, ty, &sym.mangled_name) =>
+        {
             let _ = writeln!(out, "{indent}{export_prefix}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
@@ -2250,7 +2276,7 @@ fn render_ts_type_with_ctor(
         render_ts_type(
             out,
             name,
-            &sym.kind,
+            sym,
             indent,
             export_prefix,
             None,
@@ -2265,7 +2291,7 @@ fn render_ts_type_with_ctor(
         render_ts_type(
             out,
             &ctor,
-            &sym.kind,
+            sym,
             indent,
             export_prefix,
             None,
@@ -2305,7 +2331,7 @@ fn render_ts_namespace(
         if !matches!(sym.kind, TypeKind::Interface { .. }) {
             push_doc(out, type_doc(&sym.kind), &inner);
         }
-        render_ts_type(out, tname, &sym.kind, &inner, "", None, &occupied);
+        render_ts_type(out, tname, sym, &inner, "", None, &occupied);
     }
     for (nname, sub) in &ns.namespaces {
         render_ts_namespace(out, nname, sub, &inner, "");
@@ -2720,7 +2746,9 @@ fn render_type_for(
             }
             let _ = writeln!(out, "{indent}}}\n");
         }
-        TypeKind::Alias { ty, .. } if let Some(text) = utility_declaration(name, ty) => {
+        TypeKind::Alias { ty, .. }
+            if let Some(text) = utility_declaration(name, ty, &sym.mangled_name) =>
+        {
             let _ = writeln!(out, "{indent}{text}\n");
         }
         TypeKind::Alias { generics, ty, .. } => {
@@ -5098,6 +5126,49 @@ mod tests {
     }
 
     #[test]
+    fn readonly_collections_in_editor_declarations_are_not_circular() {
+        let lib = render_lib_submilli_d_ts();
+        for (name, args, base) in [("ReadonlyMap", "K, V", "Map"), ("ReadonlySet", "T", "Set")] {
+            assert!(!lib.contains(&format!("type {name}<{args}> = {name}<{args}>")));
+            assert!(lib.contains(&format!("type {name}<{args}> = Omit<{base}<{args}>,")));
+        }
+        assert!(lib.contains("map: ReadonlyMap<K, V>"));
+        assert!(lib.contains("set: ReadonlySet<T>"));
+    }
+
+    #[test]
+    fn a_package_alias_named_readonly_map_keeps_its_own_parameters() {
+        let mut alias = builtin_package_declaration()
+            .types
+            .remove("ReadonlyMap")
+            .unwrap();
+        alias.mangled_name = crate::mangle::package_symbol("@review/collections", "ReadonlyMap");
+        let TypeKind::Alias { generics, ty, .. } = &mut alias.kind else {
+            panic!("builtin alias");
+        };
+        *generics = crate::GenericParameters::unconstrained(vec!["T".into()]);
+        let Type::Readonly(inner) = ty else {
+            panic!("readonly collection");
+        };
+        let Type::InterfaceRef { args, .. } = inner.as_mut() else {
+            panic!("Map reference");
+        };
+        *args = vec![Type::String, Type::TypeVar("T".into())];
+        let mut package = PackageDeclaration::with_package("@review/collections");
+        package.types.insert("ReadonlyMap".into(), alias);
+        package.check_type_limits().unwrap();
+        let declarations = render_packages_d_ts(&[&package], &[]);
+        assert!(
+            declarations.contains("export type ReadonlyMap<T> ="),
+            "{declarations}"
+        );
+        assert!(
+            !declarations.contains("export type ReadonlyMap<K, V>"),
+            "{declarations}"
+        );
+    }
+
+    #[test]
     fn global_functions_are_in_the_editor_declarations() {
         let lib = render_lib_submilli_d_ts();
         for function in [
@@ -5519,7 +5590,7 @@ mod tests {
         );
 
         let docs = render_declarations(&defs);
-        let shape = &defs.types.get("Shape").unwrap().kind;
+        let shape = defs.types.get("Shape").unwrap();
         let mut dts = String::new();
         render_ts_type(
             &mut dts,
@@ -5634,7 +5705,7 @@ mod tests {
         );
 
         let docs = render_declarations(&defs);
-        let calc = &defs.types.get("Calc").unwrap().kind;
+        let calc = defs.types.get("Calc").unwrap();
         let mut dts = String::new();
         render_ts_type(
             &mut dts,

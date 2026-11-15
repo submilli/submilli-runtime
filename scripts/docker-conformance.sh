@@ -173,7 +173,7 @@ put_blueprint conformance-ephemeral "$PORT"
 
 step "2. Every OS-facing surface, in one round-trip"
 result=$(execute "$PORT" conformance "${REPO_ROOT}/examples/docker/conformance.ts" | json_field result)
-expected="conformance ok: tls, tzdata, vfs"
+expected="conformance ok: tls, tzdata, vfs (per_session)"
 [[ "$result" == "$expected" ]] || die "conformance program returned '${result}'"
 ok "$result"
 
