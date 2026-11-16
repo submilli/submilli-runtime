@@ -11,7 +11,7 @@
 //! is the same value.
 
 use wasmtime::{ArrayRef, ArrayRefPre, Caller, Func, Global, GlobalType, Mutability, StructRef};
-use wasmtime::{StructRefPre, Val, ValType};
+use wasmtime::{FieldType, Finality, StorageType, StructRefPre, StructType, Val, ValType};
 
 use crate::runtime::StoreData;
 use crate::runtime::fuel::{host_func, host_func_async};
@@ -60,10 +60,7 @@ fn build_static_value_object(
     build_namespace_object(caller, &intr, text)
 }
 
-/// The host function behind the call signature of the constructor bound to
-/// `name` (`NumberConstructor#<call>` for `Number`), found through the type
-/// the prelude declares for the binding. `None` for a constructor without one.
-fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option<(String, Func)> {
+fn constructor_interface(name: &str) -> Option<&'static crate::MangledName> {
     let (prelude, _, _) = crate::runtime::prelude::cached_runtime_package_declarations();
     let symbol = prelude.first()?.values.get(name)?;
     let ValueKind::Const {
@@ -73,6 +70,14 @@ fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option
     else {
         return None;
     };
+    Some(mangled)
+}
+
+/// The host function behind the call signature of the constructor bound to
+/// `name` (`NumberConstructor#<call>` for `Number`), found through the type
+/// the prelude declares for the binding. `None` for a constructor without one.
+fn call_signature_function(caller: &Caller<'_, StoreData>, name: &str) -> Option<(String, Func)> {
+    let mangled = constructor_interface(name)?;
     let key = crate::mangle::call_signature(mangled).as_str().to_owned();
     let function = caller
         .data()
@@ -99,7 +104,7 @@ fn build_converting_closure(
     function: Func,
 ) -> wasmtime::Result<Val> {
     let closure_vtable = host_closure_vtable(caller)?;
-    let vtable = vtable_printing(caller, intr, &closure_vtable, text)?;
+    let vtable = build_static_value_vtable(caller, intr, &closure_vtable, text)?;
     let arity = function.ty(&*caller).params().len();
     let env = match super::super::member::builtin_parameters(&key) {
         Some(parameters) => super::super::arguments::with_metadata(caller, tag, parameters)?,
@@ -135,7 +140,7 @@ fn build_throwing_closure(
     message: String,
 ) -> wasmtime::Result<Val> {
     let closure_vtable = host_closure_vtable(caller)?;
-    let vtable = vtable_printing(caller, intr, &closure_vtable, text)?;
+    let vtable = build_static_value_vtable(caller, intr, &closure_vtable, text)?;
     let (function_ty, closure_ty) = value_closure_type(caller.engine(), intr, 0)?;
     let function = host_func(&mut *caller, function_ty, move |caller, _, _| {
         Err(throw_host_error(caller, type_error(message.clone())))
@@ -158,7 +163,7 @@ fn build_namespace_object(
     text: String,
 ) -> wasmtime::Result<Val> {
     let object_vtable = host_object_vtable(caller)?;
-    let vtable = vtable_printing(caller, intr, &object_vtable, text)?;
+    let vtable = build_static_value_vtable(caller, intr, &object_vtable, text)?;
     let names_pre = ArrayRefPre::new(&mut *caller, intr.field_names.clone());
     let names = ArrayRef::new_fixed(&mut *caller, &names_pre, &[])?;
     let fields_pre = ArrayRefPre::new(&mut *caller, intr.object_fields.clone());
@@ -178,8 +183,9 @@ fn build_namespace_object(
     Ok(Val::AnyRef(Some(object.to_anyref())))
 }
 
-/// `base`'s vtable with its `toString` slot replaced by one returning `text`.
-fn vtable_printing(
+/// Preserve the binding's string form and retain a constructor's native
+/// interface for member dispatch through structural views.
+fn build_static_value_vtable(
     caller: &mut Caller<'_, StoreData>,
     intr: &IntrinsicTypes,
     base: &Val,
@@ -191,6 +197,11 @@ fn vtable_printing(
     let base = base
         .as_struct(&mut *caller)?
         .ok_or_else(|| wasmtime::Error::msg("static value base vtable is not a struct"))?;
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::HASH, text.len() as u64)?;
+    let interface = text
+        .strip_prefix("function ")
+        .and_then(|signature| signature.split_once('('))
+        .and_then(|(name, _)| constructor_interface(name));
     let to_string = host_func_async(
         &mut *caller,
         intr.to_string_fn.clone(),
@@ -203,13 +214,79 @@ fn vtable_printing(
             })
         },
     );
-    let slots = [
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, 6)?;
+    let mut slots = vec![
         Val::FuncRef(Some(to_string)),
         base.field(&mut *caller, 1)?,
         base.field(&mut *caller, 2)?,
         base.field(&mut *caller, 3)?,
     ];
-    let pre = StructRefPre::new(&mut *caller, intr.vtable.clone());
+    let ty = if let Some(interface) = interface {
+        // Slot 4 is reserved for a closure adapter's original function.
+        slots.push(Val::null_any_ref());
+        slots.push(Val::AnyRef(Some(
+            write_submilli_string_struct(caller, interface.as_str())?.to_anyref(),
+        )));
+        static_vtable_type(caller, intr)?
+    } else {
+        intr.vtable.clone()
+    };
+    let pre = StructRefPre::new(&mut *caller, ty);
     let vtable = StructRef::new(&mut *caller, &pre, &slots)?;
     Ok(Val::AnyRef(Some(vtable.to_anyref())))
+}
+
+// A typed vtable extension identifies a constructor without relying on its
+// printable name, closure environment (which adapters can wrap), or static type.
+fn static_vtable_type(
+    caller: &mut Caller<'_, StoreData>,
+    intr: &IntrinsicTypes,
+) -> wasmtime::Result<StructType> {
+    if let Some(ty) = &caller.data().static_value_vtable_type {
+        return Ok(ty.clone());
+    }
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, 6)?;
+    let mut fields: Vec<_> = intr.vtable.fields().collect();
+    fields.push(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::Ref(wasmtime::RefType::new(
+            true,
+            wasmtime::HeapType::Any,
+        ))),
+    ));
+    fields.push(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::Ref(wasmtime::RefType::new(
+            false,
+            wasmtime::HeapType::ConcreteStruct(intr.string.clone()),
+        ))),
+    ));
+    let ty = crate::runtime::gc_singleton::singleton_struct(
+        caller.engine(),
+        Finality::Final,
+        Some(intr.vtable.clone()),
+        fields,
+    )?;
+    caller.data_mut().static_value_vtable_type = Some(ty.clone());
+    Ok(ty)
+}
+
+pub(in crate::runtime::prelude) fn static_interface(
+    caller: &mut Caller<'_, StoreData>,
+    object: &wasmtime::Rooted<StructRef>,
+) -> wasmtime::Result<Option<String>> {
+    let Some(ty) = caller.data().static_value_vtable_type.clone() else {
+        return Ok(None);
+    };
+    let Val::AnyRef(Some(vtable)) = object.field(&mut *caller, 0)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "object vtable missing",
+        ));
+    };
+    let vtable = vtable.unwrap_struct(&mut *caller)?;
+    if !vtable.matches_ty(&*caller, &ty)? {
+        return Ok(None);
+    }
+    let interface = vtable.field(&mut *caller, 5)?;
+    crate::runtime::host::read_string_arg(caller, &interface, "static interface").map(Some)
 }

@@ -5203,8 +5203,8 @@ pub(crate) fn emit_object_property_read(
     Ok(())
 }
 
-/// Read a property from the receiver on the stack. A plain closure has no
-/// user property slots; a callable shape still reads its stored properties.
+/// Read a property from the live carrier. Constructor closures expose their
+/// static members; callable shapes read their stored properties.
 fn emit_receiver_property_read_as(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
@@ -5225,14 +5225,6 @@ fn emit_receiver_property_read_as(
             intrinsics.object_shape,
         )));
         emitter.instruction(Instruction::I32Eqz);
-        // A weak interface may accept both primitives and plain functions.
-        // Leave closures to the optional-property/length dispatch below.
-        emitter.instruction(Instruction::LocalGet(receiver));
-        emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
-            intrinsics.closure,
-        )));
-        emitter.instruction(Instruction::I32Eqz);
-        emitter.instruction(Instruction::I32And);
         emitter.emit_if(BlockType::Result(ctx.symbols.value_type(field_ty)?));
         emitter.instruction(Instruction::LocalGet(receiver));
         emit_dynamic_property_read(emitter, ctx, prop_name, field_ty)?;
@@ -7030,16 +7022,9 @@ fn emit_class_method_value(
     emit_object_property_read_as(emitter, ctx, receiver, method, result_ty, check_ty)
 }
 
-/// shape-based interface method dispatch. The receiver —
-/// an `InterfaceRef`-typed value carrying its `$Object` shape — is
-/// already on the stack; the method's closure lives in a field slot
-/// named by `method`. Pull it via the `$ObjectShape` field-name scan
-/// (slot 2), cast to the matching closure struct, then invoke
-/// through the closure ABI (env + boxed args + funcref). The
-/// leading `RefAsNonNull` + `RefCastNonNull($ObjectShape)` is
-/// retained because the on-stack value's static type may be a wider
-/// `(ref $Object)` (or `(ref null $Object)`) — the cast pins it to
-/// the object shape the field scan expects.
+/// Interface method dispatch on the live receiver already on the stack.
+/// Resolve a constructor's static member or an object's field before evaluating
+/// arguments, then invoke the resulting closure with that receiver.
 ///
 /// `slot_index_local` names a local that already holds the method slot's index.
 /// The accessor paths resolve it to decide *whether* to dispatch, and the scan
@@ -7192,38 +7177,27 @@ fn emit_shape_method_with_type_arguments(
 
     let rcv_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
-        heap_type: HeapType::Concrete(intrinsics.object_shape),
+        heap_type: HeapType::Concrete(intrinsics.object),
     }))?;
     let closure_local = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
         heap_type: HeapType::Concrete(closure_struct_idx),
     }))?;
 
-    // 1. Receiver is on stack as `(ref [null] $Object)` (or a
-    //    narrower subtype). The field scan expects `(ref
-    //    $ObjectShape)` (non-null subtype). Strip null and downcast.
+    // Keep the live receiver: a constructor stored at an interface type is
+    // a closure, while a user implementation carries an object shape.
     emitter.instruction(Instruction::RefAsNonNull);
-    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
-        intrinsics.object_shape,
-    )));
     emitter.instruction(Instruction::LocalSet(rcv_local));
 
-    // 2. Read the method's slot: by index when the caller already scanned it,
-    //    else by the field-name scan.
+    // An accessor caller has already proved and scanned an object shape.
+    // Otherwise resolve by name on the live carrier before evaluating arguments.
+    emitter.instruction(Instruction::LocalGet(rcv_local));
     if let Some(index_local) = slot_index_local {
-        emit_field_slot_get(emitter, intrinsics, rcv_local, index_local);
+        let shape =
+            stash_receiver_as_object_shape(emitter, &Type::Unknown, intrinsics.object_shape)?;
+        emit_field_slot_get(emitter, intrinsics, shape, index_local);
     } else {
-        let name_global = ctx
-            .symbols
-            .field_name_string_global_idx(method)
-            .ok_or_else(|| {
-                crate::codegen::internal_failure(
-                    ("per-name string global recorded during field-name-strings emission \
-             for interface method names")
-                        .to_string(),
-                )
-            })?;
-        emit_object_field_read_by_name(emitter, ctx, rcv_local, name_global);
+        emit_dynamic_property_read(emitter, ctx, method, &Type::Unknown)?;
     }
 
     let method_value = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;

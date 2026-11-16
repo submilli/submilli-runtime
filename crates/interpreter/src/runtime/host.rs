@@ -90,8 +90,10 @@ fn install_prelude(
     let map_backing_type = super::prelude::map::map_backing_struct(store.engine(), &intr)?;
     let set_backing_type = super::prelude::set::set_backing_struct(store.engine(), &intr)?;
     let member_functions = super::prelude::member::functions(linker, store);
+    let member_constants = super::prelude::member::constants(linker, store);
     store.data_mut().host_abi = Some(HostAbi {
         member_functions,
+        member_constants,
         string_type: intr.string,
         uint8_type: intr.uint8_array,
         array_type: intr.array,
@@ -757,6 +759,7 @@ pub(crate) fn read_code_unit(
 /// instance per call.
 pub struct HostAbi {
     pub(crate) member_functions: std::collections::BTreeMap<String, wasmtime::Func>,
+    pub(crate) member_constants: std::collections::BTreeMap<String, wasmtime::Global>,
     pub(crate) string_type: StructType,
     pub(crate) uint8_type: StructType,
     pub(crate) array_type: StructType,

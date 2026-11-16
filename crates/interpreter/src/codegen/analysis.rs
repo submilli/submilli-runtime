@@ -1517,6 +1517,12 @@ impl CodegenAnalysis {
         arity: usize,
         ret: &Type,
     ) -> Result<(), crate::compiler_error::CompilerFailure> {
+        // A structural method can live on a constructor closure as well as
+        // an object shape. Its property lookup uses the live carrier.
+        self.dependency_usage.note_member(crate::mangle::extend(
+            &crate::mangle::prelude("ObjectConstructor"),
+            "#getField",
+        ));
         if crate::typechecker::infer::narrowing::strip_nullish(receiver_ty)
             .primitive_union_members()
             .is_some()
