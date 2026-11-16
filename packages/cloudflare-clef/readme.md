@@ -56,9 +56,11 @@ function main(): string {
 
 `model` is `clef` (27B, the default) or `clef-flash` (9B). `noul`, `choice`, and
 `score` make one request for one question, as in `@submilli/typesafe`.
-Every failure throws `ClefError`, including the builders' validation errors. The Package reports
-token usage to the run's cost without a dollar amount, because Workers AI bills
-in neurons after a daily free allowance.
+Validation, credential, and HTTP-status failures throw `ClefError`. A denied
+capability throws `PermissionDeniedError`, and a transport failure such as a
+timeout throws a plain `Error` from `submilli:http`. The Package reports token
+usage to the run's cost without a dollar amount, because Workers AI bills in
+neurons after a daily free allowance.
 
 ## Development
 

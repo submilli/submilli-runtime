@@ -50,7 +50,9 @@ JSON state only.
 
 ## Errors
 
-Every failure throws `ClefError`, with `code`, `status`, and `retryAfter`.
+Validation, credential, and HTTP-status failures throw `ClefError`, with `code`,
+`status`, and `retryAfter`. A denied capability throws `PermissionDeniedError`, and
+a transport failure such as a timeout throws a plain `Error` from `submilli:http`.
 Invalid questions, state, or model names fail with `invalid_argument` before any
 request. Request failures use `missing_credentials`, `invalid_credentials`,
 `invalid_request`, `unauthorized`, `forbidden`, `rate_limited`, `http_error`, or
