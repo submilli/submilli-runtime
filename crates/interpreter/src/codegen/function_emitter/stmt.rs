@@ -858,6 +858,11 @@ fn emit_array_index_store(
             .ty,
         &Type::Array(Box::new(Type::Unknown)),
     )?;
+    let array_local = emitter.add_anonymous_local(ValType::Ref(RefType {
+        nullable: false,
+        heap_type: HeapType::Concrete(array_idx),
+    }))?;
+    emitter.instruction(Instruction::LocalTee(array_local));
     emitter.instruction(Instruction::LocalGet(key));
     super::expr::emit_index_number(
         emitter,
@@ -874,6 +879,24 @@ fn emit_array_index_store(
         field_index: 1,
     });
     emitter.instruction(Instruction::LocalSet(raw_arr_local));
+    // Only the current end can grow a dense array. The RHS may have changed
+    // the length, so decide between append and overwrite after it runs.
+    emitter.instruction(Instruction::LocalGet(idx_f64_local));
+    emitter.instruction(Instruction::LocalGet(length));
+    emitter.instruction(Instruction::F64ConvertI32U);
+    emitter.instruction(Instruction::F64Eq);
+    emitter.emit_if(BlockType::Empty);
+    let append = ctx
+        .symbols
+        .func_idx(&crate::mangle::extend(
+            &crate::mangle::prelude("Array"),
+            "append",
+        ))
+        .ok_or_else(|| crate::codegen::internal_failure("array append helper imported"))?;
+    emitter.instruction(Instruction::LocalGet(array_local));
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::Call(append));
+    emitter.emit_else();
     let idx_local = emit_checked_index_with_length(
         emitter,
         ctx,
@@ -886,6 +909,7 @@ fn emit_array_index_store(
     emitter.instruction(Instruction::LocalGet(idx_local));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::ArraySet(raw_array_idx));
+    emitter.emit_end();
     Ok(())
 }
 

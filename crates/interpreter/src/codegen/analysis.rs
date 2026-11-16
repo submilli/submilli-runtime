@@ -956,12 +956,16 @@ impl CodegenAnalysis {
             TypedStmtKind::AssignIndex {
                 receiver, elem_ty, ..
             } => {
-                if ta
+                let receiver_ty = ta
                     .source_type(*receiver)
-                    .map_err(crate::codegen::arena_failure)?
-                    .indexes_by_name()
-                {
+                    .map_err(crate::codegen::arena_failure)?;
+                if receiver_ty.indexes_by_name() {
                     self.note_record_helpers();
+                } else if !matches!(receiver_ty.lowered(), Type::Uint8Array) {
+                    self.dependency_usage.note_member(crate::mangle::extend(
+                        &crate::mangle::prelude("Array"),
+                        "append",
+                    ));
                 }
                 self.visit_type_at(elem_ty, stmt.span)?;
                 self.note_index_check(ta, Some(*receiver))?;

@@ -68,11 +68,13 @@ function main(): void {
   j[growTo(j, 3) - 2] = 42;
   assert(j.length === 3 && j[1] === 42, "the index expression grew the array");
 
-  // A shrinking RHS must still throw: the check sees the new, shorter length.
+  // A shrinking RHS can turn an overwrite into an append.
   const d: number[] = [1, 2, 3];
+  d[2] = shrink(d);
+  assert(d.length === 3 && d[2] === 5, "append uses the post-pop length");
   let threw = false;
   try {
-    d[2] = shrink(d);
+    d[3] = shrink(d);
   } catch (e) {
     threw = true;
   }
