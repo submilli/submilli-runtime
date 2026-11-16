@@ -248,10 +248,10 @@ function evaluateSingle(state: unknown, question: Question, requestedModel: stri
 }
 
 function evaluate(request: BatchRequest): BatchResponse {
-    const body = buildRequestBody(request);
+    const body = encodeBatchRequest(request, "jev-latest");
     const response = post("https://api.typesafe.ai/v1/systemone", body, authHeaders());
     if (!response.ok) throw typesafeHttpError(response.status, response.headers.get("retry-after") ?? null);
-    const decoded = decodeResponse(response.body, request.questions);
+    const decoded = decodeBatchResult(parseBody(response.body), request.questions);
     reportCost(decoded);
     return decoded;
 }
@@ -287,13 +287,15 @@ function reportCost(response: BatchResponse): void {
 }
 
 /**
- * Build and validate the payload without credentials or HTTP.
+ * Validate a batch and encode it as a System One request body, without credentials or HTTP.
+ * Programs call `batch`; this is for Packages that call another host of the same API.
  * @param request The batch request to serialize.
+ * @param defaultModel The model to send when the request names none.
  * @returns The JSON request body.
  */
-function buildRequestBody(request: BatchRequest): string {
+export function encodeBatchRequest(request: BatchRequest, defaultModel: string): string {
     requireDescription(request.state, "state");
-    const model = request.model ?? "jev-latest";
+    const model = request.model ?? defaultModel;
     if (model.trim().length === 0) throw invalidArgument("model cannot be blank");
     if (request.questions.size === 0) throw invalidArgument("questions cannot be empty");
     for (const [id, question] of request.questions) {
@@ -307,14 +309,15 @@ function buildRequestBody(request: BatchRequest): string {
 }
 
 /**
- * Parse typed answers and verify they match the requested IDs and criteria.
- * @param body The raw JSON response body.
+ * Decode a parsed System One result and verify it answers exactly the questions sent.
+ * Programs call `batch`; this is for Packages that call another host of the same API.
+ * @param result The parsed JSON result, with `model`, `answers`, and `usage`.
  * @param questions The questions that were sent, used to verify the answers.
  * @returns The decoded batch response.
  */
-function decodeResponse(body: string, questions: Map<string, Question>): BatchResponse {
+export function decodeBatchResult(result: unknown, questions: Map<string, Question>): BatchResponse {
     try {
-        const wire = JSON.parse(body) as { model: string; answers: unknown; usage: Usage };
+        const wire = result as { model: string; answers: unknown; usage: Usage };
         const answers = new Map<string, Answer>();
         requireObject(wire.answers);
         for (const [id, value] of Object.entries(wire.answers)) answers.set(id, decodeAnswer(value));
@@ -347,6 +350,14 @@ function typesafeHttpError(status: number, retryAfter: string | null): TypeSafeE
     else if (status === 429) code = "rate_limited";
     else if (status === 529) code = "overloaded";
     return new TypeSafeError(code, "TypeSafe request failed with HTTP " + status.toString(), status, retryAfter);
+}
+
+function parseBody(body: string): unknown {
+    try {
+        return JSON.parse(body);
+    } catch (cause) {
+        throw invalidResponse();
+    }
 }
 
 function questionJson(question: Question): string {

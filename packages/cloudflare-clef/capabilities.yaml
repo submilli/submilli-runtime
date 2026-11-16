@@ -1,0 +1,13 @@
+namespace: submilli
+provides:
+- name: cloudflare.com/clef
+  description: Evaluate independent semantic judgments together; code owns subsequent actions.
+  fields: {}
+requires:
+- capability: cost.report
+- capability: http.post
+  filter: host == "api.cloudflare.com"
+- capability: secrets.get
+  filter: name == "CLOUDFLARE_ACCOUNT_ID"
+- capability: secrets.get
+  filter: name == "CLOUDFLARE_API_TOKEN"
