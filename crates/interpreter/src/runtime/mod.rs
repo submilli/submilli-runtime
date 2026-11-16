@@ -140,7 +140,7 @@ pub struct VfsInfo {
     pub size_limit: Option<u64>,
 }
 
-/// The JSON properties host-backed values show, by backing struct.
+/// The properties host-backed values show, by backing struct.
 pub(crate) type HostViews = Vec<(wasmtime::StructType, crate::stdlib::abi::HostProperties)>;
 
 pub struct StoreData {
@@ -260,8 +260,8 @@ pub struct StoreData {
     /// This store's intrinsic types, built on first use; see
     /// [`crate::runtime::intrinsic_types::intrinsic_types`].
     pub(crate) intrinsic_types: Option<Arc<crate::runtime::intrinsic_types::IntrinsicTypes>>,
-    /// The JSON properties of each host-backed value's backing struct, built on
-    /// first use; see [`crate::stdlib::abi::json_properties`].
+    /// The properties of each host-backed value's backing struct, built on
+    /// first use; see [`crate::stdlib::abi::host_properties`].
     pub(crate) host_views: Option<HostViews>,
     /// Bodies paired with the immutable host-owned vtable globals.
     pub(crate) host_vtable_bodies: Vec<prelude::vtable::HostVtableBodies>,

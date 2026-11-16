@@ -28,9 +28,6 @@ pub(super) enum MemberFieldMiss {
     /// It declares it as a method. A union read resolves by field name at
     /// runtime; methods live in the vtable, not the field payload.
     Method,
-    /// A host interface's property, reachable only through a getter import
-    /// keyed to that one interface.
-    HostDispatched,
 }
 
 impl<'a> Inferer<'a> {
@@ -419,12 +416,10 @@ impl<'a> Inferer<'a> {
     /// Field read type for one member of a union receiver, resolved by the same
     /// authority the single-member receiver uses — the interface's *property*
     /// map, not its methods; `class_field_visible`, so module-scoped privacy
-    /// still applies. Compare `narrow_scopes::narrow_source_field_ty`, which
-    /// answers the same question for a *narrow source*: it accepts any
-    /// interface dispatch and skips `null` members, because it is rebuilding a
-    /// read the access site already accepted rather than deciding one.
+    /// still applies. Built-in properties use the same declared read type;
+    /// codegen selects their getter from the live receiver.
     ///
-    /// The `Err` carries which of the three rejections it was, produced at the
+    /// The `Err` carries the rejection reason, produced at the
     /// site that knows. The caller turns it into a diagnostic naming the member;
     /// it must not fall back to a laxer lookup, or the read would compile to a
     /// shape scan for something the member doesn't carry.
@@ -442,6 +437,15 @@ impl<'a> Inferer<'a> {
                 .map(ObjectField::read_ty)
                 .ok_or(MemberFieldMiss::Absent);
         }
+        if field == "length"
+            && let Some(ty) = super::expr::tuple_receiver_length_type(member)
+        {
+            return Ok(ty);
+        }
+        if let Some((sig, bindings, _, _)) = self.lookup_interface_property(member, field) {
+            let ty = substitute_or_record(&sig.ty, &bindings, &self.type_limits);
+            return Ok(ObjectField::widen_optional(sig.optional, ty));
+        }
         match member.peel() {
             Type::Object { fields, .. } => fields
                 .get(field)
@@ -452,31 +456,11 @@ impl<'a> Inferer<'a> {
                         .map(|index| index.read_ty())
                 })
                 .ok_or(MemberFieldMiss::Absent),
-            Type::InterfaceRef { .. } => {
-                let Some((sig, bindings, _, dispatch)) =
-                    self.lookup_interface_property(member, field)
-                else {
-                    // An index signature backs every name it doesn't declare.
-                    return self
-                        .resolver()
-                        .index_for_name(member, field)
-                        .map(|index| index.read_ty())
-                        .ok_or(MemberFieldMiss::Absent);
-                };
-                // Every user-declared interface is VTable-dispatched and reads
-                // through the shape scan, which is what a union receiver can
-                // emit. A Direct/Static one reads through a getter import keyed
-                // by its own interface — a union has no single key.
-                if dispatch != crate::Dispatch::VTable {
-                    return Err(MemberFieldMiss::HostDispatched);
-                }
-                let ty = if bindings.is_empty() {
-                    sig.ty.clone()
-                } else {
-                    substitute_or_record(&sig.ty, &bindings, &self.type_limits)
-                };
-                Ok(ObjectField::widen_optional(sig.optional, ty))
-            }
+            Type::InterfaceRef { .. } => self
+                .resolver()
+                .index_for_name(member, field)
+                .map(|index| index.read_ty())
+                .ok_or(MemberFieldMiss::Absent),
             Type::ClassRef { mangled, args, .. } => {
                 let (sig, _decl) = self
                     .class_field_visible(mangled, args, field)
@@ -485,6 +469,12 @@ impl<'a> Inferer<'a> {
             }
             _ => Err(MemberFieldMiss::Absent),
         }
+    }
+
+    /// A structural field carrier or a built-in with the requested property.
+    /// Built-ins read through their live carrier rather than a shape payload.
+    pub(super) fn can_read_union_field(&self, member: &Type, field: &str) -> bool {
+        Self::is_field_bearing(member) || self.lookup_interface_property(member, field).is_some()
     }
 
     /// The field map of one union member, expanded through the type registry so

@@ -1693,7 +1693,7 @@ fn host_value_json_slot(store: &mut Store<StoreData>, intr: &IntrinsicTypes) -> 
             Box::new(async move {
                 let value = abi_arg(params, 0)?;
                 let object = as_struct(caller, value, "host value toJson")?;
-                let properties = crate::stdlib::abi::json_properties(caller, &object)?;
+                let properties = crate::stdlib::abi::host_properties(caller, &object)?;
                 let output = serialization::host_value(caller, &object, properties).await?;
                 let st = write_submilli_string_struct_units(&mut *caller, output.units())?;
                 *abi_result(results, 0)? = Val::AnyRef(Some(st.to_anyref()));

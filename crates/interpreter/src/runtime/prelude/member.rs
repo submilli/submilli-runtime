@@ -475,9 +475,7 @@ pub(super) async fn builtin_property(
         if value::is_callable(caller, object)? {
             return super::undefined::value(caller);
         }
-        return Err(host::type_error(format!(
-            "Cannot read property '{name}' of this value by name"
-        )));
+        return host_property(caller, object, name);
     };
     let indexed = ["String", "Array", "Uint8Array"]
         .iter()
@@ -496,6 +494,34 @@ pub(super) async fn builtin_property(
         }
         (_, None) => super::undefined::value(caller),
     }
+}
+
+/// Host views describe the same fields their registered property getters read.
+/// Their backing type identifies the view even through a structural union.
+fn host_property(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    let object = super::iterator::as_struct(caller, object, "property receiver")?;
+    let properties = crate::stdlib::abi::host_properties(caller, &object)?;
+    if properties.is_empty() {
+        return Err(host::type_error(format!(
+            "Cannot read property '{name}' of this value by name"
+        )));
+    }
+    for &(property, field) in properties {
+        crate::runtime::fuel::charge(
+            &mut *caller,
+            crate::runtime::fuel::SCAN,
+            property.len() as u64,
+        )?;
+        if property == name {
+            let value = object.field(&mut *caller, field)?;
+            return box_result(caller, value);
+        }
+    }
+    super::undefined::value(caller)
 }
 
 /// Native methods are unbound functions shared by all instances of their carrier.

@@ -1231,9 +1231,6 @@ impl<'a> Inferer<'a> {
                     "`{name}` is a method on `{missing}`, and a union receiver reads only fields"
                 )
             }
-            MemberFieldMiss::HostDispatched => format!(
-                "`{name}` on `{missing}` is a built-in property, which a union receiver cannot reach"
-            ),
         };
         let mut help = vec![
             self.format_definition(missing),
@@ -1270,8 +1267,8 @@ impl<'a> Inferer<'a> {
         rw_op: Option<RwOp>,
     ) {
         use super::lookup::MemberFieldMiss;
-        // The same gate the read side applies before it treats a receiver as a
-        // union of shapes. A union carrying `null` or a primitive fails for a
+        // Writes still require structural field carriers, even though reads
+        // also accept built-in properties. A union carrying `null` or a primitive fails for a
         // different reason — that member has no fields at all — and the
         // narrow-to-one-member advice below would name `instanceof` at a
         // receiver whose fix is a null check.
@@ -1304,13 +1301,6 @@ impl<'a> Inferer<'a> {
             Some((missing, MemberFieldMiss::Method)) => (
                 format!(
                     "`{field}` is a method on `{missing}`; methods are fixed at their declaration"
-                ),
-                Some(missing),
-            ),
-            Some((missing, MemberFieldMiss::HostDispatched)) => (
-                format!(
-                    "`{field}` on `{missing}` is a built-in property, which a union receiver \
-                     cannot assign through"
                 ),
                 Some(missing),
             ),
