@@ -11,10 +11,12 @@ interface Textual {
 interface NumericFields {
   (value: string): number;
   isInteger: (value: unknown) => boolean;
+  parseInt: (text: string, radix?: number) => number;
 }
 interface TextualFields {
   (value: number): string;
   fromCharCode: (...codes: number[]) => string;
+  fromCodePoint: (...points: number[]) => string;
 }
 interface FunctionMeta { (value: string): number; length?: number; }
 let order = "";
@@ -43,6 +45,9 @@ function main(): void {
   const numberFields: NumericFields = Number;
   const integer = numberFields.isInteger;
   assert(integer(3));
+  assert(integer.length === 1);
+  assert(numberFields.parseInt.length === 2);
+  assert(numberFields.parseInt("10") === 10);
   assert(!integer("3"));
   assert(number.absent === undefined);
   assert(inspect(Number) === 9007199254740991);
@@ -60,6 +65,9 @@ function main(): void {
   const textFields: TextualFields = String;
   const chars = textFields.fromCharCode;
   assert(chars(72, 105) === "Hi");
+  assert(chars.length === 1);
+  assert(textFields.fromCodePoint.length === 1);
+  assert(textFields.fromCodePoint(72, 105) === "Hi");
   assert(chars(0xd800).charCodeAt(0) === 0xd800);
   assert(text?.fromCharCode(72, 105) === "Hi");
   assert(text.fromCharCode(...[72, 105]) === "Hi");

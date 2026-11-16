@@ -579,6 +579,8 @@ fn native_method_length(interface: &str, name: &str, parameters: &Parameters) ->
         .strip_prefix("submilli:prelude#")
         .unwrap_or(interface);
     match (interface, name) {
+        ("StringConstructor", "fromCharCode" | "fromCodePoint") => 1,
+        ("NumberConstructor", "parseInt") => 2,
         (
             "Array",
             "at" | "concat" | "every" | "fill" | "filter" | "find" | "findIndex" | "findLast"
