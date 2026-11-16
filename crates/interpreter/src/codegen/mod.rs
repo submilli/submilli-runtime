@@ -2462,10 +2462,10 @@ pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {
     match receiver_ty.lowered() {
         // A hybrid (`F & { label: string }`) is a callable object shape,
         // erased to `$Object`.
-        Type::InterfaceRef { .. } | Type::Unknown | Type::Intersection(_) => true,
-        Type::Union(members) => members
-            .iter()
-            .any(|member| !matches!(member.lowered(), Type::Object { .. })),
+        Type::Object { .. } | Type::InterfaceRef { .. } | Type::Unknown | Type::Intersection(_) => {
+            true
+        }
+        Type::Union(_) => true,
         _ => false,
     }
 }

@@ -17,7 +17,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> Result<()> {
     let string = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(intr.string)));
     let object = ValType::Ref(RefType::new(
         false,
-        HeapType::ConcreteStruct(intr.object_shape),
+        HeapType::ConcreteStruct(intr.object.clone()),
     ));
     let options = ValType::Ref(RefType::new(true, HeapType::ConcreteStruct(intr.object)));
 

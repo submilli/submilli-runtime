@@ -67,7 +67,7 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
         engine,
         FuncType::new(
             engine,
-            [obj.clone(), types.object_shape.clone()],
+            [obj.clone(), types.structural_object.clone()],
             [obj.clone()],
         ),
     )?;

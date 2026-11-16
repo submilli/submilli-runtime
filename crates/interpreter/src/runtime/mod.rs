@@ -275,6 +275,8 @@ pub struct StoreData {
     pub(crate) call_metadata_type: Option<wasmtime::StructType>,
     pub(crate) iterator_functions: [Option<wasmtime::Func>; 14],
     pub(crate) iterator_constants: [Option<wasmtime::Global>; 6],
+    /// One rooted function per declared native member; preserves method identity.
+    pub(crate) builtin_method_values: std::collections::BTreeMap<String, wasmtime::Global>,
     /// The object each static-dispatch binding is as a value, by its string
     /// form; see `prelude::object::static_value`.
     pub(crate) static_values: std::collections::BTreeMap<Vec<u16>, wasmtime::Global>,
@@ -386,6 +388,7 @@ impl StoreData {
             call_metadata_type: None,
             iterator_functions: [None; 14],
             iterator_constants: [None; 6],
+            builtin_method_values: std::collections::BTreeMap::new(),
             static_values: std::collections::BTreeMap::new(),
             parameter_cache: Default::default(),
             regex_input: None,

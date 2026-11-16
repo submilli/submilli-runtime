@@ -671,6 +671,8 @@ All of these first call `primitive()` (`P/value.rs:286`) on each operand: a boxe
 | `submilli:prelude#__value_defaults_fit` | read two boxed numbers, unwrap bounded adapter chain, `accepts_arguments` (cached metadata), box boolean (`P/member.rs:146`) | `CALL + ELEM(adapter steps) + [metadata miss] COPY + SCAN + PARSE(metadata units)` | before | No guest re-entry. Shared cache and 128-adapter bound; old PARSE term was proposed but not literally implemented. Float -> `usize` casts with `as`. |
 | `submilli:prelude#__value_property` | read name as UTF-8; `conversion_method`; `length` fast path for string/array/Uint8Array; otherwise `lookup` + empty args array + `invoke` (`P/member.rs:280`) | `CALL + SCAN(len(name)) + ELEM(f) + SCAN(sum len(name_i))` ; fallback: + `__value_member` formula + `__value_invoke` formula | before, callee charges itself | The object-field scan runs twice on the fallback path (once here, once inside `lookup`). |
 
+| Native method values (`builtin_property`) | cache unbound closures by declared member key; initialize argument metadata once | `COPY(key bytes) + HASH(key bytes)`; miss adds `ELEM(parameters)` and shared string/metadata charges | before | Cache bounded by declared native members. Invocation pays `CALL + ELEM(argument slots)` plus shared argument binding and the native callee's charge. |
+
 ### Error classes
 
 `construct` (`P/error.rs:678`) allocates the `name` string (constant, <= 21 units), a payload array of 2 (5 for `PermissionDeniedError`) and the struct; the message string is passed by reference, not copied. `constructor_init` (`P/error.rs:525`) writes 2-5 slots of an existing payload.

@@ -16,6 +16,7 @@ use crate::runtime::fuel;
 pub struct Closure {
     func: Func,
     env: Val,
+    native_length: Option<usize>,
 }
 
 impl Closure {
@@ -26,6 +27,7 @@ impl Closure {
         args: &[Val],
     ) -> wasmtime::Result<Val> {
         let bound = Self {
+            native_length: self.native_length,
             func: self.func,
             env: bind_receiver(caller, self.env, receiver)?,
         };
@@ -152,6 +154,9 @@ impl Closure {
     /// alike, so an optional parameter ends the count too, where the
     /// JavaScript TypeScript emits for `x?` would count it.
     pub(crate) fn length(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<usize> {
+        if let Some(length) = self.native_length {
+            return Ok(length);
+        }
         let declared = self.declared_arity(caller)?;
         Ok(match super::arguments::metadata(caller, &self.env)? {
             Some(params) => params
@@ -353,7 +358,30 @@ pub(crate) fn read(
         }
     };
     let env = st.field(&mut *caller, 2)?;
-    Ok(Closure { func, env })
+    let vtable = st.field(&mut *caller, 0)?;
+    let native_length = native_function_length(caller, vtable)?;
+    Ok(Closure {
+        func,
+        env,
+        native_length,
+    })
+}
+
+fn native_function_length(
+    caller: &mut Caller<'_, StoreData>,
+    vtable: Val,
+) -> wasmtime::Result<Option<usize>> {
+    let Val::AnyRef(Some(reference)) = vtable else {
+        return Ok(None);
+    };
+    let vtable = reference.unwrap_struct(&mut *caller)?;
+    if vtable.ty(&mut *caller)?.fields().len() <= 4 {
+        return Ok(None);
+    }
+    Ok(match vtable.field(&mut *caller, 4)? {
+        Val::I32(length) => usize::try_from(length).ok(),
+        _ => None,
+    })
 }
 
 pub(super) fn receiver_type(
@@ -482,6 +510,7 @@ mod tests {
             move |mut caller, _, _| {
                 Box::new(async move {
                     let invalid = Closure {
+                        native_length: None,
                         func: invalid,
                         env: Val::null_any_ref(),
                     };
@@ -495,6 +524,7 @@ mod tests {
                     assert!(invalid.call_dynamic(&mut caller, &[]).await.is_err());
                     assert!(invalid.call_void_args(&mut caller, &[]).await.is_err());
                     let healthy = Closure {
+                        native_length: None,
                         func: healthy,
                         env: Val::null_any_ref(),
                     };
@@ -548,7 +578,11 @@ mod tests {
                     )?;
                     let env = Val::AnyRef(Some(wrapper.to_anyref()));
                     let before = caller.data().tenant_limits.host_attached_bytes();
-                    let invalid = Closure { func: invalid, env };
+                    let invalid = Closure {
+                        native_length: None,
+                        func: invalid,
+                        env,
+                    };
                     for error in [
                         invalid.accepts_arguments(&mut caller, 0).unwrap_err(),
                         invalid.arguments_read(&mut caller).unwrap_err(),
@@ -566,7 +600,11 @@ mod tests {
                     }
                     assert!(matches!(wrapper.field(&mut caller, 2)?, Val::I64(0)));
                     assert_eq!(caller.data().tenant_limits.host_attached_bytes(), before);
-                    let healthy = Closure { func: healthy, env };
+                    let healthy = Closure {
+                        native_length: None,
+                        func: healthy,
+                        env,
+                    };
                     assert!(healthy.accepts_arguments(&mut caller, 1)?);
                     healthy
                         .call_dynamic(&mut caller, &[Val::null_any_ref()])

@@ -3686,6 +3686,11 @@ fn emit_object_spread(
             emitter.instruction(null_object.clone());
         }
         emitter.instruction(Instruction::Call(merge));
+        // The spread helper always constructs an object shape, even though its
+        // public structural result now occupies a universal object slot.
+        emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+            intrinsics.object_shape,
+        )));
         if let Some(NonShapeSource {
             accumulator,
             opaque,
@@ -3702,6 +3707,11 @@ fn emit_object_spread(
             emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
             emitter.instruction(null_object.clone());
             emitter.instruction(Instruction::Call(merge));
+            // The spread helper always constructs an object shape, even though its
+            // public structural result now occupies a universal object slot.
+            emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+                intrinsics.object_shape,
+            )));
             emitter.emit_end();
         }
     }
@@ -3727,7 +3737,8 @@ fn emit_spread_shape_argument(
 fn may_hold_non_shape(ty: &Type) -> bool {
     match ty.lowered() {
         Type::Union(members) => members.iter().any(may_hold_non_shape),
-        Type::Null
+        Type::Object { .. }
+        | Type::Null
         | Type::Undefined
         | Type::Boolean
         | Type::BooleanLiteral(_)
@@ -3920,21 +3931,10 @@ fn emit_spread_shape_checked(
     Ok(())
 }
 
-/// Coerces a field-read receiver already on the stack to `(ref $ObjectShape)`,
-/// which is what the field-name scan takes. Only receivers that lower to the
-/// universal `$Object` slot need it: an `InterfaceRef`, and any union carrying a
-/// nominal member (`value_type`'s mixed-union arm). A union of object shapes
-/// already lowers to an `$ObjectShape` subtype, and so does a class instance —
-/// its struct's header slots 0-2 are the `$ObjectShape` prefix.
-/// Coerce the receiver on the stack into an anonymous non-null
-/// `(ref $ObjectShape)` local, and return the slot.
-///
-/// Every property path — read, write, and read-modify-write — needs the
-/// receiver in a local it can push more than once, and every one of them needs
-/// the same coercion first: the helpers take `(ref $ObjectShape)` non-null,
-/// while an interface-typed receiver (or a union with a non-object member)
-/// lowers to `(ref null $Object)`. A receiver that is already a narrower
-/// `$ObjectShape` subtype needs nothing — Wasm subtyping accepts it.
+/// Store a receiver whose object-shape carrier has been established by dispatch.
+/// Structural object and interface slots use the universal object representation;
+/// class slots already carry an object-shape subtype. The name-scan helpers require
+/// a concrete, non-null shape and reuse this local across reads and writes.
 pub(super) fn stash_receiver_as_object_shape(
     emitter: &mut FunctionEmitter<'_>,
     receiver_ty: &Type,
@@ -8460,7 +8460,7 @@ fn emit_computed_object(
     };
     let object = emitter.add_anonymous_local(ValType::Ref(RefType {
         nullable: false,
-        heap_type: HeapType::Concrete(intr.object_shape),
+        heap_type: HeapType::Concrete(intr.object),
     }))?;
     for _ in 0..4 {
         emitter.instruction(Instruction::RefNull(HeapType::Concrete(intr.object)));

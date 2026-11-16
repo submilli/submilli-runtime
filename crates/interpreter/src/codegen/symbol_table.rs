@@ -1043,16 +1043,13 @@ impl SymbolTable {
                 })
             }
             Type::Object { .. } => {
-                // All objects lower to `$ObjectShape` (not the arity-specific subtype):
-                // sibling per-arity subtypes are not Wasm subtypes of each other, so
-                // width subtyping and object-only unions require `$ObjectShape` as the
-                // common supertype.
+                // Structural views preserve built-in carriers as well as object shapes.
                 let idx = self
                     .intrinsic_type_indices()
                     .ok_or_else(|| {
                         crate::codegen::internal_failure("intrinsics declared by codegen entry")
                     })?
-                    .object_shape;
+                    .object;
                 ValType::Ref(RefType {
                     nullable: false,
                     heap_type: HeapType::Concrete(idx),
@@ -1177,23 +1174,13 @@ impl SymbolTable {
                 if !has_function && lowered.iter().all(|&lowering| lowering == first_lowering) {
                     return Ok(first_lowering);
                 }
-                // Object-only union → `$ObjectShape`; mixed union → `$Object`.
-                let all_object_or_null = members
-                    .iter()
-                    .all(|m| matches!(m.lowered(), Type::Object { .. } | Type::Null));
-                let heap_idx = if all_object_or_null {
-                    self.intrinsic_type_indices()
-                        .ok_or_else(|| {
-                            crate::codegen::internal_failure("intrinsics declared by codegen entry")
-                        })?
-                        .object_shape
-                } else {
-                    self.intrinsic_type_indices()
-                        .ok_or_else(|| {
-                            crate::codegen::internal_failure("intrinsics declared by codegen entry")
-                        })?
-                        .object
-                };
+                // Structural members may carry built-ins, so unions share the universal slot.
+                let heap_idx = self
+                    .intrinsic_type_indices()
+                    .ok_or_else(|| {
+                        crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                    })?
+                    .object;
                 // Nullable iff some member *lowers* nullable, not iff one is
                 // spelled `null`: a `TypeVar`, `GenericParam`, `unknown`, or an
                 // unrecorded `ClassRef` can hold null after instantiation

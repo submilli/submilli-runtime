@@ -363,16 +363,10 @@ impl Evaluator<'_> {
                 args,
                 ..
             } => {
-                if is_host_backed_interface(ty) {
-                    return Err(Some(format!(
-                        "`{ty}` is built by the host and has no structural form"
-                    )));
-                }
                 let Some(symbol) = self.types.lookup(mangled, name) else {
                     return Err(Some(format!("`{ty}` has no declaration")));
                 };
                 let TypeKind::Interface {
-                    methods,
                     index,
                     more_indexes,
                     generics,
@@ -381,11 +375,6 @@ impl Evaluator<'_> {
                 else {
                     return Err(Some(format!("`{ty}` is not an interface")));
                 };
-                if methods.values().any(|method| !method.generics.is_empty()) {
-                    return Err(Some(format!(
-                        "`{ty}` has a generic method, which a mapped type cannot carry"
-                    )));
-                }
                 let fields = self
                     .types
                     .interface_full_form(mangled, name, args)
@@ -418,6 +407,12 @@ impl Evaluator<'_> {
                     .cloned()
                     .collect(),
             )),
+            _ if builtin_view(ty).is_some() => {
+                let Some((_, view)) = builtin_view(ty) else {
+                    return Err(None);
+                };
+                self.structure(&view)
+            }
             _ => Err(Some(format!("`{ty}` is not an object type"))),
         }
     }

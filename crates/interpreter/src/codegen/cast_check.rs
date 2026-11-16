@@ -456,6 +456,19 @@ fn emit_structural_test_inner(
             index,
             more_indexes,
         } => {
+            if let Some(crate::FieldNarrowingTest::Interface(test)) =
+                ctx.ta.runtime_type_tests.get(ty)
+            {
+                return emit_interface_test_inner(
+                    emitter,
+                    ctx,
+                    value_local,
+                    ty,
+                    test,
+                    interface_stack,
+                    validator_state,
+                );
+            }
             let shape_idx = ctx.symbols.object_shape_type_idx().ok_or_else(|| {
                 crate::codegen::internal_failure("$ObjectShape intrinsic registered")
             })?;

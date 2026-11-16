@@ -1757,6 +1757,26 @@ impl<'a> Inferer<'a> {
         &self,
         child_ty: &Type,
     ) -> Option<crate::InterfaceNarrowingTest> {
+        if let Type::Object {
+            fields,
+            index,
+            more_indexes,
+        } = child_ty.peel()
+        {
+            let mut non_shape_carriers = self.primitive_interface_carriers(child_ty);
+            non_shape_carriers.extend(self.collection_interface_carriers(child_ty, "", fields));
+            return Some(crate::InterfaceNarrowingTest {
+                members: fields.clone(),
+                index: index.clone(),
+                more_indexes: more_indexes.clone(),
+                methods: Default::default(),
+                call: None,
+                shape_allowed: true,
+                non_shape_carriers,
+                nullable: false,
+                undefined: false,
+            });
+        }
         let (interface_ty, nullable, undefined) = match child_ty.peel() {
             Type::InterfaceRef { .. } => (child_ty.peel(), false, false),
             Type::Union(members) => {
