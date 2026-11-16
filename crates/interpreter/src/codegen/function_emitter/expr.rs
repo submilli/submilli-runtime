@@ -2675,7 +2675,9 @@ fn emit_postfix_unary(
                 )?;
                 return Ok(());
             }
-            if ctx.ta.has_string_index(&receiver_ty) {
+            if ctx.ta.has_string_index(&receiver_ty)
+                || crate::codegen::may_hold_builtin_value(&receiver_ty)
+            {
                 emit_expr(emitter, ctx, *receiver)?;
                 cast::emit_box(emitter, ctx, &receiver_ty)?;
                 let object =
@@ -5215,8 +5217,8 @@ fn emit_receiver_property_read_as(
         .symbols
         .intrinsic_type_indices()
         .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared by codegen entry"))?;
-    let allows_primitive = interface_may_hold_primitive(ctx.ta, receiver_ty);
-    if allows_primitive {
+    let allows_builtin = crate::codegen::may_hold_builtin_value(receiver_ty);
+    if allows_builtin {
         let receiver = emitter.add_anonymous_local(ctx.symbols.value_type(receiver_ty)?)?;
         emitter.instruction(Instruction::LocalTee(receiver));
         emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(
@@ -5275,7 +5277,7 @@ fn emit_receiver_property_read_as(
     if allows_closure {
         emitter.emit_end();
     }
-    if allows_primitive {
+    if allows_builtin {
         emitter.emit_end();
     }
     Ok(())
@@ -5338,27 +5340,6 @@ fn emit_dynamic_property_read(
     emitter.instruction(Instruction::GlobalGet(name));
     emitter.instruction(Instruction::Call(getter));
     cast::emit_cast_to(emitter, ctx, result_ty)
-}
-
-fn interface_may_hold_primitive(ast: &crate::TypedAst, ty: &Type) -> bool {
-    if let Type::Union(members) = ty.peel() {
-        return members
-            .iter()
-            .any(|member| interface_may_hold_primitive(ast, member));
-    }
-    let Some(crate::FieldNarrowingTest::Interface(test)) = ast.runtime_type_tests.get(ty.peel())
-    else {
-        return false;
-    };
-    test.non_shape_carriers.iter().any(|carrier| {
-        matches!(
-            carrier,
-            crate::InterfaceCarrier::String
-                | crate::InterfaceCarrier::Number
-                | crate::InterfaceCarrier::Boolean
-                | crate::InterfaceCarrier::BigInt
-        )
-    })
 }
 
 fn interface_property_may_be_absent_on_closure(
