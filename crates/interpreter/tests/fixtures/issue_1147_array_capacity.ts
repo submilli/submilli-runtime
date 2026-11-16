@@ -42,9 +42,9 @@ function main(): void {
     let readThrew = false;
     try { const value: number = small[3]; } catch (e) { readThrew = true; }
     assert(readThrew);
-    let appendThrew = false;
-    try { small[small.length] = 4; } catch (e) { appendThrew = true; }
-    assert(appendThrew && small.length === 3);
+    small[small.length] = 4;
+    assert(small.length === 4 && small[3] === 4);
+    assert(small.pop() === 4);
     let gapThrew = false;
     try { small[5] = 4; } catch (e) { gapThrew = true; }
     assert(gapThrew && small.length === 3);
@@ -52,8 +52,10 @@ function main(): void {
     // The RHS can grow within existing capacity, or shrink without releasing it.
     small[3] = grow(small);
     assert(small[3] === 7 && small.length === 4);
+    small[3] = shrink(small);
+    assert(small.length === 4 && small[3] === 8);
     let shrinkThrew = false;
-    try { small[3] = shrink(small); } catch (e) { shrinkThrew = true; }
+    try { small[4] = shrink(small); } catch (e) { shrinkThrew = true; }
     assert(shrinkThrew && small.length === 3);
     small[0]++;
     assert(small[0] === 2);

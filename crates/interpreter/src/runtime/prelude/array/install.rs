@@ -72,6 +72,20 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 
     let ft = |params: Vec<ValType>, results: Vec<ValType>| FuncType::new(&engine, params, results);
 
+    // Indexed writes append one already-boxed value without a rest array.
+    register_host_fn(
+        linker,
+        MODULE_NAME,
+        method_key("append"),
+        ft(vec![array.clone(), elem.clone()], vec![]),
+        |caller, params, _| {
+            let mut storage =
+                crate::runtime::array_storage::ArrayStorage::read(caller, abi_arg(params, 0)?)?;
+            storage.push(caller, *abi_arg(params, 1)?)?;
+            Ok(())
+        },
+    )?;
+
     // --- Accessors -------------------------------------------------------
     register_host_fn(
         linker,
@@ -821,6 +835,7 @@ pub fn declare(defs: &mut PackageDeclaration) {
         declare_method(defs, name, method_key(name), params, ret);
     };
 
+    m(defs, "append", vec![arr(), elem()], Type::Void);
     m(defs, "at", vec![arr(), n("index")], t_or_undefined());
     m(defs, "slice", vec![arr(), n("start"), n("end")], arr_ty());
     m(
