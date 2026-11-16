@@ -1,5 +1,5 @@
 import { label } from "submilli:test";
-import { Question, TypeSafeError, choiceQuestion, noulQuestion, scoreQuestion, batch, choice, noul, score, Answer,
+import { Question, TypeSafeError, decodeBatchResult, encodeBatchRequest, choiceQuestion, noulQuestion, scoreQuestion, batch, choice, noul, score, Answer,
     isNoulAnswer, isChoiceAnswer, isScoreAnswer } from "@submilli/typesafe";
 
 function expectCode(code: string, action: () => void): void {
@@ -23,6 +23,7 @@ function questions(): Map<string, Question> {
 
 function main(): void {
     testAnswerGuards();
+    testSharedCodec();
 
     label("question builders preserve structured instructions and criteria");
     const instructions = { question: 'Does the text request a "refund"?', source: "ticket.text" };
@@ -139,4 +140,28 @@ function testAnswerGuards(): void {
         else if (isScoreAnswer(answer)) total += answer.score;
     }
     assert(Math.abs(total - 2.65) < 0.000001, "positive branches narrow each answer variant");
+}
+
+function testSharedCodec(): void {
+    label("the exported codec fills in the default model and keeps an explicit one");
+    const one = new Map<string, Question>();
+    one.set("present", noulQuestion("Is an answer present?"));
+    const defaulted = JSON.parse(encodeBatchRequest({ state: "text", questions: one }, "other-model")) as { model: string };
+    const pinned = JSON.parse(encodeBatchRequest({ state: "text", questions: one, model: "pinned" }, "other-model")) as { model: string };
+    assert(defaulted.model === "other-model", "default model");
+    assert(pinned.model === "pinned", "explicit model");
+    expectCode("invalid_argument", () => { encodeBatchRequest({ state: null, questions: one }, "m"); });
+
+    label("the exported codec decodes a parsed result and rejects mismatches");
+    const usage = { input_tokens: 12, output_tokens: 0 };
+    const decoded = decodeBatchResult({ model: "m", answers: { present: { type: "noul", noul: 0.8 } }, usage: usage }, one);
+    const present = decoded.answers.get("present");
+    assert(decoded.model === "m" && isNoulAnswer(present) && decoded.usage.input_tokens === 12, "decoded result");
+    expectCode("invalid_response", () => { decodeBatchResult(null, one); });
+    expectCode("invalid_response", () => { decodeBatchResult({ model: "m", answers: {}, usage: usage }, one); });
+    expectCode("invalid_response", () => { decodeBatchResult({ model: " ", answers: { present: { type: "noul", noul: 0.8 } }, usage: usage }, one); });
+    expectCode("invalid_response", () => { decodeBatchResult({ model: "m", answers: { present: { type: "noul", noul: 0.8 } } }, one); });
+    expectCode("invalid_response", () => {
+        decodeBatchResult({ model: "m", answers: { present: { type: "noul", noul: 0.8 }, extra: { type: "noul", noul: 0.1 } }, usage: usage }, one);
+    });
 }

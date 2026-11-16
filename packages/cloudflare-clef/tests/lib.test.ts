@@ -38,7 +38,10 @@ function main(): void {
     label("only Clef models hosted on Workers AI are accepted");
     expectCode("invalid_argument", () => { batch({ state: "text", questions: questions(), model: "jev-latest" }); });
     expectCode("invalid_argument", () => { noul("text", "q", undefined, { model: "@cf/cloudflare/clef" }); });
+    expectCode("invalid_argument", () => { noul("text", "q", undefined, { model: "CLEF" }); });
+    expectCode("invalid_argument", () => { noul("text", "q", undefined, { model: "" }); });
 
     label("missing credentials fail before HTTP");
     expectCode("missing_credentials", () => { noul("text", "Is a refund requested?"); });
+    expectCode("missing_credentials", () => { batch({ state: "text", questions: questions(), model: "clef-flash" }); });
 }

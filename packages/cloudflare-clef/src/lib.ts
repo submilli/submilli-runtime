@@ -261,8 +261,9 @@ function evaluateSingle(state: unknown, question: Question, model: string | unde
 }
 
 function evaluate(request: BatchRequest): BatchResponse {
-    const body = encode(request);
-    const route = ROUTES.get(request.model ?? DEFAULT_MODEL);
+    const model = request.model ?? DEFAULT_MODEL;
+    const body = encode(request, model);
+    const route = ROUTES.get(model);
     if (route === undefined) throw new ClefError("invalid_argument", "model must be clef or clef-flash");
     const credentials = readCredentials();
     const path = "client/v4/accounts/" + credentials.accountId + "/ai/run/" + route;
@@ -273,9 +274,9 @@ function evaluate(request: BatchRequest): BatchResponse {
     return decoded;
 }
 
-function encode(request: BatchRequest): string {
+function encode(request: BatchRequest, model: string): string {
     try {
-        return typesafe.encodeBatchRequest(request, DEFAULT_MODEL);
+        return typesafe.encodeBatchRequest(request, model);
     } catch (cause) {
         throw asClefError(cause);
     }
@@ -322,15 +323,15 @@ interface Credentials {
 }
 
 function readCredentials(): Credentials {
-    const accountId = (secrets.get("CLOUDFLARE_ACCOUNT_ID") ?? "").trim();
+    const accountId = (secrets.get("CLOUDFLARE_ACCOUNT_ID") ?? "").trim().toLowerCase();
     const token = (secrets.get("CLOUDFLARE_API_TOKEN") ?? "").trim();
     if (accountId.length === 0 || token.length === 0) {
         throw new ClefError("missing_credentials",
             "Bind CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the blueprint before using Clef");
     }
-    // The ID goes into the URL path; the capability filter allows only this shape.
+    // The ID goes into the URL path, and the generated capability filter checks only the host.
     if (!/^[0-9a-f]{32}$/.test(accountId)) {
-        throw new ClefError("missing_credentials", "CLOUDFLARE_ACCOUNT_ID must be a 32-character hexadecimal account ID");
+        throw new ClefError("invalid_credentials", "CLOUDFLARE_ACCOUNT_ID must be a 32-character hexadecimal account ID");
     }
     const headers = new Map<string, string>();
     headers.set("Authorization", "Bearer " + token);

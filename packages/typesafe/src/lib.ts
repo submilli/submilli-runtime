@@ -237,10 +237,12 @@ export function isScoreAnswer(answer: Answer | null | undefined): answer is Scor
     return answer !== null && answer !== undefined && answer.type === "score";
 }
 
+const DEFAULT_MODEL = "jev-latest";
+
 function evaluateSingle(state: unknown, question: Question, requestedModel: string | undefined): Answer {
     const questions = new Map<string, Question>();
     questions.set("answer", question);
-    const model = requestedModel ?? "jev-latest";
+    const model = requestedModel ?? DEFAULT_MODEL;
     const result = evaluate({ state: state, questions: questions, model: model });
     const answer = result.answers.get("answer");
     if (answer === undefined) throw invalidResponse();
@@ -248,7 +250,7 @@ function evaluateSingle(state: unknown, question: Question, requestedModel: stri
 }
 
 function evaluate(request: BatchRequest): BatchResponse {
-    const body = encodeBatchRequest(request, "jev-latest");
+    const body = encodeBatchRequest(request, DEFAULT_MODEL);
     const response = post("https://api.typesafe.ai/v1/systemone", body, authHeaders());
     if (!response.ok) throw typesafeHttpError(response.status, response.headers.get("retry-after") ?? null);
     const decoded = decodeBatchResult(parseBody(response.body), request.questions);

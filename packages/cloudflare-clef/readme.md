@@ -56,8 +56,7 @@ function main(): string {
 
 `model` is `clef` (27B, the default) or `clef-flash` (9B). `noul`, `choice`, and
 `score` make one request for one question, as in `@submilli/typesafe`.
-Cloudflare failures throw `ClefError`, a subclass of `TypeSafeError`, so one
-`catch` handles them and the builders' validation errors. The Package reports
+Every failure throws `ClefError`, including the builders' validation errors. The Package reports
 token usage to the run's cost without a dollar amount, because Workers AI bills
 in neurons after a daily free allowance.
 

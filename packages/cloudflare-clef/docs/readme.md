@@ -50,8 +50,8 @@ JSON state only.
 
 ## Errors
 
-Validation errors throw `TypeSafeError` with code `invalid_argument` before any
-request. Request failures throw `ClefError` (a `TypeSafeError`) with codes
-`missing_credentials`, `invalid_request`, `unauthorized`, `forbidden`,
-`rate_limited`, `http_error`, or `invalid_response`, plus `status` and
-`retryAfter`. Nothing retries automatically.
+Every failure throws `ClefError`, with `code`, `status`, and `retryAfter`.
+Invalid questions, state, or model names fail with `invalid_argument` before any
+request. Request failures use `missing_credentials`, `invalid_credentials`,
+`invalid_request`, `unauthorized`, `forbidden`, `rate_limited`, `http_error`, or
+`invalid_response`. Nothing retries automatically.
