@@ -13,7 +13,7 @@ function main(): void {
   assert(xs[0] === 99 && maybe({ a: 1 }, "a") === 1, "array writes and optional reads");
   let caught = 0;
   try { write(new Account(), "describe", () => "replaced"); } catch (e: TypeError) { caught += 1; }
-  try { read(xs, "push"); } catch (e: TypeError) { caught += 1; }
+  assert(typeof read(xs, "push") === "function");
   try { write(xs, 5, 1); } catch (e: RangeError) { caught += 1; }
-  assert(caught === 3, "methods are fixed, built-in methods are not read by name, writes stay in range");
+  assert(caught === 2, "methods are fixed and writes stay in range");
 }

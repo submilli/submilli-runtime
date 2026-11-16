@@ -744,16 +744,13 @@ pub fn emit_cast_to(
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
         }
         Type::Object { .. } => {
-            // `Type::Object` lowers to `(ref $ObjectShape)`,
-            // not the arity-specific subtype. The static arity does
-            // not pin runtime arity once width subtyping has erased
-            // it, so casting to a per-arity subtype here would trap
-            // for any widened value. Field reads/writes go through
-            // the per-shape getter/setter funcrefs on slots 2/3.
             let idx = ctx
                 .symbols
-                .object_shape_type_idx()
-                .ok_or_else(|| crate::codegen::internal_failure("$ObjectShape type registered"))?;
+                .intrinsic_type_indices()
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("intrinsics declared by codegen entry")
+                })?
+                .object;
             emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(idx)));
         }
         Type::Array(_) | Type::Tuple(_) => {

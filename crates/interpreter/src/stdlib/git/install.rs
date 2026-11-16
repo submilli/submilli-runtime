@@ -34,7 +34,7 @@ fn install_repository_reads(
     ));
     let object = ValType::Ref(RefType::new(
         false,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
+        HeapType::ConcreteStruct(intr.object.clone()),
     ));
     let bytes = ValType::Ref(RefType::new(
         false,
@@ -187,7 +187,7 @@ fn install_repository_writes(
     ));
     let object = ValType::Ref(RefType::new(
         false,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
+        HeapType::ConcreteStruct(intr.object.clone()),
     ));
     // Class method slots carry a value even when their source return type is void.
     let completion = argument.clone();

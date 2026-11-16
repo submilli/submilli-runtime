@@ -82,11 +82,8 @@ pub fn package_declaration() -> PackageDeclaration {
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
-    // A required object parameter lowers to a non-null shaped object.
-    let object = ValType::Ref(RefType::new(
-        false,
-        HeapType::ConcreteStruct(intr.object_shape),
-    ));
+    // A required object parameter lowers to a non-null structural object slot.
+    let object = ValType::Ref(RefType::new(false, HeapType::ConcreteStruct(intr.object)));
     let ty = FuncType::new(&engine, [object], []);
     register_host_fn_async(
         linker,

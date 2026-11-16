@@ -12034,14 +12034,14 @@ impl Inferer<'_> {
             .then(|| Type::union(collected.iter().map(|(ty, _)| ty.clone()).collect()))
     }
 
-    /// The return every other one is assignable to, if any.
+    /// The return every other one is a subtype of, if any.
     fn widest_return(&self, collected: &[(Type, Span)]) -> Option<Type> {
         collected
             .iter()
             .find(|(candidate, _)| {
                 collected
                     .iter()
-                    .all(|(other, _)| assignable(other, candidate, self.resolver()))
+                    .all(|(other, _)| strict_subtype(other, candidate, self.resolver()))
             })
             .map(|(widest, _)| widest.clone())
     }

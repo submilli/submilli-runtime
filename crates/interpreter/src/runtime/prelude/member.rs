@@ -262,7 +262,18 @@ pub(super) async fn call_builtin(
     } else {
         args.to_vec()
     };
-    let values: Vec<Val> = receiver.into_iter().chain(args).collect();
+    call_bound_builtin(caller, function, receiver, &args).await
+}
+
+/// Invoke a native function after its caller has applied defaults and packed rest arguments.
+async fn call_bound_builtin(
+    caller: &mut Caller<'_, StoreData>,
+    function: Func,
+    receiver: Option<Val>,
+    args: &[Val],
+) -> wasmtime::Result<Val> {
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, args.len() as u64)?;
+    let values: Vec<Val> = receiver.into_iter().chain(args.iter().copied()).collect();
     let signature = function.ty(&*caller);
     let mut inputs = Vec::new();
     for (index, slot) in signature.params().enumerate() {
@@ -416,9 +427,8 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
 /// `object[name]` on a built-in value (a string, array, `Uint8Array`, boxed
 /// primitive, `Map`, `Set`, `RegExp` or Temporal value), as a generic `o[k]`
 /// reads it once `T` turns out to be one: an element for a canonical index,
-/// or the named property. Reading a method by name would need a bound method
-/// value, which a built-in has none of, so it throws a `TypeError`. Any other
-/// name (`"-1"`, `"1.5"`) is missing, as on an object.
+/// or the named property. Methods are cached unbound closures; property calls
+/// supply their receiver through the closure ABI. Other names are missing.
 pub(super) async fn builtin_property(
     caller: &mut Caller<'_, StoreData>,
     object: &Val,
@@ -438,9 +448,7 @@ pub(super) async fn builtin_property(
         (Some(index), _) if indexed => {
             read_builtin_element(caller, object, &interface, index).await
         }
-        (_, Some(BuiltinMember::Method)) => Err(host::type_error(format!(
-            "Cannot read the method '{name}' of a built-in value by name"
-        ))),
+        (_, Some(BuiltinMember::Method)) => builtin_method_value(caller, &interface, name),
         (_, Some(BuiltinMember::Property)) => {
             read_builtin_property(caller, object, &interface, name).await
         }
@@ -449,6 +457,215 @@ pub(super) async fn builtin_property(
         }
         (_, None) => super::undefined::value(caller),
     }
+}
+
+/// Native methods are unbound functions shared by all instances of their carrier.
+/// The receiver environment is filled by the normal closure-call ABI, so extraction
+/// succeeds while an unbound invocation still reports a TypeError.
+fn builtin_method_value(
+    caller: &mut Caller<'_, StoreData>,
+    interface: &str,
+    name: &str,
+) -> wasmtime::Result<Val> {
+    use wasmtime::{Global, GlobalType, Mutability, StructRef, StructRefPre};
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::HASH,
+        interface.len().saturating_add(name.len()) as u64,
+    )?;
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::COPY,
+        interface.len().saturating_add(name.len()) as u64,
+    )?;
+    let key = format!("{interface}#{name}");
+    if let Some(global) = caller.data().builtin_method_values.get(&key).copied() {
+        return Ok(global.get(&mut *caller));
+    }
+    let function = caller
+        .data()
+        .host_abi
+        .as_ref()
+        .and_then(|abi| abi.member_functions.get(&key))
+        .copied()
+        .ok_or_else(|| host::type_error("Native method is unavailable"))?;
+    let parameters = builtin_parameters(&key)
+        .ok_or_else(|| host::fatal_host_error("native method parameters missing"))?;
+    let intr = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?;
+    let (function_ty, closure_ty) =
+        super::iterator::value_closure_type(caller.engine(), &intr, parameters.len())?;
+    let tag = Val::AnyRef(Some(
+        host::write_submilli_string_struct(caller, &key)?.to_anyref(),
+    ));
+    crate::runtime::fuel::charge(
+        &mut *caller,
+        crate::runtime::fuel::ELEM,
+        parameters.len() as u64,
+    )?;
+    let metadata = super::arguments::with_metadata(caller, tag, parameters)?;
+    let receiver_ty = super::closure::receiver_type(caller)?;
+    let pre = StructRefPre::new(&mut *caller, receiver_ty);
+    let env = Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &[metadata, Val::null_any_ref()])?.to_anyref(),
+    ));
+    let invoke = host::host_value_async(&mut *caller, function_ty, move |caller, params| {
+        Box::new(invoke_native_method(caller, function, params))
+    });
+    let vtable = native_method_vtable(
+        caller,
+        &intr,
+        native_method_length(interface, name, parameters),
+    )?;
+    let pre = StructRefPre::new(&mut *caller, closure_ty);
+    let value = Val::AnyRef(Some(
+        StructRef::new(
+            &mut *caller,
+            &pre,
+            &[vtable, Val::FuncRef(Some(invoke)), env, Val::I64(0)],
+        )?
+        .to_anyref(),
+    ));
+    let global = Global::new(
+        &mut *caller,
+        GlobalType::new(
+            ValType::Ref(RefType::new(true, HeapType::Any)),
+            Mutability::Const,
+        ),
+        value,
+    )?;
+    caller.data_mut().builtin_method_values.insert(key, global);
+    Ok(value)
+}
+
+/// Public native function lengths are independent of ABI slots and defaults.
+/// Core lengths follow the JavaScript intrinsic descriptors (Node 24.14.1).
+/// Other host interfaces expose their required positional parameters.
+fn native_method_length(interface: &str, name: &str, parameters: &Parameters) -> usize {
+    let interface = interface
+        .strip_prefix("submilli:prelude#")
+        .unwrap_or(interface);
+    match (interface, name) {
+        (
+            "Array",
+            "at" | "concat" | "every" | "fill" | "filter" | "find" | "findIndex" | "findLast"
+            | "findLastIndex" | "flatMap" | "forEach" | "includes" | "indexOf" | "join"
+            | "lastIndexOf" | "map" | "push" | "reduce" | "reduceRight" | "some" | "sort"
+            | "toSorted" | "unshift",
+        ) => 1,
+        ("Array", "copyWithin" | "slice" | "splice" | "toSpliced" | "with") => 2,
+        (
+            "Array",
+            "entries" | "flat" | "keys" | "pop" | "reverse" | "shift" | "toLocaleString"
+            | "toReversed" | "toString" | "values",
+        ) => 0,
+        (
+            "String",
+            "anchor" | "at" | "charAt" | "charCodeAt" | "codePointAt" | "concat" | "endsWith"
+            | "fontcolor" | "fontsize" | "includes" | "indexOf" | "lastIndexOf" | "link"
+            | "localeCompare" | "match" | "matchAll" | "padEnd" | "padStart" | "repeat" | "search"
+            | "startsWith",
+        ) => 1,
+        (
+            "String",
+            "big" | "blink" | "bold" | "fixed" | "isWellFormed" | "italics" | "normalize" | "small"
+            | "strike" | "sub" | "sup" | "toLocaleLowerCase" | "toLocaleUpperCase" | "toLowerCase"
+            | "toString" | "toUpperCase" | "toWellFormed" | "trim" | "trimEnd" | "trimLeft"
+            | "trimRight" | "trimStart" | "valueOf",
+        ) => 0,
+        ("String", "replace" | "replaceAll" | "slice" | "split" | "substr" | "substring") => 2,
+        ("Number", "toExponential" | "toFixed" | "toPrecision" | "toString") => 1,
+        ("Number", "toLocaleString" | "valueOf") => 0,
+        ("Boolean", "toString" | "valueOf") => 0,
+        ("BigInt", "toLocaleString" | "toString" | "valueOf") => 0,
+        ("Map", "delete" | "forEach" | "get" | "has") => 1,
+        ("Map", "set") => 2,
+        ("Map", "clear" | "entries" | "keys" | "values") => 0,
+        (
+            "Set",
+            "add"
+            | "delete"
+            | "difference"
+            | "forEach"
+            | "has"
+            | "intersection"
+            | "isDisjointFrom"
+            | "isSubsetOf"
+            | "isSupersetOf"
+            | "symmetricDifference"
+            | "union",
+        ) => 1,
+        ("Set", "clear" | "entries" | "keys" | "values") => 0,
+        ("RegExp", "exec" | "test") => 1,
+        ("RegExp", "compile") => 2,
+        ("RegExp", "toString") => 0,
+        (
+            "Uint8Array",
+            "entries" | "keys" | "reverse" | "toLocaleString" | "toReversed" | "toString"
+            | "values",
+        ) => 0,
+        (
+            "Uint8Array",
+            "at" | "every" | "fill" | "filter" | "find" | "findIndex" | "findLast"
+            | "findLastIndex" | "forEach" | "includes" | "indexOf" | "join" | "lastIndexOf" | "map"
+            | "reduce" | "reduceRight" | "set" | "some" | "sort" | "toSorted",
+        ) => 1,
+        ("Uint8Array", "copyWithin" | "slice" | "subarray" | "with") => 2,
+        _ => parameters
+            .iter()
+            .take_while(|(default, rest)| default.is_none() && !*rest)
+            .count(),
+    }
+}
+
+/// Field 4 is an i32 public length, distinct from an adapter's original reference.
+fn native_method_vtable(
+    caller: &mut Caller<'_, StoreData>,
+    intr: &crate::runtime::intrinsic_types::IntrinsicTypes,
+    arity: usize,
+) -> wasmtime::Result<Val> {
+    use wasmtime::{FieldType, Finality, Mutability, StorageType, StructRef, StructRefPre};
+    let length = i32::try_from(arity).map_err(host::fatal_host_error)?;
+    let Val::AnyRef(Some(base)) = host::host_closure_vtable(caller)? else {
+        return Err(host::fatal_host_error("closure vtable missing"));
+    };
+    let base = base.unwrap_struct(&mut *caller)?;
+    let mut fields: Vec<_> = intr.vtable.fields().collect();
+    fields.push(FieldType::new(
+        Mutability::Const,
+        StorageType::ValType(ValType::I32),
+    ));
+    let ty = crate::runtime::gc_singleton::singleton_struct(
+        caller.engine(),
+        Finality::Final,
+        Some(intr.vtable.clone()),
+        fields,
+    )?;
+    let mut values = Vec::new();
+    for index in 0..4 {
+        values.push(base.field(&mut *caller, index)?);
+    }
+    values.push(Val::I32(length));
+    let pre = StructRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        StructRef::new(&mut *caller, &pre, &values)?.to_anyref(),
+    )))
+}
+
+async fn invoke_native_method(
+    caller: &mut Caller<'_, StoreData>,
+    function: Func,
+    params: &[Val],
+) -> wasmtime::Result<Val> {
+    let Val::AnyRef(Some(env)) = *abi_arg(params, 0)? else {
+        return Err(host::fatal_host_error("native method environment missing"));
+    };
+    let env = env.unwrap_struct(&mut *caller)?;
+    let receiver = env.field(&mut *caller, 1)?;
+    require_receiver(caller, &receiver)?;
+    let args = params
+        .get(1..)
+        .ok_or_else(|| host::fatal_host_error("native method argument layout"))?;
+    call_bound_builtin(caller, function, Some(receiver), args).await
 }
 
 /// Element `index` of a string, array or byte array, read with `at`, which

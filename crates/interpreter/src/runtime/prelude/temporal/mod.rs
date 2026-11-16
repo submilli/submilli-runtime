@@ -25,7 +25,7 @@ pub(super) struct DirectTypes {
     engine: Engine,
     intr: IntrinsicTypes,
     object: ValType,
-    object_shape: ValType,
+    structural_object: ValType,
     string: ValType,
 }
 
@@ -37,9 +37,9 @@ impl DirectTypes {
             true,
             HeapType::ConcreteStruct(intr.object.clone()),
         ));
-        let object_shape = ValType::Ref(RefType::new(
+        let structural_object = ValType::Ref(RefType::new(
             false,
-            HeapType::ConcreteStruct(intr.object_shape.clone()),
+            HeapType::ConcreteStruct(intr.object.clone()),
         ));
         let string = ValType::Ref(RefType::new(
             false,
@@ -49,7 +49,7 @@ impl DirectTypes {
             engine,
             intr,
             object,
-            object_shape,
+            structural_object,
             string,
         })
     }

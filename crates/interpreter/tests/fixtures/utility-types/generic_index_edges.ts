@@ -43,7 +43,7 @@ function main(): void {
   assert(bytes[1] === 44 && fails(() => write(bytes, 2, 1)) === "range", "byte writes wrap and stay in range");
   const date = Temporal.PlainDate.from("2024-01-02");
   assert(read(date, "year") === 2024 && read(Temporal.Duration.from({ hours: 2 }), "hours") === 2, "Temporal getters");
-  assert(fails(() => read(date, "add")) === "type", "Temporal methods are not read by name");
+  assert(typeof read(date, "add") === "function", "Temporal methods can be read by name");
   assert(narrowed("xyz", 2) === "z" && narrowed([1, 2, 3], 2) === 3 && narrowed({ a: 1 }, "a") === 1, "narrowed receivers");
   const user: User = { name: "a", age: 3 };
   setField(user, "age", 4);

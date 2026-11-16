@@ -1602,6 +1602,39 @@ pub(super) fn assignable_rec(
                 None => e_field.optional && !types.strict_subtype,
             })
         }
+        (_, Type::Object { .. })
+            if actual.interface_routing().is_some()
+                && expand_interface_data_shape(actual, types).is_none() =>
+        {
+            let Some((mangled, _, name, args)) = actual.interface_routing() else {
+                return false;
+            };
+            let Some(fields) = types.interface_full_form(&mangled, name, &args) else {
+                return false;
+            };
+            let (index, more_indexes) =
+                crate::split_index_signatures(types.index_signatures(actual));
+            for required in types.index_signatures(expected) {
+                if !crate::stored_index_signatures(&index, &more_indexes).any(|provided| {
+                    super::records::index_accepts_key(provided, &required.key, types)
+                }) {
+                    return false;
+                }
+            }
+            let shape = Type::Object {
+                fields,
+                index,
+                more_indexes,
+            };
+            let key = (actual.clone(), expected.clone());
+            if seen.contains(&key) {
+                return true;
+            }
+            seen.push(key);
+            let result = assignable_rec(&shape, expected, types, seen);
+            seen.pop();
+            result
+        }
         // Structural compatibility for *data-only* interfaces, both directions:
         // expand the interface to its property shape and reuse the `(Object,
         // Object)` width rule. Method-bearing interfaces expand to `None` and
@@ -3661,7 +3694,7 @@ mod tests {
     }
 
     #[test]
-    fn method_bearing_interface_not_structurally_assignable() {
+    fn method_interface_can_be_viewed_as_data_without_inventing_methods() {
         let ns = ns_with_interface("Logger", vec![("id", Type::String, false)], true);
         let object = obj(vec![("id", Type::String, false)]);
         assert!(
@@ -3669,7 +3702,7 @@ mod tests {
             "object -> method iface"
         );
         assert!(
-            !assignable_with(&iref("Logger"), &object, &ns),
+            assignable_with(&iref("Logger"), &object, &ns),
             "method iface -> object"
         );
     }

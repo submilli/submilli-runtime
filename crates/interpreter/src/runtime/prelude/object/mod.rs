@@ -940,7 +940,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
                 } else {
                     ValType::Ref(RefType::new(
                         false,
-                        HeapType::ConcreteStruct(intr.object_shape.clone()),
+                        HeapType::ConcreteStruct(intr.object.clone()),
                     ))
                 }],
             ),
@@ -971,7 +971,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
             vec![obj.clone()],
             vec![ValType::Ref(RefType::new(
                 false,
-                HeapType::ConcreteStruct(intr.object_shape.clone()),
+                HeapType::ConcreteStruct(intr.object.clone()),
             ))],
         ),
         |caller, params, results| {
@@ -1013,9 +1013,9 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         },
     )?;
 
-    let shape = ValType::Ref(RefType::new(
+    let structural_object = ValType::Ref(RefType::new(
         false,
-        HeapType::ConcreteStruct(intr.object_shape.clone()),
+        HeapType::ConcreteStruct(intr.object.clone()),
     ));
     register_host_fn(
         linker,
@@ -1023,7 +1023,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
         ctor_key("#spread"),
         ft(
             vec![obj.clone(), obj.clone(), obj.clone(), obj.clone()],
-            vec![shape],
+            vec![structural_object],
         ),
         |caller, params, results| {
             *abi_result(results, 0)? = spread(

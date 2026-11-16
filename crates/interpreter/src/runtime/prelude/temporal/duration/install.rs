@@ -24,7 +24,11 @@ pub(crate) fn install(linker: &mut Linker<StoreData>, types: &DirectTypes) -> wa
             &crate::mangle::prelude("Temporal"),
             "DurationConstructor",
         )),
-        FuncType::new(engine, [types.object_shape.clone()], object_result.clone()),
+        FuncType::new(
+            engine,
+            [types.structural_object.clone()],
+            object_result.clone(),
+        ),
         move |caller, params, results| {
             let span = shared::read_duration_like(caller, abi_arg(params, 0)?, &intr, "Duration")?;
             *abi_result(results, 0)? = shared::make_duration(caller, &span)?;
