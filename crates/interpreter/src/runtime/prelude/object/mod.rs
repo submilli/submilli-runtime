@@ -14,6 +14,7 @@ mod group_by;
 pub(crate) use group_by::map_group_by;
 mod index;
 mod static_value;
+pub(super) use static_value::static_interface;
 
 use wasmtime::{
     ArrayRef, ArrayRefPre, Caller, FuncType, HeapType, Linker, RefType, Rooted, StructRef,

@@ -29,6 +29,26 @@ pub(crate) fn functions(
         .collect()
 }
 
+/// Constant globals declared by the prelude, alongside its member functions.
+pub(crate) fn constants(
+    linker: &Linker<StoreData>,
+    store: &mut Store<StoreData>,
+) -> BTreeMap<String, wasmtime::Global> {
+    super::package_declaration()
+        .values
+        .values()
+        .filter_map(|symbol| {
+            let key = symbol.mangled_name.as_str();
+            let wasmtime::Extern::Global(global) =
+                linker.get(&mut *store, MODULE_NAME, key).ok()?
+            else {
+                return None;
+            };
+            Some((key.to_owned(), global))
+        })
+        .collect()
+}
+
 pub(super) fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -262,6 +282,11 @@ pub(super) async fn call_builtin(
     } else {
         args.to_vec()
     };
+    let receiver = if is_static_member(caller, key)? {
+        None
+    } else {
+        receiver
+    };
     call_bound_builtin(caller, function, receiver, &args).await
 }
 
@@ -425,7 +450,7 @@ async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtim
 }
 
 /// `object[name]` on a built-in value (a string, array, `Uint8Array`, boxed
-/// primitive, `Map`, `Set`, `RegExp` or Temporal value), as a generic `o[k]`
+/// primitive, constructor, `Map`, `Set`, `RegExp` or Temporal value), as a generic `o[k]`
 /// reads it once `T` turns out to be one: an element for a canonical index,
 /// or the named property. Methods are cached unbound closures; property calls
 /// supply their receiver through the closure ABI. Other names are missing.
@@ -435,7 +460,15 @@ pub(super) async fn builtin_property(
     name: &str,
 ) -> wasmtime::Result<Val> {
     require_receiver(caller, object)?;
+    if name == "length" && value::is_callable(caller, object)? {
+        let original = super::closure::original(caller, *object)?;
+        let length = super::closure::read(caller, &original, "function")?.length(caller)?;
+        return box_result(caller, Val::F64((length as f64).to_bits()));
+    }
     let Some(interface) = receiver_interface(caller, object)? else {
+        if value::is_callable(caller, object)? {
+            return super::undefined::value(caller);
+        }
         return Err(host::type_error(format!(
             "Cannot read property '{name}' of this value by name"
         )));
@@ -508,8 +541,9 @@ fn builtin_method_value(
     let env = Val::AnyRef(Some(
         StructRef::new(&mut *caller, &pre, &[metadata, Val::null_any_ref()])?.to_anyref(),
     ));
+    let is_static = is_static_member(caller, &key)?;
     let invoke = host::host_value_async(&mut *caller, function_ty, move |caller, params| {
-        Box::new(invoke_native_method(caller, function, params))
+        Box::new(invoke_native_method(caller, function, is_static, params))
     });
     let vtable = native_method_vtable(
         caller,
@@ -545,6 +579,8 @@ fn native_method_length(interface: &str, name: &str, parameters: &Parameters) ->
         .strip_prefix("submilli:prelude#")
         .unwrap_or(interface);
     match (interface, name) {
+        ("StringConstructor", "fromCharCode" | "fromCodePoint") => 1,
+        ("NumberConstructor", "parseInt") => 2,
         (
             "Array",
             "at" | "concat" | "every" | "fill" | "filter" | "find" | "findIndex" | "findLast"
@@ -654,6 +690,7 @@ fn native_method_vtable(
 async fn invoke_native_method(
     caller: &mut Caller<'_, StoreData>,
     function: Func,
+    is_static: bool,
     params: &[Val],
 ) -> wasmtime::Result<Val> {
     let Val::AnyRef(Some(env)) = *abi_arg(params, 0)? else {
@@ -661,11 +698,13 @@ async fn invoke_native_method(
     };
     let env = env.unwrap_struct(&mut *caller)?;
     let receiver = env.field(&mut *caller, 1)?;
-    require_receiver(caller, &receiver)?;
+    if !is_static {
+        require_receiver(caller, &receiver)?;
+    }
     let args = params
         .get(1..)
         .ok_or_else(|| host::fatal_host_error("native method argument layout"))?;
-    call_bound_builtin(caller, function, Some(receiver), args).await
+    call_bound_builtin(caller, function, (!is_static).then_some(receiver), args).await
 }
 
 /// Element `index` of a string, array or byte array, read with `at`, which
@@ -692,6 +731,20 @@ async fn read_builtin_property(
     interface: &str,
     name: &str,
 ) -> wasmtime::Result<Val> {
+    let key_len = interface.len().saturating_add(name.len()).saturating_add(1) as u64;
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::COPY, key_len)?;
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::HASH, key_len)?;
+    let key = format!("{interface}#{name}");
+    if let Some(global) = caller
+        .data()
+        .host_abi
+        .as_ref()
+        .and_then(|abi| abi.member_constants.get(&key))
+        .copied()
+    {
+        let value = global.get(&mut *caller);
+        return box_result(caller, value);
+    }
     let params = member_params(caller, object, interface, name)?;
     property(caller, &params).await
 }
@@ -720,7 +773,7 @@ enum BuiltinMember {
 
 /// How the prelude interface `interface` (a mangled name) declares `name`.
 fn builtin_member(interface: &str, name: &str) -> Option<BuiltinMember> {
-    builtin_members().get(interface)?.get(name).copied()
+    builtin_members().get(interface)?.members.get(name).copied()
 }
 
 /// Presence checks inspect declarations without reading a property or binding a method.
@@ -732,7 +785,7 @@ pub(super) fn has_builtin_member(
     let Some(members) = builtin_members().get(interface) else {
         return Ok(false);
     };
-    for name in members.keys() {
+    for name in members.members.keys() {
         crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::SCAN, name.len() as u64)?;
         if name.encode_utf16().eq(key.iter().copied()) {
             return Ok(true);
@@ -741,36 +794,55 @@ pub(super) fn has_builtin_member(
     Ok(false)
 }
 
-fn builtin_members() -> &'static HashMap<String, BTreeMap<String, BuiltinMember>> {
-    static MEMBERS: LazyLock<HashMap<String, BTreeMap<String, BuiltinMember>>> =
-        LazyLock::new(|| {
-            let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
-            let mut members = HashMap::new();
-            for symbol in prelude.iter().flat_map(|package| package.types.values()) {
-                let crate::TypeKind::Interface {
-                    methods,
-                    properties,
-                    ..
-                } = &symbol.kind
-                else {
-                    continue;
-                };
-                let entry: &mut BTreeMap<String, BuiltinMember> = members
-                    .entry(symbol.mangled_name.as_str().to_owned())
-                    .or_default();
-                entry.extend(
-                    properties
-                        .keys()
-                        .map(|name| (name.clone(), BuiltinMember::Property)),
-                );
-                entry.extend(
-                    methods
-                        .keys()
-                        .map(|name| (name.clone(), BuiltinMember::Method)),
-                );
-            }
-            members
-        });
+/// Static host functions omit the receiver from their ABI.
+fn is_static_member(caller: &mut Caller<'_, StoreData>, key: &str) -> wasmtime::Result<bool> {
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::SCAN, key.len() as u64)?;
+    crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::HASH, key.len() as u64)?;
+    Ok(key
+        .rsplit_once('#')
+        .and_then(|(interface, _)| builtin_members().get(interface))
+        .is_some_and(|declaration| declaration.is_static))
+}
+
+struct BuiltinMembers {
+    is_static: bool,
+    members: BTreeMap<String, BuiltinMember>,
+}
+
+fn builtin_members() -> &'static HashMap<String, BuiltinMembers> {
+    static MEMBERS: LazyLock<HashMap<String, BuiltinMembers>> = LazyLock::new(|| {
+        let (prelude, _, _) = super::declaration::cached_runtime_package_declarations();
+        let mut members = HashMap::new();
+        for symbol in prelude.iter().flat_map(|package| package.types.values()) {
+            let crate::TypeKind::Interface {
+                methods,
+                properties,
+                dispatch,
+                ..
+            } = &symbol.kind
+            else {
+                continue;
+            };
+            let declaration = members
+                .entry(symbol.mangled_name.as_str().to_owned())
+                .or_insert_with(|| BuiltinMembers {
+                    is_static: *dispatch == crate::Dispatch::Static,
+                    members: BTreeMap::new(),
+                });
+            let entry = &mut declaration.members;
+            entry.extend(
+                properties
+                    .keys()
+                    .map(|name| (name.clone(), BuiltinMember::Property)),
+            );
+            entry.extend(
+                methods
+                    .keys()
+                    .map(|name| (name.clone(), BuiltinMember::Method)),
+            );
+        }
+        members
+    });
     &MEMBERS
 }
 
@@ -794,6 +866,9 @@ fn receiver_interface(
         return Ok(None);
     };
     let intr = intrinsic_types(&mut *caller)?;
+    if let Some(interface) = super::object::static_interface(caller, &object)? {
+        return Ok(Some(interface));
+    }
     for (ty, name) in [
         (&intr.string, "String"),
         (&intr.boxed_number, "Number"),
