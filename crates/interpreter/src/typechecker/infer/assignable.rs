@@ -3694,7 +3694,7 @@ mod tests {
     }
 
     #[test]
-    fn method_bearing_interface_not_structurally_assignable() {
+    fn method_interface_can_be_viewed_as_data_without_inventing_methods() {
         let ns = ns_with_interface("Logger", vec![("id", Type::String, false)], true);
         let object = obj(vec![("id", Type::String, false)]);
         assert!(
@@ -3702,7 +3702,7 @@ mod tests {
             "object -> method iface"
         );
         assert!(
-            !assignable_with(&iref("Logger"), &object, &ns),
+            assignable_with(&iref("Logger"), &object, &ns),
             "method iface -> object"
         );
     }
