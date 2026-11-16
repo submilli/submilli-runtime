@@ -1139,6 +1139,41 @@ impl LlmProvider for FixtureLlm {
         let models = self.catalog();
         Box::pin(async move { Ok(models) })
     }
+    /// `llm_files_unsupported` plays a provider that sends prompts only. Every
+    /// other fixture echoes what it was sent, so a file's name, kind and size
+    /// are visible without the fake quoting its bytes.
+    fn call_with_files<'a>(
+        &'a self,
+        model: &'a str,
+        prompts: &'a [String],
+        schema_json: Option<&'a str>,
+        files: &'a [submilli_engine::runtime::LlmFile],
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>,
+    > {
+        if files.is_empty() {
+            return self.call(model, prompts, schema_json);
+        }
+        if self.scenario.contains("files_unsupported") {
+            let model = model.to_string();
+            return Box::pin(async move { Err(LlmCallError::FilesUnsupported { model }) });
+        }
+        let sent: Vec<String> = files
+            .iter()
+            .map(|file| {
+                format!(
+                    "{} {} {}",
+                    file.name,
+                    file.kind.media_type(),
+                    file.bytes.len()
+                )
+            })
+            .collect();
+        let outcomes = (0..prompts.len())
+            .map(|index| LlmOutcome::success(format!("answer {index}: {}", sent.join(", "))))
+            .collect();
+        Box::pin(async move { Ok(outcomes) })
+    }
 }
 
 /// Wire the provider and budget a given fixture wants.
@@ -1160,7 +1195,12 @@ fn install_llm_fixture_support(data: &mut StoreData, fixture: &str) {
 
     // Each reserved call costs its prompt estimate plus the output cap, so
     // these ceilings are sized to admit the first call(s) and refuse the next.
-    let limits = if fixture.contains("prompt_bounds") {
+    let limits = if fixture.contains("files_bounds") {
+        LlmLimits {
+            max_file_bytes: 16,
+            ..LlmLimits::default()
+        }
+    } else if fixture.contains("prompt_bounds") {
         LlmLimits {
             max_prompt_count: 4,
             max_prompt_bytes: 64,

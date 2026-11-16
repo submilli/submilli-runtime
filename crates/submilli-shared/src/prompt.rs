@@ -250,7 +250,8 @@ a response that is not JSON or does not fit `T` is `ok: false` with
 `reason: "invalid-output"`, never a throw. `call` needs `T`: write it, or let
 the expected type supply it. `batch<T>(model, prompts)` returns one
 `Completion<T>` per prompt, positionally, each checked on its own, at a bounded
-concurrency. `ok` is not "nothing threw": a truncated or filtered text
+concurrency. Every form takes a last optional `files` (paths of PDFs, images or
+text files to send with each prompt; each needs `fs.read`). `ok` is not "nothing threw": a truncated or filtered text
 completion is `ok: false` **and still carries `text`**, so
 `if (!r.ok) continue` drops usable output. Token counts may be absent:
 indeterminate, not free.

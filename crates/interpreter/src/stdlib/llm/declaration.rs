@@ -79,9 +79,11 @@ pub fn package_declaration() -> PackageDeclaration {
                 Type::Union(vec![Type::String, Type::Undefined]),
                 crate::DefaultValue::Undefined,
             ),
+            files_param(),
         ],
         completion_type(Type::String),
-        "/**\n * Send one prompt to `model` and return its completion text as a \
+        &with_files_doc(
+            "/**\n * Send one prompt to `model` and return its completion text as a \
          `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. \
          Check `ok` before reading `value`; the compiler will not let you read it \
          otherwise.\n *\n * `schema`, when given, is a JSON Schema sent to the provider \
@@ -99,8 +101,10 @@ pub fn package_declaration() -> PackageDeclaration {
          Model name. Call `models()` for the ones this runtime serves; an undeclared \
          name throws.\n * @param prompt The prompt text. Bounded in bytes \
          independently of the token ceiling.\n * @param schema A JSON Schema for the \
-         provider, sent unchanged; the result stays text.\n * @capability llm.call \
+         provider, sent unchanged; the result stays text.{FILES}\n * @capability llm.call \
          { model: $model, prompt_count: 1 }\n */",
+            "the prompt",
+        ),
     );
     insert_fn(
         &mut defs,
@@ -113,9 +117,11 @@ pub fn package_declaration() -> PackageDeclaration {
                 Type::Union(vec![Type::String, Type::Undefined]),
                 crate::DefaultValue::Undefined,
             ),
+            files_param(),
         ],
         Type::Array(Box::new(completion_type(Type::String))),
-        "/**\n * Send every prompt to `model` and return one `Completion<string>` each, \
+        &with_files_doc(
+            "/**\n * Send every prompt to `model` and return one `Completion<string>` each, \
          positionally: `result[i]` is the text outcome of `prompts[i]`, including when \
          that element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out \
          happens host-side at a bounded concurrency, so this is not sugar for a loop. \
@@ -130,8 +136,10 @@ pub fn package_declaration() -> PackageDeclaration {
          the ones this runtime serves.\n * @param prompts The prompts, in the order \
          the results come back. Bounded in count, and each in bytes.\n * @param \
          schema A JSON Schema for the provider, sent unchanged; the results stay \
-         text.\n * @capability llm.call { model: $model, prompt_count: \
+         text.{FILES}\n * @capability llm.call { model: $model, prompt_count: \
          $prompts.length }\n */",
+            "every prompt",
+        ),
     );
     insert_generic_fn(
         &mut defs,
@@ -140,9 +148,11 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("model", Type::String),
             Param::new("prompt", Type::String),
+            files_param(),
         ],
         completion_type(call_type_var()),
-        "/**\n * Send one prompt to `model` and return its answer checked as a `T`: \
+        &with_files_doc(
+            "/**\n * Send one prompt to `model` and return its answer checked as a `T`: \
          `{ ok: true, value }` or `{ ok: false, reason, message }`. Check `ok` before \
          reading `value`; the compiler will not let you read it otherwise.\n *\n * \
          `call<Verdict>(model, prompt)` emits a JSON Schema for `Verdict` at compile \
@@ -168,7 +178,9 @@ pub fn package_declaration() -> PackageDeclaration {
          model when no provider is configured.\n * @param model Model name. Call \
          `models()` for the ones this runtime serves; an undeclared name throws.\n * \
          @param prompt The prompt text. Bounded in bytes independently of the token \
-         ceiling.\n * @capability llm.call { model: $model, prompt_count: 1 }\n */",
+         ceiling.{FILES}\n * @capability llm.call { model: $model, prompt_count: 1 }\n */",
+            "the prompt",
+        ),
     );
     insert_generic_fn(
         &mut defs,
@@ -177,9 +189,11 @@ pub fn package_declaration() -> PackageDeclaration {
         vec![
             Param::new("model", Type::String),
             Param::new("prompts", Type::Array(Box::new(Type::String))),
+            files_param(),
         ],
         Type::Array(Box::new(completion_type(call_type_var()))),
-        "/**\n * Send every prompt to `model` and return one `Completion` each, \
+        &with_files_doc(
+            "/**\n * Send every prompt to `model` and return one `Completion` each, \
          positionally: `result[i]` is the outcome of `prompts[i]`, including when that \
          element failed. An empty `prompts` returns `[]`.\n *\n * Fan-out happens \
          host-side at a bounded concurrency, so this is not sugar for a loop — a \
@@ -195,8 +209,10 @@ pub fn package_declaration() -> PackageDeclaration {
          process — so an oversized batch is refused without partially dispatching.\n \
          * @param model Model name. Call `models()` for the ones this runtime \
          serves.\n * @param prompts The prompts, in the order the results come back. \
-         Bounded in count, and each in bytes.\n * @capability llm.call { model: \
+         Bounded in count, and each in bytes.{FILES}\n * @capability llm.call { model: \
          $model, prompt_count: $prompts.length }\n */",
+            "every prompt",
+        ),
     );
     for name in [LLM_CALL, LLM_BATCH] {
         defs.runtime_generics
@@ -223,6 +239,31 @@ pub fn package_declaration() -> PackageDeclaration {
          @capability llm.call { prompt_count: 0 }\n */",
     );
     defs
+}
+
+/// `doc` with its `{FILES}` marker replaced by the `@param files` text, for
+/// files sent `with` the prompt or every prompt.
+fn with_files_doc(doc: &str, with: &str) -> String {
+    doc.replace(
+        "{FILES}",
+        &format!(
+            "\n * @param files Paths of files in this program's filesystem, sent to the \
+             model with {with}: PDFs, images (PNG, JPEG, GIF, WebP) and UTF-8 text, told \
+             apart by their leading bytes. Each is gated and read as `fs.read` reads it. \
+             Too large a file, or too many bytes of files in one call, is a `RangeError`; \
+             any other file is a `TypeError`; and a runtime whose model provider does not \
+             accept files throws a catchable error."
+        ),
+    )
+}
+
+/// `files?: string[]`, last of what a program writes.
+fn files_param() -> Param {
+    Param::with_default(
+        "files",
+        Type::Union(vec![Type::Array(Box::new(Type::String)), Type::Undefined]),
+        crate::DefaultValue::Undefined,
+    )
 }
 
 fn package() -> crate::Package {

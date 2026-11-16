@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use interpreter::runtime::{
-    FailureReason, LlmCallError, LlmFailure, LlmModel, LlmOutcome, LlmProvider,
+    FailureReason, LlmCallError, LlmFailure, LlmFile, LlmModel, LlmOutcome, LlmProvider,
 };
 use interpreter::stdlib::llm::{OPS, request_digest};
 use serde_json::Value;
@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::cassette::{Cassette, Entry, Kind, Unusable, decoded_body, llm_key};
 
 /// An [`LlmProvider`] that answers from a recorded run: the next unused recording of the
-/// same model, prompts and schema, served whole, with each outcome's own failure and token
+/// same model, prompts, schema and files (by content), served whole, with each outcome's own failure and token
 /// counts.
 ///
 /// `models` and `output_reserve` are answered by `declared`, the provider the run would
@@ -52,6 +52,16 @@ impl LlmProvider for RecordedLlmProvider {
         prompts: &'a [String],
         schema_json: Option<&'a str>,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
+        self.call_with_files(model, prompts, schema_json, &[])
+    }
+
+    fn call_with_files<'a>(
+        &'a self,
+        model: &'a str,
+        prompts: &'a [String],
+        schema_json: Option<&'a str>,
+        files: &'a [LlmFile],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
         Box::pin(async move {
             let declared = self.declared.models().await?;
             if !declared.iter().any(|declared| declared.name == model) {
@@ -64,7 +74,7 @@ impl LlmProvider for RecordedLlmProvider {
             // answers both alike.
             let accept: Vec<String> = OPS
                 .iter()
-                .map(|op| request_digest(op, model, prompts, schema_json))
+                .map(|op| request_digest(op, model, prompts, schema_json, files))
                 .collect();
             match self
                 .cassette
@@ -74,7 +84,9 @@ impl LlmProvider for RecordedLlmProvider {
                 Ok(answered) => answered,
                 Err(miss) if self.live => {
                     self.cassette.went_live(miss);
-                    self.declared.call(model, prompts, schema_json).await
+                    self.declared
+                        .call_with_files(model, prompts, schema_json, files)
+                        .await
                 }
                 Err(miss) => {
                     self.cassette.stop(miss).await;
@@ -161,6 +173,7 @@ fn answer(
 /// | `unknown-model`          | local: today's declarations; miss                           |
 /// | `budget-exceeded`        | local: today's token budget; miss                           |
 /// | `prompt-bounds-exceeded` | local: today's prompt bounds; miss                          |
+/// | `files-unsupported`      | local: today's provider; miss                               |
 ///
 /// A kind not listed, or none, is a miss too.
 fn call_error(record: &Value) -> Result<LlmCallError, Unusable> {

@@ -22,7 +22,7 @@ and `Temporal`, are on [Built-ins](/docs/reference/built-ins).
 | --- | --- | --- |
 | `submilli:fs` | The program's filesystem: read, write, list, stat, move, copy, remove | `fs.*` |
 | `submilli:http` | HTTP requests, and downloads into the filesystem | `http.<verb>`, `http.request`, `http.download` |
-| `submilli:llm` | Model calls: `text`, `texts`, `call`, `batch`, `models` | `llm.call` |
+| `submilli:llm` | Model calls: `text`, `texts`, `call`, `batch`, `models` | `llm.call`; `fs.read` for files |
 | `submilli:embedding` | Text embeddings: `embed`, `models` | `embedding.embed` |
 | `submilli:session` | Key-value state that lasts for the session | `session.*` |
 | `submilli:git` | Repositories in the filesystem: history, commits, branches, clone, fetch, pull | `git.init`, `git.clone`, `git.fetch`, `git.commit` |
@@ -134,10 +134,10 @@ An operation that passes a limit throws and leaves the repository as it was.
 
 | Form | Returns |
 | --- | --- |
-| `text(model, prompt, schema?)` | A `Completion<string>`: `value` is the text |
-| `texts(model, prompts, schema?)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
-| `call<T>(model, prompt)` | A `Completion<T>`: `value` is a `T`, checked field by field against the response |
-| `batch<T>(model, prompts)` | A `Completion<T>[]`, each response checked on its own |
+| `text(model, prompt, schema?, files?)` | A `Completion<string>`: `value` is the text |
+| `texts(model, prompts, schema?, files?)` | A `Completion<string>[]`, `result[i]` for `prompts[i]` |
+| `call<T>(model, prompt, files?)` | A `Completion<T>`: `value` is a `T`, checked field by field against the response |
+| `batch<T>(model, prompts, files?)` | A `Completion<T>[]`, each response checked on its own |
 | `models()` | The `Model`s this caller may call |
 
 - A `Completion<T>` is `{ ok: true, value: T }` or `{ ok: false, reason, message }`,
@@ -150,6 +150,12 @@ An operation that passes a limit throws and leaves the repository as it was.
   response against it. A response that is not JSON or doesn't match is
   `ok: false` with `reason: "invalid-output"`; its siblings in a batch are
   unaffected.
+- `files` lists paths in the program's filesystem to send with every prompt:
+  PDFs, images (PNG, JPEG, GIF, WebP) and UTF-8 text, told apart by their
+  leading bytes. Each is gated and read as `fs.read` reads it, and one call
+  sends at most 14.25 MB of files, which still fits Amazon Bedrock's 20 MB
+  request limit once base64-encoded. Any other or empty file throws a
+  `TypeError`.
 - A batch takes up to 128 prompts, each up to 256 KB. A call's tokens are
   reserved against the run's and the server's budgets before it is sent.
 
@@ -619,11 +625,11 @@ Gated model calls: text/texts for text, call<T>/batch<T> for checked values, and
 
 | Function | Capability | Description |
 | --- | --- | --- |
-| `batch<T>(model: string, prompts: string[]): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
-| `call<T>(model: string, prompt: string): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its answer checked as a `T`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
+| `batch<T>(model: string, prompts: string[], files?: string[]): Completion<T>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion` each, positionally: `result[i]` is the outcome of `prompts[i]`, including when that element failed. |
+| `call<T>(model: string, prompt: string, files?: string[]): Completion<T>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its answer checked as a `T`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
 | `models(): Model[]` | `llm.call { prompt_count: 0 }` | The models this runtime serves and this caller may call. |
-| `text(model: string, prompt: string, schema?: string): Completion<string>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion text as a `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
-| `texts(model: string, prompts: string[], schema?: string): Completion<string>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion<string>` each, positionally: `result[i]` is the text outcome of `prompts[i]`, including when that element failed. |
+| `text(model: string, prompt: string, schema?: string, files?: string[]): Completion<string>` | `llm.call { model, prompt_count: 1 }` | Send one prompt to `model` and return its completion text as a `Completion<string>`: `{ ok: true, value }` or `{ ok: false, reason, message }`. |
+| `texts(model: string, prompts: string[], schema?: string, files?: string[]): Completion<string>[]` | `llm.call { model, prompt_count: $prompts.length }` | Send every prompt to `model` and return one `Completion<string>` each, positionally: `result[i]` is the text outcome of `prompts[i]`, including when that element failed. |
 
 ### `Completion`
 

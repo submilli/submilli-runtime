@@ -95,15 +95,16 @@ submilli docs submilli:llm
 ```text
 submilli:llm — Gated model calls: call/batch, and models() to discover them.
 …
-function batch<T>(model: string, prompts: string[]): Completion<T>[];
-function call<T>(model: string, prompt: string): Completion<T>;
+function batch<T>(model: string, prompts: string[], files?: string[]): Completion<T>[];
+function call<T>(model: string, prompt: string, files?: string[]): Completion<T>;
 function models(): Model[];
 …
 ```
 
 The typed form, `call<Verdict>`, sends a JSON Schema for `Verdict` with
 the request and checks the response against it field by field, so the
-value it returns has that shape. One capability covers all three:
+value it returns has that shape. One capability covers all three; a call
+that sends `files` also needs `fs.read` for each file it names:
 
 ```sh
 submilli blueprint capability list submilli:llm

@@ -19832,8 +19832,8 @@ function main(): void { if (result < 10) { } }
         );
         assert_eq!(
             llm_argument_counts(&ta),
-            vec![2],
-            "a typed call carries only the model and the prompt"
+            vec![3],
+            "a typed call carries only the model, the prompt and the defaulted files"
         );
         assert_eq!(
             llm_calls_wrapped_in_cast(&ta),

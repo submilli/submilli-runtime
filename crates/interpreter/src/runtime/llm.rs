@@ -46,6 +46,12 @@ pub const DEFAULT_OUTPUT_CAP: u64 = 64_000;
 pub const DEFAULT_MAX_PROMPT_COUNT: u64 = 128;
 /// UTF-8 bytes in a single prompt element.
 pub const DEFAULT_MAX_PROMPT_BYTES: u64 = 256 * 1024;
+/// Bytes of every file one call sends. Files travel base64-encoded, a third
+/// larger, and Amazon Bedrock's 20 MB is the smallest request limit Anthropic
+/// lists for Claude (<https://platform.claude.com/docs/en/api/overview#request-size-limits>).
+/// Three quarters of 19 MB is what fits there once a megabyte is left for the
+/// prompt and schema (256 KiB each at most) and the request around them.
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 19_000_000 / 4 * 3;
 
 /// The ceilings a dispatch is checked against.
 ///
@@ -67,6 +73,9 @@ pub struct LlmLimits {
     pub max_prompt_count: u64,
     /// UTF-8 bytes in a single prompt element. Enforced at the stdlib boundary.
     pub max_prompt_bytes: u64,
+    /// Bytes of every file one call sends with each prompt. Enforced at the
+    /// stdlib boundary, beside `fs.maxReadSize()` for each file.
+    pub max_file_bytes: u64,
 }
 
 impl Default for LlmLimits {
@@ -77,6 +86,7 @@ impl Default for LlmLimits {
             default_output_cap: DEFAULT_OUTPUT_CAP,
             max_prompt_count: DEFAULT_MAX_PROMPT_COUNT,
             max_prompt_bytes: DEFAULT_MAX_PROMPT_BYTES,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         }
     }
 }
@@ -194,6 +204,9 @@ pub enum LlmCallError {
     /// renders `HTTP {status}: {body}`); this one deliberately does not, because a
     /// model provider's body carries completion fragments.
     Transport { model: String, detail: String },
+    /// The call sends files, and this provider sends prompts only. Nothing was
+    /// sent to a model.
+    FilesUnsupported { model: String },
 }
 
 /// Which prompt bound a dispatch ran into. Carries the numbers, never the
@@ -209,6 +222,8 @@ pub enum PromptBoundKind {
     /// UTF-8 bytes of the schema sent with every prompt, held to the
     /// per-prompt bound.
     SchemaBytes,
+    /// Bytes of every file one call sends.
+    FileBytes,
 }
 
 impl std::fmt::Display for PromptBoundKind {
@@ -217,6 +232,7 @@ impl std::fmt::Display for PromptBoundKind {
             Self::PromptCount => write!(f, "prompts in one batch"),
             Self::PromptBytes => write!(f, "bytes in a single prompt"),
             Self::SchemaBytes => write!(f, "bytes in the schema"),
+            Self::FileBytes => write!(f, "bytes of files in one call"),
         }
     }
 }
@@ -263,6 +279,17 @@ impl std::fmt::Display for LlmCallError {
                 PromptBoundKind::SchemaBytes
             ),
             Self::PromptBoundsExceeded {
+                limit_kind: PromptBoundKind::FileBytes,
+                actual,
+                limit,
+                ..
+            } => write!(
+                f,
+                "prompt bound exceeded: {actual} {} exceeds the {limit} allowed — send \
+                 fewer or smaller files per call",
+                PromptBoundKind::FileBytes
+            ),
+            Self::PromptBoundsExceeded {
                 limit_kind,
                 actual,
                 limit,
@@ -282,6 +309,11 @@ impl std::fmt::Display for LlmCallError {
                 "transport error before any prompt ran: {detail} — no tokens were billed; \
                  retry the call"
             ),
+            Self::FilesUnsupported { .. } => write!(
+                f,
+                "this runtime's model provider does not accept files — send the file's \
+                 text in the prompt instead"
+            ),
         }
     }
 }
@@ -298,7 +330,8 @@ impl LlmCallError {
             | Self::BudgetExceeded { model, .. }
             | Self::PromptBoundsExceeded { model, .. }
             | Self::Unauthorized { model }
-            | Self::Transport { model, .. } => model,
+            | Self::Transport { model, .. }
+            | Self::FilesUnsupported { model } => model,
         }
     }
 
@@ -636,6 +669,68 @@ impl LlmModel {
     }
 }
 
+/// A file sent to the model with every prompt of a call, read from the
+/// program's filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmFile {
+    /// The file's name, the last component of the path the program passed.
+    pub name: String,
+    pub kind: LlmFileKind,
+    pub bytes: std::sync::Arc<[u8]>,
+}
+
+/// What a file holds, told from its leading bytes rather than its name. The
+/// runtime sends only these kinds. A provider may still refuse one it does not
+/// read (Gemini takes no GIF, and many OpenAI-compatible servers take no
+/// files); that is the provider's answer for the prompt, as any refusal is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmFileKind {
+    Pdf,
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    /// UTF-8 text with no NUL byte.
+    Text,
+}
+
+impl LlmFileKind {
+    /// The kind `bytes` hold, or `None` for anything else, an empty file
+    /// included.
+    pub fn of(bytes: &[u8]) -> Option<Self> {
+        const PREFIXES: [(&[u8], LlmFileKind); 5] = [
+            (b"%PDF-", LlmFileKind::Pdf),
+            (b"\x89PNG\r\n\x1a\n", LlmFileKind::Png),
+            (b"\xFF\xD8\xFF", LlmFileKind::Jpeg),
+            (b"GIF87a", LlmFileKind::Gif),
+            (b"GIF89a", LlmFileKind::Gif),
+        ];
+        if let Some((_, kind)) = PREFIXES
+            .iter()
+            .find(|(prefix, _)| bytes.starts_with(prefix))
+        {
+            return Some(*kind);
+        }
+        if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+            return Some(Self::Webp);
+        }
+        let text = !bytes.is_empty() && !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok();
+        text.then_some(Self::Text)
+    }
+
+    /// The IANA media type providers are told.
+    pub fn media_type(self) -> &'static str {
+        match self {
+            Self::Pdf => "application/pdf",
+            Self::Png => "image/png",
+            Self::Jpeg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::Webp => "image/webp",
+            Self::Text => "text/plain",
+        }
+    }
+}
+
 /// The embedder-provided model provider: resolves the credential, performs the
 /// completions, and reports what each one cost.
 ///
@@ -692,6 +787,29 @@ pub trait LlmProvider: Send + Sync {
     /// is why this defaults rather than being required of every implementor.
     fn output_reserve(&self, _model: &str) -> Option<u64> {
         None
+    }
+
+    /// [`Self::call`], with `files` sent alongside every prompt. The
+    /// interpreter dispatches every call through here.
+    ///
+    /// The default sends a call without files to [`Self::call`] and refuses
+    /// one with files before anything is dispatched, so a provider written
+    /// before files existed keeps working and never drops a file silently.
+    fn call_with_files<'a>(
+        &'a self,
+        model: &'a str,
+        prompts: &'a [String],
+        schema_json: Option<&'a str>,
+        files: &'a [LlmFile],
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<LlmOutcome>, LlmCallError>> + Send + 'a>> {
+        if files.is_empty() {
+            return self.call(model, prompts, schema_json);
+        }
+        Box::pin(async move {
+            Err(LlmCallError::FilesUnsupported {
+                model: model.to_string(),
+            })
+        })
     }
 }
 
@@ -1273,13 +1391,20 @@ mod tests {
                 model: MODEL.to_string(),
                 detail: "connection reset".to_string(),
             },
+            LlmCallError::FilesUnsupported {
+                model: MODEL.to_string(),
+            },
         ]
     }
 
     #[test]
-    fn six_dispatch_variants_each_name_the_model_and_a_distinct_fix() {
+    fn seven_dispatch_variants_each_name_the_model_and_a_distinct_fix() {
         let variants = every_variant();
-        assert_eq!(variants.len(), 6, "LlmCallError has six dispatch variants");
+        assert_eq!(
+            variants.len(),
+            7,
+            "LlmCallError has seven dispatch variants"
+        );
 
         let mut fixes: Vec<String> = Vec::new();
         for err in &variants {
@@ -1297,7 +1422,7 @@ mod tests {
         }
 
         // Distinct fixes: a shared message would tell the caller nothing about
-        // which of the six they hit.
+        // which of the seven they hit.
         let mut sorted = fixes.clone();
         sorted.sort();
         sorted.dedup();
@@ -1620,6 +1745,65 @@ mod tests {
         assert_eq!(outcomes.len(), prompts.len(), "positional: one per prompt");
         assert_eq!(outcomes[1].text.as_deref(), Some("1"));
         assert_eq!(provider.models().await.unwrap()[0].name, "noop");
+    }
+
+    /// A provider written before files existed refuses a call that sends one,
+    /// rather than dropping it, and serves a call without files as before.
+    #[tokio::test]
+    async fn a_provider_without_file_support_refuses_files_only() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(NoopProvider);
+        let prompts = vec!["a".to_string()];
+        let file = super::LlmFile {
+            name: "notes.md".to_string(),
+            kind: super::LlmFileKind::Text,
+            bytes: b"# Notes".as_slice().into(),
+        };
+        let refused = provider
+            .call_with_files(MODEL, &prompts, None, std::slice::from_ref(&file))
+            .await;
+        assert_eq!(
+            refused,
+            Err(LlmCallError::FilesUnsupported {
+                model: MODEL.to_string()
+            })
+        );
+        let served = provider.call_with_files(MODEL, &prompts, None, &[]).await;
+        assert_eq!(served.map(|outcomes| outcomes.len()), Ok(1));
+    }
+
+    #[test]
+    fn a_files_kind_comes_from_its_bytes() {
+        use super::LlmFileKind;
+        assert_eq!(LlmFileKind::of(b"%PDF-1.7"), Some(LlmFileKind::Pdf));
+        assert_eq!(
+            LlmFileKind::of(b"\xFF\xD8\xFF\xE0"),
+            Some(LlmFileKind::Jpeg)
+        );
+        assert_eq!(LlmFileKind::of(b"GIF89a"), Some(LlmFileKind::Gif));
+        assert_eq!(
+            LlmFileKind::of(b"RIFF\0\0\0\0WEBPVP8 "),
+            Some(LlmFileKind::Webp)
+        );
+        assert_eq!(
+            LlmFileKind::of(b"RIFF\0\0\0\0WAVE"),
+            None,
+            "a RIFF that is not WebP"
+        );
+        assert_eq!(
+            LlmFileKind::of("caf\u{e9}".as_bytes()),
+            Some(LlmFileKind::Text)
+        );
+        assert_eq!(LlmFileKind::of(b"a\0b"), None, "a NUL is not text");
+        assert_eq!(
+            LlmFileKind::of(b"\xC3\x28"),
+            None,
+            "invalid UTF-8 is not text"
+        );
+        assert_eq!(
+            LlmFileKind::of(b""),
+            None,
+            "an empty file is nothing to send"
+        );
     }
 
     #[tokio::test]

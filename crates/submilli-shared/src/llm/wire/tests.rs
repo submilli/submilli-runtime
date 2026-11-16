@@ -46,7 +46,16 @@ fn schema() -> Value {
 }
 
 fn request(kind: ProviderKind, schema_json: Option<&Value>) -> WireRequest {
-    build_request(kind, BASE, MODEL, PROMPT, schema_json, Some(256), Some(KEY))
+    build_request(
+        kind,
+        BASE,
+        MODEL,
+        PROMPT,
+        &[],
+        schema_json,
+        Some(256),
+        Some(KEY),
+    )
 }
 
 fn header<'a>(req: &'a WireRequest, name: &str) -> Option<&'a str> {
@@ -100,6 +109,7 @@ fn a_trailing_slash_on_the_base_url_does_not_double() {
         "https://example.test/",
         MODEL,
         PROMPT,
+        &[],
         None,
         None,
         Some(KEY),
@@ -116,6 +126,7 @@ fn google_does_not_double_the_models_prefix() {
         BASE,
         "models/gemini-2.5-pro",
         PROMPT,
+        &[],
         None,
         None,
         Some(KEY),
@@ -212,7 +223,7 @@ fn the_key_never_appears_in_the_url_or_the_body() {
 #[test]
 fn no_key_means_no_auth_header() {
     for kind in ProviderKind::ALL {
-        let req = build_request(kind, BASE, MODEL, PROMPT, None, None, None);
+        let req = build_request(kind, BASE, MODEL, PROMPT, &[], None, None, None);
         for name in ["x-api-key", "x-goog-api-key", "authorization"] {
             assert_eq!(header(&req, name), None, "{}", kind.label());
         }
@@ -318,6 +329,7 @@ fn anthropic_always_sends_max_tokens_and_the_others_omit_an_absent_cap() {
         BASE,
         MODEL,
         PROMPT,
+        &[],
         None,
         None,
         Some(KEY),
@@ -335,7 +347,7 @@ fn anthropic_always_sends_max_tokens_and_the_others_omit_an_absent_cap() {
         ProviderKind::OpenAiCompatible,
         ProviderKind::Google,
     ] {
-        let body = build_request(kind, BASE, MODEL, PROMPT, None, None, Some(KEY)).body;
+        let body = build_request(kind, BASE, MODEL, PROMPT, &[], None, None, Some(KEY)).body;
         for absent in ["max_completion_tokens", "max_tokens"] {
             assert_eq!(body.get(absent), None, "{} invented {absent}", kind.label());
         }
@@ -1145,4 +1157,94 @@ fn the_error_message_is_read_from_the_error_envelope() {
         raw,
         ProviderFailure::ApiCall { ref message, .. } if message == "upstream exploded"
     ));
+}
+
+fn file(name: &str, bytes: &[u8]) -> LlmFile {
+    LlmFile {
+        name: name.to_string(),
+        kind: LlmFileKind::of(bytes).expect("a kind the runtime sends"),
+        bytes: bytes.into(),
+    }
+}
+
+/// Files go before the prompt, each in the form its kind documents, and the
+/// prompt survives as the last part.
+#[test]
+fn files_precede_the_prompt_in_each_kinds_own_form() {
+    let files = [
+        file("report.pdf", b"%PDF-1.7"),
+        file("notes.md", b"# Notes"),
+        file("chart.png", b"\x89PNG\r\n\x1a\n"),
+    ];
+    let pdf = "JVBERi0xLjc=";
+    let png = "iVBORw0KGgo=";
+    for kind in ProviderKind::ALL {
+        let req = build_request(kind, BASE, MODEL, PROMPT, &files, None, None, None);
+        let parts = match kind {
+            ProviderKind::Google => req.body.pointer("/contents/0/parts"),
+            _ => req.body.pointer("/messages/0/content"),
+        };
+        let expected = match kind {
+            ProviderKind::Anthropic => json!([
+                { "type": "document", "title": "report.pdf",
+                  "source": { "type": "base64", "media_type": "application/pdf", "data": pdf } },
+                { "type": "document", "title": "notes.md",
+                  "source": { "type": "text", "media_type": "text/plain", "data": "# Notes" } },
+                { "type": "image",
+                  "source": { "type": "base64", "media_type": "image/png", "data": png } },
+                { "type": "text", "text": PROMPT },
+            ]),
+            ProviderKind::Google => json!([
+                { "inlineData": { "mimeType": "application/pdf", "data": pdf } },
+                { "inlineData": { "mimeType": "text/plain", "data": "IyBOb3Rlcw==" } },
+                { "inlineData": { "mimeType": "image/png", "data": png } },
+                { "text": PROMPT },
+            ]),
+            ProviderKind::OpenAi | ProviderKind::OpenAiCompatible => json!([
+                { "type": "file", "file": { "filename": "report.pdf",
+                  "file_data": format!("data:application/pdf;base64,{pdf}") } },
+                { "type": "text", "text": "notes.md:\n# Notes" },
+                { "type": "image_url",
+                  "image_url": { "url": format!("data:image/png;base64,{png}") } },
+                { "type": "text", "text": PROMPT },
+            ]),
+        };
+        assert_eq!(parts, Some(&expected), "{}", kind.label());
+    }
+}
+
+#[test]
+fn files_without_a_prompt_send_no_empty_text_part() {
+    let files = [file("scan", b"%PDF-1.7")];
+    let anthropic = build_request(
+        ProviderKind::Anthropic,
+        BASE,
+        MODEL,
+        "",
+        &files,
+        None,
+        None,
+        None,
+    );
+    let content = anthropic
+        .body
+        .pointer("/messages/0/content")
+        .and_then(Value::as_array);
+    assert_eq!(content.map(Vec::len), Some(1), "only the document");
+
+    let openai = build_request(
+        ProviderKind::OpenAi,
+        BASE,
+        MODEL,
+        "",
+        &files,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        openai.body.pointer("/messages/0/content/0/file/filename"),
+        Some(&json!("scan.pdf")),
+        "OpenAI is told the PDF's type by its name"
+    );
 }
