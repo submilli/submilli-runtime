@@ -53,8 +53,11 @@ description holds the confirmed summary, the clarified fields, the person's
 words verbatim, and the context: user, workspace, page, error, and situation.
 Each value is quoted in a code fence, so Markdown, links, and mentions in it
 take no effect. Words that start like a known credential, such as `lin_api_`,
-`sk-`, `ghp_`, or `xoxb-`, are replaced with `[redacted]`. Long values are cut:
-the title at 120 characters, fields at 4,000, and the person's words at 8,000.
+`sk-`, `ghp_`, or `xoxb-`, and the word after `Bearer`, are replaced with
+`[redacted]`; words end at whitespace, quotes, and punctuation such as `=`, so
+`KEY="lin_api_…"` is caught too. The person's words are otherwise kept exactly
+as written, and their heading says when something was redacted. The title is cut
+at 120 characters and each clarified field at 4,000.
 
 The `user` field is whatever the program was told, such as the signed-in user
 named in the console's context. It is labeled "not verified" in the issue.
@@ -65,4 +68,5 @@ named in the console's context. It is labeled "not verified" in the issue.
 no original words or summary, or has an unknown `kind`. It throws when either
 secret is unbound, when the team is not found, and on HTTP or GraphQL failures.
 HTTP failures report the status only, not the response body. Nothing retries
-automatically.
+automatically. Do not retry a failed call on your own: a timeout can come after
+Linear created the issue, and a second call files it again.

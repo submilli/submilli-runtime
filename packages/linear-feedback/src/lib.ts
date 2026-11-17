@@ -79,16 +79,24 @@ export interface FeedbackIssue {
 
 const TITLE_LIMIT = 120;
 const FIELD_LIMIT = 4000;
-const ORIGINAL_LIMIT = 8000;
 const KINDS = ["bug", "idea", "praise", "question", "other"];
 // Credential prefixes a person may paste with an error message. A word that
 // starts with one of these is replaced before anything is sent.
 const CREDENTIAL_PREFIXES = ["lin_api_", "lin_oauth_", "sk-", "ghp_", "gho_", "ghs_", "ghu_", "github_pat_",
-    "xoxb-", "xoxp-", "xoxa-", "xapp-", "AKIA", "ASIA", "AIza", "glpat-", "Bearer"];
+    "xoxb-", "xoxp-", "xoxa-", "xapp-", "AKIA", "ASIA", "AIza", "glpat-"];
+
+// Characters that end a word for redaction, besides whitespace: quotes and the punctuation of
+// assignments, headers, JSON, URLs' query strings, and code.
+const WORD_BREAKS = "\"'`=:,;()[]{}<>&|";
+
+function breaksWord(ch: string): boolean {
+    return ch === " " || ch === "\n" || ch === "\t" || ch === "\r" || WORD_BREAKS.indexOf(ch) >= 0;
+}
 
 /**
- * Replace each whitespace-separated word that starts with a known credential prefix
- * with "[redacted]". Spacing and line breaks are kept.
+ * Replace each word that starts with a known credential prefix, and the word after "Bearer",
+ * with "[redacted]". Words end at whitespace, quotes, and punctuation such as `=`, `:`, and `,`,
+ * so `KEY="lin_api_…"` and `token=ghp_…` are caught. Everything else is kept as written.
  * @param text Text that may contain a pasted credential.
  * @returns The text with credential-looking words replaced.
  */
@@ -97,16 +105,16 @@ export function redactCredentials(text: string): string {
     let word = "";
     let redactNext = false;
     for (let i = 0; i <= text.length; i++) {
-        const ch = i < text.length ? text.charAt(i) : " ";
-        const space = ch === " " || ch === "\n" || ch === "\t" || ch === "\r";
-        if (!space) {
+        const end = i === text.length;
+        const ch = end ? "" : text.charAt(i);
+        if (!end && !breaksWord(ch)) {
             word += ch;
             continue;
         }
         if (word.length > 0) {
             let secret = redactNext;
             redactNext = false;
-            if (word === "Bearer") {
+            if (word === "Bearer" || word === "bearer") {
                 redactNext = true;
             } else {
                 for (const prefix of CREDENTIAL_PREFIXES) {
@@ -116,7 +124,7 @@ export function redactCredentials(text: string): string {
             out += secret ? "[redacted]" : word;
             word = "";
         }
-        if (i < text.length) out += ch;
+        out += ch;
     }
     return out;
 }
@@ -177,9 +185,9 @@ export function buildFeedbackIssue(feedback: Feedback): FeedbackIssue {
     if (feedback.confirmed !== true) {
         throw new Error("Feedback is filed only after the person confirms the summary");
     }
-    const original = clean(feedback.original, ORIGINAL_LIMIT);
+    const original = feedback.original;
     const summary = clean(feedback.summary, TITLE_LIMIT);
-    if (original === undefined) throw new Error("Feedback needs the person's original words");
+    if (original.trim().length === 0) throw new Error("Feedback needs the person's original words");
     if (summary === undefined) throw new Error("Feedback needs a confirmed summary");
     const kind = kindOf(feedback);
     const prefix = (feedback.test === true ? "[TEST] " : "") + "Feedback (" + kind + "): ";
@@ -206,9 +214,14 @@ export function buildFeedbackIssue(feedback: Feedback): FeedbackIssue {
         lines.push("", "**" + section[0] + "**", "", fenced(value));
     }
     if (!any) lines.push("", "_The person chose not to add details._");
-    lines.push("", "## Their words (verbatim)", "", fenced(original));
-    const additions = clean(feedback.additions, ORIGINAL_LIMIT);
-    if (additions !== undefined) lines.push("", "**Later additions or corrections**", "", fenced(additions));
+    // The person's words are kept exactly as written, without trimming or cutting; only
+    // credential-looking words are replaced, and the heading says when that happened.
+    const words = redactCredentials(original);
+    const additions = feedback.additions;
+    const laterWords = additions === undefined || additions.trim().length === 0 ? undefined : redactCredentials(additions);
+    const redacted = words !== original || (laterWords !== undefined && laterWords !== additions);
+    lines.push("", redacted ? "## Their words (verbatim, credential-like words redacted)" : "## Their words (verbatim)", "", fenced(words));
+    if (laterWords !== undefined) lines.push("", "**Later additions or corrections**", "", fenced(laterWords));
 
     lines.push("", "## Context", "");
     const facts: string[][] = [
@@ -287,7 +300,7 @@ interface Envelope<T> {
     errors?: GraphQlError[];
 }
 
-const TEAM_FIELDS = "id key states(first: 100) { nodes { id name type position } }";
+const TEAM_FIELDS = "id key states(first: 100, filter: { type: { in: [\"triage\", \"backlog\"] } }) { nodes { id name type position } }";
 const TEAM_BY_KEY_QUERY = "query FeedbackTeamByKey($key: String!) { teams(first: 2, filter: { key: { eqIgnoreCase: $key } }) { nodes { " + TEAM_FIELDS + " } } }";
 const TEAM_BY_ID_QUERY = "query FeedbackTeamById($id: String!) { team(id: $id) { " + TEAM_FIELDS + " } }";
 const CREATE_QUERY = "mutation FileFeedback($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url title state { name } } } }";

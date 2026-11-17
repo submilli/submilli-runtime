@@ -72,9 +72,23 @@ function main(): void {
     assert(redactCredentials("key lin_api_abcdefghijk1234 failed") === "key [redacted] failed", "linear key");
     assert(redactCredentials("Authorization: Bearer abc.def.ghi\nnext") === "Authorization: Bearer [redacted]\nnext", "bearer");
     assert(redactCredentials("sk-short ok") === "sk-short ok", "short words stay");
+    assert(redactCredentials("LINEAR_API_KEY=\"lin_api_abcdefghijk1234\"") === "LINEAR_API_KEY=\"[redacted]\"", "quoted assignment");
+    assert(redactCredentials("token=ghp_0123456789abcdef, next") === "token=[redacted], next", "unquoted assignment");
+    assert(redactCredentials("{'key': 'sk-proj-0123456789'}") === "{'key': '[redacted]'}", "JSON-ish");
+    assert(redactCredentials("authorization: bearer abcdefghij") === "authorization: bearer [redacted]", "lower-case bearer");
     const leaky = base();
     leaky.error = "401 with ghp_0123456789abcdefghij";
     assert(!buildFeedbackIssue(leaky).description.includes("ghp_0123456789"), "error field redacted");
+
+    label("the person's words are kept exactly, without trimming or cutting");
+    const exact = base();
+    exact.original = "  first line\n" + "y".repeat(9000) + "  ";
+    const exactIssue = buildFeedbackIssue(exact).description;
+    assert(exactIssue.includes("```text\n" + exact.original + "\n```"), "original unchanged");
+    assert(exactIssue.includes("## Their words (verbatim)\n"), "plain heading without redaction");
+    const pasted = base();
+    pasted.original = "it failed with key lin_api_abcdefghijk1234";
+    assert(buildFeedbackIssue(pasted).description.includes("## Their words (verbatim, credential-like words redacted)"), "redaction is disclosed");
 
     label("triage first, else the first backlog state");
     const states = [
