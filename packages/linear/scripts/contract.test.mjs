@@ -16,7 +16,9 @@ const contexts = [];
 // Every request since a test last reset this, in order; `request` is the last of them.
 let requests = [];
 let lookupResponse = null;
-const resolvedTeam = { team: { id: 'team' }, labels: { nodes: [{ id: 'feedback' }] } };
+// When non-empty, successive requests take their data from here, in order.
+let queued = [];
+const resolvedTeam = { team: { id: 'team' }, labels: { nodes: [{ id: 'feedback' }] }, project: { id: 'project' } };
 globalThis.__linearHost = {
     secrets: { get: () => token },
     check: (capability, context) => {
@@ -28,8 +30,8 @@ globalThis.__linearHost = {
         request = { url, body, headers };
         requests.push(request);
         queries.add(body.query);
-        let data = response;
-        if (body.query.includes('team { id }')) {
+        let data = queued.length > 0 ? queued.shift() : response;
+        if (queued.length === 0 && data === response && body.query.includes('team { id }')) {
             data = lookupResponse ?? (response === null ? null : {
                 issue: Object.hasOwn(response, 'issue') && response.issue === null ? null : resolvedTeam,
                 comment: { issue: resolvedTeam },
@@ -140,7 +142,7 @@ test('an update and a comment are checked against the team of their issue', () =
     for (const [capability, call, mutation, context] of [
         ['updateIssue', () => linear.updateIssue('issue', { title: 'Renamed' }), 'issueUpdate', { teamId: 'team', projectId: null }],
         ['updateIssue', () => linear.updateIssue('issue', { projectId: 'project' }), 'issueUpdate', { teamId: 'team', projectId: 'project' }],
-        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note' }), 'commentCreate', { teamId: 'team', labelIds: ['feedback'] }],
+        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note' }), 'commentCreate', { teamId: 'team', labelIds: ['feedback'], projectId: 'project' }],
     ]) {
         response = {
             issue: { team: { id: 'team' } },
@@ -210,25 +212,25 @@ test('issue reads and all session operations check the resolved team before sens
     lookupResponse = null;
 });
 
-test('issue creation is checked with its team and the labels it is created with', () => {
+test('issue creation is checked with its team and the labels and project it is created with', () => {
     const issue = { id: 'new', title: 'Hello' };
     response = { issueCreate: { success: true, issue } };
     const input = { teamId: 'team', title: 'Hello', labelIds: ['feedback'], projectId: 'project' };
     assert.deepEqual(linear.createIssue(input), issue);
     sent('createIssue', 'IssueCreateInput!', input);
-    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: ['feedback'] });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: ['feedback'], projectId: 'project' });
     linear.createIssue({ teamId: 'team', title: 'Plain' });
-    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: [] });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: [], projectId: null });
     queries.add(request.body.query);
 });
 
-test('a comment is checked against the labels its issue has in Linear, not the caller\'s word', () => {
-    lookupResponse = { issue: { team: { id: 'team' }, labels: { nodes: [] } } };
+test('a comment is checked against the labels and project its issue has in Linear, not the caller\'s word', () => {
+    lookupResponse = { issue: { team: { id: 'team' }, labels: { nodes: [] }, project: null } };
     response = { commentCreate: { success: true, comment: { id: 'comment' } } };
     requests = [];
     linear.createComment({ issueId: 'issue', body: 'Note' });
-    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: [] });
-    assert.ok(requests[0].body.query.includes('labels(first: 250) { nodes { id } }'));
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: [], projectId: null });
+    assert.ok(requests[0].body.query.includes('labels(first: 250) { nodes { id } } project { id }'));
     queries.add(requests[0].body.query);
     denied = true;
     requests = [];
@@ -236,6 +238,61 @@ test('a comment is checked against the labels its issue has in Linear, not the c
     assert.equal(requests.length, 1, 'a denied comment makes only the lookup');
     denied = false;
     lookupResponse = null;
+});
+
+test('findSimilarIssues checks first, then returns only ids and scores of open labelled lookalikes', () => {
+    const title = (id, text, closed) => ({ id, title: text, completedAt: closed === 'done' ? '2026-01-01T00:00:00Z' : null, canceledAt: closed === 'canceled' ? '2026-01-01T00:00:00Z' : null });
+    const pages = [
+        { nodes: [
+            title('same', 'Feedback (bug): Package-not-granted error on save does not say how to fix it'),
+            title('other', 'Feedback (idea): Dark mode for the console'),
+            title('closed', 'Feedback (bug): Package-not-granted error on save does not say how to fix it', 'done'),
+        ], pageInfo: { hasNextPage: true, endCursor: 'c1' } },
+        { nodes: [
+            title('close', 'Feedback (bug): Save error says package not granted'),
+            title('cancelled', 'Package not granted error on save', 'canceled'),
+        ], pageInfo: { hasNextPage: false, endCursor: null } },
+    ];
+    const serve = () => { queued = pages.map((issues) => ({ issues })); };
+    envelope = undefined;
+    requests = [];
+    serve();
+    try {
+        const found = linear.findSimilarIssues({ teamId: 'team', labelId: 'feedback', projectId: 'project' }, 'Package-not-granted error on save gives no way to fix it');
+        assert.equal(capabilities.at(-1), 'linear.app/findSimilarIssues');
+        assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelId: 'feedback', projectId: 'project' });
+        // Only ids and scores, best first; closed, canceled and unrelated issues are left out.
+        assert.deepEqual(found.map((r) => Object.keys(r).sort()), found.map(() => ['id', 'score']));
+        assert.deepEqual(found.map((r) => r.id), ['same', 'close']);
+        assert.ok(found[0].score > found[1].score && found[1].score >= 0.5);
+        assert.ok(!JSON.stringify(found).includes('Package'), 'no title text is returned');
+        // Both pages were read with the team and (label or project) filter, and only ids, titles and close dates were asked for.
+        assert.equal(requests.length, 2);
+        assert.deepEqual(JSON.parse(JSON.stringify(requests[0].body.variables)), { first: 250, filter: { team: { id: { eq: 'team' } }, or: [{ labels: { some: { id: { eq: 'feedback' } } } }, { project: { id: { eq: 'project' } } }] } });
+        assert.equal(requests[1].body.variables.after, 'c1');
+        assert.ok(requests[0].body.query.includes('nodes { id title completedAt canceledAt }'));
+        assert.ok(!requests[0].body.query.includes('description'));
+        queries.add(requests[0].body.query);
+        // limit and minScore bound the result.
+        serve();
+        assert.deepEqual(linear.findSimilarIssues({ teamId: 'team', labelId: 'feedback' }, 'Package-not-granted error on save gives no way to fix it', { limit: 1 }).map((r) => r.id), ['same']);
+        serve();
+        assert.deepEqual(linear.findSimilarIssues({ teamId: 'team', projectId: 'project' }, 'Package-not-granted error on save gives no way to fix it', { minScore: 1 }), []);
+        assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelId: null, projectId: 'project' });
+        assert.deepEqual(JSON.parse(JSON.stringify(requests.at(-1).body.variables)).filter, { team: { id: { eq: 'team' } }, project: { id: { eq: 'project' } } });
+        queued = [];
+        // Text with no significant words makes no request.
+        requests = [];
+        assert.deepEqual(linear.findSimilarIssues({ teamId: 'team', labelId: 'feedback' }, 'the and of'), []);
+        assert.equal(requests.length, 0);
+        // A denied check makes no request at all.
+        denied = true;
+        assert.throws(() => linear.findSimilarIssues({ teamId: 'team', labelId: 'other-label' }, 'anything here'), /Capability denied/);
+        assert.equal(requests.length, 0);
+    } finally {
+        denied = false;
+        queued = [];
+    }
 });
 
 test('session creation snapshots target getters once', () => {

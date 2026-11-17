@@ -16,17 +16,30 @@ provides:
     teamId:
       type: string
 - name: linear.app/createComment
-  description: Create a comment on an issue; returns the created comment. The issue is read first, so the check carries `teamId`, the team the issue belongs to, and `labelIds`, the labels it has now.
+  description: Create a comment on an issue; returns the created comment. The issue is read first, so the check carries `teamId`, the team the issue belongs to, `labelIds`, the labels it has now, and `projectId`, its project now (null when none).
   fields:
     labelIds:
       type: string[]
+    projectId:
+      type: string
     teamId:
       type: string
 - name: linear.app/createIssue
-  description: Create an issue; returns the created issue. `labelIds` in the check are the labels it is created with (empty when none).
+  description: Create an issue; returns the created issue. `labelIds` in the check are the labels it is created with (empty when none), and `projectId` its project (null when none).
   fields:
     labelIds:
       type: string[]
+    projectId:
+      type: string
+    teamId:
+      type: string
+- name: linear.app/findSimilarIssues
+  description: Find open issues whose titles resemble a text, for duplicate detection without reading other issues. Looks in a team, at issues that carry a label or belong to a project (either, when both are given). The package compares titles itself and returns only UUIDs and scores, never titles, descriptions or any other content. Similarity is the Dice coefficient of significant words (case-insensitive, stop words ignored). Completed and canceled issues are skipped. Reads up to 10,000 issues. `labelId` and `projectId` in the check are null when not given.
+  fields:
+    labelId:
+      type: string
+    projectId:
+      type: string
     teamId:
       type: string
 - name: linear.app/getAgentSession
