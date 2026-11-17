@@ -13,7 +13,8 @@ yourself.
 Read operations:
 
 - `getIssue(id)` fetches one issue.
-- `listIssues(filter, page)` fetches a filtered, paginated page of issues.
+- `listIssues(filter, page)` fetches a filtered, paginated page of issues. The
+  check carries the filter's `teamId` and `labelId` (each null when not set).
 - `listTeams(page)` fetches a page of teams.
 
 Lists return a `Page<T>` with `nodes` and `pageInfo`. When
@@ -65,10 +66,10 @@ function main(): string {
 function getIssue(id: string): Issue | null;
 
 /**
- * List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or null when the filter names no team.
- * @param filter Optional filters (team, assignee, state category, timestamps); omit it to apply none. `teamId` is also checked against capability rules.
+ * List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or null when the filter names no team; `labelId` is the filter's label, or null when it names none.
+ * @param filter Optional filters (team, assignee, state category, timestamps, label); omit it to apply none. `teamId` and `labelId` are also checked against capability rules.
  * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
- * @capability linear.app/listIssues { teamId: string }
+ * @capability linear.app/listIssues { teamId: string, labelId: string }
  * @returns One page of issues in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
  */
 function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue>;
@@ -233,6 +234,10 @@ interface IssueFilter {
    * Restrict to issues created at or after this ISO timestamp.
    */
   createdAtAfter?: string;
+  /**
+   * Restrict to issues that carry this label UUID.
+   */
+  labelId?: string;
   /**
    * Restrict by state category, e.g. "started".
    */
