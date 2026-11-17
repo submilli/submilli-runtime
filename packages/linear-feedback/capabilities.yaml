@@ -11,3 +11,6 @@ requires:
 - capability: http.post
   filter: host == "api.linear.app" and path == "/graphql"
 - capability: secrets.get
+  filter: name == "FEEDBACK_LINEAR_API_KEY"
+- capability: secrets.get
+  filter: name == "FEEDBACK_LINEAR_TEAM"

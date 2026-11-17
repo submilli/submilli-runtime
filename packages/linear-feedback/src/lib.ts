@@ -319,8 +319,8 @@ export function feedbackState(states: TeamState[]): TeamState | undefined {
     return backlog;
 }
 
-function secret(name: string): string {
-    const value = secrets.get(name);
+// Each secret is read by its literal name, so the build pins `secrets.get` to exactly these two.
+function bound(name: string, value: string | undefined): string {
     if (value === undefined || value.trim().length === 0) {
         throw new Error("Feedback filing is not set up: the " + name + " secret is not bound");
     }
@@ -328,7 +328,7 @@ function secret(name: string): string {
 }
 
 function graphql(query: string, variables: { [key: string]: unknown }): Response {
-    const token = secret("FEEDBACK_LINEAR_API_KEY");
+    const token = bound("FEEDBACK_LINEAR_API_KEY", secrets.get("FEEDBACK_LINEAR_API_KEY"));
     const headers = new Map<string, string>();
     headers.set("Authorization", token.startsWith("lin_api_") || token.startsWith("Bearer ") ? token : "Bearer " + token);
     const response = post(ENDPOINT, { query: query, variables: variables }, headers);
@@ -385,7 +385,7 @@ export function submitFeedback(feedback: Feedback): FiledFeedback {
     const kind = kindOf(copy);
     const test = copy.test === true;
     check("linear.app/submitFeedback", { kind: kind, test: test });
-    const teamName = secret("FEEDBACK_LINEAR_TEAM");
+    const teamName = bound("FEEDBACK_LINEAR_TEAM", secrets.get("FEEDBACK_LINEAR_TEAM"));
     const team = findTeam(teamName);
     const input: { [key: string]: unknown } = { teamId: team.id, title: issue.title, description: issue.description };
     const state = feedbackState(team.states.nodes);
