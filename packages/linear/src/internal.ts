@@ -31,6 +31,8 @@ export interface IssueFilter {
     createdAtAfter?: string;
     /** Restrict to issues updated at or after this ISO timestamp. */
     updatedAtAfter?: string;
+    /** Restrict to issues that carry this label UUID. */
+    labelId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,7 @@ export function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
     const completedAtBefore = filter.completedAtBefore;
     const createdAtAfter = filter.createdAtAfter;
     const updatedAtAfter = filter.updatedAtAfter;
+    const labelId = filter.labelId;
     if (teamId !== undefined) {
         out.team = { id: { eq: teamId } };
     }
@@ -91,6 +94,113 @@ export function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
     }
     if (updatedAtAfter !== undefined) {
         out.updatedAt = { gte: stripZoneAnnotation(updatedAtAfter) };
+    }
+    if (labelId !== undefined) {
+        out.labels = { some: { id: { eq: labelId } } };
+    }
+    return out;
+}
+
+// Common words that carry no meaning when comparing two short texts.
+const STOP_WORDS = new Set<string>([
+    "the", "and", "for", "not", "but", "you", "your", "are", "was", "were", "this", "that", "with",
+    "from", "have", "has", "had", "does", "did", "doesn", "didn", "can", "cannot", "could", "would",
+    "should", "will", "when", "what", "how", "why", "who", "which", "there", "their", "they", "them",
+    "then", "than", "into", "onto", "out", "about", "after", "before", "also", "just", "only", "very",
+    "its", "it's", "any", "all", "some", "too", "feedback", "bug", "idea", "praise", "question", "other",
+]);
+
+// A letter or digit: ASCII letters and digits, plus non-ASCII characters outside the general
+// punctuation block, so accented and non-Latin words count as words.
+function isWordChar(code: number): boolean {
+    if (code >= 48 && code <= 57) return true;
+    if (code >= 97 && code <= 122) return true;
+    if (code <= 0xbf) return false; // ASCII and Latin-1 controls, spaces and symbols, including the no-break space
+    if (code === 0xd7 || code === 0xf7) return false;
+    if (code === 0x1680 || code === 0x180e || code === 0xfeff) return false;
+    if (code >= 0x2000 && code <= 0x206f) return false; // general punctuation and Unicode spaces
+    if (code >= 0x3000 && code <= 0x303f) return false; // ideographic space and CJK punctuation
+    return true;
+}
+
+/**
+ * Split a text into its distinct significant words for similarity comparison.
+ * @param text Any text, such as an issue title.
+ * @returns Lowercase words of at least three letters or digits, in first-seen order, without stop words or duplicates.
+ */
+export function significantWords(text: string): string[] {
+    const lower = text.toLowerCase();
+    const words: string[] = [];
+    const seen = new Set<string>();
+    let current = "";
+    for (let i = 0; i <= lower.length; i++) {
+        const code = i < lower.length ? lower.charCodeAt(i) : 32;
+        if (isWordChar(code)) {
+            current = current + lower.charAt(i);
+            continue;
+        }
+        if (current.length >= 3 && !STOP_WORDS.has(current) && !seen.has(current)) {
+            seen.add(current);
+            words.push(current);
+        }
+        current = "";
+    }
+    return words;
+}
+
+/**
+ * Similarity of two word lists: the Dice coefficient, twice the shared words over the total.
+ * @param a Distinct words of the first text.
+ * @param b Distinct words of the second text.
+ * @returns A score from 0 (no shared words, or either list empty) to 1 (the same words).
+ */
+export function wordSimilarity(a: string[], b: string[]): number {
+    if (a.length === 0 || b.length === 0) return 0;
+    const inB = new Set<string>();
+    for (const word of b) inB.add(word);
+    let shared = 0;
+    for (const word of a) {
+        if (inB.has(word)) shared = shared + 1;
+    }
+    return (2 * shared) / (a.length + b.length);
+}
+
+/** Linear's issue-filter variable for a duplicate search: a team, and a label or a project. */
+export interface SimilarIssuesFilterVar {
+    /** Team-id equality clause. */
+    team: { id: { eq: string } };
+    /** Has-label clause, when only a label is given. */
+    labels?: { some: { id: { eq: string } } };
+    /** Project-id equality clause, when only a project is given. */
+    project?: { id: { eq: string } };
+    /** Either clause, when both a label and a project are given. */
+    or?: SimilarIssuesScopeClause[];
+}
+
+/** One alternative of a duplicate-search scope: a label or a project. */
+export interface SimilarIssuesScopeClause {
+    /** Has-label clause. */
+    labels?: { some: { id: { eq: string } } };
+    /** Project-id equality clause. */
+    project?: { id: { eq: string } };
+}
+
+/**
+ * Build the filter for a duplicate search: issues in the team that carry the label or belong to
+ * the project (either one when only one is given; the whole team when neither is).
+ * @param teamId Team UUID.
+ * @param labelId Optional label UUID.
+ * @param projectId Optional project UUID.
+ * @returns Linear filter variable.
+ */
+export function buildSimilarIssuesFilter(teamId: string, labelId?: string, projectId?: string): SimilarIssuesFilterVar {
+    const out: SimilarIssuesFilterVar = { team: { id: { eq: teamId } } };
+    if (labelId !== undefined && projectId !== undefined) {
+        out.or = [{ labels: { some: { id: { eq: labelId } } } }, { project: { id: { eq: projectId } } }];
+    } else if (labelId !== undefined) {
+        out.labels = { some: { id: { eq: labelId } } };
+    } else if (projectId !== undefined) {
+        out.project = { id: { eq: projectId } };
     }
     return out;
 }
@@ -191,6 +301,8 @@ export interface IssueFilterVar {
     createdAt?: DateComparatorVar;
     /** Updated-at date comparator. */
     updatedAt?: DateComparatorVar;
+    /** Has-label clause: at least one label with this id. */
+    labels?: { some: { id: { eq: string } } };
 }
 
 /** Linear date comparator subset used by curated filters. */

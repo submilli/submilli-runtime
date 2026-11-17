@@ -16,6 +16,10 @@ import {
     buildListIssuesVars,
     buildPageVars,
     GraphQlResponse,
+    significantWords,
+    wordSimilarity,
+    buildSimilarIssuesFilter,
+    SimilarIssuesFilterVar,
     graphqlErrorMessage,
     httpFailureMessage,
     IssueFilter,
@@ -415,14 +419,15 @@ export function getIssue(id: string): Issue | null {
 
 /**
  * List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or
- * null when the filter names no team.
- * @param filter Optional filters (team, assignee, state category, timestamps); omit it to apply none. `teamId` is also checked against capability rules.
+ * null when the filter names no team; `labelId` is the filter's label, or null when it names none.
+ * @param filter Optional filters (team, assignee, state category, timestamps, label); omit it to apply none. `teamId` and `labelId` are also checked against capability rules.
  * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of issues in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
- * @capability linear.app/listIssues { teamId: string }
+ * @capability linear.app/listIssues { teamId: string, labelId: string }
  */
 export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue> {
     const teamId = filter?.teamId;
+    const labelId = filter?.labelId;
     let owned: IssueFilter | undefined;
     if (filter !== undefined) {
         owned = {
@@ -433,12 +438,87 @@ export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue
             completedAtBefore: filter.completedAtBefore,
             createdAtAfter: filter.createdAtAfter,
             updatedAtAfter: filter.updatedAtAfter,
+            labelId: labelId,
         };
     }
-    check("linear.app/listIssues", { teamId: teamId ?? null });
+    check("linear.app/listIssues", { teamId: teamId ?? null, labelId: labelId ?? null });
     const vars = buildListIssuesVars(owned, page);
     const envelope = graphqlPost(LIST_ISSUES_QUERY, vars).json<GraphQlResponse<ListIssuesData>>();
     return requireData(envelope).issues;
+}
+
+/** A possible duplicate from `findSimilarIssues`: only the issue's UUID and its similarity score. */
+export interface SimilarIssue {
+    /** Issue UUID; pass it to `createComment` to add to that issue. */
+    id: string;
+    /** Similarity of the issue's title to the searched text, from 0 to 1, rounded to two decimals. */
+    score: number;
+}
+
+/** Where `findSimilarIssues` looks: a team, and issues with a label or in a project (or both). */
+export interface SimilarIssueScope {
+    /** Team UUID. */
+    teamId: string;
+    /** Optional label UUID: issues that carry it. */
+    labelId?: string;
+    /** Optional project UUID: issues in it. */
+    projectId?: string;
+}
+
+/** Options for `findSimilarIssues`. All optional. */
+export interface SimilarIssueOptions {
+    /** Lowest score to return, from 0 to 1; default 0.5. */
+    minScore?: number;
+    /** Most results to return, from 1 to 10; default 3. */
+    limit?: number;
+}
+
+/**
+ * Find open issues whose titles resemble a text, for duplicate detection without reading other
+ * issues. Looks in a team, at issues that carry a label or belong to a project (either, when both
+ * are given). The package compares titles itself and returns only UUIDs and scores, never titles,
+ * descriptions or any other content. Similarity is the Dice coefficient of significant words
+ * (case-insensitive, stop words ignored). Completed and canceled issues are skipped. Reads up to
+ * 10,000 issues. `labelId` and `projectId` in the check are null when not given.
+ * @param scope `teamId`, and an optional `labelId` and `projectId`; all checked against capability rules.
+ * @param text Text to compare with each issue's title, such as a proposed title.
+ * @param options Optional `minScore` (default 0.5) and `limit` (default 3, at most 10).
+ * @returns Matching issues, best first, each with only `id` and `score`; empty when none reaches `minScore`.
+ * @capability linear.app/findSimilarIssues { teamId: string, labelId: string, projectId: string }
+ */
+export function findSimilarIssues(scope: SimilarIssueScope, text: string, options?: SimilarIssueOptions): SimilarIssue[] {
+    const teamId = scope.teamId;
+    const labelId = scope.labelId;
+    const projectId = scope.projectId;
+    const requestedMin = options?.minScore;
+    const requestedLimit = options?.limit;
+    check("linear.app/findSimilarIssues", { teamId: teamId, labelId: labelId ?? null, projectId: projectId ?? null });
+    let minScore = requestedMin ?? 0.5;
+    if (minScore < 0) minScore = 0;
+    if (minScore > 1) minScore = 1;
+    let limit = requestedLimit ?? 3;
+    if (limit < 1) limit = 1;
+    if (limit > 10) limit = 10;
+    const wanted = significantWords(text);
+    const found: SimilarIssue[] = [];
+    if (wanted.length === 0) return found;
+    const filter = buildSimilarIssuesFilter(teamId, labelId, projectId);
+    let after: string | undefined = undefined;
+    for (let pageNumber = 0; pageNumber < 40; pageNumber++) {
+        const vars: SimilarIssuesVars = { first: 250, after: after, filter: filter };
+        const envelope = graphqlPost(SIMILAR_ISSUES_QUERY, vars).json<GraphQlResponse<SimilarIssuesData>>();
+        const page = requireData(envelope).issues;
+        for (const node of page.nodes) {
+            if (node.completedAt !== null || node.canceledAt !== null) continue;
+            const score = Math.round(wordSimilarity(wanted, significantWords(node.title)) * 100) / 100;
+            if (score >= minScore) found.push({ id: node.id, score: score });
+        }
+        const cursor = page.pageInfo.endCursor;
+        if (!page.pageInfo.hasNextPage || cursor === null) break;
+        after = cursor;
+    }
+    found.sort((a: SimilarIssue, b: SimilarIssue): number => b.score - a.score);
+    return found.slice(0, limit);
 }
 
 /**
@@ -495,10 +575,11 @@ export function listUsers(page?: PageOptions): Page<User> {
 // ---------------------------------------------------------------------------
 
 /**
- * Create an issue; returns the created issue.
+ * Create an issue; returns the created issue. `labelIds` in the check are the labels it is created
+ * with (empty when none), and `projectId` its project (null when none).
  * @param input New issue fields; `teamId` is required and unset optional fields are omitted from the request.
  * @returns The created issue.
- * @capability linear.app/createIssue { teamId: string }
+ * @capability linear.app/createIssue { teamId: string, labelIds: string[], projectId: string }
  */
 export function createIssue(input: IssueCreateInput): Issue {
     const teamId = input.teamId;
@@ -507,7 +588,12 @@ export function createIssue(input: IssueCreateInput): Issue {
     const assigneeId = input.assigneeId;
     const stateId = input.stateId;
     const priority = input.priority;
-    const labelIds = input.labelIds?.slice();
+    const callerLabelIds = input.labelIds;
+    let labelIds: string[] | undefined;
+    if (callerLabelIds !== undefined) {
+        labelIds = [];
+        for (const labelId of callerLabelIds) labelIds.push(labelId);
+    }
     const projectId = input.projectId;
     const issueInput: IssueCreateInput = { teamId: teamId };
     if (title !== undefined) issueInput.title = title;
@@ -517,7 +603,7 @@ export function createIssue(input: IssueCreateInput): Issue {
     if (priority !== undefined) issueInput.priority = priority;
     if (labelIds !== undefined) issueInput.labelIds = labelIds;
     if (projectId !== undefined) issueInput.projectId = projectId;
-    check("linear.app/createIssue", { teamId: teamId });
+    check("linear.app/createIssue", { teamId: teamId, labelIds: labelIds ?? [], projectId: projectId ?? null });
     const vars: CreateIssueVars = { input: issueInput };
     const envelope = graphqlPost(CREATE_ISSUE_QUERY, vars).json<GraphQlResponse<IssueCreateData>>();
     return requirePayloadIssue(requireData(envelope).issueCreate);
@@ -557,10 +643,11 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
 
 /**
  * Create a comment on an issue; returns the created comment. The issue is read first, so the
- * check carries `teamId`, the team the issue belongs to.
+ * check carries `teamId`, the team the issue belongs to, `labelIds`, the labels it has now, and
+ * `projectId`, its project now (null when none).
  * @param input Target `issueId`, Markdown `body`, and optional `parentId` for a threaded reply. Throws if the issue does not exist.
  * @returns The created comment.
- * @capability linear.app/createComment { teamId: string }
+ * @capability linear.app/createComment { teamId: string, labelIds: string[], projectId: string }
  */
 export function createComment(input: CommentCreateInput): Comment {
     const issueId = input.issueId;
@@ -568,8 +655,8 @@ export function createComment(input: CommentCreateInput): Comment {
     const parentId = input.parentId;
     const commentInput: CommentCreateInput = { issueId: issueId, body: body };
     if (parentId !== undefined) commentInput.parentId = parentId;
-    const teamId = issueTeamId(issueId);
-    check("linear.app/createComment", { teamId: teamId });
+    const scope = issueScope(issueId);
+    check("linear.app/createComment", { teamId: scope.teamId, labelIds: scope.labelIds, projectId: scope.projectId });
     const vars: CreateCommentVars = { input: commentInput };
     const envelope = graphqlPost(CREATE_COMMENT_QUERY, vars)
         .json<GraphQlResponse<CommentCreateData>>();
@@ -587,6 +674,18 @@ function issueTeamId(issueId: string): string {
     const teamId = nullableIssueTeamId(issueId);
     if (teamId === null) throw new Error("Linear issue was not found");
     return teamId;
+}
+
+// The team, current labels and project of an issue, read from Linear, so a rule on either holds for an
+// operation that names only the issue.
+function issueScope(issueId: string): IssueScope {
+    const envelope = graphqlPost(ISSUE_SCOPE_QUERY, { id: issueId }).json<GraphQlResponse<IssueScopeData>>();
+    const issue = requireData(envelope).issue;
+    if (issue === null) throw new Error("Linear issue was not found");
+    const labelIds: string[] = [];
+    for (const label of issue.labels.nodes) labelIds.push(label.id);
+    const project = issue.project;
+    return { teamId: issue.team.id, labelIds: labelIds, projectId: project === null ? null : project.id };
 }
 
 function nullableIssueTeamId(issueId: string): string | null {
@@ -747,6 +846,28 @@ interface IssueTeamData {
 interface IssueTeam {
     team: TeamId;
 }
+interface SimilarIssueNode {
+    id: string;
+    title: string;
+    completedAt: string | null;
+    canceledAt: string | null;
+}
+interface SimilarIssuesVars {
+    first: number;
+    after?: string;
+    filter: SimilarIssuesFilterVar;
+}
+interface SimilarIssuesData {
+    issues: { nodes: SimilarIssueNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+}
+interface IssueScopeData {
+    issue: { team: TeamId; labels: { nodes: TeamId[] }; project: TeamId | null } | null;
+}
+interface IssueScope {
+    teamId: string;
+    labelIds: string[];
+    projectId: string | null;
+}
 interface CommentTeam { issue: IssueTeam | null; }
 interface CommentTeamData { comment: CommentTeam | null; }
 interface AgentSessionTeamData {
@@ -849,6 +970,8 @@ const ISSUE_FIELDS =
 const VIEWER_QUERY = "query { viewer { id name email active } }";
 const GET_ISSUE_QUERY = `query($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`;
 const ISSUE_TEAM_QUERY = "query($id: String!) { issue(id: $id) { team { id } } }";
+const SIMILAR_ISSUES_QUERY = "query($first: Int, $after: String, $filter: IssueFilter) { issues(first: $first, after: $after, filter: $filter) { nodes { id title completedAt canceledAt } pageInfo { hasNextPage endCursor } } }";
+const ISSUE_SCOPE_QUERY = "query($id: String!) { issue(id: $id) { team { id } labels(first: 250) { nodes { id } } project { id } } }";
 const COMMENT_TEAM_QUERY = "query($id: String!) { comment(id: $id) { issue { team { id } } } }";
 const AGENT_SESSION_TEAM_QUERY = "query($id: String!) { agentSession(id: $id) { issue { team { id } } comment { issue { team { id } } } } }";
 const LIST_ISSUES_QUERY = `query($first: Int, $after: String, $filter: IssueFilter) { issues(first: $first, after: $after, filter: $filter) { nodes { ${ISSUE_FIELDS} } pageInfo { hasNextPage endCursor } } }`;

@@ -15,6 +15,9 @@ import {
     graphqlErrorMessage,
     httpFailureMessage,
     GraphQlResponse,
+    significantWords,
+    wordSimilarity,
+    buildSimilarIssuesFilter,
 } from "../src/internal";
 
 function main(): void {
@@ -26,6 +29,48 @@ function main(): void {
     assert(
         JSON.stringify(buildIssueFilter({ teamId: "T1" })) === "{\"team\":{\"id\":{\"eq\":\"T1\"}}}",
         "team-only clause; absent clauses omitted, not null",
+    );
+
+    label("issue filter: label clause");
+    assert(
+        JSON.stringify(buildIssueFilter({ labelId: "L1" })) === "{\"labels\":{\"some\":{\"id\":{\"eq\":\"L1\"}}}}",
+        "label clause matches issues that have the label",
+    );
+
+    label("significant words: lowercase, distinct, no stop words, no short words, punctuation splits");
+    assert(
+        JSON.stringify(significantWords("Feedback (bug): The Package-not-granted error, on SAVE; save again")) ===
+            "[\"package\",\"granted\",\"error\",\"save\",\"again\"]",
+        "significant words",
+    );
+    assert(JSON.stringify(significantWords("")) === "[]", "empty text has no words");
+    assert(JSON.stringify(significantWords("Ünïcode café — naïve")) === "[\"ünïcode\",\"café\",\"naïve\"]", "non-ASCII letters count, the em dash splits");
+    assert(
+        JSON.stringify(significantWords("save\u00a0changes\u3000now\u202fplease\u00bbdone")) === "[\"save\",\"changes\",\"now\",\"please\",\"done\"]",
+        "no-break, ideographic and narrow spaces and Latin-1 symbols split words",
+    );
+    assert(wordSimilarity(significantWords("save changes"), significantWords("save\u00a0changes")) === 1, "a no-break space does not change the score");
+
+    label("word similarity: Dice coefficient");
+    assert(wordSimilarity(["a1", "b2"], ["a1", "b2"]) === 1, "same words score 1");
+    assert(wordSimilarity(["a1", "b2"], ["c3", "d4"]) === 0, "no shared words score 0");
+    assert(wordSimilarity(["a1", "b2", "c3"], ["a1"]) === 0.5, "one shared of four words in total");
+    assert(wordSimilarity([], ["a1"]) === 0, "an empty side scores 0");
+
+    label("duplicate-search filter: team, and label or project");
+    assert(JSON.stringify(buildSimilarIssuesFilter("T1")) === "{\"team\":{\"id\":{\"eq\":\"T1\"}}}", "team only");
+    assert(
+        JSON.stringify(buildSimilarIssuesFilter("T1", "L1")) === "{\"labels\":{\"some\":{\"id\":{\"eq\":\"L1\"}}},\"team\":{\"id\":{\"eq\":\"T1\"}}}",
+        "label only",
+    );
+    assert(
+        JSON.stringify(buildSimilarIssuesFilter("T1", undefined, "P1")) === "{\"project\":{\"id\":{\"eq\":\"P1\"}},\"team\":{\"id\":{\"eq\":\"T1\"}}}",
+        "project only",
+    );
+    assert(
+        JSON.stringify(buildSimilarIssuesFilter("T1", "L1", "P1")) ===
+            "{\"or\":[{\"labels\":{\"some\":{\"id\":{\"eq\":\"L1\"}}}},{\"project\":{\"id\":{\"eq\":\"P1\"}}}],\"team\":{\"id\":{\"eq\":\"T1\"}}}",
+        "label or project",
     );
 
     label("issue filter: all clauses");
