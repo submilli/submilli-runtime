@@ -560,7 +560,8 @@ pub(super) fn try_match_metadata(
     if !["index", "input", "groups"].contains(&name) {
         return Ok(None);
     }
-    let ty = intrinsic_types(&mut *caller)?.regex_match_box.clone();
+    // A global match is a plain array whose metadata reads as undefined.
+    let ty = intrinsic_types(&mut *caller)?.array.clone();
     if !super::collection::is_a(caller, value, &ty)? {
         return Ok(None);
     }
