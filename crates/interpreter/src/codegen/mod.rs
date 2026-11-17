@@ -2456,6 +2456,24 @@ pub(crate) fn host_property_iface(receiver_ty: &Type) -> Option<crate::MangledNa
     }
 }
 
+/// Primitive writes and erased generic receivers use the dynamic property ABI.
+pub(crate) fn field_write_needs_dynamic_receiver(ty: &Type) -> bool {
+    ty.all_members(&|member| {
+        member.lowers_to_erased_slot()
+            || matches!(
+                member.primitive_behavior(),
+                Type::Number
+                    | Type::NumberLiteral(_)
+                    | Type::Boolean
+                    | Type::BooleanLiteral(_)
+                    | Type::String
+                    | Type::StringLiteral(_)
+                    | Type::BigInt
+                    | Type::AliasRef { .. }
+            )
+    })
+}
+
 /// Whether a field access on `receiver_ty` may meet a value with no object
 /// payload: a built-in seen through a structural view or `unknown`.
 pub(crate) fn may_hold_builtin_value(receiver_ty: &Type) -> bool {

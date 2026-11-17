@@ -947,7 +947,9 @@ impl CodegenAnalysis {
                         &crate::mangle::property_setter(&name.name),
                     ));
                 }
-                if crate::codegen::may_hold_builtin_value(receiver_ty) {
+                if crate::codegen::may_hold_builtin_value(receiver_ty)
+                    || crate::codegen::field_write_needs_dynamic_receiver(receiver_ty)
+                {
                     self.note_record_helpers();
                 }
                 self.extra_field_names.push(name.name.clone());
@@ -1175,13 +1177,13 @@ impl CodegenAnalysis {
                 if matches!(op, crate::UnOp::Neg) && may_be_bigint(operand_ty) {
                     self.dependency_usage.collect_bigint_host_value("neg");
                 }
-                if matches!(op, crate::UnOp::Pos)
-                    && (operand_ty.is_string_shaped()
-                        // A bare alias reference may name a string alias; see `may_be_bigint`.
-                        || matches!(operand_ty, crate::Type::AliasRef { .. })
-                        || matches!(operand_ty.primitive_behavior(), crate::Type::Union(_)))
-                {
-                    self.dependency_usage.collect_number_coercion_host_value();
+                if let Some(name) = match op {
+                    crate::UnOp::Pos => Some("pos"),
+                    crate::UnOp::Neg => Some("neg"),
+                    _ => None,
+                } {
+                    self.dependency_usage
+                        .note_value(crate::mangle::prelude(&format!("__value_{name}")));
                 }
             }
             TypedExprKind::Call { mangled, .. } | TypedExprKind::GenericCall { mangled, .. } => {
