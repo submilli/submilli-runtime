@@ -588,6 +588,10 @@ pub fn declare_intrinsic_types(types: &mut TypeSection) -> IntrinsicTypeIndices 
                         element_type: StorageType::Val(ref_null(object)),
                         mutable: false,
                     },
+                    FieldType {
+                        element_type: StorageType::Val(ValType::I32),
+                        mutable: true,
+                    }, // present metadata properties: index, input, groups
                 ]
                 .into_boxed_slice(),
             }),

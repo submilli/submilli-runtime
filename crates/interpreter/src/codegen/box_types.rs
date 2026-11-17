@@ -337,6 +337,7 @@ impl Collector<'_> {
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
                 self.walk_expr(*receiver)?;
             }

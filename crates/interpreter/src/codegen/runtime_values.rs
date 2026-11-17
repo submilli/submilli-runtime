@@ -111,6 +111,15 @@ pub(crate) fn dynamic_member_interface(iface: &MangledName) -> bool {
         .any(|name| iface == &crate::mangle::prelude(name))
 }
 
+/// Match metadata can be removed through an optional structural view even when
+/// its declared interface requires it. Read its live boxed value.
+pub(crate) fn deletable_match_metadata(iface: &MangledName, name: &str) -> bool {
+    ["index", "input", "groups"].contains(&name)
+        && ["RegExpMatchArray", "RegExpExecArray"]
+            .iter()
+            .any(|kind| iface == &crate::mangle::prelude(kind))
+}
+
 /// Whether a method on `iface` called on `recv_ty` dispatches through the live
 /// member helpers: a union of primitives, or a wrapper-interface receiver.
 pub(crate) fn method_dispatches_live(recv_ty: &Type, iface: &MangledName) -> bool {

@@ -482,6 +482,7 @@ pub(super) fn collect_from_expr(
             }
         }
         TypedExprKind::FieldAccess { receiver, .. }
+        | TypedExprKind::DeleteField { receiver, .. }
         | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
             collect_from_expr(ast, *receiver, c)?;
         }

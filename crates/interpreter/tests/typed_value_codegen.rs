@@ -24,7 +24,7 @@ fn run(source: &str, prepare: impl FnOnce(&mut TypedAst) + Send + 'static) -> St
                 .chain(host)
                 .chain(internal)
                 .collect::<Vec<_>>();
-            let wasm = submilli_engine::codegen::codegen(
+            let generated = submilli_engine::codegen::codegen_with_type_info(
                 &source,
                 "typed-values.ts",
                 FileId(0),
@@ -32,7 +32,13 @@ fn run(source: &str, prepare: impl FnOnce(&mut TypedAst) + Send + 'static) -> St
                 &dependencies,
             )
             .unwrap();
-            pollster::block_on(RuntimeConfig::default().run(&wasm))
+            let compiled = submilli_engine::CompiledScript {
+                wasm: generated.wasm,
+                type_info: generated.type_info,
+                warnings: vec![],
+                timings: Default::default(),
+            };
+            pollster::block_on(RuntimeConfig::default().run_compiled(&compiled))
                 .expect("valid typed program loads and runs")
                 .value
                 .expect("main returns a value")
@@ -232,4 +238,142 @@ fn unary_operators_convert_non_numeric_values() {
         }),
         "0"
     );
+}
+
+#[test]
+fn delete_field_removes_own_properties() {
+    let source = include_str!("typed_value_sources/delete.ts")
+        .replace("delete o.p", "deleteMarker(o, \"p\")")
+        .replace(
+            "delete receiver()[\"p\"]",
+            "deleteMarker(receiver(), \"p\")",
+        );
+    assert_eq!(run_with_delete(&source, 2), "0");
+}
+
+#[test]
+fn delete_field_preserves_prototype_members() {
+    let source = include_str!("typed_value_sources/delete-prototype.ts")
+        .replace("delete o.p", "deleteMarker(o, \"p\")")
+        .replace("delete method.p", "deleteMarker(method, \"p\")");
+    let source = source.replace("delete o.next", "deleteMarker(o, \"next\")");
+    assert_eq!(run_with_delete(&source, 3), "0");
+}
+
+#[test]
+fn delete_field_uses_literal_property_names() {
+    let mut source = include_str!("typed_value_sources/delete-keys.ts").to_owned();
+    for key in ["雪", "", "get p", "1"] {
+        source = source.replace(
+            &format!("delete keys[\"{key}\"]"),
+            &format!("deleteMarker(keys, \"{key}\")"),
+        );
+    }
+    assert_eq!(run_with_delete(&source, 4), "0");
+}
+
+#[test]
+fn delete_field_preserves_structural_equality_and_hashing() {
+    // Submilli's documented structural equality differs from JS identity.
+    let source = r#"
+        function main(): number {
+            const required = { p: 1, keep: 2 };
+            deleteMarker(required, "p");
+            const absent: {p?: number; keep: number} = { keep: 2 };
+            if (required !== absent || absent !== required) return 1;
+            const forward = new Map<object, number>();
+            forward.set(required, 42);
+            const reverse = new Map<object, number>();
+            reverse.set(absent, 43);
+            if (forward.get(absent) !== 42 || reverse.get(required) !== 43) return 2;
+            const set = new Set<object>();
+            set.add(required);
+            if (!set.has(absent)) return 3;
+            const copied = { ...required };
+            if ("p" in copied || Object.hasOwn(copied, "p")) return 4;
+            return 0;
+        }
+    "#;
+    assert_eq!(run_with_delete(source, 1), "0");
+}
+
+#[test]
+fn delete_field_handles_optional_views_of_builtins() {
+    let source = include_str!("typed_value_sources/delete-builtins.ts")
+        .replace("delete o.toString", "deleteMarker(o, \"toString\")")
+        .replace("delete o.length", "deleteMarker(o, \"length\")")
+        .replace("delete o.lastIndex", "deleteMarker(o, \"lastIndex\")");
+    assert_eq!(run_with_delete(&source, 3), "0");
+}
+
+#[test]
+fn delete_field_removes_configurable_builtin_metadata() {
+    let mut source = include_str!("typed_value_sources/delete-metadata.ts").to_owned();
+    for name in ["length", "index", "input", "groups"] {
+        source = source.replace(
+            &format!("delete o.{name}"),
+            &format!("deleteMarker(o, \"{name}\")"),
+        );
+    }
+    assert_eq!(run_with_delete(&source, 4), "0");
+}
+
+#[test]
+fn deleted_match_metadata_is_checked_by_runtime_casts() {
+    // Runtime-checked casts are an intentional Submilli extension to TypeScript.
+    let source = r#"
+        function acceptsExec(value: unknown): boolean {
+            try { const checked = value as RegExpExecArray; return checked.length > 0; }
+            catch { return false; }
+        }
+        function main(): number {
+            const m = /(?<a>a)/.exec("a");
+            if (m === null || !acceptsExec(m)) return 1;
+            deleteMarker(m, "index");
+            if (acceptsExec(m)) return 2;
+            const optional = m as unknown as RegExpMatchArray;
+            if (optional.index !== undefined) return 3;
+            const n = /(?<a>a)/.exec("a");
+            if (n === null) return 4;
+            deleteMarker(n, "input");
+            if (acceptsExec(n)) return 5;
+            const groups = n.groups as unknown as { [key: string]: unknown };
+            groups.a = 42;
+            deleteMarker(n, "groups");
+            const visible = n as unknown as RegExpMatchArray;
+            if (visible.groups !== undefined) return 6;
+            return 0;
+        }
+    "#;
+    assert_eq!(run_with_delete(source, 3), "0");
+}
+
+fn run_with_delete(source: &str, expected_nodes: usize) -> String {
+    let source = format!(
+        "function deleteMarker(o: unknown, key: string): boolean {{ return true; }}\n{source}"
+    );
+    run(&source, move |ast| {
+        let mut count = 0;
+        for id in ast.expr_ids().unwrap() {
+            let expr = ast.try_expr(id).unwrap().clone();
+            let TypedExprKind::Call { mangled, args, .. } = expr.kind else {
+                continue;
+            };
+            if mangled != submilli_engine::mangle::package_symbol("main", "deleteMarker") {
+                continue;
+            }
+            let TypedExprKind::String(name) = &ast.try_expr(args[1]).unwrap().kind else {
+                panic!("literal key");
+            };
+            ast.try_expr_mut(id).unwrap().kind = TypedExprKind::DeleteField {
+                receiver: args[0],
+                name: Ident {
+                    name: name.clone(),
+                    span: expr.span,
+                },
+            };
+            count += 1;
+        }
+        assert_eq!(count, expected_nodes);
+    })
 }

@@ -649,8 +649,13 @@ fn connect_expression(
             }
         }
         TypedExprKind::InterfacePropertyAccess {
-            receiver, iface, ..
+            receiver,
+            iface,
+            name,
         } => {
+            if super::deletable_match_metadata(iface, &name.name) {
+                flow.widened.insert(target.clone());
+            }
             if super::dynamic_member_interface(iface) {
                 flow.value(*receiver, target);
             }
@@ -725,6 +730,10 @@ fn connect_expression(
             flow.widened.insert(target.clone());
             flow.edge(Place::Element, target.clone());
             flow.value(*receiver, target);
+        }
+        TypedExprKind::DeleteField { name, .. } => {
+            // A required field can disappear through an optional structural view.
+            flow.widened.insert(Place::Field(name.name.clone()));
         }
         TypedExprKind::FieldAccess { receiver, name } => {
             flow.widened.insert(target.clone());
@@ -872,7 +881,10 @@ fn connect_optional_chain(
                 flow.edge(Place::Field(name.name.clone()), step.clone());
                 flow.edge(receiver.clone(), step.clone());
             }
-            crate::TypedChainPart::InterfaceProperty { iface, .. } => {
+            crate::TypedChainPart::InterfaceProperty { iface, name, .. } => {
+                if super::deletable_match_metadata(iface, &name.name) {
+                    flow.widened.insert(step.clone());
+                }
                 if super::dynamic_member_interface(iface) {
                     flow.edge(receiver.clone(), step.clone());
                 }

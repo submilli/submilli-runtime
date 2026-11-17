@@ -361,3 +361,29 @@ fn capability_failure_retains_deferred_http_warning() {
             .unwrap();
     assert_eq!(healthy.warnings.last(), error.diagnostics.first());
 }
+
+#[test]
+fn delete_field_propagates_an_invalid_receiver() {
+    let mut ast = typed("function main(): boolean { return true; }");
+    let id = ast
+        .expr_ids()
+        .unwrap()
+        .find(|id| {
+            matches!(
+                ast.try_expr(*id).unwrap().kind,
+                TypedExprKind::Boolean(true)
+            )
+        })
+        .unwrap();
+    let span = ast.try_expr(id).unwrap().span;
+    ast.try_expr_mut(id).unwrap().kind = TypedExprKind::DeleteField {
+        receiver: ExprId(u32::MAX),
+        name: submilli_engine::Ident {
+            name: "p".into(),
+            span,
+        },
+    };
+    assert_invalid_id(submilli_engine::check(&ast).unwrap_err().fatal.unwrap());
+    assert_invalid_id(submilli_engine::capture(ast.clone()).unwrap_err());
+    assert_invalid_id(submilli_engine::desugar(ast, FileId(0)).unwrap_err());
+}

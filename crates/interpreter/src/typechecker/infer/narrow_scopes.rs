@@ -295,6 +295,7 @@ impl<'a> Inferer<'a> {
                 .kind
             {
                 crate::TypedExprKind::FieldAccess { receiver, .. }
+                | crate::TypedExprKind::DeleteField { receiver, .. }
                 | crate::TypedExprKind::InterfacePropertyAccess { receiver, .. }
                 | crate::TypedExprKind::IndexAccess { receiver, .. } => id = *receiver,
                 crate::TypedExprKind::LocalNarrowRef { binding, .. } => {

@@ -793,6 +793,7 @@ impl State<'_> {
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
                 self.walk_expr(receiver)?;
             }
@@ -1603,6 +1604,7 @@ mod tests {
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
                 walk_expr(ta, *receiver, out);
             }
@@ -1803,6 +1805,7 @@ mod tests {
                 elements.iter().find_map(|e| scan_expr(ta, e.expr_id()))
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => scan_expr(ta, *receiver),
             TypedExprKind::IndexAccess { receiver, index } => {
                 scan_expr(ta, *receiver).or_else(|| scan_expr(ta, *index))

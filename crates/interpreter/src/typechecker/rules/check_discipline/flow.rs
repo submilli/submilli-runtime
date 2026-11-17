@@ -566,6 +566,10 @@ impl<'a> Walker<'a, '_, '_> {
                 let key = ReadKey::Property(name.name.clone());
                 self.read_of(*receiver, key, span, yields_primitive)?
             }
+            TypedExprKind::DeleteField { receiver, .. } => {
+                self.write_through(*receiver)?;
+                stable()
+            }
             TypedExprKind::IndexAccess { receiver, index } => {
                 let key = self.package.index_key(*index)?;
                 self.consume(*index, Use::Escape(Usage::Operand))?;

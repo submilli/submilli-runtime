@@ -413,6 +413,28 @@ fn emit_expr_value(
         TypedExprKind::ObjectLiteral { members, fields } => {
             emit_object_literal(emitter, ctx, &expr.ty, members, fields)?;
         }
+        TypedExprKind::DeleteField { receiver, name } => {
+            emit_receiver(emitter, ctx, *receiver)?;
+            let ty = ctx
+                .ta
+                .try_expr(*receiver)
+                .map_err(crate::codegen::arena_failure)?
+                .ty
+                .clone();
+            cast::emit_box(emitter, ctx, &ty)?;
+            let name = ctx
+                .symbols
+                .field_name_string_global_idx(&name.name)
+                .ok_or_else(|| crate::codegen::internal_failure("delete field name collected"))?;
+            let delete = ctx
+                .symbols
+                .prelude_func_idx("ObjectConstructor##deleteField")
+                .ok_or_else(|| {
+                    crate::codegen::internal_failure("delete field host function collected")
+                })?;
+            emitter.instruction(Instruction::GlobalGet(name));
+            emitter.instruction(Instruction::Call(delete));
+        }
         TypedExprKind::FieldAccess { receiver, name } => {
             emit_field_access(emitter, ctx, id, &expr.ty, receiver, name)?;
         }
@@ -872,6 +894,7 @@ fn emit_function_ref(
     if let Some(metadata) = ctx.symbols.function_argument_metadata.get(mangled) {
         crate::codegen::call_arguments::wrap(emitter, ctx, metadata)?;
     }
+    crate::codegen::closures::emit_property_state(emitter, ctx)?;
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
     emitter.instruction(Instruction::GlobalSet(closure_global_idx));
@@ -2022,7 +2045,8 @@ fn emit_closure_value(
     }
     // Stack: vtable, funcref, env — `(ref $env_N)` subtypes
     // `(ref any)` so the env flows into field 2 implicitly.
-    // Closure struct allocation consumes all four fields.
+    // Closure struct allocation consumes the callable, property state and identity fields.
+    crate::codegen::closures::emit_property_state(emitter, ctx)?;
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure_struct_idx));
     if let Some(environment) = self_environment {
@@ -4201,7 +4225,9 @@ fn emit_chain_access(
             // exactly this part's `result_ty` — `?.` adds `| null` once,
             // to the whole chain, never to a step's own result. So the
             // value already sits in the slot the next step expects.
-            if crate::codegen::runtime_values::is_wrapper_interface_receiver(receiver_ty, iface) {
+            if crate::codegen::runtime_values::is_wrapper_interface_receiver(receiver_ty, iface)
+                || crate::codegen::runtime_values::deletable_match_metadata(iface, &name.name)
+            {
                 cast::emit_box(emitter, ctx, receiver_ty)?;
                 emit_live_property(emitter, ctx, iface, &name.name)?;
                 return cast::emit_cast_to(emitter, ctx, result_ty);

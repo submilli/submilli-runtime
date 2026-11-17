@@ -183,6 +183,7 @@ pub(super) fn constructor_argument(
                         crate::codegen::internal_failure("field guard target is not registered")
                     })?,
             )?;
+            crate::codegen::closures::emit_property_state(emitter, ctx)?;
             emitter.instruction(Instruction::I64Const(0));
             emitter.instruction(Instruction::StructNew(closure));
             emitter.instruction(Instruction::ArraySet(intr.object_fields));
@@ -213,6 +214,7 @@ pub(super) fn constructor_argument(
                     })?,
             ));
             super::runtime_descriptors::environment(emitter, ctx, &context.args)?;
+            crate::codegen::closures::emit_property_state(emitter, ctx)?;
             emitter.instruction(Instruction::I64Const(0));
             emitter.instruction(Instruction::StructNew(
                 ctx.symbols
@@ -324,6 +326,7 @@ fn attach_non_null(
                     crate::codegen::internal_failure("field guard target is not registered")
                 })?,
         )?;
+        crate::codegen::closures::emit_property_state(emitter, ctx)?;
         emitter.instruction(Instruction::I64Const(0));
         emitter.instruction(Instruction::StructNew(closure));
         emitter.instruction(Instruction::ArraySet(

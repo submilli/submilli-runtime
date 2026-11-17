@@ -414,6 +414,9 @@ pub(super) fn box_result(caller: &mut Caller<'_, StoreData>, result: Val) -> was
 async fn property(caller: &mut Caller<'_, StoreData>, params: &[Val]) -> wasmtime::Result<Val> {
     require_receiver(caller, abi_arg(params, 0)?)?;
     let name = host::read_string_arg(caller, abi_arg(params, 1)?, "property")?;
+    if let Some(value) = super::regex::try_match_metadata(caller, abi_arg(params, 0)?, &name)? {
+        return Ok(value);
+    }
     if let Some(value) = value::conversion_method(caller, abi_arg(params, 0)?, &name).await? {
         return Ok(value);
     }
@@ -460,6 +463,9 @@ pub(super) async fn builtin_property(
     name: &str,
 ) -> wasmtime::Result<Val> {
     require_receiver(caller, object)?;
+    if let Some(value) = super::regex::try_match_metadata(caller, object, name)? {
+        return Ok(value);
+    }
     if name == "length" && value::is_callable(caller, object)? {
         let original = super::closure::original(caller, *object)?;
         let length = super::closure::read(caller, &original, "function")?.length(caller)?;
@@ -551,11 +557,18 @@ fn builtin_method_value(
         native_method_length(interface, name, parameters),
     )?;
     let pre = StructRefPre::new(&mut *caller, closure_ty);
+    let property_state = super::closure::new_property_state(caller)?;
     let value = Val::AnyRef(Some(
         StructRef::new(
             &mut *caller,
             &pre,
-            &[vtable, Val::FuncRef(Some(invoke)), env, Val::I64(0)],
+            &[
+                vtable,
+                Val::FuncRef(Some(invoke)),
+                env,
+                property_state,
+                Val::I64(0),
+            ],
         )?
         .to_anyref(),
     ));

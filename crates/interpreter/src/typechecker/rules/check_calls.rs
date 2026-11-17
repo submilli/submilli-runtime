@@ -242,6 +242,9 @@ impl Collector<'_> {
             | TypedExprKind::FieldAccess {
                 receiver: operand, ..
             }
+            | TypedExprKind::DeleteField {
+                receiver: operand, ..
+            }
             | TypedExprKind::InterfacePropertyAccess {
                 receiver: operand, ..
             }

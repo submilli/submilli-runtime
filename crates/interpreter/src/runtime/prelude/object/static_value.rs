@@ -120,10 +120,17 @@ fn build_converting_closure(
         })
     });
     let closure_pre = StructRefPre::new(&mut *caller, closure_ty);
+    let property_state = super::super::closure::new_property_state(caller)?;
     let closure = StructRef::new(
         &mut *caller,
         &closure_pre,
-        &[vtable, Val::FuncRef(Some(convert)), env, Val::I64(0)],
+        &[
+            vtable,
+            Val::FuncRef(Some(convert)),
+            env,
+            property_state,
+            Val::I64(0),
+        ],
     )?;
     Ok(Val::AnyRef(Some(closure.to_anyref())))
 }
@@ -146,10 +153,17 @@ fn build_throwing_closure(
         Err(throw_host_error(caller, type_error(message.clone())))
     });
     let closure_pre = StructRefPre::new(&mut *caller, closure_ty);
+    let property_state = super::super::closure::new_property_state(caller)?;
     let closure = StructRef::new(
         &mut *caller,
         &closure_pre,
-        &[vtable, Val::FuncRef(Some(function)), tag, Val::I64(0)],
+        &[
+            vtable,
+            Val::FuncRef(Some(function)),
+            tag,
+            property_state,
+            Val::I64(0),
+        ],
     )?;
     Ok(Val::AnyRef(Some(closure.to_anyref())))
 }

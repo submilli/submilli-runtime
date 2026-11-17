@@ -344,7 +344,9 @@ fn rewrite_operation(
             receiver,
             iface,
             name,
-        } if flow.expr_is_wide(receiver) && super::dynamic_member_interface(&iface) => {
+        } if super::deletable_match_metadata(&iface, &name.name)
+            || (flow.expr_is_wide(receiver) && super::dynamic_member_interface(&iface)) =>
+        {
             let args = member_arguments(ast, id, receiver, &iface, &name.name)?;
             ast.try_expr_mut(id)
                 .map_err(crate::codegen::arena_failure)?

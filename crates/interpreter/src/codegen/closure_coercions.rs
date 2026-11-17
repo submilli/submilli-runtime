@@ -365,6 +365,12 @@ fn emit_rebound_original(
             field_index: 2,
         });
         emit_forward_types(body, ctx, types)?;
+        body.instruction(&Instruction::LocalGet(original));
+        body.instruction(&Instruction::RefCastNonNull(HeapType::Concrete(structure)));
+        body.instruction(&Instruction::StructGet {
+            struct_type_index: structure,
+            field_index: 3,
+        });
         body.instruction(&Instruction::I64Const(0));
         body.instruction(&Instruction::StructNew(structure));
         body.instruction(&Instruction::LocalSet(original));
@@ -595,6 +601,7 @@ fn emit_wrap(
         super::generic_binding::emit_creation_wrapper(emitter, ctx)?;
     }
     super::this_binding::wrap(emitter, ctx)?;
+    super::closures::emit_property_state(emitter, ctx)?;
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(
         ctx.symbols

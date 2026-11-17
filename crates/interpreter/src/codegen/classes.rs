@@ -1462,6 +1462,7 @@ impl ClassPlan {
                 if let Some(metadata) = &method.argument_metadata {
                     super::call_arguments::wrap(&mut emitter, ctx, metadata)?;
                 }
+                crate::codegen::closures::emit_property_state(&mut emitter, ctx)?;
                 emitter.instruction(Instruction::I64Const(0));
                 emitter.instruction(Instruction::StructNew(closure_struct));
                 emitter.instruction(Instruction::ArraySet(intrinsics.object_fields));
