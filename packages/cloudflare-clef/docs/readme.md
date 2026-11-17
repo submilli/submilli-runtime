@@ -41,8 +41,8 @@ function main(): number {
 
 | `model` | Size | When |
 | --- | --- | --- |
-| `clef` (default) | 27B | The most accurate judgments. |
-| `clef-flash` | 9B | Cheaper and faster judgments over short state. Cloudflare's hosted version has a shorter context than the open weights. |
+| `clef` (default) | 27B | The most accurate judgments. Hosted limit: about 65K tokens per request. |
+| `clef-flash` | 9B | Cheaper and faster judgments over short state. Hosted limit: about 24K tokens per request, far below the open weights. |
 
 Keep state short and relevant: send the passages a question needs rather than
 whole documents. Clef can also read images, but this Package sends text and
@@ -56,4 +56,5 @@ a transport failure such as a timeout throws a plain `Error` from `submilli:http
 Invalid questions, state, or model names fail with `invalid_argument` before any
 request. Request failures use `missing_credentials`, `invalid_credentials`,
 `invalid_request`, `unauthorized`, `forbidden`, `rate_limited`, `http_error`, or
-`invalid_response`. Nothing retries automatically.
+`invalid_response`. State over the hosted limit fails with `invalid_request`
+(HTTP 422). Nothing retries automatically.

@@ -1,4 +1,5 @@
 import { label } from "submilli:test";
+import secrets from "submilli:secrets";
 import { ClefError, Question, batch, choice, choiceQuestion, noul, noulQuestion, score,
     scoreQuestion } from "@submilli/cloudflare-clef";
 
@@ -41,6 +42,11 @@ function main(): void {
     expectCode("invalid_argument", () => { noul("text", "q", undefined, { model: "CLEF" }); });
     expectCode("invalid_argument", () => { noul("text", "q", undefined, { model: "" }); });
 
+    // A live run binds the credentials, so this check only holds without them.
+    if (secrets.get("CLOUDFLARE_ACCOUNT_ID") !== undefined || secrets.get("CLOUDFLARE_API_TOKEN") !== undefined) {
+        label("skip: missing-credentials check needs unbound credentials");
+        return;
+    }
     label("missing credentials fail before HTTP");
     expectCode("missing_credentials", () => { noul("text", "Is a refund requested?"); });
     expectCode("missing_credentials", () => { batch({ state: "text", questions: questions(), model: "clef-flash" }); });
