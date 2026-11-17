@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "96ce62cae6dce83bb1cf0bf1a83e300540975f1f4d0edbb39554989c89ececd9"
+  contentHash: "3920b839b63eab1e2211aa7aa8c8337ad8eed0f2a195f62154a8748fb29e5235"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -35,6 +35,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/google-drive`](#submilligoogle-drive) | Google Drive files and folders in My Drive and Shared Drives: search, read, download, upload, organize, and share. | `GOOGLE_ACCESS_TOKEN` | `www.googleapis.com` |
 | [`@submilli/jina`](#submillijina) | Web pages and search results as Markdown or structured data, through Jina Reader and Search. | `JINA_API_KEY` | `r.jina.ai`, `s.jina.ai` |
 | [`@submilli/linear`](#submillilinear) | Linear issues, comments, teams, projects, users, and agent sessions, through Linear's GraphQL API. | `LINEAR_API_KEY` | `api.linear.app` |
+| [`@submilli/linear-feedback`](#submillilinear-feedback) | Confirmed product feedback from an assistant, filed as one issue in a fixed Linear team's triage or backlog. | `FEEDBACK_LINEAR_API_KEY`, `FEEDBACK_LINEAR_TEAM` | `api.linear.app` |
 | [`@submilli/notion`](#submillinotion) | Notion search, pages as enhanced Markdown, databases, data sources, views, comments, users, blocks, and file uploads. | `NOTION_ACCESS_TOKEN` | `api.notion.com` |
 | [`@submilli/posthog`](#submilliposthog) | PostHog Cloud (US) event reads in bounded, fully paged windows, event and property schema, cohort state, and event capture. | `POSTHOG_PERSONAL_API_KEY`, `POSTHOG_PROJECT_API_KEY` | `us.posthog.com`, `us.i.posthog.com` |
 | [`@submilli/sentry`](#submillisentry) | Sentry Cloud organizations, projects, issues, and events, and issue triage. | `SENTRY_AUTH_TOKEN` | `sentry.io` |
@@ -329,6 +330,26 @@ submilli install submilli/submilli-runtime @submilli/linear
 submilli blueprint add-package @submilli/linear --no-capabilities
 submilli blueprint capability list @submilli/linear
 submilli blueprint capability add linear.app/listIssues
+```
+
+## @submilli/linear-feedback
+
+Confirmed product feedback from an assistant, filed as one issue in a fixed Linear team's triage or backlog.
+
+| | |
+| --- | --- |
+| Secret | `FEEDBACK_LINEAR_API_KEY`, `FEEDBACK_LINEAR_TEAM` |
+| Credential | A Linear API key or app OAuth token that may create issues in the feedback team, and that team's key or UUID |
+| Without the secret | Throws before any request, naming the unbound secret |
+| HTTP | `api.linear.app`: POST `/graphql` |
+| Filesystem | None |
+| Readme | [`packages/linear-feedback/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/linear-feedback/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/linear-feedback
+submilli blueprint add-package @submilli/linear-feedback --no-capabilities
+submilli blueprint capability list @submilli/linear-feedback
+submilli blueprint capability add linear.app/submitFeedback
 ```
 
 ## @submilli/notion

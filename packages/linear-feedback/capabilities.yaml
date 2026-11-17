@@ -1,0 +1,13 @@
+namespace: submilli
+provides:
+- name: linear.app/submitFeedback
+  description: File one piece of confirmed feedback as an issue in the configured team's triage or backlog state. The team comes from the `FEEDBACK_LINEAR_TEAM` secret and the key from `FEEDBACK_LINEAR_API_KEY`; neither is an argument, and neither appears in the result.
+  fields:
+    kind:
+      type: string
+    test:
+      type: boolean
+requires:
+- capability: http.post
+  filter: host == "api.linear.app" and path == "/graphql"
+- capability: secrets.get

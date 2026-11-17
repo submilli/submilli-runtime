@@ -145,3 +145,10 @@ version = "0.1.0"
 description = "PostHog Cloud (US) client for bounded event queries with keyset pages, event and property schema, cohort state, and event capture."
 keywords = ["posthog", "analytics", "events", "hogql", "cohorts", "capture"]
 path = "packages/posthog"
+
+[[package]]
+name = "@submilli/linear-feedback"
+version = "0.1.0"
+description = "File confirmed product feedback from an assistant as an issue in a configured Linear team's triage or backlog."
+keywords = ["linear", "feedback", "triage", "issues", "assistant"]
+path = "packages/linear-feedback"
