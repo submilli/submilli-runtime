@@ -5,10 +5,10 @@ slug: why
 sidebar:
   order: 1
 authorship:
-  label: "human-written"
+  label: "ai-assisted"
   confirmed: true
-  contentHash: "52623be12c29bf6d1ae4316e41d53b36c04e71e07a57909544990213693a6093"
-  confirmedAt: "2026-10-05T20:18:00.685778+00:00"
+  contentHash: "7672abc93029378cb44c0d8a75d17e49bd9d8af0da8d3fef8b29d93fc2bf118f"
+  confirmedAt: "2026-11-17T09:58:31.972Z"
 ---
 
 Agents use tools to perform tasks. Most of them call one tool at a time, wait for the service to respond, process its response using inference tokens, and make the decision on next steps. This typically means slow (model turns, waiting for tool call completion), expensive (context bloat, inference) and potentially brittle - inference is not meant for highly deterministic tasks (like mathematical functions).
@@ -33,6 +33,8 @@ serves their 2,500-endpoint API to the model in about 1,000 tokens. As tool
 schemas, the same API takes 1.17 million tokens.
 * [OpenAI](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling)
 and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling-ptc) are aligned.
+
+Submilli measured that pattern on [AppWorld](https://github.com/StonyBrookNLP/appworld). The [benchmark](https://github.com/submilli/submilli-appworld) runs Submilli, MCP, QuickJS code mode, and tool calling on the same 168 `test_normal` tasks, with the same models and the same Deep Agents harness. Submilli beat MCP on all seven model setups. Task success was 10 to 21 percentage points higher, and cost was 33 to 63% lower. QuickJS code mode passed 8 to 16 fewer percentage points and cost 16 to 52% more. Against tool calling with the same APIs, Submilli passed the most tasks, tying tool calling when DeepSeek ran at high effort, and was the cheapest in six of the seven setups.
 
 It has become clear that agents should write code. The question that stems from it, is where should this code run, and what should it be allowed to do?
 
