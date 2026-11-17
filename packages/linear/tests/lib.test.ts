@@ -28,6 +28,12 @@ function main(): void {
         "team-only clause; absent clauses omitted, not null",
     );
 
+    label("issue filter: label clause");
+    assert(
+        JSON.stringify(buildIssueFilter({ labelId: "L1" })) === "{\"labels\":{\"some\":{\"id\":{\"eq\":\"L1\"}}}}",
+        "label clause matches issues that have the label",
+    );
+
     label("issue filter: all clauses");
     const full = buildIssueFilter({ teamId: "T1", assigneeId: "U1", stateType: "started" });
     assert(

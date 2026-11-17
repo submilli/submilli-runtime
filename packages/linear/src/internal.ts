@@ -31,6 +31,8 @@ export interface IssueFilter {
     createdAtAfter?: string;
     /** Restrict to issues updated at or after this ISO timestamp. */
     updatedAtAfter?: string;
+    /** Restrict to issues that carry this label UUID. */
+    labelId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,7 @@ export function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
     const completedAtBefore = filter.completedAtBefore;
     const createdAtAfter = filter.createdAtAfter;
     const updatedAtAfter = filter.updatedAtAfter;
+    const labelId = filter.labelId;
     if (teamId !== undefined) {
         out.team = { id: { eq: teamId } };
     }
@@ -91,6 +94,9 @@ export function buildIssueFilter(filter?: IssueFilter): IssueFilterVar {
     }
     if (updatedAtAfter !== undefined) {
         out.updatedAt = { gte: stripZoneAnnotation(updatedAtAfter) };
+    }
+    if (labelId !== undefined) {
+        out.labels = { some: { id: { eq: labelId } } };
     }
     return out;
 }
@@ -191,6 +197,8 @@ export interface IssueFilterVar {
     createdAt?: DateComparatorVar;
     /** Updated-at date comparator. */
     updatedAt?: DateComparatorVar;
+    /** Has-label clause: at least one label with this id. */
+    labels?: { some: { id: { eq: string } } };
 }
 
 /** Linear date comparator subset used by curated filters. */

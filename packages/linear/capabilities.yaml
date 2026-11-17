@@ -16,13 +16,17 @@ provides:
     teamId:
       type: string
 - name: linear.app/createComment
-  description: Create a comment on an issue; returns the created comment. The issue is read first, so the check carries `teamId`, the team the issue belongs to.
+  description: Create a comment on an issue; returns the created comment. The issue is read first, so the check carries `teamId`, the team the issue belongs to, and `labelIds`, the labels it has now.
   fields:
+    labelIds:
+      type: string[]
     teamId:
       type: string
 - name: linear.app/createIssue
-  description: Create an issue; returns the created issue.
+  description: Create an issue; returns the created issue. `labelIds` in the check are the labels it is created with (empty when none).
   fields:
+    labelIds:
+      type: string[]
     teamId:
       type: string
 - name: linear.app/getAgentSession
@@ -55,8 +59,10 @@ provides:
     teamId:
       type: string
 - name: linear.app/listIssues
-  description: List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or null when the filter names no team.
+  description: List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or null when the filter names no team; `labelId` is the filter's label, or null when it names none.
   fields:
+    labelId:
+      type: string
     teamId:
       type: string
 - name: linear.app/listProjects

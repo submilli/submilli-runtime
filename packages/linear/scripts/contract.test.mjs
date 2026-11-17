@@ -16,7 +16,7 @@ const contexts = [];
 // Every request since a test last reset this, in order; `request` is the last of them.
 let requests = [];
 let lookupResponse = null;
-const resolvedTeam = { team: { id: 'team' } };
+const resolvedTeam = { team: { id: 'team' }, labels: { nodes: [{ id: 'feedback' }] } };
 globalThis.__linearHost = {
     secrets: { get: () => token },
     check: (capability, context) => {
@@ -140,7 +140,7 @@ test('an update and a comment are checked against the team of their issue', () =
     for (const [capability, call, mutation, context] of [
         ['updateIssue', () => linear.updateIssue('issue', { title: 'Renamed' }), 'issueUpdate', { teamId: 'team', projectId: null }],
         ['updateIssue', () => linear.updateIssue('issue', { projectId: 'project' }), 'issueUpdate', { teamId: 'team', projectId: 'project' }],
-        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note' }), 'commentCreate', { teamId: 'team' }],
+        ['createComment', () => linear.createComment({ issueId: 'issue', body: 'Note' }), 'commentCreate', { teamId: 'team', labelIds: ['feedback'] }],
     ]) {
         response = {
             issue: { team: { id: 'team' } },
@@ -210,6 +210,34 @@ test('issue reads and all session operations check the resolved team before sens
     lookupResponse = null;
 });
 
+test('issue creation is checked with its team and the labels it is created with', () => {
+    const issue = { id: 'new', title: 'Hello' };
+    response = { issueCreate: { success: true, issue } };
+    const input = { teamId: 'team', title: 'Hello', labelIds: ['feedback'], projectId: 'project' };
+    assert.deepEqual(linear.createIssue(input), issue);
+    sent('createIssue', 'IssueCreateInput!', input);
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: ['feedback'] });
+    linear.createIssue({ teamId: 'team', title: 'Plain' });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: [] });
+    queries.add(request.body.query);
+});
+
+test('a comment is checked against the labels its issue has in Linear, not the caller\'s word', () => {
+    lookupResponse = { issue: { team: { id: 'team' }, labels: { nodes: [] } } };
+    response = { commentCreate: { success: true, comment: { id: 'comment' } } };
+    requests = [];
+    linear.createComment({ issueId: 'issue', body: 'Note' });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelIds: [] });
+    assert.ok(requests[0].body.query.includes('labels(first: 250) { nodes { id } }'));
+    queries.add(requests[0].body.query);
+    denied = true;
+    requests = [];
+    assert.throws(() => linear.createComment({ issueId: 'issue', body: 'Note' }), /Capability denied/);
+    assert.equal(requests.length, 1, 'a denied comment makes only the lookup');
+    denied = false;
+    lookupResponse = null;
+});
+
 test('session creation snapshots target getters once', () => {
     let reads = 0;
     lookupResponse = { issue: resolvedTeam };
@@ -252,12 +280,17 @@ test('GraphQL errors remain actionable', () => {
 test('an unfiltered issue list is checked with a null team and sends only the default page', () => {
     response = { issues: page };
     assert.deepEqual(linear.listIssues(), page);
-    assert.deepEqual({ ...contexts.at(-1) }, { teamId: null });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: null, labelId: null });
     assert.deepEqual(JSON.parse(JSON.stringify(request.body.variables)), { first: 50 });
     linear.listIssues({ teamId: 'team', stateType: 'started' }, { after: 'cursor' });
-    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team' });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelId: null });
     assert.deepEqual(JSON.parse(JSON.stringify(request.body.variables)), {
         first: 50, after: 'cursor', filter: { team: { id: { eq: 'team' } }, state: { type: { eq: 'started' } } },
+    });
+    linear.listIssues({ teamId: 'team', labelId: 'feedback' });
+    assert.deepEqual({ ...contexts.at(-1) }, { teamId: 'team', labelId: 'feedback' });
+    assert.deepEqual(JSON.parse(JSON.stringify(request.body.variables)).filter, {
+        team: { id: { eq: 'team' } }, labels: { some: { id: { eq: 'feedback' } } },
     });
     queries.add(request.body.query);
 });

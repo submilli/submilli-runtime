@@ -20,7 +20,8 @@ Read operations:
 - `getIssue(id)` fetches one issue.
 <!-- submilli:endif -->
 <!-- submilli:if capability="linear.app/listIssues" -->
-- `listIssues(filter, page)` fetches a filtered, paginated page of issues.
+- `listIssues(filter, page)` fetches a filtered, paginated page of issues. The
+  check carries the filter's `teamId` and `labelId` (each null when not set).
 <!-- submilli:endif -->
 <!-- submilli:if capability="linear.app/getTeam" -->
 - `getTeam(id)` fetches one team.
@@ -42,7 +43,8 @@ Write operations:
 <!-- submilli:endif -->
 
 <!-- submilli:if capability="linear.app/createIssue" -->
-- `createIssue(input)` creates an issue.
+- `createIssue(input)` creates an issue. The check carries `teamId` and the
+  `labelIds` it is created with.
 <!-- submilli:endif -->
 <!-- submilli:if capability="linear.app/updateIssue" -->
 - `updateIssue(id, input)` changes an issue. An update sends only fields
@@ -58,8 +60,10 @@ Write operations:
 <!-- submilli:if any="linear.app/updateIssue linear.app/createComment" -->
 
 Writes to an existing issue read the issue first, so the policy check carries
-the team it belongs to. An issue that does not exist throws before the
-check.
+the team it belongs to. A comment's check also carries `labelIds`, the labels the
+issue has in Linear, so a rule such as `labelIds contains "<label id>"` limits
+comments to issues with that label. An issue that does not exist throws before
+the check.
 
 <!-- submilli:endif -->
 

@@ -415,14 +415,15 @@ export function getIssue(id: string): Issue | null {
 
 /**
  * List issues, optionally filtered and paginated. `teamId` in the check is the filter's team, or
- * null when the filter names no team.
- * @param filter Optional filters (team, assignee, state category, timestamps); omit it to apply none. `teamId` is also checked against capability rules.
+ * null when the filter names no team; `labelId` is the filter's label, or null when it names none.
+ * @param filter Optional filters (team, assignee, state category, timestamps, label); omit it to apply none. `teamId` and `labelId` are also checked against capability rules.
  * @param page Optional `first` (page size, default 50, max 250) and `after` cursor; omit it to request the first 50 items.
  * @returns One page of issues in `nodes`; while `pageInfo.hasNextPage` is true, pass `pageInfo.endCursor` as `after` for the next page.
- * @capability linear.app/listIssues { teamId: string }
+ * @capability linear.app/listIssues { teamId: string, labelId: string }
  */
 export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue> {
     const teamId = filter?.teamId;
+    const labelId = filter?.labelId;
     let owned: IssueFilter | undefined;
     if (filter !== undefined) {
         owned = {
@@ -433,9 +434,10 @@ export function listIssues(filter?: IssueFilter, page?: PageOptions): Page<Issue
             completedAtBefore: filter.completedAtBefore,
             createdAtAfter: filter.createdAtAfter,
             updatedAtAfter: filter.updatedAtAfter,
+            labelId: labelId,
         };
     }
-    check("linear.app/listIssues", { teamId: teamId ?? null });
+    check("linear.app/listIssues", { teamId: teamId ?? null, labelId: labelId ?? null });
     const vars = buildListIssuesVars(owned, page);
     const envelope = graphqlPost(LIST_ISSUES_QUERY, vars).json<GraphQlResponse<ListIssuesData>>();
     return requireData(envelope).issues;
@@ -495,10 +497,11 @@ export function listUsers(page?: PageOptions): Page<User> {
 // ---------------------------------------------------------------------------
 
 /**
- * Create an issue; returns the created issue.
+ * Create an issue; returns the created issue. `labelIds` in the check are the labels it is created
+ * with (empty when none).
  * @param input New issue fields; `teamId` is required and unset optional fields are omitted from the request.
  * @returns The created issue.
- * @capability linear.app/createIssue { teamId: string }
+ * @capability linear.app/createIssue { teamId: string, labelIds: string[] }
  */
 export function createIssue(input: IssueCreateInput): Issue {
     const teamId = input.teamId;
@@ -507,7 +510,12 @@ export function createIssue(input: IssueCreateInput): Issue {
     const assigneeId = input.assigneeId;
     const stateId = input.stateId;
     const priority = input.priority;
-    const labelIds = input.labelIds?.slice();
+    const callerLabelIds = input.labelIds;
+    let labelIds: string[] | undefined;
+    if (callerLabelIds !== undefined) {
+        labelIds = [];
+        for (const labelId of callerLabelIds) labelIds.push(labelId);
+    }
     const projectId = input.projectId;
     const issueInput: IssueCreateInput = { teamId: teamId };
     if (title !== undefined) issueInput.title = title;
@@ -517,7 +525,7 @@ export function createIssue(input: IssueCreateInput): Issue {
     if (priority !== undefined) issueInput.priority = priority;
     if (labelIds !== undefined) issueInput.labelIds = labelIds;
     if (projectId !== undefined) issueInput.projectId = projectId;
-    check("linear.app/createIssue", { teamId: teamId });
+    check("linear.app/createIssue", { teamId: teamId, labelIds: labelIds ?? [] });
     const vars: CreateIssueVars = { input: issueInput };
     const envelope = graphqlPost(CREATE_ISSUE_QUERY, vars).json<GraphQlResponse<IssueCreateData>>();
     return requirePayloadIssue(requireData(envelope).issueCreate);
@@ -557,10 +565,10 @@ export function updateIssue(id: string, input: IssueUpdateInput): Issue {
 
 /**
  * Create a comment on an issue; returns the created comment. The issue is read first, so the
- * check carries `teamId`, the team the issue belongs to.
+ * check carries `teamId`, the team the issue belongs to, and `labelIds`, the labels it has now.
  * @param input Target `issueId`, Markdown `body`, and optional `parentId` for a threaded reply. Throws if the issue does not exist.
  * @returns The created comment.
- * @capability linear.app/createComment { teamId: string }
+ * @capability linear.app/createComment { teamId: string, labelIds: string[] }
  */
 export function createComment(input: CommentCreateInput): Comment {
     const issueId = input.issueId;
@@ -568,8 +576,8 @@ export function createComment(input: CommentCreateInput): Comment {
     const parentId = input.parentId;
     const commentInput: CommentCreateInput = { issueId: issueId, body: body };
     if (parentId !== undefined) commentInput.parentId = parentId;
-    const teamId = issueTeamId(issueId);
-    check("linear.app/createComment", { teamId: teamId });
+    const scope = issueScope(issueId);
+    check("linear.app/createComment", { teamId: scope.teamId, labelIds: scope.labelIds });
     const vars: CreateCommentVars = { input: commentInput };
     const envelope = graphqlPost(CREATE_COMMENT_QUERY, vars)
         .json<GraphQlResponse<CommentCreateData>>();
@@ -587,6 +595,17 @@ function issueTeamId(issueId: string): string {
     const teamId = nullableIssueTeamId(issueId);
     if (teamId === null) throw new Error("Linear issue was not found");
     return teamId;
+}
+
+// The team and current labels of an issue, read from Linear, so a rule on either holds for an
+// operation that names only the issue.
+function issueScope(issueId: string): IssueScope {
+    const envelope = graphqlPost(ISSUE_SCOPE_QUERY, { id: issueId }).json<GraphQlResponse<IssueScopeData>>();
+    const issue = requireData(envelope).issue;
+    if (issue === null) throw new Error("Linear issue was not found");
+    const labelIds: string[] = [];
+    for (const label of issue.labels.nodes) labelIds.push(label.id);
+    return { teamId: issue.team.id, labelIds: labelIds };
 }
 
 function nullableIssueTeamId(issueId: string): string | null {
@@ -747,6 +766,13 @@ interface IssueTeamData {
 interface IssueTeam {
     team: TeamId;
 }
+interface IssueScopeData {
+    issue: { team: TeamId; labels: { nodes: TeamId[] } } | null;
+}
+interface IssueScope {
+    teamId: string;
+    labelIds: string[];
+}
 interface CommentTeam { issue: IssueTeam | null; }
 interface CommentTeamData { comment: CommentTeam | null; }
 interface AgentSessionTeamData {
@@ -849,6 +875,7 @@ const ISSUE_FIELDS =
 const VIEWER_QUERY = "query { viewer { id name email active } }";
 const GET_ISSUE_QUERY = `query($id: String!) { issue(id: $id) { ${ISSUE_FIELDS} } }`;
 const ISSUE_TEAM_QUERY = "query($id: String!) { issue(id: $id) { team { id } } }";
+const ISSUE_SCOPE_QUERY = "query($id: String!) { issue(id: $id) { team { id } labels(first: 250) { nodes { id } } } }";
 const COMMENT_TEAM_QUERY = "query($id: String!) { comment(id: $id) { issue { team { id } } } }";
 const AGENT_SESSION_TEAM_QUERY = "query($id: String!) { agentSession(id: $id) { issue { team { id } } comment { issue { team { id } } } } }";
 const LIST_ISSUES_QUERY = `query($first: Int, $after: String, $filter: IssueFilter) { issues(first: $first, after: $after, filter: $filter) { nodes { ${ISSUE_FIELDS} } pageInfo { hasNextPage endCursor } } }`;
