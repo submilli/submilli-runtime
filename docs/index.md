@@ -22,7 +22,7 @@ nextSteps:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "6a9ec6354df78f82dcb177a048977f0574e1a8c4e7b02085199933fd15722d70"
+  contentHash: "090e3b5a7ff750d78e76db223e49ac15d1e33dec7e2e88992d9ccb461f42ef2e"
   confirmedAt: "2026-10-05T13:01:53.009Z"
 ---
 
@@ -34,4 +34,4 @@ agent-generated program.
 
 The [AppWorld benchmark](https://github.com/submilli/submilli-appworld) compares Submilli with MCP, QuickJS code mode, and tool calling. Each arm ran the 168 tasks in AppWorld's `test_normal` split, with the same models and the same Deep Agents harness.
 
-Submilli beat MCP on all seven model setups. Task success was 10 to 21 percentage points higher, and cost was 33 to 63% lower. QuickJS code mode passed 8 to 16 fewer percentage points and cost 16 to 52% more. Against tool calling with the same APIs, Submilli passed the most tasks, tying tool calling when DeepSeek ran at high effort, and was the cheapest in six of the seven setups. The repository has the tables and the method.
+Submilli beat MCP on all seven model setups, with up to 21 points higher success and up to 63% lower cost. QuickJS code mode had up to 16 points lower success and up to 52% higher cost. Against tool calling with the same APIs, Submilli passed the most tasks, tying tool calling when DeepSeek ran at high effort, and was the cheapest in six of the seven setups. The repository has the tables and the method.

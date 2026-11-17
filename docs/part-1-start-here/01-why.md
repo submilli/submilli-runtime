@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: "ai-assisted"
   confirmed: true
-  contentHash: "7672abc93029378cb44c0d8a75d17e49bd9d8af0da8d3fef8b29d93fc2bf118f"
+  contentHash: "1c507c25cc66971908878a7fcc263c69a5c9feb06d7082fe12f0ad8799821b30"
   confirmedAt: "2026-11-17T09:58:31.972Z"
 ---
 
@@ -34,7 +34,7 @@ schemas, the same API takes 1.17 million tokens.
 * [OpenAI](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling)
 and [LangChain](https://docs.langchain.com/oss/javascript/deepagents/interpreters#programmatic-tool-calling-ptc) are aligned.
 
-Submilli measured that pattern on [AppWorld](https://github.com/StonyBrookNLP/appworld). The [benchmark](https://github.com/submilli/submilli-appworld) runs Submilli, MCP, QuickJS code mode, and tool calling on the same 168 `test_normal` tasks, with the same models and the same Deep Agents harness. Submilli beat MCP on all seven model setups. Task success was 10 to 21 percentage points higher, and cost was 33 to 63% lower. QuickJS code mode passed 8 to 16 fewer percentage points and cost 16 to 52% more. Against tool calling with the same APIs, Submilli passed the most tasks, tying tool calling when DeepSeek ran at high effort, and was the cheapest in six of the seven setups.
+Submilli measured that pattern on [AppWorld](https://github.com/StonyBrookNLP/appworld). The [benchmark](https://github.com/submilli/submilli-appworld) runs Submilli, MCP, QuickJS code mode, and tool calling on the same 168 `test_normal` tasks, with the same models and the same Deep Agents harness. Submilli beat MCP on all seven model setups, with up to 21 points higher success and up to 63% lower cost. QuickJS code mode had up to 16 points lower success and up to 52% higher cost. Against tool calling with the same APIs, Submilli passed the most tasks, tying tool calling when DeepSeek ran at high effort, and was the cheapest in six of the seven setups.
 
 It has become clear that agents should write code. The question that stems from it, is where should this code run, and what should it be allowed to do?
 
