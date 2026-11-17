@@ -45,6 +45,11 @@ function main(): void {
     );
     assert(JSON.stringify(significantWords("")) === "[]", "empty text has no words");
     assert(JSON.stringify(significantWords("Ünïcode café — naïve")) === "[\"ünïcode\",\"café\",\"naïve\"]", "non-ASCII letters count, the em dash splits");
+    assert(
+        JSON.stringify(significantWords("save\u00a0changes\u3000now\u202fplease\u00bbdone")) === "[\"save\",\"changes\",\"now\",\"please\",\"done\"]",
+        "no-break, ideographic and narrow spaces and Latin-1 symbols split words",
+    );
+    assert(wordSimilarity(significantWords("save changes"), significantWords("save\u00a0changes")) === 1, "a no-break space does not change the score");
 
     label("word similarity: Dice coefficient");
     assert(wordSimilarity(["a1", "b2"], ["a1", "b2"]) === 1, "same words score 1");

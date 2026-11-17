@@ -115,8 +115,12 @@ const STOP_WORDS = new Set<string>([
 function isWordChar(code: number): boolean {
     if (code >= 48 && code <= 57) return true;
     if (code >= 97 && code <= 122) return true;
-    if (code > 127 && !(code >= 0x2000 && code <= 0x206f)) return true;
-    return false;
+    if (code <= 0xbf) return false; // ASCII and Latin-1 controls, spaces and symbols, including the no-break space
+    if (code === 0xd7 || code === 0xf7) return false;
+    if (code === 0x1680 || code === 0x180e || code === 0xfeff) return false;
+    if (code >= 0x2000 && code <= 0x206f) return false; // general punctuation and Unicode spaces
+    if (code >= 0x3000 && code <= 0x303f) return false; // ideographic space and CJK punctuation
+    return true;
 }
 
 /**
