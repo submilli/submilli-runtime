@@ -7,7 +7,7 @@ sidebar:
 authorship:
   label: ai-assisted
   confirmed: true
-  contentHash: "a2d6bc659f3fe6adaefdae13f9223569affe453edd945ff1ce050c4bb828b64b"
+  contentHash: "96ce62cae6dce83bb1cf0bf1a83e300540975f1f4d0edbb39554989c89ececd9"
   confirmedAt: "2026-10-05T13:07:41.890Z"
 ---
 
@@ -26,6 +26,7 @@ Missing an integration? [Request a curated Package](https://github.com/submilli/
 | [`@submilli/attio`](#submilliattio) | Attio CRM objects and attributes, typed record queries, people and company upserts by email and domain, record writes, status (deal stage) changes, and notes. | `ATTIO_API_KEY` | `api.attio.com` |
 | [`@submilli/brave-search`](#submillibrave-search) | Web search, one page of results at a time, and extracted passages grouped by source URL. | `BRAVE_SEARCH_API_KEY` | `api.search.brave.com` |
 | [`@submilli/browserbase-stagehand`](#submillibrowserbase-stagehand) | Hosted Stagehand `act`, `extract`, and `observe` on a cloud browser. | `BROWSERBASE_API_KEY` | `api.browserbase.com`, `api.stagehand.browserbase.com`, `api.use1.stagehand.browserbase.com`, `api.euc1.stagehand.browserbase.com`, `api.apse1.stagehand.browserbase.com` |
+| [`@submilli/cloudflare-clef`](#submillicloudflare-clef) | Semantic judgments by Cloudflare's Clef model on Workers AI: the same choice, yes/no, and rubric-scored questions as `@submilli/typesafe`. | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | `api.cloudflare.com` |
 | [`@submilli/exa`](#submilliexa) | Web search with highlights, and extraction of known URLs with a status for each URL. | `EXA_API_KEY` | `api.exa.ai` |
 | [`@submilli/firecrawl`](#submillifirecrawl) | Firecrawl v2 web search, page scraping, site URL discovery, and explicit Batch Scrape and Crawl jobs. | `FIRECRAWL_API_KEY` | `api.firecrawl.dev` |
 | [`@submilli/github`](#submilligithub) | GitHub.com repositories, file contents, commits, branches, issues, pull requests, teams, releases, and search. | `GITHUB_TOKEN` | `api.github.com` |
@@ -139,6 +140,26 @@ protocol, not the query and not redirects. `session.liveView` needs
 Proxies, Verified, and CAPTCHA solving default off. `StagehandSession.open`
 registers cleanup. `StagehandSession.current` stores the id in the runtime
 session under `stagehand`. Drive it with `session.goto` and `session.act`.
+
+## @submilli/cloudflare-clef
+
+Semantic judgments by Cloudflare's Clef model on Workers AI: the same choice, yes/no, and rubric-scored questions as `@submilli/typesafe`.
+
+| | |
+| --- | --- |
+| Secret | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` |
+| Credential | A Cloudflare account ID and an API token with Workers AI Read and Edit permissions |
+| Without the secret | Throws `ClefError` with code `missing_credentials` |
+| HTTP | `api.cloudflare.com`: POST `/client/v4/accounts/<id>/ai/run/@cf/cloudflare/clef` and `…/clef-flash` |
+| Filesystem | None |
+| Readme | [`packages/cloudflare-clef/readme.md`](https://github.com/submilli/submilli-runtime/blob/main/packages/cloudflare-clef/readme.md) |
+
+```sh
+submilli install submilli/submilli-runtime @submilli/cloudflare-clef
+submilli blueprint add-package @submilli/cloudflare-clef --no-capabilities
+submilli blueprint capability list @submilli/cloudflare-clef
+submilli blueprint capability add cloudflare.com/clef
+```
 
 ## @submilli/exa
 

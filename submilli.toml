@@ -111,6 +111,14 @@ keywords = ["typesafe", "jev", "classification", "routing", "ranking", "relevanc
 path = "packages/typesafe"
 
 [[package]]
+name = "@submilli/cloudflare-clef"
+version = "0.1.0"
+description = "Use Cloudflare's Clef decision model, hosted on Workers AI, for the same yes/no, choice, and rubric-scored judgments as TypeSafe's Jev: classify or route requests, rank relevance, select known values, and verify claims against supplied evidence, with typed answers and probabilities."
+keywords = ["cloudflare", "clef", "workers-ai", "classification", "routing", "ranking", "relevance", "verification", "agents"]
+path = "packages/cloudflare-clef"
+dependencies = ["@submilli/typesafe"]
+
+[[package]]
 name = "@submilli/scrapecreators"
 version = "0.1.0"
 description = "Typed ScrapeCreators public-data clients for Reddit, YouTube, LinkedIn, GitHub, and Twitter/X."
