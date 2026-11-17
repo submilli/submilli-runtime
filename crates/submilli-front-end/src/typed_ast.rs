@@ -188,6 +188,26 @@ pub enum TypedExprKind {
         receiver: ExprId,
         name: Ident,
     },
+    /// `delete receiver.name` (also `delete receiver["name"]` with a literal key).
+    /// The front end must check that TypeScript accepts the operand and that
+    /// the receiver's type declares `name` optional. Dynamic keys, array elements,
+    /// and index-signature keys are not represented by this node.
+    ///
+    /// Evaluate `receiver` first, then remove its own property `name`. Subsequent
+    /// reads yield `undefined` and `in` is false unless an inherited member
+    /// remains. `Object.keys`, object spread, `for…in`, and `JSON.stringify`
+    /// no longer see the removed own property. This is not assignment of
+    /// `undefined`: the property becomes absent. The expression has type
+    /// `Type::Boolean` and yields `true` on success. Script-defined fields are
+    /// configurable; a non-configurable built-in property reached through an
+    /// optional structural view throws `TypeError`.
+    ///
+    /// Front ends supply this node directly; the engine typechecker does not
+    /// lower source-level `delete`.
+    DeleteField {
+        receiver: ExprId,
+        name: Ident,
+    },
     /// Distinct from `FieldAccess` — codegen composes `<iface>#<name>` rather than a struct field offset.
     InterfacePropertyAccess {
         receiver: ExprId,

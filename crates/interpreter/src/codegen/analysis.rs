@@ -790,6 +790,7 @@ impl CodegenAnalysis {
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
                 self.walk_expr(ta, *receiver)?;
             }
@@ -1312,6 +1313,13 @@ impl CodegenAnalysis {
                     self.visit_type(ty)?;
                 }
             }
+            TypedExprKind::DeleteField { name, .. } => {
+                self.extra_field_names.push(name.name.clone());
+                self.dependency_usage.note_member(crate::mangle::extend(
+                    &crate::mangle::prelude("ObjectConstructor"),
+                    "#deleteField",
+                ));
+            }
             TypedExprKind::FieldAccess { receiver, name } => {
                 self.extra_field_names.push(name.name.clone());
                 let receiver_ty = ta
@@ -1605,7 +1613,12 @@ impl CodegenAnalysis {
                             receiver_ty,
                             iface,
                         )
+                        || crate::codegen::runtime_values::deletable_match_metadata(
+                            iface, &name.name,
+                        )
                     {
+                        self.string_pool.intern_text(iface.as_str());
+                        self.string_pool.intern_text(&name.name);
                         self.note_live_property_access();
                     }
                     self.extra_field_names.push(name.name.clone());

@@ -6641,6 +6641,7 @@ function main(): void {
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
                 box_walk_expr(ta, receiver, names);
             }

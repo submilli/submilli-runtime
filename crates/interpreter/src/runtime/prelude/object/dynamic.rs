@@ -81,6 +81,11 @@ pub(super) async fn get(
             .call_with_receiver(caller, *object, &[])
             .await;
     }
+    if key.iter().copied().eq("length".encode_utf16())
+        && super::super::value::is_callable(caller, object)?
+    {
+        return super::super::member::builtin_property(caller, object, "length").await;
+    }
     super::super::undefined::value(caller)
 }
 
@@ -142,15 +147,23 @@ pub(super) async fn set(
                 )),
             ));
         }
+        // Allocate the shadow marker before publishing either part of the write.
+        // It retains the inherited member for a later deletion of the own field.
+        let shadow = if super::is_protocol_slot(caller, &property.name)? {
+            Some(super::protocol::shadow(
+                caller,
+                &property.name,
+                &property.value,
+            )?)
+        } else {
+            None
+        };
         let object = super::super::iterator::as_struct(caller, object, "property receiver")?;
         let values = field_array(caller, &object, 2)?;
+        let names = field_array(caller, &object, 1)?;
         values.set(&mut *caller, property.slot, *value)?;
-        // A write onto `next` or `close` makes it an own property, as
-        // assigning through the iterator does in JavaScript. The protocol
-        // marker would keep hiding it from `Object.keys` and a later spread.
-        if super::is_protocol_slot(caller, &property.name)? {
-            let plain = super::copy_field_name(caller, property.name, true)?;
-            field_array(caller, &object, 1)?.set(&mut *caller, property.slot, plain)?;
+        if let Some(shadow) = shadow {
+            names.set(&mut *caller, property.slot, shadow)?;
         }
         return super::mark_field_present(caller, &property.name);
     }
@@ -286,6 +299,12 @@ pub(super) fn has(
     name: &Val,
 ) -> wasmtime::Result<bool> {
     let key = read_string_units(caller, name, FIELD_NAME)?;
+    if "length".encode_utf16().eq(key.iter().copied())
+        && super::super::value::is_callable(caller, object)?
+    {
+        // Function.prototype.length remains after removal of the own property.
+        return Ok(true);
+    }
     let array = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
         .array
         .clone();
@@ -300,12 +319,13 @@ pub(super) fn has(
         let regex_match = crate::runtime::intrinsic_types::intrinsic_types(&mut *caller)?
             .regex_match_box
             .clone();
-        if super::super::collection::is_a(caller, object, &regex_match)?
-            && ["index", "input", "groups"]
-                .iter()
-                .any(|name| name.encode_utf16().eq(key.iter().copied()))
-        {
-            return Ok(true);
+        if super::super::collection::is_a(caller, object, &regex_match)? {
+            for name in ["index", "input", "groups"] {
+                if name.encode_utf16().eq(key.iter().copied()) {
+                    let object = super::super::iterator::as_struct(caller, object, "match array")?;
+                    return super::super::regex::match_metadata_present(caller, &object, name);
+                }
+            }
         }
         return super::super::member::has_builtin_member(
             caller,

@@ -1587,12 +1587,12 @@ fn build_closure_vtable(
                 let function =
                     super::closure::hybrid_closure(caller, &params[0])?.unwrap_or(params[0]);
                 let object = as_struct(caller, &function, "Closure#hash")?;
-                if matches!(object.field(&mut *caller, 3)?, Val::I64(0)) {
+                if matches!(object.field(&mut *caller, 4)?, Val::I64(0)) {
                     let original = super::closure::original(caller, function)?;
                     identity_hash(caller, &original)?;
                     let original = as_struct(caller, &original, "Closure#hash original")?;
-                    let id = original.field(&mut *caller, 3)?;
-                    object.set_field(&mut *caller, 3, id)?;
+                    let id = original.field(&mut *caller, 4)?;
+                    object.set_field(&mut *caller, 4, id)?;
                 }
                 results[0] = Val::I32(identity_hash(caller, &function)? as i32);
                 Ok(())

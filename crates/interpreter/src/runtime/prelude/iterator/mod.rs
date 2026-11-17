@@ -49,7 +49,7 @@ pub(crate) fn next_closure_type(
 /// The func + struct types of a value-returning closure taking `arity`
 /// arguments, `$closure_<arity>_value` — funcref
 /// `(ref any, (ref null $object) × arity) -> (ref null $object)`, struct a
-/// `$closure` subtype `{ vtable, funcref, env }`. Declared to canonicalize with
+/// `$closure` subtype `{ vtable, funcref, env, property_state, identity_hash }`. Declared to canonicalize with
 /// `codegen::closures`, so the guest's `ref.cast` to its own closure type
 /// succeeds. The [`value_closures_match_codegen`] test pins the agreement; the
 /// `array_values` (arity 0) and `constructor_called_through_call_signature`
@@ -83,6 +83,13 @@ pub(crate) fn value_closure_type(
             FieldType::new(
                 imm,
                 StorageType::ValType(ValType::Ref(RefType::new(false, HeapType::Any))),
+            ),
+            FieldType::new(
+                imm,
+                StorageType::ValType(ValType::Ref(RefType::new(
+                    false,
+                    super::map::raw_index_array_type(engine)?.into(),
+                ))),
             ),
             FieldType::new(Mutability::Var, StorageType::ValType(ValType::I64)),
         ],
@@ -269,6 +276,7 @@ pub(crate) fn build_iterator(
     let iterator_vtable = host_iterator_vtable(caller, tag)?;
 
     let closure_pre = StructRefPre::new(&mut *caller, next_struct_ty);
+    let property_state = super::closure::new_property_state(caller)?;
     let closure = StructRef::new(
         &mut *caller,
         &closure_pre,
@@ -276,6 +284,7 @@ pub(crate) fn build_iterator(
             closure_vtable,
             Val::FuncRef(Some(next_fn)),
             env,
+            property_state,
             Val::I64(0),
         ],
     )?;
@@ -327,6 +336,7 @@ pub(crate) fn build_closable_iterator(
 
     let (_, next_struct_ty) = next_closure_type(caller.engine(), &intr)?;
     let next_pre = StructRefPre::new(&mut *caller, next_struct_ty);
+    let property_state = super::closure::new_property_state(caller)?;
     let next_closure = StructRef::new(
         &mut *caller,
         &next_pre,
@@ -334,12 +344,14 @@ pub(crate) fn build_closable_iterator(
             closure_vtable,
             Val::FuncRef(Some(next_fn)),
             env,
+            property_state,
             Val::I64(0),
         ],
     )?;
 
     let (_, close_struct_ty) = void_closure_type(caller.engine(), &intr)?;
     let close_pre = StructRefPre::new(&mut *caller, close_struct_ty);
+    let property_state = super::closure::new_property_state(caller)?;
     let close_closure = StructRef::new(
         &mut *caller,
         &close_pre,
@@ -347,6 +359,7 @@ pub(crate) fn build_closable_iterator(
             closure_vtable,
             Val::FuncRef(Some(close_fn)),
             env,
+            property_state,
             Val::I64(0),
         ],
     )?;

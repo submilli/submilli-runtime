@@ -1518,6 +1518,11 @@ impl<'a> Walker<'a, '_> {
                 let receiver = self.eval(*receiver)?;
                 read(&receiver, &ReadKey::Property(name.name.clone()))
             }
+            TypedExprKind::DeleteField { receiver, .. } => {
+                let receiver = self.eval(*receiver)?;
+                self.write_into(&receiver, Flow::new(), false, span)?;
+                Flow::new()
+            }
             TypedExprKind::IndexAccess { receiver, index } => self.index(*receiver, *index)?,
             TypedExprKind::OptionalChain { base, parts } => self.optional_chain(*base, parts)?,
             TypedExprKind::ObjectLiteral { members, .. } => {

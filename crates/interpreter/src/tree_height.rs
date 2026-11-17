@@ -1170,6 +1170,7 @@ impl TypedChildren {
             }
             TypedExprKind::TupleLiteral { elements, .. } => self.exprs(elements),
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => self.expr(*receiver),
             TypedExprKind::IndexAccess { receiver, index } => self.exprs(&[*receiver, *index]),
             TypedExprKind::Closure { body, .. } => match body {

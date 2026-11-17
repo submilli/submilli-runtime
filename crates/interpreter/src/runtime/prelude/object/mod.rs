@@ -8,11 +8,13 @@
 
 use crate::runtime::host::{abi_arg, abi_result};
 mod assign;
+mod delete;
 mod dynamic;
 mod from_entries;
 mod group_by;
 pub(crate) use group_by::map_group_by;
 mod index;
+mod protocol;
 mod static_value;
 pub(super) use static_value::static_interface;
 
@@ -265,7 +267,11 @@ fn indexed_entries(
         entries.push((Val::AnyRef(Some(name.to_anyref())), value));
     }
     if is_a(caller, obj, &intr.regex_match_box)? {
+        let object = as_struct(caller, obj, "match array")?;
         for property in ["index", "input", "groups"] {
+            if !super::regex::match_metadata_present(caller, &object, property)? {
+                continue;
+            }
             let name = write_submilli_string_struct(caller, property)?;
             let value = super::regex::match_metadata(caller, &[*obj], property)?;
             entries.push((Val::AnyRef(Some(name.to_anyref())), value));
@@ -485,7 +491,13 @@ fn copy_field_name(
     let object = as_struct(caller, &name, "field name")?;
     let string = intrinsic_types(&mut *caller)?.string.clone();
     if StructType::eq(&object.ty(&*caller)?, &string) {
-        return Ok(name);
+        return if present {
+            Ok(name)
+        } else {
+            // A required source field may have been deleted through an alias.
+            // The destination's static layout must not recreate that property.
+            optional_field_name(caller, &name, false)
+        };
     }
     let ty = if present {
         string
@@ -784,13 +796,18 @@ fn has_own(caller: &mut Caller<'_, StoreData>, obj: &Val, key: &Val) -> wasmtime
         return Err(type_error("Object.hasOwn called on null or undefined"));
     }
     let target = read_string_units(caller, key, FIELD_NAME)?;
-    let regex_match = intrinsic_types(&mut *caller)?.regex_match_box.clone();
-    if is_a(caller, obj, &regex_match)?
-        && ["index", "input", "groups"]
-            .iter()
-            .any(|name| name.encode_utf16().eq(target.iter().copied()))
+    if "length".encode_utf16().eq(target.iter().copied()) && super::value::is_callable(caller, obj)?
     {
-        return Ok(true);
+        return Ok(!super::closure::length_is_deleted(caller, obj)?);
+    }
+    let regex_match = intrinsic_types(&mut *caller)?.regex_match_box.clone();
+    if is_a(caller, obj, &regex_match)? {
+        for name in ["index", "input", "groups"] {
+            if name.encode_utf16().eq(target.iter().copied()) {
+                let object = as_struct(caller, obj, "match array")?;
+                return super::regex::match_metadata_present(caller, &object, name);
+            }
+        }
     }
     if let Some(len) = indexed_len(caller, obj)? {
         let length: Vec<u16> = "length".encode_utf16().collect();
@@ -888,6 +905,7 @@ fn compares_by_equals(caller: &mut Caller<'_, StoreData>, value: &Val) -> wasmti
 }
 
 pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
+    delete::install(linker)?;
     dynamic::install(linker)?;
     let engine = linker.engine().clone();
     let intr = build_intrinsic_types(&engine)?;
@@ -1105,6 +1123,7 @@ pub fn install(linker: &mut Linker<StoreData>) -> wasmtime::Result<()> {
 }
 
 pub fn declare(defs: &mut PackageDeclaration) {
+    delete::declare(defs);
     dynamic::declare(defs);
     declare_method(
         defs,

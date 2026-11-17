@@ -318,6 +318,7 @@ impl<V: Visitor> Walk<'_, V> {
                 }
             }
             TypedExprKind::FieldAccess { receiver, .. }
+            | TypedExprKind::DeleteField { receiver, .. }
             | TypedExprKind::InterfacePropertyAccess { receiver, .. } => {
                 self.expr(*receiver)?;
             }

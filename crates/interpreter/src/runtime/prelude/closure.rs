@@ -17,6 +17,7 @@ pub struct Closure {
     func: Func,
     env: Val,
     native_length: Option<usize>,
+    length_deleted: bool,
 }
 
 impl Closure {
@@ -28,6 +29,7 @@ impl Closure {
     ) -> wasmtime::Result<Val> {
         let bound = Self {
             native_length: self.native_length,
+            length_deleted: self.length_deleted,
             func: self.func,
             env: bind_receiver(caller, self.env, receiver)?,
         };
@@ -154,6 +156,9 @@ impl Closure {
     /// alike, so an optional parameter ends the count too, where the
     /// JavaScript TypeScript emits for `x?` would count it.
     pub(crate) fn length(&self, caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<usize> {
+        if self.length_deleted {
+            return Ok(0);
+        }
         if let Some(length) = self.native_length {
             return Ok(length);
         }
@@ -364,6 +369,7 @@ pub(crate) fn read(
         func,
         env,
         native_length,
+        length_deleted: length_is_deleted(caller, val)?,
     })
 }
 
@@ -481,6 +487,50 @@ pub(super) fn declare(defs: &mut PackageDeclaration) {
     );
 }
 
+/// Mutable property state is shared by the callable copies made by generic
+/// instantiation. It is GC-owned, so retaining it does not retain the function.
+pub(crate) fn new_property_state(caller: &mut Caller<'_, StoreData>) -> wasmtime::Result<Val> {
+    let ty = super::map::raw_index_array_type(caller.engine())?;
+    let pre = wasmtime::ArrayRefPre::new(&mut *caller, ty);
+    Ok(Val::AnyRef(Some(
+        wasmtime::ArrayRef::new_fixed(&mut *caller, &pre, &[Val::I32(0)])?.to_anyref(),
+    )))
+}
+
+pub(crate) fn delete_length(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<()> {
+    let value = original(caller, *value)?;
+    property_state(caller, &value)?.set(&mut *caller, 0, Val::I32(1))
+}
+
+pub(crate) fn length_is_deleted(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<bool> {
+    let value = original(caller, *value)?;
+    match property_state(caller, &value)?.get(&mut *caller, 0)? {
+        Val::I32(flag) => Ok(flag != 0),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "invalid function property state",
+        )),
+    }
+}
+
+fn property_state(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+) -> wasmtime::Result<wasmtime::Rooted<wasmtime::ArrayRef>> {
+    let function = super::iterator::as_struct(caller, value, "function property state")?;
+    match function.field(&mut *caller, 3)? {
+        Val::AnyRef(Some(state)) => state.unwrap_array(&mut *caller),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "invalid function property state",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,6 +561,7 @@ mod tests {
                 Box::new(async move {
                     let invalid = Closure {
                         native_length: None,
+                        length_deleted: false,
                         func: invalid,
                         env: Val::null_any_ref(),
                     };
@@ -525,6 +576,7 @@ mod tests {
                     assert!(invalid.call_void_args(&mut caller, &[]).await.is_err());
                     let healthy = Closure {
                         native_length: None,
+                        length_deleted: false,
                         func: healthy,
                         env: Val::null_any_ref(),
                     };
@@ -580,6 +632,7 @@ mod tests {
                     let before = caller.data().tenant_limits.host_attached_bytes();
                     let invalid = Closure {
                         native_length: None,
+                        length_deleted: false,
                         func: invalid,
                         env,
                     };
@@ -602,6 +655,7 @@ mod tests {
                     assert_eq!(caller.data().tenant_limits.host_attached_bytes(), before);
                     let healthy = Closure {
                         native_length: None,
+                        length_deleted: false,
                         func: healthy,
                         env,
                     };

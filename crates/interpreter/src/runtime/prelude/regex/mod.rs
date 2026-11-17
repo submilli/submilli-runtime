@@ -349,6 +349,7 @@ fn build_match_box(
             ),
             *input_value,
             named,
+            Val::I32(7),
         ],
     )?;
     Ok(Val::AnyRef(Some(st.to_anyref())))
@@ -551,6 +552,62 @@ pub(super) fn flag(
 // RegExpMatch accessors
 // ---------------------------------------------------------------------------
 
+pub(super) fn try_match_metadata(
+    caller: &mut Caller<'_, StoreData>,
+    value: &Val,
+    name: &str,
+) -> wasmtime::Result<Option<Val>> {
+    if !["index", "input", "groups"].contains(&name) {
+        return Ok(None);
+    }
+    // A global match is a plain array whose metadata reads as undefined.
+    let ty = intrinsic_types(&mut *caller)?.array.clone();
+    if !super::collection::is_a(caller, value, &ty)? {
+        return Ok(None);
+    }
+    match_metadata(caller, &[*value], name).map(Some)
+}
+
+pub(crate) fn match_metadata_present(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Rooted<StructRef>,
+    name: &str,
+) -> wasmtime::Result<bool> {
+    let mask = match_metadata_mask(name)?;
+    let Val::I32(flags) = object.field(&mut *caller, 6)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "invalid match property flags",
+        ));
+    };
+    Ok(flags & mask != 0)
+}
+
+pub(crate) fn delete_match_metadata(
+    caller: &mut Caller<'_, StoreData>,
+    object: &Val,
+    name: &str,
+) -> wasmtime::Result<()> {
+    let mask = match_metadata_mask(name)?;
+    let object = as_struct(caller, object, "match property deletion")?;
+    let Val::I32(flags) = object.field(&mut *caller, 6)? else {
+        return Err(crate::runtime::host::fatal_host_error(
+            "invalid match property flags",
+        ));
+    };
+    object.set_field(&mut *caller, 6, Val::I32(flags & !mask))
+}
+
+fn match_metadata_mask(name: &str) -> wasmtime::Result<i32> {
+    match name {
+        "index" => Ok(1),
+        "input" => Ok(2),
+        "groups" => Ok(4),
+        _ => Err(crate::runtime::host::fatal_host_error(
+            "unknown match property",
+        )),
+    }
+}
+
 /// Metadata exists only on non-global matches; a global match is a plain Array.
 pub(super) fn match_metadata(
     caller: &mut Caller<'_, StoreData>,
@@ -560,6 +617,9 @@ pub(super) fn match_metadata(
     let st = as_struct(caller, abi_arg(params, 0)?, "RegExp match array")?;
     let intr = intrinsic_types(&mut *caller)?;
     if !st.matches_ty(&*caller, &intr.regex_match_box)? {
+        return super::undefined::value(caller);
+    }
+    if !match_metadata_present(caller, &st, name)? {
         return super::undefined::value(caller);
     }
     match name {

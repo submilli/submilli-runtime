@@ -1666,7 +1666,20 @@ fn emit_regexp_array_test(
     emitter.emit_end();
     emit_ref_test(emitter, value_local, intr.regex_match_box);
     emitter.emit_if(BlockType::Result(ValType::I32));
+    let flags = emitter.add_anonymous_local(ValType::I32)?;
+    emitter.instruction(Instruction::LocalGet(value_local));
+    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
+        intr.regex_match_box,
+    )));
+    emitter.instruction(Instruction::StructGet {
+        struct_type_index: intr.regex_match_box,
+        field_index: 6,
+    });
+    emitter.instruction(Instruction::LocalTee(flags));
+    emitter.instruction(Instruction::I32Const(4));
+    emitter.instruction(Instruction::I32And);
     let groups_local = emitter.add_anonymous_local(scratch_object_ty(object_idx_of(ctx)?))?;
+    emitter.emit_if(BlockType::Result(scratch_object_ty(object_idx_of(ctx)?)));
     emitter.instruction(Instruction::LocalGet(value_local));
     emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(
         intr.regex_match_box,
@@ -1675,6 +1688,9 @@ fn emit_regexp_array_test(
         struct_type_index: intr.regex_match_box,
         field_index: 5,
     });
+    emitter.emit_else();
+    super::function_emitter::expr::emit_undefined(emitter, ctx)?;
+    emitter.emit_end();
     emitter.instruction(Instruction::LocalSet(groups_local));
     let groups = test
         .members
@@ -1688,6 +1704,23 @@ fn emit_regexp_array_test(
         &mut std::collections::BTreeSet::new(),
         validator_state,
     )?;
+    // Exec results require index/input; MatchArray permits their absence.
+    let required = [("index", 1), ("input", 2)]
+        .into_iter()
+        .filter(|(name, _)| {
+            test.members
+                .get(*name)
+                .is_some_and(|field| !field.optional && !admits_undefined(&field.ty))
+        })
+        .fold(0, |mask, (_, bit)| mask | bit);
+    if required != 0 {
+        emitter.instruction(Instruction::LocalGet(flags));
+        emitter.instruction(Instruction::I32Const(required));
+        emitter.instruction(Instruction::I32And);
+        emitter.instruction(Instruction::I32Const(required));
+        emitter.instruction(Instruction::I32Eq);
+        emitter.instruction(Instruction::I32And);
+    }
     emitter.emit_else();
     emitter.instruction(Instruction::I32Const(1));
     emitter.emit_end();
@@ -2502,6 +2535,7 @@ fn emit_store_validator_environment(
             })?,
     ));
     emitter.instruction(Instruction::LocalGet(4));
+    crate::codegen::closures::emit_property_state(emitter, ctx)?;
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(closure));
     emitter.instruction(Instruction::ArraySet(intr.raw_array));

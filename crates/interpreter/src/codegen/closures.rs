@@ -544,6 +544,13 @@ where
                 mutable: false,
             },
             FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType {
+                    nullable: false,
+                    heap_type: HeapType::Concrete(intrinsics.raw_index_array),
+                })),
+                mutable: false,
+            },
+            FieldType {
                 element_type: StorageType::Val(ValType::I64),
                 mutable: true,
             },
@@ -873,6 +880,24 @@ pub(super) fn ensure_index_capacity(
             help: vec!["reduce the number of declarations".into()],
         });
     }
+    Ok(())
+}
+
+/// One shared cell survives generic instantiation: aliases observe deletion of
+/// the function's own `length` even when they hold different callable adapters.
+pub(super) fn emit_property_state(
+    emitter: &mut super::function_emitter::FunctionEmitter,
+    ctx: &super::CodegenCtx,
+) -> Result<(), crate::compiler_error::CompilerFailure> {
+    let intr = ctx
+        .symbols
+        .intrinsic_type_indices()
+        .ok_or_else(|| crate::codegen::internal_failure("intrinsics declared"))?;
+    emitter.instruction(wasm_encoder::Instruction::I32Const(0));
+    emitter.instruction(wasm_encoder::Instruction::ArrayNewFixed {
+        array_type_index: intr.raw_index_array,
+        array_size: 1,
+    });
     Ok(())
 }
 

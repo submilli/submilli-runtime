@@ -460,11 +460,13 @@ pub(super) fn emit_instantiation(
         field_index: 2,
     });
     emit_rebind(emitter, ctx, type_args)?;
-    emitter.instruction(Instruction::LocalGet(closure));
-    emitter.instruction(Instruction::StructGet {
-        struct_type_index: structure,
-        field_index: 3,
-    });
+    for field_index in [3, 4] {
+        emitter.instruction(Instruction::LocalGet(closure));
+        emitter.instruction(Instruction::StructGet {
+            struct_type_index: structure,
+            field_index,
+        });
+    }
     emitter.instruction(Instruction::StructNew(structure));
     let instantiated = instantiated_type(&source_ty, type_args);
     super::function_emitter::cast::emit_coerce_to_slot(emitter, ctx, &instantiated, &target_ty)

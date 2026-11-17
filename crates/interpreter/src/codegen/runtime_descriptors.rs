@@ -587,6 +587,7 @@ fn emit_closure(
     ));
     emitter.instruction(Instruction::RefFunc(function));
     capture(emitter, ctx, ty)?;
+    super::closures::emit_property_state(emitter, ctx)?;
     emitter.instruction(Instruction::I64Const(0));
     emitter.instruction(Instruction::StructNew(
         ctx.symbols
