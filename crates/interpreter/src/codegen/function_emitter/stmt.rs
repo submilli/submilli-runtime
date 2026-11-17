@@ -474,6 +474,14 @@ fn emit_assign_field(
             &receiver_ty,
         )?;
     }
+    // Dynamic property writes take the universal object ABI. Boxing a
+    // primitive preserves evaluation order and lets setField throw TypeError.
+    let receiver_ty = if crate::codegen::field_write_needs_dynamic_receiver(&receiver_ty) {
+        cast::emit_box(emitter, ctx, &receiver_ty)?;
+        Type::Unknown
+    } else {
+        receiver_ty
+    };
     let recv = emitter.add_anonymous_local(ctx.symbols.value_type(&receiver_ty)?)?;
     emitter.instruction(Instruction::LocalSet(recv));
     if let Some(setter) = host_property_setter(ctx, &receiver_ty, name) {

@@ -589,9 +589,9 @@ fn connect_expression(
             flow.value(*rhs, target);
         }
         TypedExprKind::Unary { op, operand } if !matches!(op, crate::UnOp::Not) => {
-            // TypeScript gives `~object` and `~T` a number result, but an
-            // object conversion or generic instantiation can produce a bigint.
-            if matches!(op, crate::UnOp::BitNot)
+            // TypeScript gives `~object`, `-object`, `~T` and `-T` a number
+            // result, but conversion or generic instantiation can produce a bigint.
+            if matches!(op, crate::UnOp::BitNot | crate::UnOp::Neg)
                 && !matches!(
                     ast.try_expr(*operand)
                         .map_err(crate::codegen::arena_failure)?

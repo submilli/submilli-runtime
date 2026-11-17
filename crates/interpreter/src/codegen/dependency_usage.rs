@@ -552,14 +552,6 @@ impl DependencyUsage {
         ));
     }
 
-    /// The string→number parse `+s` lowers to.
-    pub(crate) fn collect_number_coercion_host_value(&mut self) {
-        self.values.insert(crate::mangle::host(
-            crate::runtime::NUMBER_MODULE_NAME,
-            "toNumber",
-        ));
-    }
-
     /// The bigint operator imports a `++`/`--` on a bigint target lowers to.
     /// The target's own type goes through the caller's type funnel.
     pub(crate) fn collect_postfix_bigint_ops(&mut self, ty: &Type) {

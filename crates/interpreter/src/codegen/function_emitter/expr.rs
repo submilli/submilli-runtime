@@ -3693,17 +3693,14 @@ fn emit_object_spread(
         )));
         if let Some(NonShapeSource {
             accumulator,
-            opaque,
+            source,
         }) = non_shape_source
         {
             emitter.emit_else();
             emitter.instruction(Instruction::LocalGet(accumulator));
             // Strings and arrays copy their indices; other built-ins copy any
             // enumerable fields they expose. Nullish values copy nothing.
-            match opaque {
-                Some(source) => emitter.instruction(Instruction::LocalGet(source)),
-                None => emitter.instruction(null_object.clone()),
-            }
+            emitter.instruction(Instruction::LocalGet(source));
             emit_spread_shape_argument(emitter, ctx, final_shape, &null_object);
             emitter.instruction(null_object.clone());
             emitter.instruction(Instruction::Call(merge));
@@ -3748,7 +3745,21 @@ fn may_hold_non_shape(ty: &Type) -> bool {
         | Type::StringLiteral(_)
         | Type::InterfaceRef { .. }
         // `{}`, which holds primitives too.
-        | Type::Unknown => true,
+        | Type::Unknown
+        | Type::TypeVar(_)
+        | Type::GenericParam { .. }
+        | Type::KeyOf(_)
+        | Type::IndexedAccess { .. }
+        | Type::Mapped { .. }
+        | Type::Conditional { .. }
+        | Type::Intersection(_)
+        | Type::AliasRef { .. }
+        | Type::Function { .. }
+        | Type::Array(_)
+        | Type::Tuple(_)
+        | Type::Uint8Array
+        | Type::BigInt
+        | Type::BigIntLiteral(_) => true,
         _ => false,
     }
 }
@@ -3756,9 +3767,9 @@ fn may_hold_non_shape(ty: &Type) -> bool {
 /// The locals the `else` arm of [`emit_object_source_test`] reads.
 struct NonShapeSource {
     accumulator: u32,
-    /// The source, when held as an opaque `$Object`, may be a string, array,
-    /// or another built-in backing rather than an `$ObjectShape`.
-    opaque: Option<u32>,
+    /// Boxed source, preserving indexed fields of strings and arrays as well
+    /// as fields exposed by other built-in backings.
+    source: u32,
 }
 
 /// With the accumulator and then the source on the stack, opens an `if` on
@@ -3772,15 +3783,8 @@ fn emit_object_source_test(
     object: u32,
     object_shape: u32,
 ) -> Result<NonShapeSource, crate::compiler_error::CompilerFailure> {
-    let source_type = match ctx.symbols.value_type(source_ty)? {
-        ValType::Ref(reference) => ValType::Ref(RefType {
-            nullable: true,
-            ..reference
-        }),
-        other => other,
-    };
-    let opaque = source_type == object_ref(object);
-    let source = emitter.add_anonymous_local(source_type)?;
+    cast::emit_box(emitter, ctx, source_ty)?;
+    let source = emitter.add_anonymous_local(object_ref(object))?;
     emitter.instruction(Instruction::LocalSet(source));
     let accumulator = emitter.add_anonymous_local(object_ref(object))?;
     emitter.instruction(Instruction::LocalSet(accumulator));
@@ -3799,7 +3803,7 @@ fn emit_object_source_test(
     )));
     Ok(NonShapeSource {
         accumulator,
-        opaque: opaque.then_some(source),
+        source,
     })
 }
 
@@ -4367,7 +4371,7 @@ fn emit_binary(
                 let name = op.bitwise_name().ok_or_else(|| {
                     crate::codegen::internal_failure("missing bitwise host operation")
                 })?;
-                emit_bitwise_host(emitter, ctx, name, &[lhs, rhs], result_ty)?;
+                emit_value_operator_host(emitter, ctx, name, &[lhs, rhs], result_ty)?;
             }
         }
         // A template of constants has a string literal type: concatenate it as
@@ -6544,7 +6548,7 @@ fn emit_to_int32(
     Ok(())
 }
 
-fn emit_bitwise_host(
+fn emit_value_operator_host(
     emitter: &mut FunctionEmitter,
     ctx: &CodegenCtx,
     name: &str,
@@ -6562,7 +6566,7 @@ fn emit_bitwise_host(
     }
     let mangled = crate::mangle::prelude(&format!("__value_{name}"));
     let host = ctx.symbols.func_idx(&mangled).ok_or_else(|| {
-        crate::codegen::internal_failure(format!("missing bitwise host import: {name}"))
+        crate::codegen::internal_failure(format!("missing value operator host import: {name}"))
     })?;
     emitter.instruction(Instruction::Call(host));
     cast::emit_cast_to(emitter, ctx, result_ty)
@@ -6588,7 +6592,7 @@ fn emit_unary(
             emitter.instruction(Instruction::I32Xor);
             emitter.instruction(Instruction::F64ConvertI32S);
         }
-        UnOp::BitNot => emit_bitwise_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
+        UnOp::BitNot => emit_value_operator_host(emitter, ctx, "bitnot", &[operand], result_ty)?,
         UnOp::Neg => {
             // bigint negation routes to inline host call.
             if operand_type(ctx, operand)?.is_bigint() {
@@ -6608,24 +6612,18 @@ fn emit_unary(
                 emit_bigint_wrap_host_result(emitter, ctx, host_idx);
                 return Ok(());
             }
-            emit_primitive_operand(emitter, ctx, operand)?;
-            emitter.instruction(Instruction::F64Neg);
+            if has_numeric_operands(ctx, &[operand], result_ty)? {
+                emit_primitive_operand(emitter, ctx, operand)?;
+                emitter.instruction(Instruction::F64Neg);
+            } else {
+                emit_value_operator_host(emitter, ctx, "neg", &[operand], result_ty)?;
+            }
         }
         UnOp::Pos => {
-            // On a string, `+` is the explicit numeric coercion and lowers to
-            // the same host parse `Number(s)` calls. On a number it is the
-            // identity, so the operand's value is already what we want. A
-            // `number | string` operand picks one of the two at run time.
-            let operand_ty = operand_type(ctx, operand)?;
-            if operand_ty.is_string_shaped() {
+            if has_numeric_operands(ctx, &[operand], result_ty)? {
                 emit_primitive_operand(emitter, ctx, operand)?;
-                emitter.instruction(Instruction::Call(to_number_host(ctx)?));
-            } else if matches!(operand_ty.primitive_behavior(), Type::Union(_)) {
-                emit_expr(emitter, ctx, operand)?;
-                cast::emit_box(emitter, ctx, &operand_ty)?;
-                emit_union_to_number(emitter, ctx)?;
             } else {
-                emit_primitive_operand(emitter, ctx, operand)?;
+                emit_value_operator_host(emitter, ctx, "pos", &[operand], result_ty)?;
             }
         }
         UnOp::Not => {
@@ -6649,43 +6647,6 @@ fn emit_unary(
             emitter.instruction(Instruction::I32Eqz);
         }
     };
-    Ok(())
-}
-
-fn to_number_host(ctx: &CodegenCtx) -> Result<u32, crate::compiler_error::CompilerFailure> {
-    ctx.symbols
-        .func_idx(&crate::mangle::host(
-            crate::runtime::NUMBER_MODULE_NAME,
-            "toNumber",
-        ))
-        .ok_or_else(|| {
-            crate::codegen::internal_failure(
-                "submilli:number.toNumber import recorded by codegen analysis",
-            )
-        })
-}
-
-/// `+x` on a boxed `number | string`: parses a string member as `Number(s)`
-/// does and unboxes a number member.
-fn emit_union_to_number(
-    emitter: &mut FunctionEmitter,
-    ctx: &CodegenCtx,
-) -> Result<(), crate::compiler_error::CompilerFailure> {
-    let string = ctx
-        .symbols
-        .string_type_idx()
-        .ok_or_else(|| crate::codegen::internal_failure("$string intrinsic type registered"))?;
-    let tmp = emitter.add_anonymous_local(ctx.symbols.value_type(&Type::Unknown)?)?;
-    emitter.instruction(Instruction::LocalTee(tmp));
-    emitter.instruction(Instruction::RefTestNonNull(HeapType::Concrete(string)));
-    emitter.emit_if(BlockType::Result(ValType::F64));
-    emitter.instruction(Instruction::LocalGet(tmp));
-    emitter.instruction(Instruction::RefCastNonNull(HeapType::Concrete(string)));
-    emitter.instruction(Instruction::Call(to_number_host(ctx)?));
-    emitter.emit_else();
-    emitter.instruction(Instruction::LocalGet(tmp));
-    cast::emit_cast_to(emitter, ctx, &Type::Number)?;
-    emitter.emit_end();
     Ok(())
 }
 
