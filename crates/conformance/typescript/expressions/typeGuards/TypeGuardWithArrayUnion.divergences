@@ -6,4 +6,4 @@ line 8: message
 
 errors:
 line 7: ours: `Array<T>` expects 1 type argument, got 0 (tsc accepts)
-line 8: ours: cannot read field `length` on non-object type `Message[] | Message` (tsc accepts)
+line 8: ours: field `length` does not exist on all members of `Message[] | Message` (missing on `Message`) (tsc accepts)

@@ -9858,7 +9858,11 @@ impl Inferer<'_> {
                     Type::Error
                 }
             }
-            Type::Union(members) if members.iter().all(Self::is_field_bearing) => {
+            Type::Union(members)
+                if members
+                    .iter()
+                    .all(|member| self.can_read_union_field(member, &name.name)) =>
+            {
                 let path = self.expr_to_reference_path(
                     self.typed_ast
                         .try_expr(typed_receiver)
@@ -14348,13 +14352,12 @@ impl Inferer<'_> {
         Type::Error
     }
 
-    /// `s.field` on a union whose every member carries fields — object types,
-    /// interfaces, classes, or a mix. Accepts iff every member has `field`; the
+    /// `s.field` on a union of object types, interfaces, classes or built-ins.
+    /// Accepts iff every member has `field`; the
     /// result is the canonical union of each member's field type. The members may
     /// lay the field out at different slots, so there is no static index — the
-    /// read goes through the runtime field-name scan over
-    /// `$ObjectShape.field_names`, which class instances carry too (their
-    /// struct's header slots 0-2 are the `$ObjectShape` prefix).
+    /// read resolves by name through the receiver's carrier. Object shapes and
+    /// classes scan `$ObjectShape.field_names`; built-ins call their getter.
     ///
     /// Reports the first member that cannot back the field and returns
     /// `Type::Error`. `receiver_path` anchors the "what killed the narrowing"
@@ -14590,7 +14593,11 @@ impl Inferer<'_> {
             // owns the rule, and this arm exists so `u?.v` and `u.v` agree. A
             // chain receiver is not checked for fresh literals, so
             // `(o || {})?.a` still rejects a field the literal lacks.
-            Type::Union(members) if members.iter().all(Self::is_field_bearing) => {
+            Type::Union(members)
+                if members
+                    .iter()
+                    .all(|member| self.can_read_union_field(member, &name.name)) =>
+            {
                 let ty = self.union_field_read_ty(
                     span,
                     receiver_path,
@@ -16727,7 +16734,7 @@ pub(super) fn literal_comparison_type(
     })
 }
 
-fn tuple_receiver_length_type(receiver: &Type) -> Option<Type> {
+pub(super) fn tuple_receiver_length_type(receiver: &Type) -> Option<Type> {
     match receiver.peel() {
         Type::Tuple(tuple) => Some(tuple_length_type(tuple)),
         Type::Union(members) => members

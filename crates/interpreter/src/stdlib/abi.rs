@@ -149,18 +149,22 @@ pub(crate) fn install_field_getters(
     Ok(())
 }
 
-/// The properties `value` shows `JSON.stringify` when it is a host-backed
-/// value: none for one no view describes, such as a `FileWriter`. Values are
+/// The properties a host-backed `value` exposes through its field getters and
+/// `JSON.stringify`: none for one no view describes, such as a `FileWriter`. Values are
 /// told apart by their backing struct, so interfaces whose layouts canonicalize
 /// to one type must list the same properties; a test over
 /// [`crate::stdlib::host_views`] checks that. The table is built once per store.
-pub(crate) fn json_properties(
+pub(crate) fn host_properties(
     caller: &mut Caller<'_, StoreData>,
     value: &Rooted<StructRef>,
 ) -> wasmtime::Result<HostProperties> {
     let ty = value.ty(&*caller)?;
     if caller.data().host_views.is_none() {
         let mut views = Vec::new();
+        // The registry is static, so this capacity covers every push below.
+        views
+            .try_reserve_exact(crate::stdlib::host_views().count())
+            .map_err(fatal_host_error)?;
         for view in crate::stdlib::host_views() {
             crate::runtime::fuel::charge(&mut *caller, crate::runtime::fuel::ELEM, 1)?;
             views.push(((view.backing)(caller.engine())?, view.properties));
